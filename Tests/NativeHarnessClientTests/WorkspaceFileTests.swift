@@ -80,6 +80,16 @@ final class WorkspaceFileTests: XCTestCase {
         XCTAssertEqual(windows.relativePath(of: "\\\\Server\\Share\\proj\\a", in: "//server/share/proj"), "a")
         XCTAssertEqual(windows.relativePath(of: "\\\\?\\UNC\\server\\share\\a", in: "\\\\server\\share"), "a")
         XCTAssertEqual(windows.relativePath(of: "C:\\Ä\\x", in: "C:\\ä"), "x")
+        // Windows drops the periods and spaces a name ends in and reads a device's name as the device, so a path with
+        // such a name is in no folder: its text does not say where it leads. POSIX reads every name as written.
+        for name in [".. ", "...", ". .", "notes.", "notes ", "NUL", "nul.txt", "Con", "COM1", "com9:", "LPT\u{B9}", "aux .log"] {
+            XCTAssertNil(windows.relativePath(of: "C:\\Users\\me\\proj\\\(name)\\x", in: "C:\\Users\\me\\proj"), name)
+            XCTAssertNil(windows.relativePath(of: "C:\\Users\\me\\proj\\\(name)", in: "C:\\Users\\me\\proj"), name)
+            XCTAssertEqual(posix.relativePath(of: "/work/app/\(name)", in: "/work/app"), name)
+        }
+        for name in [".gitignore", "a.b", "console", "COM10", "null", "auxiliary.txt", "..x", "x y"] {
+            XCTAssertEqual(windows.relativePath(of: "C:\\proj\\\(name)", in: "C:\\proj"), name)
+        }
         // A `..` at a share's root stays there, as Windows reads it.
         XCTAssertEqual(windows.relativePath(of: "\\\\server\\share\\..\\other\\x", in: "\\\\server\\share\\other"), "x")
         for (path, folder) in [("C:\\Users\\me\\project", "C:\\Users\\me\\proj"), ("C:\\Users\\me\\proj\\..\\other", "C:\\Users\\me\\proj"),

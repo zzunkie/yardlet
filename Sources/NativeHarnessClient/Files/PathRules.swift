@@ -9,7 +9,10 @@ import Foundation
 /// absolute path starts with a drive (`C:\`, or `/C:/` as a file URL's path writes it) or names a share
 /// (`\\server\share`), also in the `\\?\` and `\\.\` forms; `\` and `/` both separate names, and names compare in any
 /// case, one character for one, as NTFS compares them. There `\x` (the current drive's root) and `C:x` (drive C's
-/// current folder) depend on where they are read from, so they are neither absolute nor relative.
+/// current folder) depend on where they are read from, so they are neither absolute nor relative. Windows also reads
+/// some names as something else than their text: it drops periods and spaces a name ends in, and a device's name
+/// (`NUL`, `CON`, `COM1`) is that device in any folder. A path with such a name is in no folder by these rules
+/// (`isReadAsAnotherNameOnWindows`), since its text does not say where it leads.
 struct PathRules: Equatable, Sendable {
     /// Windows' rules rather than POSIX's.
     let isWindows: Bool
@@ -50,6 +53,7 @@ struct PathRules: Equatable, Sendable {
     /// `path` below `folder`, its names joined with `/`, or "" when it is `folder` itself; nil when it lies anywhere
     /// else or either is not absolute.
     func relativePath(of path: String, in folder: String) -> String? {
+        guard !(isWindows && names(path).contains(where: Self.isReadAsAnotherNameOnWindows)) else { return nil }
         guard let path = parsed(path), let folder = parsed(folder),
               path.root.count == folder.root.count, zip(path.root, folder.root).allSatisfy(same),
               path.names.count >= folder.names.count, zip(path.names, folder.names).allSatisfy(same) else { return nil }
@@ -135,6 +139,20 @@ struct PathRules: Equatable, Sendable {
     private static func isDrive(_ name: String) -> Bool {
         let scalars = Array(name.unicodeScalars)
         return scalars.count == 2 && scalars[0].isASCII && scalars[0].properties.isAlphabetic && scalars[1] == ":"
+    }
+
+    /// Whether Windows opens something other than what `name` spells: a name that ends in a period or a space, which
+    /// Windows drops (`.` and `..` are themselves), or a device's name, alone or before an extension or a colon
+    /// (`NUL`, `con.txt`, `COM1:`), which is the device wherever it is written.
+    static func isReadAsAnotherNameOnWindows(_ name: String) -> Bool {
+        guard !name.isEmpty, name != ".", name != ".." else { return false }
+        if name.hasSuffix(".") || name.hasSuffix(" ") { return true }
+        var stem = name.prefix { $0 != "." && $0 != ":" }
+        while stem.hasSuffix(" ") { stem.removeLast() }
+        let upper = stem.uppercased()
+        if ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"].contains(upper) { return true }
+        guard upper.count == 4, upper.hasPrefix("COM") || upper.hasPrefix("LPT"), let digit = upper.last else { return false }
+        return "123456789\u{B9}\u{B2}\u{B3}".contains(digit)
     }
 
     /// The names without the empty ones, `.`, and each `..` with the name before it; a `..` at the root stays there.

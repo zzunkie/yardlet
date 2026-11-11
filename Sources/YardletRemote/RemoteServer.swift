@@ -678,7 +678,13 @@ public actor RemoteServer {
         _ hello: RemoteHandshakeHello, publicKey: Data, channel: any RemoteChannel, path: RemotePath
     ) async -> RemoteHandshakeOutcome {
         func refuse(_ code: RemoteErrorCode, _ message: String, _ close: RemoteCloseCode) -> RemoteHandshakeOutcome {
-            audit?.record(device: nil, type: "handshake", task: nil, result: code.rawValue, at: now())
+            // Whoever knows this Mac's key can be refused as often as it connects. The same refusal on the same
+            // path is one line a minute, so those lines do not push a paired device's out of the log.
+            let time = now()
+            let key = PermissionRefusalKey(device: nil, request: "handshake", setting: path.rawValue, result: code.rawValue)
+            if isFirstRefusalThisMinute(key, at: time) {
+                audit?.record(device: nil, type: "handshake", task: nil, result: code.rawValue, at: time)
+            }
             return .refused(RemoteHandshakeReply(ok: false, error: RemoteError(code, message)), close)
         }
         guard hello.v == RemoteProtocol.secureVersion else {
@@ -1165,17 +1171,24 @@ public actor RemoteServer {
 
     func auditPermissionRefusal(device: String?, request: RemoteRequest) {
         let time = now()
+        let key = PermissionRefusalKey(device: device, request: request.type, setting: request.settingID, result: "notAllowed")
+        guard isFirstRefusalThisMinute(key, at: time) else { return }
+        audit?.record(device: device, type: request.type, task: request.taskID, setting: request.settingID, input: request.auditTarget, result: key.result, at: time)
+    }
+
+    /// Whether a refusal is the first of its kind in a minute, and so gets its line in the audit log. The log
+    /// keeps its last lines only, and a refusal can be repeated at will.
+    private func isFirstRefusalThisMinute(_ key: PermissionRefusalKey, at time: Date) -> Bool {
         if time >= nextPermissionAuditPrune {
             auditedPermissionRefusals = auditedPermissionRefusals.filter { time.timeIntervalSince($0.value) < 60 }
             nextPermissionAuditPrune = time.addingTimeInterval(60)
         }
-        let key = PermissionRefusalKey(device: device, request: request.type, setting: request.settingID, result: "notAllowed")
-        if let last = auditedPermissionRefusals[key], time.timeIntervalSince(last) < 60 { return }
+        if let last = auditedPermissionRefusals[key], time.timeIntervalSince(last) < 60 { return false }
         if auditedPermissionRefusals.count >= 1_024, let oldest = auditedPermissionRefusals.min(by: { $0.value < $1.value }) {
             auditedPermissionRefusals[oldest.key] = nil
         }
         auditedPermissionRefusals[key] = time
-        audit?.record(device: device, type: request.type, task: request.taskID, setting: request.settingID, input: request.auditTarget, result: key.result, at: time)
+        return true
     }
 
     /// Opens a pairing, replacing any open one.

@@ -192,7 +192,9 @@ badge read (`TaskAttentionProjection`, `SidebarTaskIndicatorProjection`).
 
 Commands act through the same paths as the Mac's own controls. Every command is written to the Mac's
 local audit log with its type, task ID (or schedule ID, §15.21), device and result, and a refusal's `reason` and
-`setting` — never the message text or a setting's value. `ok: true`
+`setting` — never the message text or a setting's value. The log keeps its last 2,000 lines, so a refusal that can
+be repeated at will is written at most once a minute: a refused handshake by its result and path, a request a
+device's permissions refuse by device, request and setting. `ok: true`
 means the Mac accepted the command; what happens next arrives as events.
 
 #### `sendMessage`

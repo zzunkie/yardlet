@@ -635,6 +635,20 @@ final class RemoteServerTests: XCTestCase {
         XCTAssertEqual(harness.audit.entries().filter { $0.type == request.type }.count, 3,
                        "A new permission transition starts a new refusal window")
         XCTAssertFalse(try String(contentsOf: harness.auditURL, encoding: .utf8).contains("not audit content"))
+        // A refused handshake is one line a minute too: a key this Mac does not know can come as often as it likes.
+        let stranger = Data(RemoteRandom.bytes(32))
+        func refusedHandshakes() -> Int {
+            harness.audit.entries().filter { $0.type == "handshake" && $0.result == RemoteErrorCode.unknownDevice.rawValue }.count
+        }
+        for _ in 0..<40 {
+            _ = await harness.server.acceptHandshake(RemoteHandshakeHello(name: "Stranger"), publicKey: stranger,
+                                                     channel: TestChannel(), path: .local)
+        }
+        XCTAssertEqual(refusedHandshakes(), 1)
+        clock.advance(by: 61)
+        _ = await harness.server.acceptHandshake(RemoteHandshakeHello(name: "Stranger"), publicKey: stranger,
+                                                 channel: TestChannel(), path: .local)
+        XCTAssertEqual(refusedHandshakes(), 2)
         await harness.server.closed(try XCTUnwrap(phone.id))
     }
 
