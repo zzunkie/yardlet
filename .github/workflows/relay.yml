@@ -1,0 +1,52 @@
+name: Relay
+
+# The relay (relay/, a Cloudflare Worker) installed from its lock file as it stands, type-checked and
+# tested inside workerd, for the pull requests and pushes to main that change it. The tests fake every
+# outside service and make no network requests (relay/README.md, "Check"). Nothing here deploys the
+# relay or signs in to Cloudflare.
+on:
+  push:
+    branches: [main]
+    paths:
+      - relay/**
+      - .github/workflows/relay.yml
+  pull_request:
+    paths:
+      - relay/**
+      - .github/workflows/relay.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: relay-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check the relay
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: relay
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The Node.js the Windows app's workflow runs the relay with (windows-app.yml).
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Show the toolchain
+        run: |
+          node --version
+          npm --version
+      # No --legacy-peer-deps and no --force: a lock file npm refuses fails here.
+      - name: Install
+        run: npm ci
+      - name: Type-check
+        run: npm run typecheck
+      - name: Test
+        run: npm test
