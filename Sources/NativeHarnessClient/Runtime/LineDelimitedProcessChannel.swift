@@ -107,6 +107,13 @@ final class LineDelimitedProcessChannel: @unchecked Sendable {
         return code
     }
 
+    /// Closes the process's input and asks the process alone to end, for a server that is left to
+    /// end in its own way. Its events go on to its exit.
+    func askToEnd() {
+        try? input.close()
+        if process.isRunning { process.terminate() }
+    }
+
     /// What the process writes, read on the pipes' own queues, and when it has all been read.
     ///
     /// Each pipe's handler holds this object until the pipe ends or the channel is stopped, so the
