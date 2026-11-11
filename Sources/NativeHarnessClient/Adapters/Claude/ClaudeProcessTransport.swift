@@ -21,15 +21,9 @@ actor ClaudeProcessTransport: ClaudeTransport {
     private let messageStream: AsyncStream<ClaudeRawFrame>
     private let messageContinuation: AsyncStream<ClaudeRawFrame>.Continuation
 
-    private var process: Process?
-    private var stdinHandle: FileHandle?
-    private var stdoutHandle: FileHandle?
-    private var stderrHandle: FileHandle?
-    private var chunkContinuation: AsyncStream<Data>.Continuation?
+    private var channel: LineDelimitedProcessChannel?
     private var readerTask: Task<Void, Never>?
     private var pending: [String: PendingRequest] = [:]
-    private var stdoutBuffer = Data()
-    private var stderrBuffer = Data()
     private var stopped = false
     /// The task the CLI runs for, whose resource use counts its process tree.
     private let resourceOwner: TaskResourceOwner?
@@ -49,7 +43,7 @@ actor ClaudeProcessTransport: ClaudeTransport {
 
     func start(_ configuration: ClaudeLaunchConfiguration) async throws {
         await LoginShellPath.ready()
-        if let process, process.isRunning { return }
+        if let channel, channel.isRunning { return }
         guard !stopped else {
             throw HarnessAdapterError.processExited(
                 code: -1,
@@ -57,54 +51,27 @@ actor ClaudeProcessTransport: ClaudeTransport {
             )
         }
 
-        let process = Process()
-        let stdinPipe = Pipe.childInput()
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.executableURL = executableURL
-        process.currentDirectoryURL = configuration.workspaceURL.standardizedFileURL
-        process.arguments = Self.arguments(for: configuration)
-        process.environment = environment(contextLimit: configuration.contextLimit)
-        process.standardInput = stdinPipe
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        let chunks = AsyncStream<Data>.makeStream()
-        chunkContinuation = chunks.continuation
-        stdoutPipe.fileHandleForReading.readChunks(into: chunks.continuation)
-        stderrPipe.fileHandleForReading.readChunks { [weak self] data in
-            Task { await self?.appendStderr(data) }
-        }
-        let owner = resourceOwner
-        let registry = processRegistry
-        process.terminationHandler = { [weak self] process in
-            if let owner { registry.unregister(process.processIdentifier, owner: owner) }
-            Task { await self?.processDidTerminate(code: process.terminationStatus) }
-        }
-
-        do {
-            try NativeProcessTree.run(process)
-        } catch {
-            stdoutPipe.fileHandleForReading.readabilityHandler = nil
-            stderrPipe.fileHandleForReading.readabilityHandler = nil
-            throw error
-        }
-        if let owner, process.isRunning { registry.register(process.processIdentifier, owner: owner) }
-
-        self.process = process
-        stdinHandle = stdinPipe.fileHandleForWriting
-        stdoutHandle = stdoutPipe.fileHandleForReading
-        stderrHandle = stderrPipe.fileHandleForReading
+        let channel = try LineDelimitedProcessChannel(
+            .init(executableURL: executableURL,
+                  arguments: Self.arguments(for: configuration),
+                  currentDirectoryURL: configuration.workspaceURL.standardizedFileURL,
+                  environment: environment(contextLimit: configuration.contextLimit),
+                  resourceOwner: resourceOwner,
+                  processRegistry: processRegistry),
+            stderrLimit: 16 * 1024
+        )
+        self.channel = channel
+        let events = channel.events
         readerTask = Task { [weak self] in
-            for await chunk in chunks.stream {
-                await self?.acceptStdoutChunk(chunk)
+            for await event in events {
+                await self?.accept(event)
             }
         }
     }
 
     func request(_ value: JSONValue, id: String) async throws -> JSONValue {
-        guard process?.isRunning == true else {
-            throw exitError(fallback: "Claude CLI is not running")
+        guard let channel, channel.isRunning else {
+            throw await exitError(fallback: "Claude CLI is not running")
         }
         let data = try codec.encodeLine(value)
 
@@ -116,7 +83,7 @@ actor ClaudeProcessTransport: ClaudeTransport {
             }
             pending[id] = PendingRequest(continuation: continuation, timeoutTask: timeoutTask)
             do {
-                try stdinHandle?.write(contentsOf: data)
+                try channel.write(data)
             } catch {
                 timeoutTask.cancel()
                 pending.removeValue(forKey: id)
@@ -126,10 +93,10 @@ actor ClaudeProcessTransport: ClaudeTransport {
     }
 
     func send(_ value: JSONValue) async throws {
-        guard process?.isRunning == true else {
-            throw exitError(fallback: "Claude CLI is not running")
+        guard let channel, channel.isRunning else {
+            throw await exitError(fallback: "Claude CLI is not running")
         }
-        try stdinHandle?.write(contentsOf: codec.encodeLine(value))
+        try channel.write(codec.encodeLine(value))
     }
 
     func messages() async -> AsyncStream<ClaudeRawFrame> {
@@ -139,23 +106,8 @@ actor ClaudeProcessTransport: ClaudeTransport {
     func stop() async {
         guard !stopped else { return }
         stopped = true
-        stdoutHandle?.readabilityHandler = nil
-        stderrHandle?.readabilityHandler = nil
-        chunkContinuation?.finish()
         readerTask?.cancel()
-        try? stdinHandle?.close()
-
-        let exitCode: Int32
-        if let process {
-            if process.isRunning {
-                exitCode = NativeProcessTree.terminate(process: process)
-            } else {
-                exitCode = process.terminationStatus
-            }
-            if let resourceOwner { processRegistry.unregister(process.processIdentifier, owner: resourceOwner) }
-        } else {
-            exitCode = 0
-        }
+        let exitCode = channel?.stop() ?? 0
         failPending(
             HarnessAdapterError.processExited(code: exitCode, message: "Claude transport stopped")
         )
@@ -266,12 +218,9 @@ actor ClaudeProcessTransport: ClaudeTransport {
         return scoped
     }
 
-    private func acceptStdoutChunk(_ chunk: Data) {
-        stdoutBuffer.append(chunk)
-        while let newline = stdoutBuffer.firstIndex(of: 0x0A) {
-            let line = Data(stdoutBuffer[..<newline])
-            stdoutBuffer.removeSubrange(...newline)
-            guard !line.isEmpty else { continue }
+    private func accept(_ event: LineDelimitedProcessChannel.Event) {
+        switch event {
+        case let .line(line):
             do {
                 let value = try codec.decodeLine(line)
                 accept(value, rawData: line)
@@ -286,6 +235,9 @@ actor ClaudeProcessTransport: ClaudeTransport {
                     )
                 )
             }
+        case let .exited(code, stderr):
+            failPending(HarnessAdapterError.processExited(code: code, message: stderr))
+            messageContinuation.finish()
         }
     }
 
@@ -318,41 +270,17 @@ actor ClaudeProcessTransport: ClaudeTransport {
         )
     }
 
-    private func appendStderr(_ data: Data) {
-        stderrBuffer.append(data)
-        let limit = 16 * 1024
-        if stderrBuffer.count > limit {
-            stderrBuffer.removeFirst(stderrBuffer.count - limit)
-        }
-    }
-
-    /// Takes whatever the CLI wrote before it exited. A launch the CLI refuses — an unknown flag,
+    /// Why a CLI that is not running cannot be asked. A launch the CLI refuses — an unknown flag,
     /// a missing browser extension — says so on stderr and nowhere else, so the task reports those
-    /// words rather than a guess about the cause.
-    private func drainStderr() {
-        guard let stderrHandle else { return }
-        stderrHandle.readabilityHandler = nil
-        if let remaining = try? stderrHandle.readToEnd(), !remaining.isEmpty {
-            appendStderr(remaining)
-        }
-    }
-
-    private func exitError(fallback: String) -> HarnessAdapterError {
-        drainStderr()
-        let detail = String(data: stderrBuffer, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    /// words rather than a guess about the cause. The reader ends once the CLI's exit has been read
+    /// through, so the words are all there by then.
+    private func exitError(fallback: String) async -> HarnessAdapterError {
+        await readerTask?.value
+        let detail = channel?.stderrText ?? ""
         return HarnessAdapterError.processExited(
-            code: process?.terminationStatus ?? -1,
+            code: channel?.exitCode ?? -1,
             message: detail.isEmpty ? fallback : detail
         )
-    }
-
-    private func processDidTerminate(code: Int32) {
-        chunkContinuation?.finish()
-        drainStderr()
-        let message = String(data: stderrBuffer, encoding: .utf8) ?? ""
-        failPending(HarnessAdapterError.processExited(code: code, message: message))
-        messageContinuation.finish()
     }
 
     private func failPending(_ error: Error) {
