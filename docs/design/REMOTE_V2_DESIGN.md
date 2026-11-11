@@ -470,8 +470,7 @@ changelog](https://docs.aside.com/changelog/components), [ego(lite)](https://lit
 [Manus Take Over](https://help.manus.im/en/articles/11711218-how-can-i-take-over-manus-browser-or-vs-code), [1Password
 for Claude](https://support.claude.com/en/articles/15936181-get-started-with-1password-for-claude), [Unlock with Apple
 Watch](https://support.apple.com/en-us/102442),
-[LAPolicy](https://developer.apple.com/documentation/localauthentication/lapolicy). The vault design's map of Aside and
-Ego is in [BROWSER_VAULT_DESIGN](../BROWSER_VAULT_DESIGN.md) section 2.
+[LAPolicy](https://developer.apple.com/documentation/localauthentication/lapolicy).
 
 **Summary:** Everyone (1) answers the harness's approvals and questions directly on the phone, (2) fills sign-in secrets
 outside the model and (3), when still stuck, lets the person take over the screen and then hand it back. Only ChatGPT's
