@@ -368,6 +368,65 @@ final class AppModelTests: XCTestCase {
         await model.shutdown()
     }
 
+    /// A task's turn ends in several ways: the provider reports its state or an error, the message
+    /// that was to start it does not go, or the runtime's stream ends while it runs. What follows
+    /// differs with the way. This is what each leaves of a task that is not on screen: its status,
+    /// whether its row says there is something new, and whether a notification goes.
+    func testEachWayATurnEndsLeavesItsStatusItsUnreadMarkAndItsNotification() async throws {
+        enum Way: String, CaseIterable { case providerReady, providerFailed, providerError, sendFailed, streamEnded }
+        let expected: [Way: (status: SessionStatus, unread: Bool, notifications: Int)] = [
+            .providerReady: (.ready, false, 0),
+            .providerFailed: (.failed, true, 1),
+            .providerError: (.failed, true, 1),
+            .sendFailed: (.failed, false, 0),
+            .streamEnded: (.failed, true, 0)
+        ]
+        for way in Way.allCases {
+            let adapter = FakeHarnessAdapter(kind: .openCode)
+            let notifications = ScheduleNotificationRecorder()
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("NativeHarnessClientTests.turnEnd")))
+            let model = AppModel(
+                store: SessionStore(repository: InMemorySessionRepository()),
+                runtimeSelections: RuntimeSelectionStore(defaults: defaults),
+                registry: HarnessRegistry { _, _ in adapter }, preferences: defaults,
+                systemNotificationCenter: notifications, restoresIndexOnLaunch: false
+            )
+            let created = await model.createSession(harness: .openCode, workspaceURL: URL(filePath: "/tmp/turn-end"),
+                                                    runtimeExecutableURL: URL(filePath: "/tmp/opencode"), title: way.rawValue)
+            let task = try XCTUnwrap(created, model.bootstrapError ?? "Missing task")
+            let want = try XCTUnwrap(expected[way])
+
+            if way == .sendFailed { await adapter.failNextSend() }
+            await model.send(HarnessUserInput(text: "Go"), to: task)
+            switch way {
+            case .providerReady:
+                await adapter.emit(.sessionStatusChanged(.running), for: task.id, sequence: 1)
+                await adapter.emit(.sessionStatusChanged(.ready), for: task.id, sequence: 2)
+            case .providerFailed:
+                await adapter.emit(.sessionStatusChanged(.running), for: task.id, sequence: 1)
+                await adapter.emit(.sessionStatusChanged(.failed), for: task.id, sequence: 2)
+            case .providerError:
+                await adapter.emit(.sessionStatusChanged(.running), for: task.id, sequence: 1)
+                await adapter.emit(.error(message: "The provider gave up", recoverable: false), for: task.id, sequence: 2)
+            case .sendFailed:
+                break
+            case .streamEnded:
+                await adapter.emit(.sessionStatusChanged(.running), for: task.id, sequence: 1)
+                await adapter.finishEvents(for: task.id)
+            }
+
+            try await waitUntil {
+                model.store.sessions.first?.status == want.status && notifications.posts.count == want.notifications
+                    && (way != .streamEnded || !model.isAttached(task.id))
+            }
+            XCTAssertEqual(model.store.sessions.first?.status, want.status, way.rawValue)
+            XCTAssertEqual(model.store.sessions.first?.hasUnreadUpdate, want.unread, way.rawValue)
+            XCTAssertEqual(notifications.posts.count, want.notifications, way.rawValue)
+            XCTAssertEqual(model.errorBySessionID[task.id] != nil, way != .providerReady && way != .providerFailed, way.rawValue)
+            await model.shutdown()
+        }
+    }
+
     func testCodexComposerRefreshDoesNotAttachDetachedTask() async throws {
         let session = SessionRecord(harness: .codex, workspaceURL: URL(filePath: "/tmp/composer"),
                                     runtimeExecutableURL: URL(filePath: "/tmp/codex"), title: "Detached")
