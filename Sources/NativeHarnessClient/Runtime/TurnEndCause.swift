@@ -63,6 +63,8 @@ struct TurnFollowUps: OptionSet, Sendable {
     static let shellOutput = TurnFollowUps(rawValue: 1 << 12)
     /// Turns a lost connection cut off that are due continue.
     static let dueConnectionResumes = TurnFollowUps(rawValue: 1 << 13)
+    /// A Claude Code task's idle-compaction timer is armed from the request the turn ended on.
+    static let idleCompaction = TurnFollowUps(rawValue: 1 << 14)
 
-    static let all = TurnFollowUps(rawValue: (1 << 14) - 1)
+    static let all = TurnFollowUps(rawValue: (1 << 15) - 1)
 }

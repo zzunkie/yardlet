@@ -682,12 +682,16 @@ public struct RemoteCompaction: Codable, Equatable, Sendable {
     public var tokensAfter: UInt64?
     /// Why it failed, in the provider's words.
     public var message: String?
+    /// The Mac compacted the idle task before its prompt cache expired; absent for every other compaction.
+    public var whileIdle: Bool?
 
-    public init(phase: String, tokensBefore: UInt64? = nil, tokensAfter: UInt64? = nil, message: String? = nil) {
+    public init(phase: String, tokensBefore: UInt64? = nil, tokensAfter: UInt64? = nil, message: String? = nil,
+                whileIdle: Bool? = nil) {
         self.phase = phase
         self.tokensBefore = tokensBefore
         self.tokensAfter = tokensAfter
         self.message = message
+        self.whileIdle = whileIdle
     }
 }
 

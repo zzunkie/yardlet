@@ -418,6 +418,14 @@ extension YardletSetting {
             + ClaudeLaunchOption.contextLimits.map { Choice(value: String($0), title: ComposerContextSummary.tokenText($0)) }),
         storage: .choice(key: ClaudeContextLimitPreference.key, defaultValue: ClaudeLaunchOption.defaultContextLimit))
 
+    /// Claude Code's own "Idle compaction" (`IdleCompactionPreference`), on by default as there.
+    static let idleCompaction = YardletSetting(
+        id: "idle_compaction", section: .general, generalGroup: .tasks, symbol: "rectangle.compress.vertical",
+        title: L10n.string("Idle compaction"),
+        detail: L10n.string("Compacts a long Claude Code conversation left idle, just before its prompt cache expires, so your next message costs less. Stays off where Claude Code's own settings turn it off."),
+        hint: L10n.string("Claude Code tasks follow it from their next reply"),
+        values: .onOff, storage: .flag(key: IdleCompactionPreference.key, defaultValue: true))
+
     static let autoFixFailingCI = YardletSetting(
         id: "auto_fix_failing_ci", section: .general, generalGroup: .tasks, symbol: "wrench.and.screwdriver",
         title: L10n.string("Auto-fix failing CI"),
@@ -610,7 +618,7 @@ extension YardletSetting {
 enum YardletSettingCatalog {
     static let all: [YardletSetting] = [
         .language, .showInMenuBar, .mailbox, .checkForUpdates,
-        .followUpBehavior, .nextMessageSuggestions, .claudeContextLimit, .autoFixFailingCI, .showTaskServers, .continueAfterRestart,
+        .followUpBehavior, .nextMessageSuggestions, .claudeContextLimit, .idleCompaction, .autoFixFailingCI, .showTaskServers, .continueAfterRestart,
         .keepScreenUnlocked, .keepWorkingWithLidClosed,
         .agentBrowserTools, .keepCookies, .searchSuggestions, .pageSuggestions, .memorySaver, .memorySaverLevel,
         .hideKeysAndTokens,

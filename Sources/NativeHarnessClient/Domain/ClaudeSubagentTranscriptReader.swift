@@ -7,6 +7,10 @@ struct ClaudeSubagentTranscriptReader: Sendable {
     let configDirectory: URL
     var maximumBytes = 8 * 1_048_576
     var maximumEntries = 500
+    /// The compactions Yardlet made while the task was idle (`SessionRecord.idleCompactions`), which the
+    /// saved records cannot tell from a `/compact` the person sent: they read as they showed live, the
+    /// marker with its note in a turn without a request, and neither the command nor its output.
+    var idleCompactions: Set<String> = []
 
     struct SessionSnapshot: Sendable {
         let forkSource: HarnessSessionForkSource
@@ -723,9 +727,16 @@ struct ClaudeSubagentTranscriptReader: Sendable {
             guard let held = heldCompaction else { return }
             heldCompaction = nil
             let lastID = builder.entries.last?.id
-            for payload in projection.payloads(from: held) { builder.apply(payload) }
+            let whileIdle = held["uuid"]?.stringValue.map(idleCompactions.contains) == true
+            for payload in projection.payloads(from: held) {
+                guard whileIdle, case var .contextCompaction(compaction) = payload else { builder.apply(payload); continue }
+                compaction.whileIdle = true
+                builder.apply(.contextCompaction(compaction))
+            }
             record(added(after: lastID), from: held)
         }
+        /// The output of an idle compaction's `/compact`, which is not shown.
+        var dropsCommandOutput = false
         for value in chain {
             if heldCompaction != nil, !Self.followsItsCompaction(value) { showHeldCompaction() }
             // A message sent while a turn ran is saved as the command Claude read into that turn,
@@ -764,6 +775,8 @@ struct ClaudeSubagentTranscriptReader: Sendable {
             else { continue }
             count += 1
             let lastID = builder.entries.last?.id
+            let dropsOutput = dropsCommandOutput
+            dropsCommandOutput = false
             if type == "user" {
                 let content = value["message"]?["content"]
                 // A host app's notices before the person's text are context, not what they wrote.
@@ -783,14 +796,17 @@ struct ClaudeSubagentTranscriptReader: Sendable {
                 if images.isEmpty, let command = ClaudeLocalCommand.parse(text) {
                     switch command {
                     case let .request(line):
-                        builder.appendUser(line)
+                        // An idle compaction's `/compact` opens its turn as live, with no request shown.
+                        let isIdle = heldCompaction?["uuid"]?.stringValue.map(idleCompactions.contains) == true
+                        if isIdle { builder.appendUser("", origin: .provider) } else { builder.appendUser(line) }
                         if heldCompaction != nil {
                             record(added(after: lastID), from: value)
                             showHeldCompaction()
+                            dropsCommandOutput = isIdle
                             continue
                         }
                     case let .output(output):
-                        guard !output.isEmpty, let uuid = value["uuid"]?.stringValue else { continue }
+                        guard !dropsOutput, !output.isEmpty, let uuid = value["uuid"]?.stringValue else { continue }
                         let printed = JSONValue.object(["type": .string("system"), "subtype": .string("local_command_output"),
                                                         "content": .string(output), "uuid": .string(uuid)])
                         for payload in projection.payloads(from: printed) { builder.apply(payload) }

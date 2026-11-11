@@ -248,6 +248,14 @@ final class SessionStore {
         }
     }
 
+    /// Keeps a compaction Yardlet made of the idle task (`SessionRecord.idleCompactions`). It is not activity:
+    /// the task's place, reading state and last activity stay as they are.
+    func recordIdleCompaction(id: UUID, compactionID: String) async throws {
+        guard let current = sessions.first(where: { $0.id == id }), !current.idleCompactions.contains(compactionID)
+        else { return }
+        try await modify(id) { $0.recordIdleCompaction(compactionID) }
+    }
+
     /// Moves a task's last activity forward to `date`, the time a source app last worked in its
     /// conversation (`SessionListFollow`), and never back. Only the place in recency order changes:
     /// status, reading state, pin, title, project and the provider session stay as they are.

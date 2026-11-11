@@ -2342,6 +2342,13 @@
 "Claude Code default" = "Claude Code default";
 "Puts this message in the message box without sending it" = "Puts this message in the message box without sending it";
 
+/* Idle compaction: Claude Code's own "Idle compaction" (idleCompaction), compacting a long idle conversation before its prompt cache expires. */
+"Idle compaction" = "Idle compaction";
+"Compacts a long Claude Code conversation left idle, just before its prompt cache expires, so your next message costs less. Stays off where Claude Code's own settings turn it off." = "Compacts a long Claude Code conversation left idle, just before its prompt cache expires, so your next message costs less. Stays off where Claude Code's own settings turn it off.";
+"Claude Code tasks follow it from their next reply" = "Claude Code tasks follow it from their next reply";
+"Compacting while idle, before the prompt cache expires" = "Compacting while idle, before the prompt cache expires";
+"Compacted while idle, before the prompt cache expired · turn off in Settings › General" = "Compacted while idle, before the prompt cache expired · turn off in Settings › General";
+
 
 /* The session rail, its Changes card's pull request and auto-fix. */
 "Goal" = "Goal";

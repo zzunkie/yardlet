@@ -12,7 +12,7 @@ final class ClaudeProviderNoticeRenderingTests: XCTestCase {
         .turn, .request, .messages, .shellCommand, .backgroundWork, .agents, .edit, .otherChange
     ]
 
-    /// The limit cards, compaction markers and the lines above the composer (a limit warning, and a
+    /// The limit cards, compaction markers (Yardlet's of an idle task too) and the lines above the composer (a limit warning, and a
     /// task moving to another account in its turn and after it, naming what it waits for), in both
     /// appearances.
     /// Rendered without a window into `.build/claude-provider-notices-qa`.
@@ -74,6 +74,9 @@ final class ClaudeProviderNoticeRenderingTests: XCTestCase {
                     tokensBefore: 167_012, tokensAfter: 41_230))
                 CompactionMarker(compaction: HarnessContextCompaction(phase: .failed,
                     message: "Conversation too long to summarize"))
+                CompactionMarker(compaction: HarnessContextCompaction(phase: .started, whileIdle: true))
+                CompactionMarker(compaction: HarnessContextCompaction(phase: .completed,
+                    tokensBefore: 254_503, tokensAfter: 20_114, whileIdle: true))
                 ProviderNoticeLines(notices: notices)
                 // In its turn, then each thing the move can wait for after it.
                 ForEach(Array(Self.moveWaits.enumerated()), id: \.offset) { _, wait in

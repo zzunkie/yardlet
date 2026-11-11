@@ -186,4 +186,14 @@ enum ProviderNoticeText {
             return L10n.string("Compacted session")
         }
     }
+
+    /// The line under a compaction Yardlet made while the task was idle, as Claude Code notes its own.
+    static func idleCompactionNote(_ compaction: HarnessContextCompaction) -> String? {
+        guard compaction.whileIdle == true else { return nil }
+        switch compaction.phase {
+        case .started: return L10n.string("Compacting while idle, before the prompt cache expires")
+        case .completed: return L10n.string("Compacted while idle, before the prompt cache expired · turn off in Settings › General")
+        case .failed: return nil
+        }
+    }
 }

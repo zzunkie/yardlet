@@ -109,6 +109,10 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
     /// there whatever its folder, even one a project holds, until it is moved to a project again.
     /// Its folder stays its cwd.
     private(set) var isMovedToChats: Bool
+    /// The compactions Yardlet made of this Claude Code task while it was idle (`IdleCompaction`), by the ID
+    /// Claude Code's saved conversation keeps them under, newest last: read back, they show as they did
+    /// live, the marker with its note and no `/compact` (`ClaudeSubagentTranscriptReader.idleCompactions`).
+    private(set) var idleCompactions: [String]
 
     /// The task this one was started from, as far as Yardlet knows: its parent, unless the person
     /// placed it (`isLineageDetached`), where only a task placed to keep the sidebar's levels still
@@ -153,7 +157,8 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
         parentTaskID: UUID? = nil,
         isLineageDetached: Bool = false,
         placedStartedFromTaskID: UUID? = nil,
-        isMovedToChats: Bool = false
+        isMovedToChats: Bool = false,
+        idleCompactions: [String] = []
     ) {
         self.id = id
         self.harness = harness
@@ -185,6 +190,15 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
         self.isLineageDetached = isLineageDetached
         self.placedStartedFromTaskID = placedStartedFromTaskID == id ? nil : placedStartedFromTaskID
         self.isMovedToChats = isMovedToChats
+        self.idleCompactions = idleCompactions
+    }
+
+    /// How many idle compactions the task keeps; an earlier one reads back as the `/compact` it was sent as.
+    static let idleCompactionLimit = 50
+
+    mutating func recordIdleCompaction(_ compactionID: String) {
+        guard !idleCompactions.contains(compactionID) else { return }
+        idleCompactions = Array((idleCompactions + [compactionID]).suffix(Self.idleCompactionLimit))
     }
 
     /// How many replaced names the task keeps.
@@ -259,6 +273,7 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
         case isLineageDetached
         case placedStartedFromTaskID
         case isMovedToChats
+        case idleCompactions
     }
 
     init(from decoder: any Decoder) throws {
@@ -311,6 +326,7 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
         let starter = try container.decodeIfPresent(UUID.self, forKey: .placedStartedFromTaskID)
         placedStartedFromTaskID = starter == id ? nil : starter
         isMovedToChats = try container.decodeIfPresent(Bool.self, forKey: .isMovedToChats) ?? false
+        idleCompactions = try container.decodeIfPresent([String].self, forKey: .idleCompactions) ?? []
     }
 }
 

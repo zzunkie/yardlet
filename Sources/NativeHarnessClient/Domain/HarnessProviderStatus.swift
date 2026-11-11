@@ -68,6 +68,12 @@ struct HarnessContextCompaction: Codable, Equatable, Sendable {
     var tokensAfter: UInt64? = nil
     /// The provider's reason, for a compaction that failed.
     var message: String? = nil
+    /// Yardlet compacted the idle task before its prompt cache expired (`IdleCompaction`), as Claude
+    /// Code notes its own. Nil for every other compaction, and left out of the saved shape then.
+    var whileIdle: Bool? = nil
+    /// The provider's own ID for it, which its saved conversation keeps (Claude Code's `compact_boundary`
+    /// uuid). Nil where the provider gives none, and left out of the saved shape then.
+    var providerID: String? = nil
 
     var savedTokens: UInt64? {
         guard let tokensBefore, let tokensAfter, tokensBefore > tokensAfter else { return nil }

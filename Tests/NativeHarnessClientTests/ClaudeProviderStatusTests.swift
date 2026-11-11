@@ -234,7 +234,8 @@ final class ClaudeProviderStatusTests: XCTestCase {
             reversed.payloads(from: try json(frame)).forEach { other.apply($0) }
         }
         XCTAssertEqual(other.entries.map(\.content), [.compaction(HarnessContextCompaction(
-            phase: .completed, tokensBefore: 167_012, tokensAfter: 41_230))])
+            phase: .completed, tokensBefore: 167_012, tokensAfter: 41_230,
+            providerID: "a1b2c3d4-0000-4000-8000-000000000002"))], "The boundary's own ID, as its saved record keeps it")
     }
 
     func testAFailedOrUnfinishedCompactionDoesNotStayRunning() throws {
@@ -291,6 +292,108 @@ final class ClaudeProviderStatusTests: XCTestCase {
         XCTAssertTrue(payloads.contains(.contextCompaction(HarnessContextCompaction(phase: .started))))
         let state = try await adapter.providerCapabilities(for: handle)
         XCTAssertEqual(state.selectors.first { $0.id == "permissionMode" }?.currentValue, "acceptEdits")
+        await adapter.close(handle)
+    }
+
+    /// Idle compaction decides as Claude Code 2.1.322 does (`Ukr`), from what the stream reported of the
+    /// last main request and what the CLI answers about its own settings when the timer fires.
+    func testAnIdleTaskCompactsOnlyWhenClaudeCodeWouldBeforeItsCacheExpires() async throws {
+        let transport = FakeClaudeTransport()
+        func contextUsage(autoCompact: Bool) throws -> JSONValue {
+            try json(#"{"totalTokens":254503,"rawMaxTokens":1000000,"isAutoCompactEnabled":\#(autoCompact)}"#)
+        }
+        await transport.setContextUsageResponse(try contextUsage(autoCompact: true))
+        let adapter = ClaudeAdapter(executableURL: URL(filePath: "/tmp/fake-claude"), transportFactory: { _ in transport })
+        let handle = try await adapter.createSession(CreateHarnessSessionRequest(
+            localSessionID: UUID(), workspaceURL: URL(filePath: "/tmp/workspace"), initialPrompt: nil))
+        let id = handle.localSessionID
+        func responseStart(oneHour: UInt64, fiveMinutes: UInt64 = 0, read: UInt64 = 250_000) throws -> JSONValue {
+            try json(#"""
+            {"type":"stream_event","parent_tool_use_id":null,"event":{"type":"message_start","message":{"usage":
+              {"input_tokens":3,"cache_creation_input_tokens":\#(oneHour + fiveMinutes),"cache_read_input_tokens":\#(read),
+               "cache_creation":{"ephemeral_5m_input_tokens":\#(fiveMinutes),"ephemeral_1h_input_tokens":\#(oneHour)}}}}}
+            """#)
+        }
+
+        try await adapter.send("hello", to: handle)
+        // A subagent's request is its own, not the conversation's.
+        var subagent = try responseStart(oneHour: 9)
+        subagent = .object((subagent.objectValue ?? [:]).merging(["parent_tool_use_id": .string("toolu_1")]) { _, new in new })
+        await transport.emit(subagent)
+        await transport.emit(try responseStart(oneHour: 4_000))
+        await transport.emit(try json(#"""
+        {"type":"stream_event","parent_tool_use_id":null,"event":{"type":"message_delta","usage":{"output_tokens":500}}}
+        """#))
+        await transport.emit(try json(#"{"type":"result","subtype":"success","is_error":false,"result":"done"}"#))
+        try await waitUntil { await adapter.promptCache(for: id)?.outputTokens == 500 }
+        let recorded = await adapter.promptCache(for: id)
+        let armed = try XCTUnwrap(recorded)
+        XCTAssertEqual(armed.lifetime, .oneHour)
+        XCTAssertEqual(armed.contextTokens, 3 + 4_000 + 250_000 + 500, "Input, cache writes and reads, and output")
+        let due = try XCTUnwrap(IdleCompaction.fireDate(for: armed))
+        XCTAssertEqual(due.timeIntervalSince(armed.requestAt), 3_240, accuracy: 0.001, "Nine tenths of the hour")
+
+        var facts = await adapter.idleCompactionFacts(for: id)
+        XCTAssertEqual(facts.settings, ClaudeCompactionSettings(autoCompact: true, idleCompaction: true,
+                                                                 minimumContextTokens: 200_000))
+        XCTAssertNil(IdleCompaction.skip(armed: armed, due: due, now: due, facts: facts))
+        XCTAssertNil(IdleCompaction.skip(armed: armed, due: due, now: due + 60, facts: facts))
+        XCTAssertEqual(IdleCompaction.skip(armed: armed, due: due, now: due + 61, facts: facts), .lapsed,
+                       "A timer the Mac slept through does not compact")
+
+        // The person's own Claude Code settings turn it off whatever Yardlet's switch says.
+        await transport.setSettings(effective: ["idleCompaction": .bool(false)], applied: [:])
+        facts = await adapter.idleCompactionFacts(for: id)
+        XCTAssertEqual(IdleCompaction.skip(armed: armed, due: due, now: due, facts: facts), .idleCompactionOff)
+        await transport.setContextUsageResponse(try contextUsage(autoCompact: false))
+        facts = await adapter.idleCompactionFacts(for: id)
+        XCTAssertEqual(IdleCompaction.skip(armed: armed, due: due, now: due, facts: facts), .compactionOff)
+        await transport.setContextUsageResponse(try contextUsage(autoCompact: true))
+        for (variable, skip) in [("300000", IdleCompaction.Skip.small), ("5000", nil)] {
+            await transport.setSettings(effective: ["env": .object([IdleCompaction.minimumTokensVariable: .string(variable)])],
+                                        applied: [:])
+            facts = await adapter.idleCompactionFacts(for: id)
+            XCTAssertEqual(IdleCompaction.skip(armed: armed, due: due, now: due, facts: facts), skip,
+                           "The CLI's variable sets the size, never below 100,000 tokens")
+        }
+        await transport.setSettings(effective: [:], applied: [:])
+
+        await transport.emit(try json(rejectedSessionLimit.replacingOccurrences(of: #"{"status":"rejected""#, with: #"{"status":"allowed_warning""#)))
+        try await waitUntil { await adapter.idleCompactionFacts(for: id).rateLimit == .warning }
+        facts = await adapter.idleCompactionFacts(for: id)
+        XCTAssertEqual(IdleCompaction.skip(armed: armed, due: due, now: due, facts: facts), .nearLimit)
+
+        await transport.emit(try responseStart(oneHour: 600))
+        try await waitUntil { await adapter.promptCache(for: id)?.requestAt != armed.requestAt }
+        facts = await adapter.idleCompactionFacts(for: id)
+        XCTAssertEqual(IdleCompaction.skip(armed: armed, due: due, now: due, facts: facts), .newerRequest)
+
+        // A request that writes nothing keeps the lifetime of the one before; one written for five minutes arms nothing.
+        await transport.emit(try responseStart(oneHour: 0))
+        await transport.emit(try responseStart(oneHour: 0, fiveMinutes: 700))
+        try await waitUntil { await adapter.promptCache(for: id)?.lifetime == .fiveMinutes }
+        let fiveMinutes = await adapter.promptCache(for: id)
+        XCTAssertNil(IdleCompaction.fireDate(for: fiveMinutes))
+        facts = await adapter.idleCompactionFacts(for: id)
+        XCTAssertEqual(IdleCompaction.skip(armed: armed, due: due, now: due, facts: facts), .notOneHour)
+
+        // Another model since the request: its cache is not the next request's.
+        await transport.emit(try responseStart(oneHour: 800))
+        try await waitUntil { await adapter.promptCache(for: id)?.lifetime == .oneHour }
+        let latest = await adapter.promptCache(for: id)
+        let rearmed = try XCTUnwrap(latest)
+        let rearmedDue = try XCTUnwrap(IdleCompaction.fireDate(for: rearmed))
+        await transport.emit(try json(rejectedSessionLimit.replacingOccurrences(of: #"{"status":"rejected""#, with: #"{"status":"allowed""#)))
+        try await waitUntil { await adapter.idleCompactionFacts(for: id).rateLimit == .allowed }
+        facts = await adapter.idleCompactionFacts(for: id)
+        XCTAssertNil(IdleCompaction.skip(armed: rearmed, due: rearmedDue, now: rearmedDue, facts: facts))
+        _ = try await adapter.setProviderOption(id: "model", value: "sonnet", in: handle)
+        facts = await adapter.idleCompactionFacts(for: id)
+        XCTAssertEqual(IdleCompaction.skip(armed: rearmed, due: rearmedDue, now: rearmedDue, facts: facts), .prefixChanged)
+
+        // A compaction leaves nothing cached of what came before it.
+        await transport.emit(try json(compactBoundary))
+        try await waitUntil { await adapter.promptCache(for: id) == nil }
         await adapter.close(handle)
     }
 

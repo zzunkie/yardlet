@@ -2342,6 +2342,13 @@
 "Claude Code default" = "Claude Code 기본값";
 "Puts this message in the message box without sending it" = "보내지 않고 입력창에 넣습니다";
 
+/* Idle compaction: Claude Code's own "Idle compaction" (idleCompaction), compacting a long idle conversation before its prompt cache expires. */
+"Idle compaction" = "쉬는 동안 압축";
+"Compacts a long Claude Code conversation left idle, just before its prompt cache expires, so your next message costs less. Stays off where Claude Code's own settings turn it off." = "오래 쉬는 긴 Claude Code 대화를 프롬프트 캐시가 만료되기 직전에 압축해 다음 메시지 비용을 줄입니다. Claude Code 설정에서 껐다면 압축하지 않습니다.";
+"Claude Code tasks follow it from their next reply" = "Claude Code 작업은 다음 응답부터 따릅니다";
+"Compacting while idle, before the prompt cache expires" = "쉬는 동안 프롬프트 캐시가 만료되기 전에 압축하는 중";
+"Compacted while idle, before the prompt cache expired · turn off in Settings › General" = "쉬는 동안 프롬프트 캐시가 만료되기 전에 압축함 · 설정 › 일반에서 끌 수 있음";
+
 
 /* The session rail, its Changes card's pull request and auto-fix. */
 "Goal" = "목표";

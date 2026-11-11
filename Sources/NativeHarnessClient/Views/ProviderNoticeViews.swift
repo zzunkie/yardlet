@@ -223,6 +223,11 @@ struct CompactionMarker: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if let note = ProviderNoticeText.idleCompactionNote(compaction) {
+                Text(note)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .font(.caption)
         .foregroundStyle(compaction.phase == .failed ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))

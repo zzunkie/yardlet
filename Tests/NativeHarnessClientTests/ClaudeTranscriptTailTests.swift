@@ -135,7 +135,7 @@ final class ClaudeTranscriptTailTests: XCTestCase {
         XCTAssertEqual(markers.count, 1)
         let marker = try XCTUnwrap(markers.first)
         XCTAssertEqual(shown[marker].content,
-                       .compaction(.init(phase: .completed, tokensBefore: 167_012, tokensAfter: 9_120)))
+                       .compaction(.init(phase: .completed, tokensBefore: 167_012, tokensAfter: 9_120, providerID: "compact")))
         XCTAssertEqual(shown[marker + 1].content, .user(text: Self.request(301), images: nil))
         guard case let .assistant(text, _) = shown[marker - 1].content else { return XCTFail("the turn before it") }
         XCTAssertTrue(text.hasPrefix("Answer 300."))

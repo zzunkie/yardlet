@@ -218,7 +218,8 @@ enum RemoteTurnProjection {
             kind = .scheduleCreated(ConversationScheduleCreation(scheduleID: id, name: schedule.name))
         } else if let compaction = item.compaction, let phase = HarnessContextCompaction.Phase(rawValue: compaction.phase) {
             kind = .compaction(HarnessContextCompaction(phase: phase, tokensBefore: compaction.tokensBefore,
-                                                        tokensAfter: compaction.tokensAfter, message: compaction.message))
+                                                        tokensAfter: compaction.tokensAfter, message: compaction.message,
+                                                        whileIdle: compaction.whileIdle))
         } else if let notice = item.providerNotice, let noticeKind = CodexNoticeItem.Kind(rawValue: notice.kind) {
             let content = CodexNoticeItem(kind: noticeKind, message: notice.message, details: notice.details,
                                           fromModel: notice.fromModel, reason: notice.reason, path: notice.path)

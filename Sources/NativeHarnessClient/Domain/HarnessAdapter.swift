@@ -89,6 +89,18 @@ protocol HarnessHistoryFreeSessionConfiguring: Actor {
     func keepNoHistory(for localSessionID: UUID) async -> Bool
 }
 
+/// Optional surface for a provider that compacts a long conversation while its session is idle,
+/// before the prompt cache expires (Claude Code's idle compaction, `IdleCompaction`). Nothing here
+/// starts a turn or writes the provider's settings.
+protocol HarnessIdleCompacting: Actor {
+    /// What the session's last main request left in the prompt cache; nil before one, and after a
+    /// compaction until the next.
+    func promptCache(for localSessionID: UUID) async -> ClaudePromptCacheState?
+    /// The same, with the plan-limit status and the provider's own settings read now, for a timer
+    /// that fires.
+    func idleCompactionFacts(for localSessionID: UUID) async -> IdleCompactionFacts
+}
+
 /// Optional richer permission surface for adapters whose provider offers more
 /// than one allow or deny action. The base decision API stays source-compatible.
 protocol HarnessPermissionActionResponding: Actor {

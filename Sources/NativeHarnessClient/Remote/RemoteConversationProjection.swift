@@ -285,7 +285,7 @@ enum RemoteConversationProjection {
             if full != nil {
                 result.compaction = RemoteCompaction(
                     phase: compaction.phase.rawValue, tokensBefore: compaction.tokensBefore, tokensAfter: compaction.tokensAfter,
-                    message: RemoteText.short(compaction.message, RemoteText.errorLimit))
+                    message: RemoteText.short(compaction.message, RemoteText.errorLimit), whileIdle: compaction.whileIdle)
             }
         case let .request(request):
             return self.request(request, turnID: turnID, inWork: inWork, isFull: full != nil)

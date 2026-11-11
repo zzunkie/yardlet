@@ -114,6 +114,11 @@ read nothing in it, whatever mode the files inside have.
   state with the restored tasks (continuing cut-off turns, armed continues, schedules, following the session list) does
   not run, and the window says why until Yardlet is restarted. None of those records on disk change, so the next launch
   that opens the index finds them as they were. Settings and sign-ins are used as usual.
+- **Idle compactions:** `sessions.idle_compactions TEXT`, nullable: the `compact_boundary` uuids of the compactions
+  Yardlet made of a Claude Code task while it was idle (Settings › General › Idle compaction), the latest 50, kept
+  with the task's fields (`SessionRecord.idleCompactions`) and cleared when the task is deleted. Claude Code's records
+  cannot tell such a compaction from a `/compact` the person sent; this list is what lets a read show it as it showed
+  live. Existing rows keep none, and earlier builds ignore the column and their saves leave it as it is.
 - **Read cache:** `~/.yardlet/transcripts/<task UUID>.json` keeps the newest 500 `[TranscriptEntry]` of every harness's
   task. A save while the task streams (about once a second) adds only the entries that are new or changed to
   `<task UUID>.jsonl`, one `{"entry":…}` a line after a first line `{"snapshot":<bytes>}` naming the size of the `.json`
@@ -607,8 +612,10 @@ nothing to show while it is read shows as loading instead of "Start a conversati
     `<local-command-stdout>` or `<local-command-stderr>`, after an `isMeta` `<local-command-caveat>`. They read as the
     live stream showed them (`ClaudeLocalCommand`): the command as the request it was sent as (`/compact` with its
     arguments), and the output as the stream's `local_command_output` card. Claude saves a compaction before the
-    `/compact` that ran it; its marker is shown after that command, as it was live. None of them, nor a compaction's
-    summary, is an edit or rewind point.
+    `/compact` that ran it; its marker is shown after that command, as it was live. A compaction Yardlet made while
+    the task was idle (`idle_compactions` below) reads as it showed live: its `/compact` opens a turn with no request,
+    the marker carries the idle note, and the output is left out. None of them, nor a compaction's summary, is an edit
+    or rewind point.
   - For an attached task, everything from the first turn on (including what the runtime streamed) stays as it is, and
     the turns read are put before the boundary entry (`TranscriptBuilder.replaceEntries(before:)`). In the conversation
     this is `ConversationEarlierTurns.providerFile`, and the marker disappears once the read reaches the start.

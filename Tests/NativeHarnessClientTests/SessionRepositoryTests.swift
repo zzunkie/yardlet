@@ -54,7 +54,8 @@ final class SessionRepositoryTests: XCTestCase {
             title: "Claude task",
             createdAt: timestamp,
             updatedAt: timestamp,
-            providerSessionID: "claude-session-1"
+            providerSessionID: "claude-session-1",
+            idleCompactions: ["5f0c3a52-8d1e-4b7a-9c2f-3e6d1a4b7c80"]
         )
 
         let writer = try SQLiteSessionRepository(databaseURL: databaseURL)
@@ -68,6 +69,18 @@ final class SessionRepositoryTests: XCTestCase {
         try await reader.archive(id: codex.id)
         let afterArchive = try await reader.loadSessions()
         XCTAssertEqual(afterArchive, [claude])
+
+        // What Yardlet kept of a task's idle compactions goes with the task.
+        try await reader.discard(id: claude.id)
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(databaseURL.path(), &database), SQLITE_OK)
+        defer { sqlite3_close(database) }
+        var statement: OpaquePointer?
+        XCTAssertEqual(sqlite3_prepare_v2(database, "SELECT idle_compactions FROM sessions WHERE id = '\(claude.id.uuidString)';",
+                                          -1, &statement, nil), SQLITE_OK)
+        defer { sqlite3_finalize(statement) }
+        XCTAssertEqual(sqlite3_step(statement), SQLITE_ROW)
+        XCTAssertEqual(sqlite3_column_type(statement, 0), SQLITE_NULL)
     }
 
     func testSQLiteRoundTripPreservesUnknownHarnessIdentifier() async throws {

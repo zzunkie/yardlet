@@ -940,6 +940,9 @@ struct ClaudeWireCodec: Sendable {
 }
 
 struct ClaudeEventProjector: Sendable {
+    /// The ID of the card a local command's output shows as (`local_command_output`), before its frame's uuid.
+    static let commandOutputPrefix = "claude-command:"
+
     /// `activities` carries the tool calls this session already started so a `tool_result`
     /// message can complete the card the `tool_use` block opened.
     func payloads(
@@ -955,7 +958,7 @@ struct ClaudeEventProjector: Sendable {
                   let content = value["content"]?.stringValue,
                   let id = value["uuid"]?.stringValue else { return [] }
             return [.activityCompleted(HarnessActivity(
-                id: "claude-command:\(id)", kind: "command", title: L10n.string("Command output"), output: content
+                id: Self.commandOutputPrefix + id, kind: "command", title: L10n.string("Command output"), output: content
             ))]
         case "stream_event":
             guard value["event"]?["type"]?.stringValue == "content_block_delta" else { return [] }
@@ -1203,7 +1206,8 @@ struct ClaudeEventProjector: Sendable {
         HarnessContextCompaction(
             phase: .completed,
             tokensBefore: unsigned(frame["compact_metadata"]?["pre_tokens"]),
-            tokensAfter: unsigned(frame["compact_metadata"]?["post_tokens"])
+            tokensAfter: unsigned(frame["compact_metadata"]?["post_tokens"]),
+            providerID: frame["uuid"]?.stringValue
         )
     }
 

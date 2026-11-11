@@ -58,7 +58,8 @@ actor ClaudeAdapter:
     HarnessModelCatalogReporting,
     HarnessSessionBranching,
     HarnessInterruptedTurnContinuing,
-    HarnessHistoryFreeSessionConfiguring {
+    HarnessHistoryFreeSessionConfiguring,
+    HarnessIdleCompacting {
     private struct PermissionContext: Sendable {
         let localSessionID: UUID
         let originalInput: JSONValue
@@ -77,6 +78,8 @@ actor ClaudeAdapter:
     private let asksForNextMessageSuggestions: @Sendable () -> Bool
     /// The context limit a task without its own starts with (`ClaudeContextLimitPreference`).
     private let defaultContextLimit: @Sendable () -> UInt64?
+    /// The account's variables the CLI starts with, besides the app's own.
+    private let environmentOverrides: [String: String]
     /// Sessions launched with `nextMessageSuggestions: off`, which never ask whatever the setting.
     private var sessionsWithoutNextMessageSuggestions = Set<UUID>()
 
@@ -106,6 +109,10 @@ actor ClaudeAdapter:
     private var unrestoredLaunchModels = Set<UUID>()
     /// The latest context-usage request per session; an older answer arriving late is dropped.
     private var contextUsageRequestIDs: [UUID: String] = [:]
+    /// What each session's last main request left in the prompt cache (`recordPromptCache`), and the
+    /// sessions set to another model since.
+    private var promptCaches: [UUID: ClaudePromptCacheState] = [:]
+    private var modelChangedSinceRequest = Set<UUID>()
     private var agentToolServerByLocalSessionID: [UUID: AgentToolServerLaunch] = [:]
     private var yardletInstructionsByLocalSessionID: [UUID: String] = [:]
     /// Sessions the CLI keeps no conversation file for (`run_agent`).
@@ -163,6 +170,7 @@ actor ClaudeAdapter:
         self.runtimeCompatibility = runtimeCompatibility
         self.asksForNextMessageSuggestions = asksForNextMessageSuggestions
         self.defaultContextLimit = defaultContextLimit
+        self.environmentOverrides = environmentOverrides
         // Each task's CLI counts toward that task in Task Resource Usage, with everything it starts.
         self.transportFactory = transportFactory ?? { localSessionID in
             ClaudeProcessTransport(executableURL: executableURL, environmentOverrides: environmentOverrides,
@@ -769,6 +777,9 @@ actor ClaudeAdapter:
                 _ = try await transport.request(
                     ClaudeProtocol.setModel(id: requestID, model: value), id: requestID
                 )
+                if requestedModelByLocalSessionID[session.localSessionID] != value {
+                    modelChangedSinceRequest.insert(session.localSessionID)
+                }
                 requestedModelByLocalSessionID[session.localSessionID] = value
             }
         case ClaudeLaunchOption.permissionMode:
@@ -854,6 +865,8 @@ actor ClaudeAdapter:
         }
         permissions = permissions.filter { $0.value.localSessionID != session.localSessionID }
         projections.removeValue(forKey: session.localSessionID)
+        promptCaches.removeValue(forKey: session.localSessionID)
+        modelChangedSinceRequest.remove(session.localSessionID)
         foregroundSessions.remove(session.localSessionID)
         providerStateByLocalSessionID.removeValue(forKey: session.localSessionID)
         earlyPermissionModeByLocalSessionID.removeValue(forKey: session.localSessionID)
@@ -1101,6 +1114,7 @@ actor ClaudeAdapter:
             acceptAnnouncedPermissionMode(mode, for: localSessionID, rawData: frame.data)
         }
 
+        recordPromptCache(from: value, for: localSessionID)
         let endsMainTurn = value["type"]?.stringValue == "result"
             && value["parent_tool_use_id"]?.stringValue?.isEmpty != false
         // A turn Yardlet asked the CLI to stop still ends with an error result. It ends here as
@@ -1161,6 +1175,69 @@ actor ClaudeAdapter:
         state.mcpServers = servers
         providerStateByLocalSessionID[handle.localSessionID] = state
         emit(.providerCapabilitiesChanged, for: handle.localSessionID)
+    }
+
+    // MARK: - Idle compaction
+
+    /// The main conversation's requests as the stream reports them: a response's start says what the
+    /// request read and wrote in the prompt cache, its delta what it wrote out, and a compaction
+    /// leaves nothing cached of what came before it, as the CLI forgets its last request then (`umn`).
+    /// A subagent's frames carry its `parent_tool_use_id` and are its own.
+    private func recordPromptCache(from value: JSONValue, for localSessionID: UUID) {
+        guard value["parent_tool_use_id"]?.stringValue?.isEmpty != false else { return }
+        switch value["type"]?.stringValue {
+        case "system" where value["subtype"]?.stringValue == "compact_boundary":
+            promptCaches.removeValue(forKey: localSessionID)
+        case "stream_event":
+            let event = value["event"]
+            switch event?["type"]?.stringValue {
+            case "message_start":
+                if let cache = ClaudePromptCacheState(responseStart: event?["message"]?["usage"], at: Date(),
+                                                      previous: promptCaches[localSessionID]) {
+                    promptCaches[localSessionID] = cache
+                    modelChangedSinceRequest.remove(localSessionID)
+                }
+            case "message_delta":
+                if let output = ClaudeEventProjector.unsigned(event?["usage"]?["output_tokens"]) {
+                    promptCaches[localSessionID]?.outputTokens = output
+                }
+            default:
+                break
+            }
+        default:
+            break
+        }
+    }
+
+    func promptCache(for localSessionID: UUID) -> ClaudePromptCacheState? {
+        promptCaches[localSessionID]
+    }
+
+    /// The CLI's own answers, without a turn: whether it compacts automatically at all
+    /// (`get_context_usage`'s `isAutoCompactEnabled`, which counts its settings and environment) and
+    /// its effective settings (`get_settings`) for `idleCompaction` and the variable that sets how
+    /// long a conversation must be. Nothing is written.
+    func idleCompactionFacts(for localSessionID: UUID) async -> IdleCompactionFacts {
+        var settings: ClaudeCompactionSettings?
+        if let transport = transports[localSessionID] {
+            let usageID = takeRequestID(prefix: "context")
+            let settingsID = takeRequestID(prefix: "settings")
+            if let usage = try? await transport.request(ClaudeProtocol.contextUsage(id: usageID), id: usageID),
+               let autoCompact = usage["isAutoCompactEnabled"]?.boolValue,
+               let answer = try? await transport.request(ClaudeProtocol.settings(id: settingsID), id: settingsID),
+               let effective = answer["effective"] {
+                let variable = IdleCompaction.minimumTokensVariable
+                let minimum = effective["env"]?[variable]?.stringValue ?? environmentOverrides[variable]
+                    ?? RuntimeProcessEnvironment.app[variable]
+                settings = ClaudeCompactionSettings(
+                    autoCompact: autoCompact, idleCompaction: effective["idleCompaction"]?.boolValue != false,
+                    minimumContextTokens: IdleCompaction.minimumContextTokens(variable: minimum))
+            }
+        }
+        // Read after the answers: a request the CLI made meanwhile is the newer one.
+        return IdleCompactionFacts(cache: promptCaches[localSessionID],
+                                   rateLimit: projections[localSessionID]?.rateLimitStatus,
+                                   modelChanged: modelChangedSinceRequest.contains(localSessionID), settings: settings)
     }
 
     /// The result carries the turn's token counts but not how full the context window is, so the

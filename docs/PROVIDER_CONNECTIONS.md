@@ -361,10 +361,10 @@ A move the person cancels, or one given up at its deadline, is not made again un
 A task that moved keeps why, in its hover card ("Switched from <account>: nearly out of its limit").
 
 Nothing is read for this beyond what Yardlet holds: the accounts' readings, which a running task's own limit reports
-keep current; an idle task's last activity (`SessionRecord.updatedAt`, never earlier than its last request); and, for
-a task a limit just stopped, the last answer, thinking or tool call before the limit card in the conversation it holds
-(a compaction after it left nothing cached). Yardlet looks at one task when its turn ends, at the tasks on nearly
-spent accounts when the set of Claude Code accounts with room changes (`ProviderConnectionStore.onReadingsChange`),
+keep current; an idle task's last activity (`SessionRecord.updatedAt`, never earlier than its last request but for an
+idle compaction's, below); and, for a task a limit just stopped, the last answer, thinking or tool call before the
+limit card in the conversation it holds (a compaction after it left nothing cached). Yardlet looks at one task when its
+turn ends, at the tasks on nearly spent accounts when the set of Claude Code accounts with room changes (`ProviderConnectionStore.onReadingsChange`),
 and once at the moment the next of those tasks' caches expires or a nearly spent limit resets; there is no periodic
 scan.
 
@@ -376,6 +376,8 @@ waiting to move keeps that move, and the run's message goes after it; and one wh
 stays until it works again. Turned off, Yardlet
 looks at nothing, cancels the moves it was waiting to make, disarms the continues it armed, also before a relaunch, and
 schedules move runs as they did before. Moving right after a compaction would also cost nothing, but a compaction happens inside a turn.
+An idle compaction (next section) leaves the task's last activity as it was, so a task compacted while idle still
+moves at the hour, once the compaction has ended.
 
 Tests: `AccountRoutingTests.testATaskMovesOnlyWhenItsCacheIsLostAnywayOrALimitStoppedIt` (the rule),
 `ClaudeUsageLimitAppModelTests.testALimitThatResetsAfterTheCacheExpiresMovesTheTaskToAnAccountWithRoom`,
@@ -386,6 +388,69 @@ off), `testAnIdleTaskLeavesANearlySpentAccountOnceItsCacheHasExpired`,
 `ClaudeProviderNoticeRenderingTests.testAnAutomaticMoveWaitsForTheResetOrSaysWhereTheTaskGoes`
 (`.build/claude-provider-notices-qa/automatic-move-*.png`) and Settings › Harness Accounts in
 `AccountListRenderingTests.testEachModeDrawsTheSameRows` (`.build/account-list-qa/manage-*.png`).
+
+## Compacting idle Claude Code tasks
+
+**Settings › General → Idle compaction** (`IdleCompactionPreference`, on by default, under Tasks) does for Claude Code
+tasks what Claude Code's own `idleCompaction` setting does in its terminal and in the apps it recognizes: a long
+conversation left idle is compacted shortly before its 1-hour prompt cache expires, so the next message does not write
+the whole conversation to the cache again. Claude Code itself never does it in Yardlet's sessions: it compacts while
+idle only in an interactive session or one an app on its list launched, and Yardlet runs it headless under its own
+entrypoint, which it does not change. Nothing is written to Claude Code's settings.
+
+The rules are Claude Code's (2.1.322; `IdleCompaction`). After a turn ends, the task's timer is armed from the last
+request of the main conversation, as the CLI's stream reported it (`ClaudeAdapter`: the `message_start` usage, and its
+`message_delta` output): only when that request used the 1-hour cache (it wrote 1-hour cache tokens, or wrote none and
+the request before it did), and to fire nine tenths of the way to the cache's expiry, about 54 minutes after the
+request. When it fires, Yardlet asks the CLI, without a turn, whether it compacts automatically at all
+(`get_context_usage`'s `isAutoCompactEnabled`, which counts `autoCompactEnabled`, `DISABLE_COMPACT` and
+`DISABLE_AUTO_COMPACT`) and for its effective settings (`get_settings`), and compacts only when every one of Claude
+Code's conditions holds, else records which failed in the task coordination log (`idle-compaction`, with Claude Code's
+own word for it):
+
+- auto-compact is on (`compaction_off`) and `idleCompaction` is not false (`idle_compaction_off`): a person whose Claude
+  Code settings turn either off gets no idle compaction, whatever Yardlet's switch says;
+- the task was not set to another model since the request (`prefix_changed`), whose cache would not be the next
+  request's;
+- the last request used the 1-hour cache (`not_one_hour`), the cache is still warm and the timer is at most a minute
+  late (`lapsed`), so a Mac that slept through it does not compact;
+- the context, counted as the CLI counts it (input, cache writes, cache reads and output of the last response), is at
+  least `max(100000, CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS ?? 200000)` tokens (`small`), the variable read from the CLI's
+  effective settings or its environment;
+- no request came after the one the timer was armed from (`newer_request`), and the plan limit the CLI last reported is
+  `allowed`, not near or at the limit (`near_limit`).
+
+Yardlet adds its own conditions on the task: its runtime is up, nothing in it works or waits (the same test a move to
+another account makes: its turn, a question or approval, a message or shell output on its way, a shell command,
+background commands or agents, `run_agent` runs, an edit, another change), and no move to another account is waiting
+or under way. Anything sent to the task, or a turn it starts, cancels the timer; a turn's end arms it again. There is
+one timer per task and no scan: what the timer needs comes from frames the adapter already reads.
+
+The compaction is the composer's Compact session, `/compact`, sent without the person's part: it opens a turn of its
+own with no request in the conversation (the turn before keeps its answer as its last word), the compaction marker
+says it happened while idle, before the prompt cache expired, and how to turn it off (on remote clients too, as the
+marker's `whileIdle`; [REMOTE_PROTOCOL.md](REMOTE_PROTOCOL.md)), and the command's printed output is left out. The
+task runs while it compacts, so a message sent meanwhile waits for it as for any turn, and a move to another account
+that comes due waits too. It does not mark the task unread, notify, move it up the list, or clear its
+suggested next message, and a compaction's end arms no new timer: the CLI forgets its last request at a compaction.
+A CLI that starts again, after a relaunch or for any other reason, arms nothing until the task's next turn, as Claude
+Code arms only after a turn of its own process; so a task whose cache lapsed meanwhile is not compacted. Claude Code
+saves the compaction as the `/compact` it was sent as, which its records cannot tell from one the person sent, so
+Yardlet keeps with the task the compactions it made while idle (`SessionRecord.idleCompactions`, by the boundary's
+uuid, the latest 50; [NATIVE_SESSION_STORAGE.md](NATIVE_SESSION_STORAGE.md)): read back after a relaunch, they show as
+they did live, the marker with its note, without the command or its output.
+Turned off, a timer that fires does nothing and none is armed; nothing else is kept.
+
+Not the same as Claude Code: the request time is when its response began streaming rather than when the CLI sent it,
+seconds later; Claude Code's cache renewals that Yardlet cannot see can only make Claude Code fire later, never earlier;
+and Claude Code also skips while the person typed in its terminal within the last minute, which has no counterpart in
+Yardlet's composer.
+
+Tests: `ClaudeProviderStatusTests.testAnIdleTaskCompactsOnlyWhenClaudeCodeWouldBeforeItsCacheExpires` (the stream, the
+CLI's answers and every rule), and the renders of the setting in `SettingsRenderingTests.testTheWholeListAndGeneralsHeadingsDraw`
+(`.build/settings-qa/general-headings-*.png`) and of the marker in
+`ClaudeProviderNoticeRenderingTests.testLimitCardsCompactionMarkersAndNoticeLinesRender`
+(`.build/claude-provider-notices-qa/notices-*.png`).
 
 ## Account folder shape, finding sign-ins and removing accounts
 

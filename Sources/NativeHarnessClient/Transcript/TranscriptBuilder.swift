@@ -263,6 +263,8 @@ struct TranscriptBuilder: Sendable {
             settled.tokensBefore = update.tokensBefore ?? existing.tokensBefore
             settled.tokensAfter = update.tokensAfter ?? existing.tokensAfter
             settled.message = update.message ?? existing.message
+            settled.whileIdle = update.whileIdle ?? existing.whileIdle
+            settled.providerID = update.providerID ?? existing.providerID
             list[index].content = .compaction(settled)
         }
     }

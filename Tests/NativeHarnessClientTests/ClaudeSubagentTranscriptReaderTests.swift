@@ -463,6 +463,24 @@ final class ClaudeSubagentTranscriptReaderTests: XCTestCase {
                                    "user: Now the docs.", "assistant: Updated."])
         XCTAssertEqual(try reader.conversationPoints(sessionID: parent).map(\.text), ["Now the docs."],
                        "Neither the compaction's summary nor the command or its output is a request to edit")
+
+        // One Yardlet made while the task was idle, which the saved records cannot tell, reads as it showed
+        // live: a turn without a request, the marker with its note; neither the command nor its output.
+        var idleReader = reader
+        idleReader.idleCompactions = ["00000000-0000-4000-8000-000000000013"]
+        let idle = try XCTUnwrap(idleReader.readConversation(sessionID: parent)).entries.compactMap { entry -> String? in
+            switch entry.content {
+            case .user where entry.origin == .provider: "a turn without a request"
+            case let .user(text, _): "user: \(text)"
+            case let .assistant(text, _): "assistant: \(text)"
+            case let .compaction(compaction): "compaction: \(compaction.tokensBefore ?? 0) → \(compaction.tokensAfter ?? 0)"
+                + (compaction.whileIdle == true ? " while idle" : "")
+            case let .activity(activity, _): "\(activity.title): \(activity.output ?? "")"
+            default: nil
+            }
+        }
+        XCTAssertEqual(idle, ["user: Run the tests.", "assistant: All green.", "a turn without a request",
+                              "compaction: 254503 → 20114 while idle", "user: Now the docs.", "assistant: Updated."])
         XCTAssertEqual(ClaudeLocalCommand.parse(#"<command-name>/compact</command-name><command-args> keep the API notes </command-args>"#),
                        .request("/compact keep the API notes"))
         XCTAssertNil(ClaudeLocalCommand.parse("<command-name>/compact</command-name> and more words"), "Words of the person's own")

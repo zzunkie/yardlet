@@ -1645,7 +1645,9 @@ for what they read beyond §6's items. A phone keeps §6.
   `activityId` and `canStop` for a Claude Code subagent (§15.31's `subtask`), so a client reading §6 can stop the
   subagent and open its child tasks too.
 - **`compaction`** on a `notice` item that is a context compaction: `{"phase": "completed", "tokensBefore": 180000,
-  "tokensAfter": 42000}`, `phase` `started`, `completed` or `failed` with the provider's `message`.
+  "tokensAfter": 42000}`, `phase` `started`, `completed` or `failed` with the provider's `message`. `whileIdle: true`
+  when the Mac compacted the idle task before its prompt cache expired (Settings › General › Idle compaction), which
+  a client notes under the marker; absent otherwise.
 - **`providerNotice`** on a `notice` item a provider sent beside a turn: `{"kind": "modelRerouted", "message": "gpt-5.5",
   "fromModel": "gpt-6", "reason": "highRiskCyberActivity"}`; `kind` `modelRerouted`, `warning`, `configWarning` or
   `deprecationNotice`, with `details` and a config file's `path` when it names one. A client words it itself.

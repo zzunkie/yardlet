@@ -722,7 +722,8 @@ actor YHPProviderCompatibilityAdapter:
     HarnessModelCatalogReporting,
     HarnessSessionBranching,
     HarnessMCPServerStatusReading,
-    HarnessInterruptedTurnContinuing
+    HarnessInterruptedTurnContinuing,
+    HarnessIdleCompacting
 {
     nonisolated let kind: HarnessKind
     nonisolated let protocolManifest: HarnessAdapterManifest
@@ -754,6 +755,9 @@ actor YHPProviderCompatibilityAdapter:
     /// A restart continuation carries its own provenance (Claude Code's `origin`), which a YHP send
     /// has no place for, so it goes to the wrapped adapter directly, as a follow-up does.
     private let interruptedTurnContinuing: (any HarnessInterruptedTurnContinuing)?
+    /// What the prompt cache holds and the provider's compaction settings have no place in YHP; they
+    /// are read from the wrapped adapter, and the compaction itself is sent as any message.
+    private let idleCompacting: (any HarnessIdleCompacting)?
 
     init(
         adapter: any HarnessAdapter,
@@ -775,6 +779,7 @@ actor YHPProviderCompatibilityAdapter:
         self.followUpQueueing = adapter as? any HarnessFollowUpQueueing
         self.mcpStatusReading = adapter as? any HarnessMCPServerStatusReading
         self.interruptedTurnContinuing = adapter as? any HarnessInterruptedTurnContinuing
+        self.idleCompacting = adapter as? any HarnessIdleCompacting
         self.core = YHPCompatibilityAdapter(
             adapter: adapter,
             manifest: manifest,
@@ -800,6 +805,14 @@ actor YHPProviderCompatibilityAdapter:
 
     func advertisedModels(for localSessionID: UUID) async -> [HarnessModelOption]? {
         await modelCatalogReporting?.advertisedModels(for: localSessionID) ?? nil
+    }
+
+    func promptCache(for localSessionID: UUID) async -> ClaudePromptCacheState? {
+        await idleCompacting?.promptCache(for: localSessionID) ?? nil
+    }
+
+    func idleCompactionFacts(for localSessionID: UUID) async -> IdleCompactionFacts {
+        await idleCompacting?.idleCompactionFacts(for: localSessionID) ?? IdleCompactionFacts()
     }
 
     func stopSubtask(activityID: String, in session: HarnessSessionHandle) async throws {

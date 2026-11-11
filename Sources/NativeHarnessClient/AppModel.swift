@@ -265,6 +265,11 @@ final class AppModel {
     /// When a send last marked each task running. A "ready" the provider emitted before then, such
     /// as the one from attaching a new task, is older than the send and must not end the turn.
     @ObservationIgnored var submissionStartedAt: [UUID: Date] = [:]
+    /// Each Claude Code task's idle-compaction timer (`armIdleCompaction`), one at most.
+    @ObservationIgnored var idleCompactionTimers: [UUID: Task<Void, Never>] = [:]
+    /// The tasks Yardlet compacted while they were idle, from the compaction's start until the next
+    /// turn starts (`IdleCompactionRun`).
+    @ObservationIgnored var idleCompactionRuns: [UUID: IdleCompactionRun] = [:]
     @ObservationIgnored private var codexPresentationTasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var sessionTitleResolutionTasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var sessionTitleRefreshes: [UUID: UUID] = [:]
@@ -2456,6 +2461,7 @@ final class AppModel {
         guard store.sessions.contains(where: { $0.id == sessionID }) else { return }
         continuations.stoppedByPerson.remove(sessionID)
         continuations.unseenRestartResumes.removeValue(forKey: sessionID)
+        idleCompactionTurnStarted(sessionID)
         submissionStartedAt[sessionID] = Date()
         errorBySessionID.removeValue(forKey: sessionID)
         composerDrafts.tasks.existingDraft(for: sessionID)?.nextMessageSuggestion = nil
@@ -3492,8 +3498,11 @@ final class AppModel {
     }
 
     func claudeSessionReader(for session: SessionRecord) -> ClaudeSubagentTranscriptReader {
-        ClaudeSubagentTranscriptReader(configDirectory: ClaudeSubagentTranscriptReader.configDirectory(
+        var reader = ClaudeSubagentTranscriptReader(configDirectory: ClaudeSubagentTranscriptReader.configDirectory(
             connection: session.connection, workspaceURL: session.workspaceURL))
+        // The compactions Yardlet made while the task was idle, which its saved conversation cannot tell.
+        reader.idleCompactions = Set(store.sessions.first { $0.id == session.id }?.idleCompactions ?? session.idleCompactions)
+        return reader
     }
 
     /// A detached Claude task's conversation read again from its saved transcript: the newest part
@@ -6449,11 +6458,14 @@ final class AppModel {
             break
         default:
             flushTranscriptDeltas(for: event.localSessionID)
+            let idle = idleCompactionRuns.isEmpty ? nil : idleCompactionEvent(event.payload, for: event.localSessionID)
+            guard let payload = idle == nil ? event.payload : idle?.payload else { break }
             mutateTranscript(
                 for: event.localSessionID,
                 publishImmediately: true
             ) { builder in
-                builder.apply(event.payload)
+                if idle?.opensTurn == true { builder.appendUser("", origin: .provider) }
+                builder.apply(payload)
             }
         }
 
@@ -6479,11 +6491,15 @@ final class AppModel {
         case let .sessionStatusChanged(status)
             where status == .ready && (submissionStartedAt[event.localSessionID].map { event.timestamp < $0 } ?? false):
             break
+        case .sessionStatusChanged(.running) where idleCompactionRuns[event.localSessionID]?.ended == false:
+            // Yardlet's compaction of the idle task, which it marked running itself without making it recent.
+            break
         case let .sessionStatusChanged(status):
             guard status == .running || status == .waitingForApproval else {
                 await turnEnded(event.localSessionID, as: status, cause: .providerStatus, at: event.timestamp)
                 break
             }
+            idleCompactionTurnStarted(event.localSessionID)
             // The next turn has begun; what was suggested after the last one no longer fits, and a
             // question a restart cut off is no longer what the task waits on.
             composerDrafts.tasks.existingDraft(for: event.localSessionID)?.nextMessageSuggestion = nil
@@ -6533,6 +6549,11 @@ final class AppModel {
             acceptNextMessageSuggestion(text, for: event.localSessionID)
         case .turnCompleted:
             continuations.usageLimitAutoContinueHandedOver.removeValue(forKey: event.localSessionID)
+            // A compaction Yardlet made while the task was idle is no news: no mark, notification or title.
+            guard idleCompactionRuns[event.localSessionID] == nil else {
+                await reloadAttachedProviderCapabilities(for: event.localSessionID)
+                break
+            }
             // A turn that ended on its final error already failed and notified; it did not complete.
             let failed = store.sessions.first(where: { $0.id == event.localSessionID })?.status == .failed
             let shouldMarkUnread = !isSessionVisible(event.localSessionID)
@@ -6591,6 +6612,9 @@ final class AppModel {
     func turnEnded(_ id: UUID, as status: SessionStatus, cause: TurnEndCause, at timestamp: Date = Date(),
                    notificationDetail: String? = nil) async {
         let follows = cause.followUps
+        // A compaction Yardlet made while the task was idle leaves its row, order and read state as they were.
+        let isIdleCompaction = idleCompactionRuns[id] != nil
+        if isIdleCompaction, status != .running, status != .waitingForApproval { idleCompactionRuns[id]?.ended = true }
         if follows.contains(.browserPreview) {
             // The rail's browser preview goes with the turn, as the Codex app's at `turn/completed`.
             BrowserAgentUse.shared.endTurn(session: id)
@@ -6603,7 +6627,7 @@ final class AppModel {
         if follows.contains(.connectionResume), let resume = continuations.connectionResumes[id], !resume.isWaiting {
             continuations.forgetConnectionResume(id)
         }
-        let marksUnread = follows.contains(.unreadMark) && !isSessionVisible(id)
+        let marksUnread = follows.contains(.unreadMark) && !isIdleCompaction && !isSessionVisible(id)
             && [.waitingForApproval, .completed, .failed].contains(status)
         let previous = store.sessions.first(where: { $0.id == id })?.status
         let endsTurn = previous == .running || previous == .waitingForApproval
@@ -6613,14 +6637,14 @@ final class AppModel {
             id: id,
             status: status,
             hasUnreadUpdate: marksUnread ? true : nil,
-            updatesRecency: cause != .providerStatus || status != .ready || endsTurn
+            updatesRecency: !isIdleCompaction && (cause != .providerStatus || status != .ready || endsTurn)
         )
         if endsTurn {
             coordinationLog.record(.init(event: "turn-ended", task: id.uuidString,
                                          harness: store.sessions.first { $0.id == id }?.harness.rawValue,
                                          reason: cause.rawValue, status: status.rawValue))
         }
-        if follows.contains(.routingEvaluation), endsTurn {
+        if follows.contains(.routingEvaluation), endsTurn, !isIdleCompaction {
             recordTurnForRoutingEvaluation(id, status: status, at: timestamp)
             // A dialog the agent's own input opened and left unanswered is now the person's to answer.
             refreshBrowserWaits()
@@ -6652,6 +6676,10 @@ final class AppModel {
         // back while the task still runs: a cut-off turn already due continues once the turn has ended.
         if follows.contains(.dueConnectionResumes), continuations.connectionResumes[id]?.isDue == true {
             continuations.continueDueConnectionResumes()
+        }
+        // Not after its own compaction: that made no request to time a next one from.
+        if follows.contains(.idleCompaction), !isIdleCompaction, status == .ready || status == .failed {
+            armIdleCompaction(for: id)
         }
     }
 

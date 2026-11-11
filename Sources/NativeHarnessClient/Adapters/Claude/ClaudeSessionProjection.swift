@@ -30,6 +30,8 @@ struct ClaudeSessionProjection: Sendable {
     /// The card the current turn shows for the limit that stopped it.
     private var turnLimit: HarnessRateLimit?
     var hasLiveTasks: Bool { tasks.values.contains { !$0.terminal } }
+    /// The plan-limit status the CLI last reported, nil before any report.
+    var rateLimitStatus: HarnessRateLimit.Status? { latestRateLimit?.status }
 
     mutating func payloads(from frame: JSONValue) -> [HarnessEventPayload] {
         guard frame["parent_tool_use_id"]?.stringValue?.isEmpty != false else { return [] }
