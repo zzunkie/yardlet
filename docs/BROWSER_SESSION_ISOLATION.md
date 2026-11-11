@@ -282,7 +282,7 @@ cookies across host restarts.
 - **Background:** Sites that sign in only with passkeys cannot be signed in to in the Yardlet browser when the passkey
   exists only in another browser (iCloud Keychain, Whale, Chrome). Importing that browser's sign-in cookies lets Yardlet
   enter the site, and after one more Yardlet passkey is registered in the site's settings, Yardlet alone is enough from
-  then on. This is ④, which "Aside and Ego compared" in [BROWSER_VAULT_DESIGN](BROWSER_VAULT_DESIGN.md) deferred.
+  then on.
 - **What the person does:** Right-click on the page in the browser panel → "Import Sign-ins from Another Browser…" →
   choose the browser and profile → check the sites (the current page's site is at the top, already checked) → Import →
   allow in the macOS keychain prompt ("Yardlet wants to use your confidential information stored in 'Whale Safe Storage'
