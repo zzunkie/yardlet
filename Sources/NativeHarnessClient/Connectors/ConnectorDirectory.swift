@@ -648,6 +648,12 @@ final class ConnectorToolLabels: @unchecked Sendable {
 
     private let lock = NSLock()
     private var labels: [String: Label] = [:]
+    private var changes = 0
+
+    /// Changes each time the labels do, so a conversation projected before reads them again
+    /// (`ConversationProjectionCache`): a connector connected after the conversation was drawn, or connectors read
+    /// after it at launch, give its rows their names and views.
+    var generation: Int { lock.withLock { changes } }
 
     /// The names of the connectors' tools now, and, for a service whose accounts share their tools, each
     /// account's own names from before, so conversations from then still read as that account's.
@@ -676,7 +682,11 @@ final class ConnectorToolLabels: @unchecked Sendable {
                           icons: first.iconSources, takesAccount: true)
             }
         }
-        lock.withLock { labels = next }
+        lock.withLock {
+            guard labels != next else { return }
+            labels = next
+            changes += 1
+        }
     }
 
     /// The label for a tool of the Yardlet server, by its name there (`linear_create_issue`).

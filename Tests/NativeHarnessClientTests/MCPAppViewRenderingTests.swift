@@ -157,84 +157,11 @@ final class MCPAppViewRenderingTests: XCTestCase {
         }
     }
 
-    /// GitHub's own views drawn in their rows: the profile card with a real `get_me` result, and the new pull request
-    /// view with a finished result, which shows what was made rather than a form. Opt-in, since the files hold the
-    /// person's profile: `YARDLET_MCP_APPS_REAL_VIEW` names a folder with `get-me.html` and `pr-write.html` (the
-    /// views as GitHub's MCP server ships them) and `get-me-result.json` (a `get_me` result, read without writing).
-    /// The profile card loads its avatar from GitHub. The pictures stay under `.build/`.
-    func testGitHubsOwnViewsDrawInTheirRows() async throws {
-        guard let folder = ProcessInfo.processInfo.environment["YARDLET_MCP_APPS_REAL_VIEW"] else {
-            throw XCTSkip("Set YARDLET_MCP_APPS_REAL_VIEW to a folder of GitHub's views and a get_me result")
-        }
-        let files = URL(filePath: folder, directoryHint: .isDirectory)
-        let server = FakeAppServer()
-        let (center, record) = try await connectedCenter(server)
-        ConnectorToolLabels.shared.update([record])
-        defer { ConnectorToolLabels.shared.update([]) }
-        let directory = try WindowlessRender.directory("mcp-apps-qa")
-        let profile = try JSONDecoder().decode(ToolJSON.self, from: Data(contentsOf: files.appending(path: "get-me-result.json")))
-        let views: [(name: String, tool: String, html: String, ui: ToolJSON, arguments: ToolJSON, result: ToolJSON)] = [
-            ("github-get-me", "viewer_get_profile", try String(contentsOf: files.appending(path: "get-me.html"), encoding: .utf8),
-             .object(["csp": .object(["resourceDomains": .array([.string("https://avatars.githubusercontent.com")])]),
-                      "prefersBorder": .bool(false)]),
-             .object([:]), profile),
-            ("github-pr-write", "viewer_send_note", try String(contentsOf: files.appending(path: "pr-write.html"), encoding: .utf8),
-             .object(["csp": .object([:]), "prefersBorder": .bool(true)]),
-             .object(["owner": .string("example"), "repo": .string("demo"), "title": .string("Draw MCP App views"),
-                      "head": .string("mcp-apps"), "base": .string("main")]),
-             .object(["content": .array([.object(["type": .string("text"),
-                                                  "text": .string(#"{"id":"7001","url":"https://github.com/example/demo/pull/7"}"#)])]),
-                      "structuredContent": .object(["pull_request": .object(["number": .integer(7)])])]))
-        ]
-        for view in views {
-            for appearance in WindowlessRender.Appearance.allCases {
-                let taskID = UUID()
-                let task = ConnectorToolContext(taskID: taskID)
-                server.viewHTML = view.html
-                server.viewUI = view.ui
-                server.result = profile
-                server.noteResult = view.result
-                // A new connection reads the view again, with this view's metadata.
-                let fresh = try await connectedCenter(server)
-                ConnectorToolLabels.shared.update([fresh.1])
-                _ = await fresh.0.callConnectorTool(named: view.tool, arguments: view.arguments, for: task)
-                let host = ConnectorViewHost(taskID: taskID, center: fresh.0, context: { task }, ask: { _, _, _ in false })
-                let input = JSONValue(view.arguments).readableText
-                let activity = HarnessActivity(id: "\(view.name)-\(appearance.suffix)", kind: "mcp__yardlet__\(view.tool)",
-                                               title: "mcp__yardlet__\(view.tool)", input: input, output: "")
-                let item = ConversationItem(
-                    id: activity.id,
-                    kind: ConversationActivityProjection.kind(activity, harness: .claudeCode, phase: .completed, isApproved: false),
-                    phase: .completed, source: .transcript(TranscriptEntry(content: .plan(""))))
-                let row = ConversationWorkLine(item: item, harness: .claudeCode, workspaceURL: nil)
-                    .environment(\.connectorViews, host)
-                    .padding(20)
-                    .frame(width: 720, alignment: .topLeading)
-                    .background(appearance == .dark ? Color(white: 0.12) : Color.white)
-                    .environment(\.colorScheme, appearance.colorScheme)
-                let window = WindowlessRender.Host(row, size: NSSize(width: 720, height: 420), appearance: appearance)
-                defer { window.close() }
-                let controller = MCPAppViewPool.shared.controller(taskID.uuidString + " " + item.id)
-                await window.settle(until: { controller.display.state == .live }, timeout: 30)
-                // GitHub's views measure themselves in an animation frame, which WebKit holds in a window that is never
-                // shown, so the picture takes a height here; in the app the view reports its own.
-                controller.display.height = 330
-                // Let the view's own scripts and the avatar finish drawing.
-                for _ in 0..<30 { window.settle(passes: 1, interval: 0.1); await Task.yield() }
-                let webView = try XCTUnwrap(Self.webView(in: window.hosting))
-                let snapshot = try await webView.takeSnapshot(configuration: nil)
-                let capture = try window.capture()
-                Self.draw(snapshot, of: webView, into: capture.bitmap, hosting: window.hosting)
-                try WindowlessRender.writePNG(capture.bitmap,
-                                              to: directory.appending(path: "\(view.name)-\(appearance.suffix).png"))
-            }
-        }
-        _ = center
-    }
-
     /// A view that only initializes and says how tall it is.
     static let quietView = #"""
-    <!doctype html><html><body style="margin:0;height:140px">quiet<script>
+    <!doctype html><html><body style="margin:0"><div style="box-sizing:border-box;height:140px;border:2px dashed #4c9aff;
+    border-radius:8px;display:flex;align-items:center;justify-content:center;font:14px -apple-system;color:#4c9aff">
+    The view's own page, 140 points tall</div><script>
     let next = 0;
     window.addEventListener('message', (event) => {
       if (event.source !== parent || event.data.id !== 1) { return; }

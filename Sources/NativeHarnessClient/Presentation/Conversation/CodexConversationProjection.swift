@@ -57,6 +57,8 @@ enum CodexConversationProjection {
             let workspaceURL: URL
             let showsTurnLabel: Bool
             let history: HistoryMatch
+            /// The connectors' tool names and views the turns were read with (`ConnectorToolLabels.generation`).
+            var connectorLabels = ConnectorToolLabels.shared.generation
         }
 
         let turns: [CodexTurnState]
@@ -858,7 +860,9 @@ extension ConversationProjectionCache {
     ) -> ConversationPresentation {
         // The same state shown again, as the view draws again when it scrolls: its turns are the very
         // same, which tells it without comparing them.
+        let connectorLabels = ConnectorToolLabels.shared.generation
         if let last = lastCodex, last.workspaceURL == workspaceURL, last.historySelection == historySelection,
+           last.connectorLabels == connectorLabels,
            (last.state.thread?.turns ?? []).sharesStorage(with: state.thread?.turns ?? []), last.state == state {
             return keptWhole(last.presentation)
         }
@@ -868,7 +872,7 @@ extension ConversationProjectionCache {
         ) { inputs in
             turns(of: inputs, project: { CodexConversationProjection.turn($0, items: items) }, forgotten: items.forget)
         }
-        lastCodex = (state, workspaceURL, historySelection, presentation)
+        lastCodex = (state, workspaceURL, historySelection, connectorLabels, presentation)
         return presentation
     }
 }
@@ -882,10 +886,18 @@ final class CodexItemMemo {
     private var turns: [String: Turn] = [:]
     /// Items projected since the memo was made, for tests that count them.
     var projected = 0
+    /// The connectors' tool names and views the kept items were read with: when they change, every item is read
+    /// again (`ConnectorToolLabels.generation`).
+    private var connectorLabels = ConnectorToolLabels.shared.generation
 
     /// The item kept for `input`, or nil when it must be projected (a nil item that was kept is
     /// one the conversation leaves out).
     func item(_ input: CodexConversationProjection.ItemInput, in turnID: String) -> ConversationItem?? {
+        let labels = ConnectorToolLabels.shared.generation
+        if labels != connectorLabels {
+            connectorLabels = labels
+            turns = [:]
+        }
         guard let kept = turns[turnID]?[input.item.id], kept.input == input else { return nil }
         return .some(kept.item)
     }

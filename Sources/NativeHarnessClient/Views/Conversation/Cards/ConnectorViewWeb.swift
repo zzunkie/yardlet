@@ -20,6 +20,8 @@ final class MCPAppViewDisplay {
     var height: CGFloat = 120
     /// The server's choice of border (`prefersBorder`); nil leaves it to Yardlet.
     var prefersBorder: Bool? = nil
+    /// The view's `ui://` resource, once the row asked for it.
+    var uri: String? = nil
 }
 
 @MainActor
@@ -64,6 +66,7 @@ final class MCPAppViewController: NSObject {
     func start(_ view: ConversationConnectorView, host: ConnectorViewHost, isDark: Bool,
                openLink: @escaping @MainActor (URL) -> Void) {
         guard state == .idle || state == .parked else { return }
+        if display.uri != view.uri { display.uri = view.uri }
         self.isDark = isDark
         state = .loading
         loading = Task { [weak self] in
