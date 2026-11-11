@@ -107,12 +107,20 @@ final class LineDelimitedProcessChannel: @unchecked Sendable {
         return code
     }
 
-    /// Closes the process's input and asks the process alone to end, for a server that is left to
-    /// end in its own way. Its events go on to its exit.
-    func askToEnd() {
+    /// Closes the process's input and gives it `grace` to end by itself, as a server asked to end
+    /// does; then ends it and what it started, as `stop()` does, if it is still running. Its events go
+    /// on to its exit. Returns at once.
+    func end(after grace: Duration) {
         try? input.close()
-        if process.isRunning { process.terminate() }
+        let process = process
+        Self.endings.asyncAfter(deadline: .now() + grace / .seconds(1)) {
+            NativeProcessTree.terminate(process: process)
+        }
     }
+
+    /// Ends what `end(after:)` leaves running once its grace is over. Ending a process tree waits for
+    /// it, so these wait on a queue of their own rather than on one that other work needs.
+    private static let endings = DispatchQueue(label: "Yardlet process channel endings", attributes: .concurrent)
 
     /// What the process writes, read on the pipes' own queues, and when it has all been read.
     ///

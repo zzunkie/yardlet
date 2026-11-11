@@ -308,8 +308,9 @@ registry package, or a server that another app or harness starts (the "Harnesses
   person's values; nothing else of Yardlet's environment. A first `npx` or `uvx` downloads the package, so connecting
   waits up to 3 minutes. A missing runtime says what to install (Node.js, uv or Docker Desktop).
 - Lifetime: it runs while Yardlet runs and stops when Yardlet quits (its standard input closes), on Disconnect or on
-  Remove. Removing the connector deletes what npx and uv downloaded for it; Docker keeps the image, and the page says
-  so. Nothing is written to harness or app settings.
+  Remove. Disconnect and Remove close its standard input too, and if it is still running a second later, end it with
+  everything it started, such as the server that `npx` or `uvx` runs. Removing the connector deletes what npx and uv
+  downloaded for it; Docker keeps the image, and the page says so. Nothing is written to harness or app settings.
 - Updates: none on its own. A newer version is added again from the registry.
 - Same server twice: a harness that starts the same package itself (`npx|@scope/name` from its settings, without the
   version) keeps its copy, and the program connector stays out of that harness's tasks (`.harnessHasIt`). A program
