@@ -51,7 +51,7 @@ let windowsLayers = ["WinUI", "Platform/Windows"]
 let otherPlatformLayers = ["Platform/Portable"]
 // The Platform/Portable files whose parts the Windows layer provides, which the Windows app leaves out.
 let portableFilesWindowsReplaces = ["Platform/Portable/PortableProcesses.swift", "Platform/Portable/PortableRemoteHost.swift",
-                                    "Platform/Portable/PortableNotifications.swift"]
+                                    "Platform/Portable/PortableNotifications.swift", "Platform/Portable/PortableAccounts.swift"]
 
 // The phone remote's direct-path listener on the Mac uses Network.framework, which a build on another platform
 // leaves out. Windows has its own on Winsock (RemoteWinsockListener.swift, which builds only there); elsewhere the

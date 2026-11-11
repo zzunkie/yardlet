@@ -962,6 +962,49 @@ final class AccountBoundaryTests: XCTestCase {
         )
     }
 
+    /// Codex's own browser sign-in: the address its App Server answers is opened, the sign-in ends on Codex's
+    /// completion of that login and no other, and cancelling cancels that login and ends the App Server.
+    func testCodexBrowserSignInOpensCodexsAddressAndEndsOnThatLoginsCompletion() async throws {
+        func transport() -> FakeCodexAccountTransport {
+            FakeCodexAccountTransport(responses: [
+                "initialize": [.object([:])],
+                "account/login/start": [.object([
+                    "type": .string("chatgpt"), "loginId": .string("login-1"),
+                    "authUrl": .string("https://auth.example.test/oauth/authorize?state=1")
+                ])],
+                "account/login/cancel": [.object([:])]
+            ])
+        }
+        let completed = transport()
+        let opened = OpenedAddresses()
+        let signIn = CodexBrowserSignIn(executableURL: URL(filePath: "/tmp/codex"), transport: completed)
+        let run = Task { await signIn.run { await opened.add($0) } }
+        try await waitUntil { await opened.urls.count == 1 }
+        await completed.emit(method: "account/login/completed",
+                             params: .object(["loginId": .string("login-0"), "success": .bool(false)]))
+        await completed.emit(method: "account/login/completed",
+                             params: .object(["loginId": .string("login-1"), "success": .bool(true)]))
+        let outcome = await run.value
+        XCTAssertEqual(outcome, .signedIn)
+        let openedURLs = await opened.urls
+        XCTAssertEqual(openedURLs, [URL(string: "https://auth.example.test/oauth/authorize?state=1")!])
+        let start = await completed.requests.first { $0.method == "account/login/start" }
+        XCTAssertEqual(start?.params, .object(["type": .string("chatgpt")]))
+        let stopped = await completed.didStop
+        XCTAssertTrue(stopped)
+
+        let cancelled = transport()
+        let waiting = CodexBrowserSignIn(executableURL: URL(filePath: "/tmp/codex"), transport: cancelled)
+        let cancelledOpened = OpenedAddresses()
+        let cancelledRun = Task { await waiting.run { await cancelledOpened.add($0) } }
+        try await waitUntil { await cancelledOpened.urls.count == 1 }
+        await waiting.cancel()
+        let cancelledOutcome = await cancelledRun.value
+        XCTAssertEqual(cancelledOutcome, .cancelled)
+        let cancel = await cancelled.requests.first { $0.method == "account/login/cancel" }
+        XCTAssertEqual(cancel?.params, .object(["loginId": .string("login-1")]))
+    }
+
     func testCodexAccountMonitorPublishesInitialSnapshotAndSparseUpdates() async throws {
         let transport = FakeCodexAccountTransport(responses: [
             "initialize": [.object(["platformOs": .string("macos")])],
@@ -1148,12 +1191,19 @@ final class AccountBoundaryTests: XCTestCase {
     }
 }
 
+/// The addresses a sign-in handed to the browser.
+private actor OpenedAddresses {
+    private(set) var urls: [URL] = []
+    func add(_ url: URL) { urls.append(url) }
+}
+
 private actor FakeCodexAccountTransport: CodexTransport {
     private var responses: [String: [JSONValue]]
     private let stream: AsyncStream<CodexRawFrame>
     private let continuation: AsyncStream<CodexRawFrame>.Continuation
     private(set) var didStop = false
     private(set) var requestMethods: [String] = []
+    private(set) var requests: [CodexRPCRequest] = []
 
     init(responses: [String: [JSONValue]]) {
         self.responses = responses
@@ -1166,6 +1216,7 @@ private actor FakeCodexAccountTransport: CodexTransport {
 
     func request(_ request: CodexRPCRequest) async throws -> CodexRPCIncomingMessage {
         requestMethods.append(request.method)
+        requests.append(request)
         guard var values = responses[request.method], !values.isEmpty else {
             throw HarnessAdapterError.invalidProviderEvent(
                 "Missing fake response for \(request.method)"

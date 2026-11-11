@@ -3914,3 +3914,8 @@
 "Sign in, then send your message again." = "로그인한 뒤 메시지를 다시 보내세요.";
 "Models unavailable" = "모델 목록을 읽지 못했습니다.";
 "Sign in to %@ to start a task here." = "여기서 작업을 시작하려면 %@에 로그인하세요.";
+"Finish signing in to %@ in your browser." = "브라우저에서 %@ 로그인을 마치세요.";
+"Finish signing in to %@ in the window that opened." = "열린 창에서 %@ 로그인을 마치세요.";
+"Signed in to %@." = "%@에 로그인했습니다.";
+"%@ is still not signed in." = "%@에 아직 로그인되어 있지 않습니다.";
+"The sign-in window could not open: %@" = "로그인 창을 열지 못했습니다: %@";

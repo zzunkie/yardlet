@@ -28,6 +28,10 @@ final class ConversationTimeline {
     var respond: ((ConversationRequest, ConversationRequestResponse) -> Void)?
     /// Asks the provider or the host for the turns before the loaded ones, once the window shows every loaded turn.
     var loadEarlier: (() -> Void)?
+    /// Signs in to the harness of a turn that failed for its sign-in, as the Mac's error card offers it; without
+    /// it the failure only says so.
+    var signIn: HarnessSignIn?
+    private var signInRows: [String: SignInRow] = [:]
     /// The task's folder, which a file change's paths are read against; nil for another computer's task.
     var workspaceURL: URL?
 
@@ -55,6 +59,7 @@ final class ConversationTimeline {
             drawn = [:]
             order = []
             cards = [:]
+            signInRows = [:]
         }
         guard let presentation, !presentation.turns.isEmpty else {
             shown = nil
@@ -138,6 +143,12 @@ final class ConversationTimeline {
         }
         if case let .error(error) = turn.outcome {
             panel.children.append(Self.text([error.title, error.summary].compactMap { $0 }.joined(separator: "\n")))
+            if let signIn, ProviderSignIn.asksToSignIn(error.message) {
+                let row = signInRows[turn.id] ?? SignInRow(signIn: signIn, offersAlways: true)
+                signInRows[turn.id] = row
+                row.show(harness)
+                row.place(in: panel)
+            }
         }
         switch turn.progress {
         case .thinking: panel.children.append(Self.text(L10n.string("Thinking"), muted: true))

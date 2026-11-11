@@ -25,7 +25,7 @@ final class YardletApp: XamlApplication {
             Task { await remote.start() }
             let window = MainWindow(model: model, directory: RemoteHostDirectory.live())
             window.open()
-            attention.mainWindow = HWND(bitPattern: UInt(window.handle))
+            attention.mainWindow = HWND(bitPattern: UInt(window.windowHandle))
             // A click chooses its task after bringing the window forward, so the window shows it on its next turn.
             attention.onBringForward = { [weak window] in
                 let shown = window

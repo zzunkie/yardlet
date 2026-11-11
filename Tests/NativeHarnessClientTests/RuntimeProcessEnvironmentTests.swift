@@ -175,4 +175,16 @@ final class RuntimeProcessEnvironmentTests: XCTestCase {
         XCTAssertNil(hung)
         XCTAssertLessThan(ContinuousClock.now - started, .seconds(5))
     }
+
+    /// A Windows command line reads back into the same arguments by the C runtime's rules, a folder with a space,
+    /// a quote and a trailing backslash included.
+    func testAWindowsCommandLineQuotesWhatTheCRuntimeWouldSplitOrUnescape() {
+        XCTAssertEqual(WindowsCommandLine.joined(["auth", "login"]), "auth login")
+        XCTAssertEqual(WindowsCommandLine.quoted(#"C:\Users\First Last\AppData\Roaming\npm\claude.js"#),
+                       #""C:\Users\First Last\AppData\Roaming\npm\claude.js""#)
+        XCTAssertEqual(WindowsCommandLine.quoted(#"say "hi""#), #""say \"hi\"""#)
+        XCTAssertEqual(WindowsCommandLine.quoted(#"C:\a b\"#), #""C:\a b\\""#)
+        XCTAssertEqual(WindowsCommandLine.quoted(#"a\"b c"#), #""a\\\"b c""#)
+        XCTAssertEqual(WindowsCommandLine.quoted(""), #""""#)
+    }
 }

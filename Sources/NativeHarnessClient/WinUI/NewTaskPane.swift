@@ -32,6 +32,8 @@ final class NewTaskPane {
     private var settingBoxes: [ComboBox] = []
     private let prompt = TextBox()
     private let status = TextBlock()
+    /// The chosen harness's sign-in, while its account reads signed out.
+    private let signInRow: SignInRow
     /// The harnesses the list shows, in its order.
     private var harnesses: [HarnessKind] = []
     /// What the place menu lists, in its order.
@@ -50,9 +52,10 @@ final class NewTaskPane {
         case folder(URL)
     }
 
-    init(model: AppModel, log: QAEventLog, windowHandle: @escaping () -> UInt64) {
+    init(model: AppModel, log: QAEventLog, signIn: HarnessSignIn, windowHandle: @escaping () -> UInt64) {
         self.model = model
         self.log = log
+        signInRow = SignInRow(signIn: signIn)
         self.windowHandle = windowHandle
         make()
     }
@@ -90,6 +93,7 @@ final class NewTaskPane {
             self.refreshSettings()
         }
         view.children.append(harnessList)
+        view.children.append(signInRow.view)
 
         let placeRow = StackPanel()
         placeRow.orientation = .horizontal
@@ -179,6 +183,7 @@ final class NewTaskPane {
     }
 
     private func showPrompt() {
+        signInRow.show(chosenHarness)
         prompt.placeholderText = chosenHarness.map { L10n.format("What should %@ work on?", $0.displayName) } ?? ""
     }
 

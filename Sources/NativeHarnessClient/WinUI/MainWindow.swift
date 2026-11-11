@@ -35,6 +35,8 @@ final class MainWindow {
     private let taskPane = Grid()
     private let newTaskItem = NavigationViewItem()
     private var newTask: NewTaskPane?
+    /// Signing in to a harness: under the harness chosen for a new task, and where a turn failed for its sign-in.
+    private let signIn: HarnessSignIn
     private let connectItem = NavigationViewItem()
     private var hostItems: [(item: NavigationViewItem, id: String)] = []
     private var hostWindows: [String: RemoteHostWindow] = [:]
@@ -55,10 +57,8 @@ final class MainWindow {
     init(model: AppModel, directory: RemoteHostDirectory) {
         self.model = model
         self.directory = directory
+        signIn = HarnessSignIn(model: model)
     }
-
-    /// The window's handle (`HWND`), which a window's ID holds.
-    var handle: UInt64 { window.appWindow.id.value }
 
     func open() {
         model.setShowsTasks(true, inWindow: windowID)
@@ -114,11 +114,12 @@ final class MainWindow {
         observeComposer()
         navigation.content = grid
         makeConnectPane()
-        let newTask = NewTaskPane(model: model, log: log) { [weak self] in self?.windowHandle ?? 0 }
-        newTask.onStarted = { [weak self] in self?.showStartedTask() }
+        let newTask = NewTaskPane(model: model, log: log, signIn: signIn) { [weak self] in self?.windowHandle ?? 0 }
+        newTask.onStarted = { [weak self] in self?.showSelectedTask() }
         self.newTask = newTask
         newTaskItem.content = L10n.string("New task")
         timeline.respond = { [weak self] request, response in self?.answer(request, response) }
+        timeline.signIn = signIn
         connectItem.content = L10n.string("Connect to a Mac")
         navigation.footerMenuItems.append(connectItem)
         followHosts()
@@ -178,13 +179,6 @@ final class MainWindow {
         case .other: break
         }
         if let selected { choose(selected) } else { showConversation() }
-    }
-
-    /// The task the model chose (a notification's click), shown and chosen in the sidebar.
-    func showSelectedTask() {
-        shown = .task
-        navigation.content = taskPane
-        navigation.selectedItem = items.first { $0.id == model.store.selectedSessionID }?.item
     }
 
     private static func activityText(_ date: Date, now: Date) -> String {
@@ -347,13 +341,15 @@ final class MainWindow {
 
     // MARK: New task
 
-    /// The window's handle, which owns the dialogs Windows itself shows, such as the folder dialog.
-    private var windowHandle: UInt64 {
+    /// The window's handle (`HWND`, which a window's ID holds): the owner of the dialogs Windows itself shows, such
+    /// as the folder dialog, and the window a notification's click brings forward.
+    var windowHandle: UInt64 {
         window.appWindow.id.value
     }
 
-    /// The task New task started, shown with its row chosen.
-    private func showStartedTask() {
+    /// The task the model chose, shown with its row chosen: one New task started, or one a notification's click
+    /// opened.
+    func showSelectedTask() {
         navigation.content = taskPane
         shown = .task
         navigation.selectedItem = items.first { $0.id == model.store.selectedSessionID }?.item

@@ -3914,3 +3914,8 @@
 "Sign in, then send your message again." = "Sign in, then send your message again.";
 "Models unavailable" = "Models unavailable";
 "Sign in to %@ to start a task here." = "Sign in to %@ to start a task here.";
+"Finish signing in to %@ in your browser." = "Finish signing in to %@ in your browser.";
+"Finish signing in to %@ in the window that opened." = "Finish signing in to %@ in the window that opened.";
+"Signed in to %@." = "Signed in to %@.";
+"%@ is still not signed in." = "%@ is still not signed in.";
+"The sign-in window could not open: %@" = "The sign-in window could not open: %@";
