@@ -127,10 +127,7 @@ final class VisualFixtureScenarioTests: XCTestCase {
         XCTAssertEqual(snapshots.last?.harness, .openCode)
         XCTAssertTrue(snapshots.last?.canLogin ?? false)
         XCTAssertTrue(snapshots.flatMap(\.usage).contains { $0.evidence == .exactQuota })
-        XCTAssertEqual(
-            AccountUsageOverviewProjection.rows(from: snapshots).count,
-            3
-        )
+        XCTAssertEqual(snapshots.flatMap(\.usage).filter { $0.evidence == .accountUsage }.count, 3)
     }
 
     func testFixtureRequiresExplicitLaunchArgument() {

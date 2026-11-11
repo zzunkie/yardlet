@@ -32,10 +32,6 @@ enum CodexProtocol {
         CodexRPCRequest(id: id, method: "account/usage/read", params: .null)
     }
 
-    static func readConfigRequirements(id: Int64) -> CodexRPCRequest {
-        CodexRPCRequest(id: id, method: "configRequirements/read", params: .null)
-    }
-
     static func initialize(id: Int64, clientVersion: String) -> CodexRPCRequest {
         CodexRPCRequest(
             id: id,

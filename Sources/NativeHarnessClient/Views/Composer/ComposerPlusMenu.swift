@@ -43,11 +43,6 @@ struct ComposerMenuEntry: Identifiable {
         if case .submenu = accessory { return true }
         return false
     }
-
-    var keepsMenuOpen: Bool {
-        if case .toggle = accessory { return true }
-        return false
-    }
 }
 
 /// A list of menu rows with the keys of a menu: ↑ and ↓ move the highlight, Return and Space

@@ -144,44 +144,6 @@ enum AccountUsageResetError: LocalizedError, Equatable {
     }
 }
 
-/// A stable, provider-labelled row for the account-wide usage surface. Rate-limit
-/// windows stay attached to their harness card; only provider-reported account
-/// history is promoted into this overview so the UI cannot imply that lifetime
-/// usage is a quota fraction.
-struct AccountUsageOverviewRow: Identifiable, Equatable, Sendable {
-    let sourceID: String
-    let harness: HarnessKind
-    let metric: AccountUsageMetric
-
-    var id: String { "\(sourceID):\(metric.id)" }
-}
-
-enum AccountUsageOverviewProjection {
-    static func rows(from snapshots: [HarnessAccountSnapshot]) -> [AccountUsageOverviewRow] {
-        snapshots
-            .flatMap { snapshot in
-                snapshot.usage
-                    .filter { $0.evidence == .accountUsage }
-                    .map {
-                        AccountUsageOverviewRow(
-                            sourceID: snapshot.id,
-                            harness: snapshot.harness,
-                            metric: $0
-                        )
-                    }
-            }
-            .sorted {
-                let leftHarness = $0.harness.displayName
-                let rightHarness = $1.harness.displayName
-                if leftHarness != rightHarness { return leftHarness < rightHarness }
-                if $0.metric.label != $1.metric.label {
-                    return $0.metric.label < $1.metric.label
-                }
-                return $0.id < $1.id
-            }
-    }
-}
-
 /// A read-only projection of the exact usage that the selected task's runtime
 /// reported. This is intentionally separate from account quota/history rows:
 /// task-local token counts must never be presented as subscription quota.

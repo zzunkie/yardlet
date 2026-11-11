@@ -1,4 +1,5 @@
 import Foundation
+@testable import NativeHarnessClient
 
 /// Read-only shadow gate used before routing Codex presentation through YHP.
 ///

@@ -61,8 +61,6 @@ enum QueuedFollowUpState: String, Codable, Equatable, Sendable {
     case sent
 }
 
-typealias CodexQueuedSubmissionState = QueuedFollowUpState
-
 /// One message in a task's follow-up queue. The saved form is the one Codex's queue has always
 /// had, so a queue saved by an earlier launch reads as it was (plan A8).
 struct QueuedFollowUp: Codable, Equatable, Identifiable, Sendable {
