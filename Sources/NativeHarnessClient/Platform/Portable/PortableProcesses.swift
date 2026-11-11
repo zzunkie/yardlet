@@ -9,6 +9,11 @@ enum NativeProcessTree {
         try process.run()
     }
 
+    /// Stops a process the way Control-C would (SIGINT), for a CLI whose turn is the process itself.
+    static func interrupt(process: Process) {
+        process.interrupt()
+    }
+
     @discardableResult
     static func terminate(process: Process) -> Int32 {
         guard process.isRunning else { return process.terminationStatus }

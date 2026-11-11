@@ -26,6 +26,14 @@ enum NativeProcessTree {
         ProcessJobs.shared.contain(process.processIdentifier)
     }
 
+    /// Stops a process whose turn is the process itself and that has no request to cancel one. Windows has no
+    /// SIGINT, and `Process.interrupt()` there ends the root alone, which would leave the node it started working;
+    /// a console's Control-C or Control-Break would reach every program in the console the app's children share
+    /// (`WindowsConsole`). So the whole job ends, as `terminate(process:)` ends it.
+    static func interrupt(process: Process) {
+        terminate(process: process)
+    }
+
     @discardableResult
     static func terminate(process: Process) -> Int32 {
         guard process.isRunning else { return process.terminationStatus }
