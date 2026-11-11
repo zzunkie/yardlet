@@ -2097,6 +2097,7 @@
 "Finished" = "완료됨";
 "Follow and drive another Mac's tasks here. On that Mac, open Settings › Remote, choose Pair…, then Copy link, and paste the link below." = "다른 Mac의 작업을 여기서 보고 조작합니다. 그 Mac에서 설정 › 원격 연결을 열어 연결…과 링크 복사를 차례로 누른 뒤, 아래에 붙여 넣으세요.";
 "Its window closes and this Mac forgets it. When it can be reached now, it forgets this Mac too; otherwise remove this Mac in its Settings › Remote." = "창이 닫히고 이 Mac에서 그 Mac을 지웁니다. 지금 연결할 수 있으면 그 Mac에서도 이 Mac을 지웁니다. 연결할 수 없으면 그 Mac의 설정 › 원격 연결에서 이 Mac을 제거하세요.";
+"Its window closes and this computer forgets it. When it can be reached now, it forgets this computer too; otherwise remove this computer in its Settings › Remote." = "창이 닫히고 이 컴퓨터에서 그 Mac을 지웁니다. 지금 연결할 수 있으면 그 Mac에서도 이 컴퓨터를 지웁니다. 연결할 수 없으면 그 Mac의 설정 › 원격 연결에서 이 컴퓨터를 제거하세요.";
 "Loading…" = "불러오는 중…";
 "No other account can continue this task." = "이 작업을 이어 갈 다른 계정이 없습니다.";
 "Not paired" = "연결되지 않음";

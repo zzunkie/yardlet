@@ -2,8 +2,9 @@ import Foundation
 import WinUI
 
 /// A task's conversation as the engine lays it out for every harness (`ConversationPresentation`), drawn turn by
-/// turn: what was sent, a line for each step of the work, the answers with their Markdown (`MarkdownView`), the
-/// requests waiting and how the turn ended. A turn that did not change keeps what it drew, so an answer streaming in
+/// turn: what was sent, a line for each step of the work (a change to files opens to its diff, `FileChangeView`), the
+/// answers with their Markdown (`MarkdownView`), the requests waiting and how the turn ended. A turn that did not
+/// change keeps what it drew, so an answer streaming in
 /// redraws its own turn and nothing else, and the view stays at the end while it was there. As on the Mac, only the
 /// latest turns are drawn (`ConversationTurnWindow`, 10 at first) and Load more history above them draws 10 more,
 /// so what an update compares and draws is bounded by the window, however long the conversation is. A host's
@@ -25,6 +26,8 @@ final class ConversationTimeline {
     var respond: ((ConversationRequest, ConversationRequestResponse) -> Void)?
     /// Asks the provider or the host for the turns before the loaded ones, once the window shows every loaded turn.
     var loadEarlier: (() -> Void)?
+    /// The task's folder, which a file change's paths are read against; nil for another computer's task.
+    var workspaceURL: URL?
 
     init() {
         stack.spacing = 20
@@ -120,7 +123,9 @@ final class ConversationTimeline {
         let panel = StackPanel()
         panel.spacing = 8
         for item in turn.prompt + turn.notices + turn.work + turn.answers {
-            if let element = Self.element(for: item, harness: harness) { panel.children.append(element) }
+            if let element = Self.element(for: item, harness: harness, workspaceURL: workspaceURL) {
+                panel.children.append(element)
+            }
         }
         for request in turn.requests where request.state == .pending {
             panel.children.append(Self.text(request.title))
@@ -164,7 +169,7 @@ final class ConversationTimeline {
         return panel
     }
 
-    private static func element(for item: ConversationItem, harness: HarnessKind) -> UIElement? {
+    private static func element(for item: ConversationItem, harness: HarnessKind, workspaceURL: URL?) -> UIElement? {
         switch item.kind {
         case let .userMessage(message, _):
             let block = StackPanel()
@@ -182,9 +187,12 @@ final class ConversationTimeline {
             let words = ConversationLineWording.command(command, phase: item.phase, harness: harness).map(\.text)
             return words.isEmpty ? nil : text(words.joined(separator: ", "), muted: true)
         case let .tool(tool):
-            return text(ConversationLineWording.tool(tool, phase: item.phase, harness: harness, workspaceURL: nil).text, muted: true)
-        case .fileChange:
-            return ConversationLiveWork.words(for: item, harness: harness, workspaceURL: nil).map { text($0.text, muted: true) }
+            let words = ConversationLineWording.tool(tool, phase: item.phase, harness: harness, workspaceURL: workspaceURL).text
+            let diffs = tool.diff.map { [$0] } ?? tool.diffs
+            if diffs.isEmpty { return text(words, muted: true) }
+            return FileChangeView.element(words: words, diffs: diffs, phase: item.phase, workspaceURL: workspaceURL)
+        case let .fileChange(change):
+            return FileChangeView.element(item, change: change, harness: harness, workspaceURL: workspaceURL)
         default:
             return nil
         }

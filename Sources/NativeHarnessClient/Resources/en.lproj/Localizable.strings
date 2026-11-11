@@ -2097,6 +2097,7 @@
 "Finished" = "Finished";
 "Follow and drive another Mac's tasks here. On that Mac, open Settings › Remote, choose Pair…, then Copy link, and paste the link below." = "Follow and drive another Mac's tasks here. On that Mac, open Settings › Remote, choose Pair…, then Copy link, and paste the link below.";
 "Its window closes and this Mac forgets it. When it can be reached now, it forgets this Mac too; otherwise remove this Mac in its Settings › Remote." = "Its window closes and this Mac forgets it. When it can be reached now, it forgets this Mac too; otherwise remove this Mac in its Settings › Remote.";
+"Its window closes and this computer forgets it. When it can be reached now, it forgets this computer too; otherwise remove this computer in its Settings › Remote." = "Its window closes and this computer forgets it. When it can be reached now, it forgets this computer too; otherwise remove this computer in its Settings › Remote.";
 "Loading…" = "Loading…";
 "No other account can continue this task." = "No other account can continue this task.";
 "Not paired" = "Not paired";
