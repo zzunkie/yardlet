@@ -92,7 +92,7 @@ struct ConversationTimeline: View {
     @State private var latestRequest = ConversationLatestRequest()
     @State private var readingTracker = TranscriptReadingTracker()
     @State private var handledInitialSearch = false
-    @State private var focusedTurnID: String?
+    @State private var focus = ConversationTurnFocus()
     @State private var turnFocusRequest = 0
     @State private var scrollState = TranscriptScrollFollowState()
     @State private var showsFileRewind = false
@@ -132,12 +132,12 @@ struct ConversationTimeline: View {
         let latestRequestID = latestRequest.id(latestTurnID: railTurns.last?.id) { loaded.anchors.isRenamed($0, as: $1) }
         HStack(spacing: 0) {
             if railTurns.count > 1 || hasEarlierTurns {
-                CodexTurnRail(
-                    turns: railTurns,
-                    focusedTurnID: scrollState.isFollowing ? railTurns.last?.id : focusedTurnID,
+                ConversationReadingRail(
+                    turns: railTurns, isFollowing: scrollState.isFollowing, focus: focus, tracker: readingTracker,
+                    turnID: { loaded.rows.turnID(of: $0) },
                     onFocus: { turnID in
                         readingTracker.cancelRestoration()
-                        focusedTurnID = turnID
+                        focus.turnID = turnID
                         scrollState.isFollowing = false
                         // A turn whose start the window leaves out is drawn from its start, then gone to.
                         if let window, window.hides(turnID, in: loaded.whole) { earliestReadTurnID = turnID }
@@ -150,7 +150,6 @@ struct ConversationTimeline: View {
                                          before: windowed.turns.first?.id, revealing: revealed.progress, asksForMore: true)
                     }
                 )
-                .equatable()
                 .accessibilitySortPriority(ParityAccessibility.surfacePicker - 1)
             }
 
@@ -178,7 +177,6 @@ struct ConversationTimeline: View {
                         .transcriptReadingAnchor(turn.id, tracker: readingTracker)
                     }
                 }
-                .coordinateSpace(name: readingTracker.coordinateSpace)
                 .modifier(TranscriptScrollFollowing(
                     latestRequestID: latestRequestID, state: $scrollState,
                     readingPosition: readingPosition, readingTracker: readingTracker,
@@ -222,18 +220,15 @@ struct ConversationTimeline: View {
                     }
                 }
                 .onChange(of: turnFocusRequest) { _, _ in
-                    guard let focusedTurnID else { return }
+                    guard let focusedTurnID = focus.turnID else { return }
                     proxy.scrollTo(focusedTurnID, anchor: .center)
                     // A turn the window was just widened to is laid out in the next display cycle.
                     guard earliestReadTurnID == focusedTurnID else { return }
                     Task { @MainActor in
                         try? await Task.sleep(for: .milliseconds(30))
-                        guard self.focusedTurnID == focusedTurnID else { return }
+                        guard focus.turnID == focusedTurnID else { return }
                         proxy.scrollTo(focusedTurnID, anchor: .center)
                     }
-                }
-                .onChange(of: readingTracker.visibleAnchorID) { _, id in
-                    if !scrollState.isFollowing, let id { focusedTurnID = loaded.rows.turnID(of: id) }
                 }
                 .task(id: historySelection) {
                     let restoresReading = !handledInitialSearch && readingPosition?.bookmark.followsLatest == false
@@ -248,7 +243,7 @@ struct ConversationTimeline: View {
                     guard !Task.isCancelled else { return }
                     readingTracker.cancelRestoration()
                     scrollState.isFollowing = false
-                    focusedTurnID = targetTurnID
+                    focus.turnID = targetTurnID
                     withAnimation(ParityMotion.easeInOut(reduceMotion: reduceMotion)) {
                         proxy.scrollTo(targetTurnID, anchor: .center)
                     }
@@ -262,7 +257,7 @@ struct ConversationTimeline: View {
                     reveal.end()
                     readingTracker.cancelRestoration()
                     scrollState.isFollowing = false
-                    focusedTurnID = targetTurnID
+                    focus.turnID = targetTurnID
                     if let window, window.hides(targetTurnID, in: loaded.whole) { earliestReadTurnID = targetTurnID }
                     // Once the widened window is drawn, and again once the place kept as its turns arrived
                     // above has settled, as find goes to a match.
@@ -540,6 +535,8 @@ struct ConversationTimeline: View {
                 .frame(maxWidth: .infinity, alignment: .center)
                 // A drag from the margins or between turns selects, as a page's does.
                 .background { ConversationPressBackdrop() }
+                // The turns' frames are read in the content, which scrolling leaves as they are.
+                .coordinateSpace(name: readingTracker.coordinateSpace)
         }
     }
 
@@ -580,6 +577,39 @@ private final class LoadedConversation {
     init(rows: ConversationTurnRows, threadID: String?) {
         self.rows = rows
         anchors = ConversationAnchorResolver(presentation: rows.presentation, threadID: threadID)
+    }
+}
+
+/// The turn the rail marks: the one the reader went to, then the one their reading reaches. A class
+/// only the rail reads (`ConversationReadingRail`), so a scroll that passes from one turn to the next
+/// draws the rail again and not the timeline, which projects the conversation and compares every turn
+/// it draws.
+@MainActor @Observable
+private final class ConversationTurnFocus {
+    var turnID: String?
+}
+
+/// The rail beside the conversation with the turn being read marked. It reads the place being read
+/// (`TranscriptReadingTracker.visibleAnchorID`) in a view of its own for the same reason.
+private struct ConversationReadingRail: View {
+    let turns: [ConversationTurn]
+    let isFollowing: Bool
+    let focus: ConversationTurnFocus
+    let tracker: TranscriptReadingTracker
+    /// The turn a row drawn is of: a long turn is drawn in parts, each a row.
+    let turnID: (String) -> String
+    let onFocus: (String) -> Void
+    let hasMoreTurns: Bool
+    let moreTurns: String
+    let onLoadMore: () -> Void
+
+    var body: some View {
+        CodexTurnRail(turns: turns, focusedTurnID: isFollowing ? turns.last?.id : focus.turnID, onFocus: onFocus,
+                      hasMoreTurns: hasMoreTurns, moreTurns: moreTurns, onLoadMore: onLoadMore)
+            .equatable()
+            .onChange(of: tracker.visibleAnchorID) { _, id in
+                if !isFollowing, let id { focus.turnID = turnID(id) }
+            }
     }
 }
 

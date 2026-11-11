@@ -17,14 +17,24 @@ struct TranscriptReadingAnchors {
     let resolve: (TranscriptReadingBookmark) -> TranscriptReadingBookmark?
 }
 
-/// Visible scroll targets choose the bookmark; prefetched rows may retain stale geometry.
-/// Viewport-relative frames retain a position within a message when surrounding rows grow.
+/// Keeps the place being read: the first turn in view and how far into it the viewport's top is, so
+/// the place holds when the turns around it grow.
+///
+/// Each turn tells its frame in the conversation's content (`transcriptReadingAnchor`), and the scroll
+/// view tells how far it has scrolled (`observe`). Scrolling changes only the second: the turns say
+/// nothing while the conversation moves under the reader, and where a turn is in the viewport is worked
+/// out from the two when a place is kept or restored.
 @MainActor @Observable
 final class TranscriptReadingTracker {
+    /// Names the conversation's content, inside its scroll view, which the turns' frames are read in.
     let coordinateSpace = UUID().uuidString
+    /// How far below the viewport a turn still counts as in reach. A place is read from and restored
+    /// against the turns in view and this far after them; a turn farther away is gone to by its ID first.
+    private static let reach: CGFloat = 1_600
     private(set) var request: TranscriptRestoreRequest?
     private(set) var anchorRevision = 0
     private(set) var visibleAnchorID: String?
+    /// The turns' frames in the conversation's content.
     @ObservationIgnored private var frames: [String: CGRect] = [:]
     @ObservationIgnored private var visibleItemIDs: Set<String>?
     @ObservationIgnored private var itemIDs: [String] = []
@@ -124,6 +134,7 @@ final class TranscriptReadingTracker {
         if let id = pending?.anchorID, !retained.contains(id) { followLatest() }
     }
 
+    /// A turn's frame in the conversation's content, or nil once it is no longer drawn.
     func measure(id: String, frame: CGRect?) {
 #if DEBUG
         ViewBodyCensus.note(.conversationTurnPlaced)
@@ -165,16 +176,23 @@ final class TranscriptReadingTracker {
            let id = saved.anchorID, itemIDs.contains(id) {
             pending = saved
             anchorAttempts = 0
-            if frames[id] == nil { request = .anchor(id) }
+            if frameInViewport(id) == nil { request = .anchor(id) }
         }
         scheduleGeometry()
+    }
+
+    /// A turn's frame in the viewport, for a turn in view or within reach below it.
+    private func frameInViewport(_ id: String) -> CGRect? {
+        guard let frame = frames[id]?.offsetBy(dx: 0, dy: -offset), frame.maxY >= 0, frame.minY <= Self.reach
+        else { return nil }
+        return frame
     }
 
     /// Called after a geometry transaction, when row and scroll callbacks agree. Keeping this
     /// deterministic also lets tests cover lazy measurement, reflow and interrupted restoration.
     func settleGeometry() {
         guard hasStarted, !wasHidden, viewport.width >= 80, viewport.height >= 60 else { return }
-        if let saved = pending, let id = saved.anchorID, let frame = frames[id] {
+        if let saved = pending, let id = saved.anchorID, let frame = frameInViewport(id) {
             let fraction = saved.fraction.isFinite ? min(max(-1, saved.fraction), 1) : 0
             let delta = frame.minY + frame.height * fraction
             let desired = offset + delta
@@ -190,7 +208,7 @@ final class TranscriptReadingTracker {
                 pending = nil
                 request = nil
                 record?.bookmark = saved
-                visibleAnchorID = id
+                read(id)
             } else {
                 request = .offset(target)
             }
@@ -204,14 +222,21 @@ final class TranscriptReadingTracker {
         }
         if followsLatest {
             if deferred == nil { record?.bookmark = .init() }
-            visibleAnchorID = itemIDs.last
+            read(itemIDs.last)
             needsCapture = false
-        } else if needsCapture, let bookmark = Self.bookmark(offset: 0, frames: frames,
-            itemIDs: itemIDs.filter { visibleItemIDs?.contains($0) ?? true }) {
+        } else if needsCapture, let bookmark = Self.bookmark(
+            offset: 0, itemIDs: itemIDs.lazy.filter { self.visibleItemIDs?.contains($0) ?? true },
+            frame: frameInViewport) {
             record?.bookmark = bookmark
-            visibleAnchorID = bookmark.anchorID
+            read(bookmark.anchorID)
             needsCapture = false
         }
+    }
+
+    /// The turn being read is `id`. Told only when it is another turn: the rail beside the
+    /// conversation is drawn again for each change, and a scroll works the place out on every frame.
+    private func read(_ id: String?) {
+        if visibleAnchorID != id { visibleAnchorID = id }
     }
 
     /// What keeps the reader's place when earlier items arrive above it: the first item in view at
@@ -223,7 +248,7 @@ final class TranscriptReadingTracker {
     func placeToKeep() -> (id: String, anchor: UnitPoint)? {
         guard viewport.height >= 60 else { return nil }
         for id in itemIDs where visibleItemIDs?.contains(id) ?? true {
-            guard let frame = frames[id], frame.maxY > 0 else { continue }
+            guard let frame = frameInViewport(id), frame.maxY > 0 else { continue }
             let free = viewport.height - frame.height
             guard abs(free) >= 1 else { continue }
             return (id, UnitPoint(x: 0.5, y: frame.minY / free))
@@ -242,14 +267,21 @@ final class TranscriptReadingTracker {
         deferred = nil
         followsLatest = true
         record?.bookmark = .init()
-        visibleAnchorID = itemIDs.last
+        read(itemIDs.last)
         request = .latest
     }
 
-    static func bookmark(offset: CGFloat, frames: [String: CGRect], itemIDs: [String]) -> TranscriptReadingBookmark? {
-        let measured = itemIDs.compactMap { id in frames[id].map { (id, $0) } }
-        guard let (id, frame) = measured.first(where: { $0.1.maxY > offset }) ?? measured.last,
-              frame.height > 0 else { return nil }
+    /// The place `offset` is at: the first of `itemIDs` whose frame ends after it, or the last with a
+    /// frame, and how far into that item it is. `frame` gives an item's frame where `offset` is measured.
+    static func bookmark(offset: CGFloat, itemIDs: some Sequence<String>,
+                         frame: (String) -> CGRect?) -> TranscriptReadingBookmark? {
+        var place: (id: String, frame: CGRect)?
+        for id in itemIDs {
+            guard let frame = frame(id) else { continue }
+            place = (id, frame)
+            if frame.maxY > offset { break }
+        }
+        guard let (id, frame) = place, frame.height > 0 else { return nil }
         // A negative fraction preserves the short gap before the first visible message.
         let fraction = min(max(-1, (offset - frame.minY) / frame.height), 1)
         return TranscriptReadingBookmark(anchorID: id,
@@ -286,15 +318,15 @@ final class TranscriptReadingTracker {
 }
 
 extension View {
+    /// Tells the tracker the turn's frame in the conversation's content, which changes when the
+    /// conversation is laid out and not when it scrolls. A frame in the viewport changed on every
+    /// frame of a scroll for every turn in or near view, and each told the tracker again.
     func transcriptReadingAnchor(_ id: String, tracker: TranscriptReadingTracker) -> some View {
         self.id(id)
-            .onGeometryChange(for: CGRect?.self) { geometry in
-                let frame = geometry.frame(in: .named(tracker.coordinateSpace))
-                // Limit notifications to the visible region and a small prefetch margin.
-                return frame.maxY >= 0 && frame.minY <= 1_600 ? frame : nil
-            } action: { _, frame in tracker.measure(id: id, frame: frame) }
-            // A lazy row can leave the view tree without publishing offscreen geometry.
-            // Its last visible frame must not compete with the message now being read.
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(tracker.coordinateSpace)) } action: { frame in
+                tracker.measure(id: id, frame: frame)
+            }
+            // A turn no longer drawn has no place to read from.
             .onDisappear { tracker.measure(id: id, frame: nil) }
     }
 }

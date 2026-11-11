@@ -291,6 +291,8 @@ struct TaskSidebar: View {
     @State private var nesting = SidebarNesting()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.sidebarHoverCard) private var hoverCard
+    /// Where the list's content is in the window, for the rows' hover cards.
+    @State private var listOrigin = SidebarListOrigin()
 
     /// The shown row and whether it is pinned, which moves it between the pinned rows and its project.
     private struct ShownRowPin: Equatable {
@@ -384,10 +386,19 @@ struct TaskSidebar: View {
                     }
                     .padding(.top, 16)
                     .padding(.bottom, 12)
+                    // The rows' frames are read in the content, which scrolling leaves as they are.
+                    .coordinateSpace(.named(SidebarListOrigin.contentSpace))
                 }
                 .scrollPosition($position)
+                .environment(\.sidebarListOrigin, listOrigin)
+                // Rows passing under a pointer at rest take it once the list rests.
+                .restsHoverWhileScrolling()
+                .onGeometryChange(for: CGPoint.self) {
+                    $0.frame(in: .named(SidebarHoverCardMetrics.space)).origin
+                } action: { listOrigin.scrollView = $0 }
                 // A row's hover card closes as the list scrolls under it.
                 .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in
+                    listOrigin.offset = new
                     // A list made again first reports where it starts, which is not where it was left.
                     guard old != new else { return }
                     hoverCard?.sidebarScrolled()
@@ -910,7 +921,7 @@ private struct SidebarStateHeader: View {
         }
         .buttonStyle(.borderless)
         .parityPointer()
-        .onHover { isHovering = $0 }
+        .onRestingHover { isHovering = $0 }
         .accessibilityLabel(title)
         .accessibilityValue(L10n.string(isCollapsed ? "Collapsed" : "Expanded"))
         .accessibilityAddTraits(.isHeader)
@@ -1063,7 +1074,7 @@ private struct ProjectTaskHeader: View {
                 .padding(.trailing, 3)
             }
         }
-        .onHover { isHovering = $0 }
+        .onRestingHover { isHovering = $0 }
         .contextMenu {
             projectOptions
         }
@@ -1130,7 +1141,7 @@ private struct SidebarShowMoreButton: View {
         }
         .buttonStyle(.borderless)
         .parityPointer()
-        .onHover { isHovering = $0 }
+        .onRestingHover { isHovering = $0 }
         .accessibilitySortPriority(ParityAccessibility.sidebarPrimary - 2)
     }
 }
@@ -1785,7 +1796,7 @@ struct SidebarFamilySummaryLine: View {
         }
         .buttonStyle(.borderless)
         .parityPointer()
-        .onHover { isHovering = $0 }
+        .onRestingHover { isHovering = $0 }
         .help(([Self.sessionsText(counts.sessions, more: showsMore)]
                + [details.failed, details.new, details.working].compactMap { $0 }).joined(separator: " · "))
         .accessibilityElement(children: .ignore)
@@ -1899,7 +1910,7 @@ private struct SidebarSplitEntry: View {
             isSelected || isDropTargeted ? ParityTheme.selectedFill : (isHovering ? ParityTheme.hoverFill : .clear),
             in: SidebarMetrics.rowShape()
         )
-        .onHover { isHovering = $0 }
+        .onRestingHover { isHovering = $0 }
         .contextMenu {
             if let openInNewTab {
                 Button(L10n.string("Open in New Tab")) { openInNewTab.open(.split(split.id)) }
@@ -1952,7 +1963,9 @@ private struct TaskRow: View {
     @Environment(TaskPullRequestMonitor.self) private var pullRequests: TaskPullRequestMonitor?
     @Environment(AccountAssignmentLog.self) private var accountAssignments: AccountAssignmentLog?
     @Environment(\.sidebarHoverCard) private var hoverCard
-    /// Where the row is in the window, kept without drawing the row again as the list scrolls.
+    @Environment(\.sidebarListOrigin) private var listOrigin
+    @Environment(\.scrollHoverRest) private var listScroll
+    /// Where the row is in the list's content, which the list's scrolling leaves as it is.
     @State private var place = SidebarRowPlace()
 
     /// While a script captures the showcase, the row shows no hover (`HoverRevealedActionsCapture`).
@@ -2104,12 +2117,12 @@ private struct TaskRow: View {
             isSelected ? ParityTheme.selectedFill : (isHovering ? ParityTheme.hoverFill : .clear),
             in: SidebarMetrics.rowShape()
         )
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(SidebarHoverCardMetrics.space)) } action: { frame in
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(SidebarListOrigin.contentSpace)) } action: { frame in
 #if DEBUG
             ViewBodyCensus.note(.sidebarRowPlaced)
 #endif
             place.frame = frame
-            if isHovering { hoverCard?.rowMoved(session.id, to: frame) }
+            if isHovering { hoverCard?.rowMoved(session.id, to: frameInWindow) }
         }
         // The Codex app's row: its hover card opens after a rest, or at once at the row's end, where
         // its buttons are.
@@ -2117,15 +2130,18 @@ private struct TaskRow: View {
             guard let hoverCard, !Self.ignoresHover else { return }
             switch phase {
             case let .active(location):
-                hoverCard.rowHovered(hoverContent, frame: place.frame,
-                                     atEnd: location.x >= place.frame.width - SidebarHoverCardMetrics.immediateWidth)
+                // The list scrolling under the pointer opens no card (`SidebarHoverCardState.sidebarScrolled`).
+                guard listScroll?.isScrolling != true else { return }
+                let frame = frameInWindow
+                hoverCard.rowHovered(hoverContent, frame: frame,
+                                     atEnd: location.x >= frame.width - SidebarHoverCardMetrics.immediateWidth)
             case .ended:
                 hoverCard.rowLeft(session.id)
             }
         }
         .onChange(of: hoverContent) { _, content in hoverCard?.rowChanged(content) }
         .onDisappear { hoverCard?.rowLeft(session.id) }
-        .onHover { hovering in
+        .onRestingHover { hovering in
             isHovering = hovering && !Self.ignoresHover
             prefetch?.cancel()
             prefetch = nil
@@ -2146,12 +2162,47 @@ private struct TaskRow: View {
     private var worktreeDetail: String? {
         SidebarWorktreeProjection.detail(for: session)
     }
+
+    /// The row's frame in the window (`SidebarHoverCardMetrics.space`), where its hover card goes.
+    private var frameInWindow: CGRect {
+        listOrigin?.inWindow(place.frame) ?? place.frame
+    }
 }
 
-/// A row's frame in the window, which the row reads when the pointer comes onto it. A class, so the
-/// list's scrolling updates it without drawing every row again.
+/// A row's frame in the list's content, which the row reads when the pointer comes onto it. A class,
+/// so a new layout updates it without drawing the row again.
 private final class SidebarRowPlace {
     var frame: CGRect = .zero
+}
+
+/// Where the list's content is in the window (`SidebarHoverCardMetrics.space`): its scroll view's
+/// origin there, less how far it has scrolled. A row keeps its frame in the content and works its
+/// frame in the window out from this when the pointer is on it. A row's frame in the window changed
+/// on every frame of a scroll, for every row in view; how far the list has scrolled is one number a
+/// frame. A class no view observes, so the list's scrolling draws nothing again.
+@MainActor
+final class SidebarListOrigin {
+    /// Names the list's content, inside its scroll view.
+    static let contentSpace = "SidebarListContent"
+
+    var scrollView = CGPoint.zero
+    var offset: CGFloat = 0
+
+    func inWindow(_ frame: CGRect) -> CGRect {
+        frame.offsetBy(dx: scrollView.x, dy: scrollView.y - offset)
+    }
+}
+
+private struct SidebarListOriginKey: EnvironmentKey {
+    static let defaultValue: SidebarListOrigin? = nil
+}
+
+extension EnvironmentValues {
+    /// The sidebar list a row is in (`SidebarListOrigin`).
+    var sidebarListOrigin: SidebarListOrigin? {
+        get { self[SidebarListOriginKey.self] }
+        set { self[SidebarListOriginKey.self] = newValue }
+    }
 }
 
 private struct TaskRowActionButton: View {
