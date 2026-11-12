@@ -83,12 +83,16 @@ open class XamlApplication: Application, IXamlMetadataProvider {
     private static func startWindowsAppRuntime() throws {
         let initialized = RoInitialize(RO_INIT_SINGLETHREADED)
         guard initialized >= 0 else { throw StartFailure.call("RoInitialize", initialized) }
-        // The Windows App SDK release the bindings were generated from; a stable release has no tag.
+        // The Windows App SDK release the bindings were generated from; a stable release has no tag. From
+        // 2.0 the bootstrapper reads only the major version, so the runtime must also be at least the
+        // version the bindings were generated from, which the WinUI types they call were in.
+        var minimum = PACKAGE_VERSION()
+        minimum.Version = UInt64(WINDOWSAPPSDK_RUNTIME_VERSION_UINT64)
         let result = "".withCString(encodedAs: UTF16.self) { tag in
             MddBootstrapInitialize2(
                 UInt32(WINDOWSAPPSDK_RELEASE_MAJORMINOR),
                 tag,
-                PACKAGE_VERSION(),
+                minimum,
                 MddBootstrapInitializeOptions_OnNoMatch_ShowUI
             )
         }

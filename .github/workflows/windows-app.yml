@@ -49,9 +49,9 @@ jobs:
       - name: Place the bootstrapper
         shell: pwsh
         run: Windows/scripts/place-bootstrapper.ps1 -Binaries $env:APP_BIN
-      - name: Install the Windows App Runtime 1.7
+      - name: Install the Windows App Runtime 2.6
         shell: pwsh
-        run: Windows/scripts/install-windows-app-runtime.ps1 -Url https://aka.ms/windowsappsdk/1.7/1.7.250909003/windowsappruntimeinstall-x64.exe
+        run: Windows/scripts/install-windows-app-runtime.ps1 -Url https://aka.ms/windowsappsdk/2.6/2.6.5/windowsappruntimeinstall-x64.exe
       - name: Open the app
         shell: powershell
         run: Windows/scripts/check-window.ps1 -Executable "$env:APP_BIN\NativeHarnessClient.exe" -Name app -OutDirectory window-check
@@ -103,7 +103,7 @@ jobs:
             -Executable "$env:APP_BIN\NativeHarnessClient.exe" -Fixture "$env:APP_BIN\yardlet-remote-fixture.exe" `
             -OutDirectory window-check
           exit $LASTEXITCODE
-      # The app with the Swift runtime beside it, to run on a PC that has the Windows App Runtime 1.7 but no
+      # The app with the Swift runtime beside it, to run on a PC that has the Windows App Runtime 2.6 but no
       # Swift: its executable, libraries and resource folder, as report.ps1 counts them, without the fixture host
       # the build made beside it.
       - name: Gather the app

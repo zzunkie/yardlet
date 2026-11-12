@@ -4,10 +4,11 @@
 # their members reach.
 #
 # The inputs are Microsoft's NuGet packages at the versions and SHA-512 hashes projections.json pins,
-# restored as packages.config lists them: the Windows App SDK's, the Windows SDK's and WebView2's
-# metadata (.winmd), and, from the Windows App SDK package, the x64 bootstrapper with its import library
-# and header, which Bindings/Package.swift links as CWindowsAppSDK. Building swift-winrt needs Visual
-# Studio's C++ tools.
+# restored as packages.config lists them, which restores each package named and none it depends on: the
+# Windows App SDK's components (Foundation, InteractiveExperiences, WinUI), the Windows SDK's and
+# WebView2's metadata (.winmd); from Foundation, the x64 bootstrapper with its import library and header,
+# and from the Windows App SDK's Runtime package the header with the release's version, which
+# Bindings/Package.swift links as CWindowsAppSDK. Building swift-winrt needs Visual Studio's C++ tools.
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 
@@ -98,12 +99,14 @@ foreach ($package in $projections.packages) {
     $hash = [Convert]::ToBase64String([Convert]::FromHexString((Get-FileHash $file -Algorithm SHA512).Hash))
     if ($hash -ne $package.sha512) { throw "$($package.id) $($package.version) has SHA-512 $hash, not the pinned $($package.sha512)" }
 }
-$appSdk = Get-Package 'Microsoft.WindowsAppSDK'
+$foundation = Get-Package 'Microsoft.WindowsAppSDK.Foundation'
 
-# The metadata: the Windows App SDK's for its newest target, the Windows SDK's contracts, WebView2's.
+# The metadata: the Windows App SDK components' (InteractiveExperiences' for its newest target), the
+# Windows SDK's contracts, WebView2's.
 $inputs = @()
-$inputs += Get-ChildItem (Join-Path $appSdk 'lib\uap10.0') -Filter *.winmd
-$inputs += Get-ChildItem (Join-Path $appSdk 'lib\uap10.0.18362') -Filter *.winmd
+$inputs += Get-ChildItem (Join-Path $foundation 'metadata') -Filter *.winmd
+$inputs += Get-ChildItem (Join-Path (Get-Package 'Microsoft.WindowsAppSDK.InteractiveExperiences') 'metadata\10.0.18362.0') -Filter *.winmd
+$inputs += Get-ChildItem (Join-Path (Get-Package 'Microsoft.WindowsAppSDK.WinUI') 'metadata') -Filter *.winmd
 $inputs += Get-ChildItem (Get-Package 'Microsoft.Windows.SDK.Contracts') -Recurse -Filter *.winmd
 $inputs += Get-ChildItem (Get-Package 'Microsoft.Web.WebView2') -Recurse -Filter *.winmd |
     Where-Object { $_.DirectoryName -notmatch '\\(arm64|x86)\\' } | Select-Object -First 1
@@ -125,12 +128,14 @@ foreach ($module in Get-ChildItem (Join-Path $output 'Sources') -Directory) {
 }
 Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $generated 'CWinRT\Package.swift')
 
-# The bootstrapper: its header, its x64 import library and DLL from the Windows App SDK package.
+# The bootstrapper: its header, its x64 import library and DLL from Foundation, and the release's
+# version from the Runtime package.
 $bootstrap = Join-Path $generated 'CWindowsAppSDK'
 New-Item -ItemType Directory -Force "$bootstrap\include", "$bootstrap\lib", "$bootstrap\bin" | Out-Null
-Copy-Item (Join-Path $appSdk 'include\MddBootstrap.h'), (Join-Path $appSdk 'include\WindowsAppSDK-VersionInfo.h') "$bootstrap\include"
-Copy-Item (Join-Path $appSdk 'lib\win10-x64\Microsoft.WindowsAppRuntime.Bootstrap.lib') "$bootstrap\lib"
-Copy-Item (Join-Path $appSdk 'runtimes\win-x64\native\Microsoft.WindowsAppRuntime.Bootstrap.dll') "$bootstrap\bin"
+Copy-Item (Join-Path $foundation 'include\MddBootstrap.h') "$bootstrap\include"
+Copy-Item (Join-Path (Get-Package 'Microsoft.WindowsAppSDK.Runtime') 'include\WindowsAppSDK-VersionInfo.h') "$bootstrap\include"
+Copy-Item (Join-Path $foundation 'lib\native\x64\Microsoft.WindowsAppRuntime.Bootstrap.lib') "$bootstrap\lib"
+Copy-Item (Join-Path $foundation 'runtimes\win-x64\native\Microsoft.WindowsAppRuntime.Bootstrap.dll') "$bootstrap\bin"
 @'
 #pragma once
 #include <windows.h>

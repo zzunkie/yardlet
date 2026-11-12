@@ -1,9 +1,24 @@
 {
   "packages": [
     {
-      "id": "Microsoft.WindowsAppSDK",
-      "version": "1.7.250909003",
-      "sha512": "TquAx6P4taXpBnXGVXUcFlHxofWHy6qbRUsv/JInAGzzaEVG1ep8+wEP4ewu+d8pJVyTf7PqOncsCp5uIyrqZw=="
+      "id": "Microsoft.WindowsAppSDK.Foundation",
+      "version": "2.6.5",
+      "sha512": "Tr1MqgcGrxmRsxVXimykQyuCRe9pQfv0HWliR9gQA2Jk7cVngWmUZl4vbMFUzvlyEwa7W7edjDOizeTiiGvcDQ=="
+    },
+    {
+      "id": "Microsoft.WindowsAppSDK.InteractiveExperiences",
+      "version": "2.6.5",
+      "sha512": "IIwhM0Qec/hdm3Y9r6awMAMTv9mR5FA+TWJvRJzai3Gs2fYL5j4ah4yChkEVVn89F6n1btiVxczUECT5vy5diw=="
+    },
+    {
+      "id": "Microsoft.WindowsAppSDK.WinUI",
+      "version": "2.6.5",
+      "sha512": "eNmFFLMf3NrkvJDhXCHVfIYcS+xjldnWSHzRZt2REmtQsaRcJvdpfiqBVTqWrPntI30M+urxCQuDoag+4NH4rw=="
+    },
+    {
+      "id": "Microsoft.WindowsAppSDK.Runtime",
+      "version": "2.6.5",
+      "sha512": "i2SDGAY6nfJI1UHmBpK84T26sNIq6HTa0vOXpE9BQBBieoKYt7RQ/BRpeT2P4/jg6Y8FSpgaZYLitJC8TagsrQ=="
     },
     {
       "id": "Microsoft.Windows.SDK.Contracts",
@@ -12,8 +27,8 @@
     },
     {
       "id": "Microsoft.Web.WebView2",
-      "version": "1.0.2903.40",
-      "sha512": "pDLSrpyma3xyOGXlw3Aowy7XceBdeJbukZzKLVdPCFvyfnn8PrCLylMn6c456ja0TcOOal8IdQCVONDRU2OGkw=="
+      "version": "1.0.3719.77",
+      "sha512": "Cpq7EGgijiCN0lg1RlTZuZcRkzyo/USU9cEJMSPh6FG4PLjmTEpJ5NKuJqQ06ONnVVARCcTLf31IjjhFJUrApw=="
     }
   ],
   "include": [

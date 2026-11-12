@@ -232,16 +232,20 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   messages the loop waits for the next one, the main dispatch queue's event or Foundation's next timer, so Swift's
   main actor runs on the window's thread and an idle window uses no processor time.
 - **The WinUI bindings.** [swift-winrt](https://github.com/thebrowsercompany/swift-winrt) generates them from the
-  metadata (.winmd) in Microsoft's NuGet packages (the Windows App SDK 1.7.250909003, the Windows SDK contracts and
-  WebView2), whose versions and SHA-512 hashes `Windows/Bindings/projections.json` pins. It projects the types that
+  metadata (.winmd) in Microsoft's NuGet packages (the Windows App SDK 2.6.5's Foundation, InteractiveExperiences and
+  WinUI, the Windows SDK contracts and WebView2), whose versions and SHA-512 hashes `Windows/Bindings/projections.json`
+  pins. From 2.0 the Windows App SDK package only names those it is made of, and a restore from a list of packages
+  takes each one named and none it depends on, so the list names each. It projects the types that
   file includes and every type their members reach, into `Windows/Bindings/Generated/`, which git ignores; the
   bindings are generated before a build, not kept in the repository. `Windows/Bindings/Package.swift` links them
   into the executable, not into DLLs, and a release build optimizes them for size without reflection metadata.
   swift-winrt's exclusions are not used: it still writes members whose generic arguments name an excluded type.
-- **The bootstrapper.** The app links the Windows App SDK package's x64 import library for
-  `Microsoft.WindowsAppRuntime.Bootstrap.dll`, and `Windows/scripts/place-bootstrapper.ps1` puts the DLL from the
-  same package beside the executable, as the Windows App SDK's build targets do. The Windows App Runtime 1.7 is
-  installed on its own, as for any unpackaged WinUI app.
+- **The bootstrapper.** The app links the x64 import library for `Microsoft.WindowsAppRuntime.Bootstrap.dll` from
+  the Windows App SDK's Foundation package, and `Windows/scripts/place-bootstrapper.ps1` puts the DLL from the same
+  package beside the executable, as the Windows App SDK's build targets do. The Windows App Runtime 2 is installed on
+  its own, as for any unpackaged WinUI app. From 2.0 the bootstrapper matches the runtime by its major version
+  alone, so the app also asks for at least the version its bindings were generated from (2.6.5), and the
+  bootstrapper offers to install the runtime when it finds none that new.
 
 On Windows, with Swift 6.4.1 and Visual Studio's C++ tools (swift-winrt is C++):
 
@@ -279,7 +283,7 @@ with 1003; the phones are listed among the devices, and turning the remote off c
 still open and the room. The runner's phone reaches the listener from the same computer, which Windows' firewall
 does not filter, so what another device on the network needs is the firewall's permission above. The run
 gathers the app with its resource folder and the Swift runtime beside it, opens what it gathered from another folder with the
-build folder out of reach, and uploads it (`windows-app-bin`), to open on a PC that has the Windows App Runtime 1.7 but
+build folder out of reach, and uploads it (`windows-app-bin`), to open on a PC that has the Windows App Runtime 2.6 but
 no Swift. Last, it packs the app, installs it, updates it and removes it (`Windows/scripts/check-install.ps1`, "Installing
 and updating the Windows app" below), and uploads the first installer it packed (`windows-app-setup`).
 
@@ -314,7 +318,7 @@ bindings; fork it and keep only the fixes the app needs; as a last resort, write
 keep the engine in Swift, which needs a layer that carries the engine's state and events to the C# screens.
 
 **What the Windows app does not have yet:** a signature: the installer and what it installs are unsigned, and the
-Windows App Runtime 1.7 the app needs is installed on its own and no longer supported by Microsoft. Settings has no
+Windows App Runtime 2 the app needs is installed on its own rather than carried with it. Settings has no
 switch for checking for updates and no Check for Updates, as the Mac's has. The
 Yardlet MCP server: its endpoint is a Unix domain socket (`Sources/YardletAgentTools/Platform/UnixDomainSocket.swift`)
 with no named pipe in its place, and the app carries no `yardlet-mcp.exe`, so a Windows task has no connectors and none

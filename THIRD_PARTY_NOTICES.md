@@ -851,21 +851,22 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
-#### Windows App SDK 1.7.250909003 (NuGet package Microsoft.WindowsAppSDK)
+#### Windows App SDK 2.6.5 (NuGet packages Microsoft.WindowsAppSDK.Foundation, .InteractiveExperiences, .WinUI and .Runtime)
 
-Source: https://www.nuget.org/packages/Microsoft.WindowsAppSDK/1.7.250909003
+Source: https://www.nuget.org/packages/Microsoft.WindowsAppSDK/2.6.5
 
 © Microsoft Corporation. The Windows app carries `Microsoft.WindowsAppRuntime.Bootstrap.dll` beside its executable
-and links the package's import library for it, as distributable code under the Microsoft Software License Terms for
-the Windows App SDK (the package's `license.txt`). The WinUI bindings are generated from the package's metadata. The
-Windows App Runtime itself is installed on its own and is not part of the app.
+and links the Foundation package's import library for it, as distributable code under the Microsoft Software License
+Terms for the Windows App SDK (each package's `license.txt`). The WinUI bindings are generated from the packages'
+metadata, and the bootstrapper's version header comes from the Runtime package. The Windows App Runtime itself is
+installed on its own and is not part of the app.
 
 ### Used only to build the Windows app
 
 - **swift-winrt** (above), built from source to generate the bindings, with
   [winmd](https://github.com/microsoft/winmd) (MIT License, © Microsoft Corporation) as its metadata reader.
 - **Windows SDK contracts 10.0.18362.2005** (NuGet package Microsoft.Windows.SDK.Contracts, © Microsoft Corporation,
-  https://aka.ms/WinSDKLicenseURL) and **WebView2 1.0.2903.40** (NuGet package Microsoft.Web.WebView2, © Microsoft
+  https://aka.ms/WinSDKLicenseURL) and **WebView2 1.0.3719.77** (NuGet package Microsoft.Web.WebView2, © Microsoft
   Corporation, the package's `LICENSE.txt`): metadata the bindings are generated from.
 - **NuGet** (`nuget.exe`, © .NET Foundation and contributors), which restores the packages above.
 - **Velopack's packer** (`vpk`, above), installed as a .NET tool to pack the installer.
