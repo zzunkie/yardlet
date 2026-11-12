@@ -17,8 +17,8 @@ struct ConversationQuestionStepsView<Finish: View>: View {
     /// The form takes input; otherwise it reads as the questions and their options.
     let isAnswerable: Bool
     /// Sends the answers: Return, or Skip on the last question, once every question is settled.
-    /// Nil while the caller cannot send them.
-    let submit: (() -> Void)?
+    /// Called when the person goes on, so the caller decides then whether it can send them.
+    let submit: () -> Void
     /// The last question's answer buttons.
     @ViewBuilder let finish: () -> Finish
 
@@ -264,7 +264,7 @@ struct ConversationQuestionStepsView<Finish: View>: View {
         } else if let waiting = stepper.firstUnsettled(input) {
             index = waiting
         } else {
-            submit?()
+            submit()
         }
     }
 

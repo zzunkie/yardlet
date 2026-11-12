@@ -152,7 +152,7 @@ struct CodexQuestionOptions: View {
             } else {
                 ConversationQuestionStepsView(
                     steps: steps, input: $input, index: $index, isAnswerable: onAnswer != nil,
-                    submit: canSend ? { send() } : nil
+                    submit: send
                 ) {
                     Button(L10n.string("Send")) { send() }
                         .parityProminentButton()

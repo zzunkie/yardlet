@@ -260,7 +260,7 @@ struct ConversationRequestCard: View {
             let isAnswerable = answersForm(responses)
             ConversationQuestionStepsView(
                 steps: steps, input: $input, index: $questionIndex, isAnswerable: isAnswerable,
-                submit: isAnswerable ? submitForm(responses) : nil
+                submit: submitForm
             ) {
                 // In the row the form ends with, after its Skip.
                 ForEach(Array(responses.enumerated()), id: \.offset) { _, response in
@@ -275,11 +275,12 @@ struct ConversationRequestCard: View {
         }
     }
 
-    /// Sends the form by its prominent answer, once the form can be sent.
-    private func submitForm(_ responses: [ConversationRequestResponse]) -> (() -> Void)? {
+    /// Sends the form by its prominent answer, if one of the answers offered now sends the form.
+    private func submitForm() {
+        let responses = offeredResponses
         guard let response = responses.first(where: { $0.route == .structured && $0.role == .primary })
-            ?? responses.first(where: { $0.route == .structured }) else { return nil }
-        return { send(response) }
+            ?? responses.first(where: { $0.route == .structured }) else { return }
+        send(response)
     }
 
     /// The plan exactly as the provider wrote it, in its own markdown.

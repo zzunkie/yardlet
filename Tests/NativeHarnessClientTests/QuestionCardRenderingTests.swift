@@ -81,4 +81,36 @@ final class QuestionCardRenderingTests: XCTestCase {
             }
         }
     }
+
+    /// Skip on the last question sends the answers on the first click, also when the form could
+    /// not be sent before it: here the one question takes only words, and none are typed.
+    func testSkipOnTheLastQuestionSendsOnTheFirstClick() throws {
+        final class Replies { var sent: [String] = [] }
+        let replies = Replies()
+        let questions = [CodexAsyncQuestion(title: "Anything else before I start?", options: [], itemID: "q-1")]
+        let directory = try WindowlessRender.directory("composer-stream-qa")
+        try WindowlessRender.hostedInBothAppearances("question-card-skip", in: directory,
+                                                     size: NSSize(width: 640, height: 240)) { appearance in
+            Self.codexCard(questions, onAnswer: { _ in }, appearance: appearance)
+        }
+        let host = WindowlessRender.Host(Self.codexCard(questions, onAnswer: { replies.sent.append($0) },
+                                                        appearance: .light),
+                                         size: NSSize(width: 640, height: 240), appearance: .light)
+        defer { host.close() }
+        host.settle()
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Skip")))
+        host.settle(passes: 2)
+        XCTAssertEqual(replies.sent.count, 1)
+    }
+
+    private static func codexCard(_ questions: [CodexAsyncQuestion], onAnswer: @escaping (String) -> Void,
+                                  appearance: WindowlessRender.Appearance) -> some View {
+        CodexQuestionOptions(questions: questions, onAnswer: onAnswer)
+            .padding(20)
+            .frame(width: 640, height: 240, alignment: .top)
+            .background(ParityTheme.canvas)
+            .tint(Color.primary)
+            .environment(\.controlActiveState, .key)
+            .environment(\.colorScheme, appearance.colorScheme)
+    }
 }
