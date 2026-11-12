@@ -1055,7 +1055,7 @@ extension JSONValue {
     init?(foundation value: Any) {
         switch value {
         case let string as NSString:
-            self = .string(string as String)
+            self = .string(Self.swiftString(string))
         case let dictionary as NSDictionary:
             var object: [String: JSONValue] = Dictionary(minimumCapacity: dictionary.count)
             for (key, element) in dictionary {
@@ -1084,5 +1084,29 @@ extension JSONValue {
         default:
             return nil
         }
+    }
+
+    /// The text as Swift's own UTF-8 string. Bridged as it is, a Foundation string stays Foundation's:
+    /// each reading of it as Swift text (counting its UTF-8, walking its characters) converts it again,
+    /// whole, and the transcript a saved conversation becomes is read that way on the main thread each
+    /// time a view draws it. One copy here costs less than the parse that made the string.
+    private static func swiftString(_ string: NSString) -> String {
+        #if canImport(Darwin)
+        let text = string as CFString
+        let range = CFRange(location: 0, length: CFStringGetLength(text))
+        let utf8 = CFStringBuiltInEncodings.UTF8.rawValue
+        var count: CFIndex = 0
+        // Text that does not convert whole (a lone surrogate, which JSONSerialization refuses) is bridged.
+        guard CFStringGetBytes(text, range, utf8, 0, false, nil, 0, &count) == range.length else {
+            return string as String
+        }
+        return String(unsafeUninitializedCapacity: count) { buffer in
+            CFStringGetBytes(text, range, utf8, 0, false, buffer.baseAddress, count, nil)
+            return count
+        }
+        #else
+        // Outside Apple's platforms a String is always Swift's own; only Objective-C bridges one.
+        return string as String
+        #endif
     }
 }

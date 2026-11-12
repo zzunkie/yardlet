@@ -33,9 +33,11 @@ enum ConversationTaskSuggestionProjection {
     /// A shared-transcript call (Claude Code, ACP) that Yardlet answered as a suggestion. The session
     /// rail asks this of every finished call in the conversation each time it updates, so a call is
     /// passed over by its answer, which is short when it is Yardlet's, before its input is decoded.
+    /// The answer's length is measured only up to the limit: counting the whole of a long output
+    /// encodes all of it when Foundation made the string.
     static func suggestion(from activity: HarnessActivity) -> ConversationTaskSuggestion? {
         guard activity.outcome != .failed, activity.subtask == nil, activity.diff == nil,
-              let result = activity.output, result.utf8.count <= longestAnswer,
+              let result = activity.output, result.utf8.prefix(longestAnswer + 1).count <= longestAnswer,
               TaskSuggestionToolCatalog.taskID(inResult: result) != nil else { return nil }
         return suggestion(arguments: ConversationAgentRunProjection.arguments(in: activity.input), result: result)
     }

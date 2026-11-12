@@ -80,6 +80,17 @@ final class ClaudeSubagentTranscriptReaderTests: XCTestCase {
         XCTAssertNil(ClaudeSubagentTranscriptReader.timestamp("not a date"))
     }
 
+    /// A saved line's text is read into Swift's own strings: left as Foundation's, each reading of a long
+    /// output or answer as Swift text (the rail measuring a call's result, the answer's markdown) converted
+    /// all of it again, on the main thread.
+    func testASavedLinesTextIsReadIntoSwiftStrings() throws {
+        let output = String(repeating: "빌드 결과 ─ line\u{0}😀\n", count: 40)
+        let line = try JSONSerialization.data(withJSONObject: ["type": "user", "output": output])
+        let read = try XCTUnwrap(ClaudeSubagentTranscriptReader.parseLine(line)?["output"]?.stringValue)
+        XCTAssertEqual(read, output)
+        XCTAssertTrue(read.isContiguousUTF8)
+    }
+
     func testAmbiguousParentAndAgentMappingFailClosed() throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
