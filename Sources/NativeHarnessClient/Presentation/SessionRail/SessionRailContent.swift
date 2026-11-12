@@ -146,6 +146,10 @@ struct SessionRailContent: Equatable {
     /// The session jobs a Claude Code task's CLI holds, listed with the background tasks as the Claude
     /// app lists its loops there.
     var sessionJobs: [ClaudeSessionJob] = []
+    /// Yardlet's schedules whose runs continue the task, listed with its session jobs as the Codex app
+    /// shows a heartbeat on its thread: those that will run or can be resumed, as Scheduled tasks offers
+    /// Resume. A one-off that ran, or whose time passed, is left to Scheduled tasks.
+    var schedules: [ScheduledTask] = []
     var preview: SessionRailPreview?
     /// Files the task wrote, newest first (`outputs(entries:codexChanges:workspaceURL:)`).
     var outputs: [Output] = []
@@ -200,6 +204,7 @@ struct SessionRailContent: Equatable {
         childTasks: [SessionRailAgents.Child] = [],
         backgroundTerminals: [CodexBackgroundTerminal] = [],
         sessionJobs: [ClaudeSessionJob] = [],
+        schedules: [ScheduledTask] = [],
         preview: SessionRailPreview? = nil,
         suggestionResolution: ((String) -> TaskSuggestionResolution?)? = nil
     ) -> SessionRailContent {
@@ -249,6 +254,7 @@ struct SessionRailContent: Equatable {
             backgroundTasks: background.isShown ? background : nil,
             backgroundTerminals: backgroundTerminals,
             sessionJobs: sessionJobs,
+            schedules: schedules.filter { $0.isEnabled || $0.canResume },
             preview: preview,
             outputs: outputs(entries: entries, codexChanges: codexChanges,
                              generatedFiles: generatedFiles + generatedImages(in: codexState),
@@ -355,7 +361,8 @@ struct SessionRailContent: Equatable {
         case .changes: changes != nil
         case .suggestions: !suggestions.isEmpty
         case .agents: agents != nil
-        case .backgroundTasks: backgroundTasks != nil || !backgroundTerminals.isEmpty || !sessionJobs.isEmpty
+        case .backgroundTasks:
+            backgroundTasks != nil || !backgroundTerminals.isEmpty || !sessionJobs.isEmpty || !schedules.isEmpty
         case .preview: preview != nil
         case .outputs: !outputs.isEmpty
         // Not drawn yet: no harness's goal or servers reach the rail.
@@ -413,8 +420,9 @@ struct SessionRailContent: Equatable {
                 : L10n.format("%lld agents", Int64(agents.agents.count))
         case .backgroundTasks:
             let count = (backgroundTasks?.rows.count ?? 0) + backgroundTerminals.count
+            let scheduled = sessionJobs.count + schedules.filter(\.isEnabled).count
             let parts = [count == 0 ? nil : L10n.format("%lld running", Int64(count)),
-                         sessionJobs.isEmpty ? nil : L10n.format("%lld scheduled", Int64(sessionJobs.count))]
+                         scheduled == 0 ? nil : L10n.format("%lld scheduled", Int64(scheduled))]
             let rollup = parts.compactMap { $0 }.joined(separator: " · ")
             return rollup.isEmpty ? nil : rollup
         case .preview:

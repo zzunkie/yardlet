@@ -1,13 +1,15 @@
 import SwiftUI
 
 /// The sidebar's scheduled tasks. Like archived tasks, it takes the task list's place and Back
-/// returns to it. Each row names the schedule, its harness and
-/// when it runs next or why it does not; the detail beside it holds the rest. The schedules that will
-/// run come first, soonest first (`ScheduleListSections`); under them, while any Claude Code task's
-/// CLI holds one, "Session schedules": each such job with its task, which a click opens. Yardlet's own
-/// addition, so it is not there at all without one. Last come two folded groups, the schedules that
-/// are off and the one-offs that ran, as the Claude app's routines list hides completed ones until
-/// asked; choosing a schedule in a folded group opens it.
+/// returns to it. The schedules that will run come first, soonest first (`ScheduleListSections`), under
+/// the day they run next (Today, Tomorrow, Next 7 days, Later), as a run history groups its runs by the
+/// day they ran; each row names the schedule with the time it runs on the right, and under it how it
+/// repeats and the task its runs continue, as the Codex app's heartbeat rows name their thread. The
+/// detail beside it holds the rest. Under them, while any Claude Code task's CLI holds one, "Session
+/// schedules": each such job with its time and task, which a click opens. Yardlet's own addition, so it
+/// is not there at all without one. Last come two folded groups, the schedules that are off and the
+/// one-offs that ran, as the Claude app's routines list hides completed ones until asked; choosing a
+/// schedule in a folded group opens it.
 struct ScheduledTaskList: View {
     let schedules: [ScheduledTask]
     var sessionJobs: [ScheduledSessionJob] = []
@@ -15,11 +17,14 @@ struct ScheduledTaskList: View {
     let startingIDs: Set<UUID>
     let now: Date
     let nextRun: (ScheduledTask) -> Date?
+    /// The title of a task a schedule continues, while it is in Yardlet.
+    var taskTitle: (UUID) -> String? = { _ in nil }
     /// The folded groups that are open.
     @Binding var expandedSections: Set<ScheduleListSections.Section>
     let onBack: () -> Void
     let actions: ScheduledTaskActions
     var calendar: Calendar = .autoupdatingCurrent
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
 
     var body: some View {
         let sections = ScheduleListSections(schedules, nextRun: nextRun)
@@ -53,26 +58,25 @@ struct ScheduledTaskList: View {
                     } else if sections.upcoming.isEmpty, sessionJobs.isEmpty {
                         emptyLine(L10n.string("No scheduled task will run."))
                     }
-                    ForEach(sections.upcoming) { row($0) }
+                    let days = sections.upcomingByDay(now: now, calendar: calendar)
+                    ForEach(Array(days.enumerated()), id: \.element.day) { index, group in
+                        groupHeader(ScheduleText.title(of: group.day), isFirst: index == 0)
+                        ForEach(group.entries) { row($0) }
+                    }
                     if !sessionJobs.isEmpty {
-                        Text(L10n.string("Session schedules"))
-                            .font(.system(size: SidebarMetrics.projectHeaderFontSize))
-                            .foregroundStyle(.secondary)
-                            .frame(height: SidebarMetrics.projectHeaderHeight)
-                            .padding(.leading, SidebarMetrics.projectHeaderLeading)
-                            .padding(.top, sections.upcoming.isEmpty ? 0 : SidebarMetrics.groupBottomSpacing)
-                            .accessibilityAddTraits(.isHeader)
+                        groupHeader(L10n.string("Session schedules"), isFirst: days.isEmpty)
                         ForEach(sessionJobs.sorted {
                             ($0.job.nextRun(after: now)?.date ?? .distantFuture) < ($1.job.nextRun(after: now)?.date ?? .distantFuture)
                         }) { item in
-                            ScheduledSessionJobRow(item: item, now: now, open: { actions.openTask(item.session.id) })
+                            ScheduledSessionJobRow(item: item, now: now, calendar: calendar,
+                                                   open: { actions.openTask(item.session.id) })
                                 .padding(.horizontal, 4)
                         }
                     }
                     folded(.off, sections.off)
                     folded(.finished, sections.finished)
                 }
-                .padding(.top, 16)
+                .padding(.top, 10)
                 .padding(.bottom, 12)
             }
             .accessibilitySortPriority(ParityAccessibility.sidebarPrimary - 2)
@@ -107,12 +111,29 @@ struct ScheduledTaskList: View {
             .padding(.horizontal, 13)
     }
 
+    /// A day's or the session jobs' header, as a project's name heads its tasks in the sidebar.
+    private func groupHeader(_ title: String, isFirst: Bool) -> some View {
+        Text(title)
+            .font(.system(size: SidebarMetrics.projectHeaderFontSize * interfaceScale))
+            .foregroundStyle(.secondary)
+            .frame(height: SidebarMetrics.projectHeaderHeight * interfaceScale)
+            .padding(.leading, SidebarMetrics.projectHeaderLeading)
+            .padding(.top, isFirst ? 0 : SidebarMetrics.groupBottomSpacing)
+            .accessibilityAddTraits(.isHeader)
+    }
+
     private func row(_ entry: ScheduleListSections.Entry) -> some View {
         let schedule = entry.schedule
         let isStarting = startingIDs.contains(schedule.id)
+        let shown = ScheduleText.listRow(schedule, nextRun: entry.nextRun, isStarting: isStarting, now: now,
+                                         calendar: calendar)
+        let destination = schedule.destination
         return ScheduledTaskRow(
             schedule: schedule,
             status: ScheduleText.row(schedule, nextRun: entry.nextRun, isStarting: isStarting, now: now, calendar: calendar),
+            time: shown.time,
+            line: shown.line,
+            continuedTask: destination.mode == .continueTask ? destination.targetTaskID.flatMap(taskTitle) : nil,
             isSelected: selection == schedule.id,
             isStarting: isStarting,
             actions: actions)
@@ -222,12 +243,18 @@ struct ScheduleSectionHeader: View {
     }
 }
 
-/// One schedule: its harness, its name (with a mark when each run continues a task, as the Codex app's
-/// heartbeat rows name the thread), and when it runs next and how it repeats, or why it does not.
+/// One schedule: its harness and name with the time it runs next on the right, and under them how it
+/// repeats, or why it does not, and the task each run continues, as the Codex app's heartbeat rows name
+/// their thread.
 struct ScheduledTaskRow: View {
     let schedule: ScheduledTask
-    /// `ScheduleText.row`.
+    /// `ScheduleText.row`, the next run with its day, which the hover text and assistive apps read.
     let status: String
+    /// What the row shows of it (`ScheduleText.listRow`): the time on the right, and the line under the name.
+    var time: String? = nil
+    var line: String? = nil
+    /// The title of the task each run continues, while it is in Yardlet.
+    var continuedTask: String? = nil
     let isSelected: Bool
     let isStarting: Bool
     let actions: ScheduledTaskActions
@@ -237,7 +264,8 @@ struct ScheduledTaskRow: View {
     private var isQuiet: Bool { !schedule.isEnabled }
     private var continuesTask: Bool { schedule.destination.mode == .continueTask }
     private var eachRun: String {
-        L10n.string(continuesTask ? "Each run continues a task." : "Each run starts a new task.")
+        if let continuedTask { return L10n.format("Continues “%@”", continuedTask) }
+        return L10n.string(continuesTask ? "Each run continues a task." : "Each run starts a new task.")
     }
 
     var body: some View {
@@ -249,36 +277,34 @@ struct ScheduledTaskRow: View {
                         .opacity(isQuiet ? 0.5 : 1)
                 }
                 VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 4) {
+                    HStack(spacing: 6) {
                         Text(schedule.name)
                             .font(.system(size: 13 * interfaceScale))
                             .foregroundStyle(isQuiet ? .secondary : .primary)
                             .lineLimit(1)
-                        if continuesTask {
-                            Image(systemName: "arrow.turn.down.right")
-                                .font(.system(size: 9 * interfaceScale, weight: .semibold))
+                        Spacer(minLength: 0)
+                        if isStarting {
+                            ProgressView().controlSize(.mini).frame(width: 14, height: 14)
+                        } else if let time {
+                            Text(time)
+                                .font(.system(size: 11 * interfaceScale))
+                                .monospacedDigit()
                                 .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .fixedSize()
                         }
                     }
                     HStack(spacing: 4) {
-                        if schedule.state.stopReason == .repeatedFailures {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .font(.system(size: 9))
-                                .foregroundStyle(.orange)
-                        } else if !schedule.isEnabled, schedule.state.stopReason == nil {
-                            Image(systemName: "pause.fill")
-                                .font(.system(size: 8))
-                                .foregroundStyle(.secondary)
-                        }
-                        Text(status)
-                            .font(.system(size: 11 * interfaceScale))
-                            .foregroundStyle(.secondary)
+                        ScheduleStateMark(schedule: schedule)
+                        Text(line ?? status)
                             .lineLimit(1)
+                            .layoutPriority(1)
+                        if continuesTask {
+                            ContinuedTaskLabel(title: continuedTask)
+                        }
                     }
-                }
-                Spacer(minLength: 3)
-                if isStarting {
-                    ProgressView().controlSize(.mini).frame(width: 14, height: 14)
+                    .font(.system(size: 11 * interfaceScale))
+                    .foregroundStyle(.secondary)
                 }
             }
             .padding(.trailing, SidebarMetrics.rowTrailingPadding)
@@ -299,18 +325,58 @@ struct ScheduledTaskRow: View {
     }
 }
 
-/// A session job in the scheduled tasks list: its task's title, then the job's schedule, next run and
-/// end. A click opens the task; the job itself is the CLI's, which takes no request to change it.
+/// The task a schedule's runs or a session job continue, after how it repeats: an arrow and the task's
+/// title, which gives way first where the row is narrow. The arrow alone where the task is gone.
+struct ContinuedTaskLabel: View {
+    let title: String?
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Image(systemName: "arrow.turn.down.right")
+                .font(.system(size: 9 * interfaceScale, weight: .semibold))
+            if let title {
+                Text(title).lineLimit(1).truncationMode(.tail)
+            }
+        }
+        .padding(.leading, 2)
+    }
+}
+
+/// The mark before a schedule's status where it is off: a pause for one the person paused, a warning for
+/// one that turned itself off after its runs kept failing to start.
+struct ScheduleStateMark: View {
+    let schedule: ScheduledTask
+
+    var body: some View {
+        if schedule.state.stopReason == .repeatedFailures {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 9))
+                .foregroundStyle(.orange)
+        } else if !schedule.isEnabled, schedule.state.stopReason == nil {
+            Image(systemName: "pause.fill")
+                .font(.system(size: 8))
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// A session job in the scheduled tasks list, in a schedule's shape: what it asks with the time it runs
+/// next on the right, then how it repeats and its task. A click opens the task; the job itself is the
+/// CLI's, which takes no request to change it.
 struct ScheduledSessionJobRow: View {
     let item: ScheduledSessionJob
     let now: Date
+    var calendar: Calendar = .autoupdatingCurrent
     let open: () -> Void
     @State private var isHovering = false
     @Environment(\.yardletInterfaceScale) private var interfaceScale
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
-            let detail = SessionJobText.detail(item.job, now: max(now, context.date))
+            let at = max(now, context.date)
+            let detail = SessionJobText.detail(item.job, now: at)
+            let title = SessionJobText.title(item.job)
             Button(action: open) {
                 HStack(spacing: 0) {
                     SidebarRowLeading {
@@ -318,15 +384,29 @@ struct ScheduledSessionJobRow: View {
                                             size: SidebarMetrics.nestedIconSize * interfaceScale)
                     }
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(item.session.title)
-                            .font(.system(size: 13 * interfaceScale))
-                            .lineLimit(1)
-                        Text(detail)
-                            .font(.system(size: 11 * interfaceScale))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                        HStack(spacing: 6) {
+                            Text(title)
+                                .font(.system(size: 13 * interfaceScale))
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                            if let next = item.job.nextRun(after: at)?.date {
+                                Text(ScheduleText.shortMoment(next, relativeTo: at, calendar: calendar))
+                                    .font(.system(size: 11 * interfaceScale))
+                                    .monospacedDigit()
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .fixedSize()
+                            }
+                        }
+                        HStack(spacing: 4) {
+                            Text(SessionJobText.schedule(item.job, calendar: calendar))
+                                .lineLimit(1)
+                                .layoutPriority(1)
+                            ContinuedTaskLabel(title: item.session.title)
+                        }
+                        .font(.system(size: 11 * interfaceScale))
+                        .foregroundStyle(.secondary)
                     }
-                    Spacer(minLength: 3)
                 }
                 .padding(.trailing, SidebarMetrics.rowTrailingPadding)
                 .frame(height: SidebarMetrics.twoLineRowHeight * interfaceScale)
@@ -335,10 +415,10 @@ struct ScheduledSessionJobRow: View {
             }
             .buttonStyle(.plain)
             .onHover { isHovering = $0 }
-            .help([item.session.title, SessionJobText.title(item.job), detail].joined(separator: "\n"))
+            .help([title, detail, item.session.title].joined(separator: "\n"))
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(item.session.title)
-            .accessibilityValue(detail)
+            .accessibilityLabel(title)
+            .accessibilityValue("\(detail), \(L10n.format("Continues “%@”", item.session.title))")
             .accessibilityHint(L10n.string("Open task"))
             .accessibilityAddTraits(.isButton)
         }

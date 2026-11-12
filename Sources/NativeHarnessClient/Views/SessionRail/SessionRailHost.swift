@@ -41,7 +41,8 @@ struct SessionRailBrowserTab: Equatable {
 
 /// What the rail's Agents, Background tasks and Preview cards read from the app: a task's
 /// `run_agent` subagents and child tasks, the conversations and outputs they open beside the task,
-/// Codex's background terminals and how to stop them, and the browser tab the agent drives.
+/// Codex's background terminals and how to stop them, the schedules that continue the task, and the
+/// browser tab the agent drives.
 @MainActor
 struct SessionRailAgentServices {
     /// The task's `run_agent` subagents and the child tasks `create_task` made (Agents card).
@@ -68,6 +69,10 @@ struct SessionRailAgentServices {
     var readTaskOutput: @MainActor (HarnessActivity) async -> ClaudeTaskOutputReader.Output? = { _ in nil }
     /// The session jobs a Claude Code task's running CLI holds (`AppModel.sessionJobs(of:)`).
     var sessionJobs: @MainActor () -> [ClaudeSessionJob] = { [] }
+    /// Yardlet's schedules whose runs continue the task (`ScheduledTaskCenter.schedules(continuing:)`).
+    var continuingSchedules: @MainActor () -> [ScheduledTask] = { [] }
+    /// Opens a schedule in Scheduled tasks.
+    var openSchedule: @MainActor (UUID) -> Void = { _ in }
     /// Stops Codex's background terminals.
     var stopTerminal: (@MainActor (CodexBackgroundTerminal) async throws -> Void)? = nil
     var stopAllTerminals: (@MainActor () async throws -> Void)? = nil
@@ -133,6 +138,7 @@ struct SessionRailHost: View {
             childTasks: services.agents.childTasks(),
             backgroundTerminals: backgroundTerminals,
             sessionJobs: services.agents.sessionJobs(),
+            schedules: services.agents.continuingSchedules(),
             preview: preview,
             suggestionResolution: suggestionActions.map { actions in
                 { id in MainActor.assumeIsolated { actions.resolution(id) } }

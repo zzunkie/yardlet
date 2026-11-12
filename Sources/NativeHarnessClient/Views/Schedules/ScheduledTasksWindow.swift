@@ -9,6 +9,7 @@ struct ScheduledTasksSidebar: View {
 
     var body: some View {
         let center = model.scheduledTasks
+        let titles = continuedTaskTitles(center.schedules)
         ScheduledTaskList(
             schedules: center.schedules,
             sessionJobs: model.scheduledSessionJobs,
@@ -16,9 +17,19 @@ struct ScheduledTasksSidebar: View {
             startingIDs: center.startingIDs,
             now: center.displayNow,
             nextRun: { center.nextRun(of: $0) },
+            taskTitle: { titles[$0] },
             expandedSections: $state.expandedSections,
             onBack: onBack,
             actions: actions)
+    }
+
+    /// The titles of the tasks schedules continue, read in one pass over the tasks.
+    private func continuedTaskTitles(_ schedules: [ScheduledTask]) -> [UUID: String] {
+        let targets = Set(schedules.compactMap { $0.destination.mode == .continueTask ? $0.destination.targetTaskID : nil })
+        guard !targets.isEmpty else { return [:] }
+        var titles: [UUID: String] = [:]
+        for session in model.store.sessions where targets.contains(session.id) { titles[session.id] = session.title }
+        return titles
     }
 }
 

@@ -58,6 +58,34 @@ struct ScheduleListSections: Equatable {
     /// Every schedule, in the list's order.
     var all: [Entry] { upcoming + off + finished }
 
+    /// The day a schedule that will run runs next, which the list groups them by, as a run history groups
+    /// its runs by the day they ran.
+    enum Day: CaseIterable {
+        case today
+        case tomorrow
+        case nextSevenDays
+        /// A week or more ahead, or with no next run.
+        case later
+
+        init(_ nextRun: Date?, now: Date, calendar: Calendar) {
+            guard let nextRun else { self = .later; return }
+            switch calendar.dateComponents([.day], from: calendar.startOfDay(for: now),
+                                           to: calendar.startOfDay(for: nextRun)).day ?? 0 {
+            case ...0: self = .today
+            case 1: self = .tomorrow
+            case 2...6: self = .nextSevenDays
+            default: self = .later
+            }
+        }
+    }
+
+    /// The schedules that will run, by the day they run next, soonest first; days with none are left out.
+    func upcomingByDay(now: Date, calendar: Calendar) -> [(day: Day, entries: [Entry])] {
+        var byDay: [Day: [Entry]] = [:]
+        for entry in upcoming { byDay[Day(entry.nextRun, now: now, calendar: calendar), default: []].append(entry) }
+        return Day.allCases.compactMap { day in byDay[day].map { (day, $0) } }
+    }
+
     private static func byName(_ a: Entry, _ b: Entry) -> Bool {
         switch a.schedule.name.localizedStandardCompare(b.schedule.name) {
         case .orderedAscending: true

@@ -12,6 +12,7 @@ struct RemoteScheduleList: View {
                 schedules: model.schedules.definitions, sessionJobs: model.schedules.sessionJobs,
                 selection: selection, startingIDs: Set(model.schedules.starting.compactMap(UUID.init(uuidString:))),
                 now: now, nextRun: model.schedules.nextRun,
+                taskTitle: { [context = model.schedules.context] in context.task($0)?.title },
                 expandedSections: $state.expandedSections,
                 onBack: { model.showsSchedules = false; model.select(.none) }, actions: model.schedules.actions, calendar: model.schedules.calendar)
         } else { LegacyRemoteScheduleList(model: model) }

@@ -35,8 +35,9 @@ struct SessionRailCardBody: View {
         case .backgroundTasks:
             SessionRailBackgroundTasksCard(projection: content.backgroundTasks ?? BackgroundTasksProjection(entries: []),
                                            terminals: content.backgroundTerminals, jobs: content.sessionJobs,
+                                           schedules: content.schedules,
                                            actions: actions.backgroundTasks, openOutput: actions.openTaskOutput,
-                                           terminalActions: actions.terminals)
+                                           terminalActions: actions.terminals, openSchedule: actions.openSchedule)
         case .preview:
             if let preview = content.preview { SessionRailPreviewCard(preview: preview, openBrowser: actions.openBrowser) }
         case .outputs:
@@ -452,30 +453,36 @@ struct SessionRailTerminalActions {
     var isStopping: (String) -> Bool = { _ in false }
 }
 
-/// The task's real background work while it runs: a Claude Code task's session jobs (soonest first,
-/// where the Claude app lists its loops), shells, monitors and workflows, a Codex thread's background
-/// terminals; four, then "Show N more". Agents have their own card. A row opens its output beside the
-/// task (the Claude app's Background tasks pane, the Codex app's output tab) and stops it; "Stop all"
-/// stops every one after asking, as the composer's line. A session job has no stop: the CLI takes no
-/// request to end one (the Claude app's stop sends the model a message asking it to).
+/// The task's real background work while it runs: what will check in on it, soonest first — a Claude
+/// Code task's session jobs, where the Claude app lists its loops, and Yardlet's schedules that continue
+/// the task, as the Codex app shows a heartbeat on its thread — then shells, monitors and workflows, a
+/// Codex thread's background terminals; four, then "Show N more". Agents have their own card. A row
+/// opens its output beside the task (the Claude app's Background tasks pane, the Codex app's output tab)
+/// and stops it; "Stop all" stops every one after asking, as the composer's line. A session job has no
+/// stop: the CLI takes no request to end one (the Claude app's stop sends the model a message asking it
+/// to). A schedule's row opens it in Scheduled tasks, where it is paused or changed.
 struct SessionRailBackgroundTasksCard: View {
     let projection: BackgroundTasksProjection
     var terminals: [CodexBackgroundTerminal] = []
     var jobs: [ClaudeSessionJob] = []
+    var schedules: [ScheduledTask] = []
     let actions: HarnessActivityActions?
     var openOutput: ((HarnessActivity) -> Void)? = nil
     var terminalActions: SessionRailTerminalActions? = nil
+    var openSchedule: ((UUID) -> Void)? = nil
     @State private var stopAll = BackgroundTasksStopAll()
     @Environment(\.yardletInterfaceScale) private var interfaceScale
 
     private enum Item: Identifiable {
         case job(ClaudeSessionJob)
+        case schedule(ScheduledTask)
         case task(BackgroundTasksProjection.Row)
         case terminal(CodexBackgroundTerminal)
 
         var id: String {
             switch self {
             case let .job(job): "job:\(job.id)"
+            case let .schedule(schedule): "schedule:\(schedule.id)"
             case let .task(row): "task:\(row.id)"
             case let .terminal(terminal): "terminal:\(terminal.id)"
             }
@@ -484,10 +491,15 @@ struct SessionRailBackgroundTasksCard: View {
 
     private var items: [Item] {
         let now = Date()
-        let soonest = jobs.sorted {
-            ($0.nextRun(after: now)?.date ?? .distantFuture) < ($1.nextRun(after: now)?.date ?? .distantFuture)
+        let calendar = Calendar.autoupdatingCurrent
+        // One that will not run (a paused schedule) after those that will; otherwise in the order given.
+        let timed = jobs.map { ($0.nextRun(after: now)?.date, Item.job($0)) }
+            + schedules.map { (ScheduleRunPolicy.nextRun(of: $0, now: now, calendar: calendar), Item.schedule($0)) }
+        let soonest = timed.enumerated().sorted { a, b in
+            let x = a.element.0 ?? .distantFuture, y = b.element.0 ?? .distantFuture
+            return x != y ? x < y : a.offset < b.offset
         }
-        return soonest.map(Item.job) + projection.rows.map(Item.task) + terminals.map(Item.terminal)
+        return soonest.map(\.element.1) + projection.rows.map(Item.task) + terminals.map(Item.terminal)
     }
 
     /// The tasks "Stop all" would stop.
@@ -505,6 +517,8 @@ struct SessionRailBackgroundTasksCard: View {
                 switch item {
                 case let .job(job):
                     SessionJobRailRow(job: job)
+                case let .schedule(schedule):
+                    ScheduleRailRow(schedule: schedule, open: openSchedule)
                 case let .task(row):
                     BackgroundTaskRowView(row: row, actions: actions, leadingInset: 0, openOutput: openOutput)
                         .padding(.trailing, -8)
@@ -610,6 +624,57 @@ struct SessionJobRailRow: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(SessionJobText.title(job))
             .accessibilityValue(detail)
+        }
+    }
+}
+
+/// A Yardlet schedule whose runs continue the task, in its session jobs' shape: its name, then how it
+/// repeats and when it runs next, kept current by the minute; one that is off says so in the list's
+/// words. A click opens it in Scheduled tasks.
+struct ScheduleRailRow: View {
+    let schedule: ScheduledTask
+    var open: ((UUID) -> Void)? = nil
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            let nextRun = ScheduleRunPolicy.nextRun(of: schedule, now: context.date, calendar: .autoupdatingCurrent)
+            let detail = ScheduleText.railDetail(schedule, nextRun: nextRun, now: context.date)
+            Button { open?(schedule.id) } label: {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: schedule.trigger.isRecurring ? "arrow.clockwise" : "clock")
+                        .font(.system(size: 11 * interfaceScale))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 14)
+                        .padding(.top, 2)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(schedule.name)
+                            .font(.system(size: 12 * interfaceScale))
+                            .foregroundStyle(schedule.isEnabled ? .primary : .secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        HStack(spacing: 4) {
+                            ScheduleStateMark(schedule: schedule)
+                            Text(detail)
+                                .font(.system(size: 11 * interfaceScale))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.vertical, 3)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .parityPointer()
+            .disabled(open == nil)
+            .help(L10n.format("Open %@ in Scheduled tasks", schedule.name))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(schedule.name)
+            .accessibilityValue(detail)
+            .accessibilityHint(L10n.format("Open %@ in Scheduled tasks", schedule.name))
+            .accessibilityAddTraits(.isButton)
         }
     }
 }

@@ -2448,6 +2448,9 @@
 "Yesterday" = "어제";
 "Previous 7 days" = "지난 7일";
 "Older" = "이전";
+"Tomorrow" = "내일";
+"Next 7 days" = "다음 7일";
+"Later" = "이후";
 "Running now" = "지금 실행 중";
 "Needs your attention" = "확인이 필요함";
 "Run completed" = "실행 완료";

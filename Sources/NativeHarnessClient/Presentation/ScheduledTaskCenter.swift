@@ -20,6 +20,10 @@ final class ScheduledTaskCenter {
     private(set) var startingIDs: Set<UUID> = []
     /// Bumped by each look, so a list showing "next run" redraws as time passes.
     private(set) var lastCheck = Date()
+    /// The schedules that continue each task, for that task's rail
+    /// (`schedules(continuing:)`). Kept as schedules change, so a rail drawn for each event of its task
+    /// looks up its own instead of reading every schedule.
+    private(set) var continuingByTaskID: [UUID: [ScheduledTask]] = [:]
 
     /// The time views show "next run" and history against; reading it redraws them after each look.
     var displayNow: Date {
@@ -45,6 +49,7 @@ final class ScheduledTaskCenter {
         self.repository = repository
         schedules = repository.load()?.schedules ?? []
         ScheduleNameDirectory.shared.update(schedules)
+        indexContinuing()
     }
 
     func schedule(id: UUID) -> ScheduledTask? {
@@ -56,6 +61,11 @@ final class ScheduledTaskCenter {
     /// not one.
     func schedule(startedTask taskID: UUID) -> ScheduledTask? {
         schedules.first { $0.startedTask(taskID) }
+    }
+
+    /// The schedules whose runs are the next messages of this task (`ScheduleDestination.Mode.continueTask`).
+    func schedules(continuing taskID: UUID) -> [ScheduledTask] {
+        continuingByTaskID[taskID] ?? []
     }
 
     /// The tasks schedules started, for the sidebar's clock mark.
@@ -221,8 +231,19 @@ final class ScheduledTaskCenter {
     private func persist() {
         repository.save(ScheduleSnapshot(schedules: schedules))
         ScheduleNameDirectory.shared.update(schedules)
+        indexContinuing()
         // A change can bring the next slot closer than the loop's sleep.
         sleeper?.cancel()
+    }
+
+    /// Set only when it changed, so a change to a schedule no task's rail shows redraws no rail.
+    private func indexContinuing() {
+        var index: [UUID: [ScheduledTask]] = [:]
+        for schedule in schedules where schedule.destination.mode == .continueTask {
+            guard let target = schedule.destination.targetTaskID else { continue }
+            index[target, default: []].append(schedule)
+        }
+        if index != continuingByTaskID { continuingByTaskID = index }
     }
 
     // MARK: - The loop

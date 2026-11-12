@@ -49,7 +49,11 @@ enum SessionJobText {
 
     /// "Next run in 6 min". A one-shot job past its time runs once the CLI is idle.
     static func nextRun(_ job: ClaudeSessionJob, now: Date) -> String? {
-        guard let run = job.nextRun(after: now)?.date else { return nil }
+        job.nextRun(after: now).map { nextRun(at: $0.date, now: now) }
+    }
+
+    /// "Next run in 6 min", as the rail says it of a session job and of a schedule that continues the task.
+    static func nextRun(at run: Date, now: Date) -> String {
         guard run.timeIntervalSince(now) >= 60 else { return L10n.string("Next run in under a minute") }
         return L10n.format("Next run %@", run.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated)))
     }

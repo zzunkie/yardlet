@@ -22,6 +22,8 @@ struct SessionRailActions {
     var openTaskOutput: ((HarnessActivity) -> Void)? = nil
     /// Codex's background terminals: their output and stopping them.
     var terminals: SessionRailTerminalActions? = nil
+    /// Opens a schedule that continues the task in Scheduled tasks.
+    var openSchedule: ((UUID) -> Void)? = nil
     /// The Agents card's controls.
     var agents: SessionRailAgentActions? = nil
     /// Opens the browser panel, from the Preview card.

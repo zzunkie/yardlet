@@ -2448,6 +2448,9 @@
 "Yesterday" = "Yesterday";
 "Previous 7 days" = "Previous 7 days";
 "Older" = "Older";
+"Tomorrow" = "Tomorrow";
+"Next 7 days" = "Next 7 days";
+"Later" = "Later";
 "Running now" = "Running now";
 "Needs your attention" = "Needs your attention";
 "Run completed" = "Run completed";

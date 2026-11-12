@@ -160,6 +160,8 @@ final class ScheduledTaskTests: XCTestCase {
         model.scheduledTasks.create(ScheduledTask(name: "Heartbeat", prompt: "Any new failures since last time?",
                                                   trigger: .interval(hours: 2, anchor: date(16, 22), days: []),
                                                   destination: destination))
+        XCTAssertEqual(model.scheduledTasks.schedules(continuing: target.id).map(\.name), ["Heartbeat"],
+                       "The task's rail finds it without reading every schedule")
         let tasksBefore = model.store.sessions.count
 
         clock.now = date(17, 0, 0, 10)
@@ -177,6 +179,12 @@ final class ScheduledTaskTests: XCTestCase {
         let skipped = try XCTUnwrap(model.scheduledTasks.schedules.first?.state.runs.first)
         XCTAssertEqual(skipped.outcome, .skipped)
         XCTAssertEqual(skipped.skipReason, .targetBusy)
+        XCTAssertEqual(model.scheduledTasks.schedules(continuing: target.id).first?.state.runs.first, skipped,
+                       "and reads it as it now stands")
+        var startsTasks = try XCTUnwrap(model.scheduledTasks.schedules.first)
+        startsTasks.destination.mode = .newTask
+        model.scheduledTasks.update(startsTasks)
+        XCTAssertTrue(model.scheduledTasks.schedules(continuing: target.id).isEmpty, "Once its runs start new tasks, it is gone")
         await model.shutdown()
     }
 

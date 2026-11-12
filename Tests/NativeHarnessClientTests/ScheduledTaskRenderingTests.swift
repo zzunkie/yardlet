@@ -224,7 +224,8 @@ final class ScheduledTaskRenderingTests: XCTestCase {
         let morning = try XCTUnwrap(window.first { $0.label == "Morning check" })
         XCTAssertTrue(morning.value.contains(" · \(L10n.string("Every day"))"), "The next run and how it repeats: \(morning)")
         let heartbeat = try XCTUnwrap(window.first { $0.label == "Release heartbeat" })
-        XCTAssertTrue(heartbeat.value.contains(L10n.string("Each run continues a task.")), heartbeat.description)
+        XCTAssertTrue(heartbeat.value.contains(L10n.format("Continues “%@”", "Release watch")),
+                      "A schedule that continues a task names it: \(heartbeat)")
         XCTAssertTrue(shows(window, L10n.string("Skipped: the previous run is still going")))
         XCTAssertTrue(shows(window, L10n.string("Missed, ran late")))
         XCTAssertTrue(shows(window, L10n.format("Switched to %@: %@ was nearly out of its limit",
@@ -357,15 +358,21 @@ final class ScheduledTaskRenderingTests: XCTestCase {
         center.now = { now }
         func list(_ expanded: Set<ScheduleListSections.Section>, selection: UUID? = nil) -> some View {
             ScheduledTaskList(schedules: center.schedules, selection: selection, startingIDs: [], now: now,
-                              nextRun: { center.nextRun(of: $0) }, expandedSections: .constant(expanded), onBack: {},
-                              actions: ScheduledTaskActions())
+                              nextRun: { center.nextRun(of: $0) }, taskTitle: { _ in "Release watch" },
+                              expandedSections: .constant(expanded), onBack: {},
+                              actions: ScheduledTaskActions(), calendar: calendar)
                 .background(ParityTheme.sidebar)
         }
-        let folded = try render("list-many", size: NSSize(width: 280, height: 820)) { _ in list([]) }
+        let folded = try render("list-many", size: NSSize(width: 280, height: 1_000)) { _ in list([]) }
         let rows = folded.map(\.label).filter { label in schedules.contains { $0.name == label } }
         XCTAssertEqual(rows.prefix(5), ["Check CI on PR #377", "Release heartbeat", "Check CI on PR #381",
                                         "Check CI on PR #384", "Check CI on PR #386"], "Soonest first, whatever repeats")
         XCTAssertEqual(rows.count, 11, "Only the schedules that will run")
+        // Under the day each runs next, as a run history groups its runs by the day they ran.
+        let days = folded.map(\.label).filter { label in ScheduleListSections.Day.allCases.contains { ScheduleText.title(of: $0) == label } }
+        XCTAssertEqual(Array(days.prefix(3)), [ScheduleListSections.Day.today, .tomorrow, .nextSevenDays].map(ScheduleText.title(of:)))
+        let heartbeat = try XCTUnwrap(folded.first { $0.label == "Release heartbeat" })
+        XCTAssertTrue(heartbeat.value.contains(L10n.format("Continues “%@”", "Release watch")), heartbeat.description)
         XCTAssertFalse(shows(folded, "Check CI on PR #340"), "One-offs that ran are folded away")
         XCTAssertFalse(shows(folded, "Branch cleanup"), "So are the schedules that are off")
         let completed = try XCTUnwrap(folded.first { $0.label == L10n.string("Completed scheduled tasks group") })

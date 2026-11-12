@@ -122,6 +122,62 @@ enum ScheduleText {
         return "\(moment(nextRun, relativeTo: now, calendar: calendar)) · \(cadence)"
     }
 
+    /// A schedule's row in the list, read at a glance under its day (`ScheduleListSections.Day`): the time it
+    /// runs next on the right, and how it repeats under its name. One that does not run on its time says only
+    /// why (`row`), with no time.
+    static func listRow(_ schedule: ScheduledTask, nextRun: Date?, isStarting: Bool, now: Date = Date(),
+                        calendar: Calendar = .autoupdatingCurrent) -> (time: String?, line: String) {
+        guard !isStarting, schedule.isEnabled, schedule.state.stopReason == nil, let nextRun,
+              !schedule.state.runs.contains(where: { $0.outcome == .deferred }) else {
+            return (nil, row(schedule, nextRun: nextRun, isStarting: isStarting, now: now, calendar: calendar))
+        }
+        return (time(nextRun, in: ScheduleListSections.Day(nextRun, now: now, calendar: calendar), calendar: calendar),
+                cadence(schedule.trigger, calendar: calendar))
+    }
+
+    /// A next run as its day's group in the list leaves it to say: "9:00 AM" today or tomorrow, "Sat 9:00 AM"
+    /// within the week, "Nov 20" after.
+    static func time(_ date: Date, in day: ScheduleListSections.Day, calendar: Calendar = .autoupdatingCurrent) -> String {
+        let style: ScheduleDateFormatters.Style = switch day {
+        case .today, .tomorrow: .time
+        case .nextSevenDays: .template("EEE jmm")
+        case .later: .template("MMMd")
+        }
+        return ScheduleDateFormatters.shared.formatter(style, calendar: calendar).string(from: date)
+    }
+
+    /// A next run on its own, where no day's group says the day: "9:00 AM" today, "Tomorrow at 9:00 AM",
+    /// "Sat 9:00 AM" within the week, "Nov 20" after.
+    static func shortMoment(_ date: Date, relativeTo now: Date = Date(), calendar: Calendar = .autoupdatingCurrent) -> String {
+        let day = ScheduleListSections.Day(date, now: now, calendar: calendar)
+        guard day == .tomorrow else { return time(date, in: day, calendar: calendar) }
+        return ScheduleDateFormatters.shared.formatter(.relativeDay, calendar: calendar).string(from: date)
+    }
+
+    static func title(of day: ScheduleListSections.Day) -> String {
+        switch day {
+        case .today: L10n.string("Today")
+        case .tomorrow: L10n.string("Tomorrow")
+        case .nextSevenDays: L10n.string("Next 7 days")
+        case .later: L10n.string("Later")
+        }
+    }
+
+    /// A schedule that continues a task, in the task's rail beside its session jobs and in their words: how it
+    /// repeats, then when it runs next ("Every 2 hours · Next run in 42 min"). One that is off, or waits for
+    /// the task, says so as the list's row does.
+    static func railDetail(_ schedule: ScheduledTask, nextRun: Date?, now: Date = Date(),
+                           calendar: Calendar = .autoupdatingCurrent) -> String {
+        guard schedule.isEnabled, schedule.state.stopReason == nil,
+              !schedule.state.runs.contains(where: { $0.outcome == .deferred }) else {
+            return row(schedule, nextRun: nil, isStarting: false, now: now, calendar: calendar)
+        }
+        let repeats = schedule.trigger.isRecurring ? summary(schedule.trigger, calendar: calendar, now: now)
+            : L10n.string("Once")
+        guard let nextRun else { return repeats }
+        return "\(repeats) · \(SessionJobText.nextRun(at: nextRun, now: now))"
+    }
+
     static func lastRun(_ schedule: ScheduledTask, now: Date = Date(), calendar: Calendar = .autoupdatingCurrent) -> String? {
         schedule.state.lastRunAt.map { lastRun(at: $0, now: now, calendar: calendar) }
     }

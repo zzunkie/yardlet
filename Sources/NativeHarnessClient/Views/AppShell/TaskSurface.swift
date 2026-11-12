@@ -478,6 +478,7 @@ struct TaskDetail: View {
                 workspaceState.showPanelDetail(.claudeTaskOutput(activityID: activity.id, title: activity.title))
             } : nil,
             terminals: railTerminalActions,
+            openSchedule: railServices.map { services in { services.agents.openSchedule($0) } },
             agents: railAgentActions,
             openBrowser: { showBrowserTab(railServices?.agents.browserPreviewTab()?.key) },
             openChanges: { openSurface(.diff) },

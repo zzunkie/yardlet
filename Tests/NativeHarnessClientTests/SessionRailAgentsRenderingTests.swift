@@ -43,6 +43,21 @@ final class SessionRailAgentsRenderingTests: XCTestCase {
                        L10n.format("Every hour at minute %@", "7, 22, 37, 52"))
         XCTAssertNil(SessionJobText.summary(cron: "0 9 1 * *"), "a form the CLI does not name stays its own")
         XCTAssertEqual(fixture.content.cards(SessionRailPreferences()).suffix(3), [.suggestions, .agents, .backgroundTasks])
+
+        // A Codex task a schedule continues lists it with its background terminal: the heartbeat and the paused
+        // schedule, which Scheduled tasks would resume; not the one-off that ran.
+        let codex = SessionRecord(harness: .codex, workspaceURL: fixture.session.workspaceURL,
+                                  runtimeExecutableURL: URL(filePath: "/tmp/codex"), title: "Audit the build")
+        let codexRail = fixture.codexContent(codex, state: CodexTaskState(), shot: CodexTaskState())
+        XCTAssertEqual(codexRail.schedules.map(\.name), ["Nightly build check", "Build heartbeat"])
+        XCTAssertEqual(codexRail.rollup(.backgroundTasks),
+                       [L10n.format("%lld running", Int64(1)), L10n.format("%lld scheduled", Int64(1))].joined(separator: " · "),
+                       "The paused one is not counted as scheduled")
+        let heartbeat = try XCTUnwrap(codexRail.schedules.last)
+        XCTAssertTrue(ScheduleText.railDetail(heartbeat, nextRun: ScheduleRunPolicy.nextRun(of: heartbeat, now: Date(),
+                                                                                          calendar: .autoupdatingCurrent))
+            .hasPrefix(L10n.format("Every %lld hours", Int64(2)) + " · " + L10n.format("Next run %@", "")),
+                      "how it repeats, then the next run, as a session job's row says them")
     }
 
     /// The request answered from the conversation leaves the rail too, so a person with the rail
@@ -391,21 +406,45 @@ private final class AgentsRailFixture {
                                                                  thread: "computer-use-render")) ?? state
         let codex = SessionRecord(harness: .codex, workspaceURL: session.workspaceURL, runtimeExecutableURL: URL(filePath: "/tmp/codex"),
                                   title: "Audit the build", status: .running)
-        let content = SessionRailContent.make(
+        let content = codexContent(codex, state: state, shot: shot)
+        return SessionRailView(content: content, folds: .constant(folds), preferences: preferences,
+                               actions: SessionRailActions(terminals: SessionRailTerminalActions(), openSchedule: { _ in }))
+            .frame(height: 1200, alignment: .top)
+            .background(ParityTheme.canvas)
+            .environment(\.colorScheme, appearance.colorScheme)
+            .environment(\.harnessModelNames, HarnessModelNames(harness: .codex))
+    }
+
+    /// Yardlet's schedules whose runs continue a task: a heartbeat every two hours, one paused, and a one-off
+    /// that ran, which the rail leaves to Scheduled tasks.
+    static func continuingSchedules(of task: SessionRecord) -> [ScheduledTask] {
+        let now = Date()
+        func schedule(_ name: String, _ trigger: ScheduleTrigger) -> ScheduledTask {
+            var made = ScheduledTask(name: name, prompt: "\(name).", trigger: trigger, destination: ScheduleDestination(
+                mode: .continueTask, harness: task.harness, targetTaskID: task.id), createdAt: now.addingTimeInterval(-86_400))
+            made.state.scanFloor = now.addingTimeInterval(-60)
+            return made
+        }
+        let heartbeat = schedule("Build heartbeat", .interval(hours: 2, anchor: now.addingTimeInterval(-4_680), days: []))
+        var paused = schedule("Nightly build check", .daily(ScheduleTime(hour: 23, minute: 0)))
+        paused.isEnabled = false
+        var ran = schedule("Check the cache warmed", .once(now.addingTimeInterval(-3_600)))
+        ran.isEnabled = false
+        ran.state.stopReason = .finished
+        return [paused, ran, heartbeat]
+    }
+
+    func codexContent(_ codex: SessionRecord, state: CodexTaskState, shot: CodexTaskState) -> SessionRailContent {
+        SessionRailContent.make(
             session: codex, projectName: "yardlet", instructionSources: TaskInstructionSources(origin: .provider, paths: []),
             git: nil, options: SessionRailAgentsTests.options(.codex), connectors: nil, account: nil, entries: [],
             codexPlan: nil, pullRequest: nil, pullRequestState: nil, codexState: state,
             backgroundTerminals: [CodexBackgroundTerminal(processID: "42", itemID: "c9", command: "npm run dev -- --port 5173",
                                                           workspacePath: "")],
+            schedules: Self.continuingSchedules(of: codex),
             preview: SessionRailComputerFrame.latest(in: shot).map {
                 SessionRailPreview(source: .computer($0), caption: L10n.string("Computer use"))
             })
-        return SessionRailView(content: content, folds: .constant(folds), preferences: preferences,
-                               actions: SessionRailActions(terminals: SessionRailTerminalActions()))
-            .frame(height: 1200, alignment: .top)
-            .background(ParityTheme.canvas)
-            .environment(\.colorScheme, appearance.colorScheme)
-            .environment(\.harnessModelNames, HarnessModelNames(harness: .codex))
     }
 
     private var railActions: SessionRailActions {

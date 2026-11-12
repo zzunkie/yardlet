@@ -2483,6 +2483,8 @@ struct MainWindow: View {
         services.readCodexThread = { threadID in try await model.readCodexChildThread(threadID, of: session) }
         services.readTaskOutput = { activity in await model.readClaudeTaskOutput(activity, of: session) }
         if session.harness == .claudeCode { services.sessionJobs = { model.sessionJobs(of: session.id) } }
+        services.continuingSchedules = { model.scheduledTasks.schedules(continuing: session.id) }
+        services.openSchedule = { id in showSchedule(id) }
         if session.harness == .codex {
             services.readBackgroundTerminals = { await model.codexBackgroundTerminals(of: session) }
             services.stopTerminal = { terminal in try await model.stopCodexBackgroundTerminal(terminal.processID, of: session) }
