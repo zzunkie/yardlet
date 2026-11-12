@@ -280,7 +280,7 @@ import XCTest
                        "Same Claude session and storage")
     }
 
-    func testOutputWaitsForTheRunningTurnAndAStoppedCommandIsNotSent() async throws {
+    func testOutputWaitsForTheRunningTurnAndAnEditAndAStoppedCommandIsNotSent() async throws {
         let fixture = try await makeFixture(idle: false)
         let model = fixture.model, task = fixture.task, transport = fixture.transport
         let sentBefore = await transport.sentValues.count
@@ -303,7 +303,16 @@ import XCTest
         model.stopShellCommand(in: task)
         try await waitUntil { model.shellCommandRun(entryID: sleeping)?.state == .stopped }
 
+        // An earlier message being edited when the turn ends holds the output too, which would cut in front of
+        // the edit; cancelling the edit lets it go.
+        model.composerDrafts.tasks.draft(for: task.id).editState = ConversationEditState(session: task, targetID: "t",
+            previousID: nil, originalText: "Earlier", draft: TaskDraftSnapshot(), entries: [])
         await transport.emit(try json(result))
+        try await waitUntil { model.store.sessions.first?.status == .ready }
+        try await Task.sleep(for: .milliseconds(150))
+        let whileEditing = await transport.sentValues.count
+        XCTAssertEqual(whileEditing, sentBefore, "The output waits for the edit")
+        model.cancelConversationEdit(in: task)
         try await waitUntil { await transport.sentValues.count == sentBefore + 1 }
         let sent = try await lastSent(transport)
         XCTAssertEqual(sent["message"]?["content"]?.stringValue,

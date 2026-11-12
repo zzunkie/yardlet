@@ -34,8 +34,13 @@ enum TaskBlocker: CaseIterable {
     case childTasks
     /// A message the person is editing.
     case edit
-    /// Another change under way: a session change, an account switch, a fork, a restart, a side chat opening,
-    /// unarchiving, or its worktree being made again.
+    /// A change of its conversation under way: an edited message being sent, a Codex command, review or retried
+    /// turn starting, or files being restored.
+    case conversationChange
+    /// Its account is changing (`AppModel.changeAccount`).
+    case accountSwitch
+    /// Another change under way: a fork, a restart, a side chat opening, unarchiving, or its worktree being made
+    /// again.
     case change
     /// Its runtime is starting (`AppModel.attach`): a change of its account or runtime meanwhile fails the start.
     case runtimeStarting
@@ -62,7 +67,7 @@ enum TaskBlocker: CaseIterable {
         case .shellCommand: .shellCommand
         case .request: .request
         case .edit: .edit
-        case .change, .runtimeStarting, .startingAsChild, .cutOffTurn: .otherChange
+        case .conversationChange, .accountSwitch, .change, .runtimeStarting, .startingAsChild, .cutOffTurn: .otherChange
         case .agents: .agents
         case .backgroundWork: .backgroundWork
         case .sideChat, .codexTurn, .sessionJobs, .processes, .childStartWaiting, .childTasks, .sessionJobRelaunch,
@@ -90,6 +95,24 @@ enum TaskBlocker: CaseIterable {
         [.turn, .otherChange].contains($0.accountMoveWait(heldMessagesGoAfter: true))
     }
 
+    /// Whether a turn Yardlet starts to send what it holds (a queued message, shell output) waits while this holds
+    /// the task: a message already on its way, which keeps its place in the queue; a message the person is editing,
+    /// which the send would cut in front of; and a change of its conversation or account. The turn itself each send
+    /// reads as its provider reports it. A send goes ahead of the rest: nothing sends it again once another change
+    /// ends, a runtime still starting is waited for by the send itself, and a queued message takes the place of a
+    /// cut-off turn's continuation.
+    var holdsOffSends: Bool {
+        switch self {
+        case .messageOnItsWay, .edit, .conversationChange, .accountSwitch: true
+        case .sideChat, .turn, .codexTurn, .shellCommand, .request, .queuedMessages, .shellOutput, .backgroundWork,
+             .sessionJobs, .processes, .agents, .childStartWaiting, .childTasks, .change, .runtimeStarting,
+             .startingAsChild, .cutOffTurn, .sessionJobRelaunch, .limitContinue: false
+        }
+    }
+
+    /// What a turn Yardlet starts to send what it holds waits for (`holdsOffSends`).
+    static let holdingOffSends = allCases.filter(\.holdsOffSends)
+
     /// What keeps a task's runtime whether or not it is on screen, in a word for the memory saver's log and tests;
     /// nil for what the runtime may end under. An idle terminal does not keep it: the shell goes on without it.
     var memorySaverWord: String? {
@@ -102,7 +125,7 @@ enum TaskBlocker: CaseIterable {
         case .sessionJobs: "schedule"
         case .processes: "processes"
         case .agents, .childStartWaiting, .childTasks: "children"
-        case .edit, .change, .runtimeStarting: "changing"
+        case .edit, .conversationChange, .accountSwitch, .change, .runtimeStarting: "changing"
         case .cutOffTurn, .sessionJobRelaunch, .limitContinue: "continuing"
         case .startingAsChild: nil
         }

@@ -1719,8 +1719,7 @@ final class AppModel {
     /// its bubble appears now.
     private func startQueuedTurn(with itemID: UUID, in session: SessionRecord, attaching: Bool) async {
         guard let item = followUps.item(itemID, in: session.id), item.state != .sent,
-              !sessionMutations.contains(session.id), !switchingAccounts.contains(session.id),
-              composerDrafts.tasks.draft(for: session.id).editState == nil,
+              firstBlocker(of: session, among: TaskBlocker.holdingOffSends) == nil,
               attaching || handlesBySessionID[session.id] != nil,
               !Task.isCancelled, followUps.claim(itemID) else { return }
         defer { followUps.finish(itemID) }
@@ -1764,15 +1763,15 @@ final class AppModel {
         }
     }
 
-    /// Sends the first message Yardlet holds once no turn runs. While the provider still holds one
-    /// (Claude Code), it starts that turn itself, so the queue waits for it.
+    /// Sends the first message Yardlet holds once no turn runs and nothing a send waits for holds the
+    /// task (`TaskBlocker.holdsOffSends`). While the provider still holds one (Claude Code), it starts
+    /// that turn itself, so the queue waits for it.
     private func drainFollowUps(for sessionID: UUID) async {
         guard let session = store.sessions.first(where: { $0.id == sessionID }), !followUps.isPaused(sessionID),
               continuations.accountSwitchesAfterTurn[sessionID] == nil, continuations.usageLimitHold(of: sessionID) == nil,
+              firstBlocker(of: session, among: TaskBlocker.holdingOffSends) == nil,
               let delivery = followUpDelivery(for: session),
-              case let queue = followUps.queue(for: sessionID),
-              !queue.contains(where: { $0.state == .sent || followUps.isClaimed($0.id) }),
-              let first = queue.first, first.state == .pending,
+              let first = followUps.queue(for: sessionID).first, first.state == .pending,
               await delivery.runningTurn(reportedRunning: isRunning(sessionID)) == nil else { return }
         await startQueuedTurn(with: first.id, in: session, attaching: false)
     }
@@ -2074,12 +2073,12 @@ final class AppModel {
     }
 
     /// Sends the oldest finished command once the task is idle and holds no queued message, as
-    /// the Claude app waits for the turn and for messages ahead of it. Its message starts a turn,
-    /// and the next one waits for that turn to end.
+    /// the Claude app waits for the turn and for messages ahead of it, and once nothing else a send
+    /// waits for holds it (`TaskBlocker.holdsOffSends`), a message being edited among them. Its
+    /// message starts a turn, and the next one waits for that turn to end.
     private func deliverShellCommand(for sessionID: UUID) async {
         guard let session = store.sessions.first(where: { $0.id == sessionID }), session.harness == .claudeCode,
-              session.status != .running, session.status != .waitingForApproval,
-              !sessionMutations.contains(sessionID), !switchingAccounts.contains(sessionID),
+              !Self.isWorking(session), firstBlocker(of: session, among: TaskBlocker.holdingOffSends) == nil,
               continuations.accountSwitchesAfterTurn[sessionID] == nil,
               !followUps.queue(for: sessionID).contains(where: { $0.state != .failed }),
               let delivery = pendingShellDeliveries[sessionID]?.first else { return }
@@ -5744,10 +5743,11 @@ final class AppModel {
         case .childStartWaiting: sessionTools.queue.contains { $0.callerID == id }
         case .childTasks: store.sessions.contains { $0.parentTaskID == id && Self.isWorking($0) }
         case .edit: composerDrafts.tasks.existingDraft(for: id)?.editState != nil
+        case .conversationChange: sessionMutations.contains(id)
+        case .accountSwitch: switchingAccounts.contains(id)
         case .change:
-            sessionMutations.contains(id) || switchingAccounts.contains(id) || forkingSessions.contains(id)
-                || restartingSessions.contains(id) || openingSideChats.contains(id) || unarchivingSessionIDs.contains(id)
-                || recreatingTaskWorktrees.contains(id)
+            forkingSessions.contains(id) || restartingSessions.contains(id) || openingSideChats.contains(id)
+                || unarchivingSessionIDs.contains(id) || recreatingTaskWorktrees.contains(id)
         case .runtimeStarting: runtimeStarts[id] != nil
         case .startingAsChild: sessionTools.isQueued(id) || sessionTools.starting.contains(id)
         case .cutOffTurn: continuations.continuesCutOffTurn(id)
@@ -7679,6 +7679,9 @@ extension AppModel {
                           diffComments: draft.diffComments.isEmpty ? nil : draft.diffComments,
                           browserComments: draft.browserComments.isEmpty ? nil : draft.browserComments))
         composerDrafts.persistNow()
+        // What waited for the edit goes now.
+        scheduleFollowUpDrain(for: session.id)
+        scheduleShellDelivery(for: session.id)
     }
 
     private func submitConversationEdit(_ input: CodexComposerDraft, to source: SessionRecord) async {
