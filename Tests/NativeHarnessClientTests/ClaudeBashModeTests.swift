@@ -323,6 +323,21 @@ import XCTest
         try await Task.sleep(for: .milliseconds(150))
         let afterStopped = await transport.sentValues.count
         XCTAssertEqual(afterStopped, sentBefore + 1, "The stopped command was not sent")
+
+        // A change of the conversation that begins while a command runs (files being restored, say) holds its output
+        // the same way, and its end lets it go: nothing else would send it before the next turn ends.
+        model.runShellCommand("printf later", in: task)
+        let later = try XCTUnwrap(model.transcriptBySessionID[task.id]?.last?.id)
+        XCTAssertTrue(model.beginConversationChange(of: task.id))
+        try await waitUntil { model.shellCommandRun(entryID: later)?.state == .finished }
+        try await Task.sleep(for: .milliseconds(150))
+        let whileChanging = await transport.sentValues.count
+        XCTAssertEqual(whileChanging, sentBefore + 1, "The output waits for the change")
+        model.endConversationChange(of: task.id)
+        try await waitUntil { await transport.sentValues.count == sentBefore + 2 }
+        let afterChange = try await lastSent(transport)
+        XCTAssertEqual(afterChange["message"]?["content"]?.stringValue,
+                       ClaudeBashMessage.text(command: "printf later", stdout: "later"))
     }
 
     func testOutputWaitsBehindQueuedMessagesAndACommandThatCouldNotStartStillTellsClaudeWhy() async throws {

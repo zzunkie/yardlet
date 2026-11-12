@@ -5754,7 +5754,7 @@ final class AppModel {
 
     func endConversationChange(of id: UUID) {
         sessionMutations.remove(id)
-        taskMayHaveSettled(id)
+        sendWhatAChangeHeld(in: id)
     }
 
     /// Begins a change of the task's account (`TaskBlocker.accountSwitch`), or holds the task as one does while its
@@ -5763,9 +5763,22 @@ final class AppModel {
         switchingAccounts.insert(id).inserted
     }
 
+    /// What the switch held is sent by whoever switched, in its order: a move after a turn sends it once it moved
+    /// (`TaskContinuationCoordinator.completeAccountSwitch`), and a continue after a limit sends its own message
+    /// first, which what waited for the continue follows.
     func endAccountSwitch(of id: UUID) {
         switchingAccounts.remove(id)
         taskMayHaveSettled(id)
+    }
+
+    /// A change of the conversation, which held off Yardlet's sends (`TaskBlocker.holdsOffSends`), ended: what waits
+    /// on the task looks again, and what Yardlet holds to send goes as at the end of a turn, unless something else
+    /// still holds it. Nothing else would send it before the task's next turn ends. Queued messages go only from a
+    /// task that is ready, as after a turn; a change that started a turn leaves them for that turn's end.
+    private func sendWhatAChangeHeld(in id: UUID) {
+        taskMayHaveSettled(id)
+        if store.sessions.first(where: { $0.id == id })?.status == .ready { scheduleFollowUpDrain(for: id) }
+        scheduleShellDelivery(for: id)
     }
 
     private func blocks(_ session: SessionRecord, _ kind: TaskBlocker) -> Bool {
