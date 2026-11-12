@@ -1849,6 +1849,8 @@
 "codex.row.ranCommand" = "Ran command";
 "codex.row.runningCommand" = "Running command";
 "codex.row.stoppedCommand" = "Stopped command";
+"codex.row.denied" = "<verb>Denied</verb> %@";
+"codex.row.deniedCommand" = "Denied command";
 "codex.row.viewedImage" = "<verb>Viewed</verb> %@";
 "codex.row.viewingImage" = "<verb>Viewing</verb> %@";
 "codex.row.viewedAnImage" = "Viewed an image";

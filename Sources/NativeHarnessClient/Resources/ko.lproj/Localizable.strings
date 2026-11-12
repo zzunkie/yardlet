@@ -1849,6 +1849,8 @@
 "codex.row.ranCommand" = "명령 실행됨";
 "codex.row.runningCommand" = "명령 실행 중";
 "codex.row.stoppedCommand" = "명령 중지됨";
+"codex.row.denied" = "%@ <verb>거부됨</verb>";
+"codex.row.deniedCommand" = "명령 거부됨";
 "codex.row.viewedImage" = "%@ <verb>확인함</verb>";
 "codex.row.viewingImage" = "%@ <verb>확인 중</verb>";
 "codex.row.viewedAnImage" = "이미지 1개 확인함";

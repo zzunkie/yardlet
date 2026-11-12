@@ -107,6 +107,18 @@ final class ToolRowWordingTests: XCTestCase {
                                           actions: Array(actions.prefix(2)))
         XCTAssertEqual(ConversationLineWording.command(command, phase: .completed, harness: .codex, localize: en).map(\.text),
                        ["Read a.swift", "Read b.swift"])
+
+        // A command the person declined never ran: it reads as denied, by its whole command, as its
+        // card reads.
+        var declined = command
+        declined.status = "declined"
+        XCTAssertEqual(ConversationLineWording.command(declined, phase: .failed, harness: .codex, localize: en).map(\.text),
+                       ["Denied cat a.swift && cat b.swift"])
+        XCTAssertEqual(ConversationLineWording.command(declined, phase: .failed, harness: .codex, localize: ko),
+                       [ConversationLineWords(leading: "cat a.swift && cat b.swift", verb: "거부됨")])
+        XCTAssertEqual(ko("codex.row.denied").replacingOccurrences(of: "%@ ", with: "")
+                        .replacingOccurrences(of: "<verb>", with: "").replacingOccurrences(of: "</verb>", with: ""),
+                       ko("Denied"), "The row's word is the card's")
     }
 
     // MARK: - The wrapper

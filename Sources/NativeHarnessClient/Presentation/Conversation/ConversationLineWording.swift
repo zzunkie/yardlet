@@ -192,6 +192,14 @@ enum ConversationLineWording {
         if let words = command.words { return words }
         switch harness {
         case .codex:
+            // A command the person declined never ran. It reads as its whole command, as the Codex app
+            // reads one (not as what it would have read or searched), and as denied, as its card does:
+            // the app's own "Ran" would say it ran.
+            if command.status.lowercased() == "declined" {
+                let shown = oneLine(CodexShellCommand.displayed(command.command))
+                return [shown.isEmpty ? ConversationLineWords.filling(localize("codex.row.deniedCommand"), [])
+                    : ConversationLineWords.filling(localize("codex.row.denied"), [shown])]
+            }
             let actions = command.actions.isEmpty ? [.unknown(command: command.command)] : command.actions
             return actions.map { codex($0, phase: phase, localize: localize) }
         case .claudeCode:
