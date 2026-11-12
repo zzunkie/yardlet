@@ -688,6 +688,184 @@ final class RestartResumeTests: XCTestCase {
         await model.shutdown()
     }
 
+    /// What holds a task off screen, as an account move and the memory saver each read it: what a move waits for, which
+    /// the line above the composer names (also once the task's turn has ended, when the messages and shell output
+    /// Yardlet holds go after the move), and the word the memory saver keeps the runtime for. Each thing alone in a task
+    /// of its own, then piled up on one task from what a list names last, so that each step names what came on top or
+    /// keeps what it named before: the order decides the reason the line shows.
+    func testWhatHoldsATaskForAnAccountMoveAndForTheMemorySaver() async throws {
+        struct Holds: Equatable {
+            var move: AccountMoveBlocker?
+            var moveAfterTurn: AccountMoveBlocker?
+            var keep: String?
+            init(_ move: AccountMoveBlocker?, _ moveAfterTurn: AccountMoveBlocker?, _ keep: String?) {
+                (self.move, self.moveAfterTurn, self.keep) = (move, moveAfterTurn, keep)
+            }
+        }
+        let alone: [(thing: String, holds: Holds)] = [
+            ("Nothing", Holds(nil, nil, nil)),
+            ("Side chat", Holds(nil, nil, "side chat")),
+            ("Turn", Holds(.turn, .turn, "turn")),
+            ("Approval", Holds(.turn, .turn, "turn")),
+            ("Codex turn", Holds(nil, nil, "turn")),
+            ("Shell command", Holds(.shellCommand, .shellCommand, "turn")),
+            ("Session tool approval", Holds(.request, .request, "question")),
+            ("Queued message", Holds(.messages, nil, "queued")),
+            ("Message on its way", Holds(.messages, .messages, "queued")),
+            ("Shell output", Holds(.messages, nil, "queued")),
+            ("Background command", Holds(.backgroundWork, .backgroundWork, "background")),
+            ("Session job", Holds(nil, nil, "schedule")),
+            ("Server", Holds(nil, nil, "processes")),
+            ("Agent", Holds(.agents, .agents, "children")),
+            ("Its child waits for room", Holds(nil, nil, "children")),
+            ("Its child works", Holds(nil, nil, "children")),
+            ("Waits for room as a child", Holds(.otherChange, .otherChange, nil)),
+            ("Starts as a child", Holds(.otherChange, .otherChange, nil)),
+            ("Edit", Holds(.edit, .edit, "changing")),
+            ("Account switch", Holds(.otherChange, .otherChange, "changing")),
+            ("Cut-off turn", Holds(.otherChange, .otherChange, "continuing")),
+            ("Continue after limit", Holds(nil, nil, "continuing")),
+        ]
+        let piles: [(task: String, steps: [(thing: String, holds: Holds)])] = [
+            ("Side chat with a message", [("Queued message", Holds(.messages, nil, "side chat"))]),
+            ("Session job and a server", [("Session job", Holds(nil, nil, "schedule")),
+                                          ("Server", Holds(nil, nil, "schedule"))]),
+            ("Piled for a move", [
+                ("Background command", Holds(.backgroundWork, .backgroundWork, "background")),
+                ("Agent", Holds(.agents, .agents, "background")),
+                ("Starts as a child", Holds(.otherChange, .otherChange, "background")),
+                ("Edit", Holds(.edit, .edit, "background")),
+                ("Session tool approval", Holds(.request, .request, "question")),
+                ("Shell command", Holds(.shellCommand, .shellCommand, "turn")),
+                ("Queued message", Holds(.messages, .shellCommand, "turn")),
+                ("Turn", Holds(.turn, .turn, "turn")),
+            ]),
+            ("Piled for the memory saver", [
+                ("Continue after limit", Holds(nil, nil, "continuing")),
+                ("Edit", Holds(.edit, .edit, "changing")),
+                ("Agent", Holds(.edit, .edit, "children")),
+                ("Server", Holds(.edit, .edit, "processes")),
+                ("Background command", Holds(.edit, .edit, "background")),
+                ("Queued message", Holds(.messages, .edit, "queued")),
+                ("Session tool approval", Holds(.messages, .request, "question")),
+                ("Turn", Holds(.turn, .turn, "turn")),
+            ]),
+        ]
+
+        let fixture = try ClaudeFixture()
+        let now = Date()
+        var tasks = Dictionary(uniqueKeysWithValues: (alone.map(\.thing) + piles.map(\.task)).map {
+            ($0, fixture.session(title: $0, status: .ready, updatedAt: now))
+        })
+        tasks["Codex turn"] = SessionRecord(harness: .codex, workspaceURL: fixture.root, runtimeExecutableURL: fixture.cli,
+            title: "Codex turn", status: .ready, updatedAt: now, providerSessionID: "thread")
+        var child = fixture.session(title: "Child", status: .running, updatedAt: now)
+        child.parentTaskID = tasks["Its child works"]?.id
+        for title in ["Session job", "Session job and a server"] {
+            let task = try XCTUnwrap(tasks[title])
+            try fixture.save(savedRecords(sessionJob(at: now.addingTimeInterval(-60)), conversation: task.providerSessionID!),
+                             for: task)
+        }
+        let sideChats = ["Side chat", "Side chat with a message"]
+        let sessions = tasks.filter { !sideChats.contains($0.key) }.map(\.value) + [child]
+        let store = SessionStore(sessions: sessions, repository: InMemorySessionRepository(sessions: sessions))
+        let model = fixture.model(store: store)
+        model.continuations.connectionResumeSleep = { _ in try await Task.sleep(for: .seconds(3_600)) }
+        for title in sideChats {
+            tasks[title] = try await store.createSession(harness: .claudeCode, workspaceURL: fixture.root,
+                runtimeExecutableURL: fixture.cli, title: title, selectsSession: false, connection: fixture.connection,
+                isTemporary: true)
+        }
+        store.selectedSessionID = nil
+
+        var servers: [UUID: [TaskServerPort]] = [:]
+        var approvals: [Task<Bool, Never>] = []
+        func add(_ thing: String, to title: String) async throws {
+            let task = try XCTUnwrap(store.sessions.first { $0.id == tasks[title]?.id }, title)
+            let id = task.id
+            switch thing {
+            case "Nothing", "Side chat", "Its child works": break
+            case "Turn": try await store.updateSession(id: id, status: .running)
+            case "Approval": try await store.updateSession(id: id, status: .waitingForApproval)
+            case "Codex turn":
+                let turn = CodexTurnState(id: "turn", status: .inProgress, itemsView: .full, items: [], raw: .null)
+                model.codexPresentations[id] = CodexTaskState(thread: CodexThreadState(id: "thread", preview: "",
+                    status: .notLoaded, turns: [turn], raw: .null))
+            case "Shell command":
+                model.runShellCommand("sleep 30", in: task)
+                try await waitUntil { model.runningShellCommandBySessionID[id] != nil }
+            case "Session tool approval":
+                let request = PermissionRequest(id: "approval-\(id)", title: "Start a task", detail: nil, command: nil)
+                approvals.append(Task { await model.sessionTools.ask(request, in: id, onChange: {}) })
+                try await waitUntil { !model.heldRequests(in: id).isEmpty }
+            case "Queued message":
+                model.followUps.append(QueuedFollowUp(draft: CodexComposerDraft(inputs: [.text("Then this")])), to: id)
+            case "Message on its way":
+                let message = QueuedFollowUp(draft: CodexComposerDraft(inputs: [.text("This one")]))
+                model.followUps.append(message, to: id)
+                XCTAssertTrue(model.followUps.claim(message.id))
+            case "Shell output":
+                // A command that ends during a turn sends its output once the turn has ended.
+                try await store.updateSession(id: id, status: .running)
+                model.runShellCommand("true", in: task)
+                try await waitUntil { model.pendingShellDeliveries[id]?.isEmpty == false }
+                try await store.updateSession(id: id, status: .ready)
+            case "Background command":
+                model.transcripts[id] = (model.transcriptBySessionID[id] ?? []) + [TranscriptEntry(content: .activity(
+                    HarnessActivity(id: "dev-\(id)", kind: "Bash", title: "npm run dev", isBackground: true,
+                                    subtask: HarnessSubtaskReference(taskID: "b-\(id)", taskType: "local_bash")),
+                    state: .running))]
+            case "Session job":
+                await model.resume(task)
+                try await waitUntil { !model.sessionJobs(of: id).isEmpty }
+            case "Server":
+                servers[id] = [TaskServerPort(port: 5173, processID: 1, processName: "node")]
+                model.resourceMonitor.applyServers(servers)
+            case "Agent":
+                let run = AgentRun(callerID: id, hostTaskID: id, harness: .claudeCode, prompt: "Survey",
+                                   workspaceURL: fixture.root, depth: 1)
+                run.state = .running
+                model.sessionTools.add(run)
+            case "Its child waits for room":
+                model.sessionTools.enqueue(.init(id: UUID(), callerID: id, firstMessage: nil, start: { _ in }))
+            case "Waits for room as a child":
+                model.sessionTools.enqueue(.init(id: id, callerID: UUID(), firstMessage: nil, start: { _ in }))
+            case "Starts as a child": model.sessionTools.starting.insert(id)
+            case "Edit":
+                model.composerDrafts.tasks.draft(for: id).editState = ConversationEditState(session: task, targetID: "t",
+                    previousID: nil, originalText: "Earlier", draft: TaskDraftSnapshot(), entries: [])
+            case "Account switch": model.switchingAccounts.insert(id)
+            case "Cut-off turn": model.continuations.acceptTurnCut(.connection, for: id, at: now)
+            case "Continue after limit":
+                model.continuations.setUsageLimitAutoContinue(true, resetsAt: now.addingTimeInterval(5 * 3_600), for: task)
+            default: XCTFail("No way to add \(thing)")
+            }
+        }
+        func holds(_ title: String) throws -> Holds {
+            let task = try XCTUnwrap(store.sessions.first { $0.id == tasks[title]?.id }, title)
+            return Holds(model.accountMoveBlocker(of: task), model.accountMoveBlocker(of: task, heldMessagesGoAfter: true),
+                         model.memorySaverKeeps(task))
+        }
+
+        for (thing, expected) in alone {
+            try await add(thing, to: thing)
+            XCTAssertEqual(try holds(thing), expected, thing)
+        }
+        for (title, steps) in piles {
+            for (thing, expected) in steps {
+                try await add(thing, to: title)
+                XCTAssertEqual(try holds(title), expected, "\(title), then \(thing)")
+            }
+        }
+
+        for title in ["Shell command", "Piled for a move"] {
+            model.stopShellCommand(in: try XCTUnwrap(tasks[title]))
+        }
+        for id in tasks.values.map(\.id) { model.sessionTools.refuseApprovals(in: id) }
+        for approval in approvals { _ = await approval.value }
+        await model.shutdown()
+    }
+
     /// Next-message suggestions follow the tasks the person looks at, as Claude Code's terminal suggests only while it
     /// has focus. A CLI started for the task on screen or for the person's own message asks; one started for a task off
     /// screen (another task's message, a continuation) does not, and starts again asking once its task comes on
