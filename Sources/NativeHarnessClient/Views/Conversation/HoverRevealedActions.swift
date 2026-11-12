@@ -25,7 +25,7 @@ struct RevealsActionsOnHover: ViewModifier {
     func body(content: Content) -> some View {
         content
             .environment(\.hoverRevealsActions, isHovering)
-            .onHover { isHovering = $0 }
+            .pointerHover { isHovering = $0 }
     }
 }
 

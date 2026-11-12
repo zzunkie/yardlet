@@ -680,6 +680,14 @@ final class TranscriptProseFragments: NSObject, NSTextLayoutManagerDelegate {
 final class TranscriptProseTextView: NSTextView {
     var copyDetails: String?
 
+    /// The whole text is TextKit's viewport, as the container lays it out whole anyway
+    /// (`TranscriptProseContainerView.layout`). Kept to the visible part, the viewport moved at every
+    /// frame of a scroll: the text laid its fragments out again and asked for layout, and its turn's
+    /// hosting view and the window's SwiftUI laid out with it.
+    override func viewportBounds(for textViewportLayoutController: NSTextViewportLayoutController) -> CGRect {
+        bounds
+    }
+
     /// A copy gives plain text: list markers as "1. " and lines as lines, without the frame's colours,
     /// which a rich copy of dark text would carry into a light document.
     override var writablePasteboardTypes: [NSPasteboard.PasteboardType] { [.string] }
