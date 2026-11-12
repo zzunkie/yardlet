@@ -42,7 +42,7 @@ struct PairingScanner: View {
                         Button("Open Settings") {
                             if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
                         }
-                        .buttonStyle(.borderedProminent)
+                        .prominentButton()
                     }
                     .padding(32)
                 }

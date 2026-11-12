@@ -37,6 +37,8 @@ final class HostSession: Identifiable {
     private(set) var followUp: RemoteFollowUpMode?
     /// The Mac answers a task's settings, slash commands, edit and fork (§15.23).
     private(set) var taskControls = false
+    /// The Mac reads a suggested task's choices for the phone and starts it with the phone's (§15.9).
+    private(set) var suggestionOptions = false
     private(set) var conversations: [String: ConversationState] = [:]
     /// Each open task's composer settings as the Mac last answered them (§15.23).
     private(set) var taskSettings: [String: [RemoteSetting]] = [:]
@@ -208,6 +210,7 @@ final class HostSession: Identifiable {
             newTask = response.newTask
             followUp = response.followUp
             taskControls = response.taskControls == true
+            suggestionOptions = response.suggestionOptions == true
             if let serverTime = response.serverTime {
                 clockOffset = Double(serverTime) / 1000 - Date().timeIntervalSince1970
             }
@@ -229,6 +232,7 @@ final class HostSession: Identifiable {
         newTask = response.newTask
         followUp = response.followUp
         taskControls = response.taskControls == true
+        suggestionOptions = response.suggestionOptions == true
     }
 
     private func applyTasks(changed: [RemoteTask], removed: [String]) {

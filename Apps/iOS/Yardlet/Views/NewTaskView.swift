@@ -148,24 +148,30 @@ struct NewTaskView: View {
         }
     }
 
-    /// What the Mac refused, in the words of what it said it was about (§15.16).
     private func message(for refusal: RemoteError?) -> String {
-        guard let refusal, refusal.code == .notAllowed else { return HostSession.message(for: refusal, host: session.name) }
-        let harnessName = harnesses.first { $0.harness == harness }?.harnessName ?? session.name
+        Self.message(for: refusal, host: session.name,
+                     harnessName: harnesses.first { $0.harness == harness }?.harnessName, settings: settings)
+    }
+
+    /// What the Mac refused about a new task's choices, in the words of what it said it was about (§15.16). A
+    /// suggested task started with its Options passes the same checks (§15.9).
+    static func message(for refusal: RemoteError?, host: String, harnessName: String?, settings: [RemoteSetting]) -> String {
+        guard let refusal, refusal.code == .notAllowed else { return HostSession.message(for: refusal, host: host) }
+        let harnessName = harnessName ?? host
         switch refusal.reason {
         case .signIn?:
-            return String(localized: "Sign in to \(harnessName) on \(session.name) to start a task.")
+            return String(localized: "Sign in to \(harnessName) on \(host) to start a task.")
         case .worktree?:
             return String(localized: "This project isn't in a Git repository, so it can't start in a new worktree.")
         case .attachments?:
             return String(localized: "\(harnessName) doesn't take these photos.")
         case .setting?, .confirmation?:
             if let name = settings.first(where: { $0.id == refusal.setting })?.name {
-                return String(localized: "\(session.name) doesn't take this \(name) choice now. Pick again.")
+                return String(localized: "\(host) doesn't take this \(name) choice now. Pick again.")
             }
-            return String(localized: "\(session.name) doesn't offer that choice now. Pick again.")
+            return String(localized: "\(host) doesn't offer that choice now. Pick again.")
         default:
-            return String(localized: "\(session.name) doesn't offer that choice now. Pick again.")
+            return String(localized: "\(host) doesn't offer that choice now. Pick again.")
         }
     }
 }

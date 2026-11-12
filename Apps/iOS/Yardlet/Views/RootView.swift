@@ -50,7 +50,7 @@ struct LockView: View {
             Text("Yardlet is locked").font(.headline)
             if lock.isLocked {
                 Button("Unlock") { Task { await lock.unlock() } }
-                    .buttonStyle(.borderedProminent)
+                    .prominentButton()
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

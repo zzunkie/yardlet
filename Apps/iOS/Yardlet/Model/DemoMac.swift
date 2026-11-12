@@ -103,6 +103,17 @@ final class DemoBridge: RemoteBridge {
         }
     }
 
+    func suggestionOptions(taskID: String, suggestionID: String, harness: String?, settings: [String: String],
+                           projectID: String?, accountID: String?,
+                           composer: Bool) async -> Result<RemoteNewTaskOptions, RemoteError> {
+        (await fixture.suggestionOptions(taskID: taskID, suggestionID: suggestionID, harness: harness, settings: settings,
+                                         projectID: projectID, accountID: accountID, composer: composer)).map { options in
+            var options = options
+            options.settings = options.settings.map(Self.local)
+            return options
+        }
+    }
+
     func limitAccounts(taskID: String) async -> Result<[RemoteAccount], RemoteError> {
         await fixture.limitAccounts(taskID: taskID)
     }

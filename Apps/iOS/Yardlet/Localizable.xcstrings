@@ -1049,6 +1049,16 @@
         }
       }
     },
+    "Options": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "옵션"
+          }
+        }
+      }
+    },
     "Other": {
       "localizations": {
         "ko": {
@@ -1629,6 +1639,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "시작됨"
+          }
+        }
+      }
+    },
+    "Starting…": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "시작 중…"
           }
         }
       }

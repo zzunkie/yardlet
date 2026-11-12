@@ -128,3 +128,11 @@ struct CommandErrorBanner: View {
         }
     }
 }
+
+extension View {
+    /// `.borderedProminent` on the app's monochrome accent, which is near white in dark mode, where the system's white
+    /// label would not read: the label takes the background's colour, as a card's primary answer does.
+    func prominentButton() -> some View {
+        buttonStyle(.borderedProminent).foregroundStyle(Color(.systemBackground))
+    }
+}

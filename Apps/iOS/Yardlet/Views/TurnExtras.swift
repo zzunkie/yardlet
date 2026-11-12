@@ -97,10 +97,17 @@ private struct AccountChooser: View {
     }
 }
 
-/// A task the agent suggests, with what the Mac's chip offers (§15.9).
+/// A task the agent suggests, with what the Mac's chip offers now (§15.9): Start, Do It Here and Dismiss, and Options
+/// from a Mac that reads the chip's choices for the phone; else what became of it. Why a Start failed shows under it.
 struct SuggestionView: View {
     let item: RemoteItem
     let context: ItemContext
+    @State private var isShowingOptions = false
+
+    private var actions: [String] { item.options ?? [] }
+    private var offersOptions: Bool {
+        context.session.suggestionOptions && actions.contains(RemoteSuggestionAction.start.rawValue)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -108,27 +115,66 @@ struct SuggestionView: View {
             if let detail = item.detail, !detail.isEmpty {
                 Text(detail).font(.footnote).foregroundStyle(.secondary)
             }
-            if item.suggestionState == nil || item.suggestionState == "pending" {
+            if item.suggestionState == "failed", let failure = item.suggestionFailure, !failure.isEmpty {
+                Text(failure).font(.footnote).foregroundStyle(.red).textSelection(.enabled)
+            }
+            if !actions.isEmpty {
                 HStack(spacing: 8) {
-                    Button("Start") { act(.start) }.buttonStyle(.borderedProminent)
-                    Button("Do It Here") { act(.here) }.buttonStyle(.bordered)
-                    Spacer()
-                    Button {
-                        act(.dismiss)
-                    } label: {
-                        Image(systemName: "xmark")
+                    if actions.contains(RemoteSuggestionAction.start.rawValue) {
+                        Button("Start") { act(.start) }.prominentButton()
                     }
-                    .buttonStyle(.borderless)
-                    .accessibilityLabel("Dismiss")
+                    if actions.contains(RemoteSuggestionAction.here.rawValue) {
+                        Button("Do It Here") { act(.here) }.buttonStyle(.bordered)
+                    }
+                    if offersOptions {
+                        Button("Options") { isShowingOptions = true }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(.secondary)
+                            .accessibilityHint(item.title ?? "")
+                    }
+                    Spacer()
+                    if actions.contains(RemoteSuggestionAction.dismiss.rawValue) {
+                        Button {
+                            act(.dismiss)
+                        } label: {
+                            Image(systemName: "xmark")
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Dismiss")
+                    }
                 }
                 .controlSize(.small)
                 .disabled(!context.session.isConnected)
-            } else if let state = item.suggestionState {
-                Text(state == "started" ? String(localized: "Started") : state == "dismissed" ? String(localized: "Dismissed")
-                     : String(localized: "Done here"))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+            } else if let outcome {
+                Text(outcome).font(.footnote).foregroundStyle(.secondary)
             }
+        }
+        .sheet(isPresented: $isShowingOptions) {
+            if let id = item.suggestionId {
+                SuggestionOptionsView(session: context.session, taskID: context.taskID, suggestionID: id,
+                                      title: item.title ?? "")
+            }
+        }
+        // Started, sent or dismissed meanwhile, here or on the Mac: its Options have nothing left to start.
+        .onChange(of: offersOptions) { _, offered in
+            if !offered { isShowingOptions = false }
+        }
+        #if DEBUG
+        .task {
+            guard UserDefaults.standard.string(forKey: "sheet") == "suggestionOptions" else { return }
+            try? await Task.sleep(for: .seconds(1.5))
+            if offersOptions { isShowingOptions = true }
+        }
+        #endif
+    }
+
+    private var outcome: String? {
+        switch item.suggestionState {
+        case "started": String(localized: "Started")
+        case "dismissed": String(localized: "Dismissed")
+        case "sentHere": String(localized: "Done here")
+        case "starting": String(localized: "Starting…")
+        default: nil
         }
     }
 

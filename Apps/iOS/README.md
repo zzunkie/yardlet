@@ -4,8 +4,9 @@ The phone remote for iOS: it follows the tasks Yardlet runs on your Mac and answ
 remote protocol ([docs/REMOTE_PROTOCOL.md](../../docs/REMOTE_PROTOCOL.md)). The Mac keeps every agent, sign-in and
 session; the phone lists the tasks with the sidebar's marks, reads a task's conversation as it streams, sends
 messages (into a running turn or queued after it), answers approvals, questions, plan reviews, MCP forms and browser
-handoffs with the Mac card's own choices, stops a turn, starts a task with the Mac's choices, changes a task's model,
-effort and permission mode, and pins or archives tasks. It notifies you while it is closed.
+handoffs with the Mac card's own choices, stops a turn, starts a task with the Mac's choices, starts a task the agent
+suggests as offered or with its Options, changes a task's model, effort and permission mode, and pins or archives
+tasks. It notifies you while it is closed.
 
 It is a SwiftUI app for iOS 17 and later. It builds `YardletRemote`, the package target the Mac's own remote is
 built from, so the protocol's types, the Noise channel, pairing links, the race between the same network, Tailscale
@@ -39,7 +40,8 @@ Paste the pairing URL it prints into "Paste a Pairing Link", or open it in the S
 
 **Screens without touching them:** a debug build reads launch arguments for screenshots and checks: `-demo YES` starts
 the demo, `-openTask <task ID>` opens a task, and `-sheet newTask`, `-sheet settings` or `-sheet taskSettings` opens
-that sheet, and `-openLink '<pairing link>'` opens a link as another app would, for example:
+that sheet (`-sheet suggestionOptions` opens the Options of a suggested task in the open task), and
+`-openLink '<pairing link>'` opens a link as another app would, for example:
 
 ```bash
 xcrun simctl launch booted com.zzunkie.yardlet.remote -demo YES -openTask 0F1E0001-0000-4000-8000-000000000001
