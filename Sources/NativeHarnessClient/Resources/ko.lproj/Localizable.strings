@@ -720,6 +720,11 @@
 "Interface size" = "인터페이스 크기";
 "Compact" = "작게";
 "Large" = "크게";
+"Code font" = "코드 글꼴";
+"Code font size" = "코드 글꼴 크기";
+"Applies to code blocks, diffs, command output, open files and the terminal." = "코드 블록, diff, 명령 출력, 열린 파일, 터미널에 함께 적용됩니다.";
+"Default · %d pt" = "기본 · %dpt";
+"%d pt" = "%dpt";
 "Choose a light, dark, or system-matched appearance." = "라이트, 다크 또는 시스템과 일치하는 화면을 선택합니다.";
 "Adjust text and control sizing across the app." = "앱 전체의 텍스트와 컨트롤 크기를 조절합니다.";
 "Git" = "Git";

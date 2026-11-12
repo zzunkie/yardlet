@@ -20,7 +20,10 @@ A even when their setting is Yardlet-specific. A remote conversation retains the
 
 Values are macOS points at the standard interface size. Use the existing `yardletInterfaceScale`
 (compact 0.94, standard 1, large 1.08) where the component already supports it; text must not be
-scaled twice. SF system text provides Korean fallback; code uses the system monospaced face.
+scaled twice. SF system text provides Korean fallback. Code (code blocks, diffs, command output, open
+files and the terminal) uses the code font Settings › Appearance chooses, `yardletCodeFont`: a view
+keeps its size for the standard code font, the system monospaced face at 12 points, and takes its
+font and size from it (`YardletCodeFont.size(_:scale:)`), so the default draws as before.
 
 | Proposed type token | Size / weight | Current mapping and consolidation |
 | --- | --- | --- |

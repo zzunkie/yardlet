@@ -33,6 +33,7 @@ struct TaskSurfaceHost: NSViewRepresentable {
         hosting.rootView = AnyView(content
             .environment(\.taskSurfacePresence, presence)
             .environment(\.yardletInterfaceScale, window.yardletInterfaceScale)
+            .environment(\.yardletCodeFont, window.yardletCodeFont)
             .dynamicTypeSize(window.dynamicTypeSize)
             .environment(\.windowDrag, window.windowDrag)
             .environment(\.taskWindowHeight, window.taskWindowHeight)

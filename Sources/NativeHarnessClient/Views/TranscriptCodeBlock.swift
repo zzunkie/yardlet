@@ -8,6 +8,7 @@ struct TranscriptCodeBlock: View {
     var findKey: ConversationFindSegmentKey? = nil
     let copyPayload: () -> String?
     @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @Environment(\.yardletCodeFont) private var codeFont
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.conversationFindSlot) private var findSlot
     @State private var fullCode: FullCode?
@@ -46,7 +47,7 @@ struct TranscriptCodeBlock: View {
             Divider()
             ScrollView(.horizontal) {
                 Text(code)
-                    .font(.system(size: 12.5 * interfaceScale, design: .monospaced))
+                    .font(codeFont.font(ofSize: codeFont.size(12.5, scale: interfaceScale)))
                     .textSelection(.enabled)
                     .fixedSize(horizontal: true, vertical: false)
                     .padding(12)

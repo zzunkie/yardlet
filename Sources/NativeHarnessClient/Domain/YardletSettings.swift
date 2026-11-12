@@ -457,6 +457,17 @@ extension YardletSetting {
         storage: .choice(key: YardletPreferenceKeys.interfaceSize,
                          defaultValue: YardletInterfaceSizePreference.standard.rawValue))
 
+    /// With the code font, which Appearance picks from the fonts installed and keeps to itself.
+    static let codeFontSize = YardletSetting(
+        id: "code_font_size", section: .appearance, symbol: "chevron.left.forwardslash.chevron.right",
+        title: L10n.string("Code font size"),
+        detail: L10n.string("Applies to code blocks, diffs, command output, open files and the terminal."),
+        values: .choices(CodeFontPreference.sizes.map { size in
+            Choice(value: String(size), title: size == CodeFontPreference.standardSize
+                ? L10n.format("Default · %d pt", size) : L10n.format("%d pt", size))
+        }),
+        storage: .choice(key: CodeFontPreference.sizeKey, defaultValue: String(CodeFontPreference.standardSize)))
+
     static let personalAgentMessages = YardletSetting(
         id: "personal_agent_messages", section: .notifications, symbol: "circle.dotted",
         title: L10n.string("Personal agent messages"),
@@ -623,7 +634,7 @@ enum YardletSettingCatalog {
         .agentBrowserTools, .keepCookies, .searchSuggestions, .pageSuggestions, .memorySaver, .memorySaverLevel,
         .hideKeysAndTokens,
         .shareTerminal, .terminalLocation,
-        .theme, .interfaceSize,
+        .theme, .interfaceSize, .codeFontSize,
         .personalAgentMessages, .newMail,
         .yardletInstructions, .dailyEvaluation,
         .claudeAIConnectors,

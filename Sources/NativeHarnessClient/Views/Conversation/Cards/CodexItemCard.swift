@@ -103,6 +103,7 @@ struct CodexBoundedOutput: View {
 /// command keeps the same bounded tail and offers the whole output in a reader.
 struct CodexCommandOutput: View {
     @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @Environment(\.yardletCodeFont) private var codeFont
     let text: String
     let isRunning: Bool
     /// The command that wrote it, offered to copy beside it where the card does not show it.
@@ -130,7 +131,7 @@ struct CodexCommandOutput: View {
                     .frame(height: 280 * interfaceScale)
             } else {
                 Text(window.text)
-                    .font(.system(size: 11 * interfaceScale, design: .monospaced))
+                    .font(codeFont.font(ofSize: codeFont.size(11, scale: interfaceScale)))
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)

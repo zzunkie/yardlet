@@ -56,8 +56,10 @@ struct TranscriptTextReader: NSViewRepresentable {
         guard let view = scroll.documentView as? NSTextView else { return }
         let selection = view.selectedRanges
         let origin = scroll.contentView.bounds.origin
+        // Code in the code font, at its size for the size given.
+        let codeFont = context.environment.yardletCodeFont
         let font: NSFont = monospaced
-            ? .monospacedSystemFont(ofSize: fontSize, weight: .regular)
+            ? codeFont.nsFont(ofSize: codeFont.size(fontSize))
             : .systemFont(ofSize: fontSize)
         let changed = view.string != text || view.font != font
         guard changed else { return }

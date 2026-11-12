@@ -59,18 +59,21 @@ struct WorkspaceFileReader: NSViewRepresentable {
         text.isEditable = onEdit != nil && !isSaving
         // Typing changes the text under the same document; only another text is drawn again.
         // Nothing here grows with the file: this runs again whenever the reading position is kept.
-        let changed = coordinator.documentID != document.id || coordinator.fontSize != fontSize
+        // In the code font, at its size for the 12 points the reader was given.
+        let codeFont = context.environment.yardletCodeFont
+        let font = codeFont.nsFont(ofSize: codeFont.size(fontSize))
+        let changed = coordinator.documentID != document.id || coordinator.font != font
             || text.documentLength != document.utf16Length
         coordinator.isApplying = true
         if changed {
             coordinator.documentID = document.id
-            coordinator.fontSize = fontSize
+            coordinator.font = font
             coordinator.highlightID = document.highlightID
-            text.show(document, font: NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular))
+            text.show(document, font: font)
             text.setAccessibilityLabel(document.path)
             view.gutter.document = document
-            view.gutter.fontSize = fontSize
-            view.gutter.ruleThickness = max(42, CGFloat(String(document.lineStarts.count).count) * fontSize * 0.65 + 18)
+            view.gutter.fontSize = font.pointSize
+            view.gutter.ruleThickness = max(42, CGFloat(String(document.lineStarts.count).count) * font.pointSize * 0.65 + 18)
             view.needsLayout = true
             view.layoutSubtreeIfNeeded()
         } else if coordinator.highlightID != document.highlightID {
@@ -111,7 +114,7 @@ struct WorkspaceFileReader: NSViewRepresentable {
         weak var gutter: FileLineNumberView?
         var document: WorkspaceFileDocument?
         var documentID: UUID?
-        var fontSize: CGFloat?
+        var font: NSFont?
         var highlightID: UUID?
         var navigationID: UUID?
         var isApplying = false

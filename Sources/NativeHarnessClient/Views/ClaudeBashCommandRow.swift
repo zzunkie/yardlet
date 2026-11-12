@@ -40,6 +40,7 @@ struct ClaudeBashCommandRow: View {
     var runInTerminal: ((String) -> Void)? = nil
     @Environment(\.claudeShellCommands) private var shellCommands
     @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @Environment(\.yardletCodeFont) private var codeFont
     @Environment(\.colorScheme) private var colorScheme
 
     /// The Claude app's output box is at most 160 points tall.
@@ -51,7 +52,7 @@ struct ClaudeBashCommandRow: View {
         let terminalCommand = ConversationRunInTerminalButton.offer(command, runInTerminal)
         VStack(alignment: .leading, spacing: 5) {
             Text(TranscriptCodeBlock.highlighted(command, language: "bash", isDark: colorScheme == .dark))
-                .font(.system(size: 12.5 * interfaceScale, design: .monospaced))
+                .font(codeFont.font(ofSize: codeFont.size(12.5, scale: interfaceScale)))
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -83,7 +84,7 @@ struct ClaudeBashCommandRow: View {
     private func output(for run: ClaudeShellCommandRun?) -> some View {
         let content = outputContent(for: run)
         let text = Text(verbatim: content.text)
-            .font(.system(size: 12 * interfaceScale, design: .monospaced))
+            .font(codeFont.font(ofSize: codeFont.size(12, scale: interfaceScale)))
             .foregroundStyle(content.isError ? Color.red : Color.secondary)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)

@@ -221,12 +221,13 @@ struct CodexDiffPreviewLines: View {
 
     let lines: [CodexFileChangeCardProjection.Preview.Line]
     @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @Environment(\.yardletCodeFont) private var codeFont
 
     var body: some View {
-        let lineHeight = 17 * interfaceScale
+        let lineHeight = codeFont.size(17, scale: interfaceScale)
         let scrolls = lines.count > Self.visibleLineLimit
         let largest = lines.compactMap(\.number).max()
-        let gutterWidth = largest.map { CGFloat(max(String($0).count, 2)) * 7 * interfaceScale + 10 } ?? 6
+        let gutterWidth = largest.map { CGFloat(max(String($0).count, 2)) * codeFont.size(7, scale: interfaceScale) + 10 } ?? 6
         GeometryReader { viewport in
             ScrollView(scrolls ? [.horizontal, .vertical] : .horizontal) {
                 LazyVStack(alignment: .leading, spacing: 0) {
@@ -276,7 +277,7 @@ struct CodexDiffPreviewLines: View {
                     .textSelection(.enabled)
                     .padding(.trailing, 10)
             }
-            .font(.system(size: 11 * interfaceScale, design: .monospaced))
+            .font(codeFont.font(ofSize: codeFont.size(11, scale: interfaceScale)))
             .lineLimit(1)
         }
     }

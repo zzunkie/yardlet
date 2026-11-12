@@ -91,6 +91,13 @@ struct SettingsCenterView: View {
         YardletAppearancePreference.system.rawValue
     @AppStorage(YardletPreferenceKeys.interfaceSize) private var interfaceSizeRawValue =
         YardletInterfaceSizePreference.standard.rawValue
+    /// Read by each window as it changes (`YardletWindowPreferences`).
+    @AppStorage(CodeFontPreference.nameKey) private var codeFontName = ""
+    @AppStorage(CodeFontPreference.sizeKey) private var codeFontSize = String(CodeFontPreference.standardSize)
+    /// The monospaced families installed, read when Appearance shows.
+    @State private var codeFontFamilies: [String] = []
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @Environment(\.colorScheme) private var colorScheme
     @AppStorage(PersonalAgentNotificationPreference.key) private var notifiesPersonalAgentMessages = true
     /// Followed by the app's mailbox as it changes (`AppModel.followMailbox`); off by default.
     @AppStorage(MailboxPreference.key) private var showsMailbox = false
@@ -290,6 +297,7 @@ struct SettingsCenterView: View {
         }
         .task(id: section) {
             if section == .notifications { await notifications.refresh() }
+            if section == .appearance, codeFontFamilies.isEmpty { codeFontFamilies = YardletCodeFont.installedFamilies() }
         }
         .onChange(of: section, initial: true) { _, value in
             focusedSection = value
@@ -639,11 +647,65 @@ struct SettingsCenterView: View {
                 }
                 .labelsHidden().frame(width: 160)
             }
+            Divider()
+            codeFontDetail
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .parityCard()
     }
+
+    /// The code font and its size as one pair, as the Claude app's and the Codex app's Appearance offer them: the
+    /// system's monospaced face or one installed, and a size, with a few lines drawn in them.
+    private var codeFontDetail: some View {
+        let setting = YardletSetting.codeFontSize
+        let codeFont = YardletCodeFont(name: codeFontFamilies.contains(codeFontName) ? codeFontName : "",
+                                       points: CodeFontPreference.size(codeFontSize))
+        return VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Label(L10n.string("Code font"), systemImage: setting.symbol)
+                    .font(.callout.weight(.semibold))
+                if let detail = setting.detail {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            HStack(spacing: 8) {
+                Picker(L10n.string("Code font"), selection: Binding(
+                    get: { codeFont.name }, set: { codeFontName = $0 })) {
+                    Text(L10n.string("System")).tag("")
+                    if !codeFontFamilies.isEmpty { Divider() }
+                    ForEach(codeFontFamilies, id: \.self) { family in
+                        Text(family).tag(family)
+                    }
+                }
+                .labelsHidden().fixedSize()
+                Picker(setting.title, selection: Binding(
+                    get: { String(codeFont.points) }, set: { codeFontSize = $0 })) {
+                    ForEach(setting.choices, id: \.value) { choice in
+                        Text(choice.title).tag(choice.value)
+                    }
+                }
+                .labelsHidden().fixedSize()
+            }
+            Text(TranscriptCodeBlock.highlighted(Self.codeFontSample, language: "swift", isDark: colorScheme == .dark))
+                .font(codeFont.font(ofSize: codeFont.size(12.5, scale: interfaceScale)))
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 420, alignment: .leading)
+                .padding(12)
+                .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 9))
+                .overlay { RoundedRectangle(cornerRadius: 9).stroke(ParityTheme.separator) }
+                .accessibilityHidden(true)
+        }
+    }
+
+    private static let codeFontSample = """
+        func greet(_ name: String) -> String {
+            return "Hello, \\(name)!"
+        }
+        """
 
     /// Where a General row's divider starts: under the words, past the 30 pt icon and the 12 pt
     /// gap, as Connectors' rows divide.

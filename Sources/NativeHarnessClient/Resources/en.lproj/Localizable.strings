@@ -720,6 +720,11 @@
 "Interface size" = "Interface size";
 "Compact" = "Compact";
 "Large" = "Large";
+"Code font" = "Code font";
+"Code font size" = "Code font size";
+"Applies to code blocks, diffs, command output, open files and the terminal." = "Applies to code blocks, diffs, command output, open files and the terminal.";
+"Default · %d pt" = "Default · %d pt";
+"%d pt" = "%d pt";
 "Choose a light, dark, or system-matched appearance." = "Choose a light, dark, or system-matched appearance.";
 "Adjust text and control sizing across the app." = "Adjust text and control sizing across the app.";
 "Git" = "Git";

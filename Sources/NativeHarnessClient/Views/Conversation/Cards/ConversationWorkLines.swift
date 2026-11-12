@@ -335,6 +335,7 @@ struct ConversationWorkLine: View, Equatable {
     }
 
     @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @Environment(\.yardletCodeFont) private var codeFont
     @Environment(\.conversationDisclosureChoices) private var choices
     @Environment(\.connectorViews) private var connectorViews
 
@@ -434,7 +435,7 @@ struct ConversationWorkLine: View, Equatable {
             VStack(alignment: .leading, spacing: 6) {
                 if showsCommand {
                     Text(verbatim: command.command)
-                        .font(.system(size: 11 * interfaceScale, design: .monospaced))
+                        .font(codeFont.font(ofSize: codeFont.size(11, scale: interfaceScale)))
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.trailing, 26)

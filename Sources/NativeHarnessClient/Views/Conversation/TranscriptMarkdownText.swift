@@ -128,6 +128,7 @@ private struct TranscriptMarkdownBlocksView: View {
 /// A run of prose blocks in one text view, with the look and find marks of the message around it.
 private struct TranscriptProseRun: View {
     @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @Environment(\.yardletCodeFont) private var codeFont
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.transcriptWorkspaceURL) private var workspaceURL
     @Environment(\.conversationFindSlot) private var findSlot
@@ -141,7 +142,8 @@ private struct TranscriptProseRun: View {
         let active = findSlot?.active
         TranscriptProseText(
             blocks: blocks, fullSource: fullSource, dialect: dialect,
-            style: TranscriptProseStyle(scale: interfaceScale, isDark: colorScheme == .dark, workspaceURL: workspaceURL),
+            style: TranscriptProseStyle(scale: interfaceScale, isDark: colorScheme == .dark, workspaceURL: workspaceURL,
+                                        codeFont: codeFont),
             // Only the message holding the current match follows find's scroll requests.
             find: TranscriptProseFind(query: findSlot?.query, active: active,
                                       scrollToken: active == nil ? nil : conversationFind?.scrollRequest?.token,

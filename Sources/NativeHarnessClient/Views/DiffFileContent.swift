@@ -53,6 +53,7 @@ struct DiffFileContent: View {
     @State private var hoveredLineID: Int?
     @State private var markdownOutcome: MarkdownReviewDiff.Outcome?
     @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @Environment(\.yardletCodeFont) private var codeFont
 
     init(file: DiffFile, width: CGFloat, showsHeader: Bool, commentRoot: String?,
          comments: Binding<[DiffComment]>, newComment: DiffLineSelection? = nil,
@@ -115,7 +116,7 @@ struct DiffFileContent: View {
     @ViewBuilder
     private var lines: some View {
         let maxLine = file.lines.reduce(0) { max($0, $1.oldLine ?? 0, $1.newLine ?? 0) }
-        let gutterWidth = max(38, CGFloat(String(maxLine).count) * 7 * interfaceScale + 14)
+        let gutterWidth = max(38, CGFloat(String(maxLine).count) * codeFont.size(7, scale: interfaceScale) + 14)
         let shown = shownComments
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
@@ -177,7 +178,7 @@ struct DiffFileContent: View {
                 choose(line, extending: NSEvent.modifierFlags.contains(.shift))
             }
             Text(line.text.isEmpty ? " " : line.text)
-                .font(.system(size: 12 * interfaceScale, weight: Self.weight(for: line.kind), design: .monospaced))
+                .font(codeFont.font(ofSize: codeFont.size(12, scale: interfaceScale), weight: Self.weight(for: line.kind)))
                 .textSelection(.enabled).foregroundStyle(Self.foreground(for: line.kind))
                 .fixedSize(horizontal: true, vertical: false)
                 .padding(.horizontal, 10).padding(.vertical, 3)
@@ -197,7 +198,7 @@ struct DiffFileContent: View {
 
     private func lineNumber(_ number: Int?, width: CGFloat) -> some View {
         Text(number.map(String.init) ?? "")
-            .font(.system(size: 11 * interfaceScale, design: .monospaced))
+            .font(codeFont.font(ofSize: codeFont.size(11, scale: interfaceScale)))
             .foregroundStyle(.secondary)
             .frame(width: width - 6, alignment: .trailing).padding(.trailing, 6)
             .padding(.vertical, 3)
@@ -293,7 +294,7 @@ struct DiffFileContent: View {
         .accessibilityElement(children: .combine)
     }
 
-    private static func weight(for kind: DiffLineKind) -> Font.Weight {
+    private static func weight(for kind: DiffLineKind) -> NSFont.Weight {
         switch kind {
         case .fileHeader, .hunkHeader: .semibold
         default: .regular

@@ -30,6 +30,7 @@ struct TranscriptProseStyle: Equatable {
     var scale: CGFloat = 1
     var isDark = false
     var workspaceURL: URL?
+    var codeFont = YardletCodeFont.standard
 }
 
 extension NSAttributedString.Key {
@@ -205,12 +206,13 @@ struct TranscriptProseBuilder {
     // MARK: - Fonts
 
     var bodySize: CGFloat { 14 * style.scale }
-    var codeSize: CGFloat { 12.5 * style.scale }
+    var codeSize: CGFloat { style.codeFont.size(12.5, scale: style.scale) }
 
+    /// Code in the code font: a block at the code size, a span in a line at its line's size.
     private func font(size: CGFloat, weight: NSFont.Weight = .regular, italic: Bool = false,
                       monospaced: Bool = false) -> NSFont {
         var font = monospaced
-            ? NSFont.monospacedSystemFont(ofSize: size, weight: weight)
+            ? style.codeFont.nsFont(ofSize: size, weight: weight)
             : NSFont.systemFont(ofSize: size, weight: weight)
         if italic {
             let descriptor = font.fontDescriptor.withSymbolicTraits(.italic)

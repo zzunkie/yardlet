@@ -292,6 +292,7 @@ struct ConversationTurnLook: @MainActor Equatable {
     let showButtonShapes: Bool
     // The conversation's.
     let scale: CGFloat
+    let codeFont: YardletCodeFont
     let workspaceURL: URL?
     let revealsActions: Bool
     let opensDetailsForReview: Bool
@@ -319,6 +320,7 @@ struct ConversationTurnLook: @MainActor Equatable {
         invertColors = environment.accessibilityInvertColors
         showButtonShapes = environment.accessibilityShowButtonShapes
         scale = environment.yardletInterfaceScale
+        codeFont = environment.yardletCodeFont
         workspaceURL = environment.transcriptWorkspaceURL
         revealsActions = environment.revealsSentMessageActions
         opensDetailsForReview = environment.opensDetailsForReview

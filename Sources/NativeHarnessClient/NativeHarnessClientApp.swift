@@ -763,16 +763,27 @@ private struct YardletWindowPreferences<Content: View>: View {
         YardletAppearancePreference.system.rawValue
     @AppStorage(YardletPreferenceKeys.interfaceSize) private var interfaceSizeRawValue =
         YardletInterfaceSizePreference.standard.rawValue
+    @AppStorage(CodeFontPreference.nameKey) private var codeFontName = ""
+    @AppStorage(CodeFontPreference.sizeKey) private var codeFontSize = String(CodeFontPreference.standardSize)
 
     var body: some View {
         if appliesInterfaceSize {
             content
                 .preferredColorScheme(effectiveColorScheme)
                 .environment(\.yardletInterfaceScale, effectiveInterfaceSize.scale)
+                .environment(\.yardletCodeFont, effectiveCodeFont)
                 .dynamicTypeSize(effectiveInterfaceSize.dynamicTypeSize)
         } else {
-            content.preferredColorScheme(effectiveColorScheme)
+            content
+                .preferredColorScheme(effectiveColorScheme)
+                .environment(\.yardletCodeFont, effectiveCodeFont)
         }
+    }
+
+    /// A visual fixture draws in the standard code font, as in the standard interface size.
+    private var effectiveCodeFont: YardletCodeFont {
+        guard !usesVisualFixture else { return .standard }
+        return YardletCodeFont(name: codeFontName, points: CodeFontPreference.size(codeFontSize))
     }
 
     private var fixtureColorScheme: ColorScheme? {

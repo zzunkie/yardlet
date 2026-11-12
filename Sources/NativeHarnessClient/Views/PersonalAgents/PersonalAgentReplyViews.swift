@@ -294,6 +294,7 @@ private struct PersonalAgentReplyRowEnvironment: ViewModifier {
             .environment(\.locale, environment.locale)
             .environment(\.layoutDirection, environment.layoutDirection)
             .environment(\.yardletInterfaceScale, environment.yardletInterfaceScale)
+            .environment(\.yardletCodeFont, environment.yardletCodeFont)
             .environment(\.conversationFind, environment.conversationFind)
             .environment(\.conversationFindSlot, environment.conversationFindSlot)
             .environment(\.conversationMessageActions, environment.conversationMessageActions)

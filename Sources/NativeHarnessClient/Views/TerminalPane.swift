@@ -92,6 +92,7 @@ struct TerminalPane: View {
     @Environment(\.taskKeyboardFocus) private var keyboardFocus
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @Environment(\.yardletCodeFont) private var codeFont
     @AppStorage(TerminalSharingPreference.key) private var sharesTerminal = true
 
     init(
@@ -260,7 +261,8 @@ struct TerminalPane: View {
 
     /// A tab's screen: the shell's view, which starts the shell the first time a panel shows it.
     private func terminalBody(_ shell: NativeTerminalSession, titles: [ObjectIdentifier: String]) -> some View {
-        SwiftTermHost(session: shell, isDark: colorScheme == .dark, fontSize: 12 * interfaceScale,
+        SwiftTermHost(session: shell, isDark: colorScheme == .dark,
+                      font: codeFont.nsFont(ofSize: codeFont.size(12, scale: interfaceScale)),
                       attachSelection: attachSelection(title: title(of: shell, in: titles)))
         .id(shell.generation)
         .padding(.horizontal, 10).padding(.bottom, 8)
@@ -857,14 +859,14 @@ final class NativeTerminalSession: NSObject, @MainActor TerminalViewDelegate, Na
 private struct SwiftTermHost: NSViewRepresentable {
     let session: NativeTerminalSession
     let isDark: Bool
-    let fontSize: CGFloat
+    let font: NSFont
     var attachSelection: ((String) -> Void)?
 
     func makeNSView(context: Context) -> TerminalViewHost {
         let view = session.view {
             let view = NativeTerminalView(
                 frame: .zero,
-                font: NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular),
+                font: font,
                 options: TerminalOptions(cursorStyle: .steadyBlock, scrollback: 5_000)
             )
             view.wantsLayer = true
@@ -892,9 +894,9 @@ private struct SwiftTermHost: NSViewRepresentable {
             view.caretColor = NSColor.systemBlue
             coordinator.isDark = isDark
         }
-        if coordinator.fontSize != fontSize {
-            view.font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
-            coordinator.fontSize = fontSize
+        if coordinator.font != font {
+            view.font = font
+            coordinator.font = font
         }
     }
 
@@ -910,7 +912,7 @@ private struct SwiftTermHost: NSViewRepresentable {
     final class Coordinator {
         let session: NativeTerminalSession
         var isDark: Bool?
-        var fontSize: CGFloat?
+        var font: NSFont?
 
         init(session: NativeTerminalSession) {
             self.session = session

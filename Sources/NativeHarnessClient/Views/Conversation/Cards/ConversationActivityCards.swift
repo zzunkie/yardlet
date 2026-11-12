@@ -270,6 +270,7 @@ struct ConversationActivitySection: View {
 /// A call's text: as it is while short, in a scrolling reader once it is long.
 struct ConversationActivityText: View {
     @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @Environment(\.yardletCodeFont) private var codeFont
     let text: String
     let accessibilityLabel: String
 
@@ -280,7 +281,7 @@ struct ConversationActivityText: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             Text(text)
-                .font(.system(size: 11 * interfaceScale, design: .monospaced))
+                .font(codeFont.font(ofSize: codeFont.size(11, scale: interfaceScale)))
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
