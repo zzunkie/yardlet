@@ -343,7 +343,7 @@ extension AppModel {
         guard let session = store.sessions.first(where: { $0.id == taskID }) else { return false }
         return session.status != .running && session.status != .waitingForApproval
             && composerDrafts.tasks.draft(for: taskID).editState == nil
-            && !switchingAccounts.contains(taskID) && !sessionMutations.contains(taskID)
+            && !isHeld(session, by: TaskBlocker.holdingOffActions)
             && !isHeldElsewhere(session)
     }
 

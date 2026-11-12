@@ -166,6 +166,52 @@ enum TaskBlocker: CaseIterable {
         $0.holdsOffContinuations || $0 == .queuedMessages || $0 == .shellOutput
     }
 
+    /// Whether an action on the task that sends into it or changes its conversation (a message, a shell command, a
+    /// command, a retried turn, opening its original conversation) is refused while this holds it, as the composer
+    /// is disabled: a change of its conversation or account under way, which the action would cross. The rest it
+    /// goes through, waiting where it must.
+    var holdsOffActions: Bool {
+        switch self {
+        case .conversationChange, .accountSwitch: true
+        case .sideChat, .turn, .codexTurn, .shellCommand, .request, .queuedMessages, .messageOnItsWay, .shellOutput,
+             .backgroundWork, .sessionJobs, .processes, .agents, .childStartWaiting, .childTasks, .edit, .change,
+             .runtimeStarting, .startingAsChild, .cutOffTurn, .sessionJobRelaunch, .limitContinue: false
+        }
+    }
+
+    /// What an action on the task is refused for (`holdsOffActions`).
+    static let holdingOffActions = allCases.filter(\.holdsOffActions)
+
+    /// Whether using the task's runtime (starting it, asking it for its limits or commands, sending into it) or
+    /// branching its conversation waits while this holds it: an account switch, which takes the runtime away. A
+    /// change of the conversation starts and asks the runtime itself.
+    var holdsOffRuntimeUse: Bool {
+        switch self {
+        case .accountSwitch: true
+        case .conversationChange, .sideChat, .turn, .codexTurn, .shellCommand, .request, .queuedMessages, .messageOnItsWay, .shellOutput,
+             .backgroundWork, .sessionJobs, .processes, .agents, .childStartWaiting, .childTasks, .edit, .change,
+             .runtimeStarting, .startingAsChild, .cutOffTurn, .sessionJobRelaunch, .limitContinue: false
+        }
+    }
+
+    /// What using the task's runtime waits for (`holdsOffRuntimeUse`).
+    static let holdingOffRuntimeUse = allCases.filter(\.holdsOffRuntimeUse)
+
+    /// Whether reading the task's saved conversation again, or beginning, cancelling or previewing an edit of it,
+    /// waits while this holds it: a change of the conversation, which rewrites it. An account switch leaves the
+    /// conversation where it is.
+    var holdsOffConversationUse: Bool {
+        switch self {
+        case .conversationChange: true
+        case .accountSwitch, .sideChat, .turn, .codexTurn, .shellCommand, .request, .queuedMessages, .messageOnItsWay, .shellOutput,
+             .backgroundWork, .sessionJobs, .processes, .agents, .childStartWaiting, .childTasks, .edit, .change,
+             .runtimeStarting, .startingAsChild, .cutOffTurn, .sessionJobRelaunch, .limitContinue: false
+        }
+    }
+
+    /// What using the task's saved conversation waits for (`holdsOffConversationUse`).
+    static let holdingOffConversationUse = allCases.filter(\.holdsOffConversationUse)
+
     /// What keeps a task's runtime whether or not it is on screen, in a word for the memory saver's log and tests;
     /// nil for what the runtime may end under. An idle terminal does not keep it: the shell goes on without it.
     var memorySaverWord: String? {

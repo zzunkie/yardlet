@@ -195,7 +195,7 @@ final class AppModel {
     private(set) var sessionMutations = Set<UUID>()
     private var reviewedFileRewinds: [UUID: FileRewindPreview] = [:]
     var pendingCodexReview: CodexReviewRequest?
-    var switchingAccounts = Set<UUID>()
+    private(set) var switchingAccounts = Set<UUID>()
     /// How long a new task waits for the first reading of its login; tests give their own.
     @ObservationIgnored var firstReadingWait: Duration = .seconds(3)
     /// The next look for tasks to move, at the moment one could (`lookForAccountMoves`).
@@ -1122,7 +1122,7 @@ final class AppModel {
     }
 
     func resume(_ session: SessionRecord) async {
-        guard !switchingAccounts.contains(session.id),
+        guard !isHeld(session, by: TaskBlocker.holdingOffRuntimeUse),
               let session = store.sessions.first(where: { $0.id == session.id }) else { return }
         if let refusal = sendRefusal(for: session) {
             composerDrafts.tasks.draft(for: session.id).notice = refusal.message
@@ -1169,7 +1169,7 @@ final class AppModel {
                 + input.mentions.compactMap(CodexUserInput.localMention(for:))), to: session)
             return
         }
-        guard !sessionMutations.contains(session.id) else {
+        guard !isHeld(session, by: TaskBlocker.holdingOffConversationUse) else {
             composerDrafts.tasks.draft(for: session.id).keepDiffComments(sentIn: input.text, images: input.images.map(\.url))
             return
         }
@@ -1182,7 +1182,7 @@ final class AppModel {
         var input = input
         input.text = input.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !input.isEmpty,
-              !switchingAccounts.contains(session.id),
+              !isHeld(session, by: TaskBlocker.holdingOffRuntimeUse),
               let saved = store.sessions.first(where: { $0.id == session.id }) else {
             if store.sessions.contains(where: { $0.id == session.id }) {
                 composerDrafts.tasks.draft(for: session.id).keepDiffComments(sentIn: input.text, images: input.images.map(\.url))
@@ -1360,7 +1360,7 @@ final class AppModel {
             await submitConversationEdit(draft, to: session)
             return
         }
-        guard !sessionMutations.contains(session.id) else {
+        guard !isHeld(session, by: TaskBlocker.holdingOffConversationUse) else {
             composerDrafts.tasks.draft(for: session.id).keepDiffComments(sentIn: draft.text, images: draft.imageURLs)
             return
         }
@@ -1480,7 +1480,7 @@ final class AppModel {
         to source: SessionRecord
     ) async {
         guard let session = store.sessions.first(where: { $0.id == source.id }),
-              !sessionMutations.contains(session.id), !switchingAccounts.contains(session.id) else {
+              !isHeld(session, by: TaskBlocker.holdingOffActions) else {
             if store.sessions.contains(where: { $0.id == source.id }) {
                 composerDrafts.tasks.draft(for: source.id).keepDiffComments(sentIn: input.text, images: input.images.map(\.url))
             }
@@ -1538,7 +1538,7 @@ final class AppModel {
     func sendQueuedNow(_ itemID: UUID, for source: SessionRecord) async {
         guard let session = matchingSession(source, allowingInitialAttachment: true),
               let item = followUps.item(itemID, in: session.id),
-              !sessionMutations.contains(session.id), !switchingAccounts.contains(session.id) else { return }
+              !isHeld(session, by: TaskBlocker.holdingOffActions) else { return }
         guard let target = await runningFollowUpTarget(for: session) else {
             await startQueuedTurn(with: itemID, in: session, attaching: true)
             return
@@ -1558,7 +1558,7 @@ final class AppModel {
     func stopAndSendQueued(_ itemID: UUID, for source: SessionRecord) async {
         guard let session = matchingSession(source, allowingInitialAttachment: true),
               followUps.item(itemID, in: session.id) != nil,
-              !sessionMutations.contains(session.id), !switchingAccounts.contains(session.id) else { return }
+              !isHeld(session, by: TaskBlocker.holdingOffActions) else { return }
         guard let target = await runningFollowUpTarget(for: session) else {
             await startQueuedTurn(with: itemID, in: session, attaching: true)
             return
@@ -2004,7 +2004,7 @@ final class AppModel {
     /// is not sent. One command runs at a time.
     func runShellCommand(_ command: String, in source: SessionRecord) {
         guard let session = store.sessions.first(where: { $0.id == source.id }), session.harness == .claudeCode,
-              !switchingAccounts.contains(session.id), !sessionMutations.contains(session.id) else { return }
+              !isHeld(session, by: TaskBlocker.holdingOffActions) else { return }
         let command = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !command.isEmpty else { return }
         guard runningShellCommandBySessionID[session.id] == nil else {
@@ -2210,8 +2210,8 @@ final class AppModel {
     /// and the current composer. It is never queued or steered into a different active turn.
     private func retryCodexTurn(_ turnID: String, in session: SessionRecord) async {
         guard canRetryCodexTurn(turnID, in: session),
-              sessionMutations.insert(session.id).inserted else { return }
-        defer { sessionMutations.remove(session.id) }
+              beginConversationChange(of: session.id) else { return }
+        defer { endConversationChange(of: session.id) }
         do {
             let (adapter, _, handle) = try await codexProvider(for: session)
             guard canRetryCodexTurn(turnID, in: session, allowingMutation: true) else { return }
@@ -2244,15 +2244,15 @@ final class AppModel {
               case .error(_, _, true?)? = transcriptBuilders[session.id]?.entries.last?.content,
               composerDrafts.tasks.draft(for: session.id).editState == nil,
               followUps.queue(for: session.id).isEmpty,
-              !switchingAccounts.contains(session.id), !sessionMutations.contains(session.id) else { return }
+              !isHeld(session, by: TaskBlocker.holdingOffActions) else { return }
         await send(HarnessUserInput(text: RestartContinuation.claudeRetry), to: session)
     }
 
     private func canRetryCodexTurn(_ turnID: String, in source: SessionRecord, allowingMutation: Bool = false) -> Bool {
         guard let session = matchingSession(source), session.harness == .codex,
               session.status == .ready || session.status == .failed,
-              !switchingAccounts.contains(session.id),
-              allowingMutation || !sessionMutations.contains(session.id),
+              !isHeld(session, by: TaskBlocker.holdingOffRuntimeUse),
+              allowingMutation || !isHeld(session, by: TaskBlocker.holdingOffConversationUse),
               composerDrafts.tasks.draft(for: session.id).editState == nil,
               followUps.queue(for: session.id).isEmpty,
               let state = codexPresentationBySessionID[session.id] else { return false }
@@ -2267,11 +2267,11 @@ final class AppModel {
         guard command == "/compact" || command == "/review", input.inputs.count == 1,
               action == .automatic, draft.editState == nil, followUps.queue(for: session.id).isEmpty,
               session.status != .running, session.status != .waitingForApproval,
-              !switchingAccounts.contains(session.id), sessionMutations.insert(session.id).inserted else {
+              !isHeld(session, by: TaskBlocker.holdingOffRuntimeUse), beginConversationChange(of: session.id) else {
             draft.notice = L10n.string("Use this command with an empty composer while the chat is idle.")
             return
         }
-        defer { sessionMutations.remove(session.id) }
+        defer { endConversationChange(of: session.id) }
         let snapshot = draft.snapshot
         if command == "/review" {
             pendingCodexReview = CodexReviewRequest(session: session, draft: snapshot)
@@ -2302,12 +2302,12 @@ final class AppModel {
                 draft.notice = L10n.string("Compact is disabled while a chat is in progress")
                 return
             }
-            guard draft.editState == nil, followUps.queue(for: session.id).isEmpty, !switchingAccounts.contains(session.id),
-                  sessionMutations.insert(session.id).inserted else {
+            guard draft.editState == nil, followUps.queue(for: session.id).isEmpty, !isHeld(session, by: TaskBlocker.holdingOffRuntimeUse),
+                  beginConversationChange(of: session.id) else {
                 draft.notice = L10n.string("Use this command with an empty composer while the chat is idle.")
                 return
             }
-            defer { sessionMutations.remove(session.id) }
+            defer { endConversationChange(of: session.id) }
             do {
                 let (_, provider, handle) = try await codexProvider(for: session)
                 guard matchingSession(session, allowingInitialAttachment: true) != nil else { return }
@@ -2317,7 +2317,7 @@ final class AppModel {
             }
         case .codeReview:
             guard !isRunning, draft.editState == nil, followUps.queue(for: session.id).isEmpty,
-                  !switchingAccounts.contains(session.id), !sessionMutations.contains(session.id) else {
+                  !isHeld(session, by: TaskBlocker.holdingOffActions) else {
                 draft.notice = L10n.string("Use this command with an empty composer while the chat is idle.")
                 return
             }
@@ -2399,7 +2399,7 @@ final class AppModel {
     }
 
     private func readCodexRateLimits(for session: SessionRecord) async -> CodexAccountRateLimits? {
-        guard !isVisualFixture, !switchingAccounts.contains(session.id) else { return nil }
+        guard !isVisualFixture, !isHeld(session, by: TaskBlocker.holdingOffRuntimeUse) else { return nil }
         if let connection = session.connection {
             guard (try? connection.validate(for: session.harness)) != nil else { return nil }
             if let home = connection.homePath, !FileManager.default.fileExists(atPath: home) { return nil }
@@ -2420,7 +2420,7 @@ final class AppModel {
     func prepareCodexComposerCommands(for source: SessionRecord) async {
         guard source.harness == .codex, !isVisualFixture, let session = matchingSession(source),
               handlesBySessionID[session.id] != nil || session.providerSessionID != nil,
-              !switchingAccounts.contains(session.id) else { return }
+              !isHeld(session, by: TaskBlocker.holdingOffRuntimeUse) else { return }
         let state = codexCapabilitiesBySessionID[session.id] ?? .empty
         guard state.modelCatalog.models.isEmpty || state.modes.isEmpty || state.skills.isEmpty,
               preparingCodexCommands.insert(session.id).inserted else { return }
@@ -3402,7 +3402,7 @@ final class AppModel {
     private func forkSavedConversation(_ source: SessionRecord, selectsSession: Bool,
                                        inBackground: Bool = false) async -> SessionRecord? {
         guard let source = matchingSession(source), source.harness == .claudeCode,
-              !switchingAccounts.contains(source.id), forkingSessions.insert(source.id).inserted else { return nil }
+              !isHeld(source, by: TaskBlocker.holdingOffRuntimeUse), forkingSessions.insert(source.id).inserted else { return nil }
         defer { forkingSessions.remove(source.id) }
         let selectedAtStart = store.selectedSessionID
         do {
@@ -3452,7 +3452,7 @@ final class AppModel {
     /// Claude's `/clear`. As in the CLI it waits for the current turn, then opens a new chat.
     @discardableResult
     func restartClaudeConversation(_ source: SessionRecord, placement: BranchPlacement = .sidebar) async -> SessionRecord? {
-        guard let source = matchingSession(source), !switchingAccounts.contains(source.id),
+        guard let source = matchingSession(source), !isHeld(source, by: TaskBlocker.holdingOffRuntimeUse),
               !restartingSessions.contains(source.id) else { return nil }
         guard source.status != .running, source.status != .waitingForApproval else {
             composerDrafts.tasks.draft(for: source.id).notice =
@@ -3467,7 +3467,7 @@ final class AppModel {
     /// source keeps running on its own. Claude's `/clear` waits before it gets here.
     private func startNewChat(from source: SessionRecord, selects: Bool) async -> SessionRecord? {
         guard let source = matchingSession(source),
-              !switchingAccounts.contains(source.id), restartingSessions.insert(source.id).inserted else { return nil }
+              !isHeld(source, by: TaskBlocker.holdingOffRuntimeUse), restartingSessions.insert(source.id).inserted else { return nil }
         defer { restartingSessions.remove(source.id) }
         let selectedAtStart = store.selectedSessionID
         do {
@@ -3599,7 +3599,7 @@ final class AppModel {
     private func readNativeClaudeConversation(for source: SessionRecord) async {
         guard let session = matchingSession(source), session.harness == .claudeCode,
               handlesBySessionID[session.id] == nil, session.status != .running,
-              session.status != .waitingForApproval, !sessionMutations.contains(session.id),
+              session.status != .waitingForApproval, !isHeld(session, by: TaskBlocker.holdingOffConversationUse),
               // A shell command Claude has not been sent yet is only in Yardlet's conversation.
               runningShellCommandBySessionID[session.id] == nil, pendingShellDeliveries[session.id] == nil,
               let providerID = session.providerSessionID else { return }
@@ -3674,7 +3674,7 @@ final class AppModel {
     private func readNativeAntigravityConversation(for source: SessionRecord) async {
         guard !isVisualFixture, let session = matchingSession(source), session.harness == .antigravityCLI,
               handlesBySessionID[session.id] == nil, session.status != .running,
-              session.status != .waitingForApproval, !sessionMutations.contains(session.id),
+              session.status != .waitingForApproval, !isHeld(session, by: TaskBlocker.holdingOffConversationUse),
               let providerID = session.providerSessionID,
               // A task still on its local stand-in identity has no conversation of its own yet.
               UUID(uuidString: providerID) != session.id,
@@ -3729,7 +3729,7 @@ final class AppModel {
     private func readReplayedACPConversation(for source: SessionRecord) async {
         guard !isVisualFixture, let session = matchingSession(source), ACPSessionHistory.reads(session.harness),
               handlesBySessionID[session.id] == nil, session.status != .running,
-              session.status != .waitingForApproval, !sessionMutations.contains(session.id),
+              session.status != .waitingForApproval, !isHeld(session, by: TaskBlocker.holdingOffConversationUse),
               let providerID = session.providerSessionID, acpConversationsReplayed[session.id] != providerID,
               (transcriptBuilders[session.id]?.entries ?? []).isEmpty else { return }
         acpConversationsReplayed[session.id] = providerID
@@ -3838,8 +3838,8 @@ final class AppModel {
     private func readDetachedCodexThreadNow(for source: SessionRecord) async {
         guard !isVisualFixture, let session = matchingSession(source), session.harness == .codex,
               handlesBySessionID[session.id] == nil, session.status != .running,
-              session.status != .waitingForApproval, !sessionMutations.contains(session.id),
-              !switchingAccounts.contains(session.id), let threadID = session.providerSessionID,
+              session.status != .waitingForApproval, !isHeld(session, by: TaskBlocker.holdingOffActions),
+              let threadID = session.providerSessionID,
               codexThreadReads.insert(session.id).inserted else { return }
         beginSavedConversationRead(session.id)
         defer {
@@ -3867,7 +3867,7 @@ final class AppModel {
               let current = matchingSession(session),
               current.providerSessionID == threadID, handlesBySessionID[session.id] == nil,
               current.status != .running, current.status != .waitingForApproval,
-              !sessionMutations.contains(session.id) else { return }
+              !isHeld(session, by: TaskBlocker.holdingOffConversationUse) else { return }
         // The rollout the thread is written to, which following the shown task watches.
         if let path = state.thread?.raw["path"]?.stringValue, PathRules.current.isAbsolute(path) {
             codexRolloutPathBySessionID[session.id] = path
@@ -3929,7 +3929,7 @@ final class AppModel {
         session.harness == .claudeCode && session.inheritedContext?.nativeConversationOrigin?.harness == .claudeCode
             && session.inheritedContext?.nativeConversationOrigin?.providerSessionID != session.providerSessionID
             && session.status != .running && session.status != .waitingForApproval
-            && !sessionMutations.contains(session.id) && !switchingAccounts.contains(session.id)
+            && !isHeld(session, by: TaskBlocker.holdingOffActions)
     }
 
     /// Open the preserved original as an ordinary separate chat. Neither branch is rebound,
@@ -3939,8 +3939,8 @@ final class AppModel {
         guard let current = matchingSession(source), canOpenOriginalConversation(in: current),
               let origin = current.inheritedContext?.nativeConversationOrigin,
               origin.providerSessionID != current.providerSessionID,
-              sessionMutations.insert(current.id).inserted else { return nil }
-        defer { sessionMutations.remove(current.id) }
+              beginConversationChange(of: current.id) else { return nil }
+        defer { endConversationChange(of: current.id) }
         let selectedAtStart = store.selectedSessionID
         if let existing = store.sessions.first(where: { $0.id != current.id && origin.matches($0) }) {
             if selectsSession && store.selectedSessionID == selectedAtStart { store.selectedSessionID = existing.id }
@@ -3990,7 +3990,7 @@ final class AppModel {
         inBackground: Bool = false,
         throughTurnID: String? = nil
     ) async -> SessionRecord? {
-        guard let saved = matchingSession(session), !switchingAccounts.contains(saved.id),
+        guard let saved = matchingSession(session), !isHeld(saved, by: TaskBlocker.holdingOffRuntimeUse),
               forkingSessions.insert(saved.id).inserted else { return nil }
         var session = saved
         defer { forkingSessions.remove(session.id) }
@@ -4631,7 +4631,7 @@ final class AppModel {
             || composerDrafts.tasks.existingDraft(for: id).map { !$0.snapshot.isEmpty } == true
             || !followUps.queue(for: id).isEmpty
             || store.selectedSessionID == id || splits.focusedSessionID == id || splits.groupedSessionIDs.contains(id)
-            || sessionMutations.contains(id) || switchingAccounts.contains(id) || unarchivingSessionIDs.contains(id)
+            || isHeld(task, by: TaskBlocker.holdingOffActions) || unarchivingSessionIDs.contains(id)
     }
 
     /// Archives a listed task its source archived, in Yardlet's index only: no `thread/archive`,
@@ -4973,10 +4973,10 @@ final class AppModel {
 
     func startCodexReview(_ target: CodexReviewTarget, in source: SessionRecord, submittedDraft: TaskDraftSnapshot? = nil) async {
         guard let session = matchingSession(source), session.status != .running, session.status != .waitingForApproval,
-              !switchingAccounts.contains(session.id), followUps.queue(for: session.id).isEmpty,
+              !isHeld(session, by: TaskBlocker.holdingOffRuntimeUse), followUps.queue(for: session.id).isEmpty,
               composerDrafts.tasks.draft(for: session.id).editState == nil,
-              sessionMutations.insert(session.id).inserted else { return }
-        defer { sessionMutations.remove(session.id) }
+              beginConversationChange(of: session.id) else { return }
+        defer { endConversationChange(of: session.id) }
         do {
             let (_, provider, handle) = try await codexProvider(for: session)
             guard matchingSession(session, allowingInitialAttachment: true) != nil else { return }
@@ -5458,7 +5458,7 @@ final class AppModel {
     /// task. Nothing is done for a task in a turn or one that changed since it was read.
     func switchAccount(to connection: ProviderConnection, for session: SessionRecord) async {
         guard let current = store.sessions.first(where: { $0.id == session.id }),
-              !switchingAccounts.contains(session.id),
+              !isHeld(current, by: TaskBlocker.holdingOffRuntimeUse),
               current.connection == session.connection, current.providerSessionID == session.providerSessionID,
               current.status != .running, current.status != .waitingForApproval,
               connection != current.connection, TaskAccountSwitch.allows(connection, for: current) else { return }
@@ -5473,9 +5473,9 @@ final class AppModel {
     /// new account shows on the task; the move stands.
     func changeAccount(of task: SessionRecord, to connection: ProviderConnection, _ change: AccountChange) async throws {
         var held = false
-        defer { if held { switchingAccounts.remove(task.id) } }
+        defer { if held { endAccountSwitch(of: task.id) } }
         func hold() throws {
-            guard switchingAccounts.insert(task.id).inserted else { throw ProviderConnectionError.invalidBinding }
+            guard beginAccountSwitch(of: task.id) else { throw ProviderConnectionError.invalidBinding }
             held = true
         }
         if change == .chosen { try hold() }
@@ -5721,6 +5721,31 @@ final class AppModel {
     /// second.
     func firstBlocker(of session: SessionRecord, among kinds: [TaskBlocker]) -> TaskBlocker? {
         kinds.first { blocks(session, $0) }
+    }
+
+    /// Whether any of `kinds` holds the task now (`firstBlocker(of:among:)`).
+    func isHeld(_ session: SessionRecord, by kinds: [TaskBlocker]) -> Bool {
+        firstBlocker(of: session, among: kinds) != nil
+    }
+
+    /// Begins a change of the task's conversation (`TaskBlocker.conversationChange`): an edited message sent, a
+    /// Codex command, review or retried turn, files restored. False while another is under way.
+    func beginConversationChange(of id: UUID) -> Bool {
+        sessionMutations.insert(id).inserted
+    }
+
+    func endConversationChange(of id: UUID) {
+        sessionMutations.remove(id)
+    }
+
+    /// Begins a change of the task's account (`TaskBlocker.accountSwitch`), or holds the task as one does while its
+    /// runtime starts again for a context limit. False while another is under way.
+    func beginAccountSwitch(of id: UUID) -> Bool {
+        switchingAccounts.insert(id).inserted
+    }
+
+    func endAccountSwitch(of id: UUID) {
+        switchingAccounts.remove(id)
     }
 
     private func blocks(_ session: SessionRecord, _ kind: TaskBlocker) -> Bool {
@@ -6401,11 +6426,11 @@ final class AppModel {
                     defer { EventCostLog.record(.codexState, since: eventStart) }
 #endif
                     guard let self else { return }
-                    guard self.store.sessions.contains(where: { $0.id == handle.localSessionID }) else {
+                    guard let session = self.store.sessions.first(where: { $0.id == handle.localSessionID }) else {
                         return
                     }
                     var merged = state
-                    if !self.sessionMutations.contains(handle.localSessionID) {
+                    if !self.isHeld(session, by: TaskBlocker.holdingOffConversationUse) {
                         self.mergePersistedCodexServerRequests(into: &merged, for: handle.localSessionID)
                         self.mergePersistedCodexTimelineItems(into: &merged, for: handle.localSessionID)
                     }
@@ -7576,7 +7601,7 @@ extension AppModel {
               thread.turns.last(where: \.hasNativeUserMessage)?.id == turn.id,
               thread.turns.allSatisfy({ $0.status.isTerminal }), followUps.queue(for: session.id).isEmpty,
               let input = turn.userInputDraft, let providerID = session.providerSessionID, !providerID.isEmpty,
-              !sessionMutations.contains(session.id) else { return }
+              !isHeld(session, by: TaskBlocker.holdingOffConversationUse) else { return }
         let draft = composerDrafts.tasks.draft(for: session.id)
         guard draft.editState == nil else { return }
         let userTurns = thread.turns.filter(\.hasNativeUserMessage)
@@ -7596,7 +7621,7 @@ extension AppModel {
     func beginClaudeEdit(_ text: String, in source: SessionRecord) async {
         guard let session = matchingSession(source), session.harness == .claudeCode,
               session.status != .running, session.status != .waitingForApproval,
-              !sessionMutations.contains(session.id), let providerID = session.providerSessionID else { return }
+              !isHeld(session, by: TaskBlocker.holdingOffConversationUse), let providerID = session.providerSessionID else { return }
         let draft = composerDrafts.tasks.draft(for: session.id)
         guard draft.editState == nil else { return }
         let initial = draft.snapshot
@@ -7673,7 +7698,7 @@ extension AppModel {
     func cancelConversationEdit(in session: SessionRecord) {
         let draft = composerDrafts.tasks.draft(for: session.id)
         guard let edit = draft.editState, edit.preparedProviderSessionID == nil,
-              !sessionMutations.contains(session.id) else { return }
+              !isHeld(session, by: TaskBlocker.holdingOffConversationUse) else { return }
         // Diff and browser comments wait outside the edit, so canceling it leaves them as they are.
         draft.apply(.init(text: edit.previousDraftText, attachments: edit.previousDraftAttachments,
                           diffComments: draft.diffComments.isEmpty ? nil : draft.diffComments,
@@ -7687,9 +7712,9 @@ extension AppModel {
     private func submitConversationEdit(_ input: CodexComposerDraft, to source: SessionRecord) async {
         let draft = composerDrafts.tasks.draft(for: source.id)
         guard !input.isEmpty, var edit = draft.editState, var session = matchingSession(source), edit.matches(session),
-              !switchingAccounts.contains(session.id), session.status != .running, session.status != .waitingForApproval,
-              sessionMutations.insert(session.id).inserted else { return }
-        defer { sessionMutations.remove(session.id) }
+              !isHeld(session, by: TaskBlocker.holdingOffRuntimeUse), session.status != .running, session.status != .waitingForApproval,
+              beginConversationChange(of: session.id) else { return }
+        defer { endConversationChange(of: session.id) }
         do {
             guard followUps.queue(for: session.id).isEmpty else {
                 throw HarnessAdapterError.capabilityUnavailable("Remove queued messages before editing")
@@ -7834,7 +7859,7 @@ extension AppModel {
 
     func previewClaudeFiles(pointID: String, in source: SessionRecord) async throws -> FileRewindPreview {
         guard var session = matchingSession(source), session.status != .running,
-              session.status != .waitingForApproval, !sessionMutations.contains(session.id) else {
+              session.status != .waitingForApproval, !isHeld(session, by: TaskBlocker.holdingOffConversationUse) else {
             throw HarnessAdapterError.capabilityUnavailable(L10n.string("Stop active work before rewinding this conversation."))
         }
         let points = try await loadClaudeFilePoints(in: session)
@@ -7855,10 +7880,10 @@ extension AppModel {
         guard reviewedFileRewinds[preview.id] == preview, let session = matchingSession(preview.session),
               preview.result.canRewind, let files = preview.result.filesChanged,
               session.status != .running, session.status != .waitingForApproval,
-              sessionMutations.insert(session.id).inserted else {
+              beginConversationChange(of: session.id) else {
             throw HarnessAdapterError.capabilityUnavailable(L10n.string("Review the file changes before restoring them."))
         }
-        defer { sessionMutations.remove(session.id); reviewedFileRewinds.removeValue(forKey: preview.id) }
+        defer { endConversationChange(of: session.id); reviewedFileRewinds.removeValue(forKey: preview.id) }
         guard try ClaudeSubagentTranscriptReader.fileFingerprints(files, in: session) == preview.fileFingerprints else {
             throw HarnessAdapterError.capabilityUnavailable(L10n.string("The file changes have changed. Review them again."))
         }

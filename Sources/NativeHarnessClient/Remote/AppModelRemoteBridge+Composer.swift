@@ -68,7 +68,7 @@ extension AppModelRemoteBridge {
 
     func composerAction(taskID: String, action: String, itemID: String?, value: String?) async -> Result<RemoteComposerState, RemoteError> {
         guard let model, let session = session(taskID) else { return .failure(RemoteError(.notFound)) }
-        guard !model.switchingAccounts.contains(session.id), !model.sessionMutations.contains(session.id) else {
+        guard !model.isHeld(session, by: TaskBlocker.holdingOffActions) else {
             return .failure(RemoteError(.busy, "The task is changing on the Mac", reason: .changing))
         }
         switch action {

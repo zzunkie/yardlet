@@ -697,8 +697,9 @@ final class RestartResumeTests: XCTestCase {
     /// of its own, then piled up on one task from what a list names last, so that each step names what came on top or
     /// keeps what it named before: the order decides the reason the line shows. Alone, each also says whether Yardlet
     /// would choose a move of its own for the task, whether a send, a continuation or a session job relaunch
-    /// Yardlet starts waits for it, whether an agent waiting on the task counts it at work, and whether a message
-    /// from another task is turned back.
+    /// Yardlet starts waits for it, whether an agent waiting on the task counts it at work, whether a message from
+    /// another task is turned back, and whether an action on the task, a use of its runtime or of its saved
+    /// conversation waits for it.
     func testWhatHoldsATaskForAnAccountMoveAndForTheMemorySaver() async throws {
         struct Holds: Equatable {
             var move: AccountMoveBlocker?
@@ -729,6 +730,7 @@ final class RestartResumeTests: XCTestCase {
             ("Starts as a child", Holds(.otherChange, .otherChange, nil)),
             ("Edit", Holds(.edit, .edit, "changing")),
             ("Account switch", Holds(.otherChange, .otherChange, "changing")),
+            ("Conversation change", Holds(.otherChange, .otherChange, "changing")),
             ("Runtime starting", Holds(.otherChange, .otherChange, "changing")),
             ("Cut-off turn", Holds(.otherChange, .otherChange, "continuing")),
             ("Continue after limit", Holds(nil, nil, "continuing")),
@@ -842,7 +844,8 @@ final class RestartResumeTests: XCTestCase {
             case "Edit":
                 model.composerDrafts.tasks.draft(for: id).editState = ConversationEditState(session: task, targetID: "t",
                     previousID: nil, originalText: "Earlier", draft: TaskDraftSnapshot(), entries: [])
-            case "Account switch": model.switchingAccounts.insert(id)
+            case "Account switch": XCTAssertTrue(model.beginAccountSwitch(of: id))
+            case "Conversation change": XCTAssertTrue(model.beginConversationChange(of: id))
             case "Runtime starting":
                 fixture.transports.holdsInitialize = true
                 starts.append(Task { await model.resume(task) })
@@ -871,22 +874,27 @@ final class RestartResumeTests: XCTestCase {
         }
         // Yardlet chooses a move of its own only for a Claude Code task in no turn and no other change; one it
         // chooses then waits for the rest, background work say.
-        let noMoveChosen: Set = ["Turn", "Approval", "Codex turn", "Account switch", "Runtime starting",
+        let noMoveChosen: Set = ["Turn", "Approval", "Codex turn", "Account switch", "Conversation change", "Runtime starting",
                                  "Waits for room as a child", "Starts as a child", "Cut-off turn"]
         // A turn Yardlet starts to send a queued message or shell output waits for one already on its way, an edit
         // and a change of the conversation or account; the turn itself each send reads its own way.
-        let sendsWait: Set = ["Message on its way", "Edit", "Account switch"]
+        let sendsWait: Set = ["Message on its way", "Edit", "Account switch", "Conversation change"]
         // A turn Yardlet continues on its own (after a restart, a lost connection or a limit's reset) waits for the
         // turn, an edit and a change of the conversation or account; a CLI started again for its session jobs also for
         // what waits to go, which starts it.
-        let continuationsWait: Set = ["Turn", "Approval", "Edit", "Account switch"]
+        let continuationsWait: Set = ["Turn", "Approval", "Edit", "Account switch", "Conversation change"]
         let waitingToGo: Set = ["Queued message", "Message on its way", "Shell output"]
         // An agent waiting on a task counts it at work while its turn runs, messages wait for it or it starts as a
         // child; a message from another task is turned back during an edit or a change of the conversation or account.
         let atWork: Set = ["Turn", "Approval", "Queued message", "Message on its way", "Waits for room as a child",
                            "Starts as a child"]
-        let turnedBack = ["Edit": "the person is editing a message in that task.",
-                          "Account switch": "that task is changing (an account switch or an edit); try again shortly."]
+        let changing = "that task is changing (an account switch or an edit); try again shortly."
+        let turnedBack = ["Edit": "the person is editing a message in that task.", "Account switch": changing,
+                          "Conversation change": changing]
+        // An action on the task is refused during a change of its conversation or account; using its runtime waits
+        // for an account switch, and using its saved conversation for a change of it.
+        let refusing: [String: (actions: Bool, runtime: Bool, conversation: Bool)] = [
+            "Account switch": (true, true, false), "Conversation change": (true, false, true)]
         for (thing, _) in alone {
             let task = try XCTUnwrap(store.sessions.first { $0.id == tasks[thing]?.id }, thing)
             XCTAssertEqual(model.canMoveAutomatically(task), !noMoveChosen.contains(thing), thing)
@@ -900,6 +908,11 @@ final class RestartResumeTests: XCTestCase {
                            atWork.contains(thing), "At work, \(thing)")
             XCTAssertEqual(model.firstBlocker(of: task, among: TaskBlocker.turningBackTaskMessages)?.turnsBackTaskMessage,
                            turnedBack[thing], "Task messages, \(thing)")
+            let refused = refusing[thing] ?? (false, false, false)
+            XCTAssertEqual(model.isHeld(task, by: TaskBlocker.holdingOffActions), refused.actions, "Actions, \(thing)")
+            XCTAssertEqual(model.isHeld(task, by: TaskBlocker.holdingOffRuntimeUse), refused.runtime, "Runtime use, \(thing)")
+            XCTAssertEqual(model.isHeld(task, by: TaskBlocker.holdingOffConversationUse), refused.conversation,
+                           "Conversation use, \(thing)")
         }
         for (title, steps) in piles {
             for (thing, expected) in steps {

@@ -99,7 +99,7 @@ extension AppModel {
     private func idleCompactionHold(_ id: UUID) -> String? {
         guard let task = store.sessions.first(where: { $0.id == id }), task.harness == .claudeCode,
               handlesBySessionID[id] != nil, adaptersBySessionID[id] is any HarnessIdleCompacting else { return "no_runtime" }
-        if continuations.accountSwitchesAfterTurn[id] != nil || switchingAccounts.contains(id) { return "account_move" }
+        if continuations.accountSwitchesAfterTurn[id] != nil || isHeld(task, by: TaskBlocker.holdingOffRuntimeUse) { return "account_move" }
         if idleCompactionRuns[id]?.ended == false || accountMoveBlocker(of: task) != nil { return "busy" }
         return nil
     }

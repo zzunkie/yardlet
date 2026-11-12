@@ -38,7 +38,7 @@ extension AppModelRemoteBridge {
             }
             guard model.connections.usageResetStates[choice.id] != .using else { return .failure(RemoteError(.busy)) }
             guard session.status != .running, session.status != .waitingForApproval,
-                  !model.switchingAccounts.contains(session.id), !model.sessionMutations.contains(session.id) else {
+                  !model.isHeld(session, by: TaskBlocker.holdingOffActions) else {
                 return .failure(RemoteError(.busy))
             }
             let current = model.connections.choice(for: session.harness, connection: session.connection)
@@ -60,7 +60,7 @@ extension AppModelRemoteBridge {
         }
         // A limit card, not general account administration: only offer what a current card offers.
         guard session.status != .running, session.status != .waitingForApproval,
-              !model.switchingAccounts.contains(session.id), !model.sessionMutations.contains(session.id) else {
+              !model.isHeld(session, by: TaskBlocker.holdingOffActions) else {
             return .failure(RemoteError(.busy))
         }
         guard hasResetLimitCard(session, in: model) else { return .failure(RemoteError(.notAllowed)) }

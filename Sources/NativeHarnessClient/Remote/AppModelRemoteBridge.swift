@@ -326,7 +326,7 @@ final class AppModelRemoteBridge: RemoteBridge {
     private static func latestLimit(_ presentation: ConversationPresentation, of session: SessionRecord,
                                     in model: AppModel) -> (turnID: String, entryID: UUID, resetsAt: Date?)? {
         guard session.harness == .claudeCode, session.status != .running, session.status != .waitingForApproval,
-              !model.switchingAccounts.contains(session.id), !model.sessionMutations.contains(session.id),
+              !model.isHeld(session, by: TaskBlocker.holdingOffActions),
               let card = UsageLimitContinuation.card(in: model.transcriptBySessionID[session.id] ?? []),
               case let .usageLimit(limit) = card.content,
               let turn = presentation.turns.last(where: { turn in
@@ -753,7 +753,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         if model.composerDrafts.tasks.existingDraft(for: session.id)?.editState != nil {
             return RemoteError(.busy, "A message is being edited on the Mac", reason: .editing)
         }
-        if model.switchingAccounts.contains(session.id) || model.sessionMutations.contains(session.id) {
+        if model.isHeld(session, by: TaskBlocker.holdingOffActions) {
             return RemoteError(.busy, "The task is changing on the Mac", reason: .changing)
         }
         switch model.sendRefusal(for: session) {

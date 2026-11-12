@@ -1364,7 +1364,7 @@ struct MainWindow: View {
         let resumedAfterRestart = model.restartResumeNoticeSessionIDs.contains(session.id)
         let reconnecting = model.connectionResumes[session.id]?.isWaiting == true
         let canContinue = session.status != .running && session.status != .waitingForApproval
-            && !model.switchingAccounts.contains(session.id) && !model.sessionMutations.contains(session.id)
+            && !model.isHeld(session, by: TaskBlocker.holdingOffActions)
         // Read when a limit card draws, so it names the account the task runs under now.
         let usageReset: @MainActor () -> (choice: AccountChoice, context: UsageResetContext)? = {
             (model.connections.choice(for: session.harness, connection: session.connection),
@@ -1505,7 +1505,7 @@ struct MainWindow: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await model.refreshTaskFolder(session.id) }
         }
-        .disabled(model.switchingAccounts.contains(session.id) || model.sessionMutations.contains(session.id))
+        .disabled(model.isHeld(session, by: TaskBlocker.holdingOffActions))
         .environment(\.openURL, OpenURLAction { url in
             // A link to another task opens that task, as the Claude app and Codex open theirs.
             if let link = TaskLink(url) {

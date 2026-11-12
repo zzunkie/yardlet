@@ -182,7 +182,8 @@ final class TaskContinuationCoordinator {
     /// Moves a task Yardlet chose to move itself, as a choice made in its turn moves: now if nothing
     /// keeps it busy, else once that is over, with the line above the composer and its Cancel.
     func moveAutomatically(_ id: UUID, to connection: ProviderConnection, as move: AutomaticAccountMove) {
-        guard let model, accountSwitchesAfterTurn[id] == nil, !model.switchingAccounts.contains(id) else { return }
+        guard let model, accountSwitchesAfterTurn[id] == nil,
+              !(model.store.sessions.first { $0.id == id }.map { model.isHeld($0, by: TaskBlocker.holdingOffRuntimeUse) } ?? false) else { return }
         accountSwitchesAfterTurn[id] = connection
         automaticAccountMoves[id] = move
         switchAccountAfterTurn(id)
@@ -345,8 +346,8 @@ final class TaskContinuationCoordinator {
             return
         }
         guard let task = model.store.sessions.first(where: { $0.id == id }),
-              model.settlesForAccountMove(task), model.switchingAccounts.insert(id).inserted else { return }
-        defer { model.switchingAccounts.remove(id) }
+              model.settlesForAccountMove(task), model.beginAccountSwitch(of: id) else { return }
+        defer { model.endAccountSwitch(of: id) }
         contextLimitRestarts[id] = nil
         await model.detachRuntime(of: id, reason: .contextLimit)?.value
         guard let current = model.store.sessions.first(where: { $0.id == id }) else { return }

@@ -236,7 +236,7 @@ extension AppModelRemoteBridge {
         guard arguments == nil || command.argumentHint != nil || isUserCommand else {
             return .failure(RemoteError(.notAllowed, "/\(name) takes nothing after it"))
         }
-        if model.switchingAccounts.contains(session.id) || model.sessionMutations.contains(session.id) {
+        if model.isHeld(session, by: TaskBlocker.holdingOffActions) {
             return .failure(RemoteError(.busy, "The task is changing on the Mac", reason: .changing))
         }
         switch model.sendRefusal(for: session) {
@@ -355,7 +355,7 @@ extension AppModelRemoteBridge {
         if model.composerDrafts.tasks.existingDraft(for: session.id)?.editState != nil {
             return RemoteError(.busy, "A message is being edited on the Mac", reason: .editing)
         }
-        if model.switchingAccounts.contains(session.id) || model.sessionMutations.contains(session.id) {
+        if model.isHeld(session, by: TaskBlocker.holdingOffActions) {
             return RemoteError(.busy, "The task is changing on the Mac", reason: .changing)
         }
         guard model.followUps.queue(for: session.id).isEmpty else {

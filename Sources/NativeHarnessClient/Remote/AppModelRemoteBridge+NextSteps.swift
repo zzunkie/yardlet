@@ -5,7 +5,7 @@ import YardletRemote
 extension AppModelRemoteBridge {
     func nextStep(taskID: String, turnID: String, action: RemoteNextStep, text: String?) async -> RemoteError? {
         guard let model, let session = session(taskID) else { return RemoteError(.notFound) }
-        guard !model.switchingAccounts.contains(session.id), !model.sessionMutations.contains(session.id) else {
+        guard !model.isHeld(session, by: TaskBlocker.holdingOffActions) else {
             return RemoteError(.busy, "The task is changing on the Mac", reason: .changing)
         }
         guard model.composerDrafts.tasks.existingDraft(for: session.id)?.editState == nil else {

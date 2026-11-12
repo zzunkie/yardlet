@@ -1031,7 +1031,7 @@ extension AppModel: SessionToolHandling {
             return "a subagent it started is still running."
         }
         if sessionToolHasBackgroundTasks(session.id) { return "a background command or agent it started is still running." }
-        if switchingAccounts.contains(session.id) || sessionMutations.contains(session.id)
+        if isHeld(session, by: TaskBlocker.holdingOffActions)
             || unarchivingSessionIDs.contains(session.id) {
             return "that task is changing (an account switch or an edit); try again shortly."
         }
@@ -1060,7 +1060,7 @@ extension AppModel: SessionToolHandling {
         if shellBusySessionIDs.contains(session.id) { return "a command it started is still running." }
         if sessionToolHasBackgroundTasks(session.id) { return "a background command or agent it started is still running." }
         if !followUps.queue(for: session.id).isEmpty { return "messages wait to be sent after its turn." }
-        if switchingAccounts.contains(session.id) || sessionMutations.contains(session.id)
+        if isHeld(session, by: TaskBlocker.holdingOffActions)
             || unarchivingSessionIDs.contains(session.id) {
             return "that task is changing (an account switch or an edit); try again shortly."
         }
