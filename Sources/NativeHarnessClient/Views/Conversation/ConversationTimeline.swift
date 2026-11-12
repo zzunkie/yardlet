@@ -96,6 +96,7 @@ struct ConversationTimeline: View {
     @State private var turnFocusRequest = 0
     @State private var scrollState = TranscriptScrollFollowState()
     @State private var showsFileRewind = false
+    @State private var tableScroller = ConversationTableScroller()
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.conversationFind) private var find
@@ -153,122 +154,151 @@ struct ConversationTimeline: View {
                 .accessibilitySortPriority(ParityAccessibility.surfacePicker - 1)
             }
 
-            ScrollViewReader { proxy in
-                scrollView {
-                    if turns.isEmpty {
-                        emptyState
-                    }
-                    ForEach(turns) { turn in
-                        let part = loaded.rows.part(of: turn.id)
-                        let host = ConversationTurnHost(
-                            turn: turn, part: part, context: context,
-                            handlers: handlers(for: turn, turnID: loaded.rows.turnID(of: turn.id)), renderState: rendering
-                        ).equatable()
-                        // A part goes on from the one before as the items of one turn do. Only a part
-                        // takes the padding: around every turn, it cost a streaming conversation of 300
-                        // turns most of half again its drawing.
-                        Group {
-                            if part.continuesTurn {
-                                host.padding(.top, ConversationLayout.itemSpacing - ConversationLayout.turnSpacing)
-                            } else {
-                                host
-                            }
-                        }
-                        .transcriptReadingAnchor(turn.id, tracker: readingTracker)
-                    }
-                }
-                .modifier(TranscriptScrollFollowing(
-                    latestRequestID: latestRequestID, state: $scrollState,
-                    readingPosition: readingPosition, readingTracker: readingTracker,
-                    readingItemIDs: turns.map(\.id),
-                    pendingRequestIDs: presentation.pendingRequestIDs,
-                    readingAnchors: readingAnchors(loaded, window: window),
-                    pinsGrowthToBottom: true,
+            if ConversationTableTimelineSetting.isEnabled {
+                // The experimental AppKit table (`ConversationTableTimeline`), in place of the stack below.
+                ConversationTableTimeline(
+                    rows: turns.map { turn in
+                        ConversationTurnHost(turn: turn, part: loaded.rows.part(of: turn.id), context: context,
+                                             handlers: handlers(for: turn, turnID: loaded.rows.turnID(of: turn.id)),
+                                             renderState: rendering)
+                    },
+                    renderState: rendering, scrollState: $scrollState, latestRequestID: latestRequestID,
+                    pendingRequestIDs: presentation.pendingRequestIDs, readingTracker: readingTracker,
                     loadEarlier: presentation.earlier == .none ? nil : {
                         loadEarlierTurns(windowed.earlier, loadedTurnCount: loaded.whole.turns.count,
                                          before: windowed.turns.first?.id, revealing: revealed.progress, asksForMore: false)
                     },
-                    earlierKey: presentation.earlier == .none ? nil
-                        : "\(presentation.earlier)|\(turns.first?.id ?? "")",
-                    keepsPlaceAsEarlierItemsArrive: true,
-                    diagnosticID: diagnosticID,
-                    onReturnToLatest: returnToLatestTurns
-                ))
+                    earlierKey: presentation.earlier == .none ? nil : "\(presentation.earlier)|\(turns.first?.id ?? "")",
+                    onReturnToLatest: returnToLatestTurns, scroller: tableScroller
+                )
+                .environment(\.pauseTranscriptFollowing, {
+                    readingTracker.cancelRestoration()
+                    scrollState.isFollowing = false
+                })
+                .overlay(alignment: .top) { if turns.isEmpty { emptyState } }
+                .overlay(alignment: .bottomTrailing) {
+                    if scrollState.showsLatest { latestResponseButton }
+                }
                 .accessibilitySortPriority(placement.accessibilitySortPriority)
-                .background {
-                    ConversationFindScrollDriver(find: find, proxy: proxy) {
-                        readingTracker.cancelRestoration()
-                        if scrollState.isFollowing { scrollState.isFollowing = false }
+                .takesOfferedSize()
+            } else {
+                ScrollViewReader { proxy in
+                    scrollView {
+                        if turns.isEmpty {
+                            emptyState
+                        }
+                        ForEach(turns) { turn in
+                            let part = loaded.rows.part(of: turn.id)
+                            let host = ConversationTurnHost(
+                                turn: turn, part: part, context: context,
+                                handlers: handlers(for: turn, turnID: loaded.rows.turnID(of: turn.id)), renderState: rendering
+                            ).equatable()
+                            // A part goes on from the one before as the items of one turn do. Only a part
+                            // takes the padding: around every turn, it cost a streaming conversation of 300
+                            // turns most of half again its drawing.
+                            Group {
+                                if part.continuesTurn {
+                                    host.padding(.top, ConversationLayout.itemSpacing - ConversationLayout.turnSpacing)
+                                } else {
+                                    host
+                                }
+                            }
+                            .transcriptReadingAnchor(turn.id, tracker: readingTracker)
+                        }
                     }
-                    if let find, find.isPresented {
-                        ConversationFindFeeder(find: find, source: .conversation(loaded.whole))
+                    .modifier(TranscriptScrollFollowing(
+                        latestRequestID: latestRequestID, state: $scrollState,
+                        readingPosition: readingPosition, readingTracker: readingTracker,
+                        readingItemIDs: turns.map(\.id),
+                        pendingRequestIDs: presentation.pendingRequestIDs,
+                        readingAnchors: readingAnchors(loaded, window: window),
+                        pinsGrowthToBottom: true,
+                        loadEarlier: presentation.earlier == .none ? nil : {
+                            loadEarlierTurns(windowed.earlier, loadedTurnCount: loaded.whole.turns.count,
+                                             before: windowed.turns.first?.id, revealing: revealed.progress, asksForMore: false)
+                        },
+                        earlierKey: presentation.earlier == .none ? nil
+                            : "\(presentation.earlier)|\(turns.first?.id ?? "")",
+                        keepsPlaceAsEarlierItemsArrive: true,
+                        diagnosticID: diagnosticID,
+                        onReturnToLatest: returnToLatestTurns
+                    ))
+                    .accessibilitySortPriority(placement.accessibilitySortPriority)
+                    .background {
+                        ConversationFindScrollDriver(find: find, proxy: proxy) {
+                            readingTracker.cancelRestoration()
+                            if scrollState.isFollowing { scrollState.isFollowing = false }
+                        }
+                        if let find, find.isPresented {
+                            ConversationFindFeeder(find: find, source: .conversation(loaded.whole))
+                        }
                     }
-                }
-                // A match in a turn the window leaves out widens the window to it first (plan A5.2),
-                // then goes there once the turn is drawn.
-                .onChange(of: find?.scrollRequest) { _, request in
-                    if request != nil { reveal.end() }
-                    guard let request, let window, window.hides(request.scrollID, in: loaded.whole) else { return }
-                    earliestReadTurnID = request.scrollID
-                    Task { @MainActor in
-                        await Task.yield()
-                        guard find?.scrollRequest == request else { return }
-                        proxy.scrollTo(request.scrollID, anchor: .center)
-                        try? await Task.sleep(for: .milliseconds(80))
-                        guard find?.scrollRequest == request else { return }
-                        proxy.scrollTo(ConversationFindAnchor.activeMatch, anchor: .center)
+                    // A match in a turn the window leaves out widens the window to it first (plan A5.2),
+                    // then goes there once the turn is drawn.
+                    .onChange(of: find?.scrollRequest) { _, request in
+                        if request != nil { reveal.end() }
+                        guard let request, let window, window.hides(request.scrollID, in: loaded.whole) else { return }
+                        earliestReadTurnID = request.scrollID
+                        Task { @MainActor in
+                            await Task.yield()
+                            guard find?.scrollRequest == request else { return }
+                            proxy.scrollTo(request.scrollID, anchor: .center)
+                            try? await Task.sleep(for: .milliseconds(80))
+                            guard find?.scrollRequest == request else { return }
+                            proxy.scrollTo(ConversationFindAnchor.activeMatch, anchor: .center)
+                        }
                     }
-                }
-                .onChange(of: turnFocusRequest) { _, _ in
-                    guard let focusedTurnID = focus.turnID else { return }
-                    proxy.scrollTo(focusedTurnID, anchor: .center)
-                    // A turn the window was just widened to is laid out in the next display cycle.
-                    guard earliestReadTurnID == focusedTurnID else { return }
-                    Task { @MainActor in
-                        try? await Task.sleep(for: .milliseconds(30))
-                        guard focus.turnID == focusedTurnID else { return }
+                    .onChange(of: turnFocusRequest) { _, _ in
+                        guard let focusedTurnID = focus.turnID else { return }
                         proxy.scrollTo(focusedTurnID, anchor: .center)
+                        // A turn the window was just widened to is laid out in the next display cycle.
+                        guard earliestReadTurnID == focusedTurnID else { return }
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .milliseconds(30))
+                            guard focus.turnID == focusedTurnID else { return }
+                            proxy.scrollTo(focusedTurnID, anchor: .center)
+                        }
                     }
-                }
-                .task(id: historySelection) {
-                    let restoresReading = !handledInitialSearch && readingPosition?.bookmark.followsLatest == false
-                    handledInitialSearch = true
-                    guard !restoresReading else { return }
-                    guard historySelection != nil, let targetTurnID = Self.firstHistoryMatch(in: loaded.whole)
-                    else { return }
-                    reveal.end()
-                    // A match in a turn the window leaves out widens the window to it first.
-                    if let window, window.hides(targetTurnID, in: loaded.whole) { earliestReadTurnID = targetTurnID }
-                    await Task.yield()
-                    guard !Task.isCancelled else { return }
-                    readingTracker.cancelRestoration()
-                    scrollState.isFollowing = false
-                    focus.turnID = targetTurnID
-                    withAnimation(ParityMotion.easeInOut(reduceMotion: reduceMotion)) {
-                        proxy.scrollTo(targetTurnID, anchor: .center)
-                    }
-                }
-                // A call another view asked for (a file's related task): the turn holding it, at its top,
-                // widening the window to it first as a history result does.
-                .task(id: place?.request.id) {
-                    guard placement == .task, let place else { return }
-                    defer { place.done() }
-                    guard let targetTurnID = Self.turn(holding: place.request.callID, in: loaded.whole) else { return }
-                    reveal.end()
-                    readingTracker.cancelRestoration()
-                    scrollState.isFollowing = false
-                    focus.turnID = targetTurnID
-                    if let window, window.hides(targetTurnID, in: loaded.whole) { earliestReadTurnID = targetTurnID }
-                    // Once the widened window is drawn, and again once the place kept as its turns arrived
-                    // above has settled, as find goes to a match.
-                    for delay in [30, 120] {
-                        try? await Task.sleep(for: .milliseconds(delay))
+                    .task(id: historySelection) {
+                        let restoresReading = !handledInitialSearch && readingPosition?.bookmark.followsLatest == false
+                        handledInitialSearch = true
+                        guard !restoresReading else { return }
+                        guard historySelection != nil, let targetTurnID = Self.firstHistoryMatch(in: loaded.whole)
+                        else { return }
+                        reveal.end()
+                        // A match in a turn the window leaves out widens the window to it first.
+                        if let window, window.hides(targetTurnID, in: loaded.whole) { earliestReadTurnID = targetTurnID }
+                        await Task.yield()
                         guard !Task.isCancelled else { return }
-                        proxy.scrollTo(targetTurnID, anchor: .top)
+                        readingTracker.cancelRestoration()
+                        scrollState.isFollowing = false
+                        focus.turnID = targetTurnID
+                        withAnimation(ParityMotion.easeInOut(reduceMotion: reduceMotion)) {
+                            proxy.scrollTo(targetTurnID, anchor: .center)
+                        }
+                    }
+                    // A call another view asked for (a file's related task): the turn holding it, at its top,
+                    // widening the window to it first as a history result does.
+                    .task(id: place?.request.id) {
+                        guard placement == .task, let place else { return }
+                        defer { place.done() }
+                        guard let targetTurnID = Self.turn(holding: place.request.callID, in: loaded.whole) else { return }
+                        reveal.end()
+                        readingTracker.cancelRestoration()
+                        scrollState.isFollowing = false
+                        focus.turnID = targetTurnID
+                        if let window, window.hides(targetTurnID, in: loaded.whole) { earliestReadTurnID = targetTurnID }
+                        // Once the widened window is drawn, and again once the place kept as its turns arrived
+                        // above has settled, as find goes to a match.
+                        for delay in [30, 120] {
+                            try? await Task.sleep(for: .milliseconds(delay))
+                            guard !Task.isCancelled else { return }
+                            proxy.scrollTo(targetTurnID, anchor: .top)
+                        }
                     }
                 }
+                .takesOfferedSize()
             }
-            .takesOfferedSize()
         }
         .background {
             if placement.paintsCanvas { ParityTheme.canvas }
@@ -395,7 +425,9 @@ struct ConversationTimeline: View {
             actions.readEarlierHistory?()
         case .none: return
         }
-        reveal.begin(before: earliestDrawn)
+        // The table measures the turns that arrive out of sight and puts them in together
+        // (`ConversationTableController`), so it is handed them all at once.
+        if !ConversationTableTimelineSetting.isEnabled { reveal.begin(before: earliestDrawn) }
     }
 
     /// Draws the next of the turns that arrived once what this display cycle drew is laid out and
@@ -538,6 +570,24 @@ struct ConversationTimeline: View {
                 // The turns' frames are read in the content, which scrolling leaves as they are.
                 .coordinateSpace(name: readingTracker.coordinateSpace)
         }
+    }
+
+    /// "Latest response" over the table (`ConversationTableTimeline`), as following draws it over the stack.
+    private var latestResponseButton: some View {
+        Button {
+            tableScroller.scrollToLatest()
+        } label: {
+            Label(L10n.string("Latest response"), systemImage: "arrow.down")
+                .font(.caption.weight(.medium))
+                .padding(.horizontal, 11)
+                .padding(.vertical, 7)
+                .background(ParityTheme.elevated, in: Capsule())
+                .overlay { Capsule().stroke(ParityTheme.strongSeparator) }
+        }
+        .buttonStyle(.borderless)
+        .parityPointer()
+        .help(L10n.string("Return to the latest response and follow new messages"))
+        .padding(12)
     }
 
     @ViewBuilder
