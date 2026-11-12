@@ -531,11 +531,9 @@ final class TaskContinuationCoordinator {
         model.flushTranscriptDeltas(for: sessionID)
         guard let session = model.store.sessions.first(where: { $0.id == sessionID }),
               session.providerSessionID == left.providerSessionID, session.connection == left.connection,
-              session.status != .running, session.status != .waitingForApproval,
+              model.firstBlocker(of: session, among: TaskBlocker.holdingOffContinuations) == nil,
               let card = UsageLimitContinuation.card(in: model.heldTranscript(of: sessionID) ?? []),
-              case let .usageLimit(limit) = card.content, left.waits(for: limit.resetsAt),
-              model.composerDrafts.tasks.draft(for: sessionID).editState == nil,
-              !model.switchingAccounts.contains(sessionID), !model.sessionMutations.contains(sessionID) else { return }
+              case let .usageLimit(limit) = card.content, left.waits(for: limit.resetsAt) else { return }
         await model.send(HarnessUserInput(text: UsageLimitContinuation.afterReset), to: session)
     }
 
@@ -747,11 +745,8 @@ final class TaskContinuationCoordinator {
         return session.harness == .claudeCode && session.providerSessionID != nil
             && now.timeIntervalSince(session.updatedAt) < ClaudeSessionJobs.recurringMaxAge
             && model.handlesBySessionID[session.id] == nil
-            && session.status != .running && session.status != .waitingForApproval
             && restartResumesToContinue[session.id] == nil && connectionResumes[session.id] == nil
-            && model.followUps.queue(for: session.id).isEmpty && model.pendingShellDeliveries[session.id]?.isEmpty != false
-            && !model.switchingAccounts.contains(session.id) && !model.sessionMutations.contains(session.id)
-            && model.composerDrafts.tasks.existingDraft(for: session.id)?.editState == nil
+            && model.firstBlocker(of: session, among: TaskBlocker.holdingOffSessionJobRelaunches) == nil
             && (!askingRefusal || model.sendRefusal(for: session) == nil)
     }
 
@@ -888,9 +883,7 @@ final class TaskContinuationCoordinator {
         guard let model, var record = connectionResumes[id], record.isWaiting, isNetworkAvailable,
               RestartResumePreference.isOn(in: model.preferences),
               let session = model.store.sessions.first(where: { $0.id == id }),
-              session.status != .running, session.status != .waitingForApproval,
-              !model.switchingAccounts.contains(id), !model.sessionMutations.contains(id),
-              model.composerDrafts.tasks.draft(for: id).editState == nil else { return false }
+              model.firstBlocker(of: session, among: TaskBlocker.holdingOffContinuations) == nil else { return false }
         let inLine = restartResumeLine.starting.contains(id)
         if !model.followUps.queue(for: id).isEmpty {
             forgetConnectionResume(id)
@@ -1029,9 +1022,7 @@ final class TaskContinuationCoordinator {
         // Until it is asked, a quit still carries it over.
         defer { restartResumesToContinue.removeValue(forKey: id) }
         guard let session = model.store.sessions.first(where: { $0.id == id }),
-              session.status != .running, session.status != .waitingForApproval,
-              !model.switchingAccounts.contains(id), !model.sessionMutations.contains(id),
-              model.composerDrafts.tasks.draft(for: id).editState == nil else { return false }
+              model.firstBlocker(of: session, among: TaskBlocker.holdingOffContinuations) == nil else { return false }
         if model.handlesBySessionID[id] == nil { await model.resume(session) }
         let inLine = restartResumeLine.starting.contains(id)
         if !model.followUps.queue(for: id).isEmpty {

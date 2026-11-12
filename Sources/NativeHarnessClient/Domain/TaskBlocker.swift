@@ -113,6 +113,28 @@ enum TaskBlocker: CaseIterable {
     /// What a turn Yardlet starts to send what it holds waits for (`holdsOffSends`).
     static let holdingOffSends = allCases.filter(\.holdsOffSends)
 
+    /// Whether a turn Yardlet continues on its own (one a restart or a lost connection cut off, or one a limit
+    /// stopped, once it has reset) waits while this holds the task: its turn, a message being edited, and a change
+    /// of its conversation or account. A continuation gives way to a queued message itself, resumes a runtime still
+    /// starting itself, and is what a cut-off turn is; nothing continues it again once another change ends.
+    var holdsOffContinuations: Bool {
+        switch self {
+        case .turn, .edit, .conversationChange, .accountSwitch: true
+        case .sideChat, .codexTurn, .shellCommand, .request, .queuedMessages, .messageOnItsWay, .shellOutput,
+             .backgroundWork, .sessionJobs, .processes, .agents, .childStartWaiting, .childTasks, .change,
+             .runtimeStarting, .startingAsChild, .cutOffTurn, .sessionJobRelaunch, .limitContinue: false
+        }
+    }
+
+    /// What a turn Yardlet continues on its own waits for (`holdsOffContinuations`).
+    static let holdingOffContinuations = allCases.filter(\.holdsOffContinuations)
+
+    /// What keeps a task's CLI from starting again for the session jobs it brings back: what holds off a
+    /// continuation, and messages or shell output waiting to go, which start it themselves.
+    static let holdingOffSessionJobRelaunches = allCases.filter {
+        $0.holdsOffContinuations || $0 == .queuedMessages || $0 == .shellOutput
+    }
+
     /// What keeps a task's runtime whether or not it is on screen, in a word for the memory saver's log and tests;
     /// nil for what the runtime may end under. An idle terminal does not keep it: the shell goes on without it.
     var memorySaverWord: String? {

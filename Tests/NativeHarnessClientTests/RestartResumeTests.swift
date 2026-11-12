@@ -696,7 +696,8 @@ final class RestartResumeTests: XCTestCase {
     /// Yardlet holds go after the move), and the word the memory saver keeps the runtime for. Each thing alone in a task
     /// of its own, then piled up on one task from what a list names last, so that each step names what came on top or
     /// keeps what it named before: the order decides the reason the line shows. Alone, each also says whether Yardlet
-    /// would choose a move of its own for the task, and whether a send Yardlet starts waits for it.
+    /// would choose a move of its own for the task, and whether a send, a continuation or a session job relaunch
+    /// Yardlet starts waits for it.
     func testWhatHoldsATaskForAnAccountMoveAndForTheMemorySaver() async throws {
         struct Holds: Equatable {
             var move: AccountMoveBlocker?
@@ -874,11 +875,20 @@ final class RestartResumeTests: XCTestCase {
         // A turn Yardlet starts to send a queued message or shell output waits for one already on its way, an edit
         // and a change of the conversation or account; the turn itself each send reads its own way.
         let sendsWait: Set = ["Message on its way", "Edit", "Account switch"]
+        // A turn Yardlet continues on its own (after a restart, a lost connection or a limit's reset) waits for the
+        // turn, an edit and a change of the conversation or account; a CLI started again for its session jobs also for
+        // what waits to go, which starts it.
+        let continuationsWait: Set = ["Turn", "Approval", "Edit", "Account switch"]
+        let waitingToGo: Set = ["Queued message", "Message on its way", "Shell output"]
         for (thing, _) in alone {
             let task = try XCTUnwrap(store.sessions.first { $0.id == tasks[thing]?.id }, thing)
             XCTAssertEqual(model.canMoveAutomatically(task), !noMoveChosen.contains(thing), thing)
             XCTAssertEqual(model.firstBlocker(of: task, among: TaskBlocker.holdingOffSends) != nil,
                            sendsWait.contains(thing), "Sends, \(thing)")
+            XCTAssertEqual(model.firstBlocker(of: task, among: TaskBlocker.holdingOffContinuations) != nil,
+                           continuationsWait.contains(thing), "Continuations, \(thing)")
+            XCTAssertEqual(model.firstBlocker(of: task, among: TaskBlocker.holdingOffSessionJobRelaunches) != nil,
+                           continuationsWait.union(waitingToGo).contains(thing), "Session job relaunches, \(thing)")
         }
         for (title, steps) in piles {
             for (thing, expected) in steps {
