@@ -165,7 +165,7 @@ def collect_round(folder, required_phases=(), required_metrics=None):
     return {'launch': launch, 'phases': phases, 'problems': scene.get('problems', []) + problems,
             'processSamples': samples,
             'loadBefore': run.get('loadBefore'), 'reopens': run.get('reopens'),
-            'extra': {key: scene[key] for key in ('window', 'screen', 'sidebar', 'browser', 'memoryCycle', 'diagnostics') if key in scene}}
+            'extra': {key: scene[key] for key in ('window', 'screen', 'sidebar', 'browser', 'memoryCycle', 'diagnostics', 'conversation') if key in scene}}
 
 
 def median_of(rounds, pick):

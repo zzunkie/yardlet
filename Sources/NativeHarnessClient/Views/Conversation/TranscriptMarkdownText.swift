@@ -364,7 +364,7 @@ private struct TranscriptMarkdownTable: View {
                 .padding(6)
             }
         }
-        .onHover { isHovering = $0 }
+        .pointerHover { isHovering = $0 }
         .conversationFindAnchor(findAnchorFraction)
         .accessibilityActions {
             Button(L10n.string("Copy table"), action: copy)

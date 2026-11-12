@@ -93,6 +93,11 @@ final class ConversationTurnHosting {
     init(turnID: String) {
         self.turnID = turnID
         controller.sizingOptions = []
+        // A turn sits in the conversation's column, under no bar of the window. Kept to the safe area,
+        // its hosting view worked it out anew and asked for layout whenever it moved in the window, as
+        // every turn of a scrolling conversation does at every frame, and the window's SwiftUI laid the
+        // whole window out again with it.
+        controller.safeAreaRegions = []
 #if DEBUG
         ViewBodyCensus.note(.conversationTurnHosting)
         PerfMemoryCensus.track(self, .conversationTurnHosting)
