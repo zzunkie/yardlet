@@ -48,7 +48,7 @@ final class MainWindow {
     private var remoteSettings: RemoteSettingsPane?
     /// What the window shows beside the sidebar, so redrawing the tasks keeps what the person chose. The model
     /// learns whether it shows a task, which decides, as on the Mac, whether a task's news is a notification.
-    private enum Shown { case task, newTask, other }
+    private enum Shown { case task, newTask, connect, other }
     private var shown = Shown.task {
         didSet { model.setShowsTasks(shown == .task, inWindow: windowID) }
     }
@@ -92,7 +92,7 @@ final class MainWindow {
                 newTask.show()
             } else if container == self.connectItem {
                 self.navigation.content = self.connectPane
-                self.shown = .other
+                self.shown = .connect
             } else if let hostID = self.hostItems.first(where: { $0.item == container })?.id {
                 self.openHost(hostID)
             } else if let id = self.items.first(where: { $0.item == container })?.id {
@@ -176,7 +176,7 @@ final class MainWindow {
         switch shown {
         case .task: navigation.selectedItem = selectedItem
         case .newTask: navigation.selectedItem = newTaskItem
-        case .other: break
+        case .connect, .other: break
         }
         if let selected { choose(selected) } else { showConversation() }
     }
@@ -374,6 +374,9 @@ final class MainWindow {
             navigation.footerMenuItems.append(item)
             return (item: item, id: host.id)
         }
+        // Changing the footer's items clears NavigationView's choice, so Connect to a Mac, where a host is removed
+        // from the list, is chosen again (seen on the runner).
+        if shown == .connect { navigation.selectedItem = connectItem }
         pairedMacs?.show(hosts)
     }
 

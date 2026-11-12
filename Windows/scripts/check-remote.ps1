@@ -1,5 +1,5 @@
 # Opens the Windows app, pairs it with a host from -Link through Connect to a Mac, opens a task in the host's
-# window, sends a message and waits for the answer to stream in. It drives the window through UI Automation
+# window, sends a message and waits for the answer to stream in, then removes the host from Connect to a Mac. It drives the window through UI Automation
 # and reads the window's own event log (YARDLET_QA_EVENT_LOG); it writes screenshots, the log and a summary
 # to -OutDirectory. The CI host is yardlet-remote-fixture on a local relay (docs/REMOTE_PROTOCOL.md, sections 9 and 14).
 # Runs in Windows PowerShell 5.1, which has UI Automation and System.Drawing; the file stays ASCII because 5.1
@@ -80,6 +80,18 @@ function Find-Named($root, [string] $text, $type) {
         (New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, $text)),
         (New-Object System.Windows.Automation.PropertyCondition($UIA::ControlTypeProperty, $type)))
     $root.FindFirst($Scope::Descendants, (New-Object System.Windows.Automation.AndCondition($conditions)))
+}
+
+# A control in any of the app's top-level windows: a ContentDialog's buttons are in a popup of its own, outside the
+# main window's tree.
+function Find-InApp([string] $text, $type) {
+    $windows = $UIA::RootElement.FindAll($Scope::Children,
+        (New-Object System.Windows.Automation.PropertyCondition($UIA::ProcessIdProperty, $process.Id)))
+    foreach ($window in $windows) {
+        $found = Find-Named $window $text $type
+        if ($found) { return $found }
+    }
+    return $null
 }
 
 function Find-Typed($root, $type) {
@@ -207,4 +219,50 @@ $answered = Wait-For { Read-Events | Where-Object { $_ -like 'remote answer: Don
 $summary.answer = "$answered"
 $summary.answeredSeconds = [math]::Round(((Get-Date) - $started).TotalSeconds, 1)
 if (-not $answered) { Finish 'no answer' }
+
+# Remove... on the host under Connect to a Mac: asked first, then its window closes, the host is forgotten and the
+# list no longer has it. The main window's item is chosen again until its pane shows, as for pairing above.
+[void][RemoteDesktop]::BringForward($process.MainWindowHandle)
+$removeName = "Remove $hostName"
+$remove = $null
+$tries = 0
+$deadline = (Get-Date).AddSeconds(30)
+while (-not $remove -and (Get-Date) -lt $deadline) {
+    $tries += 1
+    [void](Wait-For { $found = Find-Item $main 'Connect to a Mac'; if ($found) {
+        if ($tries % 2 -eq 0) {
+            $found.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        } else {
+            Select-Item $found
+        }
+        $true } } 10)
+    $remove = Wait-For { Find-Named $main $removeName ([System.Windows.Automation.ControlType]::Button) } 4
+}
+if (-not $remove) { Finish 'no Remove button' }
+Save-Screen 'paired'
+$remove.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+# The dialog's own Remove, beside Cancel; the row's button is named for its host. UI Automation does not always reach
+# the popup the question is in (seen on the runner with the question on screen), and its Remove has the focus, so
+# Enter answers it then; the app's log says whether the host was removed.
+$confirm = Wait-For { Find-InApp 'Remove' ([System.Windows.Automation.ControlType]::Button) } 10
+Save-Screen 'remove-asked'
+if ($confirm) {
+    $confirm.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+} else {
+    $summary.removedWithEnter = $true
+    [void][RemoteDesktop]::BringForward($process.MainWindowHandle)
+    [RemoteDesktop]::Press(0x0D)
+}
+if (-not (Wait-For { (Read-Events) -contains "remote host removed: $hostName" } 10)) { Finish 'not removed' }
+$closed = Wait-For { -not $UIA::RootElement.FindFirst($Scope::Children, (New-Object System.Windows.Automation.AndCondition(@(
+    (New-Object System.Windows.Automation.PropertyCondition($UIA::ProcessIdProperty, $process.Id)),
+    (New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, $hostName)))))) } 10
+if (-not $closed) { Finish 'host window still open' }
+if (-not (Wait-For { -not (Find-Named $main $removeName ([System.Windows.Automation.ControlType]::Button)) } 15)) { Finish 'host still listed' }
+# The sidebar still has Connect to a Mac chosen, as the pane beside it shows.
+$summary.connectChosen = [bool](Wait-For { $item = Find-Item $main 'Connect to a Mac'
+    $item -and $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Current.IsSelected } 10)
+if (-not $summary.connectChosen) { Finish 'Connect to a Mac no longer chosen' }
+$summary.removed = $true
+Save-Screen 'removed'
 Finish 'answered'

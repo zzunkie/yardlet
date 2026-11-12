@@ -257,7 +257,8 @@ runner, measures it and types Korean into its composer through the Microsoft Kor
 (`Windows/scripts/check-window.ps1`). It then starts the relay (`relay/`) and the fixture host on it
 (`Windows/scripts/start-remote-host.ps1`) and, in the same step, since a Windows runner ends the programs a step
 started when the step ends, pairs the app with the host through Connect to a Mac, opens a task, sends a message and
-waits for the answer to stream in (`Windows/scripts/check-remote.ps1`, through UI Automation). It installs a
+waits for the answer to stream in, then removes the host with Remove… and its question, which closes its window and
+takes it off the list (`Windows/scripts/check-remote.ps1`, through UI Automation). It installs a
 stand-in harness the way npm installs one (`Windows/scripts/fake-harness/`, whose `kimi.cmd` npm itself writes into
 `%APPDATA%\npm`) and opens the app with `YARDLET_QA_HARNESS_CHECK=kimi-code` (`WinUI/QAHarnessCheck.swift`, a QA
 variable like `YARDLET_QA_EVENT_LOG`): the app finds the shim as a new task would and runs the engine's verification
@@ -311,7 +312,11 @@ alone, which must fail and so show what the fixes are for, and with the fixes, w
 bindings; fork it and keep only the fixes the app needs; as a last resort, write the screens in C# with WinUI 3 and
 keep the engine in Swift, which needs a layer that carries the engine's state and events to the C# screens.
 
-**What the Windows app does not have yet:** a Windows layer for the rest of what `Platform/Portable/` stands in for:
+**What the Windows app does not have yet:** an installer, a signature and updates: the app is the folder CI gathers,
+unsigned, and the Windows App Runtime 1.7 it needs is installed on its own and no longer supported by Microsoft. The
+Yardlet MCP server: its endpoint is a Unix domain socket (`Sources/YardletAgentTools/Platform/UnixDomainSocket.swift`)
+with no named pipe in its place, and the app carries no `yardlet-mcp.exe`, so a Windows task has no connectors and none
+of Yardlet's session, schedule, task or browser tools. A Windows layer for the rest of what `Platform/Portable/` stands in for:
 the ConPTY terminal for the terminal panel, credential storage for the vault, and a taskbar badge (which needs a
 package identity); an accounts page (signing in to a saved account, signing out); answering the questions Codex asks
 in a message while it works (`request_user_input_async`); a new task's account, attachments, worktree and slash
