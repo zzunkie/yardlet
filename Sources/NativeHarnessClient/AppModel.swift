@@ -442,6 +442,8 @@ final class AppModel {
     /// Yardlet's lid helper, for Settings › General. The app sets it; nil in tests and fixtures,
     /// where the setting is left out.
     var lidSleepHelper: LidSleepHelper?
+    /// Settings › General › "Launch at login"; nil in a fixture, a test or a copy that cannot be a login item.
+    var launchAtLogin: LaunchAtLogin?
     /// The vault for agents and Sparkle's automatic update checks, as Settings binds them, for the agent's
     /// settings tools (`settingsContext`). The app sets them; nil in tests and fixtures, and in a build without
     /// Sparkle, where those settings are left out.

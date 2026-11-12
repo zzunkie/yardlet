@@ -13,7 +13,7 @@ extension AppModel {
         YardletSettingsContext(defaults: preferences, vault: settingsVault, remote: remoteControl, cliUpdates: cliUpdates,
                                instructions: yardletInstructions, evaluation: routingEvaluation, connections: connections,
                                hasConnectors: connectorCenter != nil, hasUsage: true, lidHelper: lidSleepHelper,
-                               updateChecks: settingsUpdateChecks)
+                               updateChecks: settingsUpdateChecks, launchAtLogin: launchAtLogin)
     }
 
     private struct SettingEntry: Encodable {

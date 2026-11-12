@@ -2619,7 +2619,8 @@ struct MainWindow: View {
                 instructions: model.yardletInstructions,
                 evaluation: model.routingEvaluation,
                 usage: settingsUsage,
-                lidHelper: model.lidSleepHelper
+                lidHelper: model.lidSleepHelper,
+                launchAtLogin: model.launchAtLogin
             )
         }
         .sheet(item: $connectorAddStart, onDismiss: finishShellModal) { start in

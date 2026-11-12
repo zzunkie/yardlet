@@ -109,6 +109,7 @@ import XCTest
     /// Every section the app offers: the Yardlet account above the Personal, Integrations and Harnesses
     /// headings, with General open and its rows under the App, Tasks, Browser and Terminal headings.
     /// `list-general-*.png` is the window's size; `general-headings-*.png` is tall enough for every heading.
+    /// "Launch at login" is macOS's login item alone: turned off, nothing of it stays in Yardlet's preferences.
     func testTheWholeListAndGeneralsHeadingsDraw() async throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let (store, runtime) = try accountsFixture()
@@ -131,12 +132,15 @@ import XCTest
         let usage = SettingsUsageContext(overview: { TokenUsageFixture.overview() }, isCounting: { true },
                                          limitsCheckedAt: { nil })
         let connectors = makeConnectors()
+        let loginItem = FakeLoginItem()
+        let launchAtLogin = LaunchAtLogin(backend: loginItem)
 
         for appearance in WindowlessRender.Appearance.allCases {
             for (name, height) in [("list-general", 620.0), ("general-headings", 1560.0)] {
                 let host = WindowlessRender.Host(SettingsCenterView(size: CGSize(width: 820, height: height),
                     initialSection: SettingsSection.general.rawValue, notificationCenter: QuietNotificationCenter(), connectors: connectors, vault: vault, accounts: accounts,
-                    remote: remote, cliUpdates: cliUpdates, instructions: instructions, usage: usage)
+                    remote: remote, cliUpdates: cliUpdates, instructions: instructions, usage: usage,
+                    launchAtLogin: launchAtLogin)
                     .environment(\.colorScheme, appearance.colorScheme),
                     size: NSSize(width: 820, height: height), appearance: appearance)
                 defer { host.close() }
@@ -149,8 +153,22 @@ import XCTest
                 let headings = SettingsSection.Group.allCases.map(\.title) + GeneralSettingsGroup.allCases.map(\.title)
                 XCTAssertTrue((headings + SettingsSection.allCases.map(\.title)).allSatisfy(labels.contains),
                               labels.description)
+                XCTAssertTrue(labels.contains(YardletSetting.launchAtLogin.title), labels.description)
             }
         }
+
+        let context = YardletSettingsContext(defaults: defaults, launchAtLogin: launchAtLogin)
+        let before = Set(defaults.dictionaryRepresentation().keys)
+        let added = await YardletSetting.launchAtLogin.set(YardletSetting.on, in: context)
+        XCTAssertNil(added)
+        XCTAssertEqual(loginItem.registered, true)
+        XCTAssertEqual(YardletSetting.launchAtLogin.value(in: context), YardletSetting.on)
+        let removed = await YardletSetting.launchAtLogin.set(YardletSetting.off, in: context)
+        XCTAssertNil(removed)
+        XCTAssertEqual(loginItem.registered, false)
+        XCTAssertEqual(Set(defaults.dictionaryRepresentation().keys), before)
+        XCTAssertFalse(YardletSetting.launchAtLogin.isShown(in: YardletSettingsContext(defaults: defaults)),
+                       "A copy that cannot be a login item has no switch")
     }
 
     private func makeConnectors() -> ConnectorCenter {
@@ -263,4 +281,13 @@ private final class QuietNotificationCenter: SystemNotificationCenter {
     func authorization() async -> SystemNotificationAuthorization { .authorized }
     func requestAuthorization() async -> Bool { true }
     func post(title: String, body: String, identifier: String) async {}
+}
+
+/// A login item that records what Settings asked of it and never reaches macOS.
+private final class FakeLoginItem: LaunchAtLoginBackend, @unchecked Sendable {
+    private(set) var registered = false
+
+    func status() async -> LaunchAtLogin.Status { registered ? .on : .off }
+    func register() throws { registered = true }
+    func unregister() throws { registered = false }
 }

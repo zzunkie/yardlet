@@ -66,6 +66,13 @@ final class LidSleepHelper {
     let status: Status = .unavailable
 }
 
+/// No login items here; Settings leaves "Launch at login" out.
+@MainActor
+final class LaunchAtLogin {
+    var isOn: Bool? { nil }
+    func set(_ isOn: Bool) -> String? { nil }
+}
+
 /// No memory pressure warnings here; the memory saver keeps its timed looks.
 enum MemoryPressureWatch {
     static func start(_ handler: @escaping @MainActor () -> Void) -> AnyObject? { nil }

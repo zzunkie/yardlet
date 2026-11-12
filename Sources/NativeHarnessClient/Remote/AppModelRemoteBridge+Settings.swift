@@ -8,7 +8,8 @@ extension AppModelRemoteBridge {
     /// Settings that configure the client Mac itself or belong to sections not shown in the remote Settings sheet.
     private static let excludedRemoteSettingIDs: Set<String> = [
         YardletSetting.language.id,
-        YardletSetting.checkForUpdates.id
+        YardletSetting.checkForUpdates.id,
+        YardletSetting.launchAtLogin.id
     ]
 
     static func isRemoteHostSetting(_ setting: YardletSetting) -> Bool {

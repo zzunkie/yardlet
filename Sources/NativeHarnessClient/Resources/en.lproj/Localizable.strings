@@ -2014,6 +2014,8 @@
 "Applies the next time you open Yardlet" = "Applies the next time you open Yardlet";
 "Show in menu bar" = "Show in menu bar";
 "Show Yardlet in the menu bar" = "Show Yardlet in the menu bar";
+"Launch at login" = "Launch at login";
+"Allow Yardlet in Login Items in System Settings" = "Allow Yardlet in Login Items in System Settings";
 "Turn the sidebar activity view on or off" = "Turn the sidebar activity view on or off";
 "5h" = "5h";
 "Weekly" = "Weekly";

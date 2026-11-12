@@ -160,6 +160,8 @@ struct YardletSettingsContext {
     var hasUsage = false
     var lidHelper: LidSleepHelper?
     var updateChecks: YardletSettingSwitch?
+    /// Yardlet as a login item; nil where this copy cannot be one.
+    var launchAtLogin: LaunchAtLogin?
 }
 
 /// One setting Settings offers, described once for its row and for the agent's settings tools
@@ -306,6 +308,12 @@ extension YardletSetting {
         id: "show_in_menu_bar", section: .general, generalGroup: .app, symbol: "menubar.rectangle", title: L10n.string("Show in menu bar"),
         controlLabel: L10n.string("Show Yardlet in the menu bar"),
         values: .onOff, storage: .flag(key: MenuBarPreference.key, defaultValue: true))
+
+    /// macOS keeps it (`LaunchAtLogin`), so turning it off leaves nothing in Yardlet or in Login Items.
+    static let launchAtLogin = YardletSetting(
+        id: "launch_at_login", section: .general, generalGroup: .app, symbol: "power", title: L10n.string("Launch at login"),
+        values: .onOff,
+        storage: appSwitch({ $0.launchAtLogin?.isOn }, { context, isOn in context.launchAtLogin?.set(isOn) ?? nil }))
 
     static let mailbox = YardletSetting(
         id: "mailbox", section: .general, generalGroup: .app, symbol: "envelope", title: L10n.string("Mailbox"),
@@ -658,7 +666,7 @@ extension YardletSetting {
 @MainActor
 enum YardletSettingCatalog {
     static let all: [YardletSetting] = [
-        .language, .showInMenuBar, .mailbox, .checkForUpdates,
+        .language, .showInMenuBar, .launchAtLogin, .mailbox, .checkForUpdates,
         .followUpBehavior, .nextMessageSuggestions, .claudeContextLimit, .idleCompaction, .autoFixFailingCI, .showTaskServers, .continueAfterRestart,
         .keepScreenUnlocked, .keepWorkingWithLidClosed,
         .agentBrowserTools, .keepCookies, .searchSuggestions, .pageSuggestions, .memorySaver, .memorySaverLevel,

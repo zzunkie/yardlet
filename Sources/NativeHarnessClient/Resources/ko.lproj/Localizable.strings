@@ -2014,6 +2014,8 @@
 "Applies the next time you open Yardlet" = "다음에 Yardlet을 열 때부터 적용됩니다.";
 "Show in menu bar" = "메뉴 막대에 표시";
 "Show Yardlet in the menu bar" = "메뉴 막대에 Yardlet 표시";
+"Launch at login" = "로그인할 때 열기";
+"Allow Yardlet in Login Items in System Settings" = "시스템 설정의 로그인 항목에서 Yardlet을 허용하세요";
 "Turn the sidebar activity view on or off" = "사이드바 활동 보기를 켜거나 끕니다";
 "5h" = "5시간";
 "Weekly" = "주간";

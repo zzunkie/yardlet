@@ -72,6 +72,8 @@ struct SettingsCenterView: View {
     /// Yardlet's lid helper; nil where the app has none (tests, fixtures), and General leaves its
     /// switch out.
     let lidHelper: LidSleepHelper?
+    /// Yardlet as a login item; nil where this copy cannot be one, and General leaves its switch out.
+    let launchAtLogin: LaunchAtLogin?
     /// Non-nil when this sheet shows a remote Mac's Settings (§15.36).
     let remoteHost: RemoteHostModel?
     private let initialSectionRawValue: String?
@@ -142,6 +144,7 @@ struct SettingsCenterView: View {
         evaluation: RoutingEvaluationStore? = nil,
         usage: SettingsUsageContext? = nil,
         lidHelper: LidSleepHelper? = nil,
+        launchAtLogin: LaunchAtLogin? = nil,
         remoteHost: RemoteHostModel? = nil
     ) {
         self.size = size
@@ -154,6 +157,7 @@ struct SettingsCenterView: View {
         self.evaluation = evaluation
         self.usage = usage
         self.lidHelper = lidHelper
+        self.launchAtLogin = launchAtLogin
         self.remoteHost = remoteHost
         self.initialSectionRawValue = initialSection
         self.notificationCenter = notificationCenter
@@ -524,7 +528,8 @@ struct SettingsCenterView: View {
             lidHelper: lidHelper,
             updateChecks: sparkle.map { sparkle in
                 YardletSettingSwitch(get: { sparkle.checksAutomatically }, set: { sparkle.checksAutomatically = $0 })
-            })
+            },
+            launchAtLogin: launchAtLogin)
     }
 
     private func requestRemoteSettingChange(_ setting: YardletSetting, to value: String) {
@@ -576,6 +581,8 @@ struct SettingsCenterView: View {
                     }
                 )
             }
+        case YardletSetting.launchAtLogin.id:
+            if let launchAtLogin { launchAtLoginRow(launchAtLogin, setting: setting) }
         case YardletSetting.keepWorkingWithLidClosed.id:
             if let lidHelper {
                 lidClosedWorkRow(lidHelper, setting: setting)
@@ -801,6 +808,34 @@ struct SettingsCenterView: View {
                 .controlSize(.small)
         }
         .padding(.vertical, 14)
+    }
+
+    /// "Launch at login", with one line and System Settings while macOS keeps Yardlet's login item turned off.
+    private func launchAtLoginRow(_ item: LaunchAtLogin, setting: YardletSetting) -> some View {
+        HStack(spacing: 12) {
+            settingsControlIcon(setting.symbol)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(setting.title).font(.callout.weight(.medium))
+                if item.status == .needsApproval {
+                    Text(L10n.string("Allow Yardlet in Login Items in System Settings"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 8)
+            if item.status == .needsApproval {
+                Button(L10n.string("Open System Settings")) { item.openSystemSettings() }
+                    .controlSize(.small)
+            }
+            Toggle(setting.title, isOn: Binding(get: { item.isOn == true }, set: { _ = item.set($0) }))
+                .labelsHidden()
+                .toggleStyle(.paritySwitch)
+                .controlSize(.small)
+        }
+        .padding(.vertical, 14)
+        // The person may have changed it in System Settings since.
+        .onAppear { item.refresh() }
     }
 
     private func remoteLidClosedWorkRow(_ remoteHost: RemoteHostModel, setting: YardletSetting) -> some View {
