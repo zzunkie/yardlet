@@ -4,7 +4,9 @@ import SwiftUI
 /// them (`ConversationQuestionStepper`): one question at a time, its place among several ("2 of 3")
 /// with the previous and next question beside it, the provider's options, and the person's own
 /// answer under them where the provider takes one. Skip and Next lead to the last question, whose
-/// row ends with the caller's answer buttons, which send every answer at once.
+/// row ends with the caller's answer buttons, which send every answer at once. A question whose
+/// options have previews shows the picked option's preview beside the options
+/// (`ConversationQuestionPreview`).
 ///
 /// Keys, once the person has clicked into the form, are the Codex app's: 1–9 picks an option (the
 /// number after the options goes to the person's own answer), ← → move between questions, and
@@ -53,15 +55,10 @@ struct ConversationQuestionStepsView<Finish: View>: View {
                 }
                 if step.isFreeTextOnly {
                     answerField(step)
+                } else if step.showsPreviews {
+                    optionsWithPreview(step)
                 } else {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(step.options, id: \.label) { option in
-                            optionRow(step, option: option)
-                        }
-                        if step.allowsCustomAnswer {
-                            customAnswerRow(step)
-                        }
-                    }
+                    optionList(step, previewUnderPicked: false)
                 }
                 if isAnswerable {
                     stepButtons(step, stepper: stepper)
@@ -122,6 +119,41 @@ struct ConversationQuestionStepsView<Finish: View>: View {
     }
 
     // MARK: - Options
+
+    /// The options, then the person's own answer. With `previewUnderPicked`, the picked option's
+    /// preview follows it.
+    private func optionList(_ step: ConversationQuestionStep, previewUnderPicked: Bool) -> some View {
+        let pickedPreview = previewUnderPicked ? step.preview(for: input.answer(for: step)) : nil
+        let picked = input.answer(for: step)?.options.first
+        return VStack(alignment: .leading, spacing: 6) {
+            ForEach(step.options, id: \.label) { option in
+                optionRow(step, option: option)
+                if let pickedPreview, option.label == picked {
+                    ConversationQuestionPreview(markdown: pickedPreview)
+                }
+            }
+            if step.allowsCustomAnswer {
+                customAnswerRow(step)
+            }
+        }
+    }
+
+    /// Claude Code's layout for options with previews: the options on the left and the picked
+    /// option's preview on the right, which says when the option has none. A card too narrow for
+    /// both shows the preview under the picked option instead, as the Claude app's question card
+    /// does.
+    private func optionsWithPreview(_ step: ConversationQuestionStep) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: ConversationQuestionPreview.spacing) {
+                optionList(step, previewUnderPicked: false)
+                    .frame(width: ConversationQuestionPreview.optionsWidth)
+                ConversationQuestionPreview(markdown: step.preview(for: input.answer(for: step)))
+                    .frame(minWidth: ConversationQuestionPreview.minimumWidth,
+                           idealWidth: ConversationQuestionPreview.minimumWidth, maxWidth: .infinity)
+            }
+            optionList(step, previewUnderPicked: true)
+        }
+    }
 
     private func optionRow(_ step: ConversationQuestionStep, option: PermissionQuestionOption) -> some View {
         let isSelected = input.answer(for: step)?.options.contains(option.label) == true
@@ -313,8 +345,9 @@ struct ConversationQuestionStepsView<Finish: View>: View {
 }
 
 /// An answered form as both apps show one: each question, and under it what it was answered with
-/// (the options picked, joined, then the person's own words), or that it was not answered. Nothing
-/// on it can be pressed. With no answers known (`answers` nil) it lists the questions alone.
+/// (the options picked, joined, then the person's own words), or that it was not answered, and
+/// beside it the picked option's preview where the question shows previews. Nothing on it can be
+/// pressed. With no answers known (`answers` nil) it lists the questions alone.
 struct ConversationQuestionSummary: View {
     let steps: [ConversationQuestionStep]
     let answers: [String: ConversationQuestionAnswer]?
@@ -322,47 +355,100 @@ struct ConversationQuestionSummary: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(steps) { step in
-                // A selection across the conversation takes the question and its answer as they read.
-                VStack(alignment: .leading, spacing: 3) {
-                    let question = step.text ?? step.header ?? L10n.string("Question")
-                    Text(question)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .conversationSelectionText(question)
-                    if let answers {
-                        if let answer = answers[step.id], !answer.values.isEmpty {
-                            let text = Self.text(answer, isSecret: step.isSecret)
-                            Text(text)
-                                .font(.callout.weight(.medium))
-                                .textSelection(.enabled)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .conversationSelectionText(text)
-                        } else {
-                            Text(L10n.string("Not answered"))
-                                .font(.callout)
-                                .foregroundStyle(.tertiary)
-                                .conversationSelectionText(L10n.string("Not answered"))
+                if let preview = step.preview(for: answers?[step.id]) {
+                    // The Claude app keeps the picked option's preview beside the answer.
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .top, spacing: ConversationQuestionPreview.spacing) {
+                            questionAndAnswer(step)
+                                .frame(width: ConversationQuestionPreview.optionsWidth)
+                            ConversationQuestionPreview(markdown: preview)
+                                .frame(minWidth: ConversationQuestionPreview.minimumWidth,
+                                       idealWidth: ConversationQuestionPreview.minimumWidth, maxWidth: .infinity)
+                        }
+                        VStack(alignment: .leading, spacing: 6) {
+                            questionAndAnswer(step)
+                            ConversationQuestionPreview(markdown: preview)
                         }
                     }
+                } else {
+                    questionAndAnswer(step)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                // Read as the question and its answer: selectable text does not combine into one.
-                .accessibilityElement(children: .ignore)
-                .accessibilityAddTraits(.isStaticText)
-                .accessibilityLabel(step.text ?? step.header ?? L10n.string("Question"))
-                .accessibilityValue(answers.map { answers in
-                    answers[step.id].flatMap { $0.values.isEmpty ? nil : Self.text($0, isSecret: step.isSecret) }
-                        ?? L10n.string("Not answered")
-                } ?? "")
             }
         }
+    }
+
+    private func questionAndAnswer(_ step: ConversationQuestionStep) -> some View {
+        // A selection across the conversation takes the question and its answer as they read.
+        VStack(alignment: .leading, spacing: 3) {
+            let question = step.text ?? step.header ?? L10n.string("Question")
+            Text(question)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .conversationSelectionText(question)
+            if let answers {
+                if let answer = answers[step.id], !answer.values.isEmpty {
+                    let text = Self.text(answer, isSecret: step.isSecret)
+                    Text(text)
+                        .font(.callout.weight(.medium))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .conversationSelectionText(text)
+                } else {
+                    Text(L10n.string("Not answered"))
+                        .font(.callout)
+                        .foregroundStyle(.tertiary)
+                        .conversationSelectionText(L10n.string("Not answered"))
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // Read as the question and its answer: selectable text does not combine into one.
+        .accessibilityElement(children: .ignore)
+        .accessibilityAddTraits(.isStaticText)
+        .accessibilityLabel(step.text ?? step.header ?? L10n.string("Question"))
+        .accessibilityValue(answers.map { answers in
+            answers[step.id].flatMap { $0.values.isEmpty ? nil : Self.text($0, isSecret: step.isSecret) }
+                ?? L10n.string("Not answered")
+        } ?? "")
     }
 
     /// What a question was answered with as the card reads it: the values joined with ", ", a
     /// secret hidden.
     static func text(_ answer: ConversationQuestionAnswer, isSecret: Bool) -> String {
         answer.text(isSecret: isSecret)
+    }
+}
+
+/// An option's preview, in the provider's Markdown as the transcript draws it, read-only and
+/// selectable, in a box like Claude Code's. Without one it says there is none, as Claude Code does
+/// beside an option that has none.
+struct ConversationQuestionPreview: View {
+    let markdown: String?
+
+    /// The options' column beside a preview, about Claude Code's 30 columns.
+    static let optionsWidth: CGFloat = 220
+    /// The narrowest preview drawn beside the options; a card with less room shows it under them.
+    static let minimumWidth: CGFloat = 280
+    static let spacing: CGFloat = 12
+
+    var body: some View {
+        Group {
+            if let markdown {
+                TranscriptMarkdownText(text: markdown)
+            } else {
+                Text(L10n.string("No preview"))
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, minHeight: 48)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(ParityTheme.elevated, in: RoundedRectangle(cornerRadius: 8))
+        .overlay { RoundedRectangle(cornerRadius: 8).stroke(ParityTheme.separator) }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(L10n.string("Preview"))
     }
 }

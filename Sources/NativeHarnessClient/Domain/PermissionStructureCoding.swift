@@ -125,6 +125,7 @@ enum PermissionStructureCoding {
                 if let description = option.description {
                     encoded["description"] = .string(description)
                 }
+                if let preview = option.preview { encoded["preview"] = .string(preview) }
                 return .object(encoded)
             }),
             "multiSelect": .bool(question.allowsMultipleSelections)
@@ -141,7 +142,8 @@ enum PermissionStructureCoding {
             option["label"]?.stringValue.map {
                 PermissionQuestionOption(
                     label: $0,
-                    description: option["description"]?.stringValue
+                    description: option["description"]?.stringValue,
+                    preview: option["preview"]?.stringValue
                 )
             }
         }

@@ -2787,6 +2787,7 @@
 "Agents" = "에이전트";
 "Suggested tasks" = "제안된 작업";
 "Preview" = "미리보기";
+"No preview" = "미리보기 없음";
 "%lld agents" = "에이전트 %lld개";
 "Computer use" = "컴퓨터 사용";
 "View output" = "출력 보기";

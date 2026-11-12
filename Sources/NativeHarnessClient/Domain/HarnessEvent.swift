@@ -41,10 +41,14 @@ struct PermissionRequestAction: Codable, Equatable, Sendable {
 struct PermissionQuestionOption: Codable, Equatable, Sendable {
     let label: String
     let description: String?
+    /// What the option would look like, in the provider's Markdown, shown while it is picked:
+    /// Claude Code's `preview` (a mockup, a code snippet, a draft).
+    let preview: String?
 
-    init(label: String, description: String? = nil) {
+    init(label: String, description: String? = nil, preview: String? = nil) {
         self.label = label
         self.description = description
+        self.preview = preview
     }
 }
 

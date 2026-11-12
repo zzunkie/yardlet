@@ -809,7 +809,10 @@ enum ClaudeProtocol {
                 option["label"]?.stringValue.flatMap { label in
                     label.isEmpty ? nil : PermissionQuestionOption(
                         label: label,
-                        description: option["description"]?.stringValue
+                        description: option["description"]?.stringValue,
+                        preview: option["preview"]?.stringValue.flatMap {
+                            $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0
+                        }
                     )
                 }
             }

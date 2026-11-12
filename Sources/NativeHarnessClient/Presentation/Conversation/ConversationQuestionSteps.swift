@@ -24,6 +24,18 @@ struct ConversationQuestionStep: Identifiable, Equatable, Sendable {
 
     /// The question has only a free-text answer.
     var isFreeTextOnly: Bool { options.isEmpty }
+
+    /// The card shows the picked option's preview, as Claude Code and the Claude app do: for a
+    /// question that takes one answer and has an option with a preview.
+    var showsPreviews: Bool {
+        !allowsMultipleSelections && options.contains { $0.preview != nil }
+    }
+
+    /// The preview of the option `answer` picked, where the card shows previews.
+    func preview(for answer: ConversationQuestionAnswer?) -> String? {
+        guard showsPreviews, let picked = answer?.options.first else { return nil }
+        return options.first { $0.label == picked }?.preview
+    }
 }
 
 extension ConversationRequestForm {

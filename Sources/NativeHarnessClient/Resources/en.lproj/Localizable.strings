@@ -2787,6 +2787,7 @@
 "Agents" = "Agents";
 "Suggested tasks" = "Suggested tasks";
 "Preview" = "Preview";
+"No preview" = "No preview";
 "%lld agents" = "%lld agents";
 "Computer use" = "Computer use";
 "View output" = "View output";

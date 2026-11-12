@@ -7,7 +7,9 @@ import XCTest
 /// or more of four options with descriptions, under the window's monochrome tint (`MainWindow`
 /// tints its shell `Color.primary`). The options and the buttons must read in light and dark,
 /// waiting with nothing picked, waiting with picks (the first of two questions, as the card asks one
-/// at a time), and answered (2026-10-16: the button's words did not show in light mode).
+/// at a time), and answered (2026-10-16: the button's words did not show in light mode). A question
+/// whose option carries a preview shows it beside the options, under the picked option where the
+/// card is narrow, and beside the answer once answered.
 @MainActor
 final class QuestionCardRenderingTests: XCTestCase {
     static let questions = [
@@ -78,6 +80,85 @@ final class QuestionCardRenderingTests: XCTestCase {
             try WindowlessRender.hostedInBothAppearances("question-card-\(name)", in: directory,
                                                          size: NSSize(width: 640, height: 760)) {
                 Self.card(request, input: input, appearance: $0)
+            }
+        }
+    }
+
+    /// One question whose second option carries a multi-line preview, as Claude Code's
+    /// `AskUserQuestion` sends a mockup to compare.
+    static let previewQuestions = [
+        PermissionQuestion(
+            question: "Which layout should the settings page use?", header: "Layout",
+            options: [
+                PermissionQuestionOption(label: "Sidebar", description: "Sections listed on the left"),
+                PermissionQuestionOption(label: "Tabs", description: "One tab per section", preview: """
+                    ```
+                    ┌─ General ─┬─ Accounts ─┬─ Advanced ─┐
+                    │                                     │
+                    │  Theme         [ System       ▾ ]   │
+                    │  Font size     [ 13           ▾ ]   │
+                    │  Start at login               [x]   │
+                    └─────────────────────────────────────┘
+                    ```
+                    Each section keeps to **one screen**; the tabs stay in view.
+                    """),
+                PermissionQuestionOption(label: "Single page", description: "Every setting on one scroll")
+            ],
+            allowsCustomAnswer: true)
+    ]
+
+    /// A turn that ends on the question, waiting or answered with "Tabs", as a task shows it.
+    static func previewConversation(answered: Bool) -> [TranscriptEntry] {
+        var entries = [
+            TranscriptEntry(content: .user(text: "Redo the settings page")),
+            TranscriptEntry(content: .assistant(text: "Two layouts fit. Pick one; the preview shows it.", isStreaming: false))
+        ]
+        if answered {
+            let record = HarnessAnsweredQuestions(questions: previewQuestions, answers: [
+                PermissionQuestionAnswer(question: previewQuestions[0].question, selectedLabels: ["Tabs"])
+            ])
+            entries.append(TranscriptEntry(content: .activity(
+                HarnessActivity(id: "toolu_ask", kind: ClaudeAnswerableTool.askUserQuestion, title: "AskUserQuestion",
+                                answeredQuestions: record),
+                state: .completed)))
+        } else {
+            let permission = PermissionRequest(
+                id: "ask", title: "Claude has a question", detail: nil, command: nil,
+                structured: .questions(previewQuestions), toolCallID: "toolu_ask")
+            entries.append(TranscriptEntry(content: .permission(permission, state: .pending)))
+        }
+        return entries
+    }
+
+    func testAnOptionsPreviewShowsBesideTheOptionsOrUnderThePickedOne() throws {
+        let directory = try WindowlessRender.directory("composer-stream-qa")
+        let states: [(name: String, answered: Bool, picksTabs: Bool, width: CGFloat)] = [
+            ("wide", false, true, 900), ("wide-none", false, false, 900),
+            ("narrow", false, true, 560), ("answered", true, false, 900)
+        ]
+        for state in states {
+            for appearance in WindowlessRender.Appearance.allCases {
+                let size = NSSize(width: state.width, height: 820)
+                let host = WindowlessRender.Host(
+                    TaskConversationView(harness: .claudeCode, workspaceURL: URL(filePath: "/tmp/yardlet"),
+                                         entries: Self.previewConversation(answered: state.answered),
+                                         sessionStatus: state.answered ? .ready : .waitingForApproval,
+                                         actions: ConversationActions(answer: { _, _ in }))
+                        .frame(width: size.width, height: size.height)
+                        .background(ParityTheme.canvas)
+                        .tint(Color.primary)
+                        .environment(\.controlActiveState, .key)
+                        .environment(\.colorScheme, appearance.colorScheme),
+                    size: size, appearance: appearance)
+                defer { host.close() }
+                host.settle()
+                if state.picksTabs {
+                    XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: "Tabs"))
+                    host.settle()
+                }
+                try WindowlessRender.writePNG(
+                    try host.capture().bitmap,
+                    to: directory.appending(path: "question-card-preview-\(state.name)-\(appearance.suffix).png"))
             }
         }
     }

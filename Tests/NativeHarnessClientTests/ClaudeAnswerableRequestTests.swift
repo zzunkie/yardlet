@@ -19,7 +19,10 @@ final class ClaudeAnswerableRequestTests: XCTestCase {
                             "label": .string("date-fns"),
                             "description": .string("Small and tree-shakeable")
                         ]),
-                        .object(["label": .string("Luxon")])
+                        .object([
+                            "label": .string("Luxon"),
+                            "preview": .string("```ts\nDateTime.now().toISODate()\n```")
+                        ])
                     ])
                 ]),
                 .object([
@@ -56,6 +59,8 @@ final class ClaudeAnswerableRequestTests: XCTestCase {
         XCTAssertEqual(questions[0].options.map(\.label), ["date-fns", "Luxon"])
         XCTAssertEqual(questions[0].options[0].description, "Small and tree-shakeable")
         XCTAssertNil(questions[0].options[1].description)
+        XCTAssertNil(questions[0].options[0].preview)
+        XCTAssertEqual(questions[0].options[1].preview, "```ts\nDateTime.now().toISODate()\n```")
         XCTAssertTrue(questions[1].allowsMultipleSelections)
         XCTAssertEqual(
             questions[1].options.map(\.label),
@@ -518,6 +523,7 @@ final class ClaudeAnswerableRequestTests: XCTestCase {
         )
         XCTAssertEqual(questions.map(\.allowsMultipleSelections), [false, true])
         XCTAssertEqual(questions[0].options[0].description, "Small and tree-shakeable")
+        XCTAssertEqual(questions[0].options[1].preview, "```ts\nDateTime.now().toISODate()\n```")
 
         try await routed.respond(
             to: "question-yhp",
