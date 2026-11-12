@@ -21,6 +21,11 @@ enum RestartTrigger: String, Codable, Equatable, Sendable {
 /// What Yardlet wrote down about the tasks whose turn its quit cuts off: while it runs, as a quit
 /// then would write it, and once more as it quits. It lives in Yardlet's own preferences; the next
 /// launch reads it once and keeps its own in its place.
+///
+/// It is set and removed on `StateFileWriter`'s queue, never on the main thread: setting a preference
+/// waits on cfprefsd while it writes the whole domain, and reading one (the setting) waits while
+/// another thread sets one. A record handed over gives way to a newer one not set yet, `load` waits for
+/// those handed over before it, and quitting waits for them all.
 struct RestartResumeRecord: Codable, Equatable, Sendable {
     struct Entry: Codable, Equatable, Sendable {
         let sessionID: UUID
@@ -63,20 +68,30 @@ struct RestartResumeRecord: Codable, Equatable, Sendable {
     static let preferenceKey = "Yardlet.restartResumeRecord"
 
     static func load(from defaults: UserDefaults) -> Self? {
+        StateFileWriter.shared.flush()
         guard let data = defaults.data(forKey: preferenceKey) else { return nil }
         return try? JSONDecoder().decode(Self.self, from: data)
     }
 
+    /// Keeps the record, or, with nothing to continue or the setting off, removes the last one.
     func save(to defaults: UserDefaults) {
-        guard !entries.isEmpty, let data = try? JSONEncoder().encode(self) else {
-            defaults.removeObject(forKey: Self.preferenceKey)
-            return
+        Self.change(defaults) { defaults in
+            guard !entries.isEmpty, RestartResumePreference.isOn(in: defaults),
+                  let data = try? JSONEncoder().encode(self) else {
+                defaults.removeObject(forKey: Self.preferenceKey)
+                return
+            }
+            defaults.set(data, forKey: Self.preferenceKey)
         }
-        defaults.set(data, forKey: Self.preferenceKey)
     }
 
     static func remove(from defaults: UserDefaults) {
-        defaults.removeObject(forKey: preferenceKey)
+        change(defaults) { $0.removeObject(forKey: preferenceKey) }
+    }
+
+    private static func change(_ defaults: UserDefaults, _ apply: @escaping @Sendable (UserDefaults) -> Void) {
+        nonisolated(unsafe) let defaults = defaults
+        StateFileWriter.shared.write(preferenceKey, in: defaults) { apply(defaults) }
     }
 }
 

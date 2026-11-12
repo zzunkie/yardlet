@@ -78,17 +78,20 @@ final class RestartResumeTests: XCTestCase {
     }
 
     func testTheRecordIsKeptInYardletsPreferencesAndAnEmptyOneIsRemoved() throws {
-        let defaults = try suite()
+        let defaults = try XCTUnwrap(MainThreadRecordProbe(suiteName: testDefaultsSuite("NativeHarnessClientTests.RestartResume")))
         let entry = RestartResumeRecord.Entry(sessionID: UUID(), harness: .claudeCode, providerSessionID: "p",
             connection: nil, wasWaitingForApproval: false)
         let record = RestartResumeRecord(trigger: .update, recordedAt: Date(timeIntervalSince1970: 1_000), entries: [entry])
         record.save(to: defaults)
         XCTAssertEqual(RestartResumeRecord.load(from: defaults), record)
         RestartResumeRecord(trigger: .quit, recordedAt: Date(), entries: []).save(to: defaults)
+        StateFileWriter.shared.flush()
         XCTAssertNil(defaults.object(forKey: RestartResumeRecord.preferenceKey), "Nothing to continue leaves no record")
         record.save(to: defaults)
         RestartResumeRecord.remove(from: defaults)
         XCTAssertNil(RestartResumeRecord.load(from: defaults))
+        XCTAssertEqual(defaults.touchedOnMain, [],
+            "Kept while Yardlet runs, the record is set off the main thread, and so is the setting read: either can wait on cfprefsd")
         XCTAssertTrue(RestartResumePreference.isOn(in: defaults), "On unless turned off, as both apps behave")
         defaults.set(false, forKey: RestartResumePreference.key)
         XCTAssertFalse(RestartResumePreference.isOn(in: defaults))
@@ -1941,6 +1944,34 @@ final class RestartResumeTests: XCTestCase {
 
     private static func timestamp(_ date: Date) -> String {
         date.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
+    }
+
+    /// Yardlet's preferences, noting each time the record is set or removed, or the setting read, on the
+    /// main thread.
+    private final class MainThreadRecordProbe: UserDefaults, @unchecked Sendable {
+        private let lock = NSLock()
+        private var touched: [String] = []
+        var touchedOnMain: [String] { lock.withLock { touched } }
+
+        private func note(_ key: String, _ watched: String) {
+            guard key == watched, Thread.isMainThread else { return }
+            lock.withLock { touched.append(key) }
+        }
+
+        override func set(_ value: Any?, forKey key: String) {
+            note(key, RestartResumeRecord.preferenceKey)
+            super.set(value, forKey: key)
+        }
+
+        override func removeObject(forKey key: String) {
+            note(key, RestartResumeRecord.preferenceKey)
+            super.removeObject(forKey: key)
+        }
+
+        override func object(forKey key: String) -> Any? {
+            note(key, RestartResumePreference.key)
+            return super.object(forKey: key)
+        }
     }
 
     private func suite() throws -> UserDefaults {

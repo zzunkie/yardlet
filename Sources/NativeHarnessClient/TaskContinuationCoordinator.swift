@@ -583,11 +583,12 @@ final class TaskContinuationCoordinator {
     /// The tasks that continue when Yardlet opens again if it quit now, for the quit confirmation
     /// to say which of the running ones do. Empty with the setting off.
     func tasksContinuingAfterRestart() -> Set<UUID> {
-        guard let model, !model.isVisualFixture else { return [] }
+        guard let model, !model.isVisualFixture, RestartResumePreference.isOn(in: model.preferences) else { return [] }
         return Set(restartResumeEntries(now: Date()).map(\.sessionID))
     }
 
-    /// `leavingOut` names tasks that are not written down.
+    /// The entries under the setting on: `RestartResumeRecord.save` reads the setting off the main
+    /// thread as it writes them down. `leavingOut` names tasks that are not written down.
     private func restartResumeEntries(now: Date, leavingOut: Set<UUID> = []) -> [RestartResumeRecord.Entry] {
         guard let model else { return [] }
         let candidates = model.store.sessions.filter { !leavingOut.contains($0.id) }.map { session in
@@ -605,8 +606,7 @@ final class TaskContinuationCoordinator {
         }
         let stillToContinue = restartResumesToContinue.values.filter { !leavingOut.contains($0.sessionID) }
             .sorted { $0.sessionID.uuidString < $1.sessionID.uuidString }
-        return RestartResumePolicy.entries(for: candidates, stillToContinue: stillToContinue, now: now,
-            isOn: RestartResumePreference.isOn(in: model.preferences))
+        return RestartResumePolicy.entries(for: candidates, stillToContinue: stillToContinue, now: now, isOn: true)
     }
 
     /// The question a task's latest turn waits on the person to answer, when it waits on nothing
