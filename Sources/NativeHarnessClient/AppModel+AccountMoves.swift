@@ -43,6 +43,22 @@ enum AccountMoveBlocker: Equatable, CaseIterable {
     case backgroundWork
 }
 
+/// Who moves a task to another account, which decides how (`AppModel.changeAccount(of:to:_:)`).
+enum AccountChange: Equatable {
+    /// A move chosen to go now: the person's choice, a limit card's Continue with another account, or a
+    /// move that waited for its task, whoever chose it. The task is held from its login check on, so
+    /// nothing starts in it meanwhile, and its runtime starts under the new account.
+    case chosen
+    /// A move Yardlet makes at once on its own: an idle task leaving a nearly spent account, or a
+    /// schedule's run. The login is checked before the task is held, so the person is never held up,
+    /// and the move goes only if the task is still free to move then. Only a runtime it had starts again.
+    case automatic
+    /// Move and Remove: another folder signed in to the same account, whose login was checked once for
+    /// all its tasks. The account's limits stay the task's, and so does a continue armed at their reset.
+    /// Only a runtime it had starts again.
+    case withinAccount
+}
+
 /// A move after a turn that waits on its task (`TaskContinuationCoordinator.switchAccountAfterTurn`):
 /// who chose it, what keeps it waiting now, and since when. One Yardlet chose itself waits only until
 /// its deadline and is then given up, not forced; one the person chose waits until they cancel it.
@@ -256,14 +272,7 @@ extension AppModel {
             continuations.moveAutomatically(task.id, to: target, as: move)
             return
         }
-        do {
-            _ = try await taskReadyToResume(task, under: target)
-            guard let current = store.sessions.first(where: { $0.id == task.id }), current.connection == task.connection,
-                  canMoveAutomatically(current), settlesForAccountMove(current) else { return }
-            try await moveSettledTask(current, to: target)
-        } catch {
-            return
-        }
+        do { try await changeAccount(of: task, to: target, .automatic) } catch { return }
         guard store.sessions.first(where: { $0.id == task.id })?.connection == target else { return }
         accountAssignments.record(move.assignment, for: task.id)
     }
@@ -339,12 +348,14 @@ extension AppModel {
         return nil
     }
 
-    /// A task Yardlet may move now: a Claude Code task that is idle, has no move of its own coming,
-    /// and whose last automatic move was neither cancelled by the person nor given up at its deadline
-    /// since it last worked.
+    /// A task Yardlet may choose a move for: a Claude Code task in no turn and no other change under way
+    /// (`TaskBlocker.holdingOffAutomaticMoves`), with no move of its own coming, and whose last automatic
+    /// move was neither cancelled by the person nor given up at its deadline since it last worked. What
+    /// else a move waits for, background work say, lets it choose one that then waits.
     func canMoveAutomatically(_ task: SessionRecord) -> Bool {
-        task.harness == .claudeCode && !Self.isWorking(task) && continuations.accountSwitchesAfterTurn[task.id] == nil
-            && !switchingAccounts.contains(task.id) && !continuations.declinedAccountMoves.contains(task.id)
+        task.harness == .claudeCode && continuations.accountSwitchesAfterTurn[task.id] == nil
+            && !continuations.declinedAccountMoves.contains(task.id)
+            && firstBlocker(of: task, among: TaskBlocker.holdingOffAutomaticMoves) == nil
     }
 
     /// Each Claude Code account's last reading, by `AccountChoice.id`.

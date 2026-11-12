@@ -38,16 +38,17 @@ The screen flow is in [ACCOUNT_SELECTION_UX.md](ACCOUNT_SELECTION_UX.md).
   line above the composer says "Moving to <account> after this turn" with **Cancel**, and Return queues what the person
   sends (⌘Return still delivers it at Claude's next step). Once the turn has ended (finished, stopped or failed), the
   switch waits for what moving an account's tasks waits for ("Removing an account" below), except that the messages
-  and shell output Yardlet holds go after the switch instead, on the new account. While something keeps it waiting
-  after the turn, the line names it (`AccountMoveBlocker`): "Moving to <account> when its background work ends", or
+  and shell output Yardlet holds go after the switch instead, on the new account. An account chosen for a task in no
+  turn takes effect at once only when nothing of that holds the task; otherwise it waits the same way. While something
+  keeps it waiting, the line names it (`AccountMoveBlocker`): "Moving to <account> when its background work ends", or
   when its shell command ends, the agents it runs finish, the message on its way is delivered, its request is
   answered, the message being edited is done, or another change under way ends. A message the person sends then waits
   too, as do one from another task and a schedule's run (`TaskContinuationCoordinator.holdUntilAccountMoves`). A move
   Yardlet chose itself ("Moving tasks to an account with room" below) is different: it never holds up the person.
   Background work lives in the task's CLI and goes on after a turn a limit or an error ended, as after any other: when
-  that CLI closes first (the person switched the idle task at once, say, or it exited), what ran in it shows as stopped
-  (`AppModel.detachRuntime`, `ClaudeSessionProjection.processEnded`), so the waiting switch goes ahead and the
-  messages follow (`ClaudeUsageLimitAppModelTests.testWhatWaitsForAMoveGoesOnceTheRuntimeRunningItsBackgroundWorkCloses`).
+  that CLI closes first (a limit card's Continue with another account switched the idle task at once, say, or it
+  exited), what ran in it shows as stopped (`AppModel.detachRuntime`, `ClaudeSessionProjection.processEnded`), so the
+  waiting switch goes ahead and the messages follow (`ClaudeUsageLimitAppModelTests.testWhatWaitsForAMoveGoesOnceTheRuntimeRunningItsBackgroundWorkCloses`).
   A switch refused then (the target
   signed out, or no longer sharing the history) says why above the composer, as an immediate one does, and what was
   queued for the new account waits paused until the person resumes it. The choice is not kept across a quit. The
@@ -331,8 +332,8 @@ Code's own system prompt is cached across accounts. A task that moves while its 
 process its whole conversation again at the cache-writing price, many times what an ordinary request costs; once the
 cache has expired, the next request does that anyway, wherever the task is. So (`AccountRouting.move`):
 
-1. An idle task on a nearly spent account whose cache has expired moves at no cost. It moves as an account's tasks
-   move when the account leaves the list (`moveSettledTask`): a task without a runtime does not start its CLI.
+1. An idle task on a nearly spent account whose cache has expired moves at no cost. A task without a runtime does
+   not start its CLI for it (`AccountChange.automatic`).
 2. A task a limit stopped moves and continues on the new account (the same message as Continue with another account,
    `UsageLimitContinuation.afterAccountSwitch`), unless the limit resets before its cache expires: then it stays, and
    its limit card is armed to continue at the reset, as "Continuing after a usage limit" above arms it (kept the same
@@ -341,9 +342,11 @@ cache has expired, the next request does that anyway, wherever the task is. So (
    stays as it is, and only one the person armed keeps a task from moving.
 3. A task whose cache lives stays on a nearly spent account until a limit stops it or its cache expires.
 
-A task waiting for its reset that moves under rule 1 continues on the new account at once. A move never cuts into a
-turn: it goes through the path of an account chosen during one (`TaskContinuationCoordinator.moveAutomatically`), so a task with
-background work or a message on its way moves once that is over, with a line above the composer that says what the
+A task waiting for its reset that moves under rule 1 continues on the new account at once. Yardlet chooses no move
+for a task in a turn or another change under way, such as its runtime starting (`AppModel.canMoveAutomatically`), and
+checks the target's sign-in before it holds the task. A move never cuts into a turn: it goes through the path of an
+account chosen during one (`TaskContinuationCoordinator.moveAutomatically`), so a task with background work or a
+message on its way moves once that is over, with a line above the composer that says what the
 move waits for ("Moving to <account> when its background work ends") and Cancel. The card a move continues from is
 the one a stopped task continues from (`UsageLimitContinuation.card`). A turn that starts meanwhile cancels the move,
 since it writes the cache again on the current account. Such a move never holds up the person, and never waits

@@ -155,15 +155,16 @@ final class TaskContinuationCoordinator {
 
     // MARK: An account chosen during a turn
 
-    /// Choose account for a task. An idle task moves now. One in a turn or waiting for an answer keeps
-    /// the choice and moves once that is over, as an account's tasks move when it leaves the list
-    /// (`settlesForAccountMove`); what is sent meanwhile goes after the move. Choosing its own account
-    /// again forgets the choice.
+    /// Choose account for a task. A task nothing keeps busy moves now. One in a turn or waiting for an
+    /// answer keeps the choice and moves once that is over, and so does one something else a move waits
+    /// for holds (`settlesForAccountMove`): its background work, say, which moving would end. What is
+    /// sent meanwhile goes after the move. Choosing its own account again forgets the choice.
     func chooseAccount(_ connection: ProviderConnection, for session: SessionRecord) async {
         guard let model, let current = model.store.sessions.first(where: { $0.id == session.id }) else { return }
         // The person's choice takes the place of one Yardlet made.
         automaticAccountMoves.removeValue(forKey: current.id)
-        guard AppModel.isWorking(current) else {
+        let working = AppModel.isWorking(current)
+        guard working || !model.settlesForAccountMove(current) else {
             cancelAccountSwitchAfterTurn(for: current.id)
             await model.switchAccount(to: connection, for: current)
             return
@@ -174,6 +175,8 @@ final class TaskContinuationCoordinator {
         }
         guard TaskAccountSwitch.allows(connection, for: current) else { return }
         accountSwitchesAfterTurn[current.id] = connection
+        // With no turn to end, it waits now, and the line above the composer says what for.
+        if !working { switchAccountAfterTurn(current.id) }
     }
 
     /// Moves a task Yardlet chose to move itself, as a choice made in its turn moves: now if nothing

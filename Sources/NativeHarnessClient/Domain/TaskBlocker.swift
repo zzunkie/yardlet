@@ -52,7 +52,8 @@ enum TaskBlocker: CaseIterable {
     /// what does not keep its account from changing. With `heldMessagesGoAfter` the messages and shell output Yardlet
     /// holds go after the move, on the new account, and only one on its way is waited for. A move does not wait for
     /// what the runtime brings back on resuming (session jobs and their relaunch), for the task's processes or
-    /// children, or for an armed continue after a limit, which goes on under the same account (`moveSettledTask`).
+    /// children, or for an armed continue after a limit, which goes on under the same account
+    /// (`AccountChange.withinAccount`).
     func accountMoveWait(heldMessagesGoAfter: Bool) -> AccountMoveBlocker? {
         switch self {
         case .turn: .turn
@@ -81,6 +82,12 @@ enum TaskBlocker: CaseIterable {
         AccountMoveBlocker.allCases.flatMap { wait in
             allCases.filter { $0.accountMoveWait(heldMessagesGoAfter: heldMessagesGoAfter) == wait }
         }
+    }
+
+    /// What keeps Yardlet from choosing a move of its own for a task at all, rather than one that then waits:
+    /// its turn, or another change under way (`AppModel.canMoveAutomatically`).
+    static let holdingOffAutomaticMoves = allCases.filter {
+        [.turn, .otherChange].contains($0.accountMoveWait(heldMessagesGoAfter: true))
     }
 
     /// What keeps a task's runtime whether or not it is on screen, in a word for the memory saver's log and tests;

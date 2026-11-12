@@ -429,8 +429,9 @@ import XCTest
     }
 
     /// A task whose turn ended with a background command still running waits to move to the account
-    /// chosen during the turn, and what is sent meanwhile waits for the move. When its runtime closes
-    /// another way first (an immediate switch), the command ends with that CLI:
+    /// chosen during the turn, and what is sent meanwhile waits for the move; the account chosen again
+    /// once the task is idle waits the same way. When its runtime closes another way first (an
+    /// immediate switch, as a limit card's Continue with another account makes), the command ends with that CLI:
     /// its row stops, the move settles, and what waited goes to the new runtime rather than waiting
     /// for a command no process runs (2026-11-10: a task's messages, the person's own among them,
     /// waited hours behind a background shell the closed CLI had taken with it).
@@ -454,6 +455,13 @@ import XCTest
         try await waitUntil { model.store.sessions.first?.status == .ready && backgroundRows() == 1 }
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertEqual(model.store.sessions.first?.connection, fixture.first, "The move waits for the background work")
+        // Chosen again once the task is idle, the account waits the same way rather than ending the command.
+        model.cancelAccountSwitchAfterTurn(for: task.id)
+        await model.chooseAccount(fixture.next, for: try XCTUnwrap(model.store.sessions.first))
+        try await waitUntil { model.accountMoveHolds[task.id]?.waitsFor == .backgroundWork }
+        XCTAssertEqual(model.accountMoveHolds[task.id]?.owner, .person)
+        XCTAssertEqual(model.store.sessions.first?.connection, fixture.first)
+        XCTAssertEqual(backgroundRows(), 1)
 
         await model.switchAccount(to: fixture.next, for: try XCTUnwrap(model.store.sessions.first))
         XCTAssertEqual(model.store.sessions.first?.connection, fixture.next)

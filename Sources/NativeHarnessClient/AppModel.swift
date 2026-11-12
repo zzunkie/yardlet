@@ -5455,26 +5455,56 @@ final class AppModel {
         await registry.invalidateAll()
     }
 
+    /// Moves a task chosen to move now to `connection` (`AccountChange.chosen`), and shows a refusal on the
+    /// task. Nothing is done for a task in a turn or one that changed since it was read.
     func switchAccount(to connection: ProviderConnection, for session: SessionRecord) async {
         guard let current = store.sessions.first(where: { $0.id == session.id }),
               !switchingAccounts.contains(session.id),
               current.connection == session.connection, current.providerSessionID == session.providerSessionID,
               current.status != .running, current.status != .waitingForApproval,
               connection != current.connection, TaskAccountSwitch.allows(connection, for: current) else { return }
-        switchingAccounts.insert(current.id)
-        defer { switchingAccounts.remove(current.id) }
-        do {
-            let task = try await taskReadyToResume(current, under: connection)
-            try await rebind(task, to: connection)
-            // The task goes on under the new account, not at the old one's reset; a switch refused
-            // above leaves it waiting there, with what waits for that continue.
+        do { try await changeAccount(of: current, to: connection, .chosen) }
+        catch { errorBySessionID[current.id] = error.localizedDescription }
+    }
+
+    /// Moves a task to another account that keeps its conversations (`TaskAccountSwitch`): the one way its
+    /// account changes, in the way of whoever moves it (`AccountChange`). The provider session, storage scope
+    /// and history stay. Moving closes the task's runtime, and what ran in it ends with it, so whether the task
+    /// may move now is the caller's to ask first (`accountMoveBlocker`). A runtime that cannot start under the
+    /// new account shows on the task; the move stands.
+    func changeAccount(of task: SessionRecord, to connection: ProviderConnection, _ change: AccountChange) async throws {
+        var held = false
+        defer { if held { switchingAccounts.remove(task.id) } }
+        func hold() throws {
+            guard switchingAccounts.insert(task.id).inserted else { throw ProviderConnectionError.invalidBinding }
+            held = true
+        }
+        if change == .chosen { try hold() }
+        if change != .withinAccount { _ = try await taskReadyToResume(task, under: connection) }
+        guard let current = store.sessions.first(where: { $0.id == task.id }), current.connection == task.connection,
+              current.providerSessionID == task.providerSessionID,
+              change != .automatic || canMoveAutomatically(current) && settlesForAccountMove(current)
+        else { throw ProviderConnectionError.invalidBinding }
+        if !held { try hold() }
+        let hadRuntime = handlesBySessionID[current.id] != nil
+        let armed = continuations.usageLimitAutoContinue[current.id]
+        try await rebind(current, to: connection)
+        guard let updated = store.sessions.first(where: { $0.id == current.id }) else { return }
+        if change == .withinAccount {
+            // The same account's limits: a continue armed at their reset goes on from the new folder.
+            if let armed {
+                continuations.setUsageLimitAutoContinue(true, resetsAt: armed.resetsAt, armedBy: armed.armedBy, for: updated)
+            }
+        } else {
+            // The task goes on under the new account, not at the old one's reset, and the old one's warning and
+            // limits say nothing about the new one.
             continuations.cancelUsageLimitAutoContinue(for: current.id)
-            // The previous account's warning and limits say nothing about the next one.
             rateLimitWarningBySessionID.removeValue(forKey: current.id)
             codexStatusBySessionID.removeValue(forKey: current.id)
-            guard let updated = store.sessions.first(where: { $0.id == current.id }) else { return }
-            try await attach(updated, resumesExistingSession: updated.providerSessionID != nil)
-        } catch { errorBySessionID[current.id] = error.localizedDescription }
+        }
+        guard change == .chosen || hadRuntime else { return }
+        do { try await attach(updated, resumesExistingSession: updated.providerSessionID != nil) }
+        catch { errorBySessionID[current.id] = error.localizedDescription }
     }
 
     /// The task as it resumes under `connection`: that account's own login must be signed in first, as
@@ -5633,7 +5663,7 @@ final class AppModel {
             }
             for task in store.sessions where task.connection?.id == source.id && failures[task.id] == nil {
                 guard settlesForAccountMove(task) else { waiting += 1; continue }
-                do { try await moveSettledTask(task, to: target) }
+                do { try await changeAccount(of: task, to: target, .withinAccount) }
                 catch { failures[task.id] = error.localizedDescription }
             }
             guard waiting > 0 else { break }
@@ -5724,23 +5754,6 @@ final class AppModel {
         case .sessionJobRelaunch: continuations.sessionJobRelaunches.contains(id)
         case .limitContinue: continuations.usageLimitAutoContinue[id] != nil
         }
-    }
-
-    /// Moves one settled task to another folder of its account. It keeps a runtime only if it had one,
-    /// and an armed continue after the limit, which is the same account's.
-    func moveSettledTask(_ current: SessionRecord, to connection: ProviderConnection) async throws {
-        guard switchingAccounts.insert(current.id).inserted else { throw ProviderConnectionError.invalidBinding }
-        defer { switchingAccounts.remove(current.id) }
-        let hadRuntime = handlesBySessionID[current.id] != nil
-        let armed = continuations.usageLimitAutoContinue[current.id]
-        try await rebind(current, to: connection)
-        guard let updated = store.sessions.first(where: { $0.id == current.id }) else { return }
-        if let armed {
-            continuations.setUsageLimitAutoContinue(true, resetsAt: armed.resetsAt, armedBy: armed.armedBy, for: updated)
-        }
-        guard hadRuntime else { return }
-        do { try await attach(updated, resumesExistingSession: updated.providerSessionID != nil) }
-        catch { errorBySessionID[current.id] = error.localizedDescription }
     }
 
     /// Saved accounts a task stopped by a plan limit can continue under (the ones that share its

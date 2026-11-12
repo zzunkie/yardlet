@@ -692,7 +692,8 @@ final class RestartResumeTests: XCTestCase {
     /// the line above the composer names (also once the task's turn has ended, when the messages and shell output
     /// Yardlet holds go after the move), and the word the memory saver keeps the runtime for. Each thing alone in a task
     /// of its own, then piled up on one task from what a list names last, so that each step names what came on top or
-    /// keeps what it named before: the order decides the reason the line shows.
+    /// keeps what it named before: the order decides the reason the line shows. Alone, each also says whether Yardlet
+    /// would choose a move of its own for the task.
     func testWhatHoldsATaskForAnAccountMoveAndForTheMemorySaver() async throws {
         struct Holds: Equatable {
             var move: AccountMoveBlocker?
@@ -862,6 +863,14 @@ final class RestartResumeTests: XCTestCase {
         for (thing, expected) in alone {
             try await add(thing, to: thing)
             XCTAssertEqual(try holds(thing), expected, thing)
+        }
+        // Yardlet chooses a move of its own only for a Claude Code task in no turn and no other change; one it
+        // chooses then waits for the rest, background work say.
+        let noMoveChosen: Set = ["Turn", "Approval", "Codex turn", "Account switch", "Runtime starting",
+                                 "Waits for room as a child", "Starts as a child", "Cut-off turn"]
+        for (thing, _) in alone {
+            let task = try XCTUnwrap(store.sessions.first { $0.id == tasks[thing]?.id }, thing)
+            XCTAssertEqual(model.canMoveAutomatically(task), !noMoveChosen.contains(thing), thing)
         }
         for (title, steps) in piles {
             for (thing, expected) in steps {
