@@ -34,7 +34,8 @@ enum AccountMoveBlocker: Equatable, CaseIterable {
     /// A message the person is editing.
     case edit
     /// Another change under way: a switch, a restart, a fork, a side chat opening, unarchiving, a
-    /// worktree being made again, a child task starting, or a cut-off turn about to continue.
+    /// worktree being made again, its runtime or a child task starting, or a cut-off turn about to
+    /// continue.
     case otherChange
     /// Agents it runs (`run_agent`).
     case agents

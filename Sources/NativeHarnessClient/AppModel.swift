@@ -5716,6 +5716,7 @@ final class AppModel {
             sessionMutations.contains(id) || switchingAccounts.contains(id) || forkingSessions.contains(id)
                 || restartingSessions.contains(id) || openingSideChats.contains(id) || unarchivingSessionIDs.contains(id)
                 || recreatingTaskWorktrees.contains(id)
+        case .runtimeStarting: runtimeStarts[id] != nil
         case .startingAsChild: sessionTools.isQueued(id) || sessionTools.starting.contains(id)
         case .cutOffTurn: continuations.continuesCutOffTurn(id)
         case .sessionJobRelaunch: continuations.sessionJobRelaunches.contains(id)

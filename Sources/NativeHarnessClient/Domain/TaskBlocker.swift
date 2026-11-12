@@ -37,6 +37,8 @@ enum TaskBlocker: CaseIterable {
     /// Another change under way: a session change, an account switch, a fork, a restart, a side chat opening,
     /// unarchiving, or its worktree being made again.
     case change
+    /// Its runtime is starting (`AppModel.attach`): a change of its account or runtime meanwhile fails the start.
+    case runtimeStarting
     /// It is a child task that waits for room to start, or starts.
     case startingAsChild
     /// A turn a restart or a lost connection cut off is to continue in it.
@@ -59,7 +61,7 @@ enum TaskBlocker: CaseIterable {
         case .shellCommand: .shellCommand
         case .request: .request
         case .edit: .edit
-        case .change, .startingAsChild, .cutOffTurn: .otherChange
+        case .change, .runtimeStarting, .startingAsChild, .cutOffTurn: .otherChange
         case .agents: .agents
         case .backgroundWork: .backgroundWork
         case .sideChat, .codexTurn, .sessionJobs, .processes, .childStartWaiting, .childTasks, .sessionJobRelaunch,
@@ -93,7 +95,7 @@ enum TaskBlocker: CaseIterable {
         case .sessionJobs: "schedule"
         case .processes: "processes"
         case .agents, .childStartWaiting, .childTasks: "children"
-        case .edit, .change: "changing"
+        case .edit, .change, .runtimeStarting: "changing"
         case .cutOffTurn, .sessionJobRelaunch, .limitContinue: "continuing"
         case .startingAsChild: nil
         }

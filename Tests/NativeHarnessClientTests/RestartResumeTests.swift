@@ -723,6 +723,7 @@ final class RestartResumeTests: XCTestCase {
             ("Starts as a child", Holds(.otherChange, .otherChange, nil)),
             ("Edit", Holds(.edit, .edit, "changing")),
             ("Account switch", Holds(.otherChange, .otherChange, "changing")),
+            ("Runtime starting", Holds(.otherChange, .otherChange, "changing")),
             ("Cut-off turn", Holds(.otherChange, .otherChange, "continuing")),
             ("Continue after limit", Holds(nil, nil, "continuing")),
         ]
@@ -780,6 +781,7 @@ final class RestartResumeTests: XCTestCase {
 
         var servers: [UUID: [TaskServerPort]] = [:]
         var approvals: [Task<Bool, Never>] = []
+        var starts: [Task<Void, Never>] = []
         func add(_ thing: String, to title: String) async throws {
             let task = try XCTUnwrap(store.sessions.first { $0.id == tasks[title]?.id }, title)
             let id = task.id
@@ -835,6 +837,16 @@ final class RestartResumeTests: XCTestCase {
                 model.composerDrafts.tasks.draft(for: id).editState = ConversationEditState(session: task, targetID: "t",
                     previousID: nil, originalText: "Earlier", draft: TaskDraftSnapshot(), entries: [])
             case "Account switch": model.switchingAccounts.insert(id)
+            case "Runtime starting":
+                fixture.transports.holdsInitialize = true
+                starts.append(Task { await model.resume(task) })
+                try await waitUntil {
+                    for transport in fixture.transports.all where await transport.hasHeldInitialize {
+                        if await transport.configuration?.providerSessionID == task.providerSessionID { return true }
+                    }
+                    return false
+                }
+                fixture.transports.holdsInitialize = false
             case "Cut-off turn": model.continuations.acceptTurnCut(.connection, for: id, at: now)
             case "Continue after limit":
                 model.continuations.setUsageLimitAutoContinue(true, resetsAt: now.addingTimeInterval(5 * 3_600), for: task)
@@ -863,6 +875,8 @@ final class RestartResumeTests: XCTestCase {
         }
         for id in tasks.values.map(\.id) { model.sessionTools.refuseApprovals(in: id) }
         for approval in approvals { _ = await approval.value }
+        for transport in fixture.transports.all { await transport.answerHeldInitialize() }
+        for start in starts { await start.value }
         await model.shutdown()
     }
 
@@ -2029,12 +2043,20 @@ final class RestartResumeTests: XCTestCase {
         final class TransportLog: @unchecked Sendable {
             private let lock = NSLock()
             private var transports: [FakeClaudeTransport] = []
+            private var holding = false
             func make() -> FakeClaudeTransport {
-                let transport = FakeClaudeTransport()
-                lock.withLock { transports.append(transport) }
-                return transport
+                lock.withLock {
+                    let transport = FakeClaudeTransport(holdsInitialize: holding)
+                    transports.append(transport)
+                    return transport
+                }
             }
             var all: [FakeClaudeTransport] { lock.withLock { transports } }
+            /// Whether the processes started from now on hold their `initialize` answer: a runtime still starting.
+            var holdsInitialize: Bool {
+                get { lock.withLock { holding } }
+                set { lock.withLock { holding = newValue } }
+            }
         }
 
         init() throws {

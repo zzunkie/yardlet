@@ -578,8 +578,9 @@ account's folder.
   the target's login with the same session ID; one without starts there at its next turn. A task waits while the memory
   saver would keep its runtime, except for being on screen and for session jobs, which the resumed runtime brings back:
   a turn or a question, messages or a shell command on their way, the harness's background commands (closing the
-  runtime would end them), subagents it hosts, an edit, or another change or continuation. It moves once that is over,
-  as soon as its turn ends rather than at the move's next look, and the account's row shows how many still wait. From
+  runtime would end them), subagents it hosts, an edit, its runtime starting, or another change or continuation. It
+  moves once that is over, as soon as its turn ends rather than at the move's next look, and the account's row shows
+  how many still wait. From
   the target's confirmation on, nothing new starts on the account: automatic assignment and the account lists that
   start or move a task leave it out, the new-task account choice and the schedules that named it move to the target,
   and a task started on it any other way (an agent naming it, a schedule made meanwhile) starts on the target
