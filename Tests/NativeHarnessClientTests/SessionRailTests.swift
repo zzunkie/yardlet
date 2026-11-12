@@ -198,13 +198,14 @@ final class SessionRailTests: XCTestCase {
 
     // MARK: - Where it fits
 
-    /// The Claude app's widths (`My`): 611 pt for the conversation's side of the area alone, 771 pt
-    /// beside an open side panel; a panel expanded over the conversation leaves none.
-    func testTheRailFitsFrom611AloneAnd771BesideASidePanel() {
+    /// The Claude app's 611 pt for the conversation's side of the area alone (`My`); beside an open side
+    /// panel, the rail and the conversation's 560, where the Claude app's 771 leaves it 491. A panel
+    /// floating over the area's edge or expanded over the conversation leaves none.
+    func testTheRailFitsFrom611AloneAndBesideASidePanelWhereTheConversationKeepsItsMinimum() {
         XCTAssertFalse(SessionRailPlacement.fits(sessionWidth: 610, panelOpen: false))
         XCTAssertTrue(SessionRailPlacement.fits(sessionWidth: 611, panelOpen: false))
-        XCTAssertFalse(SessionRailPlacement.fits(sessionWidth: 770, panelOpen: true))
-        XCTAssertTrue(SessionRailPlacement.fits(sessionWidth: 771, panelOpen: true))
+        XCTAssertFalse(SessionRailPlacement.fits(sessionWidth: 839, panelOpen: true))
+        XCTAssertTrue(SessionRailPlacement.fits(sessionWidth: 840, panelOpen: true))
 
         func metrics(width: CGFloat, trailing: Bool, expanded: Bool = false, rail: Bool = true) -> TaskWorkspaceMetrics {
             TaskWorkspaceMetrics.resolve(size: CGSize(width: width, height: 700), trailing: trailing, terminal: false,
@@ -216,13 +217,15 @@ final class SessionRailTests: XCTestCase {
         XCTAssertTrue(alone.showsRail)
         XCTAssertEqual(alone.railWidth, 280)
         XCTAssertEqual(alone.chatWidth, 331)
-        // Beside a 420 pt panel and its 6 pt divider: 771 + 426.
-        XCTAssertFalse(metrics(width: 1196, trailing: true).showsRail)
-        let beside = metrics(width: 1197, trailing: true)
+        // Beside a 420 pt panel and its 6 pt divider: 840 + 426.
+        XCTAssertFalse(metrics(width: 1265, trailing: true).showsRail)
+        let beside = metrics(width: 1266, trailing: true)
         XCTAssertTrue(beside.showsRail)
-        XCTAssertEqual(beside.chatWidth, 491)
+        XCTAssertEqual(beside.chatWidth, 560)
         XCTAssertEqual(beside.trailingWidth, 420)
-        XCTAssertEqual(beside.chatWidth + beside.railWidth + 6 + beside.trailingWidth, 1197)
+        XCTAssertEqual(beside.chatWidth + beside.railWidth + 6 + beside.trailingWidth, 1266)
+        // A panel floating over the area's edge stands where the rail would.
+        XCTAssertFalse(metrics(width: 800, trailing: true).railFits)
         // An expanded panel covers the conversation and the rail.
         XCTAssertFalse(metrics(width: 1600, trailing: true, expanded: true).showsRail)
         XCTAssertFalse(metrics(width: 1600, trailing: true, expanded: true).railFits)

@@ -1302,10 +1302,12 @@ struct RemoteTaskView: View {
                     ConversationFindBar(find: find)
                         .padding(.top, 8)
                         .padding(.horizontal, 16)
+                        .clearOfFloatingPanel()
                 }
             if let notices = task?.notices {
                 RemoteTaskNoticeLines(notices: notices, harness: task.flatMap { HarnessKind(rawValue: $0.harness) } ?? .claudeCode,
                                       cancelAccountMove: { model.send(.cancelAccountMove(taskID: conversation.taskID)) })
+                    .clearOfFloatingPanel()
             }
             if let editing {
                 ConversationEditBanner(canCancel: true) {
@@ -1313,6 +1315,7 @@ struct RemoteTaskView: View {
                     draft.attachments = editing.previousAttachments
                     self.editing = nil
                 }
+                .clearOfFloatingPanel()
             }
             VStack(alignment: .leading, spacing: 8) {
                 if let error = model.commandError {
@@ -1335,6 +1338,7 @@ struct RemoteTaskView: View {
             .padding(.top, 6)
             .padding(.bottom, 16)
             .frame(maxWidth: .infinity)
+            .clearOfFloatingPanel()
         }
         .confirmationDialog(
             L10n.string("Allow and save this rule?"),

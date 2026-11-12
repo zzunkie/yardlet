@@ -337,13 +337,16 @@ final class SessionRailWindowState {
 
 /// Where the rail fits: a fixed 280 pt column beside the conversation (the Claude app's
 /// `--session-rail-w`, 17.5rem), shown when the task's area — the conversation's side of it, without
-/// a side panel — is at least 611 pt wide, or 771 pt while a side panel is open beside it (`My`: `Ay`,
-/// `jy`). A side panel expanded over the conversation leaves no room.
+/// a side panel — is at least 611 pt wide (the Claude app's `My`: `Ay`), or, while a side panel is
+/// open beside it, wide enough for the rail and the conversation's minimum beside the panel: where the
+/// Claude app's 771 (`jy`) leaves the conversation 491, Yardlet keeps it its minimum
+/// (`TaskWorkspaceSizes.minimumConversationWidth`). A side panel floating over the area's edge or expanded over
+/// the conversation leaves no room.
 enum SessionRailPlacement {
     static let width: CGFloat = 280
     static let cardSpacing: CGFloat = 10
     static let minimumAloneWidth: CGFloat = 611
-    static let minimumBesidePanelWidth: CGFloat = 771
+    static let minimumBesidePanelWidth: CGFloat = width + TaskWorkspaceSizes.minimumConversationWidth
 
     /// - Parameters:
     ///   - sessionWidth: the width the conversation and the rail share (the task's area less an open

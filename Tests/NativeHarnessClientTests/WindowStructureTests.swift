@@ -10,59 +10,58 @@ final class WindowStructureTests: XCTestCase {
     // MARK: - Side panel width
 
     /// `EZt`: max(320, min(height × 1.6, area − 500), min(640, area − 352)), within 320 and the area less
-    /// the conversation's 352 and the divider.
+    /// the conversation's 560 and the divider.
     func testTheDefaultWidthIsTheCodexAppsForTheAreaAndTheWindow() {
-        // A 1280 × 760 window beside a 240 sidebar and its line.
-        XCTAssertEqual(SidePanelWidth.standard(areaWidth: 1039, windowHeight: 760, keepsRail: false), 640)
-        // A 1512 × 945 window.
-        XCTAssertEqual(SidePanelWidth.standard(areaWidth: 1271, windowHeight: 945, keepsRail: false), 771)
+        // A 1512 × 945 window beside a 240 sidebar and its line.
+        XCTAssertEqual(SidePanelWidth.standard(areaWidth: 1271, windowHeight: 945, keepsRail: false), 705)
         // A short window: height × 1.6 is the smaller.
         XCTAssertEqual(SidePanelWidth.standard(areaWidth: 1700, windowHeight: 600, keepsRail: false), 960)
-        // A narrow area: what the conversation leaves.
-        XCTAssertEqual(SidePanelWidth.standard(areaWidth: 700, windowHeight: 560, keepsRail: false), 342)
-        XCTAssertEqual(SidePanelWidth.standard(areaWidth: 500, windowHeight: 560, keepsRail: false), 320)
+        // A 1280 × 760 window: the Codex app's 640 leaves the conversation less than its minimum.
+        XCTAssertEqual(SidePanelWidth.standard(areaWidth: 1039, windowHeight: 760, keepsRail: false), 473)
+        XCTAssertEqual(SidePanelWidth.standard(areaWidth: 700, windowHeight: 560, keepsRail: false), 320)
     }
 
-    /// Where the rail is on and the area has room for it beside the panel (771 and the divider), the
-    /// default leaves it that room; where it has none anyway, the default is the Codex app's.
+    /// Where the rail is on and the area has room for it beside the panel (the rail, the conversation's
+    /// 560 and the divider), the default leaves it that room; where it has none anyway, it does not.
     func testTheDefaultLeavesTheRailItsRoomWhereThereIsAny() {
-        XCTAssertEqual(SidePanelWidth.standard(areaWidth: 1271, windowHeight: 945, keepsRail: true), 494)
+        XCTAssertEqual(SidePanelWidth.standard(areaWidth: 1271, windowHeight: 945, keepsRail: true), 425)
         let metrics = TaskWorkspaceMetrics.resolve(
             size: CGSize(width: 1271, height: 800), trailing: true, terminal: false,
             preferredWidth: SidePanelWidth.standard(areaWidth: 1271, windowHeight: 945, keepsRail: true),
             preferredHeight: 280, rail: true)
         XCTAssertTrue(metrics.showsRail, "the rail stays beside the conversation when the panel opens")
-        // 1039 − 777 leaves less than the panel's 320: the rail has no room beside a panel there.
-        XCTAssertEqual(SidePanelWidth.standard(areaWidth: 1039, windowHeight: 760, keepsRail: true), 640)
+        XCTAssertEqual(metrics.chatWidth, 560)
+        // 1039 − 846 leaves less than the panel's 320: the rail has no room beside a panel there.
+        XCTAssertEqual(SidePanelWidth.standard(areaWidth: 1039, windowHeight: 760, keepsRail: true), 473)
     }
 
     /// The dragged width is kept as the Codex app keeps it, a share of the room between 320 and the
     /// widest, so it follows the window; a width an earlier build saved is used as it is.
     func testADraggedWidthIsAShareThatFollowsTheArea() {
-        let ratio = SidePanelWidth.ratio(width: 560, areaWidth: 1039)
-        XCTAssertEqual(ratio, 240.0 / 361.0, accuracy: 1e-9)
-        XCTAssertEqual(SidePanelWidth.width(ratio: ratio, areaWidth: 1039), 560, accuracy: 1e-9)
-        XCTAssertEqual(SidePanelWidth.width(ratio: ratio, areaWidth: 1271), 320 + 593 * 240 / 361, accuracy: 1e-9)
-        XCTAssertEqual(SidePanelWidth.ratio(width: 100, areaWidth: 1039), 0)
-        XCTAssertEqual(SidePanelWidth.ratio(width: 5000, areaWidth: 1039), 1)
-        XCTAssertEqual(SidePanelWidth.ratio(width: 400, areaWidth: 600), 0, "no room above the minimum")
+        let ratio = SidePanelWidth.ratio(width: 560, areaWidth: 1271)
+        XCTAssertEqual(ratio, 240.0 / 385.0, accuracy: 1e-9)
+        XCTAssertEqual(SidePanelWidth.width(ratio: ratio, areaWidth: 1271), 560, accuracy: 1e-9)
+        XCTAssertEqual(SidePanelWidth.width(ratio: ratio, areaWidth: 1700), 320 + 814 * 240 / 385, accuracy: 1e-9)
+        XCTAssertEqual(SidePanelWidth.ratio(width: 100, areaWidth: 1271), 0)
+        XCTAssertEqual(SidePanelWidth.ratio(width: 5000, areaWidth: 1271), 1)
+        XCTAssertEqual(SidePanelWidth.ratio(width: 400, areaWidth: 800), 0, "no room above the minimum")
 
         var preferences = TaskWorkspacePreferences()
-        XCTAssertEqual(SidePanelWidth.resolve(preferences, areaWidth: 1039, windowHeight: 760, keepsRail: false), 640)
+        XCTAssertEqual(SidePanelWidth.resolve(preferences, areaWidth: 1271, windowHeight: 945, keepsRail: false), 705)
         preferences.panelWidth = 560
-        XCTAssertEqual(SidePanelWidth.resolve(preferences, areaWidth: 1039, windowHeight: 760, keepsRail: false), 560)
+        XCTAssertEqual(SidePanelWidth.resolve(preferences, areaWidth: 1271, windowHeight: 945, keepsRail: false), 560)
         preferences.panelWidthRatio = 0.5
-        XCTAssertEqual(SidePanelWidth.resolve(preferences, areaWidth: 1039, windowHeight: 760, keepsRail: false),
-                       320 + 361 / 2)
+        XCTAssertEqual(SidePanelWidth.resolve(preferences, areaWidth: 1271, windowHeight: 945, keepsRail: false),
+                       320 + 385 / 2)
     }
 
     /// Narrower than 160 on a drag the panel closes, as the Codex app's (`Rk(320)`); between that and
     /// 320 it stays 320. Lower than 80 the terminal closes (`Rk(160)`); between that and 160 it stays 160.
     func testDraggingAPanelPastHalfItsMinimumClosesIt() {
-        XCTAssertEqual(TaskWorkspaceMetrics.sidePanelDrag(from: 500, by: 341, areaWidth: 1039), .close)
-        XCTAssertEqual(TaskWorkspaceMetrics.sidePanelDrag(from: 500, by: 340, areaWidth: 1039), .size(320))
-        XCTAssertEqual(TaskWorkspaceMetrics.sidePanelDrag(from: 500, by: -100, areaWidth: 1039), .size(600))
-        XCTAssertEqual(TaskWorkspaceMetrics.sidePanelDrag(from: 500, by: -900, areaWidth: 1039), .size(681))
+        XCTAssertEqual(TaskWorkspaceMetrics.sidePanelDrag(from: 500, by: 341, areaWidth: 1271), .close)
+        XCTAssertEqual(TaskWorkspaceMetrics.sidePanelDrag(from: 500, by: 340, areaWidth: 1271), .size(320))
+        XCTAssertEqual(TaskWorkspaceMetrics.sidePanelDrag(from: 500, by: -100, areaWidth: 1271), .size(600))
+        XCTAssertEqual(TaskWorkspaceMetrics.sidePanelDrag(from: 500, by: -900, areaWidth: 1271), .size(705))
 
         XCTAssertEqual(TaskWorkspaceMetrics.terminalDrag(from: 280, by: 201, availableHeight: 700, trailing: false), .close)
         XCTAssertEqual(TaskWorkspaceMetrics.terminalDrag(from: 280, by: 200, availableHeight: 700, trailing: false), .size(160))

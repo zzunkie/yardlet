@@ -19,17 +19,33 @@ final class TaskWorkspaceLayoutTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(layout.upperHeight, 180)
     }
 
-    /// The Codex app's bounds: the panel keeps 320 and leaves the conversation 352 (`zZt`).
-    func testWidePanelsRespectBothMinimumWidthsAndCloseRestoresChatWidth() {
-        let layout = TaskWorkspaceMetrics.resolve(size: CGSize(width: 1000, height: 700), trailing: true, terminal: false, preferredWidth: 900, preferredHeight: 240)
-        XCTAssertTrue(layout.showsChat)
-        XCTAssertEqual(layout.chatWidth, 352)
-        XCTAssertEqual(layout.trailingWidth, 642)
-        let narrowest = TaskWorkspaceMetrics.resolve(size: CGSize(width: 1000, height: 700), trailing: true, terminal: false, preferredWidth: 100, preferredHeight: 240)
-        XCTAssertEqual(narrowest.trailingWidth, 320)
-        // Below 320 + 352 and the divider the panel takes the conversation's place.
-        XCTAssertTrue(TaskWorkspaceMetrics.resolve(size: CGSize(width: 678, height: 700), trailing: true, terminal: false, preferredWidth: 420, preferredHeight: 240).showsChat)
-        XCTAssertFalse(TaskWorkspaceMetrics.resolve(size: CGSize(width: 677, height: 700), trailing: true, terminal: false, preferredWidth: 420, preferredHeight: 240).showsChat)
+    /// Beside the panel the conversation keeps 560 and the panel the Codex app's 320. Where both do not
+    /// fit, the panel floats over the area's edge at 320 and the conversation runs up to it, keeping
+    /// 560 under its edge; below the Codex app's 320 + 352 the panel takes the conversation's place.
+    func testThePanelLeavesTheConversationItsMinimumOrFloatsOverItsEdge() {
+        func layout(_ width: CGFloat, preferred: CGFloat = 420) -> TaskWorkspaceMetrics {
+            TaskWorkspaceMetrics.resolve(size: CGSize(width: width, height: 700), trailing: true, terminal: false,
+                                         preferredWidth: preferred, preferredHeight: 240)
+        }
+        let wide = layout(1000, preferred: 900)
+        XCTAssertEqual(wide.panelPlacement, .beside)
+        XCTAssertEqual(wide.chatWidth, 560)
+        XCTAssertEqual(wide.trailingWidth, 434)
+        XCTAssertEqual(layout(1000, preferred: 100).trailingWidth, 320)
+        // 320, the divider and 560.
+        XCTAssertEqual(layout(886).panelPlacement, .beside)
+        let floating = layout(885)
+        XCTAssertEqual(floating.panelPlacement, .over)
+        XCTAssertEqual(floating.trailingWidth, 320)
+        XCTAssertEqual(floating.chatWidth, 565, "the conversation runs up to the floating panel")
+        XCTAssertEqual(floating.conversationCover, 0)
+        let under = layout(760)
+        XCTAssertEqual(under.chatWidth, 560, "and keeps its minimum under the panel's edge")
+        XCTAssertEqual(under.conversationCover, 120)
+        // The Codex app's 320 + 352 and the divider.
+        XCTAssertTrue(layout(678).showsChat)
+        XCTAssertEqual(layout(677).panelPlacement, .inPlace)
+        XCTAssertFalse(layout(677).showsChat)
         let closed = TaskWorkspaceMetrics.resolve(size: CGSize(width: 1000, height: 700), trailing: false, terminal: false, preferredWidth: 674, preferredHeight: 240)
         XCTAssertEqual(closed.chatWidth, 1000)
         XCTAssertEqual(closed.upperHeight, 700)

@@ -37,7 +37,8 @@ struct NewTaskWorkspace<Home: View>: View {
             onReturnToChat: closeSidePanel,
             onCloseTrailing: closeSidePanel,
             onCloseTerminal: closeTerminal,
-            chat: home,
+            // The new-task screen is no conversation to keep wide: under a floating panel, all of it keeps clear.
+            chat: { home().clearOfFloatingPanel() },
             rail: { EmptyView() },
             trailing: { trailing.environment(\.workSurfaceNavigation, navigation) },
             bottom: { terminal(inSidePanel: false) }

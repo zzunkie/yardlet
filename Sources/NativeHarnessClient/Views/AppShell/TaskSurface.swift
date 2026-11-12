@@ -256,6 +256,8 @@ struct TaskDetail: View {
                 ConversationFindBar(find: workspaceState.conversationFind)
                     .padding(.top, 8)
                     .padding(.horizontal, 16)
+                    // It and what sits under the conversation keep clear of a panel floating over its edge.
+                    .clearOfFloatingPanel()
             }
 
             // The transcript is read only when there is an error to place.
@@ -270,28 +272,30 @@ struct TaskDetail: View {
                 .frame(maxWidth: ParityTheme.contentWidth)
                 .padding(.horizontal, 24)
                 .frame(maxWidth: .infinity)
+                .clearOfFloatingPanel()
             }
 
             if let folderMissing {
-                TaskFolderMissingBanner(notice: folderMissing)
+                TaskFolderMissingBanner(notice: folderMissing).clearOfFloatingPanel()
             }
 
             if let edit = composerDraft.editState, let rewindActions = conversationActions.rewind {
                 ConversationEditBanner(canCancel: edit.preparedProviderSessionID == nil, onCancel: rewindActions.cancelEdit)
+                    .clearOfFloatingPanel()
             }
 
             // A retry shows on the running turn's status line (D6); this line keeps the limit warning.
             if let providerNotices = conversationActions.providerNotices,
                ProviderNoticeLines.showsAnything(providerNotices) {
-                ProviderNoticeLines(notices: providerNotices)
+                ProviderNoticeLines(notices: providerNotices).clearOfFloatingPanel()
             }
 
             if let accountMove {
-                TaskAccountMoveLine(notice: accountMove)
+                TaskAccountMoveLine(notice: accountMove).clearOfFloatingPanel()
             }
 
             if session.harness == .codex, let codexStatus {
-                TaskObservationScope { codexStatusPanel(codexStatus) }
+                TaskObservationScope { codexStatusPanel(codexStatus) }.clearOfFloatingPanel()
             }
 
             // The task's background agents and tasks while they run, on the composer rail — but for what
@@ -303,6 +307,7 @@ struct TaskDetail: View {
                 if backgroundTasks.isShown {
                     BackgroundTasksBar(projection: backgroundTasks, actions: activityActions)
                         .attachedAboveComposer()
+                        .clearOfFloatingPanel()
                 }
             }
 
@@ -340,6 +345,7 @@ struct TaskDetail: View {
                 )
                 // Drawn again when what it shows changed, not for every fragment the conversation streams.
                 .equatable()
+                .clearOfFloatingPanel()
             }
             .accessibilitySortPriority(ParityAccessibility.composer)
             // The status tray tucks under the composer's top edge.

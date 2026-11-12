@@ -49,6 +49,10 @@ struct TaskWorkspaceSizes: Codable, Equatable {
     static let earlierDefaultTerminalHeight: Double = 240
     /// The Codex app's bottom panel keeps at least 160 (`Eko`).
     static let minimumTerminalHeight: Double = 160
+    /// The narrowest the conversation's column becomes beside a side panel. Inside its 32 pt gutters a
+    /// 14 pt line is about 70 Latin characters or 35 Hangul syllables, within the 45 to 75 that read
+    /// well, and the composer, 24 pt in from each side, keeps its controls on one line.
+    static let minimumConversationWidth: Double = 560
 
     var panelWidth: Double = defaultPanelWidth
     var terminalHeight: Double = defaultTerminalHeight

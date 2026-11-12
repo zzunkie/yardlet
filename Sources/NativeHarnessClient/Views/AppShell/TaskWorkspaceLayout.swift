@@ -12,6 +12,11 @@ struct TaskWorkspaceMetrics: Equatable {
     /// The task's area has room for the rail beside the conversation (`SessionRailPlacement`),
     /// whether or not the window's switch shows it.
     var railFits = false
+    /// Where the open side panel stands; nil while it is closed.
+    var panelPlacement: SidePanelPlacement?
+    /// How far a side panel floating over the area's edge reaches over the conversation, which keeps
+    /// its minimum width beneath it.
+    var conversationCover: CGFloat = 0
 
     var showsRail: Bool { railWidth > 0 }
 
@@ -44,24 +49,38 @@ struct TaskWorkspaceMetrics: Equatable {
     /// - Parameter rail: the window's rail switch is on, so the rail takes its column where it fits.
     static func resolve(size: CGSize, trailing: Bool, terminal: Bool, preferredWidth: CGFloat, preferredHeight: CGFloat,
                         expanded: Bool = false, interfaceScale: CGFloat = 1, rail: Bool = false) -> Self {
-        let showsChat = !trailing || (!expanded && size.width >= SidePanelWidth.besideConversation)
-        let panelWidth = trailing
-            ? (showsChat ? SidePanelWidth.clamped(preferredWidth, areaWidth: size.width) : size.width) : 0
+        let placement = trailing ? SidePanelPlacement(areaWidth: size.width, expanded: expanded) : nil
+        let panelWidth: CGFloat = switch placement {
+        case nil: 0
+        case .beside: SidePanelWidth.clamped(preferredWidth, areaWidth: size.width)
+        case .over: SidePanelWidth.minimum
+        case .inPlace: size.width
+        }
         let terminalHeight = terminal ? constrainedTerminalHeight(
             preferredHeight, availableHeight: size.height, trailing: trailing, interfaceScale: interfaceScale
         ) : 0
-        // The conversation's side of the area: what is left beside an open side panel and its divider.
-        let sessionWidth = showsChat ? size.width - panelWidth - (trailing ? 6 : 0) : 0
-        let railFits = showsChat && SessionRailPlacement.fits(sessionWidth: sessionWidth, panelOpen: trailing)
+        // The conversation's side of the area: the whole area, what a panel beside it and its divider
+        // leave, or, under a floating panel, up to the panel and never less than the conversation's minimum.
+        let sessionWidth: CGFloat = switch placement {
+        case nil: size.width
+        case .beside: size.width - panelWidth - SidePanelWidth.divider
+        case .over: max(size.width - panelWidth, SidePanelWidth.conversationShare)
+        case .inPlace: 0
+        }
+        // A floating panel stands where the rail would.
+        let railFits = (placement == nil || placement == .beside)
+            && SessionRailPlacement.fits(sessionWidth: sessionWidth, panelOpen: trailing)
         let railWidth = rail && railFits ? SessionRailPlacement.width : 0
         return Self(
-            chatWidth: showsChat ? sessionWidth - railWidth : 0,
+            chatWidth: sessionWidth - railWidth,
             trailingWidth: panelWidth,
             upperHeight: max(0, size.height - terminalHeight - (terminal ? 6 : 0)),
             terminalHeight: terminalHeight,
-            showsChat: showsChat,
+            showsChat: placement != .inPlace,
             railWidth: railWidth,
-            railFits: railFits
+            railFits: railFits,
+            panelPlacement: placement,
+            conversationCover: placement == .over ? max(0, sessionWidth - (size.width - panelWidth)) : 0
         )
     }
 
@@ -78,22 +97,47 @@ struct TaskWorkspaceMetrics: Equatable {
     }
 }
 
+/// Where an open side panel stands in the task's area.
+enum SidePanelPlacement: Equatable {
+    /// Beside the conversation, which keeps its minimum width (`TaskWorkspaceSizes.minimumConversationWidth`).
+    case beside
+    /// Floating over the area's trailing edge at the panel's minimum width, where the conversation
+    /// at its minimum and the panel do not fit side by side: the conversation runs up to the panel,
+    /// and where that would narrow it past its minimum it keeps its minimum under the panel's edge.
+    /// The rail has no room.
+    case over
+    /// In the conversation's place: expanded, or an area narrower than the Codex app's conversation
+    /// share and panel minimum, where a floating panel would leave too little of the conversation.
+    case inPlace
+
+    init(areaWidth: CGFloat, expanded: Bool) {
+        if expanded || areaWidth < SidePanelWidth.conversationInView {
+            self = .inPlace
+        } else {
+            self = areaWidth >= SidePanelWidth.besideConversation ? .beside : .over
+        }
+    }
+}
+
 /// The side panel's width, as the Codex app sizes its right panel (ChatGPT.app 26.1016 `EZt`, `DZt`,
-/// `AZt`, `jZt`): at least 320, leaving the conversation 352 beside it, kept as a share of the room
-/// between those so a dragged width follows the window, and until it is dragged the Codex app's
-/// default for the room the task has. The task's area is what the Codex app calls the main content:
-/// the window beside the sidebar, or one pane of a split view.
+/// `AZt`, `jZt`): at least 320, kept as a share of the room above that so a dragged width follows the
+/// window, and until it is dragged the Codex app's default for the room the task has. Beside it the
+/// conversation keeps its own minimum, wider than the Codex app's 352 (`zZt`). The task's area is what
+/// the Codex app calls the main content: the window beside the sidebar, or one pane of a split view.
 enum SidePanelWidth {
     static let minimum: CGFloat = 320
-    /// What the conversation keeps beside the panel (the Codex app's `zZt`).
-    static let conversationShare: CGFloat = 352
+    /// What the conversation keeps beside the panel.
+    static let conversationShare: CGFloat = TaskWorkspaceSizes.minimumConversationWidth
     static let divider: CGFloat = 6
     /// Narrower than this on a drag, the panel closes, as the Codex app's does below half its minimum
     /// (`Rk(320)`); widened again it would open. The width it had is kept.
     static let closingWidth: CGFloat = 160
-    /// The narrowest area that shows the conversation beside the narrowest panel; a narrower one shows
-    /// the panel in the conversation's place.
-    static let besideConversation: CGFloat = minimum + conversationShare + divider
+    /// The narrowest area that shows the conversation at its minimum beside the narrowest panel; a
+    /// narrower one floats the panel over the conversation's edge (`SidePanelPlacement.over`).
+    static let besideConversation: CGFloat = minimum + divider + conversationShare
+    /// The narrowest area that keeps the conversation in view while the panel is open: the Codex app's
+    /// 320 and 352 (`zZt`) and the divider. A narrower one shows the panel in the conversation's place.
+    static let conversationInView: CGFloat = minimum + 352 + divider
 
     static func maximum(areaWidth: CGFloat) -> CGFloat {
         max(minimum, areaWidth - divider - conversationShare)
@@ -103,12 +147,12 @@ enum SidePanelWidth {
         min(max(minimum, width), maximum(areaWidth: areaWidth))
     }
 
-    /// The Codex app's default (`EZt`): max(320, min(window height × 1.6, area − 500), min(640, area − 352)).
-    /// Where the window shows the rail and the area has room for it beside the panel, the default
-    /// leaves it that room (771 beside the panel and the divider, `SessionRailPlacement`), so opening
-    /// the panel does not push the rail over the conversation.
+    /// The Codex app's default (`EZt`): max(320, min(window height × 1.6, area − 500), min(640, area − 352)),
+    /// within what leaves the conversation its minimum. Where the window shows the rail and the area
+    /// has room for it beside the panel, the default leaves it that room (`SessionRailPlacement`), so
+    /// opening the panel does not push the rail over the conversation.
     static func standard(areaWidth: CGFloat, windowHeight: CGFloat, keepsRail: Bool) -> CGFloat {
-        var width = max(minimum, min(windowHeight * 1.6, areaWidth - 500), min(640, areaWidth - conversationShare))
+        var width = max(minimum, min(windowHeight * 1.6, areaWidth - 500), min(640, areaWidth - 352))
         if keepsRail {
             let besideRail = areaWidth - divider - SessionRailPlacement.minimumBesidePanelWidth
             if besideRail >= minimum { width = min(width, besideRail) }
@@ -166,6 +210,10 @@ private struct WorkSurfaceHeaderRowKey: EnvironmentKey {
     static let defaultValue: WorkSurfaceHeaderRow? = nil
 }
 
+private struct ConversationTrailingCoverKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 0
+}
+
 extension EnvironmentValues {
     /// The window's height, which the side panel's default width reads as the Codex app reads its shell's.
     var taskWindowHeight: CGFloat? {
@@ -179,10 +227,34 @@ extension EnvironmentValues {
         set { self[TaskAreaHeaderKey.self] = newValue }
     }
 
+    /// How far a side panel floating over the area's edge reaches over the conversation, which keeps
+    /// its width beneath it (`TaskWorkspaceMetrics.conversationCover`). What the conversation is worked
+    /// from, its composer and its find bar, keeps clear of it.
+    var conversationTrailingCover: CGFloat {
+        get { self[ConversationTrailingCoverKey.self] }
+        set { self[ConversationTrailingCoverKey.self] = newValue }
+    }
+
     /// Set for the side panel while its tab strip shares the area's header row.
     var workSurfaceHeaderRow: WorkSurfaceHeaderRow? {
         get { self[WorkSurfaceHeaderRowKey.self] }
         set { self[WorkSurfaceHeaderRowKey.self] = newValue }
+    }
+}
+
+/// Keeps what the conversation is worked from clear of a side panel floating over its edge.
+private struct ClearOfFloatingPanel: ViewModifier {
+    @Environment(\.conversationTrailingCover) private var cover
+
+    func body(content: Content) -> some View {
+        content.padding(.trailing, cover)
+    }
+}
+
+extension View {
+    /// Narrows the view by how far a floating side panel reaches over the conversation.
+    func clearOfFloatingPanel() -> some View {
+        modifier(ClearOfFloatingPanel())
     }
 }
 
@@ -191,8 +263,9 @@ extension EnvironmentValues {
 /// The session rail, where the window shows it and the area has room, is a fixed column between
 /// the conversation and the side panel, as the Claude app puts its rail beside the conversation and
 /// its side panes after it. The area's header (`taskAreaHeader`) runs over the conversation and the
-/// rail; the side panel beside them reaches the top, its tab strip in the header's row. A panel in
-/// the conversation's place sits below the header, which then runs the whole width.
+/// rail; the side panel beside them reaches the top, its tab strip in the header's row. A panel
+/// floating over the area's edge (`SidePanelPlacement.over`) or in the conversation's place sits
+/// below the header, which then runs the whole width.
 struct TaskWorkspaceLayout<Chat: View, Rail: View, Trailing: View, Bottom: View>: View {
     let showsTrailing: Bool
     let showsTerminal: Bool
@@ -232,8 +305,9 @@ struct TaskWorkspaceLayout<Chat: View, Rail: View, Trailing: View, Bottom: View>
                 expanded: preferences.isExpanded, interfaceScale: interfaceScale, rail: wantsRail
             )
             // The panel beside the conversation reaches the top and shares the header's row.
-            let panelInRow = header != nil && showsTrailing && metrics.showsChat
+            let panelInRow = header != nil && metrics.panelPlacement == .beside
             let trailingTop = panelInRow ? 0 : headerHeight
+            let floats = metrics.panelPlacement == .over
             ZStack(alignment: .topLeading) {
                 VStack(spacing: 0) {
                     HStack(alignment: .top, spacing: 0) {
@@ -243,6 +317,7 @@ struct TaskWorkspaceLayout<Chat: View, Rail: View, Trailing: View, Bottom: View>
                                 .contentShape(Rectangle()).clipped().opacity(metrics.showsChat ? 1 : 0)
                                 .disabled(!metrics.showsChat).allowsHitTesting(metrics.showsChat)
                                 .accessibilityHidden(!metrics.showsChat)
+                                .environment(\.conversationTrailingCover, metrics.conversationCover)
                             if metrics.showsRail {
                                 rail()
                                     .frame(width: metrics.railWidth, height: metrics.upperHeight)
@@ -250,8 +325,11 @@ struct TaskWorkspaceLayout<Chat: View, Rail: View, Trailing: View, Bottom: View>
                             }
                         }
                         .padding(.top, headerHeight)
+                        // A floating panel takes no room from the conversation, which keeps its width under the
+                        // panel's edge rather than narrowing past its minimum.
+                        .frame(width: floats ? max(0, proxy.size.width - metrics.trailingWidth) : nil, alignment: .leading)
                         if showsTrailing {
-                            if metrics.showsChat {
+                            if metrics.panelPlacement == .beside {
                                 resizeHandle(vertical: true)
                                     .frame(height: metrics.upperHeight + headerHeight - trailingTop)
                                     .padding(.top, trailingTop)
@@ -292,13 +370,24 @@ struct TaskWorkspaceLayout<Chat: View, Rail: View, Trailing: View, Bottom: View>
                                 }
                                 trailing()
                                     .environment(\.workSurfaceExpansion,
-                                                 proxy.size.width >= SidePanelWidth.besideConversation ? $preferences.isExpanded : nil)
+                                                 proxy.size.width >= SidePanelWidth.conversationInView ? $preferences.isExpanded : nil)
                                     .environment(\.workSurfaceHeaderRow, panelInRow ? header.map {
                                         WorkSurfaceHeaderRow(height: $0.height, isTitleBar: $0.isTitleBar)
                                     } : nil)
                             }
                             .frame(width: metrics.trailingWidth, height: metrics.upperHeight + headerHeight - trailingTop)
                             .contentShape(Rectangle()).clipped()
+                            // Floating, it is backed, edged and shadowed as the rail raised in a narrow window
+                            // is (`SessionRailRaisedLayer`). It stays the same view either way, so what it shows
+                            // is kept, and the shadow falls from a plain shape behind it, not from its content.
+                            .background {
+                                if floats {
+                                    Rectangle().fill(ParityTheme.canvas).shadow(color: .black.opacity(0.14), radius: 16, x: -4)
+                                }
+                            }
+                            .overlay(alignment: .leading) {
+                                if floats { Rectangle().fill(ParityTheme.separator).frame(width: 1) }
+                            }
                             .padding(.top, trailingTop)
                         }
                     }

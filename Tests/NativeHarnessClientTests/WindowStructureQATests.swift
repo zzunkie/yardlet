@@ -322,10 +322,11 @@ final class WindowStructureQATests: XCTestCase {
                 let terminalHandle = try XCTUnwrap(handle(L10n.string("Resize terminal"), in: host))
                 let panelWidth = Self.size.width - panelHandle.frame.maxX
                 let terminalHeight = Self.size.height - terminalHandle.frame.maxY
-                // 1280 × 760 beside a 240 sidebar: the Codex app's default, max(320, min(1216, 539), min(640, 687)).
-                XCTAssertEqual(panelWidth, 640, accuracy: 1)
+                // 1280 × 760 beside a 240 sidebar: the Codex app's default, max(320, min(1216, 539), min(640, 687)),
+                // within what leaves the conversation its 560 and the divider.
+                XCTAssertEqual(panelWidth, 473, accuracy: 1)
                 XCTAssertEqual(terminalHeight, 280, accuracy: 1)
-                var notes = ["Side panel width \(Int(panelWidth)) (Codex formula, was 420), terminal \(Int(terminalHeight)) (was 240)"]
+                var notes = ["Side panel width \(Int(panelWidth)) (Codex formula within the conversation's 560), terminal \(Int(terminalHeight)) (was 240)"]
                 orderIn(host)
 
                 // A drag past half the panel's minimum closes it, keeping the width it had.
@@ -345,7 +346,7 @@ final class WindowStructureQATests: XCTestCase {
                 if let dragged = handle(L10n.string("Resize side panel"), in: host) { doubleClick(dragged, in: host) }
                 let resetWidth = Self.size.width - (handle(L10n.string("Resize side panel"), in: host)?.frame.maxX ?? 0)
                 XCTAssertNil(model.taskWorkspaces.sizes.sizes.panelWidthRatio, "a double click returns to the default")
-                XCTAssertEqual(resetWidth, 640, accuracy: 1)
+                XCTAssertEqual(resetWidth, 473, accuracy: 1)
                 notes.append("Handle double-clicked → width \(Int(resetWidth)) (default)")
 
                 // The terminal: lower than 80 closes it, keeping its height.
