@@ -47,6 +47,10 @@ enum PerfBenchFixture {
         case memoryCycle = "memory-cycle"
         /// Edit the actual composer while a fake Claude answer streams in the same window.
         case composerInput = "composer-input"
+        /// A 60-turn Claude Code conversation of long answers, code blocks, tables, links and tool output,
+        /// scrolled up to its top and back down as a reader's trackpad does, then the same while its
+        /// last turn streams.
+        case conversationScroll = "conversation-scroll"
     }
 
     static var isRequested: Bool { CommandLine.arguments.contains(argument) }
@@ -164,8 +168,9 @@ enum PerfBenchFixture {
         var transcripts: [UUID: [TranscriptEntry]] = [:]
         var savedCards: [UUID: [CodexPersistedTimelineItem]] = [:]
 
-        func claudeTask(_ id: UUID, title: String, runtime: URL, sessionID: String, turns: Int) -> SessionRecord {
-            transcripts[id] = LongConversationFixture.claude(turns: turns, seed: "perf-\(id.uuidString.prefix(4))")
+        func claudeTask(_ id: UUID, title: String, runtime: URL, sessionID: String, turns: Int,
+                        links: Bool = false) -> SessionRecord {
+            transcripts[id] = LongConversationFixture.claude(turns: turns, seed: "perf-\(id.uuidString.prefix(4))", links: links)
             return SessionRecord(id: id, harness: .claudeCode, workspaceURL: projects[0], runtimeExecutableURL: runtime,
                                  title: title, titleOrigin: .automatic, status: .ready, createdAt: now.addingTimeInterval(-3_600),
                                  updatedAt: now, providerSessionID: sessionID)
@@ -211,6 +216,9 @@ enum PerfBenchFixture {
         case .sidebar:
             shown = [codexTask(shownTaskID, title: "Fix the parser's empty input", threadID: codexThreadID,
                                turns: (0..<4).map { LongConversationFixture.codexTurn($0) })]
+        case .conversationScroll:
+            shown = [claudeTask(shownTaskID, title: "Fix the parser's empty input", runtime: claude,
+                                sessionID: claudeSessionID, turns: 60, links: true)]
         case .browserTabs:
             shown = [claudeTask(shownTaskID, title: "Check the pages", runtime: none, sessionID: claudeSessionID, turns: 5)]
         case .codexSwitch, .memoryCycle:
@@ -278,6 +286,9 @@ enum PerfBenchFixture {
     static func install(in model: AppModel) {
         guard isRequested, !started, let scene else { return }
         started = true
+        // `--ui-fixture-perf-hold`: the scene's window stays as it was set up, for a person to try, and
+        // nothing is measured.
+        guard !CommandLine.arguments.contains("--ui-fixture-perf-hold") else { return }
         let runner = PerfBenchRunner(model: model, scene: scene, output: output(for: scene))
         Task { @MainActor in await runner.run() }
     }
@@ -392,6 +403,8 @@ private final class PerfBenchRunner {
             await memoryCycles()
         case .composerInput:
             await composerInput()
+        case .conversationScroll:
+            await scrollConversation()
         }
         finish()
     }
@@ -464,6 +477,108 @@ private final class PerfBenchRunner {
         if !started { problems.append("nothing streamed into the task") }
         try? await Task.sleep(for: .seconds(2))
         await phase("scroll-streaming", seconds: 10, frames: true, onFrame: move)
+    }
+
+    /// The conversation scrolled as a reader's trackpad scrolls it: a scroll wheel event of 20 points
+    /// each frame (1,200 points a second at 60 Hz), with the phases of a gesture, up to the top and back
+    /// down to the end, again and again. The events go to the conversation's scroll view as the window
+    /// would hand them on, so following lets go, earlier turns come in at the top and the view keeps its
+    /// place as they arrive, as for a reader. Then the same while the last turn streams; the message that
+    /// starts it brings the view back to the end.
+    private func scrollConversation() async {
+        guard let window, let scroll = conversationScrollView(in: window) else {
+            problems.append("no conversation scroll view")
+            return
+        }
+        func metrics() -> (top: CGFloat, bottom: CGFloat) {
+            let visible = scroll.documentVisibleRect
+            let height = scroll.documentView?.frame.height ?? 0
+            let flipped = scroll.documentView?.isFlipped ?? true
+            return flipped ? (visible.minY, height - visible.maxY) : (height - visible.maxY, visible.minY)
+        }
+        record["conversation"] = ["listHeight": scroll.documentView?.frame.height ?? 0,
+                                  "visibleHeight": scroll.contentView.bounds.height]
+        if metrics().top < 2_000 { problems.append("the conversation scrolls only \(Int(metrics().top)) pt") }
+        var upward = true
+        var reversals = 0
+        var gesture: CGScrollPhase = .began
+        // What the scrolling did, to see that the scene measured what it says: how far the view moved
+        // a frame at a time, how often it jumped (earlier turns arriving above the place kept), and how
+        // far from the end it got (following that does not let go keeps it there while a turn streams).
+        var moved: CGFloat = 0
+        var jumps = 0
+        var farthestFromEnd: CGFloat = 0
+        var nearestToTop = CGFloat.greatestFiniteMagnitude
+        var lastTop: CGFloat?
+        func traveled(from height: CGFloat) -> [String: Any] {
+            // With no frame served (a display asleep stops its display link) nothing moved.
+            ["movedPoints": Int(moved), "jumps": jumps, "reversals": reversals,
+             "farthestFromEndPoints": Int(farthestFromEnd),
+             "nearestToTopPoints": nearestToTop.isFinite && nearestToTop < 1e9 ? Int(nearestToTop) : -1,
+             "listHeightStart": Int(height), "listHeightEnd": Int(scroll.documentView?.frame.height ?? 0)]
+        }
+        func resetTravel() {
+            (moved, jumps, farthestFromEnd, nearestToTop, lastTop) = (0, 0, 0, .greatestFiniteMagnitude, nil)
+        }
+        let move: (CADisplayLink) -> Void = { _ in
+            let edges = metrics()
+            if let lastTop {
+                let step = abs(edges.top - lastTop)
+                if step > 100 { jumps += 1 } else { moved += step }
+            }
+            lastTop = edges.top
+            farthestFromEnd = max(farthestFromEnd, edges.bottom)
+            nearestToTop = min(nearestToTop, edges.top)
+            if upward, edges.top <= 1 {
+                upward = false
+                reversals += 1
+                Self.scrollWheel(scroll, by: 0, phase: .ended)
+                gesture = .began
+            } else if !upward, edges.bottom <= 1 {
+                upward = true
+                reversals += 1
+                Self.scrollWheel(scroll, by: 0, phase: .ended)
+                gesture = .began
+            }
+            Self.scrollWheel(scroll, by: upward ? 20 : -20, phase: gesture)
+            gesture = .changed
+        }
+        let scrollHeight = scroll.documentView?.frame.height ?? 0
+        await phase("scroll", seconds: 10, frames: true, onFrame: move)
+        Self.scrollWheel(scroll, by: 0, phase: .ended)
+        let scrolled = traveled(from: scrollHeight)
+        if moved < 2_000 { problems.append("the conversation scrolled only \(Int(moved)) pt (is the display asleep?)") }
+        let published = model.publicationCounts
+        await send("perf stream 30", to: PerfBenchFixture.shownTaskID)
+        let started = await waitUntil(.seconds(20)) { self.model.publicationCounts.transcripts > published.transcripts + 10 }
+        if !started { problems.append("nothing streamed into the task") }
+        try? await Task.sleep(for: .seconds(2))
+        upward = true
+        reversals = 0
+        gesture = .began
+        resetTravel()
+        let streamingHeight = scroll.documentView?.frame.height ?? 0
+        await phase("scroll-streaming", seconds: 10, frames: true, onFrame: move)
+        Self.scrollWheel(scroll, by: 0, phase: .ended)
+        record["conversation"] = ["visibleHeight": scroll.contentView.bounds.height,
+                                  "scroll": scrolled, "scroll-streaming": traveled(from: streamingHeight)]
+    }
+
+    /// A trackpad's scroll wheel event of `points` (positive moves toward the top) in a gesture's
+    /// `phase`, handed to `scroll` as the window hands it on.
+    private static func scrollWheel(_ scroll: NSScrollView, by points: Int32, phase: CGScrollPhase) {
+        guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
+                                  wheel1: points, wheel2: 0, wheel3: 0) else { return }
+        event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+        event.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
+        event.setIntegerValueField(.scrollWheelEventPointDeltaAxis1, value: Int64(points))
+        event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: Double(points))
+        if let window = scroll.window {
+            let center = scroll.convert(NSPoint(x: scroll.bounds.midX, y: scroll.bounds.midY), to: nil)
+            event.location = window.convertPoint(toScreen: center)
+        }
+        guard let wheel = NSEvent(cgEvent: event) else { return }
+        scroll.scrollWheel(with: wheel)
     }
 
     private func openBrowserTabs() async {
@@ -826,6 +941,14 @@ private final class PerfBenchRunner {
         return all(window.contentView ?? NSView()).filter { scroll in
             let frame = scroll.convert(scroll.bounds, to: nil)
             return frame.minX <= 120 && 120 <= frame.maxX && frame.width <= SidebarWidth.maximum + 1
+        }.max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }
+    }
+
+    /// The scroll view right of the sidebar whose content is tallest: the shown conversation's.
+    private func conversationScrollView(in window: NSWindow) -> NSScrollView? {
+        func all(_ view: NSView) -> [NSScrollView] { ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap(all) }
+        return all(window.contentView ?? NSView()).filter { scroll in
+            scroll.convert(scroll.bounds, to: nil).minX > SidebarWidth.minimum && !scroll.isHidden
         }.max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }
     }
 
