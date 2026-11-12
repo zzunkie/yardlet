@@ -14,11 +14,17 @@ import Foundation
 ///   Codex counterpart of Full access);
 /// - never where the card's allow is broader than this one request ("for session", "always").
 /// Everything else is answered on the card; its notification only opens the task.
+///
+/// The composer's keys answer the same requests the same way (`ComposerApprovalKey`): "Allow once",
+/// or the card's one-time denial (`deny`).
 enum NotificationApprovalProjection {
     struct PendingRequest: Equatable, Sendable {
         let id: String
         /// What "Allow once" sends; nil when the request is answered only on its card.
         let allowOnce: ConversationRequestRoute?
+        /// The card's denial that leaves no rule behind, for a request that takes "Allow once";
+        /// nil otherwise.
+        var deny: ConversationRequestRoute? = nil
         /// It asks the person a question rather than for approval (`asksQuestion`), which Settings lets notify on
         /// its own switch (`TaskNotificationKind`).
         var asksQuestion = false
@@ -44,11 +50,28 @@ enum NotificationApprovalProjection {
         if harness == .codex {
             return (codex?.serverRequestsByID.values.filter { $0.resolution == .pending } ?? [])
                 .sorted { $0.id.compare($1.id, options: [.numeric, .literal]) == .orderedAscending }
-                .map { PendingRequest(id: $0.id, allowOnce: allowOnce(for: $0), asksQuestion: asksQuestion($0)) }
+                .map { PendingRequest(id: $0.id, allowOnce: allowOnce(for: $0), deny: deny(for: $0),
+                                      asksQuestion: asksQuestion($0)) }
         }
         return transcript.compactMap { entry in
             guard case let .permission(request, .pending) = entry.content else { return nil }
-            return PendingRequest(id: request.id, allowOnce: allowOnce(for: request), asksQuestion: asksQuestion(request))
+            return PendingRequest(id: request.id, allowOnce: allowOnce(for: request), deny: deny(for: request),
+                                  asksQuestion: asksQuestion(request))
+        }
+    }
+
+    /// The same for a request as its card holds it, by the record it was read from; nil for one that
+    /// no longer waits or asks for more than an approval.
+    static func pendingRequest(for request: ConversationRequest) -> PendingRequest? {
+        guard request.state == .pending, request.form == nil else { return nil }
+        switch request.source {
+        case let .transcript(entry):
+            guard case let .permission(permission, _) = entry.content else { return nil }
+            return PendingRequest(id: request.id, allowOnce: allowOnce(for: permission), deny: deny(for: permission))
+        case let .codexServerRequest(state):
+            return PendingRequest(id: request.id, allowOnce: allowOnce(for: state), deny: deny(for: state))
+        case .codexApproval:
+            return nil
         }
     }
 
@@ -69,6 +92,31 @@ enum NotificationApprovalProjection {
         // Only an answer the card itself offers.
         let offered = ConversationRequestResponses.plain(providerActions: request.actions).map(\.route)
         return offered.contains(route) ? route : nil
+    }
+
+    /// The denial a shared-transcript request that takes "Allow once" gets from the keyboard: the plain
+    /// deny where the provider listed no options, or its own narrowest denial unless that one is standing.
+    static func deny(for request: PermissionRequest) -> ConversationRequestRoute? {
+        guard allowOnce(for: request) != nil else { return nil }
+        guard !request.actions.isEmpty else { return .decision(.deny) }
+        guard let action = PermissionActionPreference.preferred(from: request.actions, decision: .deny),
+              PermissionActionPreference.scope(id: action.id, intent: action.kind) != .broad else { return nil }
+        return .providerAction(action)
+    }
+
+    /// The denial a Codex server request that takes "Allow once" gets from the keyboard: the card's
+    /// decline, or its cancel where it offers no decline; never a rule such as a host's network denial.
+    static func deny(for request: CodexServerRequestState) -> ConversationRequestRoute? {
+        guard allowOnce(for: request) != nil else { return nil }
+        let denials = CodexRequestResponseProjection.responses(for: request)
+            .filter { $0.role == .destructive }.map(\.route)
+        let plain: [ConversationRequestRoute] = [
+            .codex(.command(.decline)), .codex(.fileChange(.decline)), .codex(.command(.cancel)),
+            .codex(.fileChange(.cancel)), .codex(.legacyReview(.abort))
+        ]
+        return plain.first(where: denials.contains) ?? denials.first { route in
+            if case .codex(.legacyReview(.denied)) = route { true } else { false }
+        }
     }
 
     /// The answer "Allow once" gives a Codex server request: accept, for a command or file-change

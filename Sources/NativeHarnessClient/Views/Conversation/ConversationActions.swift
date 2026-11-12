@@ -28,6 +28,9 @@ struct ConversationActions {
     var answer: ((String, PermissionStructuredAnswer) -> Void)? = nil
     /// Answers a Codex server request.
     var respondToCodexRequest: (String, CodexServerRequestResponse) -> Void = { _, _ in }
+    /// The task's composer answers its oldest tool approval from the keyboard (`ComposerApprovalKey`),
+    /// so the request cards name those keys.
+    var answersFromComposer = false
     /// Requests Yardlet itself holds in this task (`AppModel.heldRequests`): what its session tools
     /// wait on, and a question a restart cut off. Drawn at the end of the latest turn and answered by
     /// the same routes.

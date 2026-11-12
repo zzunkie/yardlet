@@ -1761,7 +1761,8 @@ struct MainWindow: View {
                 Task { await model.selectCodexRunLocation(location, for: session) }
             },
             refreshConnectors: { await model.refreshMCPServers(for: session) },
-            prepareCodexCommands: { await model.prepareCodexComposerCommands(for: session) }
+            prepareCodexCommands: { await model.prepareCodexComposerCommands(for: session) },
+            answerApproval: { allowing in model.answerOldestApproval(in: session.id, allowing: allowing) }
         )
         if wiring.submission == .codexDraft {
             actions.submitCodex = { draft, action in

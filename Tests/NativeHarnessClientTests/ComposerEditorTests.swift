@@ -539,7 +539,10 @@ final class ComposerEditorTests: XCTestCase {
         XCTAssertEqual(ComposerReturnKey(EventModifiers.shift), .newline)
         XCTAssertEqual(ComposerReturnKey([.shift, .capsLock] as EventModifiers), .newline)
         XCTAssertNil(ComposerReturnKey(EventModifiers.option), "Option-Return adds a line in the field editor")
-        XCTAssertNil(ComposerReturnKey([.shift, .command] as EventModifiers))
+        // ⇧⌘Return answers a waiting tool approval, and only with a denial (`ComposerApprovalKey`).
+        XCTAssertEqual(ComposerReturnKey([.shift, .command] as EventModifiers), .denyRequest)
+        XCTAssertTrue(ComposerApprovalKey.deny.contains(KeyboardShortcut(.return, modifiers: [.shift, .command])))
+        XCTAssertFalse(ComposerApprovalKey.allow.contains { $0.modifiers.contains(.shift) })
         XCTAssertNil(ComposerReturnKey(EventModifiers.control))
         XCTAssertEqual(ComposerReturnKey(NSEvent.ModifierFlags.command), .alternate)
         XCTAssertEqual(ComposerReturnKey(NSEvent.ModifierFlags.shift), .newline)

@@ -90,6 +90,25 @@ extension AppModel {
               session.status == .waitingForApproval,
               isAttached(session.id),
               let route = pendingApproval(requestID, in: session)?.allowOnce else { return false }
+        return await answer(requestID, with: route, in: session)
+    }
+
+    /// Answers the oldest request the task waits on from the composer's keys (`ComposerApprovalKey`):
+    /// with its "Allow once", or with the card's one-time denial, as a notification answers it, and only
+    /// for a request a notification could answer. Returns whether the key answered; the answer itself
+    /// goes on after this returns. It goes by the requests that wait rather than the task's status, which
+    /// can read running again after one of several requests is answered.
+    func answerOldestApproval(in sessionID: UUID, allowing: Bool) -> Bool {
+        guard let session = store.sessions.first(where: { $0.id == sessionID }), isAttached(session.id),
+              let oldest = pendingApprovals(in: session).first,
+              let route = allowing ? oldest.allowOnce : oldest.deny else { return false }
+        Task { await answer(oldest.id, with: route, in: session) }
+        return true
+    }
+
+    /// Sends a request card's answer by its route, as the card sends it; false for an answer only the
+    /// card's form gives.
+    private func answer(_ requestID: String, with route: ConversationRequestRoute, in session: SessionRecord) async -> Bool {
         switch route {
         case let .decision(decision):
             await respond(to: requestID, decision: decision, in: session)
@@ -127,7 +146,8 @@ extension AppModel {
         )
         // What Yardlet holds in the task (`heldRequests`), answered by the same "Allow once".
         + heldRequests(in: session.id).map {
-            NotificationApprovalProjection.PendingRequest(id: $0.id, allowOnce: RemoteApprovalPolicy.allowOnce($0))
+            NotificationApprovalProjection.pendingRequest(for: $0)
+                ?? NotificationApprovalProjection.PendingRequest(id: $0.id, allowOnce: nil)
         }
     }
 

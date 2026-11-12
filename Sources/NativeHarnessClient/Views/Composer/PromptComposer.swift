@@ -145,7 +145,17 @@ struct PromptComposer: View {
         guard let followUp = runningFollowUp,
               let action = followUp.alternateAction(preferred: followUpMode, canSteer: canSteer)
         else { return nil }
-        return { submit(action) }
+        return { if !allowsWaitingApproval() { submit(action) } }
+    }
+
+    /// Return and ⌘Return in the empty composer allow the oldest tool approval the task waits on, once,
+    /// and ⇧⌘Return denies it (`ComposerApprovalKey`); with a draft they send it. Not in bash mode,
+    /// where Return runs a command.
+    private func allowsWaitingApproval() -> Bool { answersWaitingApproval(allowing: true) }
+
+    private func answersWaitingApproval(allowing: Bool) -> Bool {
+        guard isRunning, currentDraft.isEmpty, !isBashMode, let answer = actions.answerApproval else { return false }
+        return answer(allowing)
     }
 
     /// The "+" menu's connectors: Yardlet's own, each with this task's switch, and the session's
@@ -302,8 +312,9 @@ struct PromptComposer: View {
             isCommandMenuOpen: openComposerMenu == .commands, isMenuOpen: openComposerMenu != nil,
             showsChips: !composerDraft.diffComments.isEmpty || !composerDraft.browserComments.isEmpty,
             isFocused: $isPromptFocused,
-            onSubmit: { submit(.automatic) },
+            onSubmit: { if !allowsWaitingApproval() { submit(.automatic) } },
             onAlternateSubmit: alternateSubmit,
+            onDenyRequest: actions.answerApproval == nil ? nil : { _ = answersWaitingApproval(allowing: false) },
             takeSuggestion: takeNextMessageSuggestion,
             suggestion: isBashMode ? nil : composerDraft.shownNextMessageSuggestion(
                 isEnabled: showsNextMessageSuggestions, isRunning: isRunning),
@@ -311,6 +322,8 @@ struct PromptComposer: View {
                 // In the home's reply, Escape is the home's: nothing the task runs stops.
                 if let escape = actions.escape { escape() }
                 else if isShellCommandRunning { shellCommands?.stop() }
+                // A waiting tool approval is denied first, as the Codex app's Escape denies one.
+                else if isRunning, actions.answerApproval?(false) == true { return }
                 else if isRunning { actions.interrupt() }
                 else if isBashMode { composerDraft.leaveBashMode() }
             },

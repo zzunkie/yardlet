@@ -360,6 +360,7 @@ struct TaskDetail: View {
         var actions = conversationActions
         actions.restoreDraft = { restoreDraft($0) }
         actions.subtaskControls = activityActions
+        actions.answersFromComposer = composerActions.answerApproval != nil
         // A conversation shown without its task's panels (a side chat) has no terminal to hand to.
         actions.runInTerminal = conversationOnly ? nil : { runInTerminal($0) }
         let allowsRetry = (session.status == .ready || session.status == .failed)

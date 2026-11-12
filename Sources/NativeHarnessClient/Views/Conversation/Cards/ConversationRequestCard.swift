@@ -326,18 +326,31 @@ struct ConversationRequestCard: View {
         let route = request.route(for: response, input: input)
         let role: ButtonRole? = response.role == .destructive ? .destructive : nil
         let send = { self.send(response) }
+        let help = ShortcutHelp.text(response.title, keys(for: response))
         if response.role == .primary {
             Button(response.title, role: role, action: send)
                 .parityProminentButton()
                 .parityPointer()
                 .disabled(route == nil)
                 .accessibilityLabel(response.title)
+                .help(help)
         } else {
             Button(response.title, role: role, action: send)
                 .buttonStyle(.bordered)
                 .parityPointer()
                 .disabled(route == nil)
                 .accessibilityLabel(response.title)
+                .help(help)
         }
+    }
+
+    /// The composer's keys that give this answer (`ComposerApprovalKey`): "Allow once" and the
+    /// one-time denial of a request a notification could answer.
+    private func keys(for response: ConversationRequestResponse) -> [KeyboardShortcut] {
+        guard actions.answersFromComposer, let pending = NotificationApprovalProjection.pendingRequest(for: request)
+        else { return [] }
+        if response.route == pending.allowOnce { return ComposerApprovalKey.allow }
+        if response.route == pending.deny { return ComposerApprovalKey.deny }
+        return []
     }
 }

@@ -48,6 +48,13 @@ struct ComposerActions {
     /// Reads what the Codex command list shows beyond its fixed commands, without a turn.
     var prepareCodexCommands: () async -> Void = {}
 
+    // MARK: Requests
+
+    /// Answers the oldest tool approval the task waits on from the composer's keys
+    /// (`ComposerApprovalKey`): true allows it once, false denies it. Returns whether a key answered
+    /// one; nil where the composer answers none.
+    var answerApproval: ((_ allowing: Bool) -> Bool)? = nil
+
     // MARK: The home's reply
 
     /// What Escape does in place of stopping the turn: the home's reply gives the composer back to

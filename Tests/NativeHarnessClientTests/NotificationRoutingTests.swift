@@ -258,6 +258,8 @@ final class NotificationRoutingTests: XCTestCase {
     func testAllowOnceIsOfferedOnlyForAPlainToolApproval() {
         let plain = PermissionRequest(id: "1", title: "Run", detail: nil, command: "ls")
         XCTAssertEqual(NotificationApprovalProjection.allowOnce(for: plain), .decision(.allow))
+        // The composer's Escape denies what its Return allows once, leaving no rule behind.
+        XCTAssertEqual(NotificationApprovalProjection.deny(for: plain), .decision(.deny))
 
         let claudeOffer = [
             PermissionRequestAction(id: "allow", label: "Allow", decision: .allow, kind: "allow_once"),
@@ -268,6 +270,11 @@ final class NotificationRoutingTests: XCTestCase {
             NotificationApprovalProjection.allowOnce(for: request(actions: claudeOffer)),
             .providerAction(claudeOffer[0])
         )
+        XCTAssertEqual(NotificationApprovalProjection.deny(for: request(actions: claudeOffer)),
+                       .providerAction(claudeOffer[2]))
+        let standingDenial = [claudeOffer[0], PermissionRequestAction(
+            id: "reject_always", label: "Always reject", decision: .deny, kind: "reject_always")]
+        XCTAssertNil(NotificationApprovalProjection.deny(for: request(actions: standingDenial)))
 
         // The provider's narrowest allow is standing, so there is no one-time allow to give.
         let onlyAlways = [
@@ -275,10 +282,12 @@ final class NotificationRoutingTests: XCTestCase {
             PermissionRequestAction(id: "reject", label: "Reject", decision: .deny, kind: "reject_once")
         ]
         XCTAssertNil(NotificationApprovalProjection.allowOnce(for: request(actions: onlyAlways)))
+        XCTAssertNil(NotificationApprovalProjection.deny(for: request(actions: onlyAlways)))
 
         let question = PermissionQuestion(question: "Which?", options: [.init(label: "A"), .init(label: "B")])
         XCTAssertNil(NotificationApprovalProjection.allowOnce(for: request(structured: .questions([question]))))
         XCTAssertNil(NotificationApprovalProjection.allowOnce(for: request(structured: .plan("1. Do it"))))
+        XCTAssertNil(NotificationApprovalProjection.deny(for: request(structured: .plan("1. Do it"))))
         XCTAssertNil(NotificationApprovalProjection.allowOnce(for: PermissionRequest(
             id: "held", title: "AskUserQuestion", detail: nil, command: nil, requiresInAppAnswer: true
         )))
@@ -301,8 +310,29 @@ final class NotificationRoutingTests: XCTestCase {
             NotificationApprovalProjection.allowOnce(for: codexRequest(.execCommandApproval, "execCommandApproval")),
             .codex(.legacyReview(.approved))
         )
+        XCTAssertEqual(
+            NotificationApprovalProjection.deny(for: codexRequest(.commandExecutionApproval, "item/commandExecution/requestApproval")),
+            .codex(.command(.decline))
+        )
+        XCTAssertEqual(
+            NotificationApprovalProjection.deny(for: codexRequest(.execCommandApproval, "execCommandApproval")),
+            .codex(.legacyReview(.denied(rejection: L10n.string("Denied"))))
+        )
+        // Codex's own offer: its decline or cancel, never a host's network rule listed first.
+        let offered = CodexServerRequestState(
+            id: "s:1", method: "item/commandExecution/requestApproval", kind: .commandExecutionApproval,
+            threadID: "thread", turnID: "turn", itemID: "item", params: .object(["availableDecisions": .array([
+            .string("accept"),
+            .object(["applyNetworkPolicyAmendment": .object(["network_policy_amendment": .object([
+                "host": .string("example.com"), "action": .string("deny")])])]),
+            .string("cancel")
+        ])]), resolution: .pending)
+        XCTAssertEqual(NotificationApprovalProjection.deny(for: offered), .codex(.command(.cancel)))
         // More sandbox or network access is Codex's Full access counterpart: answered in the app.
         XCTAssertNil(NotificationApprovalProjection.allowOnce(
+            for: codexRequest(.permissionsApproval, "item/permissions/requestApproval")
+        ))
+        XCTAssertNil(NotificationApprovalProjection.deny(
             for: codexRequest(.permissionsApproval, "item/permissions/requestApproval")
         ))
         XCTAssertNil(NotificationApprovalProjection.allowOnce(for: codexRequest(.toolUserInput, "item/tool/requestUserInput")))
@@ -414,6 +444,32 @@ final class NotificationRoutingTests: XCTestCase {
         XCTAssertEqual(sentAtEnd, sent.count)
         XCTAssertEqual(model.store.selectedSessionID, session.id)
         XCTAssertEqual(claude.attention.bringForwardCount, 1)
+
+        // The composer's keys answer the oldest request the task waits on the same way: Escape denies
+        // it once, without the CLI's rule, and Return then allows the next one once.
+        for id in ["bash-3", "bash-4"] {
+            await transport.emit(canUseTool(id, tool: "Bash", input: .object(["command": .string("swift build")]),
+                                            suggestions: [Self.bashRule]))
+        }
+        try await waitUntil {
+            model.store.sessions.first { $0.id == session.id }?.status == .waitingForApproval
+                && model.pendingApprovals(in: session).map(\.id) == ["bash-3", "bash-4"]
+        }
+        XCTAssertTrue(model.answerOldestApproval(in: session.id, allowing: false))
+        try await waitUntil { await transport.sentValues.last?["response"]?["request_id"]?.stringValue == "bash-3" }
+        let afterDenial = await transport.sentValues
+        let denial = try XCTUnwrap(afterDenial.last?["response"]?["response"])
+        XCTAssertEqual(denial["behavior"]?.stringValue, "deny")
+        XCTAssertNil(denial["updatedPermissions"])
+        try await waitUntil { model.pendingApprovals(in: session).map(\.id) == ["bash-4"] }
+        XCTAssertTrue(model.answerOldestApproval(in: session.id, allowing: true))
+        try await waitUntil { await transport.sentValues.last?["response"]?["request_id"]?.stringValue == "bash-4" }
+        let afterAllow = await transport.sentValues
+        let allow = try XCTUnwrap(afterAllow.last?["response"]?["response"])
+        XCTAssertEqual(allow["behavior"]?.stringValue, "allow")
+        XCTAssertNil(allow["updatedPermissions"])
+        try await waitUntil { model.pendingApprovals(in: session).isEmpty }
+        XCTAssertFalse(model.answerOldestApproval(in: session.id, allowing: true))
         await model.shutdown()
     }
 
@@ -480,6 +536,9 @@ final class NotificationRoutingTests: XCTestCase {
         }
         XCTAssertEqual(model.pendingApprovals(in: model.store.sessions[0]).map(\.id), ["s:access-1", "s:command-1"])
 
+        // The composer's keys answer only the oldest request, and it is one they do not answer.
+        XCTAssertFalse(model.answerOldestApproval(in: session.id, allowing: true))
+        XCTAssertFalse(model.answerOldestApproval(in: session.id, allowing: false))
         let access = await model.allowOnce(.init(sessionID: session.id, requestID: "s:access-1"))
         XCTAssertFalse(access)
         let command = await model.allowOnce(.init(sessionID: session.id, requestID: "s:command-1"))

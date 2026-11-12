@@ -6,8 +6,13 @@ import SwiftUI
 /// other tooltips use. Buttons pass the menu's own `KeyboardShortcut`, so the tooltip follows the key.
 enum ShortcutHelp {
     static func text(_ title: String, _ shortcut: KeyboardShortcut?) -> String {
-        guard let shortcut else { return title }
-        return "\(title) (\(shortcut.displayText))"
+        text(title, shortcut.map { [$0] } ?? [])
+    }
+
+    /// The same with each key that does it, in the order given.
+    static func text(_ title: String, _ shortcuts: [KeyboardShortcut]) -> String {
+        guard !shortcuts.isEmpty else { return title }
+        return "\(title) (\(shortcuts.map(\.displayText).joined(separator: ", ")))"
     }
 }
 
