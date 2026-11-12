@@ -280,7 +280,8 @@ still open and the room. The runner's phone reaches the listener from the same c
 does not filter, so what another device on the network needs is the firewall's permission above. The run
 gathers the app with its resource folder and the Swift runtime beside it, opens what it gathered from another folder with the
 build folder out of reach, and uploads it (`windows-app-bin`), to open on a PC that has the Windows App Runtime 1.7 but
-no Swift.
+no Swift. Last, it packs the app, installs it, updates it and removes it (`Windows/scripts/check-install.ps1`, "Installing
+and updating the Windows app" below), and uploads the first installer it packed (`windows-app-setup`).
 
 **Why the screens are Swift.** Before the app target, the same window (sidebar, conversation, composer) was built in
 Swift and in C# with WinUI 3 and opened on a GitHub Actions Windows runner. Both held 28–30 MB of private
@@ -312,8 +313,9 @@ alone, which must fail and so show what the fixes are for, and with the fixes, w
 bindings; fork it and keep only the fixes the app needs; as a last resort, write the screens in C# with WinUI 3 and
 keep the engine in Swift, which needs a layer that carries the engine's state and events to the C# screens.
 
-**What the Windows app does not have yet:** an installer, a signature and updates: the app is the folder CI gathers,
-unsigned, and the Windows App Runtime 1.7 it needs is installed on its own and no longer supported by Microsoft. The
+**What the Windows app does not have yet:** a signature: the installer and what it installs are unsigned, and the
+Windows App Runtime 1.7 the app needs is installed on its own and no longer supported by Microsoft. Settings has no
+switch for checking for updates and no Check for Updates, as the Mac's has. The
 Yardlet MCP server: its endpoint is a Unix domain socket (`Sources/YardletAgentTools/Platform/UnixDomainSocket.swift`)
 with no named pipe in its place, and the app carries no `yardlet-mcp.exe`, so a Windows task has no connectors and none
 of Yardlet's session, schedule, task or browser tools. A Windows layer for the rest of what `Platform/Portable/` stands in for:
@@ -330,6 +332,55 @@ there hands frames over whole (swiftlang/swift-corelibs-foundation#5255), its re
 does not decrypt from a piece of one: a paired device that sends such a frame holds the frames after it, other phones'
 too, until the bytes reach the limit (4 + 65,535 bytes) and are dropped, and a phone whose frame was dropped is out of
 step with its cipher's nonce and has to connect again.
+
+## Installing and updating the Windows app
+
+`Windows/scripts/pack.ps1` packs the app with [Velopack](https://velopack.io) into a per-user installer,
+`YardletApp-win-Setup.exe`, which installs without administrator rights into `%LOCALAPPDATA%\YardletApp` with a Start
+menu shortcut and an entry in Settings › Apps; a portable zip; and the update package with the feed an installed app
+reads (`releases.win.json`). The pack id is `YardletApp`, not `Yardlet`: Velopack installs into `%LOCALAPPDATA%\<pack
+id>`, moves aside a folder it finds there that is not empty and deletes it once the install succeeds, and empties that
+folder when the app is removed (its `install.rs` and `uninstall.rs`), and `%LOCALAPPDATA%\Yardlet` is the app's data.
+
+What goes in is the app's executable and only that executable, so a program the build made for a check, such as
+`yardlet-remote-fixture.exe`, stays out; the libraries and resource folder the build put beside it; the Windows App
+SDK's bootstrapper; the Swift runtime; the relay the build carries (`place-relay.ps1`); Velopack's C library,
+`velopack_libc_win_x64_msvc.dll`, at the version and SHA-256 the script pins; and, when `-UpdateFeed` names one, the
+feed in `YardletUpdateFeed`. `Windows/scripts/set-app-icon.ps1` writes Yardlet's icon into the packed copy of the
+executable, from which the taskbar button, the shortcut and the Apps entry take theirs, and gives the installer the
+same icon. The window's title bar keeps WinUI's default icon.
+
+In the app (`Platform/Windows/WindowsUpdates.swift`), the library is looked for in the executable's folder alone, with
+its dependencies from System32, so a build run from its build folder has none and runs as before. Velopack's start
+runs first, before the Windows App Runtime (`XamlApplication.willStart()`): it answers an installer's hook (installed,
+updated, replaced, about to be removed) and ends the process at once, as Setup.exe and Update.exe wait for it to; it
+puts in an update downloaded earlier that is not yet in place and opens the app again; and it gives the process the
+AppUserModelID of the app's shortcut (`velopack.YardletApp`). An installed app whose package names a feed then does
+what Sparkle does on the Mac: it looks for an update when it opens and once a day, downloads one in the background,
+and once its window has closed and it quits, hands the update to Velopack's updater, which waits for the process to
+end and puts the update in place without showing anything or opening the app again. A feed that is a GitHub
+repository's address is read from its newest ten releases, for the `releases.win.json` among their files, so a release
+made for the Mac alone in between does no harm. Velopack checks a download against the SHA-256 the feed lists; nothing
+else vouches for it until the files are signed, where the Mac's updates also carry an EdDSA signature that Sparkle
+checks.
+
+Signing has a place but no certificate: `-SignTemplate`, or `YARDLET_WINDOWS_SIGN_TEMPLATE`, gives `vpk` a command
+that signs one file, with `{{file}}` for its path, which it runs on every executable and library it packs and on
+Setup.exe. Without one nothing is signed. Publishing these files with a release is not part of `scripts/release.sh`
+yet.
+
+Removing the app leaves `%LOCALAPPDATA%\Yardlet`, its keys in Credential Manager, the firewall's permission and the
+notifications' registration under `HKCU\Software\Classes`, as moving the Mac app to the Trash leaves its data. The
+harnesses' own folders, such as `%USERPROFILE%\.claude`, are theirs and are never touched.
+
+`windows-app.yml` checks all of it on the runner (`Windows/scripts/check-install.ps1`): it packs the build twice, as
+two versions that read a feed in a folder on the runner. The first one's Setup.exe installs it without a window, and
+Velopack's log must show the app answered the install hook; the installed folder must hold no other executable, the
+executable must carry an icon, and the shortcut, the Apps entry and the version must be there, with the data folder
+unchanged. Opened, the app must find nothing newer. With the second version's files in the feed, the app opened again
+must download it and, once its window is closed, hand it to the updater, after which the installed version must be the
+second; opened once more it must say so and find nothing newer. Removing it must answer the uninstall hook and take
+the installed app, the shortcut and the Apps entry, and leave the data folder as it was.
 
 ## The check that blocks new violations
 
@@ -406,6 +457,7 @@ location there (AppData, the registry and so on) is not confirmed.
 | swift-markdown 0.8.0 (swift-cmark 0.8.0) | `Transcript/TranscriptInlineContent`, `Transcript/TranscriptMarkdownDocument`, `Diff/MarkdownReviewDiff`, `Domain/TaskAttention` | The manifest has Windows-specific settings. Builds on Linux (confirmed); Windows not confirmed | `CMARK_GFM_STATIC_DEFINE` `.when(platforms: [.windows])` in swift-markdown's `Package.swift`, `#if os(Windows)` in swift-cmark's `Package.swift` | Keep it in the engine |
 | swift-crypto 5.0.3 (in place of CryptoKit) | `CodexEnvironmentManager`, `ClaudeSubagentTranscriptReader`, `YardletRemote` | Windows builds in its own CI; its README names ARM64 Windows. Not confirmed with Yardlet's build | Builds on Linux (confirmed) | Keep |
 | SwiftTerm 1.18.0 | None; the macOS layer and screens only | Only the terminal parser builds. No PTY or view (confirmed) | The manifest's `os(Windows)` branch leaves out the `Apple`, `Mac` and `iOS` sources, and `LocalProcess.swift`, `Pty.swift` and `HeadlessTerminal.swift` are under `#if !os(iOS) && !os(Windows)` | The Windows terminal uses ConPTY and a Windows view |
-| Sparkle 2.10.1 | None; only the macOS layer imports it (`Platform/macOS/YardletSparkle.swift`), and it is linked only on macOS (`.when(platforms: [.macOS])`) | Not used | `Package.swift` | Windows needs its own update mechanism |
+| Sparkle 2.10.1 | None; only the macOS layer imports it (`Platform/macOS/YardletSparkle.swift`), and it is linked only on macOS (`.when(platforms: [.macOS])`) | Not used | `Package.swift` | Windows updates through Velopack |
+| Velopack 1.2.161 (`vpk` and its C library `velopack_libc`) | None; the Windows layer loads the library at run time (`Platform/Windows/WindowsUpdates.swift`) and links nothing of it | Packs, installs and updates the Windows app ("Installing and updating the Windows app" above) | `Windows/scripts/pack.ps1` pins the version and the library's SHA-256; `windows-app.yml` installs, updates and removes the app | Keep the packer and the library at one version |
 | CSQLite (`systemLibrary`, `link "sqlite3"`; on Windows a C target linking `winsqlite3`) | `Store/SessionRepository`, `Domain/ProviderSessionTitleResolver` | Windows ships SQLite as `winsqlite3.dll` with the header in the Windows SDK. Builds on Linux with the system's libsqlite3 (confirmed) | `Package.swift`, `Sources/CSQLite/module.modulemap`, `Sources/CSQLiteWindows` | Keep the system's SQLite on each platform |
 | Observation | Many `@Observable` models | A Swift toolchain module, imported explicitly outside Apple's platforms. Builds on Linux (confirmed) | The Linux build | Keep as is |

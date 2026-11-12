@@ -9,14 +9,26 @@ import WinUIApplication
 @main
 final class YardletApp: XamlApplication {
     private var mainWindow: MainWindow?
+    private var updater: WindowsUpdater?
 
     required init() {
         super.init()
     }
 
+    /// An installer's hook, or an update downloaded earlier, before anything else (`VelopackStart`).
+    override class func willStart() {
+        VelopackStart.run()
+    }
+
+    /// An update downloaded meanwhile goes in once the process has ended.
+    override func shutDown(exitCode: Int32) {
+        let updater = updater
+        MainActor.assumeIsolated { updater?.applyOnExit() }
+    }
+
     override func launched() {
         let console = WindowsConsole.makeHidden()
-        mainWindow = MainActor.assumeIsolated {
+        let (window, updater) = MainActor.assumeIsolated {
             let attention = WindowsApplicationAttention()
             let model = AppModel.live(applicationAttention: attention)
             // Off until the person turns it on in Settings › Remote, as on the Mac; while off it opens nothing.
@@ -34,7 +46,11 @@ final class YardletApp: XamlApplication {
             QAEventLog.shared.write(console)
             QAEventLog.shared.write("language: \(L10n.windowsLanguageNote)")
             QAHarnessCheck.runIfAsked(model: model)
-            return window
+            let updater = WindowsUpdater.installed { QAEventLog.shared.write($0) }
+            updater?.start()
+            return (window, updater)
         }
+        mainWindow = window
+        self.updater = updater
     }
 }

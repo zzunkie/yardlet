@@ -104,7 +104,8 @@ jobs:
             -OutDirectory window-check
           exit $LASTEXITCODE
       # The app with the Swift runtime beside it, to run on a PC that has the Windows App Runtime 1.7 but no
-      # Swift: its executables and libraries and its resource folder, as report.ps1 counts them.
+      # Swift: its executable, libraries and resource folder, as report.ps1 counts them, without the fixture host
+      # the build made beside it.
       - name: Gather the app
         shell: pwsh
         # The relay a public build carries (scripts/release.sh), for the PC the gathered app is opened on.
@@ -112,7 +113,8 @@ jobs:
           YARDLET_RELAY_URL: https://relay.yardlet.app
         run: |
           $out = New-Item -ItemType Directory -Force windows-app-bin
-          Get-ChildItem $env:APP_BIN -File | Where-Object { $_.Extension -in '.exe', '.dll', '.pri', '.winmd' } |
+          Get-ChildItem $env:APP_BIN -File |
+            Where-Object { $_.Name -eq 'NativeHarnessClient.exe' -or $_.Extension -in '.dll', '.pri', '.winmd' } |
             Copy-Item -Destination $out
           Get-ChildItem $env:APP_BIN -Directory | Where-Object Name -match 'resources|bundle' |
             Copy-Item -Destination $out -Recurse
@@ -137,6 +139,18 @@ jobs:
             Rename-Item .build-hidden .build
           }
           exit $code
+      # The app packed with Velopack, installed without a window, updated from a feed in a folder on the runner
+      # and removed (docs/PLATFORM_PORTABILITY.md, "Installing and updating the Windows app").
+      - name: Install, update and remove the packed app
+        shell: pwsh
+        env:
+          YARDLET_RELAY_URL: https://relay.yardlet.app
+        run: Windows/scripts/check-install.ps1 -Binaries $env:APP_BIN -OutDirectory window-check
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-app-setup
+          path: ${{ runner.temp }}/yardlet-pack-first
+          retention-days: 7
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-app-bin

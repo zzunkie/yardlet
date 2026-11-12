@@ -8,11 +8,12 @@ import WindowsFoundation
 
 /// A WinUI application in an unpackaged process, for a window to derive from and mark `@main`.
 ///
-/// `main()` starts COM for the thread and the Windows App Runtime through the Windows App SDK's
-/// bootstrapper, creates the application as the type `main()` was called on, and runs the thread's
-/// message loop, which also runs Foundation's run loop and the main dispatch queue, where Swift's main
-/// actor runs. The application supplies the XAML controls' metadata and styles, as an App.xaml does
-/// for a C# application, and calls `launched()` when the window can be made.
+/// `main()` lets the application run what must come first (`willStart()`), starts COM for the thread
+/// and the Windows App Runtime through the Windows App SDK's bootstrapper, creates the application as
+/// the type `main()` was called on, and runs the thread's message loop, which also runs Foundation's
+/// run loop and the main dispatch queue, where Swift's main actor runs. The application supplies the
+/// XAML controls' metadata and styles, as an App.xaml does for a C# application, and calls
+/// `launched()` when the window can be made.
 open class XamlApplication: Application, IXamlMetadataProvider {
     public enum StartFailure: Swift.Error {
         case call(String, HRESULT)
@@ -21,6 +22,9 @@ open class XamlApplication: Application, IXamlMetadataProvider {
     public required override init() {
         super.init()
     }
+
+    /// Runs first in `main()`, before COM and the Windows App Runtime start; it may end the process.
+    open class func willStart() {}
 
     /// Makes the first window; XAML elements can be made from here on.
     open func launched() {}
@@ -35,6 +39,7 @@ open class XamlApplication: Application, IXamlMetadataProvider {
 
     @MainActor
     public static func main() {
+        Self.willStart()
         do {
             try startWindowsAppRuntime()
             // XAML runs on a thread with a dispatcher queue, set up for XAML once the application

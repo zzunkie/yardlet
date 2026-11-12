@@ -818,6 +818,39 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+#### Velopack 1.2.161
+
+Source: https://github.com/velopack/velopack
+
+The Windows app's installer, its updater (`Update.exe`) and the C library the app loads to update itself
+(`velopack_libc_win_x64_msvc.dll`) are Velopack's, put together by its packer, `vpk`
+(docs/PLATFORM_PORTABILITY.md, "Installing and updating the Windows app").
+
+```
+MIT License
+
+Copyright © 2021 Caelan Sayler
+Copyright © 2024 Velopack Ltd.
+
+Permission is hereby granted,  free of charge,  to any person obtaining a
+copy of this software and associated documentation files (the "Software"),
+to deal in the Software without restriction, including without limitation
+the rights to  use, copy, modify, merge, publish, distribute, sublicense,
+and/or sell copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+```
+
 #### Windows App SDK 1.7.250909003 (NuGet package Microsoft.WindowsAppSDK)
 
 Source: https://www.nuget.org/packages/Microsoft.WindowsAppSDK/1.7.250909003
@@ -835,3 +868,4 @@ Windows App Runtime itself is installed on its own and is not part of the app.
   https://aka.ms/WinSDKLicenseURL) and **WebView2 1.0.2903.40** (NuGet package Microsoft.Web.WebView2, © Microsoft
   Corporation, the package's `LICENSE.txt`): metadata the bindings are generated from.
 - **NuGet** (`nuget.exe`, © .NET Foundation and contributors), which restores the packages above.
+- **Velopack's packer** (`vpk`, above), installed as a .NET tool to pack the installer.
