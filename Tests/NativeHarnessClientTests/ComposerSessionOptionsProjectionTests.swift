@@ -391,20 +391,29 @@ final class ComposerSessionOptionsProjectionTests: XCTestCase {
         XCTAssertEqual(codexOptions.followUp?.delivery, .codexDraft)
         let add = L10n.string("Add to the running task"), next = L10n.string("Deliver at the next step")
         let after = L10n.string("Send when this turn ends")
-        XCTAssertEqual(codexOptions.followUp?.runningPlaceholder(preferred: .steer), L10n.format("↩ %@ · ⌘↩ %@", add, after))
-        XCTAssertEqual(codexOptions.followUp?.runningPlaceholder(preferred: .queue), L10n.format("↩ %@ · ⌘↩ %@", after, add))
-        XCTAssertEqual(codexOptions.followUp?.returnHint(preferred: .steer),
-                       L10n.format("Return: %@. Command-Return: %@.", add, after))
+        XCTAssertEqual(codexOptions.followUp?.runningPlaceholder(preferred: .steer, keys: .return), "↩ \(add) · ⌘↩ \(after)")
+        XCTAssertEqual(codexOptions.followUp?.runningPlaceholder(preferred: .queue, keys: .return), "↩ \(after) · ⌘↩ \(add)")
+        XCTAssertEqual(codexOptions.followUp?.returnHint(preferred: .steer, keys: .return),
+                       L10n.format("%@ key: %@. %@ key: %@.", "Return", add, "Command-Return", after))
+        // With the ⌘Return shortcuts ⌘Return sends and ⇧⌘Return sends the other way, as the Codex app moves it.
+        for keys in [SendShortcut.commandReturnForMultiline, .commandReturn] {
+            XCTAssertEqual(codexOptions.followUp?.runningPlaceholder(preferred: .steer, keys: keys), "⌘↩ \(add) · ⇧⌘↩ \(after)")
+            XCTAssertEqual(codexOptions.followUp?.returnHint(preferred: .steer, keys: keys),
+                           L10n.format("%@ key: %@. %@ key: %@.", "Command-Return", add, "Shift-Command-Return", after))
+        }
         XCTAssertEqual(claudeOptions.followUp?.delivery, .providerInput)
-        XCTAssertEqual(claudeOptions.followUp?.runningPlaceholder(preferred: .steer), L10n.format("↩ %@ · ⌘↩ %@", next, after))
-        XCTAssertEqual(claudeOptions.followUp?.runningPlaceholder(preferred: .queue), L10n.format("↩ %@ · ⌘↩ %@", after, next))
+        XCTAssertEqual(claudeOptions.followUp?.runningPlaceholder(preferred: .steer, keys: .return), "↩ \(next) · ⌘↩ \(after)")
+        XCTAssertEqual(claudeOptions.followUp?.runningPlaceholder(preferred: .queue, keys: .return), "↩ \(after) · ⌘↩ \(next)")
 
         // A harness that takes nothing while its turn runs keeps what is sent for the next turn.
         let antigravity = ComposerSessionOptionsProjection.make(harness: .antigravityCLI, session: nil,
                                                                 providerCapabilities: nil, providerUsage: nil, isAttached: true)
         XCTAssertEqual(antigravity.followUp?.policy, .afterTurn)
         XCTAssertEqual(antigravity.followUp?.delivery, .providerInput)
-        XCTAssertEqual(antigravity.followUp?.runningPlaceholder(preferred: .steer), L10n.format("↩ %@", after))
+        XCTAssertEqual(antigravity.followUp?.runningPlaceholder(preferred: .steer, keys: .return), "↩ \(after)")
+        XCTAssertEqual(antigravity.followUp?.runningPlaceholder(preferred: .steer, keys: .commandReturn), "⌘↩ \(after)")
+        XCTAssertEqual(antigravity.followUp?.returnHint(preferred: .steer, keys: .commandReturn),
+                       L10n.format("%@ key: %@.", "Command-Return", after))
         XCTAssertNil(antigravity.followUp?.alternateAction(preferred: .steer, canSteer: true),
                      "⌘Return queues as Return does")
         XCTAssertEqual(claudeOptions.followUp?.alternateAction(preferred: .steer, canSteer: true), .queue)

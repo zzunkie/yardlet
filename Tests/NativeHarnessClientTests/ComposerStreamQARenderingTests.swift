@@ -117,14 +117,14 @@ final class ComposerStreamQARenderingTests: XCTestCase {
         let after = L10n.string("Send when this turn ends")
         // While a turn runs the field says where Return and ⌘Return send, in each harness's words.
         XCTAssertTrue(labels("composer-claude-running").contains(
-            L10n.format("↩ %@ · ⌘↩ %@", L10n.string("Deliver at the next step"), after)), "\(labels("composer-claude-running"))")
+            "↩ \(L10n.string("Deliver at the next step")) · ⌘↩ \(after)"), "\(labels("composer-claude-running"))")
         XCTAssertTrue(labels("composer-codex-running").contains(
-            L10n.format("↩ %@ · ⌘↩ %@", L10n.string("Add to the running task"), after)))
-        XCTAssertTrue(labels("composer-antigravity-running").contains(L10n.format("↩ %@", after)))
+            "↩ \(L10n.string("Add to the running task")) · ⌘↩ \(after)"))
+        XCTAssertTrue(labels("composer-antigravity-running").contains("↩ \(after)"))
         // A task about to move to another account says so above the composer, and Return queues
         // what is sent meanwhile for after the move.
         XCTAssertTrue(labels("composer-claude-moving-account").contains(
-            L10n.format("↩ %@ · ⌘↩ %@", after, L10n.string("Deliver at the next step"))), "\(labels("composer-claude-moving-account"))")
+            "↩ \(after) · ⌘↩ \(L10n.string("Deliver at the next step"))"), "\(labels("composer-claude-moving-account"))")
         XCTAssertTrue(values("composer-claude-moving-account").contains(
             L10n.format("Moving to %@ after this turn", Self.accountMove.accountName)))
         XCTAssertTrue(labels("composer-claude-moving-account").contains(L10n.string("Cancel account change")))

@@ -108,6 +108,8 @@ struct SettingsCenterView: View {
     @AppStorage(TaskNotificationKind.turnEndedKey) private var turnCompletionNotifications =
         TurnCompletionNotifications.whenNotShown.rawValue
     @AppStorage(NotificationSound.key) private var notificationSound = NotificationSound.standard
+    /// The keys a row's tooltip names (`YardletSetting.keysHint`).
+    @AppStorage(SendShortcut.preferenceKey) private var sendShortcut = SendShortcut.return
     /// Read by the browser host client as it changes and by each memory check (`MemorySaverPreference`).
     @AppStorage(MemorySaverPreference.key) private var savesMemory = true
     @AppStorage(MemorySaverPreference.levelKey) private var memorySaverLevel = BrowserMemorySaver.Level.balanced
@@ -546,15 +548,18 @@ struct SettingsCenterView: View {
 
     @ViewBuilder
     private func preferenceRow(_ setting: YardletSetting) -> some View {
+        // A tooltip that names the composer's keys names this Mac's, which its composers follow.
+        let hint = setting.hint(keys: sendShortcut)
         if let remoteHost {
             SettingsPreferenceRow(
                 setting: setting,
                 icon: settingsControlIcon(setting.symbol),
+                hint: hint,
                 remoteValue: remoteHost.hostSettingValue(setting),
                 onSelectRemote: { requestRemoteSettingChange(setting, to: $0) }
             )
         } else {
-            SettingsPreferenceRow(setting: setting, icon: settingsControlIcon(setting.symbol))
+            SettingsPreferenceRow(setting: setting, icon: settingsControlIcon(setting.symbol), hint: hint)
         }
     }
 
@@ -1168,6 +1173,7 @@ struct SettingsRowText: View {
 private struct SettingsPreferenceRow<Icon: View>: View {
     let setting: YardletSetting
     let icon: Icon
+    let hint: String?
     var remoteValue: String? = nil
     var onSelectRemote: ((String) -> Void)? = nil
 
@@ -1176,7 +1182,7 @@ private struct SettingsPreferenceRow<Icon: View>: View {
             icon
             SettingsRowText(setting: setting)
             Spacer(minLength: 8)
-            control.modifier(SettingsHint(hint: setting.hint))
+            control.modifier(SettingsHint(hint: hint))
         }
         .padding(.vertical, 14)
     }

@@ -89,12 +89,12 @@ final class ClaudeFollowUpRenderingTests: XCTestCase {
                 VStack(alignment: .leading, spacing: 4) {
                     Button {} label: {
                         ComposerFollowUpMenuRow(title: FollowUpPolicy.afterTurnPhrase, systemImage: "text.append",
-                                                isAlternate: preferred != .queue)
+                                                key: preferred == .queue ? "↩" : "⌘↩")
                     }
                     .buttonStyle(.borderless)
                     Button {} label: {
                         ComposerFollowUpMenuRow(title: policy.steerPhrase ?? "", systemImage: "arrow.turn.up.right",
-                                                isAlternate: preferred != .steer)
+                                                key: preferred == .steer ? "↩" : "⌘↩")
                     }
                     .buttonStyle(.borderless)
                 }

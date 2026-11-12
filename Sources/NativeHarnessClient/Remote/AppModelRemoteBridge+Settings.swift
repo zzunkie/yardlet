@@ -9,7 +9,8 @@ extension AppModelRemoteBridge {
     private static let excludedRemoteSettingIDs: Set<String> = [
         YardletSetting.language.id,
         YardletSetting.checkForUpdates.id,
-        YardletSetting.launchAtLogin.id
+        YardletSetting.launchAtLogin.id,
+        YardletSetting.sendShortcut.id
     ]
 
     static func isRemoteHostSetting(_ setting: YardletSetting) -> Bool {

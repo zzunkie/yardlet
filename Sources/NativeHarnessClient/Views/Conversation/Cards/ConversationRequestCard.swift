@@ -16,6 +16,8 @@ struct ConversationRequestCard: View {
     let actions: ConversationActions
 
     @State private var input: ConversationRequestFormInput
+    /// Which keys allow a request from the composer (`ComposerApprovalKey`).
+    @AppStorage(SendShortcut.preferenceKey) private var sendShortcut = SendShortcut.return
     @State private var questionIndex: Int
     /// What the card sent for a question form, which it reads as until the provider's record arrives.
     @State private var sent: ConversationRequestFormInput?
@@ -349,7 +351,7 @@ struct ConversationRequestCard: View {
     private func keys(for response: ConversationRequestResponse) -> [KeyboardShortcut] {
         guard actions.answersFromComposer, let pending = NotificationApprovalProjection.pendingRequest(for: request)
         else { return [] }
-        if response.route == pending.allowOnce { return ComposerApprovalKey.allow }
+        if response.route == pending.allowOnce { return ComposerApprovalKey.allow(sendShortcut) }
         if response.route == pending.deny { return ComposerApprovalKey.deny }
         return []
     }

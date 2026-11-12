@@ -19,6 +19,8 @@ struct RemoteComposer: View {
     var queued: [RemoteItem] = []
     /// A turn's message being edited, sent as its edit.
     @Binding var editing: RemoteMessageEdit?
+    /// This Mac's keys, which its composers follow, whatever the host's.
+    @AppStorage(SendShortcut.preferenceKey) private var sendShortcut = SendShortcut.return
     @FocusState private var isFocused: Bool
     @State private var isSending = false
     @State private var showsFollowUpMenu = false
@@ -72,7 +74,8 @@ struct RemoteComposer: View {
     var body: some View {
         ComposerEditor(
             draft: draft, placeholder: placeholder,
-            accessibilityHint: isRunning ? policy.returnHint(preferred: preferred) : L10n.string("Press Return to send"),
+            accessibilityHint: isRunning ? policy.returnHint(preferred: preferred, keys: sendShortcut)
+                : L10n.format("Press %@ to send", sendShortcut.sendKeyName),
             metrics: .task(), input: nil, onExternalInput: acceptsAttachments ? { receive($0) } : nil, mentionRoots: [],
             mentionSearch: mentionSearch,
             onInsertMention: { RemoteComposerMentionIndex.insert($0, replacing: $1, into: draft) },
@@ -145,7 +148,7 @@ struct RemoteComposer: View {
 
     private var placeholder: String {
         guard model.isConnected else { return L10n.format("Waiting for %@…", model.name) }
-        if isRunning { return policy.runningPlaceholder(preferred: preferred) }
+        if isRunning { return policy.runningPlaceholder(preferred: preferred, keys: sendShortcut) }
         return L10n.format("Ask %@…", task?.harnessName ?? model.name)
     }
 
@@ -328,8 +331,8 @@ struct RemoteComposer: View {
         .buttonStyle(.borderless)
         .parityPointer()
         .accessibilityLabel(L10n.string("Queue or steer"))
-        .accessibilityHint(policy.returnHint(preferred: preferred))
-        .help(policy.runningPlaceholder(preferred: preferred))
+        .accessibilityHint(policy.returnHint(preferred: preferred, keys: sendShortcut))
+        .help(policy.runningPlaceholder(preferred: preferred, keys: sendShortcut))
         .popover(isPresented: $showsFollowUpMenu) {
             VStack(alignment: .leading, spacing: 4) {
                 if model.composerExtensions, !queued.isEmpty {
@@ -343,7 +346,7 @@ struct RemoteComposer: View {
                     send(.queue)
                 } label: {
                     ComposerFollowUpMenuRow(title: FollowUpPolicy.afterTurnPhrase, systemImage: "text.append",
-                                            isAlternate: returnMode != .queue)
+                                            key: followUpKey(.queue))
                 }
                 .buttonStyle(.borderless)
                 .parityPointer()
@@ -352,7 +355,7 @@ struct RemoteComposer: View {
                         showsFollowUpMenu = false
                         send(.steer)
                     } label: {
-                        ComposerFollowUpMenuRow(title: steer, systemImage: "arrow.turn.up.right", isAlternate: returnMode != .steer)
+                        ComposerFollowUpMenuRow(title: steer, systemImage: "arrow.turn.up.right", key: followUpKey(.steer))
                     }
                     .buttonStyle(.borderless)
                     .parityPointer()
@@ -361,6 +364,11 @@ struct RemoteComposer: View {
             .padding(8)
             .frame(minWidth: 150, alignment: .leading)
         }
+    }
+
+    /// The key a follow-up menu row names: the send key for where it sends, the other one for the other.
+    private func followUpKey(_ mode: FollowUpMode) -> String {
+        mode == returnMode ? sendShortcut.sendSymbol : sendShortcut.alternateSymbol
     }
 
     private var stopButton: some View {

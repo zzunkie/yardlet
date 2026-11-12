@@ -1304,7 +1304,7 @@ final class AppModel {
     // the same way.
 
     /// A message for a task's follow-up queue: the composer's Queue and Steer, or one sent while
-    /// the task's turn runs (Return follows the follow-up setting, ⌘Return does the other). Nothing
+    /// the task's turn runs (the send key follows the follow-up setting, the other key the other). Nothing
     /// here stops the running turn (2026-10-16: a message sent while Claude wrote its answer cut the
     /// answer off). Codex steers its active turn (`turn/steer`) or holds the message in Yardlet, as
     /// its typed path `submitCodex` does. Claude Code is written a steered message to read at its

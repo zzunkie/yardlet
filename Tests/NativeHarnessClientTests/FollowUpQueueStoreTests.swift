@@ -243,17 +243,14 @@ final class FollowUpQueueStoreTests: XCTestCase {
         XCTAssertEqual(FollowUpPolicy.claudeCode.removeLabel, L10n.string("Remove from queue"))
 
         // Where Return and ⌘Return send a message while a turn runs, in each harness's words.
-        XCTAssertEqual(FollowUpPolicy.codex.runningPlaceholder(preferred: .steer),
-                       L10n.format("↩ %@ · ⌘↩ %@", L10n.string("Add to the running task"),
-                                   L10n.string("Send when this turn ends")))
-        XCTAssertEqual(FollowUpPolicy.claudeCode.runningPlaceholder(preferred: .steer),
-                       L10n.format("↩ %@ · ⌘↩ %@", L10n.string("Deliver at the next step"),
-                                   L10n.string("Send when this turn ends")))
-        XCTAssertEqual(FollowUpPolicy.claudeCode.runningPlaceholder(preferred: .queue),
-                       L10n.format("↩ %@ · ⌘↩ %@", L10n.string("Send when this turn ends"),
-                                   L10n.string("Deliver at the next step")))
-        XCTAssertEqual(FollowUpPolicy.afterTurn.runningPlaceholder(preferred: .steer),
-                       L10n.format("↩ %@", L10n.string("Send when this turn ends")))
+        XCTAssertEqual(FollowUpPolicy.codex.runningPlaceholder(preferred: .steer, keys: .return),
+                       "↩ \(L10n.string("Add to the running task")) · ⌘↩ \(L10n.string("Send when this turn ends"))")
+        XCTAssertEqual(FollowUpPolicy.claudeCode.runningPlaceholder(preferred: .steer, keys: .return),
+                       "↩ \(L10n.string("Deliver at the next step")) · ⌘↩ \(L10n.string("Send when this turn ends"))")
+        XCTAssertEqual(FollowUpPolicy.claudeCode.runningPlaceholder(preferred: .queue, keys: .return),
+                       "↩ \(L10n.string("Send when this turn ends")) · ⌘↩ \(L10n.string("Deliver at the next step"))")
+        XCTAssertEqual(FollowUpPolicy.afterTurn.runningPlaceholder(preferred: .steer, keys: .return),
+                       "↩ \(L10n.string("Send when this turn ends"))")
     }
 
     // MARK: - Helpers

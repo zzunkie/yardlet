@@ -145,16 +145,21 @@ struct ComposerFollowUpOptions: Equatable, Sendable {
     /// Which submit queues or steers a typed draft.
     var delivery: ComposerSubmissionPath
 
-    /// What the composer says Return and ⌘Return send while a turn runs, in place of its placeholder.
-    func runningPlaceholder(preferred: FollowUpMode) -> String { policy.runningPlaceholder(preferred: preferred) }
+    /// What the composer says its send keys send while a turn runs, in place of its placeholder.
+    func runningPlaceholder(preferred: FollowUpMode, keys: SendShortcut) -> String {
+        policy.runningPlaceholder(preferred: preferred, keys: keys)
+    }
 
     /// The same for VoiceOver.
-    func returnHint(preferred: FollowUpMode) -> String { policy.returnHint(preferred: preferred) }
+    func returnHint(preferred: FollowUpMode, keys: SendShortcut) -> String {
+        policy.returnHint(preferred: preferred, keys: keys)
+    }
 
-    /// What ⌘Return sends while a turn runs: the other of the follow-up setting, which Return
-    /// follows, as the Codex app inverts its follow-up behavior for one message with ⌘Enter (by
-    /// default Return steers and ⌘Return queues for after the turn). Nil where ⌘Return is Return:
-    /// the harness cannot steer, or that is steering and the turn cannot be steered yet.
+    /// What the key that sends the other way sends while a turn runs: the other of the follow-up
+    /// setting, which the send key follows, as the Codex app inverts its follow-up behavior for one
+    /// message with ⌘Enter, or ⇧⌘Enter where ⌘Enter sends (by default Return steers and ⌘Return
+    /// queues for after the turn). Nil where that key sends as the send key does: the harness cannot
+    /// steer, or that is steering and the turn cannot be steered yet.
     func alternateAction(preferred: FollowUpMode, canSteer: Bool) -> CodexComposerAction? {
         guard policy.steers else { return nil }
         return Self.alternateAction(preferred: preferred, canSteer: canSteer)

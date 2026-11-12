@@ -527,7 +527,7 @@ final class AppModelRemoteBridge: RemoteBridge {
             }
             Self.messageAccepted(by: session, in: model)
             // As the composer sends: an idle task starts a turn, a running one takes a follow-up, steered or
-            // queued as the phone chose (the composer's Return and ⌘Return) or as the Mac's setting says.
+            // queued as the phone chose (the composer's send keys) or as the Mac's setting says.
             if let followUp, session.status == .running || session.status == .waitingForApproval {
                 Task { await model.submitFollowUp(input, action: followUp == .steer ? .steer : .queue, to: session) }
             } else {

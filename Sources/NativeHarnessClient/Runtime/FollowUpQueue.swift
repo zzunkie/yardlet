@@ -8,7 +8,8 @@ import Observation
 
 // MARK: - The queued message
 
-/// What an automatic send (Return) does while a turn runs; ⌘Return does the other. The Codex app
+/// What an automatic send (Return, or the send shortcut's key) does while a turn runs; the key that
+/// sends the other way (⌘Return, or ⇧⌘Return with the ⌘Return shortcuts) does the other. The Codex app
 /// steers the running turn by default and offers queueing as its General setting; the composer's
 /// Queue and Steer stay explicit. Steering never stops the turn: Codex's `turn/steer` adds the
 /// message to the running turn, and Claude Code is written it to read at its next step (`next`),
@@ -34,7 +35,7 @@ enum FollowUpMode: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// What ⌘Return does while a turn runs.
+    /// What the key that sends the other way does while a turn runs.
     var other: Self {
         switch self {
         case .queue: .steer
@@ -309,18 +310,19 @@ enum FollowUpPolicy: Equatable, Sendable {
     }
 
     /// What the composer says in place of its placeholder while a turn runs, as the Claude app's
-    /// does ("⏎ to send, ⌘⏎ to queue for later"): where Return sends a message (the follow-up
-    /// setting, `preferred`) and where ⌘Return sends it (the other). A harness that cannot steer
-    /// names Return alone.
-    func runningPlaceholder(preferred: FollowUpMode) -> String {
-        guard steers else { return L10n.format("↩ %@", Self.afterTurnPhrase) }
-        return L10n.format("↩ %@ · ⌘↩ %@", phrase(for: preferred), phrase(for: preferred.other))
+    /// does ("⏎ to send, ⌘⏎ to queue for later"): where the send shortcut's key sends a message (the
+    /// follow-up setting, `preferred`) and where the key that sends the other way sends it (the
+    /// other). A harness that cannot steer names the send key alone.
+    func runningPlaceholder(preferred: FollowUpMode, keys: SendShortcut) -> String {
+        guard steers else { return "\(keys.sendSymbol) \(Self.afterTurnPhrase)" }
+        return "\(keys.sendSymbol) \(phrase(for: preferred)) · \(keys.alternateSymbol) \(phrase(for: preferred.other))"
     }
 
     /// `runningPlaceholder` with the keys in words, for VoiceOver.
-    func returnHint(preferred: FollowUpMode) -> String {
-        guard steers else { return L10n.format("Return: %@.", Self.afterTurnPhrase) }
-        return L10n.format("Return: %@. Command-Return: %@.", phrase(for: preferred), phrase(for: preferred.other))
+    func returnHint(preferred: FollowUpMode, keys: SendShortcut) -> String {
+        guard steers else { return L10n.format("%@ key: %@.", keys.sendKeyName, Self.afterTurnPhrase) }
+        return L10n.format("%@ key: %@. %@ key: %@.", keys.sendKeyName, phrase(for: preferred),
+                           keys.alternateKeyName, phrase(for: preferred.other))
     }
 
     /// Why a message the provider let go unread failed.

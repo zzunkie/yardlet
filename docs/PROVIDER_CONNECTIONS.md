@@ -35,10 +35,11 @@ The screen flow is in [ACCOUNT_SELECTION_UX.md](ACCOUNT_SELECTION_UX.md).
   happen. After the switch it reconnects with the same session ID.
 - An account chosen while the task is in a turn or waiting for approval takes effect when that turn ends
   (`AppModel.chooseAccount`), since switching closes the task's CLI. Until then the task keeps working where it is, a
-  line above the composer says "Moving to <account> after this turn" with **Cancel**, and Return queues what the person
-  sends (⌘Return still delivers it at Claude's next step). Once the turn has ended (finished, stopped or failed), the
-  switch waits for what moving an account's tasks waits for ("Removing an account" below), except that the messages
-  and shell output Yardlet holds go after the switch instead, on the new account. An account chosen for a task in no
+  line above the composer says "Moving to <account> after this turn" with **Cancel**, and the send key queues what the
+  person sends (the key that sends the other way, ⌘Return by default, still delivers it at Claude's next step). Once the
+  turn has ended (finished, stopped or failed), the switch waits for what moving an account's tasks waits for
+  ("Removing an account" below), except that the messages and shell output Yardlet holds go after the switch instead,
+  on the new account. An account chosen for a task in no
   turn takes effect at once only when nothing of that holds the task; otherwise it waits the same way. While something
   keeps it waiting, the line names it (`AccountMoveBlocker`): "Moving to <account> when its background work ends", or
   when its shell command ends, the agents it runs finish, the message on its way is delivered, its request is

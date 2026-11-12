@@ -27,7 +27,7 @@
 "Add files" = "Add files";
 "Add files and more" = "Add files and more";
 "Add files and more · Type @ to mention a file" = "Add files and more · Type @ to mention a file";
-"Press Return to send" = "Press Return to send";
+"Press %@ to send" = "Press %@ to send";
 "Press Escape to stop the active task" = "Press Escape to stop the active task";
 "Context unavailable" = "Context unavailable";
 "Open in editor" = "Open in editor";
@@ -1555,6 +1555,10 @@
 "Server is busy, reconnecting %@" = "Server is busy, reconnecting %@";
 "Queue paused because you interrupted" = "Queue paused because you interrupted";
 "Delete queued message" = "Delete queued message";
+"Send shortcut" = "Send shortcut";
+"Return" = "Return";
+"⌘Return for multiline" = "⌘Return for multiline";
+"Always ⌘Return" = "Always ⌘Return";
 "Follow-up behavior" = "Follow-up behavior";
 "Send or clear the current draft before editing a queued message." = "Send or clear the current draft before editing a queued message.";
 "Session limit reached" = "Session limit reached";
@@ -1607,11 +1611,9 @@
 "Send now: add it to the running task without stopping it" = "Send now: add it to the running task without stopping it";
 "Send now: Claude reads it at its next step without stopping" = "Send now: Claude reads it at its next step without stopping";
 "Delivered · Claude reads it at its next step" = "Delivered · Claude reads it at its next step";
-"↩ %@" = "↩ %@";
-"↩ %@ · ⌘↩ %@" = "↩ %@ · ⌘↩ %@";
-"Return: %@." = "Return: %@.";
-"Return: %@. Command-Return: %@." = "Return: %@. Command-Return: %@.";
-"While a turn runs, Return sends this way and Command-Return the other way" = "While a turn runs, Return sends this way and Command-Return the other way";
+"%@ key: %@." = "%@ key: %@.";
+"%@ key: %@. %@ key: %@." = "%@ key: %@. %@ key: %@.";
+"While a turn runs, %@ sends this way and %@ the other way" = "While a turn runs, %@ sends this way and %@ the other way";
 "Claude Code did not take this message." = "Claude Code did not take this message.";
 "Claude Code cannot send this message now." = "Claude Code cannot send this message now.";
 "Copy message" = "Copy message";
@@ -2120,7 +2122,7 @@
 "On %@" = "On %@";
 "Pair it again from File › Connect to Mac…." = "Pair it again from File › Connect to Mac….";
 "Paired Macs" = "Paired Macs";
-"Press Return to start the task" = "Press Return to start the task";
+"Press %@ to start the task" = "Press %@ to start the task";
 "Reconnecting…" = "Reconnecting…";
 "Remote Mac" = "Remote Mac";
 "Remove from This Mac" = "Remove from This Mac";

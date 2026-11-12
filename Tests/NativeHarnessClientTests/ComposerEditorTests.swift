@@ -522,7 +522,7 @@ final class ComposerEditorTests: XCTestCase {
 
     // MARK: - Return while a turn runs
 
-    func testCommandReturnSendsTheOtherWayOfTheFollowUpSettingAndShiftReturnAddsALine() {
+    func testCommandReturnSendsTheOtherWayOfTheFollowUpSettingAndTheSendShortcutMovesTheKeys() throws {
         XCTAssertEqual(ComposerFollowUpOptions.alternateAction(preferred: .steer, canSteer: true), .queue,
                        "By default Return sends at once and ⌘Return after the turn")
         XCTAssertEqual(ComposerFollowUpOptions.alternateAction(preferred: .steer, canSteer: false), .queue)
@@ -532,20 +532,47 @@ final class ComposerEditorTests: XCTestCase {
         XCTAssertEqual(FollowUpMode.steer.other, .queue)
         XCTAssertEqual(FollowUpMode.queue.other.action, .steer)
 
-        // The Codex and Claude apps' keys: Return sends, ⌘Return the other way, Shift-Return a line.
-        XCTAssertEqual(ComposerReturnKey([] as EventModifiers), .send)
-        XCTAssertEqual(ComposerReturnKey(EventModifiers.capsLock), .send, "Caps Lock does not count")
-        XCTAssertEqual(ComposerReturnKey(EventModifiers.command), .alternate)
-        XCTAssertEqual(ComposerReturnKey(EventModifiers.shift), .newline)
-        XCTAssertEqual(ComposerReturnKey([.shift, .capsLock] as EventModifiers), .newline)
-        XCTAssertNil(ComposerReturnKey(EventModifiers.option), "Option-Return adds a line in the field editor")
+        // The Codex and Claude apps' keys by default: Return sends, ⌘Return the other way, Shift-Return a line.
+        let key = { (modifiers: EventModifiers, keys: SendShortcut, draft: String) in
+            ComposerReturnKey(modifiers, sendShortcut: keys, draft: draft)
+        }
+        XCTAssertEqual(SendShortcut.current(in: try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("ComposerEditorTests.keys")))),
+                       .return, "Return sends until the person chooses otherwise")
+        XCTAssertEqual(key([], .return, "One\ntwo"), .send)
+        XCTAssertEqual(key(.capsLock, .return, ""), .send, "Caps Lock does not count")
+        XCTAssertEqual(key(.command, .return, ""), .alternate)
+        XCTAssertEqual(key(.shift, .return, ""), .newline)
+        XCTAssertEqual(key([.shift, .capsLock], .return, ""), .newline)
         // ⇧⌘Return answers a waiting tool approval, and only with a denial (`ComposerApprovalKey`).
-        XCTAssertEqual(ComposerReturnKey([.shift, .command] as EventModifiers), .denyRequest)
+        XCTAssertEqual(key([.shift, .command], .return, ""), .denyRequest)
         XCTAssertTrue(ComposerApprovalKey.deny.contains(KeyboardShortcut(.return, modifiers: [.shift, .command])))
-        XCTAssertFalse(ComposerApprovalKey.allow.contains { $0.modifiers.contains(.shift) })
-        XCTAssertNil(ComposerReturnKey(EventModifiers.control))
-        XCTAssertEqual(ComposerReturnKey(NSEvent.ModifierFlags.command), .alternate)
-        XCTAssertEqual(ComposerReturnKey(NSEvent.ModifierFlags.shift), .newline)
+        XCTAssertEqual(ComposerReturnKey(NSEvent.ModifierFlags.command, sendShortcut: .return, draft: ""), .alternate)
+        XCTAssertEqual(ComposerReturnKey(NSEvent.ModifierFlags.shift, sendShortcut: .return, draft: ""), .newline)
+        // The Codex app's ⌘Return shortcuts: ⌘Return sends and ⇧⌘Return sends the other way. Return adds
+        // a line to a draft that already has more than one, or always.
+        for keys in [SendShortcut.commandReturnForMultiline, .commandReturn] {
+            XCTAssertEqual(key(.command, keys, "One\ntwo"), .send, "\(keys)")
+            XCTAssertEqual(key([.command, .capsLock], keys, ""), .send, "\(keys)")
+            XCTAssertEqual(key([.shift, .command], keys, ""), .alternate, "\(keys)")
+            XCTAssertEqual(key([], keys, "One\ntwo"), .newline, "\(keys)")
+            XCTAssertEqual(key(.shift, keys, "One"), .newline, "\(keys)")
+        }
+        // The keys that allow a waiting approval are the empty composer's send keys, and never ⇧⌘Return.
+        XCTAssertEqual(SendShortcut.allCases.map { ComposerApprovalKey.allow($0).map(\.displayText) },
+                       [["↩", "⌘↩"], ["↩", "⌘↩"], ["⌘↩"]])
+        XCTAssertEqual(key([], .commandReturnForMultiline, "One line"), .send)
+        XCTAssertEqual(key([], .commandReturnForMultiline, ""), .send)
+        XCTAssertEqual(key([], .commandReturn, "One line"), .newline)
+        XCTAssertEqual(key([], .commandReturn, ""), .newline)
+        for keys in SendShortcut.allCases {
+            XCTAssertNil(key(.option, keys, ""), "Option-Return adds a line in the field editor (\(keys))")
+            XCTAssertNil(key(.control, keys, ""), "\(keys)")
+            XCTAssertNil(key([.option, .command], keys, ""), "\(keys)")
+        }
+        XCTAssertEqual(SendShortcut.allCases.map(\.sendSymbol), ["↩", "⌘↩", "⌘↩"])
+        XCTAssertEqual(SendShortcut.allCases.map(\.alternateSymbol), ["⌘↩", "⇧⌘↩", "⇧⌘↩"])
+        XCTAssertEqual(SendShortcut.allCases.map { ComposerShortcut.send($0).displayText }, ["↩", "⌘↩", "⌘↩"],
+                       "The send button's tooltip names the key that sends")
 
         // The Return an input method passes on after committing its composition reaches `onSubmit`;
         // the app's current event says which Return it was.
@@ -558,10 +585,11 @@ final class ComposerEditorTests: XCTestCase {
         let letter = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .shift, timestamp: 0,
                                       windowNumber: 0, context: nil, characters: "A",
                                       charactersIgnoringModifiers: "a", isARepeat: false, keyCode: 0)
-        XCTAssertEqual(ComposerReturnKey(event: shiftReturn), .newline)
-        XCTAssertEqual(ComposerReturnKey(event: keypadEnter), .alternate)
-        XCTAssertNil(ComposerReturnKey(event: letter))
-        XCTAssertNil(ComposerReturnKey(event: nil))
+        XCTAssertEqual(ComposerReturnKey(event: shiftReturn, sendShortcut: .return, draft: ""), .newline)
+        XCTAssertEqual(ComposerReturnKey(event: keypadEnter, sendShortcut: .return, draft: ""), .alternate)
+        XCTAssertEqual(ComposerReturnKey(event: keypadEnter, sendShortcut: .commandReturn, draft: ""), .send)
+        XCTAssertNil(ComposerReturnKey(event: letter, sendShortcut: .return, draft: ""))
+        XCTAssertNil(ComposerReturnKey(event: nil, sendShortcut: .return, draft: ""))
     }
 
     /// While an input method composes, Return is its own: the composer only notes which Return it
@@ -586,14 +614,24 @@ final class ComposerEditorTests: XCTestCase {
         let draft = TaskComposerDraft()
         var sent: [String] = []
         var followUps: [String] = []
+        /// Whether a tool approval waits for the composer's keys, and how they answered it: true allows.
+        var waitsForApproval = false
+        var approvals: [Bool] = []
     }
 
     private func followUpComposer(_ harness: HarnessKind, _ probe: FollowUpProbe, preferred: FollowUpMode,
-                                  isRunning: Bool = true, canSteer: Bool = true) throws -> some View {
+                                  isRunning: Bool = true, canSteer: Bool = true,
+                                  keys: SendShortcut? = nil) throws -> some View {
         let suite = testDefaultsSuite("ComposerEditorTests.followUp")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defaults.set(preferred.rawValue, forKey: FollowUpMode.preferenceKey)
+        if let keys { defaults.set(keys.rawValue, forKey: SendShortcut.preferenceKey) }
         var actions = ComposerActions(send: { probe.sent.append($0.text) })
+        actions.answerApproval = { allowing in
+            guard probe.waitsForApproval else { return false }
+            probe.approvals.append(allowing)
+            return true
+        }
         if harness == .codex {
             actions.submitCodex = { draft, action in probe.followUps.append("\(action.rawValue): \(draft.text)") }
         } else {
@@ -635,6 +673,52 @@ final class ComposerEditorTests: XCTestCase {
                 XCTAssertEqual(probe.sent, ["Use Python"])
                 XCTAssertEqual(probe.followUps, ["queue: Then update the README"])
             }
+        }
+
+        // With the Codex app's ⌘Return shortcuts ⌘Return sends and ⇧⌘Return sends the other way. Return
+        // adds a line to a draft that has more than one ("⌘Return for multiline", where it still sends
+        // one line), or always; Shift-Return and Option-Return still add one.
+        for keys in [SendShortcut.commandReturnForMultiline, .commandReturn] {
+            let probe = FollowUpProbe()
+            let mounted = try mount(followUpComposer(.claudeCode, probe, preferred: .steer, keys: keys), editing: probe.draft)
+            // In the empty composer ⌘Return allows a waiting tool approval and ⇧⌘Return denies it, never
+            // allows it; Return allows it where it sends the empty draft (`ComposerApprovalKey`).
+            probe.waitsForApproval = true
+            try press("\r", keyCode: 36, modifiers: .command, in: mounted, until: { probe.approvals == [true] })
+            try press("\r", keyCode: 36, modifiers: [.shift, .command], in: mounted,
+                      until: { probe.approvals == [true, false] })
+            if keys == .commandReturnForMultiline {
+                try press("\r", keyCode: 36, in: mounted, until: { probe.approvals == [true, false, true] })
+            }
+            XCTAssertEqual(probe.approvals, keys == .commandReturn ? [true, false] : [true, false, true], "\(keys)")
+            XCTAssertEqual(probe.sent + probe.followUps, [], "An answered approval sends nothing (\(keys))")
+            probe.waitsForApproval = false
+            try type("Use Python", into: mounted)
+            if keys == .commandReturnForMultiline {
+                try press("\r", keyCode: 36, in: mounted, until: { probe.sent.count == 1 })
+                XCTAssertEqual(probe.sent, ["Use Python"], "One line goes on Return")
+                try type("Two", into: mounted)
+                try press("\r", keyCode: 36, modifiers: .shift, in: mounted, until: { probe.draft.text == "Two\n" })
+                try type("lines", into: mounted)
+            } else {
+                try press("\r", keyCode: 36, in: mounted, until: { probe.draft.text == "Use Python\n" })
+                try type("Two", into: mounted)
+                try press("\r", keyCode: 36, modifiers: .option, in: mounted,
+                          until: { probe.draft.text == "Use Python\nTwo\n" })
+                try type("lines", into: mounted)
+            }
+            let draft = probe.draft.text
+            try press("\r", keyCode: 36, in: mounted, until: { probe.draft.text == draft + "\n" })
+            XCTAssertEqual(probe.draft.text, draft + "\n", "Return adds a line to more than one (\(keys))")
+            try type("end", into: mounted)
+            let sent = probe.sent.count
+            try press("\r", keyCode: 36, modifiers: .command, in: mounted, until: { probe.sent.count == sent + 1 })
+            XCTAssertEqual(probe.sent.last, draft + "\nend", "⌘Return sends (\(keys))")
+            XCTAssertEqual(probe.draft.text, "")
+            try type("Then update the README", into: mounted)
+            try press("\r", keyCode: 36, modifiers: [.shift, .command], in: mounted, until: { !probe.followUps.isEmpty })
+            XCTAssertEqual(probe.followUps, ["queue: Then update the README"], "⇧⌘Return sends the other way (\(keys))")
+            mounted.host.close()
         }
     }
 

@@ -29,6 +29,7 @@ struct RemoteNewTaskView: View {
     @State private var loadingCommands = false
     @State private var optionReadID: UUID?
     @State private var mentionIndex = RemoteComposerMentionIndex()
+    @AppStorage(SendShortcut.preferenceKey) private var sendShortcut = SendShortcut.return
     @FocusState private var isFocused: Bool
     @State private var listKeyboard = NewTaskHomeListKeyboard()
     @FocusState private var listFocus: NewTaskHomeLists.Part?
@@ -120,7 +121,7 @@ struct RemoteNewTaskView: View {
         VStack(alignment: .leading, spacing: 10) {
             ComposerEditor(
                 draft: draft, placeholder: NewTaskComposerText.placeholder(harnessName: chosenHarness?.harnessName ?? model.newTask?.harnessName),
-                accessibilityHint: L10n.string("Press Return to start the task"), metrics: .newTask,
+                accessibilityHint: L10n.format("Press %@ to start the task", sendShortcut.sendKeyName), metrics: .newTask,
                 input: nil, onExternalInput: acceptsAttachments ? { receive($0) } : nil, mentionRoots: [],
                 mentionSearch: mentionSearch,
                 onInsertMention: { RemoteComposerMentionIndex.insert($0, replacing: $1, into: draft) },

@@ -209,6 +209,8 @@ struct YardletSetting: Identifiable {
     var note: String?
     /// The control's tooltip, where a row has one instead of a line.
     var hint: String?
+    /// In place of `hint`, a tooltip that names the composer's keys, which the send shortcut chooses.
+    var keysHint: (@Sendable (SendShortcut) -> String)?
     /// The control's accessibility label, where it differs from the title.
     var controlLabel: String?
     let values: Values
@@ -223,7 +225,12 @@ struct YardletSetting: Identifiable {
 
     /// Its help as one text: the lines under the title, then the tooltip.
     var help: String {
-        [detail, note, hint].compactMap(\.self).joined(separator: " ")
+        [detail, note, hint(keys: .current())].compactMap(\.self).joined(separator: " ")
+    }
+
+    /// The tooltip, with the keys of this send shortcut where it names them.
+    func hint(keys: SendShortcut) -> String? {
+        keysHint?(keys) ?? hint
     }
 
     var choices: [Choice] {
@@ -404,9 +411,16 @@ extension YardletSetting {
         storage: .choice(key: MemorySaverPreference.levelKey, defaultValue: BrowserMemorySaver.Level.balanced.rawValue),
         shownWhileOn: memorySaver.id)
 
+    static let sendShortcut = YardletSetting(
+        id: "send_shortcut", section: .general, generalGroup: .tasks, symbol: "return", title: L10n.string("Send shortcut"),
+        values: choices(SendShortcut.self, title: \.title),
+        storage: .choice(key: SendShortcut.preferenceKey, defaultValue: SendShortcut.return.rawValue))
+
     static let followUpBehavior = YardletSetting(
         id: "follow_up_behavior", section: .general, generalGroup: .tasks, symbol: "text.append", title: L10n.string("Follow-up behavior"),
-        hint: L10n.string("While a turn runs, Return sends this way and Command-Return the other way"),
+        keysHint: { keys in
+            L10n.format("While a turn runs, %@ sends this way and %@ the other way", keys.sendKeyName, keys.alternateKeyName)
+        },
         values: choices(FollowUpMode.self, title: \.title),
         storage: .choice(key: FollowUpMode.preferenceKey, defaultValue: FollowUpMode.steer.rawValue))
 
@@ -667,7 +681,7 @@ extension YardletSetting {
 enum YardletSettingCatalog {
     static let all: [YardletSetting] = [
         .language, .showInMenuBar, .launchAtLogin, .mailbox, .checkForUpdates,
-        .followUpBehavior, .nextMessageSuggestions, .claudeContextLimit, .idleCompaction, .autoFixFailingCI, .showTaskServers, .continueAfterRestart,
+        .sendShortcut, .followUpBehavior, .nextMessageSuggestions, .claudeContextLimit, .idleCompaction, .autoFixFailingCI, .showTaskServers, .continueAfterRestart,
         .keepScreenUnlocked, .keepWorkingWithLidClosed,
         .agentBrowserTools, .keepCookies, .searchSuggestions, .pageSuggestions, .memorySaver, .memorySaverLevel,
         .hideKeysAndTokens,

@@ -123,8 +123,10 @@ struct PromptComposer: View {
     @Environment(\.claudeShellCommands) private var shellCommands
     @Environment(\.composerConnectors) private var yardletConnectors
     @Environment(\.taskAccountMove) private var accountMove
-    /// What Return sends while a turn runs; ⌘Return sends the other way.
+    /// What the send key sends while a turn runs; the key that sends the other way sends the other.
     @AppStorage(FollowUpMode.preferenceKey) private var followUpModeValue = FollowUpMode.steer.rawValue
+    /// Which keys send, as the placeholder, the send button and the follow-up menu name them.
+    @AppStorage(SendShortcut.preferenceKey) private var sendShortcut = SendShortcut.return
     /// Whether the empty composer shows the suggested next message as its faint text, for Tab or →.
     @AppStorage(NextMessageSuggestionPreference.key) private var showsNextMessageSuggestions = true
 
@@ -140,17 +142,24 @@ struct PromptComposer: View {
         return followUp
     }
 
-    /// ⌘Return while a turn runs: the follow-up setting's other way. Nil where it is Return.
+    /// The key that sends the other way while a turn runs: the follow-up setting's other way. Nil where
+    /// it sends as the send key does. In the empty composer it answers a waiting tool approval: ⌘Return
+    /// allows it, as the send key does; ⇧⌘Return, the key with the ⌘Return send shortcuts, denies it,
+    /// as it does where Return sends (`ComposerApprovalKey`), so it is there even where it sends as the
+    /// send key does.
     private var alternateSubmit: (() -> Void)? {
-        guard let followUp = runningFollowUp,
-              let action = followUp.alternateAction(preferred: followUpMode, canSteer: canSteer)
-        else { return nil }
-        return { if !allowsWaitingApproval() { submit(action) } }
+        let action = runningFollowUp.flatMap { $0.alternateAction(preferred: followUpMode, canSteer: canSteer) }
+        let allowing = sendShortcut == .return
+        guard action != nil || (!allowing && actions.answerApproval != nil) else { return nil }
+        return {
+            guard !answersWaitingApproval(allowing: allowing) else { return }
+            submit(action ?? .automatic)
+        }
     }
 
-    /// Return and ⌘Return in the empty composer allow the oldest tool approval the task waits on, once,
-    /// and ⇧⌘Return denies it (`ComposerApprovalKey`); with a draft they send it. Not in bash mode,
-    /// where Return runs a command.
+    /// The send keys in the empty composer allow the oldest tool approval the task waits on, once, and
+    /// ⇧⌘Return denies it (`ComposerApprovalKey`); with a draft they send it. Not in bash mode, where
+    /// Return runs a command.
     private func allowsWaitingApproval() -> Bool { answersWaitingApproval(allowing: true) }
 
     private func answersWaitingApproval(allowing: Bool) -> Bool {
@@ -186,11 +195,11 @@ struct PromptComposer: View {
         bashModeAvailable && shellCommands?.isRunning == true
     }
 
-    /// While a turn runs the placeholder says what Return and ⌘Return send, as the Claude app's
-    /// composer does while Claude works.
+    /// While a turn runs the placeholder says what the send keys send, as the Claude app's composer
+    /// does while Claude works.
     private var promptPlaceholder: String {
         if isBashMode { return L10n.string("Enter a shell command") }
-        return runningFollowUp?.runningPlaceholder(preferred: followUpMode) ?? options.placeholder
+        return runningFollowUp?.runningPlaceholder(preferred: followUpMode, keys: sendShortcut) ?? options.placeholder
     }
 
     private func triggerFocus(for menu: ComposerMenu) -> ComposerFocus {
@@ -305,7 +314,8 @@ struct PromptComposer: View {
             draft: composerDraft, placeholder: promptPlaceholder,
             accessibilityHint: isBashMode
                 ? L10n.string("Bash mode. Press Escape to return to chat.")
-                : runningFollowUp?.returnHint(preferred: followUpMode) ?? L10n.string("Press Return to send"),
+                : runningFollowUp?.returnHint(preferred: followUpMode, keys: sendShortcut)
+                    ?? L10n.format("Press %@ to send", sendShortcut.sendKeyName),
             metrics: .task(chipsTop: showsPausedCodexQueue ? 6 : 9),
             input: inputPolicy, mentionRoots: mentionRoots, commands: editorCommands,
             bashModeAvailable: bashModeAvailable,
@@ -545,10 +555,10 @@ struct PromptComposer: View {
                     .parityPointer()
                     .focused($focusedComposerControl, equals: .queueOrSteerTrigger)
                     .accessibilityLabel(L10n.string("Queue or steer"))
-                    .accessibilityHint(followUp.returnHint(preferred: followUpMode))
+                    .accessibilityHint(followUp.returnHint(preferred: followUpMode, keys: sendShortcut))
                     // Its name, then the keys, which stay in view once the draft has text and the
                     // placeholder is gone.
-                    .help("\(L10n.string("Queue or steer")) · \(followUp.runningPlaceholder(preferred: followUpMode))")
+                    .help("\(L10n.string("Queue or steer")) · \(followUp.runningPlaceholder(preferred: followUpMode, keys: sendShortcut))")
                     .popover(isPresented: composerMenuBinding(.queueOrSteer)) {
                         VStack(alignment: .leading, spacing: 4) {
                             // Each row says where the message goes, as the placeholder does.
@@ -609,7 +619,7 @@ struct PromptComposer: View {
                     systemName: "arrow.up",
                     help: L10n.string("Send"),
                     isProminent: true,
-                    shortcut: ComposerShortcut.send,
+                    shortcut: ComposerShortcut.send(sendShortcut),
                     action: { submit(.automatic) }
                 )
                 .disabled(currentDraft.isEmpty)
@@ -621,13 +631,14 @@ struct PromptComposer: View {
         composerDraft.submission
     }
 
-    /// A row of the queue-or-steer menu with its key: Return for the follow-up setting's way,
-    /// ⌘Return for the other.
+    /// A row of the queue-or-steer menu with its key: the send key for the follow-up setting's way,
+    /// the key that sends the other way for the other.
     private func followUpMenuRow(_ title: String, systemImage: String, mode: FollowUpMode,
                                  policy: FollowUpPolicy) -> some View {
-        // A harness that cannot steer queues on Return.
+        // A harness that cannot steer queues on the send key.
         let returnMode = policy.steers ? followUpMode : .queue
-        return ComposerFollowUpMenuRow(title: title, systemImage: systemImage, isAlternate: mode != returnMode)
+        return ComposerFollowUpMenuRow(title: title, systemImage: systemImage,
+                                       key: mode == returnMode ? sendShortcut.sendSymbol : sendShortcut.alternateSymbol)
     }
 
     /// A queued message's words: its request, or the count of the comments it carries alone.
@@ -863,14 +874,14 @@ extension PromptComposer: @MainActor Equatable {
 struct ComposerFollowUpMenuRow: View {
     let title: String
     let systemImage: String
-    /// ⌘Return sends this way; otherwise Return does.
-    let isAlternate: Bool
+    /// The key that sends this way, as a menu writes it (`SendShortcut.sendSymbol`, `alternateSymbol`).
+    let key: String
 
     var body: some View {
         HStack(spacing: 12) {
             Label(title, systemImage: systemImage)
             Spacer(minLength: 0)
-            Text(verbatim: isAlternate ? "⌘↩" : "↩")
+            Text(verbatim: key)
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
         }

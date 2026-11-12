@@ -1233,6 +1233,7 @@ private struct PersonalAgentComposer: View {
     /// The reply dialog's record of where focus was before it opened.
     var replyKeys: PersonalAgentReplyKeys? = nil
     var onEscape: () -> Void = {}
+    @AppStorage(SendShortcut.preferenceKey) private var sendShortcut = SendShortcut.return
     @FocusState private var focused: Bool
     @State private var confirmsEditing = false
     @State private var confirmsRecovery = false
@@ -1282,7 +1283,7 @@ private struct PersonalAgentComposer: View {
                 .font(.caption).foregroundStyle(.secondary)
             }
             ComposerEditor(draft: draft.editor, placeholder: L10n.string("Message your dot…"),
-                accessibilityHint: L10n.string("Press Return to send"), metrics: .task(),
+                accessibilityHint: L10n.format("Press %@ to send", sendShortcut.sendKeyName), metrics: .task(),
                 input: nil, onExternalInput: externalInput, mentionRoots: [], commands: nil,
                 isCommandMenuOpen: false, isMenuOpen: false, showsChips: !draft.files.isEmpty,
                 isFocused: $focused, onSubmit: submit, onEscape: onEscape) {
