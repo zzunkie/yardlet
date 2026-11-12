@@ -6,7 +6,8 @@ import XCTest
 /// The session rail drawn without a window on screen, a provider, an account, `gh` or user data,
 /// into `.build/session-rail-qa/`, light and dark: every card open and folded for Claude Code, Codex
 /// and OpenCode; the Changes card's pull request states; and a task with the rail beside its
-/// conversation at wide and narrow widths, beside a side panel, and raised where it has no room.
+/// conversation at wide and narrow widths, beside a side panel, and raised where it has no room, and a
+/// side panel floating where it has none either.
 @MainActor
 final class SessionRailRenderingTests: XCTestCase {
     private typealias Fixtures = ComposerUnificationFixtures
@@ -223,10 +224,12 @@ final class SessionRailRenderingTests: XCTestCase {
             ("task-wide", NSSize(width: 1240, height: 760), false, false, true),
             ("task-narrow-fits", NSSize(width: 700, height: 700), false, false, true),
             ("task-with-panel", NSSize(width: 1400, height: 760), true, false, true),
-            // The panel's default leaves the rail its room where there is any (1100 − 777 ≥ 320) ...
-            ("task-panel-default-keeps-rail", NSSize(width: 1100, height: 700), true, false, true),
+            // The panel's default leaves the rail its room where there is any (1200 − 846 ≥ 320) ...
+            ("task-panel-default-keeps-rail", NSSize(width: 1200, height: 700), true, false, true),
             // ... and where there is none, the panel opens at the Codex app's default and the rail goes.
             ("task-panel-no-room", NSSize(width: 1000, height: 700), true, false, false),
+            // Where the conversation's 560 and the panel's 320 do not fit, the panel floats over its place.
+            ("task-panel-floats", NSSize(width: 800, height: 700), true, false, false),
             ("task-narrow-raised", NSSize(width: 600, height: 700), false, true, false)
         ]
         for item in cases {

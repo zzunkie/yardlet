@@ -648,12 +648,13 @@ final class WindowStructureQATests: XCTestCase {
             }
             host.close()
 
-            // A split view, the right pane's side panel open beside its conversation.
+            // A split view, the right pane's side panel open beside its conversation: each pane wide enough for
+            // the conversation's 560 beside the panel's 320.
             model.taskWorkspaces.state(for: fixture.running.id).setPanels(.init())
             splits.selectTab(.session(fixture.left.id))
             splits.closeOtherTabs(than: .session(fixture.left.id))
             splits.split(.right, placing: fixture.right.id)
-            let wide = NSSize(width: 1680, height: 900)
+            let wide = NSSize(width: 2100, height: 900)
             model.taskWorkspaces.state(for: fixture.right.id).setPanels(panel)
             host = WindowlessRender.Host(window(model, appearance, size: wide), size: wide, appearance: appearance)
             host.settle(passes: 30, interval: 0.03)
@@ -666,7 +667,7 @@ final class WindowStructureQATests: XCTestCase {
                 XCTAssertEqual(closePanel.frame.midY, paneLine, accuracy: 3, "the pane's panel strip is in its header's row")
                 let top = try XCTUnwrap(pageTop(host))
                 XCTAssertEqual(top, ParityTheme.titleBarHeight + 41, accuracy: 2)
-                notes.append("Split view with one tab (1680×900), side panel browser in the right pane: page starts at \(Int(top.rounded())) pt, "
+                notes.append("Split view with one tab (2100×900), side panel browser in the right pane: page starts at \(Int(top.rounded())) pt, "
                              + "as beside one task (with the window's tabs over the panes, 50 + 36 + 41 = 127 pt)")
             }
             model.taskWorkspaces.state(for: fixture.right.id).setPanels(.init())
