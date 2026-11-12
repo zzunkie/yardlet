@@ -91,6 +91,9 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
     private var style: TranscriptProseStyle?
     private var segments: [TranscriptProsePiece.Segment] = []
     private var codeBlocks: [TranscriptProsePiece.CodeBlock] = []
+    /// Room above the text for a first code block's header (`TranscriptProsePiece.leadingInset`): the
+    /// text starts this far down in the text view (its `textContainerInset`).
+    private var leadingInset: CGFloat = 0
     private var trailingInset: CGFloat = 0
     /// Heights and the longest line's width, by width, since the text last changed.
     private var sizes: [CGFloat: CGSize] = [:]
@@ -210,6 +213,7 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
             }
             location += item.piece.text.length
         }
+        leadingInset = built.first?.piece.leadingInset ?? 0
         trailingInset = built.last?.piece.trailingInset ?? 0
         if let segmentKey {
             segments = segments.map { .init(key: segmentKey, range: $0.range, text: $0.text) }
@@ -280,7 +284,7 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
         guard let layout = textView.textLayoutManager, (textView.textStorage?.length ?? 0) > 0 else { return .zero }
         layOutWhole(atWidth: width)
         let usage = layout.usageBoundsForTextContainer
-        let size = CGSize(width: ceil(usage.maxX), height: ceil(usage.height + trailingInset))
+        let size = CGSize(width: ceil(usage.maxX), height: ceil(leadingInset + usage.height + trailingInset))
         sizes[width] = size
         return size
     }
@@ -330,7 +334,7 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
     /// The height the text is laid out at now, which is what it draws, for the tests.
     var laidOutHeight: CGFloat {
         guard let layout = textView.textLayoutManager, (textView.textStorage?.length ?? 0) > 0 else { return 0 }
-        return ceil(layout.usageBoundsForTextContainer.height + trailingInset)
+        return ceil(leadingInset + layout.usageBoundsForTextContainer.height + trailingInset)
     }
 #endif
 
@@ -366,6 +370,9 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
     override func layout() {
         super.layout()
         guard liveResizeSize == nil else { return }
+        if textView.textContainerInset.height != leadingInset {
+            textView.textContainerInset = NSSize(width: 0, height: leadingInset)
+        }
         if textView.frame != bounds {
             textView.frame = bounds
             // The links' rects moved with the lines (`TranscriptProseTextView.resetCursorRects`).
@@ -513,7 +520,7 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
         guard let layout = textView.textLayoutManager, let textRange = textRange(range) else { return [] }
         var rects: [CGRect] = []
         layout.enumerateTextSegments(in: textRange, type: .standard, options: []) { _, frame, _, _ in
-            rects.append(frame)
+            rects.append(frame.offsetBy(dx: 0, dy: leadingInset))
             return true
         }
         return rects
@@ -523,7 +530,7 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
     private func codeFrame(_ block: TranscriptProsePiece.CodeBlock) -> CGRect? {
         guard let fragment = fragment(at: block.range.location) as? TranscriptProseFragment,
               let box = fragment.codeBox else { return nil }
-        return box.offsetBy(dx: fragment.layoutFragmentFrame.minX, dy: fragment.layoutFragmentFrame.minY)
+        return box.offsetBy(dx: fragment.layoutFragmentFrame.minX, dy: fragment.layoutFragmentFrame.minY + leadingInset)
     }
 
     private func fragment(at offset: Int) -> NSTextLayoutFragment? {
@@ -641,7 +648,7 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
             union = union.map { $0.union(frame) } ?? frame
             return true
         }
-        return union
+        return union?.offsetBy(dx: 0, dy: leadingInset)
     }
 
     /// Opens `url` as a click on it does: through SwiftUI's `openURL`, which shows a file in the

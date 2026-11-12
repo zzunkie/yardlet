@@ -104,6 +104,9 @@ struct TranscriptProsePiece {
     let text: NSAttributedString
     let segments: [Segment]
     let codeBlocks: [CodeBlock]
+    /// The text's first paragraph is a code block, whose header row goes above its text: TextKit 2
+    /// leaves no room above a text's first paragraph, so the view makes this much.
+    var leadingInset: CGFloat = 0
     /// The last paragraph is a code block whose frame reaches below its text.
     let trailingInset: CGFloat
 }
@@ -245,6 +248,11 @@ struct TranscriptProseBuilder {
                 paragraph.style.paragraphSpacingBefore += max(0, leading - paragraph.style.lineSpacing)
             }
         }
+        var leadingInset: CGFloat = 0
+        if isFirst, let first = output.paragraphs.first, first.decoration.code != nil {
+            leadingInset = first.style.paragraphSpacingBefore
+            first.style.paragraphSpacingBefore = 0
+        }
         let text = NSMutableAttributedString()
         var offsets: [Int] = []
         for (index, paragraph) in output.paragraphs.enumerated() {
@@ -279,7 +287,8 @@ struct TranscriptProseBuilder {
         if isLast, let last = output.paragraphs.last, let code = last.decoration.code {
             trailingInset = TranscriptProseMetrics.codePadding + (code.isTruncated ? TranscriptProseMetrics.codeFooterHeight : 0)
         }
-        return TranscriptProsePiece(text: text, segments: segments, codeBlocks: codeBlocks, trailingInset: trailingInset)
+        return TranscriptProsePiece(text: text, segments: segments, codeBlocks: codeBlocks, leadingInset: leadingInset,
+                                    trailingInset: trailingInset)
     }
 
     private func append(_ block: TranscriptMarkdownBlock, path: [Int], context: Context, spacingAfter: CGFloat,

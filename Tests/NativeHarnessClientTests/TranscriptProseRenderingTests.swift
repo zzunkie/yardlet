@@ -119,6 +119,24 @@ final class TranscriptProseRenderingTests: XCTestCase {
         }
     }
 
+    /// A message that starts with a code block draws the block's header row, and its Copy, inside the
+    /// message, as one that starts with words does: TextKit 2 leaves no room above a text's first
+    /// paragraph, where the header is drawn.
+    func testAMessageThatStartsWithCodeDrawsItsHeaderInside() throws {
+        let text = "```swift\nfunc parse() -> [Token] { [.end] }\n```\n\nThat is the parser."
+        try WindowlessRender.hostedInBothAppearances("prose-code-first", in: WindowlessRender.directory("conversation-text"),
+                                                     size: NSSize(width: 720, height: 400)) {
+            Message(scheme: $0.colorScheme, text: text)
+        }
+        let host = WindowlessRender.Host(Message(scheme: .light, text: text), size: NSSize(width: 720, height: 400),
+                                         appearance: .light)
+        defer { host.close() }
+        host.settle()
+        let container = try XCTUnwrap(Self.proseTextViews(in: host.hosting).first?.superview)
+        let copy = try XCTUnwrap(container.subviews.first { $0 is NSHostingView<AnyView> })
+        XCTAssertTrue(container.bounds.contains(copy.frame), "\(copy.frame) in \(container.bounds)")
+    }
+
     /// A message's text view, and what TextKit 2 builds inside it (the views that draw its lines and
     /// its selection, and its layout manager with every line it laid out), are let go with the message.
     /// A conversation opened again builds its messages anew; on macOS 27 each one let go otherwise left
