@@ -543,9 +543,10 @@ final class ComposerEditorTests: XCTestCase {
         XCTAssertEqual(key(.command, .return, ""), .alternate)
         XCTAssertEqual(key(.shift, .return, ""), .newline)
         XCTAssertEqual(key([.shift, .capsLock], .return, ""), .newline)
-        // ⇧⌘Return answers a waiting tool approval, and only with a denial (`ComposerApprovalKey`).
-        XCTAssertEqual(key([.shift, .command], .return, ""), .denyRequest)
-        XCTAssertTrue(ComposerApprovalKey.deny.contains(KeyboardShortcut(.return, modifiers: [.shift, .command])))
+        // ⇧⌘Return is no key here: the Claude app's "Always allow", which no key gives
+        // (`ComposerApprovalKey`). Escape alone denies a waiting tool approval.
+        XCTAssertNil(key([.shift, .command], .return, ""))
+        XCTAssertEqual(ComposerApprovalKey.deny.map(\.displayText), ["⎋"])
         XCTAssertEqual(ComposerReturnKey(NSEvent.ModifierFlags.command, sendShortcut: .return, draft: ""), .alternate)
         XCTAssertEqual(ComposerReturnKey(NSEvent.ModifierFlags.shift, sendShortcut: .return, draft: ""), .newline)
         // The Codex app's ⌘Return shortcuts: ⌘Return sends and ⇧⌘Return sends the other way. Return adds
@@ -681,16 +682,16 @@ final class ComposerEditorTests: XCTestCase {
         for keys in [SendShortcut.commandReturnForMultiline, .commandReturn] {
             let probe = FollowUpProbe()
             let mounted = try mount(followUpComposer(.claudeCode, probe, preferred: .steer, keys: keys), editing: probe.draft)
-            // In the empty composer ⌘Return allows a waiting tool approval and ⇧⌘Return denies it, never
-            // allows it; Return allows it where it sends the empty draft (`ComposerApprovalKey`).
+            // In the empty composer ⌘Return allows a waiting tool approval and ⇧⌘Return answers none;
+            // Return allows it where it sends the empty draft (`ComposerApprovalKey`).
             probe.waitsForApproval = true
             try press("\r", keyCode: 36, modifiers: .command, in: mounted, until: { probe.approvals == [true] })
-            try press("\r", keyCode: 36, modifiers: [.shift, .command], in: mounted,
-                      until: { probe.approvals == [true, false] })
+            try press("\r", keyCode: 36, modifiers: [.shift, .command], in: mounted)
+            XCTAssertEqual(probe.approvals, [true], "⇧⌘Return neither allows nor denies (\(keys))")
             if keys == .commandReturnForMultiline {
-                try press("\r", keyCode: 36, in: mounted, until: { probe.approvals == [true, false, true] })
+                try press("\r", keyCode: 36, in: mounted, until: { probe.approvals == [true, true] })
             }
-            XCTAssertEqual(probe.approvals, keys == .commandReturn ? [true, false] : [true, false, true], "\(keys)")
+            XCTAssertEqual(probe.approvals, keys == .commandReturn ? [true] : [true, true], "\(keys)")
             XCTAssertEqual(probe.sent + probe.followUps, [], "An answered approval sends nothing (\(keys))")
             probe.waitsForApproval = false
             try type("Use Python", into: mounted)

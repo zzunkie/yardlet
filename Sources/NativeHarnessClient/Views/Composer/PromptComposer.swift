@@ -143,23 +143,22 @@ struct PromptComposer: View {
     }
 
     /// The key that sends the other way while a turn runs: the follow-up setting's other way. Nil where
-    /// it sends as the send key does. In the empty composer it answers a waiting tool approval: ⌘Return
-    /// allows it, as the send key does; ⇧⌘Return, the key with the ⌘Return send shortcuts, denies it,
-    /// as it does where Return sends (`ComposerApprovalKey`), so it is there even where it sends as the
-    /// send key does.
+    /// it sends as the send key does. Where Return sends, it is ⌘Return, which in the empty composer
+    /// allows a waiting tool approval as the send key does (`ComposerApprovalKey`). With the ⌘Return send
+    /// shortcuts it is ⇧⌘Return, which answers none, so it is there even where it sends as the send key
+    /// does: the send key in the empty composer would allow the approval.
     private var alternateSubmit: (() -> Void)? {
         let action = runningFollowUp.flatMap { $0.alternateAction(preferred: followUpMode, canSteer: canSteer) }
-        let allowing = sendShortcut == .return
-        guard action != nil || (!allowing && actions.answerApproval != nil) else { return nil }
+        let allows = sendShortcut == .return
+        guard action != nil || (!allows && actions.answerApproval != nil) else { return nil }
         return {
-            guard !answersWaitingApproval(allowing: allowing) else { return }
+            if allows, allowsWaitingApproval() { return }
             submit(action ?? .automatic)
         }
     }
 
-    /// The send keys in the empty composer allow the oldest tool approval the task waits on, once, and
-    /// ⇧⌘Return denies it (`ComposerApprovalKey`); with a draft they send it. Not in bash mode, where
-    /// Return runs a command.
+    /// The send keys in the empty composer allow the oldest tool approval the task waits on, once
+    /// (`ComposerApprovalKey`); with a draft they send it. Not in bash mode, where Return runs a command.
     private func allowsWaitingApproval() -> Bool { answersWaitingApproval(allowing: true) }
 
     private func answersWaitingApproval(allowing: Bool) -> Bool {
@@ -324,7 +323,6 @@ struct PromptComposer: View {
             isFocused: $isPromptFocused,
             onSubmit: { if !allowsWaitingApproval() { submit(.automatic) } },
             onAlternateSubmit: alternateSubmit,
-            onDenyRequest: actions.answerApproval == nil ? nil : { _ = answersWaitingApproval(allowing: false) },
             takeSuggestion: takeNextMessageSuggestion,
             suggestion: isBashMode ? nil : composerDraft.shownNextMessageSuggestion(
                 isEnabled: showsNextMessageSuggestions, isRunning: isRunning),

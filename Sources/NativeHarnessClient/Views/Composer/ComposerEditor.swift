@@ -70,9 +70,6 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
     /// the ⌘Return shortcuts) with no list open, where it sends differently (the task composer while a
     /// turn runs: the follow-up setting's other way). Nil where it sends as `onSubmit` does.
     let onAlternateSubmit: (() -> Void)?
-    /// ⇧⌘Return where Return sends (`ComposerReturnKey.denyRequest`): denies the request the composer
-    /// answers from the keyboard (`ComposerApprovalKey`). Nil where the key does nothing.
-    let onDenyRequest: (() -> Void)?
     /// Plain Tab with no typed list showing and no input method composing: puts the composer's
     /// suggested next message into the text and says whether one was there to take. Nil where the
     /// composer has no suggestions (the new-task composer). Otherwise Tab moves focus as before.
@@ -110,7 +107,6 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
         isFocused: FocusState<Bool>.Binding,
         onSubmit: @escaping () -> Void,
         onAlternateSubmit: (() -> Void)? = nil,
-        onDenyRequest: (() -> Void)? = nil,
         takeSuggestion: (() -> Bool)? = nil,
         suggestion: String? = nil,
         onEscape: @escaping () -> Void = {},
@@ -137,7 +133,6 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
         self.isFocused = isFocused
         self.onSubmit = onSubmit
         self.onAlternateSubmit = onAlternateSubmit
-        self.onDenyRequest = onDenyRequest
         self.takeSuggestion = takeSuggestion
         self.suggestion = suggestion
         self.onEscape = onEscape
@@ -346,8 +341,8 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
                 // editor and Option-Return adds a line there. While an input method composes, the key
                 // is the input method's: it commits the composition first, and `onSubmit` then does
                 // what this Return asks, never a send for a line.
-                guard let key = ComposerReturnKey(press.modifiers, sendShortcut: sendShortcut, draft: draft.text),
-                      key != .denyRequest || onDenyRequest != nil else { return .ignored }
+                guard let key = ComposerReturnKey(press.modifiers, sendShortcut: sendShortcut, draft: draft.text)
+                else { return .ignored }
                 if fieldContext.hasMarkedText {
                     fieldContext.composedReturn = key
                     return .ignored
@@ -444,9 +439,7 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
     /// One Return, after any composition: a typed list's row takes it whatever its modifiers,
     /// as it takes Return; otherwise it sends, sends the other way, or adds a line.
     private func takeReturn(_ key: ComposerReturnKey) {
-        if key == .denyRequest {
-            onDenyRequest?()
-        } else if typedCommandQuery != nil {
+        if typedCommandQuery != nil {
             if let command = highlightedCommand { commands?.choose(command) }
         } else if let mention = typedMention, let match = fileMentions.highlightedMatch {
             insertMention(match, replacing: mention)
@@ -455,7 +448,6 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
             case .send: onSubmit()
             case .alternate: (onAlternateSubmit ?? onSubmit)()
             case .newline: fieldContext.insertLine(into: draft)
-            case .denyRequest: break
             }
         }
     }
@@ -540,17 +532,14 @@ enum ComposerTypedLists {
 
 /// What a Return asks of the composer, by its modifiers and the send shortcut, as the Codex and
 /// Claude apps have it. By default Return sends, ⌘Return sends the other way while a turn runs (the
-/// Codex app's inverted follow-up, the Claude app's "Queue for later"), Shift-Return adds a line,
-/// and ⇧⌘Return denies a waiting tool approval (`ComposerApprovalKey`). With the Codex app's ⌘Return
-/// shortcuts, ⌘Return sends, ⇧⌘Return sends the other way (and, with nothing to send, the composer
-/// denies the approval with it), and Return adds a line when the draft already has more than one, or
-/// always. Option-Return adds a line through AppKit's field editor and is not one of these, nor is a
-/// Return with Control.
+/// Codex app's inverted follow-up, the Claude app's "Queue for later") and Shift-Return adds a line.
+/// With the Codex app's ⌘Return shortcuts, ⌘Return sends, ⇧⌘Return sends the other way, and Return
+/// adds a line when the draft already has more than one, or always. Option-Return adds a line through
+/// AppKit's field editor and is not one of these, nor is a Return with Control.
 enum ComposerReturnKey: Equatable {
     case send
     case alternate
     case newline
-    case denyRequest
 
     /// Caps Lock does not count.
     init?(_ modifiers: EventModifiers, sendShortcut: SendShortcut, draft: String) {
@@ -558,7 +547,7 @@ enum ComposerReturnKey: Equatable {
         case ([], _): self = sendShortcut.returnSends(draft) ? .send : .newline
         case (.command, .return): self = .alternate
         case (.command, _): self = .send
-        case ([.shift, .command], .return): self = .denyRequest
+        case ([.shift, .command], .return): return nil
         case ([.shift, .command], _): self = .alternate
         case (.shift, _): self = .newline
         default: return nil
@@ -596,19 +585,18 @@ enum ComposerShortcut {
 /// The keys that answer the oldest tool approval a task waits on from its composer (the approvals a
 /// notification's "Allow once" answers), so that both apps' keys work: Return, as in the Codex app,
 /// and ⌘Return, as in the Claude app, allow it once while the composer holds no draft; Escape, as in
-/// the Codex app, denies it before it stops the turn, and so does ⇧⌘Return in the empty composer.
-/// A draft keeps Return and ⌘Return for sending it, so no key that sends one ever answers a request.
-/// ⇧⌘Return never allows: the Claude app gives it to "Always allow", a broader answer than this one,
-/// and the ⌘Return send shortcuts give it to sending the other way. Where Return adds a line to the
-/// empty draft ("Always ⌘Return"), only ⌘Return allows. The request card names the keys on its
-/// buttons' tooltips.
+/// the Codex app, denies it before it stops the turn. A draft keeps Return and ⌘Return for sending it,
+/// so no key that sends one ever answers a request. ⇧⌘Return answers none: the Claude app gives it to
+/// "Always allow", which no key here gives, and the ⌘Return send shortcuts give it to sending the
+/// other way. Where Return adds a line to the empty draft ("Always ⌘Return"), only ⌘Return allows.
+/// The request card names the keys on its buttons' tooltips.
 enum ComposerApprovalKey {
     static func allow(_ sendShortcut: SendShortcut) -> [KeyboardShortcut] {
         let commandReturn = KeyboardShortcut(.return, modifiers: .command)
         return sendShortcut.returnSends("") ? [KeyboardShortcut(.return, modifiers: []), commandReturn] : [commandReturn]
     }
 
-    static let deny = [KeyboardShortcut(.escape, modifiers: []), KeyboardShortcut(.return, modifiers: [.shift, .command])]
+    static let deny = [KeyboardShortcut(.escape, modifiers: [])]
 }
 
 /// The composer field's window and the Return an input method took while composing: a reference
