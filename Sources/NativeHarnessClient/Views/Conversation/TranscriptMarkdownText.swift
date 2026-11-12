@@ -319,7 +319,8 @@ struct TranscriptInlineMarkdownText: View, Equatable {
     }
 }
 
-/// A Markdown table: scrolled sideways when it is wider than the message, and, as both apps offer,
+/// A Markdown table: fitted to the message by wrapping its cells, and scrolled sideways, its edge
+/// fading, when even its narrowest does not fit (`TranscriptTableLayout`). As both apps offer,
 /// "Expand table" (a sheet with the whole table) and the Codex app's "Copy table" on hover, which
 /// copies the table as Markdown and as an HTML table that documents and spreadsheets paste as a table.
 private struct TranscriptMarkdownTable: View {
@@ -339,16 +340,23 @@ private struct TranscriptMarkdownTable: View {
 
     var body: some View {
         if isExpanded {
-            grid(maximumColumnWidth: 520 * interfaceScale)
+            grid(maximumColumnWidth: 520 * interfaceScale, words: longestWords)
         } else {
             compact
         }
     }
 
     private var compact: some View {
-        ScrollView(.horizontal) {
-            grid(maximumColumnWidth: 280 * interfaceScale)
+        let words = longestWords
+        return ViewThatFits(in: .horizontal) {
+            grid(maximumColumnWidth: nil, words: words)
+            // Its narrowest is wider than the message: it scrolls, its edges fading where it goes on.
+            ScrollView(.horizontal) {
+                grid(maximumColumnWidth: 280 * interfaceScale, words: words)
+            }
+            .modifier(TranscriptScrollEdgeFade())
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 8))
         .overlay { RoundedRectangle(cornerRadius: 8).stroke(ParityTheme.separator) }
         .overlay(alignment: .topTrailing) {
@@ -403,16 +411,20 @@ private struct TranscriptMarkdownTable: View {
         showsExpanded = true
     }
 
-    private func grid(maximumColumnWidth: CGFloat) -> some View {
-        TranscriptTableLayout(columns: columnCount, maximumColumnWidth: maximumColumnWidth) {
+    /// `words`: each cell's longest word, the header's first (`longestWords`).
+    private func grid(maximumColumnWidth: CGFloat?, words: [[CGFloat]]) -> some View {
+        TranscriptTableLayout(columns: columnCount, maximumColumnWidth: maximumColumnWidth,
+                              minimumColumnWidth: 120 * interfaceScale) {
             ForEach(0..<columnCount, id: \.self) { column in
                 cell(value(in: headers, at: column), row: nil, column: column)
                     .padding(.bottom, 8)
                     .overlay(alignment: .bottom) { Rectangle().fill(ParityTheme.separator).frame(height: 1) }
+                    .layoutValue(key: TranscriptTableLayout.LongestWord.self, value: words[0][column])
             }
             ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
                 ForEach(0..<columnCount, id: \.self) { column in
                     cell(value(in: row, at: column), row: index, column: column)
+                        .layoutValue(key: TranscriptTableLayout.LongestWord.self, value: words[index + 1][column])
                 }
             }
         }
@@ -434,6 +446,16 @@ private struct TranscriptMarkdownTable: View {
         .multilineTextAlignment(textAlignment(column))
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: cellAlignment(column))
+    }
+
+    /// Each cell's longest word in the font it is drawn in, the header's row first.
+    private var longestWords: [[CGFloat]] {
+        ([headers] + rows).enumerated().map { row, cells in
+            (0..<columnCount).map { column in
+                TranscriptTableLayout.longestWord(in: value(in: cells, at: column).attributed, size: 13 * interfaceScale,
+                                                  weight: row == 0 ? .semibold : .regular)
+            }
+        }
     }
 
     private var columnCount: Int {
@@ -508,6 +530,39 @@ struct TranscriptRenderWindow: Equatable, Sendable {
         let lines = text.reduce(1) { $1.isNewline ? $0 + 1 : $0 }
         let steps = max((text.count + step - 1) / step, (lines + chunkLineLimit - 1) / chunkLineLimit, 1)
         return step * steps
+    }
+}
+
+/// Fades a horizontal scroller's content out at an edge it goes on past, which the scroller's own bar,
+/// overlaid until one scrolls, does not show.
+private struct TranscriptScrollEdgeFade: ViewModifier {
+    private struct Edges: Equatable {
+        var leading = false
+        var trailing = false
+    }
+
+    @State private var edges = Edges()
+    private let width: CGFloat = 32
+
+    func body(content: Content) -> some View {
+        content
+            .onScrollGeometryChange(for: Edges.self) { geometry in
+                Edges(leading: geometry.contentOffset.x > 1,
+                      trailing: geometry.contentOffset.x + geometry.containerSize.width < geometry.contentSize.width - 1)
+            } action: { _, new in
+                edges = new
+            }
+            .mask {
+                HStack(spacing: 0) {
+                    LinearGradient(colors: [.black.opacity(edges.leading ? 0 : 1), .black], startPoint: .leading,
+                                   endPoint: .trailing)
+                        .frame(width: width)
+                    Rectangle()
+                    LinearGradient(colors: [.black, .black.opacity(edges.trailing ? 0 : 1)], startPoint: .leading,
+                                   endPoint: .trailing)
+                        .frame(width: width)
+                }
+            }
     }
 }
 

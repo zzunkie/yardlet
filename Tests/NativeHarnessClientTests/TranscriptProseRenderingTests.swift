@@ -253,3 +253,72 @@ extension TranscriptProseRenderingTests {
         XCTAssertGreaterThan(larger, standard * 1.15)
     }
 }
+
+extension TranscriptProseRenderingTests {
+    /// A table wider than its message wraps its cells to fit, as the Codex and Claude apps' tables do,
+    /// at the conversation's narrowest beside the side panel (560 pt, 496 inside its gutters), at the
+    /// 616 pt a 1200 pt window gave and at the widest message, and measures at the height it is drawn
+    /// at, as a turn measures its messages before placing them (`ConversationTurnHosting`). Only a
+    /// table whose words cannot fit side by side scrolls sideways, and then its scroller shows. Review
+    /// images: `.build/conversation-text/table-*.png`.
+    func testAWideTableWrapsItsCellsToFitTheMessage() throws {
+        let functions = """
+        | File | Function | What it does |
+        | --- | --- | --- |
+        | `src/notes/__main__.py` | `main()` | Parses `sys.argv`: `add <text>`, `list` or `done <id>`, and calls `Store`. No arguments lists the notes. |
+        | `src/notes/store.py` | `Store.load()` | Returns the list of notes from the file, or an empty list if the file doesn't exist. |
+        | `src/notes/store.py` | `Store.done(note_id)` | Marks the note with that id as done and saves. |
+        | `tests/test_store.py` | `StoreTests.test_add_then_done` | Adds a note, marks it done, and checks that done is true after reloading. |
+        """
+        let identifiers = """
+        | Before | After | Caller | Callee | Test |
+        | --- | --- | --- | --- | --- |
+        | `ConversationScrollRestorationController` | `ConversationReadingPositionKeeper` | `TranscriptScrollFollowing.restore` | `ConversationTurnHosting.size(forWidth:)` | `ConversationReadingPositionTests` |
+        """
+        let directory = try WindowlessRender.directory("conversation-text")
+        for (name, table, widths, scrolls) in [("table-fit", functions, [CGFloat(496), 616, 704], false),
+                                               ("table-scroll", identifiers, [CGFloat(496)], true)] {
+            for width in widths {
+                for appearance in WindowlessRender.Appearance.allCases {
+                    let message = TranscriptMarkdownText(text: table).environment(\.colorScheme, appearance.colorScheme)
+                    let placed = PlacedHeight()
+                    let host = WindowlessRender.Host(
+                        message.frame(width: width)
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { placed.height = $0 }
+                            .padding(24)
+                            .frame(width: width + 48, height: 520, alignment: .topLeading).background(ParityTheme.canvas),
+                        size: NSSize(width: width + 48, height: 520), appearance: appearance)
+                    defer { host.close() }
+                    host.settle()
+                    try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(
+                        path: "\(name)-\(Int(width))-\(appearance.suffix).png"))
+                    let measured = NSHostingController(rootView: message).sizeThatFits(
+                        in: CGSize(width: width, height: .greatestFiniteMagnitude))
+                    XCTAssertEqual(measured.height, placed.height, accuracy: 1, "\(name) at \(width): measured as it is drawn")
+                    let shown = Self.scrollViews(in: host.hosting).filter { !$0.isHiddenOrHasHiddenAncestor && !$0.frame.isEmpty }
+                    for scroll in Self.scrollViews(in: host.hosting) {
+                        print("[table \(name) \(Int(width))] scroll hidden \(scroll.isHiddenOrHasHiddenAncestor) frame \(NSStringFromRect(scroll.frame)) document \(NSStringFromRect(scroll.documentView?.frame ?? .zero)) style \(scroll.scrollerStyle.rawValue) scroller \(String(describing: scroll.horizontalScroller.map { ($0.isHidden, $0.alphaValue, NSStringFromRect($0.frame)) })) placed \(placed.height)")
+                    }
+                    if scrolls {
+                        let scroll = try XCTUnwrap(shown.first, "\(name) at \(width): the table scrolls")
+                        let document = try XCTUnwrap(scroll.documentView).frame.width
+                        let scroller = try XCTUnwrap(scroll.horizontalScroller)
+                        XCTAssertGreaterThan(document, scroll.contentView.bounds.width + 50, "\(name) at \(width)")
+                        XCTAssertTrue(scroll.hasHorizontalScroller && !scroller.isHidden && scroller.alphaValue > 0,
+                                      "\(name) at \(width): the scroller shows")
+                    } else {
+                        XCTAssertTrue(shown.isEmpty, "\(name) at \(width): the table fits without scrolling")
+                    }
+                }
+            }
+        }
+    }
+
+    private final class PlacedHeight {
+        var height: CGFloat = 0
+    }
+
+    static func scrollViews(in root: NSView) -> [NSScrollView] {
+        ((root as? NSScrollView).map { [$0] } ?? []) + root.subviews.flatMap(scrollViews)
+    }
+}
