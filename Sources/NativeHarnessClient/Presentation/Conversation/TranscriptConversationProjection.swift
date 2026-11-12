@@ -48,7 +48,9 @@ enum TranscriptConversationProjection {
     /// One update's turn inputs: what the turns read across one another, read once, and each turn's
     /// input read from it only when asked (`input(at:)`). `keeps(_:at:)` tells whether an input read
     /// for a turn before is its input now by comparing only the turn's own parts, so a cache tells a
-    /// turn the transcript kept (`TranscriptTurns`) by its storage.
+    /// turn the transcript kept (`TranscriptTurns`) by its storage, and never compares its entries: a
+    /// turn whose entries changed is another turn, and comparing them one by one compares the bytes of
+    /// every inline image in them.
     struct TurnInputs: ConversationTurnInputs {
         let turns: [TranscriptTurn]
         let harness: HarnessKind
@@ -103,7 +105,7 @@ enum TranscriptConversationProjection {
                 && previous.isLatestMessage == (index == latestMessageTurn)
                 && previous.wasCutOff == (isLast && latestTurnWasCutOff)
                 && previous.isHead == isHead(index)
-                && previous.entries == turn.entries
+                && previous.entries.sharesStorage(with: turn.entries)
                 && (changedApprovals.isEmpty || turn.toolCallIDs.isDisjoint(with: changedApprovals))
         }
 
@@ -627,6 +629,8 @@ extension ConversationProjectionCache {
         latestTurnIsComplete: Bool,
         latestTurnWasCutOff: Bool = false
     ) -> ConversationPresentation {
+        // A transcript given as its entries, made anew for each update, keeps the turns the last one had.
+        let transcript = lastTranscript.map { transcript.keepingTurns(of: $0.transcript) } ?? transcript
         let connectorLabels = ConnectorToolLabels.shared.generation
         if let last = lastTranscript, last.harness == harness, last.status == status,
            last.latestTurnIsComplete == latestTurnIsComplete, last.latestTurnWasCutOff == latestTurnWasCutOff,
@@ -653,9 +657,8 @@ extension ConversationProjectionCache {
         latestTurnIsComplete: Bool,
         latestTurnWasCutOff: Bool = false
     ) -> ConversationPresentation {
-        transcript(lastTranscript?.transcript.updated(to: entries, change: .unknown) ?? TranscriptTurns(entries),
-                   harness: harness, status: status, latestTurnIsComplete: latestTurnIsComplete,
-                   latestTurnWasCutOff: latestTurnWasCutOff)
+        transcript(TranscriptTurns(entries), harness: harness, status: status,
+                   latestTurnIsComplete: latestTurnIsComplete, latestTurnWasCutOff: latestTurnWasCutOff)
     }
 }
 

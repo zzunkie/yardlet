@@ -71,18 +71,26 @@ struct TranscriptTurns: Equatable {
         return TranscriptTurns(entries: newEntries, turns: kept, starts: keptStarts)
     }
 
-    /// The turn of `entries`: the earlier turn that starts where they do with the same entries, told by
-    /// comparing only those after the first `known` of the transcript, which stayed the same.
+    /// The turn of `entries`: the earlier turn with the same entries, told by comparing only those after
+    /// the first `known` of the transcript, which stayed the same, when it starts where they do, and all
+    /// of them when it moved (earlier entries were read in before it).
     private static func turn(_ entries: ArraySlice<TranscriptEntry>,
                              reusing earlier: [UUID: (turn: TranscriptTurn, start: Int)], known: Int) -> TranscriptTurn {
-        if let first = entries.first, let match = earlier[first.id], match.start == entries.startIndex,
-           match.turn.entries.count == entries.count {
-            let compared = min(max(known - entries.startIndex, 0), entries.count)
+        if let first = entries.first, let match = earlier[first.id], match.turn.entries.count == entries.count {
+            let compared = match.start == entries.startIndex ? min(max(known - entries.startIndex, 0), entries.count) : 0
             if match.turn.entries[compared...].elementsEqual(entries[(entries.startIndex + compared)...]) {
                 return match.turn
             }
         }
         return TranscriptTurn(entries: Array(entries))
+    }
+
+    /// These entries in the turns `earlier` had where they come out the same (`updated(to:change:)`),
+    /// when they were given as they are and not split yet: a view that draws a transcript from its
+    /// entries makes it anew for each update, and its turns are then told by their storage as those of a
+    /// transcript updated from the one before are. A transcript already split is returned as it is.
+    func keepingTurns(of earlier: TranscriptTurns) -> TranscriptTurns {
+        split.made == nil ? earlier.updated(to: entries, change: .unknown) : self
     }
 
     /// The same entries, or the same turns of entries of the same length: a transcript updated from

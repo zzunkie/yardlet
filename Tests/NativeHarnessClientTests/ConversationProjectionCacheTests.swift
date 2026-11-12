@@ -240,6 +240,16 @@ final class ConversationProjectionCacheTests: XCTestCase {
         builder.apply(.activityCompleted(HarnessActivity(id: "call-120", kind: "Bash", title: "Run 120",
                                                          input: "swift test", output: "ok, again")))
         publish(keeping: 99, projecting: 1, "an earlier call")
+        // Earlier history read in before them moves every turn: each keeps its turn, told by its entries
+        // once, and only the turns read in are projected.
+        let oldest = try XCTUnwrap(builder.entries.first)
+        let earlierHistory = (0..<3).flatMap { index -> [TranscriptEntry] in
+            [TranscriptEntry(content: .user(text: "Earlier \(index)")),
+             TranscriptEntry(content: .assistant(text: "Earlier answer \(index).", isStreaming: false))]
+        }
+        builder.raiseLimit(to: builder.entries.count + earlierHistory.count)
+        builder.replaceEntries(before: oldest.id, with: earlierHistory)
+        publish(keeping: 100, projecting: 3, "earlier history")
     }
 
     // MARK: - Fixtures
