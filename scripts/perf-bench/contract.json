@@ -43,6 +43,10 @@
     "home": [
       "projects",
       "desk"
+    ],
+    "conversation-scroll": [
+      "scroll",
+      "scroll-streaming"
     ]
   },
   "micro": [

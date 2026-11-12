@@ -40,6 +40,8 @@ what else runs on it, so they are compared between runs on the same Mac.
   it compares with; by default it is the newest earlier result. `--tolerance` sets how much worse a number
   must be to be marked (default 15%). `scripts/perf-bench/report.py compare <earlier.json> <later.json>`
   compares two results again.
+- `--app-arguments "<argument> ..."` adds arguments to every launch of the app, such as a setting to measure
+  with (`--app-arguments "-Yardlet.conversationTableTimeline YES"`); the result keeps them as `appArguments`.
 - The command exits with status 1 when a number is over its budget, a planned result is missing, or a
   benchmark could not complete (§4). `contract.json` lists the scenes' required phases and the exact
   in-process tests and measurements; the selected plan is saved in every new result.
@@ -64,6 +66,7 @@ projects unless the scene says otherwise. Phases are measured after the scene ha
 | `memory-cycle` | the same ten long Codex tasks, loaded once; history stays fixed while views are repeatedly opened and let go | `warm` (30), `revisit` (60 by default, `--cycle-seconds` changes it), `recovered` (15 at rest) |
 | `composer-input` | a 60-turn Claude task streaming while its actual field editor receives alternating plain text and marked-text commits | `typing` (20): application-side dispatch, edit and layout latency, without sending the draft |
 | `home` | the home over 400 tasks in 40 projects, every fourth a subtask of the one before, while three Claude Code answers stream | `projects` (15): the home's projects; then `desk` (15): its desk, which the development switch (`YardletDeskPreview`) shows |
+| `conversation-scroll` | a 60-turn Claude Code conversation whose answers hold long paragraphs, code blocks, tables, a Markdown link and a bare address, between Read, Grep, Bash and Edit calls with output. A scroll wheel event of 20 points a frame (1,200 points a second), in a trackpad gesture's phases, goes to the conversation's scroll view, up toward the top (bringing earlier turns in) and back down at either end. The result's `conversation` says how far the view moved a frame at a time, how often turns arriving above moved it, how far from the end it got and how near the top | `scroll` (10), then with a message streaming an answer into its last turn, which brings the view back to the end first: `scroll-streaming` (10) |
 
 The fakes stream about 30 fragments a second, the rate of a working agent, in the providers' own frame
 shapes: Claude Code's `stream-json` with partial messages, and Codex App Server notifications. A message

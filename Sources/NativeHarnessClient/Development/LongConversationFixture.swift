@@ -16,8 +16,9 @@ enum LongConversationFixture {
     }
 
     /// A Claude Code conversation of `turns` finished turns. Every entry's ID is derived from `seed`
-    /// and its place, so two calls with the same seed give the same conversation.
-    static func claude(turns: Int, seed: String = "claude", tag: String = "") -> [TranscriptEntry] {
+    /// and its place, so two calls with the same seed give the same conversation. With `links`, every
+    /// answer ends with a Markdown link and a bare address.
+    static func claude(turns: Int, seed: String = "claude", tag: String = "", links: Bool = false) -> [TranscriptEntry] {
         var entries: [TranscriptEntry] = []
         var offset = 0.0
         func add(_ content: TranscriptEntryContent, _ name: String) {
@@ -33,7 +34,7 @@ enum LongConversationFixture {
             for call in 0..<toolCount(turn) {
                 add(.activity(tool(turn: turn, call: call), state: .completed), "\(turn)|tool|\(call)")
             }
-            add(.assistant(text: answer(turn), isStreaming: false), "\(turn)|answer")
+            add(.assistant(text: answer(turn) + (links ? linkLine(turn) : ""), isStreaming: false), "\(turn)|answer")
         }
         return entries
     }
@@ -310,6 +311,11 @@ enum LongConversationFixture {
                                    output: "The file has been updated.",
                                    diff: HarnessActivityDiff(path: path, oldText: "    old()\n", newText: "    guard !input.isEmpty else { return }\n    new()\n"))
         }
+    }
+
+    /// A line of links an answer can end with: a Markdown link and a bare address.
+    static func linkLine(_ turn: Int) -> String {
+        "\n\nSee [the parser notes](https://example.com/parser/\(turn)) and https://example.com/issues/\(1_000 + turn)."
     }
 
     /// Answers of very different lengths: a line, a few paragraphs with a list, or a long write-up

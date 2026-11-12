@@ -7,10 +7,10 @@
 #   ./scripts/perf-bench/run.sh [--build] [--app <Yardlet.app>] [--scenes "<scene> ..."] [--no-micro]
 #       [--micro-only] [--repeat <n>] [--compare <result.json>] [--tolerance <fraction>]
 #       [--cycle-seconds <seconds>] [--cycle-rest-seconds <seconds>] [--hang-log on|off]
-#       [--memory-census] [--no-event-pulse] [--keep]
+#       [--memory-census] [--no-event-pulse] [--keep] [--app-arguments "<argument> ..."]
 #
 # Scenes: launch idle-running stream-claude stream-codex codex-history subagent sidebar browser-tabs codex-switch
-# memory-cycle composer-input home (all by
+# memory-cycle composer-input home conversation-scroll (all by
 # default; `PerfBenchFixture` in Sources/NativeHarnessClient/Development says what each holds). Each runs
 # in a fresh launch of the QA copy: its own bundle identifier (com.zzunkie.yardletqa.perf), a temporary
 # home, windows off every screen, never the active app (`QABackground`). Tasks that stream talk to fake
@@ -32,6 +32,8 @@
 # --hang-log     main-thread diagnostics in the QA process only (on or off, default on)
 # --memory-census count created/live/released conversation objects (diagnostic)
 # --no-event-pulse omit memory-cycle's AppKit event boundaries (diagnostic control only)
+# --app-arguments more arguments for every launch of the app, such as a setting to measure with
+#                (`-Yardlet.conversationTableTimeline YES`); the result records them
 #
 # Results: ~/Library/Caches/Yardlet/perf-bench/results/<time>-<commit>.json ($YARDLET_PERF_RESULTS), shared by
 # every checkout and worktree on this Mac, so one branch compares with another. The bench waits for the shared heavy-build lock
@@ -58,6 +60,7 @@ repeat=1
 compare=""
 tolerance=0.15
 keep=0
+app_arguments=()
 cycle_seconds=60
 cycle_rest_seconds=15
 hang_log=on
@@ -74,13 +77,14 @@ while (( $# > 0 )); do
         --compare) compare=${2:?--compare needs a result}; shift 2 ;;
         --tolerance) tolerance=${2:?--tolerance needs a fraction}; shift 2 ;;
         --keep) keep=1; shift ;;
+        --app-arguments) app_arguments=(${=2}); shift 2 ;;
         --cycle-seconds) cycle_seconds=${2:?--cycle-seconds needs a duration}; shift 2 ;;
         --cycle-rest-seconds) cycle_rest_seconds=${2:?--cycle-rest-seconds needs a duration}; shift 2 ;;
         --hang-log) hang_log=${2:?--hang-log needs on or off}; shift 2 ;;
         --memory-census) memory_census=1; shift ;;
         --event-pulse) event_pulse=1; shift ;;
         --no-event-pulse) event_pulse=0; shift ;;
-        -h|--help) /usr/bin/sed -n '2,30p' "$0" | /usr/bin/sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) /usr/bin/sed -n '2,35p' "$0" | /usr/bin/sed 's/^# \{0,1\}//'; exit 0 ;;
         *) print -u2 "error: unknown argument $1 (see --help)"; exit 2 ;;
     esac
 done
@@ -173,7 +177,7 @@ dirty=$([[ -n "$(git -C "$PROJECT_ROOT" status --porcelain --untracked-files=no)
 cat > "$out/meta.json" <<EOF
 {"commit": "$commit", "dirty": $dirty, "branch": "$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD)",
  "startedAt": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')", "machine": $(machine_info), "loadAtStart": $(load_average),
- "repeat": $repeat}
+ "repeat": $repeat, "appArguments": "${app_arguments[*]}"}
 EOF
 /usr/bin/python3 - "$out/meta.json" "$TOOLS/contract.json" "$micro" "$app_scenes" "$cycle_seconds" "$cycle_rest_seconds" "$hang_log" "$memory_census" "$event_pulse" $scenes <<'PY'
 import json, sys
@@ -243,7 +247,7 @@ PY
         (( memory_census )) && extra+=(--ui-fixture-perf-memory-census)
         (( ! event_pulse )) && extra+=(--ui-fixture-perf-no-event-pulse)
         app_pid=$("$QA/qa-launch.sh" "$qa_app" "$qa_home" "$out/logs/$name.log" -- \
-            --ui-fixture=perf --ui-fixture-perf-scene="$scene" --ui-fixture-perf-dir="$bench" $extra \
+            --ui-fixture=perf --ui-fixture-perf-scene="$scene" --ui-fixture-perf-dir="$bench" $extra $app_arguments \
             -AppleLanguages "(en)" -AppleLocale en_US)
         # Launched in the background the app makes its window only when opened again, as clicking the Dock
         # icon would, and the fixture starts in the window: open it again as soon as the app has launched.
