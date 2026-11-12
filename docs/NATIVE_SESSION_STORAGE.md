@@ -823,7 +823,8 @@ Yardlet removes there is the CLI's extra copies of Yardlet's tool schemas, descr
   new task and `session/load` for one that continues. Tasks in Bypass permissions share a second process,
   `agy acp --dangerously-skip-permissions` (see Saved options). The version the runtime reported decides (`AntigravityTransport`;
   `--version` runs again only when the file changes). An earlier version, or one whose version could not be read, keeps
-  print mode: one `agy --print --output-format stream-json` per turn.
+  print mode: one `agy --print --output-format stream-json` per turn. Print mode chosen because the version could not be
+  read serves only the task that asked; the next task to start reads the version again.
 - **One store either way:** `agy acp` keeps its sessions with the CLI's own conversations, so a task's provider session
   ID is the conversation ID that `agy --conversation <id>` and `/resume` continue in a terminal, and a task print mode
   started continues over ACP with nothing moved. A print-mode task that never ran a turn kept its local ID as a stand-in;

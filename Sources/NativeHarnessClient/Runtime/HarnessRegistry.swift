@@ -126,8 +126,17 @@ actor HarnessRegistry {
         let harness = key.harness
         // The key names the runtime asked for; an earlier version held in its place is what starts.
         let started = startedExecutable(for: harness, requested: key.executableURL)
-        let antigravityPrintMode = factory == nil && harness == .antigravityCLI
-            ? !(await servesACP(.antigravityCLI, executableURL: started)) : false
+        var antigravityPrintMode = false
+        var keeps = true
+        if factory == nil, harness == .antigravityCLI {
+            let version = await versions?.version(of: started)
+            antigravityPrintMode = !AntigravityTransport.servesACP(version: version)
+            // A version that could not be read (`--version` failed or ran out of time, as on a Mac
+            // busy right after login) is not kept by the cache, and the print mode chosen without it
+            // is not kept either: it serves this request alone, and the next one reads the version
+            // again.
+            keeps = version != nil || versions == nil
+        }
         // Another request may have made it while the version was read.
         if let adapter = adapters[key] {
             return adapter
@@ -140,7 +149,9 @@ actor HarnessRegistry {
                 connection: key.connection,
                 antigravityPrintMode: antigravityPrintMode
             )
-        adapters[key] = adapter
+        if keeps {
+            adapters[key] = adapter
+        }
         return adapter
     }
 

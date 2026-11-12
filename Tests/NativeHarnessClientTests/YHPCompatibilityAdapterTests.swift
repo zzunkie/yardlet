@@ -1,4 +1,5 @@
 import Foundation
+import os
 import XCTest
 @testable import NativeHarnessClient
 
@@ -139,6 +140,23 @@ final class YHPCompatibilityAdapterTests: XCTestCase {
             XCTAssertEqual(adapter is ACPAdapter, servesACP, version ?? "unread")
             XCTAssertEqual(adapter is StructuredHeadlessAdapter, !servesACP, version ?? "unread")
         }
+
+        // Print mode chosen because the version could not be read is not kept: the next request
+        // reads the version again and runs over ACP once it is known.
+        let reads = OSAllocatedUnfairLock(initialState: 0)
+        let registry = HarnessRegistry(routingPolicy: .legacy, versions: RuntimeVersionCache(defaults: nil, read: { _ in
+            reads.withLock { reads in
+                reads += 1
+                return reads == 1 ? nil : "1.5.7"
+            }
+        }))
+        let unread = await registry.adapter(for: .antigravityCLI, executableURL: agy)
+        XCTAssertTrue(unread is StructuredHeadlessAdapter)
+        let read = await registry.adapter(for: .antigravityCLI, executableURL: agy)
+        XCTAssertTrue(read is ACPAdapter)
+        let kept = await registry.adapter(for: .antigravityCLI, executableURL: agy)
+        XCTAssertTrue(kept === read)
+        XCTAssertEqual(reads.withLock { $0 }, 2)
     }
 
     private func runCompletedTurn(
