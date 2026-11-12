@@ -188,6 +188,31 @@ final class ScheduledTaskTests: XCTestCase {
         await model.shutdown()
     }
 
+    /// A task's rail reads the schedules that continue it from an index, drawn again with each event of the task;
+    /// a run or a pause of a schedule that starts new tasks leaves the index as it was, so it redraws no rail.
+    func testOnlyAScheduleThatContinuesATaskChangesWhatTheRailsRead() async {
+        let center = ScheduledTaskCenter()
+        center.start = { _, _, _ in .started(taskID: UUID()) }
+        final class Flag: @unchecked Sendable { var changed = false }
+        func observe() -> Flag {
+            let flag = Flag()
+            withObservationTracking { _ = center.continuingByTaskID } onChange: { flag.changed = true }
+            return flag
+        }
+        var flag = observe()
+        center.create(ScheduledTask(name: "Daily", prompt: "Go.", trigger: .daily(ScheduleTime(hour: 9, minute: 0)),
+                                    destination: ScheduleDestination(harness: .openCode)))
+        let daily = center.schedules[0].id
+        await center.runNow(daily)
+        center.setEnabled(false, for: daily)
+        XCTAssertFalse(flag.changed)
+        flag = observe()
+        center.create(ScheduledTask(name: "Heartbeat", prompt: "Go.", trigger: .interval(hours: 1, anchor: Date(), days: []),
+                                    destination: ScheduleDestination(mode: .continueTask, harness: .openCode,
+                                                                     targetTaskID: UUID())))
+        XCTAssertTrue(flag.changed)
+    }
+
     func testOneOffWaitsThroughRunningAndApprovalBeforeSending() async throws {
         let adapter = SuggestionRecordingAdapter()
         let clock = Clock(date(16, 20))
