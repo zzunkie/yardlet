@@ -168,15 +168,18 @@ final class TranscriptProseRenderingTests: XCTestCase {
 
 extension TranscriptProseRenderingTests {
     /// Going to a match inside a message's text brings it to the middle of the conversation, as the
-    /// scroll target `Text` placed did.
-    func testGoingToAMatchInATextBringsItToTheMiddle() async throws {
+    /// scroll target `Text` placed did; so does going to one in a table's cell, which the table's own
+    /// point brings there (`conversationFindAnchor`), when find first goes to it, on Return and on ⌘G.
+    func testGoingToAMatchInATextOrATableBringsItToTheMiddle() async throws {
         var entries: [TranscriptEntry] = []
         for index in 0..<8 {
             entries.append(TranscriptEntry(content: .user(text: "Request \(index)")))
             let words = String(repeating: "Words that wrap across the line as an answer does. ", count: 8)
             let needle = index == 2 ? " The needle sits here." : ""
+            let table = index == 5 ? "\n\n| Function | What it does |\n| --- | --- |\n| `Store.load()` | Reads the notes. |\n"
+                + "| `Store.done(note_id)` | Marks the note as done. |" : ""
             entries.append(TranscriptEntry(content: .assistant(
-                text: "Answer \(index).\n\n\(words)\n\n- \(words)\(needle)\n- \(words)", isStreaming: false)))
+                text: "Answer \(index).\n\n\(words)\n\n- \(words)\(needle)\n- \(words)\(table)", isStreaming: false)))
         }
         let find = ConversationFindModel()
         find.debounce = .zero
@@ -213,6 +216,28 @@ extension TranscriptProseRenderingTests {
         try WindowlessRender.writePNG(host.capture().bitmap,
                                       to: WindowlessRender.directory("conversation-text").appending(path: "find-in-text.png"))
         XCTAssertEqual(match.midY, visible.midY, accuracy: visible.height * 0.15, "The match is in the middle")
+
+        // The scroll to the match's turn and the table's point centering itself both move the
+        // conversation; the conversation stays on the match.
+        find.query = "Store.done"
+        await find.waitForSearch()
+        for move in ["typing", "Return", "⌘G"] {
+            if move == "Return" { find.submit() } else if move == "⌘G" { find.next() }
+            try await settle(12)
+            XCTAssertEqual(find.currentResult?.matches.count, 1)
+            let point = try XCTUnwrap(Self.findPoints(in: host.hosting).first, "The table places the match's point")
+            let cell = point.convert(point.bounds, to: scroll.contentView)
+            let shown = scroll.contentView.bounds
+            XCTAssertEqual(cell.midY, shown.midY, accuracy: shown.height * 0.15,
+                           "After \(move), the table's match is in the middle: \(cell) in \(shown)")
+        }
+        try WindowlessRender.writePNG(host.capture().bitmap,
+                                      to: WindowlessRender.directory("conversation-text").appending(path: "find-in-table.png"))
+    }
+
+    /// The points tables and other drawn views place for find's current match.
+    static func findPoints(in root: NSView) -> [NSView] {
+        (type(of: root) == ConversationFindCenteringView.self ? [root] : []) + root.subviews.flatMap(findPoints)
     }
 
     static func containers(in root: NSView) -> [TranscriptProseContainerView] {

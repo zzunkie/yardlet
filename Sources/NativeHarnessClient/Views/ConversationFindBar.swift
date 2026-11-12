@@ -207,15 +207,12 @@ enum ConversationFindStyle {
     }
 }
 
-enum ConversationFindAnchor {
-    /// The one point in the conversation the find scrolls to: the current match.
-    static let activeMatch = "conversation-find-active-match"
-}
-
 extension View {
-    /// Places the scroll target for the current match at `fraction` of this view's height. The target
-    /// also brings itself to the middle of the conversation when find goes to it, since a turn's
-    /// views are out of the conversation's `ScrollViewReader`'s reach (`ConversationTurnHost`).
+    /// Places the current match's point at `fraction` of this view's height. The point brings itself
+    /// to the middle of the conversation when find goes to it: a turn draws in a hosting view of its
+    /// own (`ConversationTurnHost`), where the conversation's `ScrollViewReader` cannot place it. So
+    /// it carries no scroll ID: the reader would find one there, scroll to a wrong place, often the
+    /// conversation's top, and undo the point's own centering.
     func conversationFindAnchor(_ fraction: Double?) -> some View {
         modifier(ConversationFindAnchorModifier(fraction: fraction))
     }
@@ -234,7 +231,6 @@ private struct ConversationFindAnchorModifier: ViewModifier {
                     ConversationFindAnchorMarker(token: token, find: find)
                         .frame(width: 1, height: 1)
                         .position(x: 0.5, y: min(max(0.5, height * fraction), height - 0.5))
-                        .id(ConversationFindAnchor.activeMatch)
                 }
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
@@ -294,8 +290,9 @@ struct ConversationFindFeeder: View {
     }
 }
 
-/// Moves the conversation to the current match: its row first (a lazy list may not have drawn the
-/// message yet), then the match itself. Reaching a match stops following the latest output.
+/// Moves the conversation to the current match's row, where the match then brings itself to the
+/// middle (`conversationFindAnchor`, `TranscriptProseContainerView`). Reaching a match stops
+/// following the latest output.
 struct ConversationFindScrollDriver: View {
     let find: ConversationFindModel?
     let proxy: ScrollViewProxy
@@ -305,18 +302,9 @@ struct ConversationFindScrollDriver: View {
         Color.clear
             .accessibilityHidden(true)
             .onChange(of: find?.scrollRequest) { _, request in
-                guard let request, let find else { return }
+                guard let request else { return }
                 pauseFollowing()
                 proxy.scrollTo(request.scrollID, anchor: .center)
-                Task { @MainActor in
-                    // The row lays out, and folded work or a longer text window opens, before the
-                    // match can be found.
-                    for delay in [0, 80] {
-                        if delay > 0 { try? await Task.sleep(for: .milliseconds(delay)) } else { await Task.yield() }
-                        guard find.scrollRequest == request else { return }
-                        proxy.scrollTo(ConversationFindAnchor.activeMatch, anchor: .center)
-                    }
-                }
             }
     }
 }

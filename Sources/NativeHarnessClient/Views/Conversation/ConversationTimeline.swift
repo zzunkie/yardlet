@@ -214,9 +214,6 @@ struct ConversationTimeline: View {
                         await Task.yield()
                         guard find?.scrollRequest == request else { return }
                         proxy.scrollTo(request.scrollID, anchor: .center)
-                        try? await Task.sleep(for: .milliseconds(80))
-                        guard find?.scrollRequest == request else { return }
-                        proxy.scrollTo(ConversationFindAnchor.activeMatch, anchor: .center)
                     }
                 }
                 .onChange(of: turnFocusRequest) { _, _ in
