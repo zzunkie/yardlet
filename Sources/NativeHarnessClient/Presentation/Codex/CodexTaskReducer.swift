@@ -613,8 +613,11 @@ struct CodexTaskReducer: Sendable {
             return true
 
         case "serverRequest/resolved":
+            // The App Server says only that the request closed (`threadId`, `requestId`). The answer
+            // Yardlet sent, or its rejection, stays the card's result.
             guard let requestID = params["requestId"] else { return false }
             let externalID = externalRequestID(requestID)
+            guard state.serverRequestsByID[externalID]?.resolution == .pending else { return false }
             return resolveServerRequest(id: externalID, response: params["response"], in: &state)
 
         case "error":

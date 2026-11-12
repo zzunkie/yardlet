@@ -529,40 +529,52 @@ final class CodexTaskReducerTests: XCTestCase {
     }
 
     func testDeclinedCommandApprovalTerminatesTheRetainedCommandCard() throws {
-        let reducer = steps.recording
-        var state = CodexTaskState.empty
-        XCTAssertTrue(reducer.applySnapshot(makeThreadSnapshot(items: [[
-            "id": .string("command-pending"),
-            "type": .string("commandExecution"),
-            "command": .string("touch /tmp/probe"),
-            "cwd": .string("/tmp"),
-            "status": .string("inProgress")
-        ]]), to: &state))
-        XCTAssertTrue(reducer.applyServerRequest(
-            id: .string("approval-pending"),
-            method: "item/commandExecution/requestApproval",
-            params: .object([
-                "threadId": .string("thread-1"),
-                "turnId": .string("turn-1"),
-                "itemId": .string("command-pending")
-            ]),
-            sequence: 1,
-            to: &state
-        ))
+        // "Deny" and "Deny and stop".
+        for decision in ["decline", "cancel"] {
+            let reducer = steps.recording
+            var state = CodexTaskState.empty
+            XCTAssertTrue(reducer.applySnapshot(makeThreadSnapshot(items: [[
+                "id": .string("command-pending"),
+                "type": .string("commandExecution"),
+                "command": .string("touch /tmp/probe"),
+                "cwd": .string("/tmp"),
+                "status": .string("inProgress")
+            ]]), to: &state))
+            XCTAssertTrue(reducer.applyServerRequest(
+                id: .string("approval-pending"),
+                method: "item/commandExecution/requestApproval",
+                params: .object([
+                    "threadId": .string("thread-1"),
+                    "turnId": .string("turn-1"),
+                    "itemId": .string("command-pending")
+                ]),
+                sequence: 1,
+                to: &state
+            ))
 
-        XCTAssertTrue(reducer.resolveServerRequest(
-            id: "s:approval-pending",
-            response: .object(["decision": .string("decline")]),
-            in: &state
-        ))
+            let answer: JSONValue = .object(["decision": .string(decision)])
+            XCTAssertTrue(reducer.resolveServerRequest(id: "s:approval-pending", response: answer, in: &state))
+            // Codex then says only that the request closed, without the answer: the card keeps the
+            // person's, live and as saved for the next launch.
+            reducer.applyNotification(method: "serverRequest/resolved", params: .object([
+                "threadId": .string("thread-1"), "requestId": .string("approval-pending")
+            ]), sequence: 2, to: &state)
+            let request = try XCTUnwrap(state.serverRequestsByID["s:approval-pending"])
+            XCTAssertEqual(request.resolution, .resolved(answer), decision)
+            XCTAssertEqual(CodexRequestResponseProjection.request(request).state, .denied, decision)
+            let saved = try JSONDecoder().decode(
+                CodexPendingServerRequest.self, from: JSONEncoder().encode(CodexPendingServerRequest(request)))
+            XCTAssertEqual(CodexRequestResponseProjection.request(saved.state).state, .denied, decision)
 
-        let commandItem = try XCTUnwrap(state.thread?.turns.first?.items.first)
-        XCTAssertEqual(commandItem.lifecycle, .completed)
-        guard case let .commandExecution(command) = commandItem.content else {
-            return XCTFail("declined command should remain a command card")
+            guard decision == "decline" else { continue }
+            let commandItem = try XCTUnwrap(state.thread?.turns.first?.items.first)
+            XCTAssertEqual(commandItem.lifecycle, .completed)
+            guard case let .commandExecution(command) = commandItem.content else {
+                return XCTFail("declined command should remain a command card")
+            }
+            XCTAssertEqual(command.status, "declined")
+            XCTAssertEqual(commandItem.raw["status"]?.stringValue, "declined")
         }
-        XCTAssertEqual(command.status, "declined")
-        XCTAssertEqual(commandItem.raw["status"]?.stringValue, "declined")
     }
 
     func testTerminalResumeInterruptsOnlyActivityWithoutAPendingApproval() throws {

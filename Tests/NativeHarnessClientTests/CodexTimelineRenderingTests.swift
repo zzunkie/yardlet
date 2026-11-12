@@ -29,6 +29,43 @@ final class CodexTimelineRenderingTests: XCTestCase {
 
         // The folded work of both turns, card by card.
         try render(commandCards(state).padding(24), height: 420, name: "stopped-command-card")
+
+        // A command approval answered "Deny and stop": the card still reads denied once Codex has said
+        // the request closed (without the answer) and the turn has stopped.
+        let write = #"/bin/zsh -lc "printf 'hi\\n' > ../outside-test.txt""#
+        var denied = thread([turn("turn-3", status: "inProgress", items: [
+            user("u3", "Write hi to ../outside-test.txt using a shell command."),
+            command("c3", write, status: "inProgress", output: nil)
+        ])])
+        let reducer = CodexTaskReducer()
+        let ids: [String: JSONValue] = ["threadId": .string("thread-qa"), "turnId": .string("turn-3")]
+        XCTAssertTrue(reducer.applyServerRequest(
+            id: .string("approval-3"), method: "item/commandExecution/requestApproval",
+            params: .object(ids.merging([
+                "itemId": .string("c3"), "command": .string(write), "cwd": .string("/Users/me/yardlet"),
+                "reason": .string("Allow writing hi to ../outside-test.txt outside the writable workspace?")
+            ]) { $1 }), sequence: 1, to: &denied))
+        XCTAssertTrue(reducer.resolveServerRequest(
+            id: "s:approval-3", response: .object(["decision": .string("cancel")]), in: &denied))
+        reducer.applyNotification(method: "serverRequest/resolved", params: .object([
+            "threadId": .string("thread-qa"), "requestId": .string("approval-3")
+        ]), sequence: 2, to: &denied)
+        XCTAssertTrue(reducer.applyNotification(method: "item/completed", params: .object(ids.merging([
+            "item": command("c3", write, status: "declined", output: nil)
+        ]) { $1 }), sequence: 3, to: &denied))
+        XCTAssertTrue(reducer.applyNotification(method: "turn/completed", params: .object([
+            "threadId": .string("thread-qa"),
+            "turn": .object(["id": .string("turn-3"), "status": .string("interrupted"),
+                             "durationMs": .integer(56_000), "items": .array([])])
+        ]), sequence: 4, to: &denied))
+        let card = try XCTUnwrap(CodexConversationProjection.presentation(
+            denied, workspaceURL: URL(filePath: "/Users/me/yardlet"), historySelection: nil
+        ).turns.last?.work.compactMap { item -> ConversationRequest? in
+            if case let .request(request) = item.kind { request } else { nil }
+        }.first)
+        XCTAssertEqual(card.state, .denied)
+        XCTAssertEqual(card.stateTitle, L10n.string("Denied"))
+        try render(timeline(denied), height: 460, name: "denied-and-stopped")
     }
 
     func testARunningCommandShowsItsLatestLinesAsTheyStream() throws {
