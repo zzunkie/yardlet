@@ -6559,7 +6559,8 @@ final class AppModel {
                 hasUnreadUpdate: shouldMarkUnread ? true : nil,
                 completionState: failed ? nil : .completed
             )
-            if shouldMarkUnread, !failed {
+            // Whether a task on screen notifies too is Settings' (`TaskNotificationKind`).
+            if !failed {
                 await postBackgroundNotification(
                     for: event.localSessionID,
                     status: .completed
@@ -6647,7 +6648,7 @@ final class AppModel {
             refreshBrowserWaits()
         }
         if follows.contains(.approvalNotifications) { withdrawAnsweredApprovalNotifications(for: id) }
-        if follows.contains(.notification), marksUnread {
+        if follows.contains(.notification), follows.contains(.unreadMark), !isIdleCompaction {
             await postBackgroundNotification(for: id, status: status, detail: notificationDetail)
         }
         if follows.contains(.queue), status == .ready { scheduleFollowUpDrain(for: id) }
@@ -6737,22 +6738,29 @@ final class AppModel {
         dockAttention?.forgetApprovals(in: sessionID)
     }
 
+    /// Notifies how a task's turn ended or what it waits on, as Settings › Notifications lets each kind
+    /// (`TaskNotificationKind`): out of the box only for a task that is not on screen.
     private func postBackgroundNotification(
         for sessionID: UUID,
         status: SessionStatus,
         detail: String? = nil
     ) async {
-        guard let session = store.sessions.first(where: { $0.id == sessionID }),
-              !isSessionVisible(sessionID),
-              status != .completed || announcesCompletion(of: session) else { return }
+        guard let session = store.sessions.first(where: { $0.id == sessionID }) else { return }
         // An approval names the request it asks about, so each new request in a wait is announced.
-        let requestID = status == .waitingForApproval ? newestPendingApproval(in: session)?.id : nil
+        let request = status == .waitingForApproval ? newestPendingApproval(in: session) : nil
+        guard let kind = TaskNotificationKind(status, asksQuestion: request?.asksQuestion == true),
+              kind.notifies(whileShown: isSessionVisible(sessionID), in: preferences),
+              status != .completed || announcesCompletion(of: session) else { return }
+        let requestID = request?.id
         let key = "\(sessionID.uuidString):\(status.rawValue)" + (requestID.map { ":\($0)" } ?? "")
         guard notifiedBackgroundStates.insert(key).inserted else { return }
 
         let title: String
         let body: String
         switch status {
+        case .waitingForApproval where kind == .question:
+            title = L10n.string("Task has a question")
+            body = L10n.format("%@ is waiting for your answer.", session.title)
         case .waitingForApproval:
             title = L10n.string("Task needs your attention")
             body = L10n.format("%@ is waiting for approval.", session.title)
@@ -6771,7 +6779,7 @@ final class AppModel {
         // system prompt/state is being read; never deliver a notification for a task that no
         // longer owns this lifecycle continuation.
         guard let current = store.sessions.first(where: { $0.id == sessionID }),
-              !isSessionVisible(sessionID) else { return }
+              kind.notifies(whileShown: isSessionVisible(sessionID), in: preferences) else { return }
         let identifier = "yardlet-session-\(sessionID.uuidString)-\(status.rawValue)"
             + (requestID.map { "-\($0)" } ?? "")
         var offersAllowOnce = false
@@ -6787,7 +6795,8 @@ final class AppModel {
             body: body,
             identifier: identifier,
             target: SystemNotificationTarget(sessionID: sessionID, requestID: requestID),
-            offersAllowOnce: offersAllowOnce
+            offersAllowOnce: offersAllowOnce,
+            showsWhileActive: kind.showsWhileActive(in: preferences)
         ))
     }
 

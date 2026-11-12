@@ -479,6 +479,36 @@ extension YardletSetting {
         detail: L10n.string("Only Gmail's Primary tab and Outlook's Focused inbox notify."),
         values: .onOff, storage: .flag(key: MailboxPreference.notificationsKey, defaultValue: true),
         shownWhileOn: mailbox.id)
+
+    /// The Codex app's four notification settings (`TaskNotificationKind`, `NotificationSound`): when a finished turn
+    /// notifies, whether a request for approval or a question does, and the sound.
+    static let turnCompletionNotifications = YardletSetting(
+        id: "turn_completion_notifications", section: .notifications, symbol: "checkmark.circle",
+        title: L10n.string("Turn completion notifications"),
+        detail: L10n.string("Notifies when a task finishes or fails."),
+        values: choices(TurnCompletionNotifications.self, title: \.title),
+        storage: .choice(key: TaskNotificationKind.turnEndedKey, defaultValue: TurnCompletionNotifications.whenNotShown.rawValue))
+
+    static let approvalNotifications = YardletSetting(
+        id: "approval_notifications", section: .notifications, symbol: "hand.raised",
+        title: L10n.string("Permission requests"),
+        detail: L10n.string("Notifies when a task needs your approval."),
+        values: .onOff, storage: .flag(key: TaskNotificationKind.approvalsKey, defaultValue: true))
+
+    static let questionNotifications = YardletSetting(
+        id: "question_notifications", section: .notifications, symbol: "questionmark.bubble",
+        title: L10n.string("Questions"),
+        detail: L10n.string("Notifies when a task asks you a question."),
+        values: .onOff, storage: .flag(key: TaskNotificationKind.questionsKey, defaultValue: true))
+
+    static let notificationSound = YardletSetting(
+        id: "notification_sound", section: .notifications, symbol: "speaker.wave.2",
+        title: L10n.string("Notification sound"),
+        detail: L10n.string("Plays with Yardlet's notifications."),
+        values: .choices([Choice(value: NotificationSound.standard, title: L10n.string("Default")),
+                          Choice(value: NotificationSound.none, title: L10n.string("None"))]
+            + NotificationSound.systemSounds.map { Choice(value: $0, title: $0) }),
+        storage: .choice(key: NotificationSound.key, defaultValue: NotificationSound.standard))
 }
 
 // MARK: - Yardlet Instructions, Accounts and Connectors
@@ -636,6 +666,7 @@ enum YardletSettingCatalog {
         .shareTerminal, .terminalLocation,
         .theme, .interfaceSize, .codeFontSize,
         .personalAgentMessages, .newMail,
+        .turnCompletionNotifications, .approvalNotifications, .questionNotifications, .notificationSound,
         .yardletInstructions, .dailyEvaluation,
         .claudeAIConnectors,
         .passwordManager, .addressesAndCards,

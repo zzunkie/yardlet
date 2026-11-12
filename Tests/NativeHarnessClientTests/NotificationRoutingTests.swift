@@ -201,6 +201,58 @@ final class NotificationRoutingTests: XCTestCase {
         await model.shutdown()
     }
 
+    /// Settings › Notifications chooses each kind (`TaskNotificationKind`): out of the box a finished turn notifies
+    /// only for a task off screen, as before; "Always" notifies for one on screen too and shows while Yardlet is in
+    /// front, "Never" not at all; approvals and questions each have their own switch.
+    func testSettingsChooseWhichKindsOfTaskNotificationGoOut() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("NotificationKinds")))
+        let claude = try await makeClaudeModel(preferences: defaults)
+        defer { claude.cleanUp() }
+        let (model, center, session, transport) = (claude.model, claude.center, claude.session, claude.transport)
+        let result: JSONValue = .object([
+            "type": .string("result"), "subtype": .string("success"), "is_error": .bool(false),
+            "session_id": .string(try XCTUnwrap(model.store.sessions.first { $0.id == session.id }?.providerSessionID))
+        ])
+        let window = UUID()
+        model.setShowsTasks(true, inWindow: window)
+        XCTAssertTrue(model.isSessionVisible(session.id))
+        func finishTurn() async throws {
+            await model.send("Summarize what changed.", to: session)
+            try await waitUntil { model.store.sessions.first { $0.id == session.id }?.status == .running }
+            await transport.emit(result)
+            try await waitUntil { model.store.sessions.first { $0.id == session.id }?.completionState == .completed }
+        }
+
+        try await finishTurn()
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertTrue(center.posted.isEmpty, "A task on screen does not notify out of the box")
+
+        defaults.set(TurnCompletionNotifications.always.rawValue, forKey: TaskNotificationKind.turnEndedKey)
+        try await finishTurn()
+        let always = try await waitForPost(in: center)
+        XCTAssertEqual(always.title, L10n.string("Task completed"))
+        XCTAssertTrue(always.showsWhileActive)
+
+        model.setShowsTasks(false, inWindow: window)
+        defaults.set(TurnCompletionNotifications.never.rawValue, forKey: TaskNotificationKind.turnEndedKey)
+        try await finishTurn()
+        defaults.set(false, forKey: TaskNotificationKind.approvalsKey)
+        await transport.emit(canUseTool("bash-1", tool: "Bash", input: .object(["command": .string("swift test")])))
+        try await waitUntil { model.store.sessions.first { $0.id == session.id }?.status == .waitingForApproval }
+        await model.respond(to: "bash-1", decision: .deny, in: session)
+        await transport.emit(canUseTool("question-1", tool: "AskUserQuestion", input: .object([
+            "questions": .array([.object([
+                "question": .string("Which layout?"), "header": .string("Layout"), "multiSelect": .bool(false),
+                "options": .array([.object(["label": .string("Grid")]), .object(["label": .string("List")])])
+            ])])
+        ])))
+        let question = try await waitForPost(in: center, count: 2)
+        XCTAssertEqual(question.target.requestID, "question-1", "Neither the finished turn nor the approval notified")
+        XCTAssertEqual(question.title, L10n.string("Task has a question"))
+        XCTAssertFalse(question.showsWhileActive)
+        await model.shutdown()
+    }
+
     // MARK: - Which notifications offer "Allow once"
 
     func testAllowOnceIsOfferedOnlyForAPlainToolApproval() {
@@ -791,7 +843,7 @@ final class NotificationRoutingTests: XCTestCase {
     }
 
     /// A Claude Code task on the real adapter, whose CLI is a fake transport.
-    private func makeClaudeModel() async throws -> ClaudeModel {
+    private func makeClaudeModel(preferences: UserDefaults = .yardlet) async throws -> ClaudeModel {
         let root = FileManager.default.temporaryDirectory
             .appending(path: "yardlet-notification-routing-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -812,6 +864,7 @@ final class NotificationRoutingTests: XCTestCase {
             store: SessionStore(repository: InMemorySessionRepository()),
             runtimeSelections: RuntimeSelectionStore(defaults: defaults),
             registry: HarnessRegistry { kind, _ in kind == .claudeCode ? adapter as any HarnessAdapter : otherAdapter },
+            preferences: preferences,
             codexPendingRequestRepository: UserDefaultsCodexPendingServerRequestRepository(defaults: defaults, keyPrefix: "pending."),
             codexTimelineItemRepository: UserDefaultsCodexTimelineItemRepository(defaults: defaults),
             systemNotificationCenter: center,

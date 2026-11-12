@@ -8,6 +8,8 @@ final class LocalSystemNotificationCenter: SystemNotificationCenter {
     /// `PERMISSION_REQUEST` category carries its `ALLOW_ONCE` action.
     nonisolated static let approvalCategoryIdentifier = "yardlet.approval"
     nonisolated static let allowOnceActionIdentifier = "yardlet.allowOnce"
+    /// In a notification's `userInfo`: shown while Yardlet is in front too (`SystemNotification.showsWhileActive`).
+    nonisolated static let showsWhileActiveKey = "yardletShowsWhileActive"
 
     private let injectedCenter: UNUserNotificationCenter?
     /// The center's delegate. `UNUserNotificationCenter` keeps its delegate weakly.
@@ -43,7 +45,9 @@ final class LocalSystemNotificationCenter: SystemNotificationCenter {
         let content = UNMutableNotificationContent()
         content.title = notification.title
         content.body = notification.body
-        content.userInfo = notification.target.userInfo
+        var userInfo = notification.target.userInfo
+        if notification.showsWhileActive { userInfo[Self.showsWhileActiveKey] = "1" }
+        content.userInfo = userInfo
         if notification.offersAllowOnce {
             content.categoryIdentifier = Self.approvalCategoryIdentifier
         }
@@ -142,12 +146,22 @@ final class LocalSystemNotificationCenter: SystemNotificationCenter {
     private func deliver(_ content: UNMutableNotificationContent, identifier: String) async {
         guard let center = resolvedCenter() else { return }
         guard (await authorization()).isDeliverable else { return }
-        content.sound = .default
+        content.sound = Self.sound(NotificationSound.current())
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             center.add(request) { _ in
                 continuation.resume()
             }
+        }
+    }
+
+    /// Settings › Notifications › Notification sound: macOS's notification sound, one of its alert sounds by name
+    /// (as the Codex app names them to macOS), or none.
+    nonisolated static func sound(_ choice: String) -> UNNotificationSound? {
+        switch choice {
+        case NotificationSound.none: nil
+        case NotificationSound.standard: .default
+        default: UNNotificationSound(named: UNNotificationSoundName(choice))
         }
     }
 
@@ -165,7 +179,8 @@ final class LocalSystemNotificationCenter: SystemNotificationCenter {
 }
 
 /// Hands a click or an action to the app on the main actor. While Yardlet is frontmost a
-/// notification is not shown, as before the center had a delegate.
+/// notification is not shown, as before the center had a delegate, unless it asks to be
+/// (`SystemNotification.showsWhileActive`).
 private final class NotificationResponseRelay: NSObject, UNUserNotificationCenterDelegate, Sendable {
     private let deliver: @Sendable (SystemNotificationResponse) -> Void
 
@@ -192,7 +207,8 @@ private final class NotificationResponseRelay: NSObject, UNUserNotificationCente
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        completionHandler([])
+        let userInfo = notification.request.content.userInfo
+        completionHandler(userInfo[LocalSystemNotificationCenter.showsWhileActiveKey] == nil ? [] : [.banner, .list, .sound])
     }
 }
 

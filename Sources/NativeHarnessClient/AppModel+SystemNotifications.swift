@@ -144,7 +144,8 @@ extension AppModel {
             if case .permission(_, .pending) = entry.content { true } else { false }
         }
         guard case let .permission(request, _)? = transcriptRequest?.content else { return nil }
-        return NotificationApprovalProjection.PendingRequest(id: request.id, allowOnce: nil)
+        return NotificationApprovalProjection.PendingRequest(
+            id: request.id, allowOnce: nil, asksQuestion: NotificationApprovalProjection.asksQuestion(request))
     }
 
     /// Bounces the Dock icon once for a new approval while Yardlet is behind other apps.

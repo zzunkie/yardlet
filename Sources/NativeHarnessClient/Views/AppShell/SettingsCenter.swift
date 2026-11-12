@@ -102,6 +102,10 @@ struct SettingsCenterView: View {
     /// Followed by the app's mailbox as it changes (`AppModel.followMailbox`); off by default.
     @AppStorage(MailboxPreference.key) private var showsMailbox = false
     @AppStorage(MailboxPreference.notificationsKey) private var notifiesNewMail = true
+    /// Read by each notification as it goes (`TaskNotificationKind`, `NotificationSound`).
+    @AppStorage(TaskNotificationKind.turnEndedKey) private var turnCompletionNotifications =
+        TurnCompletionNotifications.whenNotShown.rawValue
+    @AppStorage(NotificationSound.key) private var notificationSound = NotificationSound.standard
     /// Read by the browser host client as it changes and by each memory check (`MemorySaverPreference`).
     @AppStorage(MemorySaverPreference.key) private var savesMemory = true
     @AppStorage(MemorySaverPreference.levelKey) private var memorySaverLevel = BrowserMemorySaver.Level.balanced
@@ -842,8 +846,8 @@ struct SettingsCenterView: View {
     private var notificationDetail: some View {
         VStack(alignment: .leading, spacing: 12) {
             settingRow(
-                title: L10n.string("Background task notifications"),
-                detail: L10n.string("Notifies when a background task finishes, fails or needs approval."),
+                title: L10n.string("macOS notifications"),
+                detail: L10n.string("Allow Yardlet's notifications in macOS for the settings below."),
                 status: notifications.statusLabel,
                 systemName: "bell"
             )
@@ -864,6 +868,20 @@ struct SettingsCenterView: View {
                 .disabled(notifications.isLoading)
             }
             .controlSize(.small)
+            // The Codex app's four, in its order: when a finished turn notifies, approvals, questions, the sound.
+            Divider()
+            notificationMenuRow(.turnCompletionNotifications, selection: $turnCompletionNotifications)
+            Divider()
+            notificationSwitchRow(.approvalNotifications)
+            Divider()
+            notificationSwitchRow(.questionNotifications)
+            Divider()
+            notificationMenuRow(.notificationSound, selection: Binding(
+                get: { NotificationSound.offered(notificationSound) },
+                set: { sound in
+                    notificationSound = sound
+                    NotificationSoundPreview.play(sound)
+                }))
             Divider()
             HStack(spacing: 12) {
                 settingsControlIcon(YardletSetting.personalAgentMessages.symbol)
@@ -889,6 +907,38 @@ struct SettingsCenterView: View {
                 .padding(.vertical, 6)
             }
         }
+    }
+
+    /// A notification setting with its choices in a menu.
+    private func notificationMenuRow(_ setting: YardletSetting, selection: Binding<String>) -> some View {
+        HStack(spacing: 12) {
+            settingsControlIcon(setting.symbol)
+            SettingsRowText(setting: setting)
+            Spacer(minLength: 8)
+            Picker(setting.title, selection: selection) {
+                ForEach(setting.choices, id: \.value) { choice in
+                    Text(choice.title).tag(choice.value)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .fixedSize()
+            .controlSize(.small)
+        }
+        .padding(.vertical, 6)
+    }
+
+    /// A notification setting's switch, on the key the notifications read.
+    private func notificationSwitchRow(_ setting: YardletSetting) -> some View {
+        HStack(spacing: 12) {
+            settingsControlIcon(setting.symbol)
+            SettingsRowText(setting: setting)
+            Spacer(minLength: 8)
+            if case let .flag(key, defaultValue) = setting.storage {
+                PreferenceSwitch(setting.title, key: key, defaultValue: defaultValue)
+            }
+        }
+        .padding(.vertical, 6)
     }
 
     private func settingRow(
@@ -1196,5 +1246,18 @@ private extension View {
     /// Segments for up to three choices; a menu for more, as each segment is as wide as the longest one.
     @ViewBuilder func settingsChoiceStyle(count: Int) -> some View {
         if count > 3 { pickerStyle(.menu) } else { pickerStyle(.segmented) }
+    }
+}
+
+/// Plays a sound chosen in Settings › Notifications once, as the Codex app plays a sound picked from its list. The
+/// standard notification sound and none have nothing to play here.
+@MainActor
+enum NotificationSoundPreview {
+    private static var playing: NSSound?
+
+    static func play(_ choice: String) {
+        playing?.stop()
+        playing = NotificationSound.systemSounds.contains(choice) ? NSSound(named: NSSound.Name(choice)) : nil
+        playing?.play()
     }
 }

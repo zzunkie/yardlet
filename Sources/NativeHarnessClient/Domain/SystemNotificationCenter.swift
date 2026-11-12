@@ -138,6 +138,8 @@ struct SystemNotification: Equatable, Sendable {
     let target: SystemNotificationTarget
     /// Offers "Allow once" for `target.requestID` (`SystemNotificationAction.allowOnce`).
     var offersAllowOnce = false
+    /// Shown while Yardlet is in front too, where a notification otherwise only goes to Notification Center.
+    var showsWhileActive = false
 }
 
 /// What the person did with a notification: clicked it, or chose "Allow once".
@@ -245,5 +247,85 @@ final class SystemNotificationSettingsModel {
         _ = await center.requestAuthorization()
         authorization = await center.authorization()
         isLoading = false
+    }
+}
+
+/// What a task's notification is about, each kind with its own switch in Settings › Notifications, as the Codex app
+/// has them: a finished or failed turn, a request for approval, and a question.
+enum TaskNotificationKind: Equatable, Sendable {
+    case turnEnded
+    case approval
+    case question
+
+    static let turnEndedKey = "YardletTurnCompletionNotifications"
+    static let approvalsKey = "YardletApprovalNotifications"
+    static let questionsKey = "YardletQuestionNotifications"
+
+    /// What a task in `status` notifies about; a waiting task's newest request says whether it asks a question.
+    init?(_ status: SessionStatus, asksQuestion: Bool) {
+        switch status {
+        case .completed, .failed: self = .turnEnded
+        case .waitingForApproval: self = asksQuestion ? .question : .approval
+        case .ready, .running: return nil
+        }
+    }
+
+    /// Whether Settings lets it notify now, for a task on screen (`AppModel.isSessionVisible`) or not. Out of the
+    /// box a task notifies only while it is not on screen, as before these settings.
+    func notifies(whileShown isShown: Bool, in defaults: UserDefaults) -> Bool {
+        switch self {
+        case .turnEnded:
+            switch TurnCompletionNotifications.current(in: defaults) {
+            case .always: true
+            case .whenNotShown: !isShown
+            case .never: false
+            }
+        case .approval: !isShown && defaults.object(forKey: Self.approvalsKey) as? Bool ?? true
+        case .question: !isShown && defaults.object(forKey: Self.questionsKey) as? Bool ?? true
+        }
+    }
+
+    /// Shown while Yardlet is in front as well: a finished turn the person asked to hear about always.
+    func showsWhileActive(in defaults: UserDefaults) -> Bool {
+        self == .turnEnded && TurnCompletionNotifications.current(in: defaults) == .always
+    }
+}
+
+/// When a task's finished or failed turn notifies, as the Codex app's "Turn completion notifications" offers.
+enum TurnCompletionNotifications: String, CaseIterable, Sendable {
+    case always
+    /// While the task is not on screen, which is how Yardlet notified before.
+    case whenNotShown
+    case never
+
+    static func current(in defaults: UserDefaults = .yardlet) -> Self {
+        defaults.string(forKey: TaskNotificationKind.turnEndedKey).flatMap(Self.init(rawValue:)) ?? .whenNotShown
+    }
+
+    var title: String {
+        switch self {
+        case .always: L10n.string("Always")
+        case .whenNotShown: L10n.string("When not on screen")
+        case .never: L10n.string("Never")
+        }
+    }
+}
+
+/// The sound Yardlet's notifications play: macOS's notification sound, one of macOS's alert sounds, or none.
+enum NotificationSound {
+    static let key = "YardletNotificationSound"
+    static let standard = "default"
+    static let none = "none"
+    /// macOS's alert sounds in /System/Library/Sounds, by the names macOS plays them by.
+    static let systemSounds = ["Basso", "Blow", "Bottle", "Frog", "Funk", "Glass", "Hero", "Morse", "Ping", "Pop",
+                               "Purr", "Sosumi", "Submarine", "Tink"]
+
+    static func current(in defaults: UserDefaults = .yardlet) -> String {
+        offered(defaults.string(forKey: key))
+    }
+
+    /// A stored choice, the standard sound for anything not offered.
+    static func offered(_ stored: String?) -> String {
+        stored.flatMap { $0 == none || systemSounds.contains($0) ? $0 : nil } ?? standard
     }
 }

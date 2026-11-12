@@ -19,6 +19,19 @@ enum NotificationApprovalProjection {
         let id: String
         /// What "Allow once" sends; nil when the request is answered only on its card.
         let allowOnce: ConversationRequestRoute?
+        /// It asks the person a question rather than for approval (`asksQuestion`), which Settings lets notify on
+        /// its own switch (`TaskNotificationKind`).
+        var asksQuestion = false
+    }
+
+    /// Claude Code's AskUserQuestion and the other harnesses' questions in the shared transcript.
+    static func asksQuestion(_ request: PermissionRequest) -> Bool {
+        if case .questions = request.structured { true } else { false }
+    }
+
+    /// A Codex question (`item/tool/requestUserInput`) or MCP form.
+    static func asksQuestion(_ request: CodexServerRequestState) -> Bool {
+        request.kind == .toolUserInput || request.kind == .mcpElicitation
     }
 
     /// The requests a task waits on, oldest first: a Codex task's pending server requests, and the
@@ -31,11 +44,11 @@ enum NotificationApprovalProjection {
         if harness == .codex {
             return (codex?.serverRequestsByID.values.filter { $0.resolution == .pending } ?? [])
                 .sorted { $0.id.compare($1.id, options: [.numeric, .literal]) == .orderedAscending }
-                .map { PendingRequest(id: $0.id, allowOnce: allowOnce(for: $0)) }
+                .map { PendingRequest(id: $0.id, allowOnce: allowOnce(for: $0), asksQuestion: asksQuestion($0)) }
         }
         return transcript.compactMap { entry in
             guard case let .permission(request, .pending) = entry.content else { return nil }
-            return PendingRequest(id: request.id, allowOnce: allowOnce(for: request))
+            return PendingRequest(id: request.id, allowOnce: allowOnce(for: request), asksQuestion: asksQuestion(request))
         }
     }
 

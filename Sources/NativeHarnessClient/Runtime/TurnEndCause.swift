@@ -47,7 +47,7 @@ struct TurnFollowUps: OptionSet, Sendable {
     static let routingEvaluation = TurnFollowUps(rawValue: 1 << 4)
     /// Notifications of approvals since answered are withdrawn.
     static let approvalNotifications = TurnFollowUps(rawValue: 1 << 5)
-    /// A notification says how the turn ended, when the task is not on screen.
+    /// A notification says how the turn ended, as Settings › Notifications lets it (`TaskNotificationKind`).
     static let notification = TurnFollowUps(rawValue: 1 << 6)
     /// The next message Yardlet holds goes, after a turn that left the task ready.
     static let queue = TurnFollowUps(rawValue: 1 << 7)
