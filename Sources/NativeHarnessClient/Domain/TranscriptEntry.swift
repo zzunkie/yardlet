@@ -96,6 +96,11 @@ struct TranscriptEntry: Codable, Equatable, Identifiable, Sendable {
     /// note (`ClaudeProgressUpdate`). The conversation reads it as the model's words. Nil for
     /// everything else, and left out of the saved shape then.
     var isProgressUpdate: Bool?
+    /// When the person stopped the turn this was then the last entry of
+    /// (`HarnessEventPayload.turnStopped`): the turn reads as stopped, with how long it ran until
+    /// then, as a Codex turn the person interrupted reads. Nil for everything else, and left out of
+    /// the saved shape then.
+    var turnStoppedAt: Date?
 
     init(
         id: UUID = UUID(),
@@ -103,7 +108,8 @@ struct TranscriptEntry: Codable, Equatable, Identifiable, Sendable {
         content: TranscriptEntryContent,
         joinsRunningTurn: Bool? = nil,
         origin: TranscriptRequestOrigin? = nil,
-        isProgressUpdate: Bool? = nil
+        isProgressUpdate: Bool? = nil,
+        turnStoppedAt: Date? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -111,5 +117,6 @@ struct TranscriptEntry: Codable, Equatable, Identifiable, Sendable {
         self.joinsRunningTurn = joinsRunningTurn
         self.origin = origin
         self.isProgressUpdate = isProgressUpdate
+        self.turnStoppedAt = turnStoppedAt
     }
 }

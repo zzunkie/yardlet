@@ -204,6 +204,9 @@ final class ToolRowWordingTests: XCTestCase {
              "Read Parser.swift", "읽음 Parser.swift"),
             ("Read", ["file_path": "/repo/Sources/Parser.swift"], .running, "Reading Parser.swift", "읽는 중 Parser.swift"),
             ("Read", ["file_path": "/repo/missing.swift"], .failed, "Failed to read missing.swift", "읽기 실패 missing.swift"),
+            // A call the person's stop ended reads as a finished one, marked as the Claude app marks it.
+            ("Read", ["file_path": "/repo/Sources/Parser.swift"], .stopped, "Read Parser.swift Stopped",
+             "읽음 Parser.swift 중지됨"),
             ("Write", ["file_path": "/repo/notes.md"], .completed, "Created notes.md", "생성됨 notes.md"),
             ("Edit", ["file_path": "/repo/calc.py", "old_string": "a"], .completed, "Edited calc.py", "수정됨 calc.py"),
             ("MultiEdit", ["file_path": "/repo/calc.py", "edits": [["old_string": "a", "new_string": "b"]]], .running,
@@ -242,7 +245,8 @@ final class ToolRowWordingTests: XCTestCase {
         }
     }
 
-    /// Bash reads its description, its verb conjugated, or "Ran" and the command without one.
+    /// Bash reads its description, its verb conjugated, or "Ran" and the command without one. One the
+    /// person's stop ended reads its description as written, marked "Stopped" as the Claude app marks it.
     func testClaudeShellCallsReadTheirDescription() {
         func words(_ input: [String: Any], _ phase: ConversationItemPhase, _ localize: @escaping ConversationLineWording.Localize)
             -> String {
@@ -254,7 +258,8 @@ final class ToolRowWordingTests: XCTestCase {
         let described: [String: Any] = ["command": "swift test 2>&1 | tail -20", "description": "Run the tests"]
         XCTAssertEqual(words(described, .running, en), "Running the tests")
         XCTAssertEqual(words(described, .completed, en), "Ran the tests")
-        XCTAssertEqual(words(described, .stopped, en), "Run the tests")
+        XCTAssertEqual(words(described, .stopped, en), "Run the tests Stopped")
+        XCTAssertEqual(words(described, .stopped, ko), "Run the tests 중지됨")
         XCTAssertEqual(words(described, .failed, en), "Failed to run the tests")
         XCTAssertEqual(words(described, .failed, ko), "run the tests 실패")
         let noun: [String: Any] = ["command": "git status", "description": "Git status check"]
@@ -266,6 +271,7 @@ final class ToolRowWordingTests: XCTestCase {
         XCTAssertEqual(words(bare, .completed, ko), "실행됨 swift build")
         XCTAssertEqual(words(bare, .running, en), "Running swift build")
         XCTAssertEqual(words(bare, .failed, en), "Failed to run swift build")
+        XCTAssertEqual(words(bare, .stopped, en), "Ran swift build Stopped")
         // A command's last paragraph that looks like fields is still the command.
         let yaml: [String: Any] = ["command": "cat <<EOF\n\ndescription: not a field\nEOF"]
         XCTAssertEqual(words(yaml, .completed, en), "Ran cat <<EOF")

@@ -410,6 +410,54 @@ final class ClaudeSubagentTranscriptReaderTests: XCTestCase {
         XCTAssertTrue(turns[1].actions.canFork, "the latest turn still forks the whole conversation")
     }
 
+    /// A turn the person stopped reads back as the live stream ended it. Claude Code saves no record of
+    /// the Stop itself, only its note "[Request interrupted by user for tool use]" after the results it
+    /// wrote for the calls the stop cut: those read as stopped, without the text addressed to the model,
+    /// and the turn as stopped after the time it ran. A call that failed on its own still reads as
+    /// failed, and a note a quit wrote (`interruptedByShutdown`) is no stop of the person's.
+    func testATurnThePersonStoppedReadsBackAsStopped() throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let refusal = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed."
+        func log(quit: Bool) throws {
+            let cut = #""interruptedByShutdown":\#(quit),"#
+            try mainLog(root, [
+                #"{"type":"user","uuid":"00000000-0000-4000-8000-000000000001","parentUuid":null,"timestamp":"2026-11-12T10:00:00.000Z","origin":{"kind":"human"},"message":{"role":"user","content":"Run the tests."}}"#,
+                #"{"type":"assistant","uuid":"00000000-0000-4000-8000-000000000002","parentUuid":"00000000-0000-4000-8000-000000000001","timestamp":"2026-11-12T10:00:03.000Z","message":{"id":"m1","role":"assistant","content":[{"type":"tool_use","id":"toolu_t1","name":"Bash","input":{"command":"python3 -m unittest","description":"Run the tests"}}]}}"#,
+                #"{"type":"user","uuid":"00000000-0000-4000-8000-000000000003","parentUuid":"00000000-0000-4000-8000-000000000002","timestamp":"2026-11-12T10:00:05.000Z","toolUseResult":"Error: Exit code 1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_t1","is_error":true,"content":"Exit code 1"}]}}"#,
+                #"{"type":"assistant","uuid":"00000000-0000-4000-8000-000000000004","parentUuid":"00000000-0000-4000-8000-000000000003","timestamp":"2026-11-12T10:00:07.000Z","message":{"id":"m2","role":"assistant","content":[{"type":"text","text":"One test failed."}]}}"#,
+                #"{"type":"user","uuid":"00000000-0000-4000-8000-000000000005","parentUuid":"00000000-0000-4000-8000-000000000004","timestamp":"2026-11-12T10:01:00.000Z","origin":{"kind":"human"},"message":{"role":"user","content":"Run the sleep, then tell me how many tests passed."}}"#,
+                #"{"type":"assistant","uuid":"00000000-0000-4000-8000-000000000006","parentUuid":"00000000-0000-4000-8000-000000000005","timestamp":"2026-11-12T10:01:04.000Z","message":{"id":"m3","role":"assistant","content":[{"type":"tool_use","id":"toolu_sleep","name":"Bash","input":{"command":"sleep 30; echo done","description":"Sleep 30 seconds then print done"}},{"type":"tool_use","id":"toolu_tests","name":"Bash","input":{"command":"python3 -m unittest","description":"Run the tests"}}]}}"#,
+                #"{"type":"user","uuid":"00000000-0000-4000-8000-000000000007","parentUuid":"00000000-0000-4000-8000-000000000006","timestamp":"2026-11-12T10:01:13.000Z",\#(cut)"toolUseResult":{"stdout":"","stderr":"","interrupted":true},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_sleep","is_error":true,"content":"<error>Command was aborted before completion</error>"}]}}"#,
+                #"{"type":"user","uuid":"00000000-0000-4000-8000-000000000008","parentUuid":"00000000-0000-4000-8000-000000000007","timestamp":"2026-11-12T10:01:13.000Z",\#(cut)"toolUseResult":"User rejected tool use","toolDenialKind":"user-rejected","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_tests","is_error":true,"content":"\#(refusal)"}]}}"#,
+                #"{"type":"user","uuid":"00000000-0000-4000-8000-000000000009","parentUuid":"00000000-0000-4000-8000-000000000008","timestamp":"2026-11-12T10:01:13.000Z",\#(cut)"message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}"#
+            ])
+        }
+        func readBack() throws -> (calls: [(TranscriptActivityState, String?)], turns: [ConversationTurn]) {
+            let entries = try XCTUnwrap(ClaudeSubagentTranscriptReader(configDirectory: root).readConversation(sessionID: parent))
+                .entries
+            let calls = entries.compactMap { entry -> (TranscriptActivityState, String?)? in
+                guard case let .activity(activity, state) = entry.content else { return nil }
+                return (state, activity.output)
+            }
+            let turns = TranscriptConversationProjection.presentation(
+                from: entries, harness: .claudeCode, status: .ready, latestTurnIsComplete: true).turns
+            return (calls, turns)
+        }
+
+        try log(quit: false)
+        var read = try readBack()
+        XCTAssertEqual(read.calls.map(\.0), [.failed, .stopped, .stopped])
+        XCTAssertEqual(read.calls.map(\.1), ["Exit code 1", nil, nil])
+        XCTAssertEqual(read.turns.map(\.status), [.completed, .interrupted])
+        XCTAssertEqual(read.turns.last?.timing.durationMilliseconds, 13_000, "from the request to the stop")
+
+        try log(quit: true)
+        read = try readBack()
+        XCTAssertEqual(read.calls.map(\.0), [.failed, .failed, .failed])
+        XCTAssertEqual(read.turns.map(\.status), [.completed, .completed])
+    }
+
     /// The Claude app's notices of a session it started: put before the person's text in a second
     /// block, and sent alone to wake the parent. Its own screen shows neither, and neither does Yardlet.
     /// The Claude app's notices, and the CLI's note that a turn stopped (here a quit ended it while a

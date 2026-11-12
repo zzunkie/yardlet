@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import XCTest
 @testable import NativeHarnessClient
@@ -51,7 +52,34 @@ final class ClaudeStoppedTurnTests: XCTestCase {
             var transcript = TranscriptBuilder()
             payloads.forEach { transcript.apply($0) }
             XCTAssertEqual(transcript.entries.map(\.content), [.assistant(text: "The release adds ", isStreaming: false)])
+            XCTAssertNotNil(transcript.entries.last?.turnStoppedAt, "the turn reads as the person's stop")
             await session.close()
+        }
+    }
+
+    /// Stop while calls run: the CLI answers each call it cut with a failed result, one the call's own
+    /// (a command cut short), one a refusal addressed to the model. Each reads as stopped without that
+    /// text, the turn as the person's stop, on both routes. A call that finished before keeps its result.
+    func testStopEndsTheCallsItCutAsStopped() async throws {
+        for routed in [false, true] {
+            let payloads = try await StoppedTurnSession.stoppedWhileCallsRan(
+                request: "Run the sleep, then tell me how many tests passed", routed: routed)
+            let stop = try XCTUnwrap(payloads.firstIndex(of: .turnStopped), "routed: \(routed)")
+            XCTAssertLessThan(stop, try XCTUnwrap(payloads.firstIndex(of: .turnCompleted)))
+            var transcript = TranscriptBuilder()
+            transcript.appendUser("Run the sleep, then tell me how many tests passed")
+            payloads.forEach { transcript.apply($0) }
+            let calls = transcript.entries.compactMap { entry -> (String, TranscriptActivityState, String?)? in
+                guard case let .activity(activity, state) = entry.content else { return nil }
+                return (activity.id, state, activity.output)
+            }
+            XCTAssertEqual(calls.map(\.0), ["toolu_version", "toolu_sleep", "toolu_tests"])
+            XCTAssertEqual(calls.map(\.1), [.completed, .stopped, .stopped], "routed: \(routed)")
+            XCTAssertEqual(calls.map(\.2), ["0.4.2", nil, nil], "routed: \(routed)")
+            let turn = try XCTUnwrap(TranscriptConversationProjection.presentation(
+                from: transcript.entries, harness: .claudeCode, status: .ready, latestTurnIsComplete: true
+            ).turns.last)
+            XCTAssertEqual(turn.status, .interrupted)
         }
     }
 
@@ -80,6 +108,7 @@ final class ClaudeStoppedTurnTests: XCTestCase {
             try await session.waitForTurnEnd(failed: true)
             let payloads = await session.log.payloads
             XCTAssertTrue(payloads.contains { if case .error = $0 { true } else { false } }, failure)
+            XCTAssertFalse(payloads.contains(.turnStopped), failure)
             XCTAssertEqual(payloads.last, .sessionStatusChanged(.failed))
             await session.close()
         }
@@ -101,15 +130,25 @@ final class ClaudeStoppedTurnTests: XCTestCase {
         await session.close()
     }
 
-    /// Without any stop from Yardlet, the same aborted-turn result is still an error, as before.
+    /// Without any stop from Yardlet, the same aborted-turn result is still an error, as before, and a
+    /// call that failed reads as failed with what it returned.
     func testAnAbortedResultYardletDidNotCauseStillShows() async throws {
         let session = try await StoppedTurnSession(routed: true)
         try await session.adapter.send("Run the tests", to: session.handle)
+        await session.emit(StoppedTurnFrames.twoCommands)
+        await session.emit(StoppedTurnFrames.testsFailed)
         await session.emit(StoppedTurnFrames.abortedWhileAnswering)
         try await session.waitForTurnEnd(failed: true)
         let payloads = await session.log.payloads
         XCTAssertTrue(payloads.contains(.error(message: "Claude reported an error", recoverable: true)))
+        XCTAssertFalse(payloads.contains(.turnStopped))
         XCTAssertEqual(payloads.last, .sessionStatusChanged(.failed))
+        let failed = payloads.compactMap { payload -> HarnessActivity? in
+            guard case let .activityCompleted(activity) = payload else { return nil }
+            return activity
+        }
+        XCTAssertEqual(failed.map(\.outcome), [.failed])
+        XCTAssertEqual(failed.first?.output, "Exit code 1\nFAILED (failures=1)")
         await session.close()
     }
 
@@ -243,6 +282,48 @@ enum StoppedTurnFrames {
     {"type":"user","parent_tool_use_id":null,"session_id":"5b9f1a52-6c1e-4f7a-9d0e-2a4c8e1f3b77","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}
     """#
 
+    /// The same where the stop cut tool calls.
+    static let toolUseInterruptionMarker = #"""
+    {"type":"user","parent_tool_use_id":null,"session_id":"5b9f1a52-6c1e-4f7a-9d0e-2a4c8e1f3b77","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}
+    """#
+
+    /// A call that finished before the stop, and its result.
+    static let versionCall = #"""
+    {"type":"assistant","parent_tool_use_id":null,"session_id":"5b9f1a52-6c1e-4f7a-9d0e-2a4c8e1f3b77","message":{"id":"msg_v","role":"assistant","content":[{"type":"tool_use","id":"toolu_version","name":"Bash","input":{"command":"python3 -m sample_app --version","description":"Print the app version"}}]}}
+    """#
+
+    static let versionResult = #"""
+    {"type":"user","parent_tool_use_id":null,"session_id":"5b9f1a52-6c1e-4f7a-9d0e-2a4c8e1f3b77","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_version","is_error":false,"content":"0.4.2"}]},"tool_use_result":{"stdout":"0.4.2","stderr":"","interrupted":false}}
+    """#
+
+    /// A step of two Bash calls; the second waits for the first.
+    static let twoCommands = #"""
+    {"type":"assistant","parent_tool_use_id":null,"session_id":"5b9f1a52-6c1e-4f7a-9d0e-2a4c8e1f3b77","message":{"id":"msg_s","role":"assistant","content":[{"type":"tool_use","id":"toolu_sleep","name":"Bash","input":{"command":"python3 -c \"import time; time.sleep(30)\"; echo done","description":"Sleep 30 seconds in Python then print done"}},{"type":"tool_use","id":"toolu_tests","name":"Bash","input":{"command":"PYTHONPATH=src python3 -m unittest discover -s tests -v 2>&1","description":"Run the unit test suite"}}]}}
+    """#
+
+    /// The CLI tracks a foreground command as a task, as it reported one in a recorded run (`SendNowFrames`).
+    static let sleepStarted = #"""
+    {"type":"system","subtype":"task_started","session_id":"5b9f1a52-6c1e-4f7a-9d0e-2a4c8e1f3b77","task_id":"b7sleep01","task_type":"local_bash","tool_use_id":"toolu_sleep","description":"Sleep 30 seconds in Python then print done","is_backgrounded":false}
+    """#
+
+    // After a Stop, the results the CLI writes for the calls it cut, as 2.1.322 builds them (read from
+    // the installed binary with `strings`; no run was recorded): the running command's own result cut
+    // short, and for a call that had not run, a refusal addressed to the model with its typed result
+    // "User rejected tool use".
+
+    static let sleepCutShort = #"""
+    {"type":"user","parent_tool_use_id":null,"session_id":"5b9f1a52-6c1e-4f7a-9d0e-2a4c8e1f3b77","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_sleep","is_error":true,"content":"<error>Command was aborted before completion</error>"}]},"tool_use_result":{"stdout":"","stderr":"","interrupted":true}}
+    """#
+
+    static let testsRefused = #"""
+    {"type":"user","parent_tool_use_id":null,"session_id":"5b9f1a52-6c1e-4f7a-9d0e-2a4c8e1f3b77","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_tests","is_error":true,"content":"The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.\n\nNote: The user's next message may contain a correction or preference. Pay close attention \u2014 if they explain what went wrong or how they'd prefer you to work, consider saving that to memory for future sessions."}]},"tool_use_result":"User rejected tool use","tool_result_meta":[{"id":"toolu_tests","non_execution_kind":"user-rejected"}]}
+    """#
+
+    /// A call that failed on its own.
+    static let testsFailed = #"""
+    {"type":"user","parent_tool_use_id":null,"session_id":"5b9f1a52-6c1e-4f7a-9d0e-2a4c8e1f3b77","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_tests","is_error":true,"content":"Exit code 1\nFAILED (failures=1)"}]},"tool_use_result":"Error: Exit code 1\nFAILED (failures=1)"}
+    """#
+
     static func delta(_ text: String) -> String {
         #"{"type":"stream_event","parent_tool_use_id":null,"session_id":"\#(sessionID)","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"\#(text)"}}}"#
     }
@@ -273,6 +354,27 @@ private struct StoppedTurnSession {
             return XCTFail("Unreadable frame \(frame)")
         }
         await transport.emit(value)
+    }
+
+    /// The payloads of a turn Stop ended while its calls ran: one call finished, then the stop cut the
+    /// command running and the one waiting behind it.
+    static func stoppedWhileCallsRan(request: String, routed: Bool) async throws -> [HarnessEventPayload] {
+        let session = try await StoppedTurnSession(routed: routed)
+        try await session.adapter.send(request, to: session.handle)
+        await session.emit(StoppedTurnFrames.versionCall)
+        await session.emit(StoppedTurnFrames.versionResult)
+        await session.emit(StoppedTurnFrames.twoCommands)
+        await session.emit(StoppedTurnFrames.sleepStarted)
+        try await session.waitFor { $0.filter { if case .activityStarted = $0 { true } else { false } }.count >= 3 }
+        try await session.adapter.interrupt(session.handle)
+        await session.emit(StoppedTurnFrames.sleepCutShort)
+        await session.emit(StoppedTurnFrames.testsRefused)
+        await session.emit(StoppedTurnFrames.toolUseInterruptionMarker)
+        await session.emit(StoppedTurnFrames.abortedWhileToolsRan)
+        try await session.waitForTurnEnd()
+        let payloads = await session.log.payloads
+        await session.close()
+        return payloads
     }
 
     /// A turn running with a follow-up the CLI holds in its queue, where Send now can find it.
@@ -318,4 +420,55 @@ private struct StoppedTurnSession {
 private actor StoppedTurnPayloadLog {
     private(set) var payloads: [HarnessEventPayload] = []
     func append(_ payload: HarnessEventPayload) { payloads.append(payload) }
+}
+
+/// The turn Stop ended while its calls ran, drawn from the frames the CLI sends, in both appearances,
+/// into `.build/claude-stop-qa/`: as the conversation shows it (`stopped-turn-*.png`), and with its run
+/// of calls and each call opened (`stopped-calls-*.png`).
+@MainActor
+final class ClaudeStoppedTurnRenderingTests: XCTestCase {
+    func testTheStoppedTurnRenders() async throws {
+        let request = "Run `python3 -c \"import time; time.sleep(30)\"; echo done` in the foreground, then tell me how many tests passed."
+        let payloads = try await StoppedTurnSession.stoppedWhileCallsRan(request: request, routed: false)
+        var transcript = TranscriptBuilder()
+        transcript.appendUser(request)
+        payloads.forEach { transcript.apply($0) }
+        // At the times a person sees them: the calls 4 seconds after the request, the stop at 13.
+        let start = Date(timeIntervalSince1970: 1_794_000_000)
+        let entries = transcript.entries.enumerated().map { index, entry in
+            TranscriptEntry(id: entry.id, createdAt: start.addingTimeInterval(index == 0 ? 0 : 4), content: entry.content,
+                            turnStoppedAt: entry.turnStoppedAt.map { _ in start.addingTimeInterval(13) })
+        }
+        let turn = try XCTUnwrap(TranscriptConversationProjection.presentation(
+            from: entries, harness: .claudeCode, status: .ready, latestTurnIsComplete: true).turns.last)
+        let stopped = L10n.string("Stopped")
+        let folder = try WindowlessRender.directory("claude-stop-qa")
+        for appearance in WindowlessRender.Appearance.allCases {
+            let drawing = try ConversationDrawing.draw(
+                ConversationTimeline(source: .transcript(entries: entries, harness: .claudeCode, status: .ready,
+                                                         latestTurnIsComplete: true)),
+                size: NSSize(width: 760, height: 260), appearance: appearance)
+            try WindowlessRender.writePNG(drawing.capture.bitmap,
+                                          to: folder.appending(path: "stopped-turn-\(appearance.suffix).png"))
+            let texts = drawing.elements.map(\.description).joined(separator: "\n")
+            XCTAssertTrue(texts.contains(L10n.format("You stopped after %lld seconds", Int64(13))), texts)
+
+            let choices = ConversationDisclosureChoices()
+            turn.work.forEach { choices.record($0.id, isOpen: true) }
+            let calls = try ConversationDrawing.draw(
+                ConversationWorkGroup(items: turn.work, harness: .claudeCode, startsOpen: true) { item in
+                    ConversationWorkLine(item: item, harness: .claudeCode, workspaceURL: nil, runInTerminal: { _ in })
+                }
+                .environment(\.conversationDisclosureChoices, choices)
+                .padding(24),
+                size: NSSize(width: 760, height: 420), appearance: appearance)
+            try WindowlessRender.writePNG(calls.capture.bitmap,
+                                          to: folder.appending(path: "stopped-calls-\(appearance.suffix).png"))
+            let lines = calls.elements.map(\.description).joined(separator: "\n")
+            XCTAssertTrue(lines.contains("Sleep 30 seconds in Python then print done \(stopped)"), lines)
+            XCTAssertTrue(lines.contains("Run the unit test suite \(stopped)"), lines)
+            XCTAssertFalse(lines.contains("want to proceed"), lines)
+            XCTAssertFalse(lines.contains("Command was aborted"), lines)
+        }
+    }
 }

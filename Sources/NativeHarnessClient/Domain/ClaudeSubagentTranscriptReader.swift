@@ -737,8 +737,14 @@ struct ClaudeSubagentTranscriptReader: Sendable {
         }
         /// The output of an idle compaction's `/compact`, which is not shown.
         var dropsCommandOutput = false
-        for value in chain {
+        let resultsEndedByStops = Self.resultsEndedByStops(in: chain)
+        for (index, value) in chain.enumerated() {
             if heldCompaction != nil, !Self.followsItsCompaction(value) { showHeldCompaction() }
+            // Where the person stopped the turn, as the live stream ended it (`HarnessEventPayload.turnStopped`).
+            if Self.isPersonStopNote(value) {
+                builder.markTurnStopped(at: value["timestamp"]?.stringValue.flatMap(Self.timestamp) ?? .distantPast)
+                continue
+            }
             // A message sent while a turn ran is saved as the command Claude read into that turn,
             // not as a user record; it stays in that turn, as the live stream showed it (D13).
             if value["type"]?.stringValue == "attachment", let text = Self.messageReadIntoTurn(value["attachment"]) {
@@ -836,7 +842,10 @@ struct ClaudeSubagentTranscriptReader: Sendable {
                 heldCompaction = .object(object)
                 continue
             }
-            for payload in projection.payloads(from: .object(object)) { builder.apply(payload) }
+            let endedByStop = resultsEndedByStops.contains(index)
+            for payload in projection.payloads(from: .object(object)) {
+                builder.apply(endedByStop ? ClaudeProtocol.endedByStop(payload) : payload)
+            }
             record(added(after: lastID), from: value)
         }
         showHeldCompaction()
@@ -845,7 +854,8 @@ struct ClaudeSubagentTranscriptReader: Sendable {
             let identity = identities[entry.id]
             return TranscriptEntry(id: identity?.id ?? entry.id,
                 createdAt: identity?.createdAt ?? entry.createdAt, content: entry.content,
-                joinsRunningTurn: entry.joinsRunningTurn, origin: entry.origin, isProgressUpdate: entry.isProgressUpdate)
+                joinsRunningTurn: entry.joinsRunningTurn, origin: entry.origin, isProgressUpdate: entry.isProgressUpdate,
+                turnStoppedAt: entry.turnStoppedAt)
         }
         var sources: [UUID: String] = [:]
         for identity in identities.values { sources[identity.id] = identity.source }
@@ -933,8 +943,48 @@ struct ClaudeSubagentTranscriptReader: Sendable {
     /// a quit ended the CLI (the record then says `interruptedByShutdown`). The Claude app 3.1623.3
     /// reads it as the turn's interruption, never as a message the person sent (`aH` in its
     /// conversation reader).
-    static let interruptionNotes: Set<String> = ["[Request interrupted by user]",
-                                                 "[Request interrupted by user for tool use]"]
+    static let interruptionNotes: Set<String> = ["[Request interrupted by user]", toolUseInterruptionNote]
+    static let toolUseInterruptionNote = "[Request interrupted by user for tool use]"
+
+    /// The note where the person stopped a turn: an interruption note a quit did not write. The saved
+    /// record keeps no other mark of the stop, which the live stream knew as Yardlet's own request.
+    static func isPersonStopNote(_ value: JSONValue) -> Bool {
+        interruptionNote(value) != nil && value["interruptedByShutdown"]?.boolValue != true
+    }
+
+    private static func interruptionNote(_ value: JSONValue) -> String? {
+        guard value["type"]?.stringValue == "user", value["origin"]?["kind"]?.stringValue == nil else { return nil }
+        let content = value["message"]?["content"]
+        let text = content?.stringValue ?? content?.arrayValue?.compactMap {
+            $0["type"]?.stringValue == "text" ? $0["text"]?.stringValue : nil
+        }.joined(separator: "\n")
+        return text.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.flatMap {
+            interruptionNotes.contains($0) ? $0 : nil
+        }
+    }
+
+    /// The saved results of the calls the person's stops ended, by their place in `chain`: those
+    /// Claude Code wrote after a step's calls, right before the note that the person stopped them
+    /// (`toolUseInterruptionNote`). A call that finished before the stop keeps its result
+    /// (`ClaudeProtocol.endedByStop`).
+    static func resultsEndedByStops(in chain: [JSONValue]) -> Set<Int> {
+        var ended: Set<Int> = []
+        for (index, value) in chain.enumerated()
+        where isPersonStopNote(value) && interruptionNote(value) == toolUseInterruptionNote {
+            var earlier = index - 1
+            while earlier >= 0 {
+                let record = chain[earlier]
+                if record["type"]?.stringValue == "assistant" { break }
+                if record["type"]?.stringValue == "user" {
+                    let blocks = record["message"]?["content"]?.arrayValue ?? []
+                    guard !blocks.isEmpty, blocks.allSatisfy({ $0["type"]?.stringValue == "tool_result" }) else { break }
+                    ended.insert(earlier)
+                }
+                earlier -= 1
+            }
+        }
+        return ended
+    }
 
     /// The text of a message a person sent while a turn ran, from the `queued_command` record
     /// Claude saves when it reads one into the turn. Commands Claude queued itself (a finished

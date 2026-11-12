@@ -553,6 +553,19 @@ enum ClaudeProtocol {
         return abortedTerminalReasons.contains(reason)
     }
 
+    /// A call the person's stop ended, from the result the CLI wrote for it. 2.1.322 answers each call
+    /// still queued or running then with a failed result addressed to the model ("The user doesn't want
+    /// to proceed with this tool use. … STOP what you are doing …"), or with the call's own result cut
+    /// short: the call reads as stopped, as the Claude app marks it, and that text is not its output.
+    /// A call that finished before the stop keeps its result.
+    static func endedByStop(_ payload: HarnessEventPayload) -> HarnessEventPayload {
+        guard case var .activityCompleted(activity) = payload, activity.outcome != nil else { return payload }
+        activity.outcome = .stopped
+        activity.output = nil
+        activity.images = nil
+        return .activityCompleted(activity)
+    }
+
     /// What cut a turn the CLI ended on its own connection error, read from its main `result`: an API
     /// error (`terminal_reason` "api_error", or none from an older CLI) that got no HTTP status (no
     /// `api_error_status`: the request never had an answer), whose words are one of the CLI's connection

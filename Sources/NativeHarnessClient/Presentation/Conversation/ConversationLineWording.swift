@@ -195,7 +195,7 @@ enum ConversationLineWording {
             let actions = command.actions.isEmpty ? [.unknown(command: command.command)] : command.actions
             return actions.map { codex($0, phase: phase, localize: localize) }
         case .claudeCode:
-            return [claudeShell(command, phase: phase, localize: localize)]
+            return [markingStop(claudeShell(command, phase: phase, localize: localize), phase: phase, localize: localize)]
         default:
             return [ConversationLineWords(verb: plainCommandVerb(phase, localize: localize),
                                           trailing: firstLine(command.command))]
@@ -299,7 +299,15 @@ enum ConversationLineWording {
         }
     }
 
-    /// A stopped call reads as a finished one; its line marks it stopped.
+    /// A stopped call, as the Claude app marks one: its line, then "Stopped".
+    private static func markingStop(
+        _ words: ConversationLineWords, phase: ConversationItemPhase, localize: Localize
+    ) -> ConversationLineWords {
+        guard phase == .stopped else { return words }
+        return ConversationLineWords(leading: words.text, verb: localize("Stopped"))
+    }
+
+    /// A stopped call reads as a finished one; its line marks it stopped (`markingStop`).
     private static func claudeState(_ phase: ConversationItemPhase) -> String {
         switch phase {
         case .running: "running"
@@ -385,6 +393,14 @@ enum ConversationLineWording {
         _ tool: ConversationTool,
         phase: ConversationItemPhase,
         localize: Localize = { L10n.string($0) }
+    ) -> ConversationLineWords? {
+        claudeToolWords(tool, phase: phase, localize: localize).map { markingStop($0, phase: phase, localize: localize) }
+    }
+
+    private static func claudeToolWords(
+        _ tool: ConversationTool,
+        phase: ConversationItemPhase,
+        localize: Localize
     ) -> ConversationLineWords? {
         guard case let .activity(name) = tool.kind else { return nil }
         let arguments = ClaudeToolArguments(tool: name, input: tool.input)

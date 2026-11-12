@@ -213,6 +213,8 @@ enum TranscriptConversationProjection {
         // Yardlet's last run ended under the turn and nothing has continued it: it ends there. What was
         // running at the cut is not in the transcript read back (`TranscriptBuilder.init(entries:)`).
         let isCutOff = input.isLast && !isBusy && input.wasCutOff
+        // The person stopped it (`TranscriptEntry.turnStoppedAt`): it reads as stopped, with how long it ran.
+        let stoppedAt = isBusy ? nil : input.entries.lazy.compactMap(\.turnStoppedAt).max()
         // The part of a turn a read began inside answers too once a later turn follows it: what it
         // ended with is that turn's answer (a final report shown above a background task's notice).
         let answerID: UUID? = if !input.isHead || !input.isLast, input.isComplete, let last = shown.last,
@@ -374,7 +376,7 @@ enum TranscriptConversationProjection {
             .running
         } else if outcome != nil {
             .failed
-        } else if isCutOff {
+        } else if isCutOff || stoppedAt != nil {
             .interrupted
         } else if input.isComplete {
             .completed
@@ -386,7 +388,7 @@ enum TranscriptConversationProjection {
         var result = ConversationTurn(
             id: input.id,
             status: status,
-            timing: timing(shown, status: status),
+            timing: timing(shown, status: status, stoppedAt: stoppedAt),
             prompt: prompt,
             plan: plan,
             work: arranged.work,
@@ -412,13 +414,17 @@ enum TranscriptConversationProjection {
         return result
     }
 
-    /// From the request (or the head's first entry) to the turn's last entry: the times the
-    /// entries were made, not the provider's own (D4). A finished turn whose entries span less than
-    /// a second (one read back at once, or with one entry) has no work time to show.
-    private static func timing(_ entries: [TranscriptEntry], status: ConversationTurnStatus) -> ConversationTurnTiming {
+    /// From the request (or the head's first entry) to the turn's last entry, or to when the person
+    /// stopped it: the times the entries were made, not the provider's own (D4). A finished turn whose
+    /// entries span less than a second (one read back at once, or with one entry) has no work time to
+    /// show, nor does one Yardlet's quit cut off, which ran on past its last entry.
+    private static func timing(_ entries: [TranscriptEntry], status: ConversationTurnStatus,
+                               stoppedAt: Date?) -> ConversationTurnTiming {
         let startedAt = entries.first?.createdAt
-        guard status == .completed || status == .failed, let startedAt, let endedAt = entries.last?.createdAt,
-              endedAt.timeIntervalSince(startedAt) >= 1 else {
+        let lastAt = entries.last?.createdAt
+        let endedAt = [lastAt, stoppedAt].compactMap { $0 }.max()
+        guard status == .completed || status == .failed || (status == .interrupted && stoppedAt != nil),
+              let startedAt, let endedAt, endedAt.timeIntervalSince(startedAt) >= 1 else {
             return ConversationTurnTiming(startedAt: startedAt, isApproximate: true)
         }
         let milliseconds = max(0, endedAt.timeIntervalSince(startedAt) * 1_000)

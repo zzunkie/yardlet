@@ -1117,17 +1117,21 @@ actor ClaudeAdapter:
         recordPromptCache(from: value, for: localSessionID)
         let endsMainTurn = value["type"]?.stringValue == "result"
             && value["parent_tool_use_id"]?.stringValue?.isEmpty != false
+        // The results the CLI writes after a Stop Yardlet sent, for the calls the stop ended.
+        let endsCallsByStop = value["type"]?.stringValue == "user" && turnStopRequests[localSessionID] == .requested
         // A turn Yardlet asked the CLI to stop still ends with an error result. It ends here as
         // stopped: no error card, the text it streamed stays, and the task is ready again.
         let stoppedByRequest = endsMainTurn && turnStopRequests.removeValue(forKey: localSessionID).map {
             ClaudeProtocol.endsAbortedTurn(value, allowingUnstatedReason: $0 == .requested)
         } == true
-        for payload in projections[localSessionID, default: ClaudeSessionProjection()].payloads(from: value) {
+        let payloads = projections[localSessionID, default: ClaudeSessionProjection()].payloads(from: value)
+        if stoppedByRequest { emit(.turnStopped, for: localSessionID, rawData: frame.data) }
+        for payload in payloads {
             if stoppedByRequest {
                 if case .error = payload { continue }
                 if case .usageLimitReached = payload { continue }
             }
-            emit(payload, for: localSessionID, rawData: frame.data)
+            emit(endsCallsByStop ? ClaudeProtocol.endedByStop(payload) : payload, for: localSessionID, rawData: frame.data)
         }
         if endsMainTurn {
             foregroundSessions.remove(localSessionID)

@@ -361,6 +361,10 @@ enum HarnessEventPayload: Codable, Equatable, Sendable {
     /// read from that error, not guessed: the turn continues once the network is back
     /// (`ConnectionResumePolicy`). It comes before the turn's end.
     case turnCutOff(TurnCut)
+    /// The person stopped the turn, and the provider ended it for that: it reads as stopped, as a
+    /// Codex turn the person interrupted does (`TranscriptEntry.turnStoppedAt`). It comes before the
+    /// turn's end.
+    case turnStopped
     case contextCompaction(HarnessContextCompaction)
     /// A follow-up the provider held was read or let go. A read one joins the conversation here.
     case followUpDelivery(HarnessFollowUpDelivery)

@@ -140,6 +140,7 @@ enum LegacyProviderStatusExtension {
     static let nextMessageSuggestion = "session.next_message_suggestion"
     static let providerTurn = "session.provider_turn"
     static let turnCut = "session.turn_cut"
+    static let turnStopped = "session.turn_stopped"
 
     static func encode<Value: Encodable>(_ value: Value) throws -> JSONValue {
         try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(value))
@@ -160,6 +161,7 @@ enum LegacyProviderStatusExtension {
         case nextMessageSuggestion: value["text"]?.stringValue.map(HarnessEventPayload.nextMessageSuggestion)
         case providerTurn: .providerStartedTurn(messageID: value["messageID"]?.stringValue)
         case turnCut: value["cut"]?.stringValue.flatMap(TurnCut.init(rawValue:)).map(HarnessEventPayload.turnCutOff)
+        case turnStopped: .turnStopped
         default: nil
         }
     }
@@ -1360,6 +1362,10 @@ actor LegacyHarnessProtocolBridge {
                 try emit(.extensionEvent(HarnessProtocolExtensionEvent(
                     namespace: "yardlet.compat", name: LegacyProviderStatusExtension.turnCut,
                     payload: .object(["cut": .string(cut.rawValue)])
+                )), source: event)
+            case .turnStopped:
+                try emit(.extensionEvent(HarnessProtocolExtensionEvent(
+                    namespace: "yardlet.compat", name: LegacyProviderStatusExtension.turnStopped, payload: .object([:])
                 )), source: event)
 
             case let .error(message, recoverable, transient):

@@ -161,6 +161,9 @@ struct TranscriptBuilder: Sendable {
             finishStreamingBlocks()
             upsertPlan(plan)
 
+        case .turnStopped:
+            markTurnStopped(at: Date())
+
         case .turnCompleted:
             endTurn()
             expirePendingPermissions()
@@ -192,6 +195,12 @@ struct TranscriptBuilder: Sendable {
             break
         }
         trimIfNeeded()
+    }
+
+    /// The person stopped the running turn at `date`, which its last entry so far keeps
+    /// (`TranscriptEntry.turnStoppedAt`). A saved record names when it was.
+    mutating func markTurnStopped(at date: Date) {
+        if let last = entries.indices.last { list[last].turnStoppedAt = date }
     }
 
     /// The runtime ended, and with its process all the work it ran, the background work too.
