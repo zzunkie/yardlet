@@ -129,6 +129,37 @@ enum TaskBlocker: CaseIterable {
     /// What a turn Yardlet continues on its own waits for (`holdsOffContinuations`).
     static let holdingOffContinuations = allCases.filter(\.holdsOffContinuations)
 
+    /// Whether a task an agent waits on (`wait_tasks`, the message that a child task has ended) is still at its
+    /// work while this holds it: its turn, messages it has yet to take, or its start as a child task. The rest it
+    /// has done what it was asked through: its background work and agents outlast the turn, and a change or a
+    /// continuation is Yardlet's, not its own.
+    var keepsTaskAtWork: Bool {
+        switch self {
+        case .turn, .queuedMessages, .messageOnItsWay, .startingAsChild: true
+        case .sideChat, .codexTurn, .shellCommand, .request, .shellOutput, .backgroundWork, .sessionJobs, .processes,
+             .agents, .childStartWaiting, .childTasks, .edit, .conversationChange, .accountSwitch, .change,
+             .runtimeStarting, .cutOffTurn, .sessionJobRelaunch, .limitContinue: false
+        }
+    }
+
+    /// What a task an agent waits on is still at its work for (`keepsTaskAtWork`).
+    static let keepingTaskAtWork = allCases.filter(\.keepsTaskAtWork)
+
+    /// Why a message from another task is not delivered while this holds the task, in the words its sender's
+    /// agent reads; nil for what the message goes through, taken in by the turn or held until it can go.
+    var turnsBackTaskMessage: String? {
+        switch self {
+        case .edit: "the person is editing a message in that task."
+        case .conversationChange, .accountSwitch: "that task is changing (an account switch or an edit); try again shortly."
+        case .sideChat, .turn, .codexTurn, .shellCommand, .request, .queuedMessages, .messageOnItsWay, .shellOutput,
+             .backgroundWork, .sessionJobs, .processes, .agents, .childStartWaiting, .childTasks, .change,
+             .runtimeStarting, .startingAsChild, .cutOffTurn, .sessionJobRelaunch, .limitContinue: nil
+        }
+    }
+
+    /// What turns a message from another task back, in the order its reason is given (`turnsBackTaskMessage`).
+    static let turningBackTaskMessages = allCases.filter { $0.turnsBackTaskMessage != nil }
+
     /// What keeps a task's CLI from starting again for the session jobs it brings back: what holds off a
     /// continuation, and messages or shell output waiting to go, which start it themselves.
     static let holdingOffSessionJobRelaunches = allCases.filter {

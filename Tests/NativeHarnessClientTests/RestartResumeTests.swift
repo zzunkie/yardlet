@@ -696,8 +696,9 @@ final class RestartResumeTests: XCTestCase {
     /// Yardlet holds go after the move), and the word the memory saver keeps the runtime for. Each thing alone in a task
     /// of its own, then piled up on one task from what a list names last, so that each step names what came on top or
     /// keeps what it named before: the order decides the reason the line shows. Alone, each also says whether Yardlet
-    /// would choose a move of its own for the task, and whether a send, a continuation or a session job relaunch
-    /// Yardlet starts waits for it.
+    /// would choose a move of its own for the task, whether a send, a continuation or a session job relaunch
+    /// Yardlet starts waits for it, whether an agent waiting on the task counts it at work, and whether a message
+    /// from another task is turned back.
     func testWhatHoldsATaskForAnAccountMoveAndForTheMemorySaver() async throws {
         struct Holds: Equatable {
             var move: AccountMoveBlocker?
@@ -880,6 +881,12 @@ final class RestartResumeTests: XCTestCase {
         // what waits to go, which starts it.
         let continuationsWait: Set = ["Turn", "Approval", "Edit", "Account switch"]
         let waitingToGo: Set = ["Queued message", "Message on its way", "Shell output"]
+        // An agent waiting on a task counts it at work while its turn runs, messages wait for it or it starts as a
+        // child; a message from another task is turned back during an edit or a change of the conversation or account.
+        let atWork: Set = ["Turn", "Approval", "Queued message", "Message on its way", "Waits for room as a child",
+                           "Starts as a child"]
+        let turnedBack = ["Edit": "the person is editing a message in that task.",
+                          "Account switch": "that task is changing (an account switch or an edit); try again shortly."]
         for (thing, _) in alone {
             let task = try XCTUnwrap(store.sessions.first { $0.id == tasks[thing]?.id }, thing)
             XCTAssertEqual(model.canMoveAutomatically(task), !noMoveChosen.contains(thing), thing)
@@ -889,6 +896,10 @@ final class RestartResumeTests: XCTestCase {
                            continuationsWait.contains(thing), "Continuations, \(thing)")
             XCTAssertEqual(model.firstBlocker(of: task, among: TaskBlocker.holdingOffSessionJobRelaunches) != nil,
                            continuationsWait.union(waitingToGo).contains(thing), "Session job relaunches, \(thing)")
+            XCTAssertEqual(model.firstBlocker(of: task, among: TaskBlocker.keepingTaskAtWork) != nil,
+                           atWork.contains(thing), "At work, \(thing)")
+            XCTAssertEqual(model.firstBlocker(of: task, among: TaskBlocker.turningBackTaskMessages)?.turnsBackTaskMessage,
+                           turnedBack[thing], "Task messages, \(thing)")
         }
         for (title, steps) in piles {
             for (thing, expected) in steps {

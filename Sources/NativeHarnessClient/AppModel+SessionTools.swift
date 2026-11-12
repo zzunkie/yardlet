@@ -503,11 +503,8 @@ extension AppModel: SessionToolHandling {
         guard let target = store.sessions.first(where: { $0.id == target.id }) else {
             return .undelivered("that task no longer exists.")
         }
-        if composerDrafts.tasks.draft(for: target.id).editState != nil {
-            return .undelivered("the person is editing a message in that task.")
-        }
-        if switchingAccounts.contains(target.id) || sessionMutations.contains(target.id) {
-            return .undelivered("that task is changing (an account switch or an edit); try again shortly.")
+        if let reason = firstBlocker(of: target, among: TaskBlocker.turningBackTaskMessages)?.turnsBackTaskMessage {
+            return .undelivered(reason)
         }
         switch sendRefusal(for: target) {
         case .heldElsewhere?: return .undelivered("another app holds that task's conversation.")
@@ -649,12 +646,12 @@ extension AppModel: SessionToolHandling {
         }
     }
 
+    /// A wait ends for a task that waits for the person too: it has done what it can for now.
     private func sessionToolTargetSettled(_ id: UUID) -> Bool {
         if let run = sessionTools.run(id) { return run.state.isFinished || run.state == .waitingForApproval }
         guard let session = store.sessions.first(where: { $0.id == id }) else { return true }
-        if sessionTools.isQueued(id) || sessionTools.starting.contains(id) { return false }
-        if session.status == .waitingForApproval { return true }
-        return !Self.isWorking(session) && followUps.queue(for: id).isEmpty
+        return session.status == .waitingForApproval
+            || firstBlocker(of: session, among: TaskBlocker.keepingTaskAtWork) == nil
     }
 
     // MARK: - create_task
@@ -1811,8 +1808,7 @@ extension AppModel: SessionToolHandling {
                     if run.state == .interrupted { return }
                     if run.state.isFinished { break }
                 } else if let session = self.store.sessions.first(where: { $0.id == id }) {
-                    if !Self.isWorking(session), self.followUps.queue(for: id).isEmpty,
-                       !self.sessionTools.isQueued(id), !self.sessionTools.starting.contains(id) { break }
+                    if self.firstBlocker(of: session, among: TaskBlocker.keepingTaskAtWork) == nil { break }
                 } else {
                     return
                 }
