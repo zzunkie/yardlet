@@ -61,13 +61,16 @@ struct ScheduledTask: Codable, Identifiable, Equatable, Sendable {
     /// already there. A run keeps where it went (`ScheduledTaskRun.mode`), since the schedule may send its
     /// runs elsewhere later. A run kept before that is read from where the runs go now, except that a task
     /// new runs nest under was not started by one of them (an agent's schedule that continued its own task
-    /// and now starts new ones nests them under that task), and a run that continued a task went to the task
-    /// the schedule continues.
+    /// and now starts new ones nests them under that task), a run that continued a task went to the task
+    /// the schedule continues, and a task another of its runs also went to was continued, since each run
+    /// that starts a task starts a different one (a schedule that continued one task and now continues
+    /// another).
     func startedNewTask(_ run: ScheduledTaskRun) -> Bool {
         guard run.outcome == .started, let taskID = run.taskID else { return false }
         if let mode = run.mode { return mode == .newTask }
         return taskID != destination.parentTaskID
             && (destination.mode == .newTask || taskID != destination.targetTaskID)
+            && !state.runs.contains { $0.id != run.id && $0.taskID == taskID }
     }
 
     /// Whether one of its runs started this task as a task of its own.

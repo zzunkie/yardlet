@@ -618,7 +618,8 @@ Times in results are ISO 8601 in the Mac's time zone (with the offset).
   changes things is asked with the session tool approval card (the Claude app's `unattended`). That is a task a run
   started as a new task: each run keeps whether it started its task or continued one, so a task a run only continued
   stays the person's, also after the schedule's runs start new tasks (a run recorded without this counts as continued when
-  its task is the one new runs nest under or the one the schedule continues).
+  its task is the one new runs nest under, the one the schedule continues, or one another of its runs also went to, so a
+  schedule moved from continuing one task to another leaves the first the person's).
   That task cannot run a schedule or delete the schedule that started it (the Claude app's refusal wording). A schedule
   created without a card gets the notification "{harness} scheduled a task: “{name}”" / "Its runs will use {mode} mode."
   (the Claude app's "Claude scheduled a task"), {mode} being a new task's own permission in its harness's words (Full

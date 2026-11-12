@@ -681,6 +681,21 @@ final class ScheduleToolTests: XCTestCase {
                                                  mode: .newTask), at: 0)
         XCTAssertTrue(moved.startedTask(runID))
         XCTAssertFalse(moved.startedTask(ownID))
+
+        // A schedule that continued one task, with runs kept before runs said which they did, and now continues
+        // another leaves the first task the person's: each run that starts a task starts a different one.
+        let otherID = UUID()
+        var retargeted = moved
+        retargeted.destination.targetTaskID = otherID
+        retargeted.state.runs = [
+            ScheduledTaskRun(at: date(18, 12), trigger: .scheduled, outcome: .started, taskID: ownID,
+                             mode: .continueTask),
+            ScheduledTaskRun(at: date(17, 12), trigger: .scheduled, outcome: .started, taskID: ownID),
+            ScheduledTaskRun(at: date(16, 12), trigger: .scheduled, outcome: .started, taskID: ownID),
+            ScheduledTaskRun(at: date(15, 12), trigger: .scheduled, outcome: .started, taskID: runID),
+        ]
+        XCTAssertFalse(retargeted.startedTask(ownID))
+        XCTAssertTrue(retargeted.startedTask(runID))
     }
 
     private func waitForApproval(in taskID: UUID, model: AppModel) async throws -> SessionToolApproval {
