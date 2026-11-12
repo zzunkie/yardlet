@@ -109,6 +109,12 @@ open class XamlApplication: Application, IXamlMetadataProvider {
 
     /// The thread's message loop. Between messages it waits for the next one, the main dispatch queue's
     /// event, or Foundation's next timer, whichever comes first, and does no work while nothing comes.
+    ///
+    /// The wait returns for any message still in the queue, not only for one that came since the queue was last
+    /// looked at (`MWMO_INPUTAVAILABLE`). On Windows the main run loop takes Windows messages too: its pass in
+    /// `limitDate(forMode:)` dispatches one and leaves the others marked as seen, and a wait for new messages alone
+    /// then slept through them until some other input came, which left a UI Automation request unanswered until its
+    /// client gave up a minute later.
     private static func runMessageLoop() -> Int32 {
         var mainQueue: HANDLE? = _dispatch_get_main_queue_handle_4CF()
         var message = MSG()
@@ -122,7 +128,8 @@ open class XamlApplication: Application, IXamlMetadataProvider {
             }
             let next = RunLoop.main.limitDate(forMode: .default)
             let timeout = next.map { DWORD(max(0, min($0.timeIntervalSinceNow * 1000, 3_600_000))) } ?? DWORD(INFINITE)
-            let woken = MsgWaitForMultipleObjects(mainQueue == nil ? 0 : 1, &mainQueue, false, timeout, DWORD(QS_ALLINPUT))
+            let woken = MsgWaitForMultipleObjectsEx(mainQueue == nil ? 0 : 1, &mainQueue, timeout, DWORD(QS_ALLINPUT),
+                                                    DWORD(MWMO_INPUTAVAILABLE))
             // WAIT_OBJECT_0: the main queue's event, the one handle waited for.
             if mainQueue != nil, woken == 0 {
                 _dispatch_main_queue_callback_4CF(nil)

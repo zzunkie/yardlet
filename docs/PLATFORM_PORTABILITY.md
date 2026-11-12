@@ -230,7 +230,10 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   application type the app derives from. Its `main()` starts the Windows App Runtime through the Windows App SDK's
   bootstrapper, creates the application as the type `@main` names, and runs the thread's message loop. Between
   messages the loop waits for the next one, the main dispatch queue's event or Foundation's next timer, so Swift's
-  main actor runs on the window's thread and an idle window uses no processor time.
+  main actor runs on the window's thread and an idle window uses no processor time. The wait returns for any message
+  left in the queue (`MWMO_INPUTAVAILABLE`): Foundation's main run loop on Windows dispatches one Windows message in
+  each pass and leaves the rest marked as seen, and a wait for new messages alone slept through them (seen as a UI
+  Automation request unanswered for a minute).
 - **The WinUI bindings.** [swift-winrt](https://github.com/thebrowsercompany/swift-winrt) generates them from the
   metadata (.winmd) in Microsoft's NuGet packages (the Windows App SDK 2.6.5's Foundation, InteractiveExperiences and
   WinUI, the Windows SDK contracts and WebView2), whose versions and SHA-512 hashes `Windows/Bindings/projections.json`
