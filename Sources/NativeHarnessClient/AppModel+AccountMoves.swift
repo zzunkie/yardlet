@@ -20,25 +20,26 @@ struct AutomaticAccountMove: Equatable {
 }
 
 /// What keeps a task from moving to another account now (`AppModel.accountMoveBlocker`), as the line
-/// above the composer names it.
-enum AccountMoveBlocker: Equatable {
+/// above the composer names it (`TaskBlocker.accountMoveWait`). Declared in the order the line names
+/// them when several hold.
+enum AccountMoveBlocker: Equatable, CaseIterable {
     /// Its turn runs, or waits for an approval.
     case turn
-    /// A question or request in its conversation waits for the person's answer.
-    case request
     /// A message or shell output on its way to the provider.
     case messages
     /// A shell command the person ran in it.
     case shellCommand
-    /// The harness's background commands.
-    case backgroundWork
-    /// Agents it runs (`run_agent`).
-    case agents
+    /// A question or request in its conversation waits for the person's answer.
+    case request
     /// A message the person is editing.
     case edit
     /// Another change under way: a switch, a restart, a fork, a side chat opening, unarchiving, a
-    /// worktree being made again, or a cut-off turn about to continue.
+    /// worktree being made again, a child task starting, or a cut-off turn about to continue.
     case otherChange
+    /// Agents it runs (`run_agent`).
+    case agents
+    /// The harness's background commands.
+    case backgroundWork
 }
 
 /// A move after a turn that waits on its task (`TaskContinuationCoordinator.switchAccountAfterTurn`):

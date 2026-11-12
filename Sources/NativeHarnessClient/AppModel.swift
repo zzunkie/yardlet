@@ -5671,38 +5671,56 @@ final class AppModel {
         accountMoveWaits[account]?.cancel()
     }
 
-    /// Whether a task's account can change now, closing its runtime if it has one. It waits for what the
-    /// memory saver waits for (`memorySaverKeeps`) but being on screen and session jobs, which the
-    /// runtime brings back on resuming: a turn or question, messages or a shell command on their way,
-    /// the harness's background commands, subagents it hosts, another change, or a continuation. An
-    /// armed continue after a limit goes on under the same account (`moveSettledTask`). With
-    /// `heldMessagesGoAfter`, the messages and shell output Yardlet holds go after the move instead, on
-    /// the new account; only those the provider holds or one being sent are waited for.
+    /// Whether a task's account can change now, closing its runtime if it has one: nothing a move waits
+    /// for holds it (`TaskBlocker.accountMoveWait`). With `heldMessagesGoAfter`, the messages and shell
+    /// output Yardlet holds go after the move instead, on the new account; only those the provider holds
+    /// or one being sent are waited for.
     func settlesForAccountMove(_ session: SessionRecord, heldMessagesGoAfter: Bool = false) -> Bool {
         accountMoveBlocker(of: session, heldMessagesGoAfter: heldMessagesGoAfter) == nil
     }
 
     /// The first thing that keeps a task's account from changing now (`settlesForAccountMove`), or nil.
     func accountMoveBlocker(of session: SessionRecord, heldMessagesGoAfter: Bool = false) -> AccountMoveBlocker? {
+        firstBlocker(of: session, among: TaskBlocker.accountMoveWaits(heldMessagesGoAfter: heldMessagesGoAfter))?
+            .accountMoveWait(heldMessagesGoAfter: heldMessagesGoAfter)
+    }
+
+    /// The first of `kinds`, in their order, that holds the task now, or nil. Only those asked for are read, and
+    /// none after the first that holds: some read the whole conversation, and the account move's wait asks every
+    /// second.
+    func firstBlocker(of session: SessionRecord, among kinds: [TaskBlocker]) -> TaskBlocker? {
+        kinds.first { blocks(session, $0) }
+    }
+
+    private func blocks(_ session: SessionRecord, _ kind: TaskBlocker) -> Bool {
         let id = session.id
-        if Self.isWorking(session) { return .turn }
-        let queue = followUps.queue(for: id)
-        let messagesSettle = heldMessagesGoAfter
-            ? !queue.contains { $0.state == .sent || followUps.isClaimed($0.id) }
-            : queue.isEmpty && pendingShellDeliveries[id]?.isEmpty != false
-        if !messagesSettle { return .messages }
-        if runningShellCommandBySessionID[id] != nil { return .shellCommand }
-        if TaskAttentionProjection.waitingRequest(of: session, detail: taskAttentionDetails[id]) != nil
-            || !heldRequests(in: id).isEmpty { return .request }
-        if composerDrafts.tasks.existingDraft(for: id)?.editState != nil { return .edit }
-        if sessionMutations.contains(id) || switchingAccounts.contains(id) || forkingSessions.contains(id)
-            || restartingSessions.contains(id) || openingSideChats.contains(id) || unarchivingSessionIDs.contains(id)
-            || recreatingTaskWorktrees.contains(id) || sessionTools.isQueued(id) || sessionTools.starting.contains(id)
-            || continuations.continuesCutOffTurn(id) { return .otherChange }
-        if sessionTools.runs(hostedBy: id).contains(where: { !$0.state.isFinished }) { return .agents }
-        // Last: it reads the whole conversation.
-        if !BackgroundTasksProjection(entries: transcriptBySessionID[id] ?? []).rows.isEmpty { return .backgroundWork }
-        return nil
+        return switch kind {
+        case .sideChat: store.isTemporary(id)
+        case .turn: Self.isWorking(session)
+        case .codexTurn: codexPresentationBySessionID[id]?.activeTurnID != nil
+        case .shellCommand: runningShellCommandBySessionID[id] != nil
+        case .request:
+            TaskAttentionProjection.waitingRequest(of: session, detail: taskAttentionDetails[id]) != nil
+                || !heldRequests(in: id).isEmpty
+        case .queuedMessages: !followUps.queue(for: id).isEmpty
+        case .messageOnItsWay: followUps.queue(for: id).contains { $0.state == .sent || followUps.isClaimed($0.id) }
+        case .shellOutput: pendingShellDeliveries[id]?.isEmpty == false
+        case .backgroundWork: !BackgroundTasksProjection(entries: transcriptBySessionID[id] ?? []).rows.isEmpty
+        case .sessionJobs: !sessionJobs(of: id).isEmpty
+        case .processes: !resourceMonitor.servers(of: id).isEmpty || !resourceMonitor.busyCPU(of: [id]).isEmpty
+        case .agents: sessionTools.runs(hostedBy: id).contains { !$0.state.isFinished }
+        case .childStartWaiting: sessionTools.queue.contains { $0.callerID == id }
+        case .childTasks: store.sessions.contains { $0.parentTaskID == id && Self.isWorking($0) }
+        case .edit: composerDrafts.tasks.existingDraft(for: id)?.editState != nil
+        case .change:
+            sessionMutations.contains(id) || switchingAccounts.contains(id) || forkingSessions.contains(id)
+                || restartingSessions.contains(id) || openingSideChats.contains(id) || unarchivingSessionIDs.contains(id)
+                || recreatingTaskWorktrees.contains(id)
+        case .startingAsChild: sessionTools.isQueued(id) || sessionTools.starting.contains(id)
+        case .cutOffTurn: continuations.continuesCutOffTurn(id)
+        case .sessionJobRelaunch: continuations.sessionJobRelaunches.contains(id)
+        case .limitContinue: continuations.usageLimitAutoContinue[id] != nil
+        }
     }
 
     /// Moves one settled task to another folder of its account. It keeps a runtime only if it had one,
@@ -5886,38 +5904,9 @@ final class AppModel {
         memorySaverOnScreenIDs().contains(session.id) ? "on screen" : workKeepingRuntime(of: session)
     }
 
-    /// What needs the task's runtime whether or not the task is on screen.
+    /// What needs the task's runtime whether or not the task is on screen (`TaskBlocker.memorySaverWord`).
     private func workKeepingRuntime(of session: SessionRecord) -> String? {
-        let id = session.id
-        // A side chat's runtime holds its whole conversation: its harness keeps none of it.
-        if store.isTemporary(id) { return "side chat" }
-        if session.status == .running || session.status == .waitingForApproval
-            || codexPresentationBySessionID[id]?.activeTurnID != nil || runningShellCommandBySessionID[id] != nil {
-            return "turn"
-        }
-        if TaskAttentionProjection.waitingRequest(of: session, detail: taskAttentionDetails[id]) != nil
-            || !heldRequests(in: id).isEmpty {
-            return "question"
-        }
-        if !followUps.queue(for: id).isEmpty || pendingShellDeliveries[id]?.isEmpty == false { return "queued" }
-        if !BackgroundTasksProjection(entries: transcriptBySessionID[id] ?? []).rows.isEmpty { return "background" }
-        if !sessionJobs(of: id).isEmpty { return "schedule" }
-        if !resourceMonitor.servers(of: id).isEmpty || !resourceMonitor.busyCPU(of: [id]).isEmpty { return "processes" }
-        if sessionTools.runs(hostedBy: id).contains(where: { !$0.state.isFinished })
-            || sessionTools.queue.contains(where: { $0.callerID == id })
-            || store.sessions.contains(where: { $0.parentTaskID == id && ($0.status == .running || $0.status == .waitingForApproval) }) {
-            return "children"
-        }
-        if composerDrafts.tasks.existingDraft(for: id)?.editState != nil || sessionMutations.contains(id)
-            || switchingAccounts.contains(id) || forkingSessions.contains(id) || restartingSessions.contains(id)
-            || openingSideChats.contains(id) || unarchivingSessionIDs.contains(id) || recreatingTaskWorktrees.contains(id) {
-            return "changing"
-        }
-        if continuations.continuesCutOffTurn(id) || continuations.sessionJobRelaunches.contains(id)
-            || continuations.usageLimitAutoContinue[id] != nil {
-            return "continuing"
-        }
-        return nil
+        firstBlocker(of: session, among: TaskBlocker.keepingRuntime)?.memorySaverWord
     }
 
     /// Ends an idle task's runtime to free its memory, as an idle runtime that ends on its own does
