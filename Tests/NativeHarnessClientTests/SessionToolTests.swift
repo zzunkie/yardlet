@@ -1122,6 +1122,8 @@ final class SessionToolTests: XCTestCase {
         XCTAssertEqual(states.first?.kind, "task")
         XCTAssertEqual(states.first?.link, "[Busy](#\(fixture.busy.id.uuidString))")
 
+        // The turn's end wakes the wait: with no wake it would look again later than this test waits.
+        model.taskWaitTiming.toolFallback = testWaitLimit * 2
         let clock = ContinuousClock()
         let started = clock.now
         let waiting = Task { await self.call(model, "wait_tasks", ["ids": [fixture.busy.id.uuidString], "timeout_seconds": 30],
@@ -1131,6 +1133,18 @@ final class SessionToolTests: XCTestCase {
         let settled = try decode([Outcome].self, await waiting.value.text)
         XCTAssertEqual(settled.first?.ended, true)
         XCTAssertLessThan(clock.now - started, .seconds(10))
+
+        // What lets a task go without waking the wait delays it to the wait's fallback rather than holding it: here a
+        // child task's start returns while the session tools wake nothing.
+        model.sessionTools.starting.insert(fixture.busy.id)
+        model.sessionTools.taskMayHaveSettled = nil
+        model.taskWaitTiming.toolFallback = .milliseconds(50)
+        let unwoken = Task { await self.call(model, "wait_tasks", ["ids": [fixture.busy.id.uuidString], "timeout_seconds": 30],
+                                             from: fixture.caller) }
+        try await Task.sleep(for: .milliseconds(200))
+        model.sessionTools.starting.remove(fixture.busy.id)
+        let late = try decode([Outcome].self, await unwoken.value.text)
+        XCTAssertEqual(late.first?.ended, true)
 
         // The call's own deadline caps what it asked for.
         model.sessionTools.waitCeilingOverride = .milliseconds(300)

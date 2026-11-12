@@ -547,6 +547,8 @@ final class FollowUpQueueStore {
     @ObservationIgnored private let repository: any CodexQueueRepository
     /// Called when a task's queue empties: what waits behind it (a finished bash command) may go.
     @ObservationIgnored var queueDidEmpty: (@MainActor (UUID) -> Void)?
+    /// Called on every change of a task's queue: what waits for its messages to go may look again.
+    @ObservationIgnored var queueDidChange: (@MainActor (UUID) -> Void)?
     /// Called when a pause ends because the person's last message left the queue: what other tasks
     /// sent goes on as after Resume.
     @ObservationIgnored var pauseDidEnd: (@MainActor (UUID) -> Void)?
@@ -750,6 +752,7 @@ final class FollowUpQueueStore {
     }
 
     private func save(_ sessionID: UUID) {
+        queueDidChange?(sessionID)
         let queue = queues[sessionID] ?? []
         guard queue.isEmpty else {
             repository.save(queue, for: sessionID)

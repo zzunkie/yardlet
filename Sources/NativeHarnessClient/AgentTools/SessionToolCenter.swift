@@ -210,7 +210,11 @@ final class AgentRun: Identifiable {
     var accountStart: AppModel.AccountStart?
     var connection: ProviderConnection? { accountStart?.connection }
 
-    var state: State = .starting
+    var state: State = .starting {
+        didSet { if state != oldValue { stateDidChange?(self) } }
+    }
+    /// Called on every change of `state` (`SessionToolCenter.add`).
+    @ObservationIgnored var stateDidChange: (@MainActor (AgentRun) -> Void)?
     /// The subagent's conversation: the shared transcript, or a Codex thread's.
     var entries: [TranscriptEntry] = []
     /// Set on every state the thread streams, and each differs from the last: its observers hear of it
@@ -450,6 +454,11 @@ final class SessionToolCenter {
 
     func add(_ run: AgentRun) {
         runs[run.id] = run
+        // What waits on the subagent, or on the task that shows it, may look again.
+        run.stateDidChange = { [weak self] run in
+            self?.taskMayHaveSettled?(run.id)
+            self?.taskMayHaveSettled?(run.hostTaskID)
+        }
     }
 
     func run(_ id: UUID) -> AgentRun? {
@@ -500,7 +509,12 @@ final class SessionToolCenter {
     /// What waits for room, in request order. A row reads `isQueued`.
     private(set) var queue: [QueuedStart] = []
     /// Admitted and still starting: they count as running until their start returns.
-    @ObservationIgnored var starting: Set<UUID> = []
+    @ObservationIgnored var starting: Set<UUID> = [] {
+        didSet { for id in oldValue.subtracting(starting) { taskMayHaveSettled?(id) } }
+    }
+    /// Called when a subagent's state changes, or a child task or subagent leaves the line for room or its start
+    /// returns: what waits on it may look again (`AppModel.taskMayHaveSettled`).
+    @ObservationIgnored var taskMayHaveSettled: (@MainActor (UUID) -> Void)?
     /// When the last start beyond a caller's floor went, so the next one waits for its load to show.
     @ObservationIgnored var lastStartAboveFloor: ContinuousClock.Instant?
     /// Where admission reads the Mac's load; tests give their own.
@@ -523,6 +537,7 @@ final class SessionToolCenter {
         guard let index = queue.firstIndex(where: { $0.id == id }) else { return nil }
         let removed = queue.remove(at: index)
         persistQueue()
+        taskMayHaveSettled?(id)
         return removed
     }
 

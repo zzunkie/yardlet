@@ -329,7 +329,6 @@ import XCTest
         let model = AppModel(store: store, runtimeSelections: runtime,
             registry: HarnessRegistry { kind, _ in adapters.make(kind) }, connections: connections,
             restoresIndexOnLaunch: false)
-        model.accountMoveSleep = { try await Task.sleep(for: .milliseconds(10)) }
         addTeardownBlock { await model.shutdown() }
         let created = await model.createSession(harness: .claudeCode, workspaceURL: shared, runtimeExecutableURL: cli,
             title: "Attached", connection: connection(old))
@@ -352,8 +351,10 @@ import XCTest
         XCTAssertTrue(automaticChoices().contains(connection(old).id))
         XCTAssertEqual(model.scheduledTasks.schedules.first?.destination.accountID, connection(old).id)
 
-        // The move looks again later than this test waits, so only the end of a turn can move a task in time.
-        model.accountMoveSleep = { try await Task.sleep(for: testWaitLimit * 2) }
+        // The move looks again with no wake, or soon after a change in a conversation, later than this test waits,
+        // so only the end of a turn can move a task in time.
+        model.taskWaitTiming.moveFallback = testWaitLimit * 2
+        model.taskWaitTiming.moveSpacing = testWaitLimit * 2
         try await store.updateSession(id: working.id, status: .running)
         await adapters.emit(.sessionStatusChanged(.running), in: attached.id)
         try await waitUntil { store.sessions.first { $0.id == attached.id }?.status == .running }
@@ -378,7 +379,7 @@ import XCTest
             "The archived task stays archived, with its new binding saved")
         XCTAssertTrue(connections.connections.contains(connection(old)), "The account stays until every task moved")
 
-        // The detached task's turn ends quietly; the attached task's end looks at once and moves both.
+        // Each task's turn end looks at once and moves it, the detached task's as the attached task's.
         try await store.updateSession(id: working.id, status: .ready)
         await adapters.emit(.sessionStatusChanged(.ready), in: attached.id)
         try await waitUntil { !connections.connections.contains(connection(old)) }
@@ -435,7 +436,6 @@ import XCTest
             let model = AppModel(store: store, runtimeSelections: runtime,
                 registry: HarnessRegistry { kind, _ in AdapterLog().make(kind) }, connections: connections,
                 restoresIndexOnLaunch: false)
-            model.accountMoveSleep = { try await Task.sleep(for: .milliseconds(10)) }
             addTeardownBlock { await model.shutdown() }
             return model
         }

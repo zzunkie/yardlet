@@ -174,13 +174,12 @@ final class AppModel {
     /// The tasks the phone shows now (`AppModelRemoteBridge`), which the memory saver counts as on screen.
     @ObservationIgnored var remoteWatchedTaskIDs = Set<UUID>()
     @ObservationIgnored private var sessionJobReads: [UUID: Task<Void, Never>] = [:]
-    /// Waits before moving an account's tasks looks again at the ones still working (`moveTasks`); tests
-    /// hand it a clock of their own.
-    @ObservationIgnored var accountMoveSleep: @Sendable () async throws -> Void = { try await Task.sleep(for: .seconds(1)) }
+    /// What waits for something that holds a task to let it go (`taskMayHaveSettled`): account moves, `wait_tasks`
+    /// and the message that a child task has ended.
+    @ObservationIgnored let taskWaits = TaskWaits()
+    @ObservationIgnored var taskWaitTiming = TaskWaitTiming()
     /// Accounts whose tasks are being moved now, by connection ID.
     @ObservationIgnored private var movingAccounts = Set<String>()
-    /// Each account move's wait for its tasks still working; one of them ending its turn cuts it short.
-    @ObservationIgnored private var accountMoveWaits: [String: Task<Void, Never>] = [:]
     /// Instruction files the provider itself reported for a task. Harnesses that report nothing
     /// stay absent here and fall back to a plain existence check.
     private(set) var instructionSourcesBySessionID: [UUID: [String]] = [:]
@@ -464,7 +463,7 @@ final class AppModel {
     let taskSuggestions: TaskSuggestionStore
     /// What the session tools wait on and run: their approvals, subagents and nesting depth
     /// (`AppModel+SessionTools`). Tests give it volatile defaults.
-    var sessionTools = SessionToolCenter()
+    var sessionTools = SessionToolCenter() { didSet { watchSessionTools() } }
     /// Which account each task an agent started runs on, and why (`AppModel+AccountRouting`). The
     /// app keeps it in a file; tests and fixtures in memory.
     var accountAssignments = AccountAssignmentLog()
@@ -573,6 +572,9 @@ final class AppModel {
             let change = self.transcriptTurns.transcriptChanged(id)
             for entry in self.conversationSearches { entry.search?.transcriptChanged(id, change: change) }
             self.refreshAttentionDetail(for: id)
+            // Its background work or a request may have ended. A running turn holds whatever waits on the task, and
+            // wakes it when it ends.
+            if self.taskWaits.isWaiting(on: id), !self.isRunning(id) { self.taskMayHaveSettled(id, urgent: false) }
         }
         codexPresentations.didSet = { [weak self] id in
             for entry in self?.conversationSearches ?? [] { entry.search?.codexStateChanged(id) }
@@ -588,6 +590,8 @@ final class AppModel {
         followUps.seed(initialCodexQueues)
         // A finished bash command waits behind queued messages; with none left it may go.
         followUps.queueDidEmpty = { [weak self] sessionID in self?.scheduleShellDelivery(for: sessionID) }
+        // A message that left the queue may have let the task go; one sent starts a turn, whose start wakes it at once.
+        followUps.queueDidChange = { [weak self] sessionID in self?.taskMayHaveSettled(sessionID, urgent: false) }
         // With the person's last queued message gone, what other tasks sent goes as after Resume; a
         // running turn sends it when it ends.
         followUps.pauseDidEnd = { [weak self] sessionID in
@@ -625,7 +629,11 @@ final class AppModel {
             self?.continuations.taskOpened(id)
             self?.noteMemorySaverScreen()
         }
-        store.onStatusChange = { [weak self] _ in self?.continuations.restartRecordMayHaveChanged() }
+        watchSessionTools()
+        store.onStatusChange = { [weak self] id in
+            self?.continuations.restartRecordMayHaveChanged()
+            self?.taskMayHaveSettled(id)
+        }
         taskWorkspaces.onSideChatClose = { [weak self] id in self?.endSideChat(of: id) }
         self.connections.onSignedIn = { [weak self] harness, connection, isFirstReading in
             Task { await self?.continuations.continueTasks(afterSignInOf: harness, connection: connection, isFirstReading: isFirstReading) }
@@ -1019,7 +1027,7 @@ final class AppModel {
         if let id = workspace.sideChatSessionID, id != parent.id,
            let existing = store.sessions.first(where: { $0.id == id }) { return existing }
         guard openingSideChats.insert(parent.id).inserted else { return nil }
-        defer { openingSideChats.remove(parent.id) }
+        defer { openingSideChats.remove(parent.id); taskMayHaveSettled(parent.id) }
         sideChatErrors.removeValue(forKey: parent.id)
         let method = await branchMethod(for: parent)
         guard store.sessions.contains(where: { $0.id == parent.id }) else { return nil }
@@ -2040,6 +2048,7 @@ final class AppModel {
         let sessionID = run.sessionID
         if runningShellCommandBySessionID[sessionID] == entryID {
             runningShellCommandBySessionID.removeValue(forKey: sessionID)
+            taskMayHaveSettled(sessionID)
         }
         run.output = result.output
         run.exitCode = result.exitCode
@@ -2796,6 +2805,7 @@ final class AppModel {
         recreatingTaskWorktrees.insert(id)
         await restoreWorktree(for: session, worktreeName: session.worktreeName)
         recreatingTaskWorktrees.remove(id)
+        taskMayHaveSettled(id)
         await refreshTaskFolder(id)
     }
 
@@ -2838,7 +2848,7 @@ final class AppModel {
         let session = archived.session
         guard !store.sessions.contains(where: { $0.id == session.id }),
               unarchivingSessionIDs.insert(session.id).inserted else { return }
-        defer { unarchivingSessionIDs.remove(session.id) }
+        defer { unarchivingSessionIDs.remove(session.id); taskMayHaveSettled(session.id) }
         archivedTaskError = nil
         worktreeNotice = nil
         do {
@@ -3403,7 +3413,7 @@ final class AppModel {
                                        inBackground: Bool = false) async -> SessionRecord? {
         guard let source = matchingSession(source), source.harness == .claudeCode,
               !isHeld(source, by: TaskBlocker.holdingOffRuntimeUse), forkingSessions.insert(source.id).inserted else { return nil }
-        defer { forkingSessions.remove(source.id) }
+        defer { forkingSessions.remove(source.id); taskMayHaveSettled(source.id) }
         let selectedAtStart = store.selectedSessionID
         do {
             // A running task forks too, as in the Claude app: the point is where its last step ended.
@@ -3468,7 +3478,7 @@ final class AppModel {
     private func startNewChat(from source: SessionRecord, selects: Bool) async -> SessionRecord? {
         guard let source = matchingSession(source),
               !isHeld(source, by: TaskBlocker.holdingOffRuntimeUse), restartingSessions.insert(source.id).inserted else { return nil }
-        defer { restartingSessions.remove(source.id) }
+        defer { restartingSessions.remove(source.id); taskMayHaveSettled(source.id) }
         let selectedAtStart = store.selectedSessionID
         do {
             let next = try await store.createSession(harness: source.harness, workspaceURL: source.workspaceURL,
@@ -3993,7 +4003,7 @@ final class AppModel {
         guard let saved = matchingSession(session), !isHeld(saved, by: TaskBlocker.holdingOffRuntimeUse),
               forkingSessions.insert(saved.id).inserted else { return nil }
         var session = saved
-        defer { forkingSessions.remove(session.id) }
+        defer { forkingSessions.remove(session.id); taskMayHaveSettled(session.id) }
         let selectedAtStart = store.selectedSessionID
         do {
             if let throughTurnID {
@@ -5653,24 +5663,26 @@ final class AppModel {
             // Taken off the list by hand meanwhile, or its target was: the tasks left keep their own
             // copy of the binding. A cancelled move goes on at the next launch.
             guard connections.taskMoves[source.id]?.target == target, !Task.isCancelled else { return }
-            var waiting = 0
+            let look = ContinuousClock.now
+            var waiting: [UUID] = []
             for record in store.archivedSessions ?? [] where record.session.connection?.id == source.id
                 && failures[record.id] == nil {
-                guard !unarchivingSessionIDs.contains(record.id) else { waiting += 1; continue }
+                guard !unarchivingSessionIDs.contains(record.id) else { waiting.append(record.id); continue }
                 do { try await store.updateArchivedConnection(id: record.id, connection: target) }
                 catch { failures[record.id] = error.localizedDescription }
             }
             for task in store.sessions where task.connection?.id == source.id && failures[task.id] == nil {
-                guard settlesForAccountMove(task) else { waiting += 1; continue }
+                guard settlesForAccountMove(task) else { waiting.append(task.id); continue }
                 do { try await changeAccount(of: task, to: target, .withinAccount) }
                 catch { failures[task.id] = error.localizedDescription }
             }
-            guard waiting > 0 else { break }
-            connections.noteTaskMove(AccountTaskMove(target: target, waiting: waiting, isConfirmed: true), for: source.id)
-            let wait = Task { [accountMoveSleep] in _ = try? await accountMoveSleep() }
-            accountMoveWaits[source.id] = wait
-            await wait.value
-            accountMoveWaits[source.id] = nil
+            guard !waiting.isEmpty else { break }
+            connections.noteTaskMove(AccountTaskMove(target: target, waiting: waiting.count, isConfirmed: true),
+                                     for: source.id)
+            // Each task still working wakes the move as what holds it lets go; one that starts its turn now looks
+            // again when the turn ends.
+            await taskWaits.wait(for: waiting, since: look, spacing: taskWaitTiming.moveSpacing,
+                                 fallback: taskWaitTiming.moveFallback)
         }
         if let reason = failures.values.first {
             connections.noteTaskMove(AccountTaskMove(target: target, failure: L10n.format(
@@ -5695,11 +5707,17 @@ final class AppModel {
             working: listed.count(where: Self.isWorking))
     }
 
-    /// A task on an account whose tasks are moving goes as soon as its turn ends, rather than at the
-    /// move's next look, which another message could beat.
-    private func wakeAccountMove(for id: UUID) {
-        guard let account = store.sessions.first(where: { $0.id == id })?.connection?.id else { return }
-        accountMoveWaits[account]?.cancel()
+    /// Something that can hold the task (`TaskBlocker`) may have let it go: what waits on it looks again
+    /// (`TaskWaits`). `urgent` for what ends at one moment (a turn, a change of the task, a shell command), so a
+    /// task that waits to move goes before another message can start a turn; a change that comes often (the
+    /// conversation) waits for the waiter's spacing.
+    func taskMayHaveSettled(_ id: UUID, urgent: Bool = true) {
+        taskWaits.wake(id, urgent: urgent)
+    }
+
+    /// A subagent's state, or a child task's start, that the session tools keep may have let a task go.
+    private func watchSessionTools() {
+        sessionTools.taskMayHaveSettled = { [weak self] id in self?.taskMayHaveSettled(id) }
     }
 
     /// Whether a task's account can change now, closing its runtime if it has one: nothing a move waits
@@ -5717,8 +5735,8 @@ final class AppModel {
     }
 
     /// The first of `kinds`, in their order, that holds the task now, or nil. Only those asked for are read, and
-    /// none after the first that holds: some read the whole conversation, and the account move's wait asks every
-    /// second.
+    /// none after the first that holds: some read the whole conversation, and a wait asks again each time
+    /// something that holds the task may have let it go.
     func firstBlocker(of session: SessionRecord, among kinds: [TaskBlocker]) -> TaskBlocker? {
         kinds.first { blocks(session, $0) }
     }
@@ -5736,6 +5754,7 @@ final class AppModel {
 
     func endConversationChange(of id: UUID) {
         sessionMutations.remove(id)
+        taskMayHaveSettled(id)
     }
 
     /// Begins a change of the task's account (`TaskBlocker.accountSwitch`), or holds the task as one does while its
@@ -5746,6 +5765,7 @@ final class AppModel {
 
     func endAccountSwitch(of id: UUID) {
         switchingAccounts.remove(id)
+        taskMayHaveSettled(id)
     }
 
     private func blocks(_ session: SessionRecord, _ kind: TaskBlocker) -> Bool {
@@ -6065,7 +6085,7 @@ final class AppModel {
         // The start waited for may have run under the task's new account; its runtime is the task's.
         if handlesBySessionID[session.id] != nil { return }
         let start = Task { @MainActor in
-            defer { runtimeStarts[session.id] = nil }
+            defer { runtimeStarts[session.id] = nil; taskMayHaveSettled(session.id) }
             try await startRuntime(session, resumesExistingSession: resumesExistingSession)
         }
         runtimeStarts[session.id] = start
@@ -6697,7 +6717,7 @@ final class AppModel {
         if follows.contains(.autoFix) { pullRequestDetails.taskBecameIdle(id) }
         if follows.contains(.toolChanges) { agentTools?.taskTurnEnded(id) }
         if follows.contains(.accountMove) {
-            wakeAccountMove(for: id)
+            taskMayHaveSettled(id)
             continuations.switchAccountAfterTurn(id)
             considerAccountMoveAfterTurn(id)
         }
@@ -7705,6 +7725,7 @@ extension AppModel {
                           browserComments: draft.browserComments.isEmpty ? nil : draft.browserComments))
         composerDrafts.persistNow()
         // What waited for the edit goes now.
+        taskMayHaveSettled(session.id)
         scheduleFollowUpDrain(for: session.id)
         scheduleShellDelivery(for: session.id)
     }

@@ -453,7 +453,25 @@ import XCTest
         await closing.emit(try json(#"{"type":"system","subtype":"task_started","task_id":"t-shell","tool_use_id":"shell","description":"npm run dev","task_type":"local_bash","is_backgrounded":true}"#))
         await closing.emit(try json(#"{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"s"}"#))
         try await waitUntil { model.store.sessions.first?.status == .ready && backgroundRows() == 1 }
-        try await Task.sleep(for: .milliseconds(300))
+        // While it waits, a change in its long conversation (the command's output, say) costs a check of whether
+        // anything waits on the task, and the move looks again, reading the whole conversation, once per spacing at
+        // most: not once per change.
+        model.taskWaitTiming.moveSpacing = .milliseconds(100)
+        model.mutateTranscript(for: task.id, publishImmediately: true) { builder in
+            builder.raiseLimit(to: 4_000)
+            for index in 0..<3_000 { builder.appendUser("Earlier message \(index)") }
+        }
+        XCTAssertEqual(backgroundRows(), 1)
+        try await Task.sleep(for: .milliseconds(150))
+        let looks = model.continuations.accountMoveLooks
+        let streamed = ContinuousClock.now
+        for index in 0..<300 {
+            model.mutateTranscript(for: task.id, publishImmediately: true) { $0.appendUser("Output \(index)") }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        let spacings = Int(streamed.duration(to: .now) / .milliseconds(100))
+        XCTAssertLessThanOrEqual(model.continuations.accountMoveLooks - looks, spacings + 1)
+        XCTAssertGreaterThan(model.continuations.accountMoveLooks, looks, "The changes woke it")
         XCTAssertEqual(model.store.sessions.first?.connection, fixture.first, "The move waits for the background work")
         // Chosen again once the task is idle, the account waits the same way rather than ending the command.
         model.cancelAccountSwitchAfterTurn(for: task.id)
@@ -581,7 +599,8 @@ import XCTest
             let model = fixture.model
             let task = try XCTUnwrap(rested)
             try await model.store.restore()
-            model.accountMoveSleep = { try await Task.sleep(for: .milliseconds(10)) }
+            // The deadline passes on the test's clock, which wakes nothing: the move finds it at its next look.
+            model.taskWaitTiming.moveFallback = .milliseconds(10)
             var now = Date()
             model.accountMoveClock = { now }
             await model.resume(task)
@@ -649,8 +668,10 @@ import XCTest
         let model = fixture.model
         read(fixture.first, used: 0.95, in: model)
         read(fixture.next, used: 0.2, in: model)
-        // A waiting move looks again later than this test waits.
-        model.accountMoveSleep = { try await Task.sleep(for: testWaitLimit * 2) }
+        // A waiting move looks again with no wake, or soon after a change in the conversation, later than this
+        // test waits.
+        model.taskWaitTiming.moveFallback = testWaitLimit * 2
+        model.taskWaitTiming.moveSpacing = testWaitLimit * 2
         let created = await model.createSession(harness: .claudeCode, workspaceURL: fixture.shared,
             runtimeExecutableURL: fixture.cli, title: "Watch", connection: fixture.first)
         let task = try XCTUnwrap(created, model.errorBySessionID.values.first ?? "Missing task")

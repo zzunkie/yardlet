@@ -634,15 +634,16 @@ extension AppModel: SessionToolHandling {
     }
 
     /// Waits until one of the ids ends its turn or waits for the person, or the timeout passes.
-    /// True when one did.
+    /// True when one did. It looks again when one of them may have (`AppModel.taskMayHaveSettled`).
     @discardableResult
     func waitForAny(_ ids: [UUID], timeout: Duration) async -> Bool {
-        let clock = ContinuousClock()
-        let deadline = clock.now + timeout
+        let deadline = ContinuousClock.now + timeout
         while true {
+            let look = ContinuousClock.now
             for id in ids where sessionToolTargetSettled(id) { return true }
-            guard clock.now < deadline, !Task.isCancelled else { return false }
-            try? await Task.sleep(for: .milliseconds(250))
+            guard look < deadline, !Task.isCancelled else { return false }
+            await taskWaits.wait(for: ids, since: look, spacing: taskWaitTiming.toolSpacing,
+                                 fallback: min(taskWaitTiming.toolFallback, look.duration(to: deadline)))
         }
     }
 
@@ -1800,9 +1801,9 @@ extension AppModel: SessionToolHandling {
         guard caller.id == caller.hostTaskID else { return }
         Task { [weak self] in
             guard let self else { return }
-            let clock = ContinuousClock()
-            let deadline = clock.now + SessionToolPolicy.notificationWatchLimit
-            while clock.now < deadline {
+            let deadline = ContinuousClock.now + SessionToolPolicy.notificationWatchLimit
+            while ContinuousClock.now < deadline {
+                let look = ContinuousClock.now
                 if let run = self.sessionTools.run(id) {
                     // One the quit cut off is told of at the next launch (`interruptAgentRunsForQuit`).
                     if run.state == .interrupted { return }
@@ -1812,7 +1813,8 @@ extension AppModel: SessionToolHandling {
                 } else {
                     return
                 }
-                try? await Task.sleep(for: .seconds(1))
+                await self.taskWaits.wait(for: [id], since: look, spacing: self.taskWaitTiming.notificationSpacing,
+                                          fallback: min(self.taskWaitTiming.notificationFallback, look.duration(to: deadline)))
             }
             await self.notifyCaller(of: id, hostTaskID: caller.hostTaskID)
         }

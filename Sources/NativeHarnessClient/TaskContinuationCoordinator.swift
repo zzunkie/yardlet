@@ -97,7 +97,8 @@ final class TaskContinuationCoordinator {
     /// Tasks moving to the account chosen during their turn now that it ended, and the wait of each
     /// for what else keeps it busy; the end of another turn cuts the wait short.
     @ObservationIgnored private var switchingAfterTurn = Set<UUID>()
-    @ObservationIgnored private var accountSwitchWaits: [UUID: Task<Void, Never>] = [:]
+    /// How many times the moves after a turn have looked at their tasks, for tests that count them.
+    @ObservationIgnored private(set) var accountMoveLooks = 0
     /// The moves in `accountSwitchesAfterTurn` Yardlet made itself, to an account with room
     /// (AppModel+AccountMoves.swift), and the state each was made for.
     @ObservationIgnored private(set) var automaticAccountMoves: [UUID: AutomaticAccountMove] = [:]
@@ -125,7 +126,7 @@ final class TaskContinuationCoordinator {
         automaticAccountMoves.removeValue(forKey: id)
         declinedAccountMoves.remove(id)
         forgetAccountMoveHold(id)
-        accountSwitchWaits.removeValue(forKey: id)?.cancel()
+        model?.taskMayHaveSettled(id)
         contextLimitRestarts.removeValue(forKey: id)
     }
 
@@ -197,7 +198,7 @@ final class TaskContinuationCoordinator {
             declinedAccountMoves.insert(sessionID)
         }
         forgetAccountMoveHold(sessionID)
-        accountSwitchWaits[sessionID]?.cancel()
+        model.taskMayHaveSettled(sessionID)
         // What was sent for the new account goes on this one.
         if !model.isRunning(sessionID) { model.scheduleFollowUpDrain(for: sessionID) }
         model.scheduleShellDelivery(for: sessionID)
@@ -210,7 +211,7 @@ final class TaskContinuationCoordinator {
         guard automaticAccountMoves.removeValue(forKey: id) != nil else { return false }
         accountSwitchesAfterTurn.removeValue(forKey: id)
         forgetAccountMoveHold(id)
-        accountSwitchWaits[id]?.cancel()
+        model?.taskMayHaveSettled(id)
         return true
     }
 
@@ -231,13 +232,15 @@ final class TaskContinuationCoordinator {
     /// A task whose account was chosen during its turn moves once the turn ends, before the messages
     /// sent meanwhile go: they start its next turn on the new account. One still busy otherwise (a
     /// message the provider holds, a background command) is looked at again, as an account move
-    /// looks again at its tasks; a turn that starts meanwhile looks again when it ends. While it waits,
-    /// its hold says what for, and a move Yardlet chose itself that has waited past its deadline is
-    /// given up rather than forced, so what was queued behind it goes on this account.
+    /// looks again at its tasks: when something that holds the task may have let it go
+    /// (`AppModel.taskMayHaveSettled`), and at the latest after `TaskWaitTiming.moveFallback`; a turn
+    /// that starts meanwhile looks again when it ends. While it waits, its hold says what for, and a
+    /// move Yardlet chose itself that has waited past its deadline is given up rather than forced, so
+    /// what was queued behind it goes on this account.
     func switchAccountAfterTurn(_ id: UUID) {
         guard let model, accountSwitchesAfterTurn[id] != nil else { return }
         guard switchingAfterTurn.insert(id).inserted else {
-            accountSwitchWaits[id]?.cancel()
+            model.taskMayHaveSettled(id)
             return
         }
         Task {
@@ -246,6 +249,8 @@ final class TaskContinuationCoordinator {
                 forgetAccountMoveHold(id)
             }
             while let target = accountSwitchesAfterTurn[id] {
+                accountMoveLooks += 1
+                let look = ContinuousClock.now
                 guard let task = model.store.sessions.first(where: { $0.id == id }) else {
                     accountSwitchesAfterTurn.removeValue(forKey: id)
                     return
@@ -272,10 +277,8 @@ final class TaskContinuationCoordinator {
                     return
                 }
                 if accountMoveHolds[id] != hold { accountMoveHolds[id] = hold }
-                let wait = Task { [accountMoveSleep = model.accountMoveSleep] in _ = try? await accountMoveSleep() }
-                accountSwitchWaits[id] = wait
-                await wait.value
-                accountSwitchWaits[id] = nil
+                await model.taskWaits.wait(for: [id], since: look, spacing: model.taskWaitTiming.moveSpacing,
+                                           fallback: model.taskWaitTiming.moveFallback)
             }
         }
     }
