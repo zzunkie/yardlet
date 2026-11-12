@@ -33,7 +33,7 @@ struct PermissionRequestPreviewView: View {
                 Text(L10n.string("Command"))
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.tertiary)
-                CodexBoundedOutput(text: command.text)
+                CodexBoundedOutput(text: command.text, folds: false)
                 if command.omittedLineCount > 0 {
                     Text(L10n.format("%lld more lines", Int64(command.omittedLineCount)))
                         .font(.system(size: 11.5))

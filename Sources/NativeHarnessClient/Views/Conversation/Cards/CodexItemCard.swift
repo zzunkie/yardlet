@@ -50,17 +50,21 @@ struct CodexItemCard: View {
 }
 
 
+/// A tool's text, its first lines in place and the rest behind "Show more"; or, for text the person
+/// is asked to approve (`folds: false`), all of it in a reader that scrolls once it passes the same
+/// bound, since a fold would hide part of what is approved.
 struct CodexBoundedOutput: View {
     @Environment(\.yardletInterfaceScale) private var interfaceScale
     let text: String
     var characterLimit: Int = 2_400
     var monospaced = true
+    var folds = true
     @State private var isExpanded = false
 
     var body: some View {
         let window = TranscriptCodeWindow(text, lineLimit: 12, characterLimit: characterLimit)
         VStack(alignment: .leading, spacing: 5) {
-            if isExpanded && window.isTruncated {
+            if (isExpanded || !folds) && window.isTruncated {
                 TranscriptTextReader(text: text, fontSize: (monospaced ? 11 : 13.5) * interfaceScale,
                                      accessibilityLabel: L10n.string("Output"), monospaced: monospaced)
                     .frame(height: 280 * interfaceScale)
@@ -75,7 +79,7 @@ struct CodexBoundedOutput: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if window.isTruncated {
+            if folds && window.isTruncated {
                 Button(
                     isExpanded
                         ? L10n.string("Show less")

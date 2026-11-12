@@ -226,7 +226,7 @@ struct ConversationRequestCard: View {
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.tertiary)
                 }
-                CodexBoundedOutput(text: field.text)
+                CodexBoundedOutput(text: field.text, folds: false)
             }
         }
         if context.isEmpty, request.command == nil, let method = request.method {
