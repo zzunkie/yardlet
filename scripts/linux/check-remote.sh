@@ -51,7 +51,17 @@ listening() {
   awk -v port=":$port" '$4 == "0A" && substr($2, length($2) - 4) == port { print $2 }' /proc/net/tcp /proc/net/tcp6 | sort
 }
 
-trap 'kill -KILL ${host:-0} 2>/dev/null || true; echo "--- host log"; cat "$logs/host.log" 2>/dev/null || true' EXIT
+# On a failure, what the host, the stand-in and the host's data folder show.
+show() {
+  kill -KILL ${host:-0} 2>/dev/null || true
+  echo '--- host log'; cat "$logs/host.log" 2>/dev/null || true
+  echo '--- the stand-in'"'"'s calls'; cat "$home/stand-in/calls.log" 2>/dev/null || echo '(none)'
+  echo '--- the data folder'; find "$home/.local/share/yardlet" -type f 2>/dev/null | head -n 60
+  for file in $(find "$home/.local/share/yardlet" -type f \( -name '*.log' -o -name '*.jsonl' \) 2>/dev/null | head -n 10); do
+    echo "--- $file"; tail -c 3000 "$file"; echo
+  done
+}
+trap show EXIT
 start_host
 "$yardlet" host status
 port=$(sed -E 's/.*"port":([0-9]+).*/\1/' "$logs/status.json")

@@ -40,6 +40,8 @@ enum FixturePhone {
         defer { deadline.cancel() }
         var taskID: String?
         var allowed: Set<String> = []
+        // A new chat's events, shown as they come so a check that gets no answer shows where the chat stopped.
+        var shown = 0
         for await inbound in connection.inbound {
             switch inbound {
             case let .state(.connected(path, _)):
@@ -85,6 +87,10 @@ enum FixturePhone {
             case let .response(response) where response.re == "send":
                 print("Phone: sent: \(response.ok ? "ok" : response.error?.message ?? "refused")")
             case let .event(event):
+                if harness != nil, shown < 60 {
+                    shown += 1
+                    print("Phone: event \(RemoteJSON.string(event).prefix(300))")
+                }
                 // The answer names the message it answers, closing the quote after it; the message itself does not.
                 guard taskID != nil, RemoteJSON.string(event).contains("\(message)\u{201D}") else { continue }
                 print("Phone: answered")
