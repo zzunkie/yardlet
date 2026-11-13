@@ -133,6 +133,10 @@ struct TranscriptContinuedScroll: Equatable {
     }
 }
 
+/// `NHC_SCROLL_TRACE` prints the scroll's geometry and visibility changes. Read once: the checks run at
+/// every frame of a scroll, and each read of the environment copies all of it into a dictionary.
+private let tracesScroll = ProcessInfo.processInfo.environment["NHC_SCROLL_TRACE"] != nil
+
 struct TranscriptScrollFollowing<RequestID: Hashable>: ViewModifier {
     let latestRequestID: RequestID?
     @Binding var state: TranscriptScrollFollowState
@@ -242,7 +246,7 @@ struct TranscriptScrollFollowing<RequestID: Hashable>: ViewModifier {
             .onScrollTargetVisibilityChange(idType: String.self, threshold: 0) { ids in
                 readingTracker?.updateVisibleItems(ids)
                 blankMonitor?.observe(visibleItems: ids.count)
-                if ProcessInfo.processInfo.environment["NHC_SCROLL_TRACE"] != nil { print("[trace] visible \(ids.count)") }
+                if tracesScroll { print("[trace] visible \(ids.count)") }
             }
             .onChange(of: readingTracker?.request) { _, request in applyRestoration(request) }
             .onChange(of: readingTracker?.anchorRevision) { _, _ in applyRestoration(readingTracker?.request) }
@@ -275,9 +279,9 @@ struct TranscriptScrollFollowing<RequestID: Hashable>: ViewModifier {
                 if pinsGrowthToBottom, state.isFollowing, !userDriven, new.height != old.height, new.distance > 1,
                    readingTracker?.isRestoring != true {
                     position.scrollTo(edge: .bottom)
-                    if ProcessInfo.processInfo.environment["NHC_SCROLL_TRACE"] != nil { print("[trace] pin to bottom") }
+                    if tracesScroll { print("[trace] pin to bottom") }
                 }
-                if ProcessInfo.processInfo.environment["NHC_SCROLL_TRACE"] != nil {
+                if tracesScroll {
                     print("[trace] geometry \(old.offset)/\(old.height) -> \(new.offset)/\(new.height) dist \(new.distance) follow \(state.isFollowing) user \(userDriven)")
                 }
                 if let blankMonitor {
