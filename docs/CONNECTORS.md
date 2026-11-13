@@ -766,6 +766,8 @@ also provides tools that read and edit the structure inside Docs, Sheets and Sli
   revoke tokens.
 - The mailbox (docs/MAILBOX.md) shows the inbox of each connected Gmail account with the same sign-in and session,
   and asks for no other scope.
+- The calendar (docs/CALENDAR.md) shows each connected Google Calendar account's calendars and answers its invitations
+  with the same sign-in, session and requests as the Calendar tools (`GoogleCalendarAPI`), and asks for no other scope.
 - Google account row: the address, five service chips (on or off, and state), and Reconnect and `…` when needed. Below
   them is "What Yardlet asks Google for" (the scopes and their classes, and "your own app only" on the Analytics and
   Ads scopes while new sign-ins use the app in the build).
@@ -1119,6 +1121,9 @@ server, and the per-task switch and tool row labels work as for other connectors
   - Apple Contacts: `search_contacts` (name, email or phone number; with `@` it is an email, with 4 or more digits a
     phone number), `get_contact`. Read only. Contact notes are not read (that needs a separate entitlement).
 - EventKit calls run off the main thread, and the store handles one at a time under a single lock.
+- The calendar (docs/CALENDAR.md) shows Apple Calendar's calendars through the same store
+  (`MacCalendarTransport`) and never asks for permission; a Google or Outlook calendar the Mac also syncs is shown
+  once, from its own connector (docs/CALENDAR.md, "One calendar reached two ways").
 - **App bundle:** `NSCalendarsFullAccessUsageDescription`, `NSRemindersFullAccessUsageDescription` and
   `NSContactsUsageDescription` in Info.plist (English), and Korean in `ko.lproj/InfoPlist.strings`.
   `Packaging/Entitlements/Yardlet.entitlements` has the hardened runtime's
@@ -1338,15 +1343,15 @@ registered OAuth app can offer a sign-in button. Yardlet signs in with the devic
 | `Sources/NativeHarnessClient/Connectors/ConnectorToolSupport.swift` | Argument reading (`ConnectorToolArguments`) and schema pieces (`ConnectorToolSchema`) shared by Yardlet's own servers | engine |
 | `Sources/NativeHarnessClient/Connectors/GmailToolCatalog.swift`, `GmailAPI.swift`, `GmailToolRunner.swift` | Gmail tool definitions, annotations and tools that ask; REST calls, reading messages (charset, HTML→text) and building MIME; requests and responses per tool | engine |
 | `Sources/NativeHarnessClient/Connectors/GoogleREST.swift` | REST client of the Google APIs other than Gmail (JSON, extra headers, downloads, multipart uploads) | engine |
-| `Sources/NativeHarnessClient/Connectors/GoogleCalendarToolCatalog.swift`, `GoogleCalendarToolRunner.swift` | Calendar tools, scopes and tools that ask; Calendar API v3 requests and responses; `CalendarTime` (time zones, free time) | engine |
+| `Sources/NativeHarnessClient/Connectors/GoogleCalendarToolCatalog.swift`, `GoogleCalendarToolRunner.swift`, `GoogleCalendarTransport.swift` | Calendar tools, scopes and tools that ask; Calendar API v3 requests and responses (`GoogleCalendarAPI`, shared with the calendar); `CalendarTime` (time zones, free time) | engine |
 | `Sources/NativeHarnessClient/Connectors/GoogleDriveToolCatalog.swift`, `GoogleDriveToolRunner.swift` | Drive tools, scopes and tools that ask; Drive API v3 requests and responses (export, multipart); `DriveQuery` | engine |
 | `Sources/NativeHarnessClient/Connectors/GoogleEditorsToolCatalog.swift`, `GoogleEditorsToolRunner.swift` | The Drive connector's Docs, Sheets and Slides tools, tools that ask and APIs that must be enabled; Docs, Sheets and Slides API requests and responses; paging | engine |
 | `Sources/NativeHarnessClient/Connectors/GoogleAnalyticsToolCatalog.swift`, `GoogleAnalyticsToolRunner.swift`, `GoogleAdsToolCatalog.swift`, `GoogleAdsToolRunner.swift` | Analytics and Ads tools and scopes; Admin, Data and Google Ads API requests, report rows, the `SELECT` check | engine |
 | `Sources/NativeHarnessClient/Connectors/MicrosoftOAuth.swift`, `GraphAPI.swift` | Microsoft's endpoints per tenant, the app in the build, the person's app, permissions and grant checks, sign-in errors; the Graph client (headers, page links only into Graph, uploads) and shared shapes (`GraphShape`) | engine |
-| `Sources/NativeHarnessClient/Connectors/OutlookMailToolCatalog.swift`, `OutlookMailToolRunner.swift`, `OutlookCalendarToolCatalog.swift`, `OutlookCalendarToolRunner.swift`, `OneDriveToolCatalog.swift`, `OneDriveToolRunner.swift`, `TeamsToolCatalog.swift`, `TeamsToolRunner.swift` | The Microsoft 365 tools, permissions and tools that ask; Graph requests and answers | engine |
+| `Sources/NativeHarnessClient/Connectors/OutlookMailToolCatalog.swift`, `OutlookMailToolRunner.swift`, `OutlookCalendarToolCatalog.swift`, `OutlookCalendarToolRunner.swift`, `OutlookCalendarTransport.swift`, `OneDriveToolCatalog.swift`, `OneDriveToolRunner.swift`, `TeamsToolCatalog.swift`, `TeamsToolRunner.swift` | The Microsoft 365 tools, permissions and tools that ask; Graph requests and answers | engine |
 | `Sources/NativeHarnessClient/Connectors/MailServerPreset.swift`, `MailAccountTools.swift`, `IMAPMailTransport.swift` | Mail (IMAP): the services' servers and steps, the five tools and the one that asks, and the account's IMAP connection the tools and the mailbox share | engine |
 | `Sources/NativeHarnessClient/Connectors/AppStoreConnectAPI.swift`, `AppStoreConnectToolCatalog.swift`, `AppStoreConnectToolRunner.swift` | `.p8` keys and ES256 tokens (the `ES256Signing` contract), the key session (a new token after a 401), JSON:API requests, the 14 tools and those that ask | engine |
-| `Sources/NativeHarnessClient/Connectors/MacDataStore.swift`, `MacDataToolCatalog.swift`, `MacDataToolRunner.swift` | The Mac data store contract (`MacDataStoring`), permission states and error text; calendar, reminder and contact tools and running them | engine |
+| `Sources/NativeHarnessClient/Connectors/MacDataStore.swift`, `MacDataToolCatalog.swift`, `MacDataToolRunner.swift`, `MacCalendarTransport.swift` | The Mac data store contract (`MacDataStoring`), permission states and error text; calendar, reminder and contact tools and running them; the Mac's calendars for the calendar | engine |
 | `Sources/NativeHarnessClient/Connectors/MCPStdioClient.swift`, `XcodeBridge.swift` | stdio MCP client (matching request IDs, cancellation, the reason from standard error), the child process channel, finding `mcpbridge` and the Xcode version | engine |
 | `Sources/NativeHarnessClient/Connectors/SlackAppManifest.swift` | The Slack app manifest and its create link | engine |
 | `Sources/NativeHarnessClient/Connectors/GitHubDeviceSignIn.swift` | GitHub device code sign-in, the client ID in Info.plist | engine |
@@ -1553,6 +1558,9 @@ Microsoft Teams (`TeamsToolCatalog`, `TeamsToolRunner`):
 
 - The mailbox (docs/MAILBOX.md) shows the inbox of each connected Outlook Mail account with the same sign-in
   and session, and asks for no other permission.
+- The calendar (docs/CALENDAR.md) shows each connected Outlook Calendar account's calendars and answers its
+  invitations with the same sign-in, session and requests as the Outlook Calendar tools (`OutlookCalendarAPI`), and
+  asks for no other permission.
 
 ### Turning off and removing
 

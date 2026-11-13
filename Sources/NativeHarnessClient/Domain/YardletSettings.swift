@@ -327,6 +327,11 @@ extension YardletSetting {
         detail: L10n.string("Shows the inboxes of mail accounts connected in Connectors beside your tasks."),
         values: .onOff, storage: .flag(key: MailboxPreference.key, defaultValue: false))
 
+    static let calendar = YardletSetting(
+        id: "calendar", section: .general, generalGroup: .app, symbol: "calendar", title: L10n.string("Calendar"),
+        detail: L10n.string("Shows the calendars of accounts connected in Connectors beside your tasks."),
+        values: .onOff, storage: .flag(key: CalendarPreference.key, defaultValue: false))
+
     static let agentBrowserTools = YardletSetting(
         id: "agent_browser_tools", section: .general, generalGroup: .browser, symbol: "globe", title: L10n.string("Agent browser tools"),
         values: .onOff, storage: .flag(key: AgentToolPreference.browserToolsKey, defaultValue: true),
@@ -680,7 +685,7 @@ extension YardletSetting {
 @MainActor
 enum YardletSettingCatalog {
     static let all: [YardletSetting] = [
-        .language, .showInMenuBar, .launchAtLogin, .mailbox, .checkForUpdates,
+        .language, .showInMenuBar, .launchAtLogin, .mailbox, .calendar, .checkForUpdates,
         .sendShortcut, .followUpBehavior, .nextMessageSuggestions, .claudeContextLimit, .idleCompaction, .autoFixFailingCI, .showTaskServers, .continueAfterRestart,
         .keepScreenUnlocked, .keepWorkingWithLidClosed,
         .agentBrowserTools, .keepCookies, .searchSuggestions, .pageSuggestions, .memorySaver, .memorySaverLevel,

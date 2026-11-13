@@ -147,3 +147,10 @@ protocol CalendarAccountTransport: Sendable {
     /// Answers the account's invitation to an event on its service, telling the organizer.
     func respond(to event: CalendarEvent, _ response: CalendarResponse) async throws
 }
+
+extension DateInterval {
+    /// Whether `other` lies within this interval.
+    func contains(_ other: DateInterval) -> Bool {
+        start <= other.start && end >= other.end
+    }
+}

@@ -1568,24 +1568,35 @@ struct SidebarPlacesHeader: View {
     }
 }
 
-/// "Tasks | Personal agents | Mail": plain words, the shown list's in the primary color over a short rule.
-/// Mail is there only while the mailbox is on.
+/// "Tasks | Personal agents | Mail | Calendar": plain words, the shown list's in the primary color over a short
+/// rule. Mail is there only while the mailbox is on, and Calendar while the calendar is.
 struct SidebarSectionTabs: View {
     let selection: ShellSection
     let onSelect: (ShellSection) -> Void
     @Environment(\.yardletInterfaceScale) private var interfaceScale
     @Environment(\.personalAgentWatch) private var personalAgentWatch
     @Environment(\.mailbox) private var mailbox
+    @Environment(\.calendarCenter) private var calendar
 
     private var sections: [ShellSection] {
-        ShellSection.allCases.filter { $0 != .mail || mailbox?.isEnabled == true || selection == .mail }
+        ShellSection.allCases.filter { section in
+            switch section {
+            case .tasks, .personalAgents: true
+            case .mail: mailbox?.isEnabled == true || selection == .mail
+            case .calendar: calendar?.isEnabled == true || selection == .calendar
+            }
+        }
     }
 
+
+    /// The word shown. Personal agents is "Agents" in English, so all four fit the narrowest sidebar; its
+    /// accessibility label keeps the whole name (`accessibilityTitle`).
     private func title(_ section: ShellSection) -> String {
         switch section {
         case .tasks: L10n.string("Tasks")
-        case .personalAgents: L10n.string("Personal agents")
+        case .personalAgents: L10n.string("Personal agents word")
         case .mail: L10n.string("Mail")
+        case .calendar: L10n.string("Calendar")
         }
     }
 
@@ -1614,6 +1625,7 @@ struct SidebarSectionTabs: View {
                 }
                 .buttonStyle(.plain)
                 .parityPointer()
+                .accessibilityLabel(section == .personalAgents ? L10n.string("Personal agents") : title(section))
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
                 .accessibilityValue((section == .personalAgents && personalAgentWatch?.hasUnread == true)
                                     || (section == .mail && mailbox?.hasUnseenMail == true)

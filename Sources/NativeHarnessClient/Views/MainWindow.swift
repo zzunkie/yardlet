@@ -39,6 +39,7 @@ struct MainWindow: View {
     @State private var sidebarSection: ShellSection = .tasks
     /// This window's thread, account and search in the mailbox.
     @State private var mailWindow = MailWindowState()
+    @State private var calendarWindow = CalendarWindowState()
     /// Where the task list was left while another list takes its place.
     @State private var sidebarListPlace = SidebarListPlace()
     /// This window's place in `AppModel.taskWindowIDs`: windows share one model, each says for itself
@@ -503,6 +504,17 @@ struct MainWindow: View {
         case .tasks: closePersonalAgents()
         case .personalAgents: showPersonalAgents()
         case .mail: showMail()
+        case .calendar: showCalendar()
+        }
+    }
+
+    // MARK: - Calendar
+
+    /// The calendar in the task list's place, its days beside it. The tasks keep what they showed.
+    private func showCalendar() {
+        withAnimation(ParityMotion.easeInOut(reduceMotion: reduceMotion)) {
+            isSidebarVisible = true
+            sidebarSection = .calendar
         }
     }
 
@@ -527,7 +539,7 @@ struct MainWindow: View {
                     discardDraft: { thread, message in mailWindow.discardDraft(message, in: thread, center: model.mailbox) },
                     askAgent: { thread in
                         guard let account = model.mailbox.account(thread.summary.id.accountID) else { return }
-                        newTaskDraft.takeMailThread(MailText.handoff(thread, account: account))
+                        newTaskDraft.takeReference(MailText.handoff(thread, account: account))
                         showNewTask()
                     },
                     openOriginal: { url in model.openMailLink(url, elsewhere: OutsideBrowser.open) },
@@ -2021,6 +2033,23 @@ struct MainWindow: View {
                                         onRefresh: { Task { await model.mailbox.refresh() } })
                         }
                     }
+                } else if isSidebarVisible, sidebarSection == .calendar {
+                    SidebarColumn(state: sidebarWidth, windowWidth: knownWindowWidth) {
+                        VStack(spacing: 0) {
+                            sidebarTitleBar
+                            CalendarSidebar(center: model.calendar, window: calendarWindow, schedules: model.scheduledTasks.schedules,
+                                            accountMenu: accountMenu, onHome: showNewTask, onShowSchedules: showSchedules,
+                                            onSelectSection: selectSection,
+                                            onSelectEvent: { event in
+                                                if !calendarWindow.range.contains(event.start) {
+                                                    calendarWindow.show(event.start, as: calendarWindow.span)
+                                                }
+                                                calendarWindow.selection = event.id
+                                            },
+                                            onOpenSchedule: showSchedule,
+                                            onOpenConnectors: { presentSettings(.connectors) })
+                        }
+                    }
                 } else if isSidebarVisible, schedulesWindow.isShowing {
                     SidebarColumn(state: sidebarWidth, windowWidth: knownWindowWidth) {
                         VStack(spacing: 0) {
@@ -2144,6 +2173,14 @@ struct MainWindow: View {
                                       panel: model.mailbox.isEnabled ? model.taskWorkspaces.mail : nil)
                             .environment(\.taskAreaHeader, TaskAreaHeader(height: ParityTheme.titleBarHeight, isTitleBar: true,
                                                                           content: AnyView(titleBar(for: nil))))
+                    } else if sidebarSection == .calendar {
+                        CalendarWorkspace(center: model.calendar, window: calendarWindow, schedules: model.scheduledTasks.schedules,
+                                          titleBar: { titleBar(for: nil, accessory: $0) }, onOpenSchedule: showSchedule,
+                                          onAskAgent: { event, account in
+                                              newTaskDraft.takeReference(CalendarText.handoff(event, account: account,
+                                                                                              calendar: calendarWindow.calendar))
+                                              showNewTask()
+                                          })
                     } else if model.isRestoringIndex {
                         VStack(spacing: 0) {
                             titleBar(for: nil)
@@ -2223,6 +2260,7 @@ struct MainWindow: View {
         // The app's watch marks the dots with something new, and learns which dot this window shows.
         .environment(\.personalAgentWatch, model.personalAgentWatch)
         .environment(\.mailbox, model.mailbox)
+        .environment(\.calendarCenter, model.calendar)
         .onChange(of: sidebarSection, initial: true) { _, section in
             model.mailbox.setVisible(section == .mail, window: windowID)
         }
@@ -2234,6 +2272,12 @@ struct MainWindow: View {
             mailWindow.show(.allInboxes, in: model.mailbox)
             mailWindow.select(thread, in: model.mailbox)
             showMail()
+        }
+        // A window leaves the calendar when it is turned off.
+        .onChange(of: model.calendar.isEnabled) { _, enabled in
+            guard !enabled else { return }
+            calendarWindow.reset()
+            if sidebarSection == .calendar { selectSection(.tasks) }
         }
         // A window leaves the mailbox when it is turned off.
         .onChange(of: model.mailbox.isEnabled) { _, enabled in
@@ -2325,7 +2369,7 @@ struct MainWindow: View {
     /// tasks, restoring), which shows neither a task's header nor the tabs. A split view has it only
     /// for the window's tabs: its panes have their own headers.
     private func titleBar(for item: WindowItem?, focusedSurface: FocusState<TaskSurface?>.Binding? = nil,
-                          title: String? = nil) -> IntegratedTitleBar {
+                          title: String? = nil, accessory: AnyView? = nil) -> IntegratedTitleBar {
         let session = item.flatMap { item -> SessionRecord? in
             guard case let .session(id) = item else { return nil }
             return sessionRecord(id)
@@ -2371,7 +2415,8 @@ struct MainWindow: View {
                 onNewTab: newTab,
                 onOpenTask: openInOwnTab
             ) : nil,
-            title: title
+            title: title,
+            accessory: accessory
         )
     }
 

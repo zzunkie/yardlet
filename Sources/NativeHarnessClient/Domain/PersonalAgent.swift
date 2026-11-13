@@ -1,9 +1,9 @@
 import Foundation
 
-/// What a window's sidebar and content show: the coding tasks, or the personal agents, switched by the
-/// words below Scheduled tasks.
+/// What a window's sidebar and content show: the coding tasks, the personal agents, the mailbox or the calendar,
+/// switched by the words below Scheduled tasks.
 enum ShellSection: String, CaseIterable, Identifiable {
-    case tasks, personalAgents, mail
+    case tasks, personalAgents, mail, calendar
     var id: Self { self }
 }
 

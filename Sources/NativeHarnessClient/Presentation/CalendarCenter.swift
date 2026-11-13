@@ -4,6 +4,11 @@ import Observation
 /// Settings › General › Calendar: off until the person turns it on.
 enum CalendarPreference {
     static let key = "YardletCalendar"
+    /// Which calendars the person showed or hid in the calendar's sidebar, over each calendar's own default, by
+    /// account and calendar ID. No event is kept; turning the calendar off removes it.
+    static let choicesKey = "Yardlet.calendarChoices"
+    /// Whether Yardlet's scheduled runs show over the calendars, on by default; turning the calendar off removes it.
+    static let schedulesKey = "Yardlet.calendarSchedules"
 
     static func isOn(in defaults: UserDefaults = .yardlet) -> Bool {
         defaults.object(forKey: key) as? Bool ?? false
@@ -33,6 +38,10 @@ final class CalendarCenter {
     private(set) var shownEvents: [DateInterval: [CalendarEvent]] = [:]
     /// Ranges being read now.
     private(set) var loading: Set<DateInterval> = []
+    /// The person's choice of which calendars show, over each calendar's default (`CalendarPreference.choicesKey`).
+    private(set) var choices: [String: Bool] = [:]
+    /// Whether Yardlet's scheduled runs show over the calendars (`CalendarPreference.schedulesKey`).
+    private(set) var showsSchedules = true
 
     @ObservationIgnored private var transports: [UUID: any CalendarAccountTransport] = [:]
     /// The Mac's calendars that are another way to a calendar a connector reads, to that calendar.
@@ -43,6 +52,8 @@ final class CalendarCenter {
     @ObservationIgnored private var viewers: [UUID: DateInterval] = [:]
     @ObservationIgnored private var refreshing: Task<Void, Never>?
     @ObservationIgnored private var generation = 0
+    @ObservationIgnored private var calendarsByKey: [CalendarKey: CalendarInfo] = [:]
+    @ObservationIgnored private let defaults: UserDefaults
     /// How long what was read stands: a screen that shows it again within this reads nothing, and a screen that
     /// keeps showing it has it read again this often.
     @ObservationIgnored var refreshInterval: Duration = .seconds(300)
@@ -57,10 +68,19 @@ final class CalendarCenter {
         var readAt: ContinuousClock.Instant
     }
 
+    init(defaults: UserDefaults = .yardlet) {
+        self.defaults = defaults
+    }
+
     func setEnabled(_ enabled: Bool) {
         guard enabled != isEnabled else { return }
         isEnabled = enabled
-        if !enabled { forget() }
+        if enabled {
+            choices = defaults.dictionary(forKey: CalendarPreference.choicesKey) as? [String: Bool] ?? [:]
+            showsSchedules = defaults.object(forKey: CalendarPreference.schedulesKey) as? Bool ?? true
+        } else {
+            forget()
+        }
     }
 
     /// Shows these accounts, read through their transports. Accounts no longer listed are forgotten with everything
@@ -102,16 +122,53 @@ final class CalendarCenter {
             refreshing?.cancel()
             refreshing = nil
         }
+        // A range another one held for this screen is read on its own now.
+        let missing = Set(viewers.values).filter { !isFresh($0) }
+        if !missing.isEmpty { Task { await read(Array(missing)) } }
     }
 
-    /// The events of a range a screen shows, as last read.
-    func events(in range: DateInterval) -> [CalendarEvent] { shownEvents[range] ?? [] }
+    /// The events of a range a screen shows, as last read: of that range, or of the shortest range read that holds it.
+    func events(in range: DateInterval) -> [CalendarEvent] {
+        if let events = shownEvents[range] { return events }
+        guard let holding = shownEvents.keys.filter({ $0.contains(range) }).min(by: { $0.duration < $1.duration }) else { return [] }
+        return (shownEvents[holding] ?? []).filter { $0.overlaps(range) }
+    }
 
-    /// Reads every account's calendars again, and every range a screen shows.
+    /// Reads every account's calendars again, and every range a screen shows that no other shown range holds.
     func refresh() async {
         guard isEnabled else { return }
         await readCalendars()
-        await read(Array(Set(viewers.values)))
+        let shown = Set(viewers.values)
+        await read(shown.filter { range in !shown.contains { $0 != range && $0.contains(range) } }.sorted { $0.start < $1.start })
+    }
+
+    // MARK: - Choosing
+
+    /// Whether a calendar shows: the person's choice, else the calendar's own default. The Mac's copy of a calendar
+    /// a connector reads follows that calendar.
+    func isShown(_ calendar: CalendarInfo) -> Bool {
+        let shown = copies[calendar.id].flatMap { calendarsByKey[$0] } ?? calendar
+        return choices[Self.choiceKey(shown.id)] ?? shown.isShownByDefault
+    }
+
+    /// Shows or hides a calendar, and reads it for what the screens show when it was hidden before.
+    func setShown(_ shown: Bool, for calendar: CalendarInfo) {
+        guard isEnabled, isShown(calendar) != shown else { return }
+        let key = copies[calendar.id] ?? calendar.id
+        choices[Self.choiceKey(key)] = shown
+        defaults.set(choices, forKey: CalendarPreference.choicesKey)
+        for range in Array(reads.keys) { mergeEvents(range) }
+        if shown { Task { await read(Array(reads.keys), only: [key] + copies.filter { $0.value == key }.map(\.key)) } }
+    }
+
+    func setShowsSchedules(_ shows: Bool) {
+        guard isEnabled, shows != showsSchedules else { return }
+        showsSchedules = shows
+        defaults.set(shows, forKey: CalendarPreference.schedulesKey)
+    }
+
+    private static func choiceKey(_ key: CalendarKey) -> String {
+        key.accountID.uuidString + " " + key.calendarID
     }
 
     // MARK: - Invitations
@@ -168,22 +225,22 @@ final class CalendarCenter {
         mergeCalendars()
     }
 
-    /// Reads the shown calendars' events for each range. An account that could not be read counts as failed for
-    /// every calendar of it, so the Mac's copies of them stand in.
-    private func read(_ ranges: [DateInterval]) async {
-        let ranges = ranges.filter { !loading.contains($0) }
+    /// Reads the shown calendars' events for each range, or with `only` those calendars' into what was read. An
+    /// account that could not be read counts as failed for every calendar of it, so the Mac's copies of them stand in.
+    private func read(_ ranges: [DateInterval], only: [CalendarKey]? = nil) async {
+        let ranges = only == nil ? ranges.filter { !loading.contains($0) } : ranges
         guard isEnabled, !ranges.isEmpty else { return }
         let generation = generation
-        loading.formUnion(ranges)
-        defer { if generation == self.generation { loading.subtract(ranges) } }
+        if only == nil { loading.formUnion(ranges) }
+        defer { if generation == self.generation, only == nil { loading.subtract(ranges) } }
         if accounts.contains(where: { accountCalendars[$0.id] == nil && failures[$0.id] == nil }) { await readCalendars() }
         guard generation == self.generation else { return }
-        let targets = calendarsToRead()
+        let targets = calendarsToRead().filter { only?.contains($0.0.id) ?? true }
         let unreadable = accounts.filter { failures[$0.id] != nil }
             .flatMap { accountCalendars[$0.id] ?? [] }.map(\.id)
         var refused = false
         for range in ranges {
-            var read = RangeRead(failed: Set(unreadable), readAt: .now)
+            var read = only.flatMap { _ in reads[range] } ?? RangeRead(failed: Set(unreadable), readAt: .now)
             await withTaskGroup(of: (CalendarKey, Result<[CalendarEvent], Error>).self) { group in
                 for (calendar, transport) in targets {
                     group.addTask {
@@ -198,6 +255,7 @@ final class CalendarCenter {
                     switch result {
                     case let .success(events):
                         read.events[key] = events.filter { $0.overlaps(range) }
+                        read.failed.remove(key)
                     case let .failure(error):
                         read.failed.insert(key)
                         let failure = Self.failure(error)
@@ -209,6 +267,8 @@ final class CalendarCenter {
                 }
             }
             guard generation == self.generation else { return }
+            // A range forgotten meanwhile is not read again for one calendar.
+            if only != nil, reads[range] == nil { continue }
             reads[range] = read
             mergeEvents(range)
         }
@@ -218,13 +278,9 @@ final class CalendarCenter {
     /// The calendars whose events are read: each shown calendar of an account that answered, and the Mac's copy of
     /// a shown calendar too, so it can stand in at once.
     private func calendarsToRead() -> [(CalendarInfo, any CalendarAccountTransport)] {
-        let byKey = Dictionary(accountCalendars.values.flatMap { $0 }.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        return accounts.filter { failures[$0.id] == nil }.flatMap { account -> [(CalendarInfo, any CalendarAccountTransport)] in
+        accounts.filter { failures[$0.id] == nil }.flatMap { account -> [(CalendarInfo, any CalendarAccountTransport)] in
             guard let transport = transports[account.id] else { return [] }
-            return (accountCalendars[account.id] ?? []).filter { calendar in
-                let shown = copies[calendar.id].flatMap { byKey[$0] } ?? calendar
-                return shown.isShownByDefault
-            }.map { ($0, transport) }
+            return (accountCalendars[account.id] ?? []).filter(isShown).map { ($0, transport) }
         }
     }
 
@@ -232,6 +288,7 @@ final class CalendarCenter {
 
     private func mergeCalendars() {
         copies = Self.copies(in: accounts, calendars: accountCalendars)
+        calendarsByKey = Dictionary(accountCalendars.values.flatMap { $0 }.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let merged = accounts.flatMap { account in
             (accountCalendars[account.id] ?? []).filter { calendar in
                 // The Mac's copy is listed only while its connector's account cannot be read.
@@ -251,6 +308,7 @@ final class CalendarCenter {
         for (key, list) in read.events {
             // The Mac's copy stands in only where its connector could not read the calendar.
             if let direct = copies[key], !read.failed.contains(direct) { continue }
+            guard calendarsByKey[key].map(isShown) ?? false else { continue }
             events += list
         }
         events.sort { first, second in
@@ -288,16 +346,17 @@ final class CalendarCenter {
 
     // MARK: - Keeping
 
+    /// Whether the range, or a range that holds it, is being read or was read within `refreshInterval`.
     private func isFresh(_ range: DateInterval) -> Bool {
-        if loading.contains(range) { return true }
-        guard let read = reads[range] else { return false }
-        return read.readAt.duration(to: .now) < refreshInterval
+        if loading.contains(where: { $0.contains(range) }) { return true }
+        return reads.contains { $0.key.contains(range) && $0.value.readAt.duration(to: .now) < refreshInterval }
     }
 
-    /// Forgets the ranges no screen shows that are older than `refreshInterval`, or past the few kept.
+    /// Forgets the ranges no screen shows, and that hold none a screen shows, once older than `refreshInterval` or
+    /// past the few kept.
     private func prune() {
         let shown = Set(viewers.values)
-        let unshown = reads.filter { !shown.contains($0.key) }.sorted { $0.value.readAt > $1.value.readAt }
+        let unshown = reads.filter { entry in !shown.contains { entry.key.contains($0) } }.sorted { $0.value.readAt > $1.value.readAt }
         for (index, entry) in unshown.enumerated()
         where index >= Self.keptUnshownRanges || entry.value.readAt.duration(to: .now) >= refreshInterval {
             reads[entry.key] = nil
@@ -331,6 +390,11 @@ final class CalendarCenter {
         shownEvents = [:]
         loading = []
         viewers = [:]
+        calendarsByKey = [:]
+        choices = [:]
+        showsSchedules = true
+        defaults.removeObject(forKey: CalendarPreference.choicesKey)
+        defaults.removeObject(forKey: CalendarPreference.schedulesKey)
     }
 
     private static func failure(_ error: Error) -> CalendarFailure {

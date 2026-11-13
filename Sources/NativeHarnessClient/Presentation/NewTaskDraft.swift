@@ -85,8 +85,9 @@ final class NewTaskDraft {
 
     /// A prompt a suggestion or a new-task row offers, in the draft: words already there stay,
     /// before it, and a prompt already there is not added twice. Nothing is sent.
-    /// "Ask an agent" on a mail thread: a chat whose draft names the thread (`MailText.handoff`).
-    func takeMailThread(_ reference: String) {
+    /// "Ask an agent" on a mail thread or a calendar event: a chat whose draft names it (`MailText.handoff`,
+    /// `CalendarText.handoff`).
+    func takeReference(_ reference: String) {
         chooseChat()
         insertPrompt(reference)
     }

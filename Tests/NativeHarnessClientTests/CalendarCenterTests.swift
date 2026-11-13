@@ -181,20 +181,25 @@ final class FakeCalendarService: CalendarAccountTransport, @unchecked Sendable {
     }
 
     @discardableResult
-    func add(_ name: String, source: String? = nil, isPrimary: Bool = false) -> CalendarKey {
+    func add(_ name: String, source: String? = nil, isPrimary: Bool = false, color: String? = nil) -> CalendarKey {
         lock.withLock {
             let key = CalendarKey(accountID: account.id, calendarID: "\(name)-\(calendarList.count)")
-            calendarList.append(CalendarInfo(id: key, name: name, isPrimary: isPrimary, source: source))
+            calendarList.append(CalendarInfo(id: key, name: name, color: color, isPrimary: isPrimary, source: source))
             return key
         }
     }
 
-    func add(event title: String, hour: Int, to calendar: CalendarKey, day: DateInterval, response: CalendarResponse? = nil) {
+    /// An event `hour` hours into the day, or the whole day.
+    func add(event title: String, hour: Double, minutes: Double = 60, to calendar: CalendarKey, day: DateInterval,
+             response: CalendarResponse? = nil, allDay: Bool = false, notes: String? = nil, organizer: CalendarPerson? = nil,
+             attendees: [CalendarPerson] = [], conference: URL? = nil) {
         lock.withLock {
-            let start = day.start.addingTimeInterval(TimeInterval(hour * 3_600))
+            let start = allDay ? day.start : day.start.addingTimeInterval(hour * 3_600)
             let event = CalendarEvent(id: CalendarEventKey(calendar: calendar, eventID: "\(title)-\(calendar.calendarID)"),
-                                      title: title, start: start, end: start.addingTimeInterval(3_600), isAllDay: false,
-                                      response: response)
+                                      title: title, start: start, end: allDay ? day.end : start.addingTimeInterval(minutes * 60),
+                                      isAllDay: allDay, notes: notes, organizer: organizer, attendees: attendees, response: response,
+                                      conferenceURL: conference,
+                                      webURL: account.provider == .apple ? nil : URL(string: "https://calendar.example.test/event"))
             eventsByCalendar[calendar.calendarID, default: []].append(event)
         }
     }
@@ -218,7 +223,14 @@ final class FakeCalendarService: CalendarAccountTransport, @unchecked Sendable {
         }
     }
 
+    /// The answer is kept on the event, as the service keeps it.
     func respond(to event: CalendarEvent, _ response: CalendarResponse) async throws {
-        lock.withLock { answered.append("\(event.id.eventID) \(response.rawValue)") }
+        lock.withLock {
+            answered.append("\(event.id.eventID) \(response.rawValue)")
+            let calendar = event.id.calendar.calendarID
+            if let index = eventsByCalendar[calendar]?.firstIndex(where: { $0.id == event.id }) {
+                eventsByCalendar[calendar]?[index].response = response
+            }
+        }
     }
 }
