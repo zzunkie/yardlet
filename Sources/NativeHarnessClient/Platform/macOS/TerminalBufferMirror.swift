@@ -13,9 +13,12 @@ final class TerminalBufferMirror: @MainActor TerminalDelegate {
         return Terminal(delegate: self, options: options)
     }()
 
+    /// The shell hid the cursor (DECTCEM), which the emulator does not publish; a repaint carries it (`TerminalRepaint`).
+    private(set) var cursorHidden = false
+
     func send(source: Terminal, data: ArraySlice<UInt8>) { sendBytes?(data) }
-    func showCursor(source: Terminal) { display?.showCursor(source: source) }
-    func hideCursor(source: Terminal) { display?.hideCursor(source: source) }
+    func showCursor(source: Terminal) { cursorHidden = false; display?.showCursor(source: source) }
+    func hideCursor(source: Terminal) { cursorHidden = true; display?.hideCursor(source: source) }
     func setTerminalTitle(source: Terminal, title: String) { display?.setTerminalTitle(source: source, title: title) }
     func setTerminalIconTitle(source: Terminal, title: String) { display?.setTerminalIconTitle(source: source, title: title) }
     func windowCommand(source: Terminal, command: Terminal.WindowManipulationCommand) -> [UInt8]? { display?.windowCommand(source: source, command: command) }

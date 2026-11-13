@@ -39,6 +39,7 @@ final class NativeTerminalSession {
 
     func move(toTask id: UUID) {}
     func disableClipboardAccess() {}
+    func start() {}
 
     func end() {
         guard !hasEnded else { return }

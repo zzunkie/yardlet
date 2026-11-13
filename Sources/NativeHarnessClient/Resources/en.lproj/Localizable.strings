@@ -3921,6 +3921,8 @@
 
 "Closing this window or losing the connection ends its terminals." = "Closing this window or losing the connection ends its terminals.";
 
+"Terminals keep running on the host when this window closes or the connection drops." = "Terminals keep running on the host when this window closes or the connection drops.";
+
 "This link is not supported in a remote terminal." = "This link is not supported in a remote terminal.";
 
 "Search or enter address" = "Search or enter address";

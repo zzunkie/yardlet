@@ -169,6 +169,81 @@ final class RemoteServerTests: XCTestCase {
         XCTAssertFalse(try String(contentsOf: harness.auditURL, encoding: .utf8).contains("secret"))
     }
 
+    /// A shell opened with `keepRunning` outlives its connection for its own device only, which attaches it again with a
+    /// repaint; turning the device's Terminal permission off ends it, connected or not.
+    func testAKeptTerminalWaitsForItsOwnDeviceAndEndsWithItsPermission() async throws {
+        let harness = try await ServerHarness()
+        var snapshot = FakeBridge.snapshot
+        snapshot.terminals = true
+        snapshot.terminalReattach = true
+        await harness.bridge.setSnapshot(snapshot)
+        let key = Data(RemoteRandom.bytes(32))
+        let phone = try await harness.authenticatedPhone(key: key)
+        let paired = await harness.devices.all()
+        let device = try XCTUnwrap(paired.first)
+        let other = try await harness.authenticatedPhone()
+        func request(_ id: String, _ request: RemoteRequest, on channel: TestChannel) async throws -> RemoteResponse {
+            await harness.server.receive(RemoteRequestEnvelope(id: id, request: request).encoded(), on: try XCTUnwrap(channel.id))
+            return try await channel.response(id)
+        }
+        for device in await harness.devices.all() { try await harness.server.setPermission(.terminal, allowed: true, for: device.id) }
+        try await waitUntil { try await request(UUID().uuidString, .snapshot, on: phone).terminalReattach == true }
+        let opened = try await request("open", .openTerminal(taskID: "A", keepRunning: true), on: phone)
+        let terminal = try XCTUnwrap(opened.terminalId)
+        _ = try await phone.event(.terminalOutput)
+        await harness.server.closed(try XCTUnwrap(phone.id))
+        try await waitUntil { await harness.bridge.detachedTerminals == [terminal] }
+        let closedWhileKept = await harness.bridge.closedTerminals
+        XCTAssertFalse(closedWhileKept.contains(terminal), "The end of its connection does not end a kept shell")
+        let foreign = try await request("foreign", .openTerminal(taskID: "A", terminalID: terminal), on: other)
+        XCTAssertEqual(foreign.error?.code, .notFound, "Another device cannot attach it, nor learn that it exists")
+        let foreignResume = try await request("foreign-resume", .openTerminal(taskID: "A", keepRunning: true, resume: true), on: other)
+        XCTAssertNotEqual(foreignResume.terminalId, terminal)
+        XCTAssertNil(foreignResume.resumed)
+        let wrongTask = try await request("wrong-task", .openTerminal(taskID: "B", terminalID: terminal), on: other)
+        XCTAssertEqual(wrongTask.error?.code, .notFound)
+        let again = try await harness.authenticatedPhone(key: key)
+        let resumed = try await request("resume", .openTerminal(taskID: "A", columns: 100, rows: 30, keepRunning: true, resume: true), on: again)
+        XCTAssertEqual(resumed.terminalId, terminal)
+        XCTAssertEqual(resumed.resumed, true)
+        XCTAssertEqual(resumed.detachedTerminals, 0)
+        let repaint = try await again.event(.terminalOutput)
+        XCTAssertEqual(repaint.data, Data("repaint 100x30".utf8))
+        XCTAssertEqual(repaint.sequence, 1, "An attached shell's sequence starts again for its new connection")
+        let input = try await request("input", .terminalInput(taskID: "A", terminalID: terminal, data: Data("ls".utf8)), on: again)
+        XCTAssertTrue(input.ok)
+        // A newer connection of the same device takes it over while the older one is still listed.
+        let third = try await harness.authenticatedPhone(key: key)
+        let takenOver = try await request("take", .openTerminal(taskID: "A", keepRunning: true, terminalID: terminal), on: third)
+        XCTAssertEqual(takenOver.terminalId, terminal)
+        let detached = try await again.event(.terminalClosed)
+        XCTAssertEqual(detached.reason, "detached")
+        let stale = try await request("stale", .terminalInput(taskID: "A", terminalID: terminal, data: Data("x".utf8)), on: again)
+        XCTAssertEqual(stale.error?.code, .notAllowed)
+        let attachedToThird = await harness.bridge.isDetached(terminal)
+        XCTAssertFalse(attachedToThird)
+        await harness.server.closed(try XCTUnwrap(third.id))
+        try await waitUntil { await harness.bridge.isDetached(terminal) }
+        // A tab closed while its connection was away: the device's next connection ends the kept shell; no other can.
+        let foreignClose = try await request("foreign-close", .closeTerminal(taskID: "A", terminalID: terminal), on: other)
+        XCTAssertEqual(foreignClose.error?.code, .notAllowed)
+        let fourth = try await harness.authenticatedPhone(key: key)
+        let closedKept = try await request("close-kept", .closeTerminal(taskID: "A", terminalID: terminal), on: fourth)
+        XCTAssertTrue(closedKept.ok)
+        try await waitUntil { await harness.bridge.closedTerminals.contains(terminal) }
+        // Turning the device's Terminal permission off ends a shell it kept, with no connection holding it.
+        let second = try await request("second", .openTerminal(taskID: "A", keepRunning: true), on: fourth)
+        let secondTerminal = try XCTUnwrap(second.terminalId)
+        await harness.server.closed(try XCTUnwrap(fourth.id))
+        try await waitUntil { await harness.bridge.detachedTerminals.contains(secondTerminal) }
+        try await harness.server.setPermission(.terminal, allowed: false, for: device.id)
+        try await waitUntil { await harness.bridge.closedTerminals.contains(secondTerminal) }
+        let gone = try await request("gone", .openTerminal(taskID: "A", terminalID: secondTerminal), on: again)
+        XCTAssertEqual(gone.error?.code, .notAllowed)
+        let audit = harness.audit.entries().map(\.type)
+        XCTAssertTrue(audit.contains("attachTerminal") && audit.contains("detachTerminal"))
+    }
+
     func testTerminalOutputIsBoundedAndConnectionCloseRevokesPermit() async throws {
         let harness = try await ServerHarness()
         let phone = try await harness.authenticatedPhone()
@@ -2116,6 +2191,24 @@ actor FakeBridge: RemoteBridge {
         closedTerminals.append(terminalID)
     }
     func terminalPermit(_ id: String) -> RemoteTerminalPermit? { terminalPermits[id] }
+    private(set) var detachedTerminals: [String] = []
+    /// Kept with no connection's output: a detach for an older permit, arriving after a newer attach, leaves it attached.
+    func isDetached(_ id: String) -> Bool { terminalPermits[id] != nil && terminalSinks[id] == nil }
+    func detachTerminal(taskID: String, terminalID: String, permit: RemoteTerminalPermit,
+                        ended: @escaping @Sendable () async -> Void) async {
+        guard terminalPermits[terminalID] === permit else { return }
+        terminalSinks[terminalID] = nil
+        detachedTerminals.append(terminalID)
+    }
+    func attachTerminal(taskID: String, terminalID: String, columns: Int, rows: Int, permit: RemoteTerminalPermit,
+                        output: @escaping @Sendable (RemoteTerminalUpdate) async -> Void) async -> RemoteError? {
+        guard permit.isValid else { return RemoteError(.notAllowed) }
+        guard terminalPermits[terminalID] != nil, !closedTerminals.contains(terminalID) else { return RemoteError(.notFound) }
+        terminalSinks[terminalID] = output
+        terminalPermits[terminalID] = permit
+        await output(.output(Data("repaint \(columns)x\(rows)".utf8)))
+        return nil
+    }
     private(set) var completedTerminalBursts = 0
     func floodTerminal(_ id: String, totalBytes: Int = 300 * 1024, chunkBytes: Int = 16 * 1024) async {
         defer { completedTerminalBursts += 1 }

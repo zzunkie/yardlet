@@ -70,6 +70,8 @@ final class RemoteHostModel: Identifiable {
     let schedules = RemoteHostSchedules()
     let terminals = RemoteTerminalModel()
     private(set) var offersTerminals = false
+    /// The host keeps this window's shells when it closes or loses the connection (§15.29).
+    private(set) var offersTerminalReattach = false
     let files: RemoteHostFiles
     /// The host sends a conversation as its own timeline draws it (§15.24), which this Mac asks for.
     @ObservationIgnored private(set) var sendsFullConversation = false
@@ -247,6 +249,8 @@ final class RemoteHostModel: Identifiable {
                 connection = .connecting
             }
         case let .connected(path, reply):
+            // A new connection, also when a relay path moves to a direct one: the earlier one's shells left with it.
+            terminals.disconnected(final: false)
             failPending()
             closingReason = nil
             host.update(from: reply)
@@ -257,17 +261,17 @@ final class RemoteHostModel: Identifiable {
             connection = .connected(path)
             resync()
         case let .waiting(retryAt, _):
-            terminals.disconnected()
+            terminals.disconnected(final: false)
             failPending()
             clearAttentionTasks()
             connection = .unreachable(retryAt: retryAt)
         case .revoked:
-            terminals.disconnected()
+            terminals.disconnected(final: true)
             failPending()
             clearAttentionTasks()
             connection = .removed
         case .stopped:
-            terminals.disconnected()
+            terminals.disconnected(final: true)
             failPending()
             clearAttentionTasks()
             connection = .stopped
@@ -345,6 +349,8 @@ final class RemoteHostModel: Identifiable {
             offersWorkspaceFiles = response.workspaceFiles == true
             offersWorkspaceFileWrites = response.workspaceFileWrites == true
             offersTerminals = response.terminals == true
+            offersTerminalReattach = offersTerminals && response.terminalReattach == true
+            terminals.connected()
             nextSteps = response.nextSteps == true
             bankedResets = response.bankedResets == true
             taskActions = response.taskActions == true

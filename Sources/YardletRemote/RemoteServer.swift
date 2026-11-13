@@ -219,6 +219,15 @@ public protocol RemoteBridge: AnyObject, Sendable {
     func terminalResize(taskID: String, terminalID: String, columns: Int, rows: Int, permit: RemoteTerminalPermit) async -> RemoteError?
     func terminalStatus(taskID: String, terminalID: String, permit: RemoteTerminalPermit) async -> Result<RemoteTerminalStatus, RemoteError>
     func closeTerminal(taskID: String, terminalID: String) async
+    /// A shell opened with `keepRunning` lost its connection (§15.29): it goes on, its output reaching only the
+    /// host's screen, unless `permit` was already replaced by a later attach. `ended` is called once if the shell
+    /// ends before it is attached again. Only a bridge whose snapshot says `terminalReattach` is asked.
+    func detachTerminal(taskID: String, terminalID: String, permit: RemoteTerminalPermit,
+                        ended: @escaping @Sendable () async -> Void) async
+    /// The same shell for another connection of its device: `output` first gets a repaint of its screen at
+    /// `columns` by `rows`, then what it prints next. `notFound` when it no longer runs.
+    func attachTerminal(taskID: String, terminalID: String, columns: Int, rows: Int, permit: RemoteTerminalPermit,
+                        output: @escaping @Sendable (RemoteTerminalUpdate) async -> Void) async -> RemoteError?
     /// The host's Settings sheet values (§15.36). A bridge that answers it says so in its snapshot (`hostSettings`).
     func hostSettings() async -> Result<RemoteHostSettings, RemoteError>
     func setWatchesHostSettings(_ watching: Bool) async
@@ -279,6 +288,15 @@ extension RemoteBridge {
         .failure(RemoteError(.unavailable))
     }
     public func closeTerminal(taskID: String, terminalID: String) async {}
+    public func detachTerminal(taskID: String, terminalID: String, permit: RemoteTerminalPermit,
+                               ended: @escaping @Sendable () async -> Void) async {
+        await closeTerminal(taskID: taskID, terminalID: terminalID)
+        await ended()
+    }
+    public func attachTerminal(taskID: String, terminalID: String, columns: Int, rows: Int, permit: RemoteTerminalPermit,
+                               output: @escaping @Sendable (RemoteTerminalUpdate) async -> Void) async -> RemoteError? {
+        RemoteError(.notFound)
+    }
     public func openTab(taskID: String, tabID: String?, address: String, permit: RemoteTabPermit) async -> Result<String, RemoteError> {
         .failure(RemoteError(.unavailable))
     }
@@ -506,6 +524,8 @@ public actor RemoteServer {
     /// What each connection watches of a task's browser tabs (§15.25), in `RemoteServer+Tabs.swift`.
     var tabs = RemoteServerTabs()
     var terminals: [String: RemoteServerTerminal] = [:]
+    /// Opens so far, for the order kept shells attach again in.
+    var terminalOpens = 0
     var terminalInputAudits: [RemoteTerminalInputAuditKey: RemoteTerminalInputAudit] = [:]
     private var pairing: RemotePairingTicket?
     /// Live authorization has one owner. Persistence never answers an authorization check.
@@ -530,6 +550,8 @@ public actor RemoteServer {
     private var nextPermissionAuditPrune = Date.distantPast
     private var pairedDeviceID: String?
     private var published: RemoteSnapshot?
+    /// The bridge keeps a shell opened with `keepRunning` after its connection ends (§15.29).
+    var bridgeKeepsTerminals: Bool { published?.terminals == true && published?.terminalReattach == true }
     private var tasksDirty = true
     private var tasksRefresh: Task<Void, Never>?
     private var tasksTimer: Task<Void, Never>?
@@ -1288,6 +1310,7 @@ public actor RemoteServer {
         // Accepted configuration writes still finish in order, but cannot reopen runtime access.
         permissionRequestsEnabled = false
         let devicesToEnd = Set(effectivePermissions.keys).union(connections.values.compactMap(\.deviceID))
+            .union(terminals.values.map(\.deviceID))
         for device in devicesToEnd { notifyPermissionsChanged(device, permissions: RemoteDevicePermissions()) }
         flushTerminalInputAudits()
         for id in connections.keys {
@@ -2076,6 +2099,7 @@ public actor RemoteServer {
             response.reviewWriting = published?.reviewWriting == true ? true : nil
             response.browserTabs = published?.browserTabs == true ? true : nil
             response.terminals = published?.terminals == true ? true : nil
+            response.terminalReattach = bridgeKeepsTerminals ? true : nil
             response.taskRail = published?.taskRail == true ? true : nil
             response.subtasks = published?.subtasks == true ? true : nil
             response.taskNotices = published?.taskNotices == true ? true : nil

@@ -147,6 +147,8 @@ final class RemoteProtocolTests: XCTestCase {
             .hostCLIUpdate(action: "checkAll"),
             .openTerminal(taskID: "T1"),
             .openTerminal(taskID: "T1", columns: 132, rows: 40),
+            .openTerminal(taskID: "T1", keepRunning: true, terminalID: "term-1"),
+            .openTerminal(taskID: "T1", keepRunning: true, resume: true),
             .terminalInput(taskID: "T1", terminalID: "term-1", data: Data("ls\r".utf8)),
             .terminalResize(taskID: "T1", terminalID: "term-1", columns: 100, rows: 30),
             .terminalStatus(taskID: "T1", terminalID: "term-1"),

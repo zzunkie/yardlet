@@ -14,11 +14,19 @@ struct RemoteTerminalInputAudit {
 }
 
 struct RemoteServerTerminal {
-    let connection: UUID
+    /// The connection it belongs to; nil while a kept shell waits for its device to attach again.
+    var connection: UUID?
     let deviceID: String
     let taskID: String
-    let permit: RemoteTerminalPermit
+    var permit: RemoteTerminalPermit
+    /// Opened with `keepRunning` on a host whose bridge keeps shells: the end of its connection detaches it.
+    var keepsRunning = false
+    /// Its place among the server's opens, so kept shells attach again in the order they were opened.
+    var order = 0
+    /// Answered for this connection: open, or attached again.
     var opened = false
+    /// The bridge started its shell; it stays started while kept and while attaching again.
+    var hasShell = false
     var output: [Data] = []
     var sentBytes: Int?
     var sequence = 0
@@ -46,7 +54,23 @@ extension RemoteServer {
             return
         }
         guard let deviceID else { return }
-        if case let .openTerminal(taskID, columns, rows) = request {
+        if case let .openTerminal(taskID, columns, rows, keepRunning, keptID, resume) = request {
+            let keeps = (keepRunning || keptID != nil || resume) && bridgeKeepsTerminals
+            if keeps, keptID != nil || resume {
+                if let kept = keptTerminal(keptID, deviceID: deviceID, taskID: taskID) {
+                    await attachKeptTerminal(kept, requestID: requestID, on: connection, deviceID: deviceID,
+                                             columns: columns, rows: rows, counts: resume)
+                    return
+                }
+                if keptID != nil {
+                    respond(.failure(requestID, RemoteError(.notFound)), to: connection)
+                    auditTerminal("attachTerminal", device: deviceID, task: taskID, result: "notFound")
+                    return
+                }
+            } else if keptID != nil {
+                respond(.failure(requestID, RemoteError(.notFound)), to: connection)
+                return
+            }
             guard terminals.count < RemoteProtocol.maxTerminalsTotal,
                   terminals.values.count(where: { $0.connection == connection }) < RemoteProtocol.maxTerminalsPerConnection else {
                 respond(.failure(requestID, RemoteError(.rateLimited)), to: connection)
@@ -55,18 +79,11 @@ extension RemoteServer {
             }
             let terminalID = UUID().uuidString
             let permit = RemoteTerminalPermit()
-            terminals[terminalID] = RemoteServerTerminal(connection: connection, deviceID: deviceID, taskID: taskID, permit: permit)
+            terminalOpens += 1
+            terminals[terminalID] = RemoteServerTerminal(connection: connection, deviceID: deviceID, taskID: taskID, permit: permit,
+                                                         keepsRunning: keeps, order: terminalOpens)
             let error = await bridge.openTerminal(taskID: taskID, terminalID: terminalID, columns: columns, rows: rows,
-                                                  permit: permit) { [weak self] update in
-                guard let self else { permit.revoke(); return }
-                switch await permit.enqueue(update) {
-                case .notify: await self.receiveTerminalUpdates(terminalID)
-                case .overflow: await self.endTerminal(terminalID, reason: "outputOverflow")
-                case .ended:
-                    if !permit.isValid { await self.endTerminal(terminalID, reason: "closed") }
-                case .queued: break
-                }
-            }
+                                                  permit: permit, output: terminalSink(terminalID, permit: permit))
             let currentPermission = permissionError(.terminal, on: connection)
             let refusal = error ?? currentPermission ?? (permit.isValid ? nil : RemoteError(.notAllowed))
             guard refusal == nil, terminals[terminalID] != nil else {
@@ -79,12 +96,21 @@ extension RemoteServer {
                 return
             }
             terminals[terminalID]?.opened = true
+            terminals[terminalID]?.hasShell = true
             var response = RemoteResponse(re: requestID)
             response.taskId = taskID
             response.terminalId = terminalID
+            if keeps, resume { response.detachedTerminals = keptCount(deviceID: deviceID, taskID: taskID) }
             respond(response, to: connection)
             auditTerminal("openTerminal", device: deviceID, task: taskID, result: "ok")
             flushTerminal(terminalID)
+            return
+        }
+        if case let .closeTerminal(taskID, terminalID) = request, let kept = terminals[terminalID], kept.connection == nil,
+           kept.keepsRunning, kept.deviceID == deviceID, kept.taskID == taskID {
+            // A tab closed while its connection was away: its device ends the shell it kept.
+            endTerminal(terminalID, reason: "closed")
+            respond(RemoteResponse(re: requestID), to: connection)
             return
         }
         guard let terminalID = request.terminalID, let session = terminals[terminalID],
@@ -131,15 +157,133 @@ extension RemoteServer {
         default: error = RemoteError(.badRequest)
         }
         if !session.permit.isValid, terminals[terminalID] != nil {
-            endTerminal(terminalID, reason: "closed")
+            // Ends it only while this permit still holds it: a connection that ended meanwhile detached a kept shell.
+            endTerminal(terminalID, reason: "closed", permit: session.permit)
             error = RemoteError(.notFound)
         }
         respond(error.map { .failure(requestID, $0) } ?? response, to: connection)
     }
 
-    private func receiveTerminalUpdates(_ terminalID: String) {
-        guard let session = terminals[terminalID] else { return }
-        guard session.permit.isValid else { endTerminal(terminalID, reason: "closed"); return }
+    /// What the bridge calls with a shell's output for one connection. A permit replaced by a later attach, or revoked
+    /// when its connection ended, no longer speaks for the shell.
+    private func terminalSink(_ terminalID: String, permit: RemoteTerminalPermit) -> @Sendable (RemoteTerminalUpdate) async -> Void {
+        { [weak self] update in
+            guard let self else { permit.revoke(); return }
+            switch await permit.enqueue(update) {
+            case .notify: await self.receiveTerminalUpdates(terminalID, permit: permit)
+            case .overflow: await self.endTerminal(terminalID, reason: "outputOverflow", permit: permit)
+            case .ended:
+                if !permit.isValid { await self.endTerminal(terminalID, reason: "closed", permit: permit) }
+            case .queued: break
+            }
+        }
+    }
+
+    /// `id` when this device kept it for `taskID`, or with no `id` the device's earliest shell kept there.
+    private func keptTerminal(_ id: String?, deviceID: String, taskID: String) -> String? {
+        if let id {
+            guard let session = terminals[id], session.deviceID == deviceID, session.taskID == taskID,
+                  session.keepsRunning else { return nil }
+            return id
+        }
+        return terminals.filter { $0.value.deviceID == deviceID && $0.value.taskID == taskID && $0.value.keepsRunning
+            && $0.value.connection == nil }.min { $0.value.order < $1.value.order }?.key
+    }
+
+    private func keptCount(deviceID: String, taskID: String) -> Int {
+        terminals.values.count { $0.deviceID == deviceID && $0.taskID == taskID && $0.keepsRunning && $0.connection == nil }
+    }
+
+    /// A kept shell goes to `connection`; the bridge's first output repaints its screen. Another connection of the same
+    /// device that still holds it (one whose end the transport has not noticed yet) is told it was detached.
+    private func attachKeptTerminal(_ terminalID: String, requestID: String, on connection: UUID, deviceID: String,
+                                    columns: Int, rows: Int, counts: Bool) async {
+        guard var session = terminals[terminalID] else { return }
+        let taskID = session.taskID
+        func refuse(_ code: RemoteErrorCode) {
+            respond(.failure(requestID, RemoteError(code)), to: connection)
+            auditTerminal("attachTerminal", device: deviceID, task: taskID, result: code.rawValue)
+        }
+        if let holder = session.connection {
+            // An open or attach still in progress elsewhere, or this connection attaching what it already shows.
+            guard session.opened, holder != connection else { return refuse(holder == connection ? .badRequest : .unavailable) }
+        }
+        guard terminals.values.count(where: { $0.connection == connection }) < RemoteProtocol.maxTerminalsPerConnection else {
+            return refuse(.rateLimited)
+        }
+        if session.connection != nil { detachTerminal(terminalID, telling: "detached") }
+        guard let detached = terminals[terminalID] else { return refuse(.notFound) }
+        session = detached
+        let permit = RemoteTerminalPermit()
+        session.connection = connection
+        session.permit = permit
+        session.opened = false
+        session.output = []
+        session.sentBytes = nil
+        session.sequence = 0
+        session.exited = false
+        session.exitCode = nil
+        terminals[terminalID] = session
+        let error = await bridge.attachTerminal(taskID: taskID, terminalID: terminalID, columns: columns, rows: rows,
+                                                permit: permit, output: terminalSink(terminalID, permit: permit))
+        let current = terminals[terminalID]
+        let refusal = error ?? permissionError(.terminal, on: connection)
+            ?? (current == nil ? RemoteError(.notFound) : permit.isValid && current?.permit === permit ? nil : RemoteError(.unavailable))
+        guard refusal == nil else {
+            permit.revoke()
+            if current?.permit === permit {
+                // The shell ended meanwhile; otherwise it stays kept for a later attach.
+                if refusal?.code == .notFound { endTerminal(terminalID, reason: "closed") } else { detachTerminal(terminalID) }
+            }
+            return refuse(refusal?.code ?? .notAllowed)
+        }
+        terminals[terminalID]?.opened = true
+        var response = RemoteResponse(re: requestID)
+        response.taskId = taskID
+        response.terminalId = terminalID
+        response.resumed = true
+        if counts { response.detachedTerminals = keptCount(deviceID: deviceID, taskID: taskID) }
+        respond(response, to: connection)
+        auditTerminal("attachTerminal", device: deviceID, task: taskID, result: "ok")
+        flushTerminal(terminalID)
+    }
+
+    /// The shell goes on without this connection; output meanwhile reaches only the host's screen. Its own device
+    /// may attach it again (`openTerminal` with its `terminalId`, or `resume`).
+    /// `telling`: the reason the connection is sent in `terminalClosed`, when it may still be listening.
+    private func detachTerminal(_ terminalID: String, telling: String? = nil) {
+        guard var session = terminals[terminalID], let connection = session.connection else { return }
+        let permit = session.permit
+        permit.revoke()
+        flushTerminalInputAudits(deviceID: session.deviceID, taskID: session.taskID)
+        session.timeout?.cancel()
+        if let telling, session.opened {
+            var event = RemoteEvent(.terminalClosed)
+            event.taskId = session.taskID
+            event.terminalId = terminalID
+            event.reason = telling
+            send(event, to: connection)
+        }
+        session.connection = nil
+        session.timeout = nil
+        session.output = []
+        session.sentBytes = nil
+        terminals[terminalID] = session
+        auditTerminal("detachTerminal", device: session.deviceID, task: session.taskID, result: "ok")
+        let taskID = session.taskID
+        let ended: @Sendable () async -> Void = { [weak self] in await self?.keptTerminalEnded(terminalID) }
+        Task { [bridge] in await bridge.detachTerminal(taskID: taskID, terminalID: terminalID, permit: permit, ended: ended) }
+    }
+
+    /// The bridge saw a kept shell end while no connection showed it.
+    private func keptTerminalEnded(_ terminalID: String) {
+        guard let session = terminals[terminalID], session.connection == nil else { return }
+        endTerminal(terminalID, reason: "exited")
+    }
+
+    private func receiveTerminalUpdates(_ terminalID: String, permit: RemoteTerminalPermit) {
+        guard let session = terminals[terminalID], session.permit === permit else { return }
+        guard session.permit.isValid else { endTerminal(terminalID, reason: "closed", permit: permit); return }
         for update in session.permit.takeUpdates() {
             switch update {
             case let .output(data): terminals[terminalID]?.output.append(data)
@@ -152,7 +296,8 @@ extension RemoteServer {
     }
 
     private func flushTerminal(_ terminalID: String) {
-        guard var session = terminals[terminalID], session.opened, session.permit.isValid, session.sentBytes == nil else { return }
+        guard var session = terminals[terminalID], session.opened, let connection = session.connection, session.permit.isValid,
+              session.sentBytes == nil else { return }
         guard !session.output.isEmpty else {
             if session.exited { endTerminal(terminalID, reason: "exited", exitCode: session.exitCode) }
             return
@@ -172,12 +317,17 @@ extension RemoteServer {
         event.terminalId = terminalID
         event.data = data
         event.sequence = sequence
-        send(event, to: session.connection)
+        send(event, to: connection)
     }
 
     private func terminalTimedOut(_ terminalID: String, sequence: Int) {
         guard let session = terminals[terminalID], session.sequence == sequence, session.sentBytes != nil else { return }
-        endTerminal(terminalID, reason: "outputTimeout")
+        // A client that went quiet (asleep, or a network that dropped without a word) finds a kept shell still running.
+        if session.keepsRunning, session.hasShell {
+            detachTerminal(terminalID, telling: "outputTimeout")
+        } else {
+            endTerminal(terminalID, reason: "outputTimeout")
+        }
     }
 
     func endTerminals(deviceID: String, reason: String) {
@@ -187,25 +337,32 @@ extension RemoteServer {
         for id in owned { endTerminal(id, reason: reason) }
     }
 
+    /// The connection ended. Its kept shells wait for their device; the others end.
     func endTerminals(on connection: UUID, reason: String) {
         let owned = terminals.keys.filter { terminals[$0]?.connection == connection }
         for id in owned { terminals[id]?.permit.revoke() }
         flushTerminalInputAudits()
-        for id in owned { endTerminal(id, reason: reason) }
+        for id in owned {
+            if let session = terminals[id], session.keepsRunning, session.hasShell { detachTerminal(id) } else { endTerminal(id, reason: reason) }
+        }
     }
 
-    func endTerminal(_ terminalID: String, reason: String, exitCode: Int32? = nil) {
+    /// With `permit`, only while that permit still speaks for the shell: a later attach replaced it, or its connection ended.
+    func endTerminal(_ terminalID: String, reason: String, exitCode: Int32? = nil, permit: RemoteTerminalPermit? = nil) {
+        if let permit {
+            guard let session = terminals[terminalID], session.permit === permit, session.connection != nil else { return }
+        }
         guard let session = terminals.removeValue(forKey: terminalID) else { return }
         session.permit.revoke()
         flushTerminalInputAudits(deviceID: session.deviceID, taskID: session.taskID)
         session.timeout?.cancel()
-        if session.opened {
+        if session.opened, let connection = session.connection {
             var event = RemoteEvent(.terminalClosed)
             event.taskId = session.taskID
             event.terminalId = terminalID
             event.reason = reason
             event.exitCode = exitCode
-            send(event, to: session.connection)
+            send(event, to: connection)
         }
         auditTerminal("closeTerminal", device: session.deviceID, task: session.taskID, result: reason)
         Task { await bridge.closeTerminal(taskID: session.taskID, terminalID: terminalID) }
@@ -213,7 +370,7 @@ extension RemoteServer {
 
     /// Keystrokes and paste chunks are one short audit batch, never one line per byte or packet.
     func auditTerminal(_ type: String, device: String?, task: String?, bytes: Int? = nil, result: String) {
-        guard let audit, ["openTerminal", "closeTerminal", "terminalInput"].contains(type) else { return }
+        guard let audit, ["openTerminal", "attachTerminal", "detachTerminal", "closeTerminal", "terminalInput"].contains(type) else { return }
         guard type == "terminalInput", let bytes else {
             audit.record(device: device, type: type, task: task, byteCount: bytes, result: result, at: now())
             return

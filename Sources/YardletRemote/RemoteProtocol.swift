@@ -332,6 +332,8 @@ public struct RemoteSnapshot: Equatable, Sendable {
     /// The bridge shows a task's browser tabs and takes input for them (§15.25).
     public var browserTabs: Bool
     public var terminals: Bool
+    /// The bridge keeps a shell after its connection ends and repaints it for the next (§15.29).
+    public var terminalReattach: Bool = false
     public var taskRail: Bool = false
     public var bankedResets: Bool = false
     public var taskActions: Bool = false
@@ -1183,7 +1185,10 @@ public enum RemoteRequest: Equatable, Sendable {
     case unwatchTab(taskID: String)
     case tabFrameAck(taskID: String, tabID: String, frame: Int)
     case tabInput(taskID: String, tabID: String, input: RemoteTabInput)
-    case openTerminal(taskID: String, columns: Int = 80, rows: Int = 24)
+    /// A new shell, or with `terminalID` or `resume` one this device kept after an earlier connection ended
+    /// (`keepRunning`, §15.29).
+    case openTerminal(taskID: String, columns: Int = 80, rows: Int = 24, keepRunning: Bool = false,
+                      terminalID: String? = nil, resume: Bool = false)
     case terminalInput(taskID: String, terminalID: String, data: Data)
     case terminalResize(taskID: String, terminalID: String, columns: Int, rows: Int)
     case terminalStatus(taskID: String, terminalID: String)
@@ -1356,7 +1361,7 @@ public enum RemoteRequest: Equatable, Sendable {
              let .composerState(id), let .composerAction(id, _, _, _), let .composerCommands(id), let .runComposerCommand(id, _, _), let .editMessage(id, _, _), let .forkTask(id, _),
              let .watchTab(id, _, _, _, _, _), let .unwatchTab(id),
              let .tabFrameAck(id, _, _), let .tabInput(id, _, _), let .openTab(id, _, _), let .closeTab(id, _),
-             let .answerTabPermission(id, _, _, _), let .openTerminal(id, _, _), let .terminalInput(id, _, _), let .terminalResize(id, _, _, _),
+             let .answerTabPermission(id, _, _, _), let .openTerminal(id, _, _, _, _, _), let .terminalInput(id, _, _), let .terminalResize(id, _, _, _),
              let .closeTerminal(id, _), let .terminalOutputAck(id, _, _), let .terminalStatus(id, _): id
         case .projectWorkspaceFiles, .snapshot, .ping, .createTask, .newTaskOptions, .registerPush, .unregisterPush, .forgetDevice,
              .answerLink, .uploadFile, .revealLink, .scheduledTasks, .runScheduledTask, .setScheduledTaskEnabled,
@@ -1530,6 +1535,8 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         var terminalId: String?
         var columns: Int?
         var rows: Int?
+        var keepRunning: Bool?
+        var resume: Bool?
         var sequence: Int?
         var address: String?
         var prompt: Int?
@@ -1914,7 +1921,12 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
                 return fail(.badRequest, "Invalid terminal size")
             }
             if wire.type == "openTerminal" {
-                request = .openTerminal(taskID: taskID, columns: columns, rows: rows)
+                let terminalID = required(wire.terminalId)
+                guard wire.terminalId == nil || terminalID != nil, terminalID == nil || wire.resume != true else {
+                    return fail(.badRequest, "Invalid terminalId or resume")
+                }
+                request = .openTerminal(taskID: taskID, columns: columns, rows: rows, keepRunning: wire.keepRunning == true,
+                                        terminalID: terminalID, resume: wire.resume == true)
             } else {
                 guard let terminalID = required(wire.terminalId) else { return fail(.badRequest, "Missing terminalId") }
                 request = .terminalResize(taskID: taskID, terminalID: terminalID, columns: columns, rows: rows)
@@ -2259,8 +2271,9 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         case let .forkTask(taskID, turnID):
             wire.taskId = taskID
             wire.turnId = turnID
-        case let .openTerminal(taskID, columns, rows):
-            wire.taskId = taskID; wire.columns = columns; wire.rows = rows
+        case let .openTerminal(taskID, columns, rows, keepRunning, terminalID, resume):
+            wire.taskId = taskID; wire.columns = columns; wire.rows = rows; wire.terminalId = terminalID
+            wire.keepRunning = keepRunning ? true : nil; wire.resume = resume ? true : nil
         case let .terminalInput(taskID, terminalID, data):
             wire.taskId = taskID; wire.terminalId = terminalID; wire.data = data.base64EncodedString()
         case let .terminalResize(taskID, terminalID, columns, rows):
@@ -2449,6 +2462,11 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     public var tabId: String?
     public var terminalId: String?
     public var terminals: Bool?
+    /// `snapshot`: the Mac keeps a shell opened with `keepRunning` when its connection ends (§15.29).
+    public var terminalReattach: Bool?
+    /// `openTerminal`: the answer attached a kept shell, and how many more this device kept in the task.
+    public var resumed: Bool?
+    public var detachedTerminals: Int?
     public var isAtPrompt: Bool?
     public var isRunningProgram: Bool?
     /// `snapshot` on v2: the Mac answers `hostSettings` (§15.36).

@@ -2,6 +2,7 @@ import AppKit
 @preconcurrency import SwiftTerm
 import SwiftUI
 import Foundation
+import Network
 import Observation
 import XCTest
 @testable import NativeHarnessClient
@@ -132,9 +133,13 @@ final class RemoteHostModelTests: XCTestCase {
         bridge.terminals.launch = .isolatedZsh(in: folder)
         let stack = try await LoopbackStack(bridge: bridge, port: 47876)
         defer { stack.stop() }
+        // The client reaches the host through a proxy that can drop the connection.
+        let proxy = try CuttableProxy(to: try XCTUnwrap(NWEndpoint.Port(rawValue: stack.port)))
+        defer { proxy.stop() }
+        try await waitUntil { (proxy.port ?? 0) != 0 }
         let ticket = await stack.server.openPairing()
         let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
-            name: "Host", hosts: ["127.0.0.1:\(stack.port)"]).url)
+            name: "Host", hosts: ["127.0.0.1:\(try XCTUnwrap(proxy.port))"]).url)
         let directory = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
             hello: RemoteHandshakeHello(name: "Client", platform: "macos", appVersion: "test"))
         let paired = try await directory.pair(link: link.absoluteString)
@@ -313,12 +318,58 @@ final class RemoteHostModelTests: XCTestCase {
         try await stack.server.setPermission(.terminal, allowed: false, for: try XCTUnwrap(client.host.deviceID))
         try await waitUntil { !remote.isRunning && revokedLocal.hasEnded && bridge.terminals.sessions.isEmpty }
         XCTAssertTrue(host.taskWorkspaces.loadedState(for: task.id)?.terminals.isEmpty == true)
-        // Re-enabling requires an explicit new open; disconnect closes that session too.
+        // Re-enabling requires an explicit new open.
         try await stack.server.setPermission(.terminal, allowed: true, for: try XCTUnwrap(client.host.deviceID))
         remote = newRemote(); remote.start()
         try await waitUntil { remote.isRunning && bridge.terminals.sessions.count == 1 }
+        XCTAssertTrue(client.offersTerminalReattach)
+        let kept = try XCTUnwrap(bridge.terminals.sessions.values.first?.session)
+        let sentBefore = await remote.runWhenReady("printf 'BEFORE_%s\\n' DROP")
+        XCTAssertTrue(sentBefore)
+        try await waitUntil { remote.bufferText.contains("BEFORE_DROP") }
+        // A dropped connection leaves the shell running on the host, and the tab attaches to it again: what the shell
+        // printed meanwhile reaches the tab only through the repaint, since output with no connection is not queued.
+        proxy.cut()
+        try await waitUntil { !client.isConnected }
+        kept.send("printf 'WHILE_%s\\n' AWAY\r")
+        try await waitUntil { kept.bufferText.contains("WHILE_AWAY") }
+        XCTAssertTrue(kept.isRunning)
+        client.reconnectNow()
+        try await waitUntil { client.isConnected && remote.isRunning && remote.bufferText.contains("WHILE_AWAY") }
+        XCTAssertEqual(bridge.terminals.sessions.count, 1)
+        XCTAssertTrue(bridge.terminals.sessions.values.first?.session === kept, "The same shell, not a new one")
+        let sentAfter = await remote.runWhenReady("printf 'AFTER_%s\\n' DROP")
+        XCTAssertTrue(sentAfter, "Input reaches the shell again after the attach")
+        try await waitUntil { kept.bufferText.contains("AFTER_DROP") && remote.bufferText.contains("AFTER_DROP") }
+        // Closing the window keeps its shells for this device's next window, whose first terminal for the task takes them
+        // back, one tab each and no more.
+        let clientTabs = try XCTUnwrap(client.terminals.workspaces[task.id.uuidString])
+        let otherTabs = (0..<2).map { _ in clientTabs.openTerminalTab(in: folder, launch: .isolatedZsh(in: folder), taskID: nil) }
+        for tab in otherTabs { tab.start() }
+        try await waitUntil { otherTabs.allSatisfy(\.isRunning) && bridge.terminals.sessions.count == 3 }
         directory.close(paired.id)
-        try await waitUntil { bridge.terminals.sessions.isEmpty }
+        try await waitUntil { bridge.terminals.sessions.values.allSatisfy { $0.permit == nil } }
+        XCTAssertTrue(kept.isRunning)
+        kept.send("printf 'WINDOW_%s\\n' CLOSED\r")
+        try await waitUntil { kept.bufferText.contains("WINDOW_CLOSED") }
+        let reopened = try XCTUnwrap(directory.model(for: paired.id))
+        try await waitUntil { reopened.hasSnapshot }
+        let resumedPane = RemoteTerminalPane(model: reopened, taskID: task.id.uuidString, isInSidePanel: true, onClose: {})
+        let resumed = resumedPane.workspace.terminal(in: resumedPane.workspaceURL, launch: .isolatedZsh(in: folder), taskID: nil)
+        resumed.start()
+        try await waitUntil { resumed.isRunning && resumed.bufferText.contains("WINDOW_CLOSED") }
+        XCTAssertTrue(resumed.bufferText.contains("AFTER_DROP"))
+        try await waitUntil {
+            resumedPane.workspace.terminals.count == 3 && resumedPane.workspace.terminals.allSatisfy(\.isRunning)
+                && bridge.terminals.sessions.values.allSatisfy { $0.permit != nil }
+        }
+        XCTAssertEqual(bridge.terminals.sessions.count, 3, "Each kept shell came back once; none was opened anew")
+        XCTAssertEqual(resumedPane.workspace.terminals.count, 3)
+        XCTAssertTrue(resumedPane.workspace.shownTerminal === resumed)
+        // Closing their tabs ends the shells, as before.
+        resumedPane.workspace.endTerminal()
+        try await waitUntil { bridge.terminals.sessions.isEmpty && kept.hasEnded }
+        directory.close(paired.id)
         await host.shutdown()
     }
 

@@ -1,4 +1,5 @@
 import Foundation
+@preconcurrency import SwiftTerm
 import XCTest
 @testable import NativeHarnessClient
 @testable import YardletAgentTools
@@ -132,6 +133,60 @@ final class RemoteBridgeTests: XCTestCase {
         }
         XCTAssertEqual(status, .known(7 << 8))
         XCTAssertEqual(TerminalExitStatus.read(processID: shell, reported: 0), .known(0), "The shell is reaped once")
+    }
+
+    /// A renderer that attaches to a running shell (§15.29) shows the host emulator's screen as it is: each cell's
+    /// character and pen, wide characters, the alternate screen, the cursor and the scroll region, with the key modes a
+    /// renderer encodes input by. A renderer that showed the shell before keeps its scrollback but none of its stale screen.
+    func testARepaintDrawsTheHostsScreenOnARendererThatShowedItBefore() {
+        final class Probe: TerminalDelegate {
+            lazy var terminal: Terminal = {
+                var options = TerminalOptions.default
+                options.scrollback = 100
+                let terminal = Terminal(delegate: self, options: options)
+                terminal.resize(cols: 30, rows: 6)
+                return terminal
+            }()
+            func send(source: Terminal, data: ArraySlice<UInt8>) {}
+        }
+        for alternate in [false, true] {
+            let host = Probe()
+            host.terminal.feed(text: String(repeating: "earlier line\r\n", count: 10))
+            if alternate { host.terminal.feed(text: "\u{1b}[?1049h") }
+            host.terminal.feed(text: "\u{1b}[38;2;12;34;56;48;5;200;1;3m한글 👩🏽‍💻 é\u{1b}[0m\r\n\u{1b}[4:3m\u{1b}[58;5;9mwavy\u{1b}[0m")
+            host.terminal.feed(text: "\u{1b}[2;5r\u{1b}[44m  \u{1b}[0m\u{1b}[6;30Hz\u{1b}[3;7H\u{1b}[7m")
+            host.terminal.feed(text: "\u{1b}[?1h\u{1b}[?2004h\u{1b}[=3u")
+            let expected = (0..<host.terminal.rows).map { row in
+                (0..<host.terminal.cols).compactMap { host.terminal.getCharData(col: $0, row: row) }
+            }
+            // A view on the host scrolled back through its history; the repaint is still the shell's screen.
+            if !alternate { host.terminal.buffer.yDisp = 0 }
+            let renderer = Probe()
+            renderer.terminal.feed(text: "\u{1b}[?1049h\u{1b}[31mstale picture\u{1b}[?2004h\u{1b}[?1h\u{1b}[?1049l\r\nscrollback" + String(repeating: "\r\n", count: 8))
+            renderer.terminal.feed(byteArray: Array(TerminalRepaint.bytes(of: host.terminal, cursorHidden: false)))
+            for row in 0..<host.terminal.rows {
+                for column in 0..<host.terminal.cols {
+                    let expected = expected[row][column]
+                    guard let shown = renderer.terminal.getCharData(col: column, row: row) else { return XCTFail("Missing cell") }
+                    let a = host.terminal.getCharacter(for: expected), b = renderer.terminal.getCharacter(for: shown)
+                    XCTAssertEqual(a == "\0" ? " " : a, b == "\0" ? " " : b, "Cell \(column),\(row)")
+                    XCTAssertEqual(expected.attribute, shown.attribute, "Pen at \(column),\(row)")
+                    XCTAssertEqual(expected.width, shown.width, "Width at \(column),\(row)")
+                }
+            }
+            XCTAssertEqual(renderer.terminal.getCursorLocation().x, host.terminal.getCursorLocation().x)
+            XCTAssertEqual(renderer.terminal.getCursorLocation().y, host.terminal.getCursorLocation().y)
+            XCTAssertEqual(renderer.terminal.currentAttribute, host.terminal.currentAttribute)
+            XCTAssertEqual(renderer.terminal.buffer.scrollTop, 1)
+            XCTAssertEqual(renderer.terminal.buffer.scrollBottom, 4)
+            XCTAssertEqual(renderer.terminal.isCurrentBufferAlternate, alternate)
+            XCTAssertTrue(renderer.terminal.applicationCursor)
+            XCTAssertTrue(renderer.terminal.bracketedPasteMode)
+            XCTAssertEqual(renderer.terminal.keyboardEnhancementFlags, host.terminal.keyboardEnhancementFlags)
+            let text = String(decoding: renderer.terminal.getBufferAsData(kind: .normal), as: UTF8.self)
+            XCTAssertFalse(text.contains("stale picture"))
+            XCTAssertTrue(text.contains("scrollback"), "The renderer's own history above the screen stays")
+        }
     }
 
     func testHeadlessTerminalBackpressurePreservesOutputBeforeExit() async throws {

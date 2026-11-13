@@ -7,6 +7,8 @@ struct RemoteTerminalPane: View {
     let onClose: () -> Void
     let isInSidePanel: Bool
     let onAttachSelection: ((String, String) -> Void)?
+    /// The host keeps these shells when the window closes or the connection ends.
+    let keepsTerminals: Bool
 
     init(model: RemoteHostModel, taskID: String, workspaceURL: URL? = nil,
          onAttachSelection: ((String, String) -> Void)? = nil, onOpenLink: ((URL) -> Void)? = nil,
@@ -40,6 +42,7 @@ struct RemoteTerminalPane: View {
         self.onClose = onClose
         self.isInSidePanel = isInSidePanel
         self.onAttachSelection = onAttachSelection
+        keepsTerminals = model.offersTerminalReattach
     }
 
     var body: some View {
@@ -50,7 +53,8 @@ struct RemoteTerminalPane: View {
                 launch: .userLoginShell(), taskID: nil), onAttachSelection: onAttachSelection,
                 isInSidePanel: isInSidePanel, onClose: onClose)
                 .id(ObjectIdentifier(session))
-            Text(L10n.string("Closing this window or losing the connection ends its terminals."))
+            Text(keepsTerminals ? L10n.string("Terminals keep running on the host when this window closes or the connection drops.")
+                 : L10n.string("Closing this window or losing the connection ends its terminals."))
                 .font(.caption).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 12).padding(.vertical, 6)

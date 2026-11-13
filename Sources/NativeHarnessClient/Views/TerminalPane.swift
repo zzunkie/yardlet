@@ -691,6 +691,12 @@ final class NativeTerminalSession: NSObject, @MainActor TerminalViewDelegate, Na
     func scrolled(source: TerminalView, position: Double) {}
     func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
 
+    /// What draws its current screen on a renderer that attaches while it runs (`TerminalRepaint`).
+    var screenRepaint: Data? {
+        guard let emulator = terminalView?.getTerminal() ?? mirror?.terminal else { return nil }
+        return TerminalRepaint.bytes(of: emulator, cursorHidden: mirror?.cursorHidden ?? false)
+    }
+
     func disableClipboardAccess() { allowsClipboard = false }
     func markRemoteOrigin() { isRemoteOrigin = true; allowsClipboard = false }
 

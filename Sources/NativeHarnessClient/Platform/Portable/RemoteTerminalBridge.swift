@@ -9,6 +9,11 @@ final class RemoteTerminalBridge {
               permit: RemoteTerminalPermit, output: @escaping @Sendable (RemoteTerminalUpdate) async -> Void) -> RemoteError? {
         RemoteError(.unavailable)
     }
+    func attach(taskID: String, terminalID: String, columns: Int, rows: Int, permit: RemoteTerminalPermit,
+                output: @escaping @Sendable (RemoteTerminalUpdate) async -> Void) -> RemoteError? { RemoteError(.notFound) }
+    func detach(taskID: String, terminalID: String, permit: RemoteTerminalPermit, ended: @escaping @Sendable () async -> Void) {
+        Task { await ended() }
+    }
     func input(taskID: String, terminalID: String, data: Data, permit: RemoteTerminalPermit) -> RemoteError? { RemoteError(.unavailable) }
     func resize(taskID: String, terminalID: String, columns: Int, rows: Int, permit: RemoteTerminalPermit) -> RemoteError? { RemoteError(.unavailable) }
     func status(taskID: String, terminalID: String, permit: RemoteTerminalPermit) -> Result<RemoteTerminalStatus, RemoteError> { .failure(RemoteError(.unavailable)) }
