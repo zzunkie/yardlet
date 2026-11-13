@@ -144,13 +144,10 @@ enum YardletCommand {
         }
         guard waits else { return 0 }
         // Control-C stops waiting and closes the pairing.
-        let interrupt = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global())
-        _ = signal(SIGINT, SIG_IGN)
-        interrupt.setEventHandler {
+        LinuxSignals.handle([SIGINT], on: .global()) { _ in
             _ = try? HostControlClient.send(HostControlRequest(command: .cancelPairing))
             exit(130)
         }
-        interrupt.resume()
         if !json { print("Waiting for the device… (Control-C stops)") }
         fflush(nil)
         let deadline = (pairing.expiresAt ?? Date().addingTimeInterval(300)).addingTimeInterval(5)

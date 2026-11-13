@@ -41,6 +41,25 @@ final class LinuxHostTests: XCTestCase {
         try waitUntilEnded(child)
     }
 
+    /// The signals the host handles stay handled, not ignored, so a harness it starts gets them back: an ignored
+    /// SIGINT would outlast exec, and the harness would not stop its turn for it.
+    func testAHarnessDoesNotInheritTheSignalsTheHostHandles() throws {
+        LinuxSignals.handle([SIGHUP, SIGINT, SIGTERM], on: .global()) { _ in }
+        LinuxSignals.absorb(SIGPIPE)
+        let output = Pipe()
+        let process = Process()
+        process.executableURL = URL(filePath: "/bin/sh")
+        process.arguments = ["-c", "sed -n 's/^SigIgn:[[:space:]]*//p' /proc/self/status"]
+        process.standardOutput = output
+        try NativeProcessTree.run(process)
+        process.waitUntilExit()
+        let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        let ignored = try XCTUnwrap(UInt64(text.trimmingCharacters(in: .whitespacesAndNewlines), radix: 16))
+        for number in [SIGHUP, SIGINT, SIGTERM, SIGPIPE] {
+            XCTAssertEqual(ignored & (1 << UInt64(number - 1)), 0, "signal \(number) is ignored in a started program")
+        }
+    }
+
     /// The remote's keys stay the same from one start to the next, in a file its owner alone may read.
     func testRemoteKeysAreKeptPrivateAndReused() throws {
         let file = folder.appending(path: "remote/identity.json")

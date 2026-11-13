@@ -15,7 +15,6 @@ final class LinuxHost {
     let remote: RemoteControlService
     let name: String
     private var control: UnixSocketListener?
-    private var signalSources: [any DispatchSourceSignal] = []
     private var isStopping = false
 
     private init(name: String) {
@@ -28,7 +27,7 @@ final class LinuxHost {
     /// Starts the host and runs it until it is stopped; never returns.
     static func run(name: String?) -> Never {
         // A write to a harness or a device that has gone must fail as an error, not end the host.
-        _ = signal(SIGPIPE, SIG_IGN)
+        LinuxSignals.absorb(SIGPIPE)
         let lock: HostLock
         do {
             lock = try HostLock.acquire()
@@ -86,14 +85,8 @@ final class LinuxHost {
     }
 
     private func watchSignals() {
-        for number in [SIGINT, SIGTERM, SIGHUP] {
-            _ = signal(number, SIG_IGN)
-            let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
-            source.setEventHandler { [weak self] in
-                MainActor.assumeIsolated { self?.stop() }
-            }
-            source.resume()
-            signalSources.append(source)
+        LinuxSignals.handle([SIGINT, SIGTERM, SIGHUP], on: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.stop() }
         }
     }
 
