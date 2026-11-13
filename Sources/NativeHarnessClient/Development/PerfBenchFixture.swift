@@ -47,6 +47,9 @@ enum PerfBenchFixture {
         case memoryCycle = "memory-cycle"
         /// Edit the actual composer while a fake Claude answer streams in the same window.
         case composerInput = "composer-input"
+        /// The home over 400 tasks in 40 projects, a quarter of them subtasks, while three Claude Code
+        /// answers stream: its projects, then its desk (`DeskHome`), which the development switch shows.
+        case home
     }
 
     static var isRequested: Bool { CommandLine.arguments.contains(argument) }
@@ -60,6 +63,9 @@ enum PerfBenchFixture {
     static let otherRunningTaskID = UUID(uuidString: "0FA1B2C3-0000-4000-8000-00000000F002")!
     static let claudeSessionID = "0fa1b2c3-0000-4000-8000-00000000c001"
     static let otherClaudeSessionID = "0fa1b2c3-0000-4000-8000-00000000c002"
+    /// The `home` scene's third streaming task.
+    static let thirdRunningTaskID = UUID(uuidString: "0FA1B2C3-0000-4000-8000-00000000F003")!
+    static let thirdClaudeSessionID = "0fa1b2c3-0000-4000-8000-00000000c003"
     static let codexThreadID = "perf-codex-thread"
     static let otherCodexThreadID = "perf-codex-other"
     static let switchTaskCount = 10
@@ -114,7 +120,7 @@ enum PerfBenchFixture {
         let scene = scene ?? .launch
         let fileManager = FileManager.default
         let names = ["parser", "web-app", "api", "design-system", "docs", "mobile", "infra", "data"]
-        let projects = (0..<(scene == .sidebar ? 40 : names.count)).map { index in
+        let projects = (0..<(scene == .sidebar || scene == .home ? 40 : names.count)).map { index in
             directory.appending(path: "projects/\(names[index % names.count])\(index < names.count ? "" : "-\(index / names.count)")",
                                 directoryHint: .isDirectory)
         }
@@ -135,23 +141,25 @@ enum PerfBenchFixture {
         let now = Date()
 
         let backgroundCount = switch scene {
-        case .sidebar: 400
+        case .sidebar, .home: 400
         case .launch: 200
         default: 40
         }
         // The sidebar scene also has as many archived tasks; every fifth task's parent is one of them.
         let archivedCount = scene == .sidebar ? backgroundCount : 0
         func archivedID(_ index: Int) -> UUID { NameBasedUUID.make(namespace: shownTaskID, name: "archived|\(index)") }
+        func backgroundID(_ index: Int) -> UUID { NameBasedUUID.make(namespace: shownTaskID, name: "background|\(index)") }
         var sessions: [SessionRecord] = (0..<backgroundCount).map { index in
             SessionRecord(
-                id: NameBasedUUID.make(namespace: shownTaskID, name: "background|\(index)"),
+                id: backgroundID(index),
                 harness: index.isMultiple(of: 3) ? .codex : .claudeCode, workspaceURL: projects[index % projects.count],
                 runtimeExecutableURL: none, title: "Task \(index): " + titles[index % titles.count],
                 titleOrigin: .automatic, status: .ready,
                 createdAt: now.addingTimeInterval(-Double(index + 1) * 420 - 600),
                 updatedAt: now.addingTimeInterval(-Double(index + 1) * 420),
                 hasUnreadUpdate: index.isMultiple(of: 9), completionState: .completed,
-                parentTaskID: archivedCount > 0 && index.isMultiple(of: 5) ? archivedID(index) : nil)
+                parentTaskID: archivedCount > 0 && index.isMultiple(of: 5) ? archivedID(index)
+                    : (scene == .home && index % 4 == 3 ? backgroundID(index - 1) : nil))
         }
         let archived: [SessionRecord] = (0..<archivedCount).map { index in
             SessionRecord(
@@ -213,6 +221,15 @@ enum PerfBenchFixture {
                                turns: (0..<4).map { LongConversationFixture.codexTurn($0) })]
         case .browserTabs:
             shown = [claudeTask(shownTaskID, title: "Check the pages", runtime: none, sessionID: claudeSessionID, turns: 5)]
+        case .home:
+            shown = [
+                claudeTask(shownTaskID, title: "Fix the parser's empty input", runtime: claude,
+                           sessionID: claudeSessionID, turns: 20),
+                claudeTask(otherRunningTaskID, title: "Tidy the lexer", runtime: claude,
+                           sessionID: otherClaudeSessionID, turns: 20),
+                claudeTask(thirdRunningTaskID, title: "Document the refunds endpoint", runtime: claude,
+                           sessionID: thirdClaudeSessionID, turns: 20)
+            ]
         case .codexSwitch, .memoryCycle:
             shown = (0..<switchTaskCount).map { index in
                 let threadID = "\(codexThreadID)-\(index)"
@@ -392,11 +409,33 @@ private final class PerfBenchRunner {
             await memoryCycles()
         case .composerInput:
             await composerInput()
+        case .home:
+            await homeViews()
         }
         finish()
     }
 
     // MARK: Scenes
+
+    /// The home shown while three answers stream: its projects, then its desk.
+    private func homeViews() async {
+        model.splits.activate(.home)
+        let published = model.publicationCounts
+        let streaming = [PerfBenchFixture.shownTaskID, PerfBenchFixture.otherRunningTaskID, PerfBenchFixture.thirdRunningTaskID]
+        for task in streaming { await send("perf stream 60", to: task) }
+        let started = await waitUntil(.seconds(20)) {
+            self.model.publicationCounts.transcripts > published.transcripts + 30
+        }
+        if !started { problems.append("nothing streamed into the tasks") }
+        note("streaming started: \(started)")
+        try? await Task.sleep(for: .seconds(3))
+        await phase("projects", seconds: 15, frames: true)
+        UserDefaults.yardlet.set(true, forKey: DeskPreview.key)
+        defer { UserDefaults.yardlet.removeObject(forKey: DeskPreview.key) }
+        // The memory the projects' views let go settles before the desk is measured.
+        try? await Task.sleep(for: .seconds(10))
+        await phase("desk", seconds: 15, frames: true)
+    }
 
     /// - Parameter streamingFor: how long the fake streams, by default 20 seconds more than the phase.
     private func stream(into task: UUID, seconds: Double, streamingFor: Int? = nil,

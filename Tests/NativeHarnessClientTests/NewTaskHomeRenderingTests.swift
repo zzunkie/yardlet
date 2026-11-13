@@ -193,8 +193,8 @@ final class NewTaskHomeRenderingTests: XCTestCase {
             chats: [contract],
             schedules: [(audit, calendar.date(byAdding: .minute, value: 95, to: now)!),
                         (briefing, calendar.date(byAdding: .hour, value: 10, to: now)!)],
-            notices: [.usage(account: "jordan", window: L10n.string("Weekly"), remaining: "8%"),
-                      .lowDisk(availableBytes: 8_200_000_000)],
+            notices: { [.usage(account: "jordan", window: L10n.string("Weekly"), remaining: "8%"),
+                        .lowDisk(availableBytes: 8_200_000_000)] },
             now: now,
             answerLine: { answers[$0] }, latestTurn: { turns[$0] })
         return (activity, monitor, [yardlet, exampleProject, designProject, rentalProject, ledgerProject, fieldProject,
@@ -236,7 +236,7 @@ final class NewTaskHomeRenderingTests: XCTestCase {
             activity.sessions = activity.groups.flatMap(\.sessions)
             activity.chats = []
             activity.schedules = Array(activity.schedules.prefix(1))
-            activity.notices = []
+            activity.notices = { [] }
         case .empty:
             activity = NewTaskHomeActivity()
         }
@@ -411,6 +411,320 @@ final class NewTaskHomeRenderingTests: XCTestCase {
                     to: directory.appending(path: "home-\(Int(width))-\(appearance.suffix).png"))
             }
         }
+    }
+
+    // MARK: - The desk
+
+    private enum DeskDay { case busy, cleared, quiet }
+
+    /// Words in the language the test process runs in, so a Korean run reads as a Korean person's day.
+    private static func words(_ ko: String, _ en: String) -> String {
+        (Locale.preferredLanguages.first ?? "en").hasPrefix("ko") ? ko : en
+    }
+
+    /// The same 9 November as the desk's mock: two coordinators (one with four subtasks, one with one),
+    /// a task running alone, an approval with a long command, a question, a coordinator's report, a
+    /// pull request whose checks fail, a plan limit, two results just finished, three schedules and three
+    /// unread threads. A subtask its coordinator already read is not on the desk. `cleared` is the same
+    /// day after the last waiting line was handled; `quiet` has nothing waiting, running or unread.
+    private func deskFixture(_ day: DeskDay) -> (fixture: Fixture, requestLines: [UUID: String]) {
+        let w = Self.words
+        let web = root.appending(path: "example-web", directoryHint: .isDirectory)
+        let designKit = root.appending(path: "design-kit", directoryHint: .isDirectory)
+        let chatFolder = root.appending(path: "chats/contract", directoryHint: .isDirectory)
+        let yardlet = Project(name: "yardlet", primaryRoot: repository)
+        let webProject = Project(name: "example-web", primaryRoot: web)
+        let designProject = Project(name: "design-kit", primaryRoot: designKit)
+        let calendar = Calendar.current
+        let today = calendar.date(from: DateComponents(year: 2026, month: 11, day: 9, hour: 15, minute: 25))!
+        let now = Date()
+        func ago(_ minutes: Double) -> Date { now.addingTimeInterval(-minutes * 60) }
+        func make(_ title: String, _ harness: HarnessKind = .claudeCode, in folder: URL, minutes: Double,
+                  status: SessionStatus = .completed, unread: Bool = false, parent: SessionRecord? = nil,
+                  parentRead: Bool = false) -> SessionRecord {
+            SessionRecord(harness: harness, workspaceURL: folder, runtimeExecutableURL: URL(filePath: "/tmp/runtime"),
+                          title: title, titleOrigin: .provider, status: status, updatedAt: ago(minutes),
+                          hasUnreadUpdate: unread, isParentRead: parentRead,
+                          completionState: status == .failed ? .failed : .completed, parentTaskID: parent?.id)
+        }
+        let busy = day == .busy, quiet = day == .quiet
+        var details: [UUID: TaskAttentionDetail] = [:]
+        var turns: [UUID: TaskLatestTurn] = [:]
+        var answers: [UUID: String] = [:]
+        var lines: [UUID: String] = [:]
+        var sessions: [SessionRecord] = []
+
+        let coordinator = make(w("Codex/Claude 코드 경험 개선", "Improve the Codex/Claude coding experience"),
+                               in: repository, minutes: 12, unread: busy)
+        answers[coordinator.id] = w("0.11.11 서명 빌드를 Pending에 올렸습니다. 설치하고 세 가지를 봐 주시면 됩니다.",
+                                    "Staged the signed 0.11.11 build in Pending. Install it and check three things.")
+        let reattach = make(w("원격 패널 터미널 다시 붙기", "Reattach the remote panel's terminal"), in: repository,
+                            minutes: busy ? 2 : 1, status: busy ? .waitingForApproval : (quiet ? .completed : .running),
+                            parent: coordinator)
+        lines[reattach.id] = "git push -u origin remote-terminal-reattach && gh pr create --base main --head remote-terminal-reattach --title \"Reattach the remote panel's terminal after the host restarts\" --body-file /private/tmp/remote-terminal-reattach/pr-body.md --label bug --draft"
+        let report = make(w("문제 신고 메뉴", "Report a Problem menu"), in: repository, minutes: 3,
+                          status: quiet ? .completed : .running, parent: coordinator)
+        turns[report.id] = TaskLatestTurn(startedAt: ago(32))
+        let readTask = make(w("하위 작업 읽음 처리 (read_task·wait_tasks)", "Mark subtasks read after read_task"),
+                            .codex, in: repository, minutes: 4, status: quiet ? .completed : .running, parent: coordinator)
+        turns[readTask.id] = TaskLatestTurn(startedAt: ago(8))
+        let android = make(w("Android 0.3.9 내부 트랙 출시 노트", "Android 0.3.9 internal track notes"), in: repository,
+                           minutes: 30, unread: true, parent: coordinator, parentRead: true)
+        sessions += [coordinator, reattach, report, readTask, android]
+
+        let interest = make(w("오픈소스 공개 인기 가능성 조사", "Gauge interest in the open-source release"), in: repository,
+                            minutes: 50)
+        let feed = make(w("X 피드 정리", "Sort the X feed"), in: repository, minutes: 1,
+                        status: quiet ? .completed : .running, parent: interest)
+        turns[feed.id] = TaskLatestTurn(startedAt: ago(5))
+        sessions += [interest, feed]
+
+        let rates = make(w("요금 계산 API 정리 (vehicle rates)", "Tidy the vehicle rates API"), .codex, in: web, minutes: 1,
+                         status: quiet ? .completed : .running)
+        turns[rates.id] = TaskLatestTurn(startedAt: ago(21))
+        let naming = make(w("탐색 메뉴 이름 정하기", "Name the archive menu"), .codex, in: repository, minutes: busy ? 6 : 1,
+                          status: quiet ? .completed : .running)
+        if busy { details[naming.id] = TaskAttentionDetail(pendingRequest: .input) }
+        lines[naming.id] = w("보관한 작업을 모아 두는 메뉴 이름을 \u{201C}보관함\u{201D}과 \u{201C}보관된 작업\u{201D} 중 무엇으로 할까요?",
+                             "Should the menu that collects archived tasks be called \u{201C}Archive\u{201D} or \u{201C}Archived tasks\u{201D}?")
+        let blog = make(w("블로그 목록 첫 화면 속도", "Blog list first-load speed"), .codex, in: web, minutes: busy ? 25 : 1,
+                        status: busy || quiet ? .completed : .running)
+        let weekly = make(w("주간 리포트 정리", "Tidy the weekly report"), in: designKit, minutes: busy ? 41 : 1,
+                          status: busy || quiet ? .completed : .running, unread: busy)
+        if busy {
+            details[weekly.id] = TaskAttentionDetail(usageLimit: HarnessRateLimit(
+                status: .rejected, window: .session, resetsAt: calendar.date(byAdding: .hour, value: 2, to: now)))
+        }
+        let topic = make(w("블로그 소재 고르기", "Pick the next blog topic"), in: repository, minutes: 60, unread: !quiet)
+        answers[topic.id] = w("준비된 소재 셋 가운데 \u{201C}중계가 LA에서 답한 이야기\u{201D}를 권합니다.",
+                              "Of the three topics ready, I'd go with \u{201C}the relay that answered from LA\u{201D}.")
+        let contract = make(w("계약 조항 비교", "Compare contract clauses"), in: chatFolder, minutes: 180, unread: !quiet)
+        answers[contract.id] = w("두 해지 조항은 통지 기간(30일, 60일)만 다릅니다.",
+                                 "The two termination clauses differ only in notice period (30 and 60 days).")
+        sessions += [rates, naming, blog, weekly, topic]
+
+        let monitor = TaskPullRequestMonitor()
+        monitor.setPullRequest(pullRequest(48, checks: busy ? .failing : .pending), for: blog.id)
+
+        func schedule(_ name: String, _ hour: Int, _ minute: Int, ran: Bool) -> (ScheduledTask, Date) {
+            var task = ScheduledTask(name: name, prompt: "", trigger: .daily(ScheduleTime(hour: hour, minute: minute)),
+                                     destination: ScheduleDestination(harness: .claudeCode))
+            let slot = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: today)!
+            if ran {
+                task.state.runs = [ScheduledTaskRun(slot: slot, at: slot, trigger: .scheduled, outcome: .started)]
+                return (task, calendar.date(byAdding: .day, value: 1, to: slot)!)
+            }
+            return (task, slot)
+        }
+        let schedules = [schedule(w("홍보 확인 · 오전", "Promotion check · morning"), 10, 0, ran: true),
+                         schedule(w("설계 검토 매일 평가", "Design review daily check"), 17, 40, ran: false),
+                         schedule(w("홍보 확인 · 밤", "Promotion check · night"), 22, 0, ran: false)]
+
+        let conversations: [UUID: [TranscriptEntry]] = [reattach.id: [
+            TranscriptEntry(content: .user(text: w("PR을 열어 주세요", "Open the pull request"))),
+            TranscriptEntry(content: .permission(PermissionRequest(
+                id: "push", title: "Bash", detail: w("갈래를 올리고 초안 PR을 엽니다.", "Pushes the branch and opens a draft pull request."),
+                command: lines[reattach.id], toolCallID: "toolu_push"), state: .pending)),
+        ]]
+        let names = [ProjectSidebarPresentation.normalizedPath(for: repository): "yardlet",
+                     ProjectSidebarPresentation.normalizedPath(for: web): "example-web",
+                     ProjectSidebarPresentation.normalizedPath(for: designKit): "design-kit"]
+        func group(_ project: Project) -> WorkspaceGroup {
+            WorkspaceGroup(workspaceURL: project.primaryRoot,
+                           sessions: sessions.filter { Project.isSamePath($0.workspaceURL, project.primaryRoot) },
+                           project: project)
+        }
+        let activity = NewTaskHomeActivity(
+            sessions: sessions + [contract], details: details,
+            placeName: { names[ProjectSidebarPresentation.normalizedPath(for: $0.workspaceURL)] ?? L10n.string("Chats") },
+            groups: [group(yardlet), group(webProject), group(designProject)], chats: [contract],
+            agents: { $0 == rates.id ? 1 : 0 }, schedules: schedules, now: today,
+            answerLine: { answers[$0] }, latestTurn: { turns[$0] }, requestLine: { lines[$0.id] })
+        return ((activity, monitor, [yardlet, webProject, designProject], names, conversations), lines)
+    }
+
+    /// Three unread threads in one inbox, read through the mailbox as the window's would be.
+    private func deskMailbox() async throws -> MailboxCenter {
+        let mail = MailFixture()
+        let account = MailFixture.work.id
+        let threads = [
+            mail.single(account, "play", from: MailAddress(name: "Google Play Console", address: "play@example.com"),
+                        date: mail.at(daysAgo: 0, hour: 9, minute: 10), subject: Self.words("Yardlet 0.3.8 내부 테스트 출시 완료",
+                        "Yardlet 0.3.8 internal testing is live"), text: "", isUnread: true),
+            mail.single(account, "issue", from: MailAddress(name: "GitHub", address: "notifications@github.example"),
+                        date: mail.at(daysAgo: 0, hour: 11, minute: 2), subject: Self.words("[yardlet] 새 이슈 #631: 한글 입력 뒤 커서 위치",
+                        "[yardlet] New issue #631: cursor after Korean input"), text: "", isUnread: true),
+            mail.single(account, "maker", from: MailAddress(name: "Product Hunt", address: "hello@producthunt.example"),
+                        date: mail.at(daysAgo: 0, hour: 8, minute: 0), subject: "Your weekly maker update", text: "",
+                        isUnread: true),
+            mail.single(account, "read", from: MailAddress(name: "Weekly Swift", address: "hello@weekly.example"),
+                        date: mail.at(daysAgo: 0, hour: 7, minute: 0), subject: "Issue 412", text: ""),
+        ]
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("DeskMailbox")))
+        let mailbox = MailboxCenter(defaults: defaults)
+        mailbox.setEnabled(true)
+        let transport = FixtureMailTransport(account: MailFixture.work, threads: threads)
+        mailbox.setAccounts([(MailFixture.work, transport)])
+        await mailbox.refresh()
+        return mailbox
+    }
+
+    /// The desk at the widths a person's window gives the home (1,280 × 820 less a 240 pt sidebar,
+    /// 1,800 × 1,125 less 351 pt, 980 × 760 less 240 pt), on a busy day, after the last waiting line was
+    /// handled, on a quiet day and on the first day, in both appearances, into `.build/desk-qa/<language>/`.
+    /// With the development switch off the home is as it was.
+    func testTheDeskShowsWhatWaitsWhatRunsAndToday() async throws {
+        let language = (Locale.preferredLanguages.first ?? "en").hasPrefix("ko") ? "ko" : "en"
+        let directory = try WindowlessRender.directory("desk-qa/\(language)")
+        let runtimes = try runtimes()
+        let mailbox = try await deskMailbox()
+        UserDefaults.yardlet.set(true, forKey: DeskPreview.key)
+        defer { UserDefaults.yardlet.removeObject(forKey: DeskPreview.key) }
+        let regular = NSSize(width: 1_040, height: 820), wide = NSSize(width: 1_449, height: 1_125)
+        let narrow = NSSize(width: 740, height: 760)
+        let scenes: [(name: String, day: DeskDay?, size: NSSize)] = [
+            ("busy-1040", .busy, regular), ("busy-1449", .busy, wide), ("busy-740", .busy, narrow),
+            ("cleared-1040", .cleared, regular), ("quiet-1040", .quiet, regular), ("first-run-1040", nil, regular),
+        ]
+        var elements: [String: [WindowlessRender.AccessibilityElement]] = [:]
+        for scene in scenes {
+            for appearance in WindowlessRender.Appearance.allCases {
+                let fixture = scene.day.map { deskFixture($0).fixture }
+                let view = home(scene.day == nil ? .empty : .full, fixture: fixture, size: scene.size,
+                                scheme: appearance.colorScheme, runtimes: runtimes)
+                    .environment(\.mailbox, mailbox)
+                let host = WindowlessRender.Host(view, size: scene.size, appearance: appearance)
+                defer { host.close() }
+                host.settle(passes: 10)
+                try WindowlessRender.writePNG(try host.capture().bitmap,
+                                              to: directory.appending(path: "\(scene.name)-\(appearance.suffix).png"))
+                if appearance == .light { elements[scene.name] = host.accessibilityElements() }
+            }
+        }
+        let report = elements.mapValues { $0.map(\.description).joined(separator: "\n") }
+        for (name, text) in report {
+            try text.write(to: directory.appending(path: "\(name)-ax.txt"), atomically: true, encoding: .utf8)
+        }
+        func shows(_ scene: String, _ text: String) -> Bool {
+            (elements[scene] ?? []).contains { $0.label.contains(text) || $0.value.contains(text) }
+        }
+        let w = Self.words
+        // A busy day: five lines wait, four tasks run, two results just finished; the header says so.
+        let busy = "busy-1040"
+        XCTAssertTrue(shows(busy, L10n.format("%lld waiting", 5) + " · " + L10n.format("%lld running now", 4) + " · "
+                                  + L10n.format("%lld left today", 2)), report[busy]!)
+        XCTAssertTrue(shows(busy, "git push -u origin remote-terminal-reattach"), "The command to approve")
+        XCTAssertTrue(shows(busy, w("보관한 작업을 모아 두는 메뉴 이름을", "Should the menu that collects archived tasks")),
+                      "The question")
+        XCTAssertTrue(shows(busy, L10n.string("Coordinator report")))
+        XCTAssertTrue(shows(busy, w("0.11.11 서명 빌드를 Pending에 올렸습니다.", "Staged the signed 0.11.11 build")),
+                      "The report's first line")
+        XCTAssertTrue(shows(busy, L10n.format("Pull request #%lld: checks failed", 48)))
+        XCTAssertTrue(shows(busy, L10n.format("%lld running in the family", 2)), "The coordinator's family by state")
+        XCTAssertTrue(shows(busy, w("문제 신고 메뉴", "Report a Problem menu")), "Its members, with room")
+        XCTAssertFalse(shows(busy, w("Android 0.3.9", "Android 0.3.9")), "A result its coordinator read is not on the desk")
+        XCTAssertTrue(shows(busy, L10n.string("Just finished")))
+        XCTAssertTrue(shows(busy, w("두 해지 조항은", "The two termination clauses")))
+        XCTAssertTrue(shows(busy, w("설계 검토 매일 평가", "Design review daily check")), "Today's runs")
+        XCTAssertTrue(shows(busy, "Google Play Console"), "Unread mail")
+        XCTAssertFalse(shows(busy, "Issue 412"), "Read mail is not on the desk")
+        XCTAssertTrue(shows(busy, L10n.string("Now")), "The view switch")
+        // Narrow: one column, the families without their members.
+        XCTAssertFalse(shows("busy-740", w("문제 신고 메뉴", "Report a Problem menu")), report["busy-740"]!)
+        XCTAssertTrue(shows("busy-740", w("원격 패널 터미널 다시 붙기", "Reattach the remote panel's terminal")))
+        // The last waiting line handled: the zone says nothing waits.
+        XCTAssertTrue(shows("cleared-1040", L10n.string("Nothing is waiting on you")), report["cleared-1040"]!)
+        // A quiet day: today and the composer.
+        XCTAssertFalse(shows("quiet-1040", L10n.string("Waiting on you (home)")), report["quiet-1040"]!)
+        XCTAssertTrue(shows("quiet-1040", L10n.string("Unread mail")))
+        // The first day: the title and the composer, no view to switch to.
+        XCTAssertFalse(shows("first-run-1040", L10n.string("Now")), report["first-run-1040"]!)
+    }
+
+    /// Choosing the approval's line answers it in the composer's place: its card shows the whole command
+    /// the line cut short. Then the Projects view, with the header over today's project columns.
+    func testTheDeskAnswersALineInTheComposersPlaceAndSwitchesToTheProjects() async throws {
+        let language = (Locale.preferredLanguages.first ?? "en").hasPrefix("ko") ? "ko" : "en"
+        let directory = try WindowlessRender.directory("desk-qa/\(language)")
+        let runtimes = try runtimes()
+        let mailbox = try await deskMailbox()
+        UserDefaults.yardlet.set(true, forKey: DeskPreview.key)
+        defer { UserDefaults.yardlet.removeObject(forKey: DeskPreview.key) }
+        for (name, size) in [("reply-1040", NSSize(width: 1_040, height: 820)), ("reply-1449", NSSize(width: 1_449, height: 1_125))] {
+            for appearance in WindowlessRender.Appearance.allCases {
+                let fixture = deskFixture(.busy).fixture
+                let host = WindowlessRender.Host(
+                    home(fixture: fixture, size: size, scheme: appearance.colorScheme, runtimes: runtimes, reply: ReplyFixture())
+                        .environment(\.mailbox, mailbox),
+                    size: size, appearance: appearance)
+                defer { host.close() }
+                placeOffscreen(host)
+                // The waiting line, which starts with its state; the family's member line carries the title too.
+                let waiting = try XCTUnwrap(controls(in: host).first {
+                    $0.label.hasPrefix(SidebarTaskStatus.awaitingApproval.homeName)
+                        && $0.label.contains(Self.words("원격 패널 터미널 다시 붙기", "Reattach the remote panel's terminal"))
+                })
+                try clickThroughApp(waiting, in: host)
+                host.settle(passes: 10)
+                try WindowlessRender.writePNG(try host.capture().bitmap,
+                                              to: directory.appending(path: "\(name)-\(appearance.suffix).png"))
+                let elements = host.accessibilityElements()
+                let report = elements.map(\.description).joined(separator: "\n")
+                XCTAssertTrue(elements.contains { $0.value == L10n.string("Approval required") }, report)
+                XCTAssertTrue(elements.contains { $0.role == "AXStaticText" && $0.value.hasSuffix("--label bug --draft") },
+                              "The card shows the whole command: \(report)")
+
+                // The Projects view: today's project columns under the same header.
+                let projects = try XCTUnwrap(controls(in: host, role: .radioButton).first { $0.label == L10n.string("Projects") },
+                                             report)
+                try click(projects, in: host)
+                host.settle(passes: 10)
+                if name == "reply-1040" {
+                    try WindowlessRender.writePNG(try host.capture().bitmap,
+                                                  to: directory.appending(path: "projects-1040-\(appearance.suffix).png"))
+                }
+                XCTAssertTrue(host.accessibilityElements().contains { $0.label.hasPrefix("example-web") },
+                              "The project columns")
+            }
+        }
+    }
+
+    /// The keyboard goes through the desk as through the projects: Tab from the composer to the first line
+    /// waiting on the person, Return answers it in the composer's place; ↓ past what waits reaches what
+    /// runs, and Return opens it.
+    func testTheKeyboardGoesThroughTheDesksZones() async throws {
+        let runtimes = try runtimes()
+        let mailbox = try await deskMailbox()
+        UserDefaults.yardlet.set(true, forKey: DeskPreview.key)
+        defer { UserDefaults.yardlet.removeObject(forKey: DeskPreview.key) }
+        let size = NSSize(width: 1_040, height: 820)
+        var opened: [String] = []
+        let host = WindowlessRender.Host(
+            home(fixture: deskFixture(.busy).fixture, size: size, scheme: .light, runtimes: runtimes, reply: ReplyFixture(),
+                 onOpen: { opened.append($0.title) })
+                .environment(\.mailbox, mailbox),
+            size: size, appearance: .light)
+        defer { host.close() }
+        placeOffscreen(host)
+        let field = try XCTUnwrap(views(NSTextField.self, in: host.hosting).first { $0.isEditable })
+
+        XCTAssertTrue(host.window.makeFirstResponder(field))
+        host.settle(passes: 4)
+        try press("\t", keyCode: 48, in: host)
+        for _ in 0..<5 { try press(down, keyCode: 125, in: host) }
+        try press("\r", keyCode: 36, in: host)
+        XCTAssertEqual(opened, [Self.words("요금 계산 API 정리 (vehicle rates)", "Tidy the vehicle rates API")],
+                       "Past the five waiting lines, the first family; Return opens its task")
+
+        XCTAssertTrue(host.window.makeFirstResponder(field))
+        host.settle(passes: 4)
+        try press("\t", keyCode: 48, in: host)
+        try press("\r", keyCode: 36, in: host)
+        host.settle(passes: 10)
+        let elements = host.accessibilityElements()
+        XCTAssertTrue(elements.contains { $0.value == L10n.string("Approval required") },
+                      "The first waiting line is answered in the composer's place: "
+                      + elements.map(\.description).joined(separator: "\n"))
     }
 
     // MARK: - In a window
@@ -675,7 +989,8 @@ final class NewTaskHomeRenderingTests: XCTestCase {
 
     /// The buttons in the window with their frames, as assistive technologies find them (with the
     /// app's enhanced interface on, as a screen reader turns it on).
-    private func controls(in host: WindowlessRender.Host<some View>) -> [Control] {
+    private func controls(in host: WindowlessRender.Host<some View>,
+                          role: NSAccessibility.Role = .button) -> [Control] {
         host.hosting.layoutSubtreeIfNeeded()
         return WindowlessRender.withAccessibilityTree {
             let windowFrame = host.window.frame
@@ -684,7 +999,7 @@ final class NewTaskHomeRenderingTests: XCTestCase {
             func visit(_ node: AnyObject) {
                 for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
                     guard visited.insert(ObjectIdentifier(child)).inserted else { continue }
-                    if (child.accessibilityRole?() ?? nil) == .button {
+                    if (child.accessibilityRole?() ?? nil) == role {
                         let screen = child.accessibilityFrame?() ?? .zero
                         found.append(Control(
                             label: (child.accessibilityLabel?() ?? nil) ?? "",

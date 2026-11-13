@@ -223,17 +223,54 @@ final class AppModelRemoteBridge: RemoteBridge {
 
     /// The summary and kind of the newest request a task waits on, read from the request itself.
     static func requestSummary(of session: SessionRecord, in model: AppModel) -> (summary: String?, kind: String)? {
+        switch newestRequest(of: session, in: model) {
+        case let .held(request)?:
+            (RemoteTaskProjection.requestSummary(request), RemoteTaskProjection.requestKind(request))
+        case let .permission(request)?:
+            (RemoteTaskProjection.requestSummary(request), RemoteTaskProjection.requestKind(request))
+        case nil:
+            nil
+        }
+    }
+
+    /// What the newest request a task waits on asks, on one line for the home's desk: a question's first
+    /// line, or the command to approve before its description, masked as a notification's line is. The
+    /// line is cut where the desk's row ends; the request's card shows it whole.
+    static func requestLine(of session: SessionRecord, in model: AppModel) -> String? {
+        switch newestRequest(of: session, in: model) {
+        case let .held(request)? where request.form == nil:
+            RemoteSummary.line([request.command ?? request.detail ?? request.title], limit: requestLineLimit)
+        case let .held(request)?:
+            RemoteTaskProjection.requestSummary(request)
+        case let .permission(request)? where request.structured == nil:
+            RemoteSummary.line([request.command ?? request.detail ?? request.title], limit: requestLineLimit)
+        case let .permission(request)?:
+            RemoteTaskProjection.requestSummary(request)
+        case nil:
+            nil
+        }
+    }
+
+    /// Longer than a notification's: the desk's row is wider than a lock screen's.
+    private static let requestLineLimit = 400
+
+    private enum PendingRequest {
+        case held(ConversationRequest)
+        case permission(PermissionRequest)
+    }
+
+    /// The newest request a task waits on: one Yardlet holds, Codex's own, or a transcript's.
+    private static func newestRequest(of session: SessionRecord, in model: AppModel) -> PendingRequest? {
         guard let requestID = model.newestPendingApproval(in: session)?.id else { return nil }
         if let request = model.heldRequests(in: session.id).first(where: { $0.id == requestID }) {
-            return (RemoteTaskProjection.requestSummary(request), RemoteTaskProjection.requestKind(request))
+            return .held(request)
         }
         if let state = model.codexPresentationBySessionID[session.id]?.serverRequestsByID[requestID] {
-            let request = CodexRequestResponseProjection.request(state)
-            return (RemoteTaskProjection.requestSummary(request), RemoteTaskProjection.requestKind(request))
+            return .held(CodexRequestResponseProjection.request(state))
         }
         for entry in (model.transcriptBySessionID[session.id] ?? []).reversed() {
             if case let .permission(request, .pending) = entry.content, request.id == requestID {
-                return (RemoteTaskProjection.requestSummary(request), RemoteTaskProjection.requestKind(request))
+                return .permission(request)
             }
         }
         return nil

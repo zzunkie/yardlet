@@ -522,9 +522,14 @@ enum NewTaskHomeListsProjection {
 
     /// The summaries in the places kept, any not placed yet after them in their own order.
     static func keepingPlaces(_ places: [String], of summaries: [NewTaskProjectSummary]) -> [NewTaskProjectSummary] {
+        keepingPlaces(places, of: summaries, id: \.id)
+    }
+
+    /// Any items in the places kept, any not placed yet after them in their own order.
+    static func keepingPlaces<Item>(_ places: [String], of items: [Item], id: (Item) -> String) -> [Item] {
         let index = Dictionary(places.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
-        return summaries.enumerated().sorted { lhs, rhs in
-            switch (index[lhs.element.id], index[rhs.element.id]) {
+        return items.enumerated().sorted { lhs, rhs in
+            switch (index[id(lhs.element)], index[id(rhs.element)]) {
             case let (left?, right?): left < right
             case (.some, nil): true
             case (nil, .some): false
@@ -721,6 +726,16 @@ enum NewTaskHomeSection: Hashable, Sendable {
     case idle
     case moreProjects
     case folder
+    /// A zone of the desk (`DeskHome`).
+    case desk(DeskZone)
+}
+
+/// The desk's zones, in the keyboard's order.
+enum DeskZone: Hashable, Sendable {
+    case waiting
+    case running
+    case finished
+    case today
 }
 
 /// How the keyboard moves through the lists, as the Codex and Claude new-task screens do: Tab from

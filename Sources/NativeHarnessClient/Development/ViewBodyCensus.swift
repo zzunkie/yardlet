@@ -50,6 +50,10 @@ enum ViewBodyCensus {
         case personalAgentReplyRowHosting
         /// A picture of a dot's conversation, drawn again as its thumbnail arrives.
         case personalAgentImage
+        /// The home's desk (`DeskHome`), which works out its zones anew each time.
+        case desk
+        /// A line of the desk, drawn again only when what it shows changed.
+        case deskRow
     }
 
     static var isEnabled = false

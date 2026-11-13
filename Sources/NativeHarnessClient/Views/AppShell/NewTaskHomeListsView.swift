@@ -19,6 +19,8 @@ struct NewTaskHomeLists: View {
         case projects
         /// The folder's rows that start something, over the composer.
         case folder
+        /// The desk's zones (`DeskHome`), in the projects' place.
+        case desk
     }
 
     let part: Part
@@ -239,6 +241,8 @@ struct NewTaskHomeLists: View {
                         }
                     }
                 }
+            case .desk:
+                EmptyView()
             case .projects:
                 if summaries.isEmpty && idle.isEmpty {
                     if !recentSessions.isEmpty || onImportConversation != nil { recentTasks }
@@ -781,7 +785,7 @@ struct NewTaskHomeLists: View {
         switch section {
         case .folder:
             return layout.folderRows.first { $0.id == id }?.action
-        case .moreProjects:
+        case .moreProjects, .desk:
             return nil
         case .idle:
             return layout.idle?.projects.first { $0.id.uuidString == id }.map { Self.action($0, opens: false) }
@@ -810,17 +814,18 @@ struct NewTaskHomeLists: View {
     }
 }
 
-private extension NewTaskHomeListKeyboard.Entry {
+extension NewTaskHomeListKeyboard.Entry {
     /// The part of the screen that lists the line.
     var part: NewTaskHomeLists.Part {
         switch self {
         case .row(.folder, _), .toggle(.folder): .folder
+        case .row(.desk, _), .toggle(.desk): .desk
         default: .projects
         }
     }
 }
 
-private extension SidebarTaskStatus {
+extension SidebarTaskStatus {
     /// The state's name on a waiting task's line: the sidebar's words, shorter for a failed turn and a
     /// plan limit, whose error or reset follows the title (`homeDetail`).
     var homeName: String {
@@ -857,7 +862,7 @@ private extension NewTaskFolderRow {
 }
 
 /// When a row's task was last active, as a short relative time ("3 min. ago").
-private struct NewTaskHomeTime: View {
+struct NewTaskHomeTime: View {
     let date: Date
 
     var body: some View {
@@ -870,7 +875,7 @@ private struct NewTaskHomeTime: View {
 }
 
 /// How long a running task's turn has run ("12 min"), redrawn each minute.
-private struct NewTaskHomeElapsed: View {
+struct NewTaskHomeElapsed: View {
     let since: Date
 
     var body: some View {
@@ -896,7 +901,7 @@ private struct NewTaskHomeElapsed: View {
 /// answered in the composer's place), the keyboard's highlight or the pointer's, the mark of the task
 /// the composer answers, and, for an unread result, a mark-as-read button while the pointer is on it
 /// (for a project left alone for a while, its Dismiss).
-private struct NewTaskHomeRow<Content: View>: View {
+struct NewTaskHomeRow<Content: View>: View {
     var isHighlighted = false
     /// The composer answers this row's task.
     var isAnswering = false

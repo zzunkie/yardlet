@@ -221,6 +221,41 @@ final class StreamingWindowRedrawTests: XCTestCase {
         XCTAssertLessThanOrEqual(unread[.sidebarRow], 12)
     }
 
+    /// The desk shown while a task streams in the background: what the task streams does not draw the
+    /// desk again, and another task's new state draws the desk and its own line, not every line.
+    func testTheDeskIsDrawnAgainOnlyForWhatChanged() async throws {
+        UserDefaults.yardlet.set(true, forKey: DeskPreview.key)
+        defer { UserDefaults.yardlet.removeObject(forKey: DeskPreview.key) }
+        let fixture = try await makeFixture(tasks: 12)
+        let model = fixture.model, streaming = fixture.tasks[0], other = fixture.tasks[5]
+        for task in fixture.tasks[6...9] { await model.store.markUnread(id: task.id) }
+        model.splits.activate(.home)
+        let window = Window(fixture: fixture)
+        defer { window.close() }
+        window.host.settle(passes: 20)
+        await model.send(HarnessUserInput(text: "Start"), to: streaming)
+        try await waitUntil { model.store.sessions.first { $0.id == streaming.id }?.status == .running }
+        window.host.settle(passes: 20)
+        XCTAssertTrue(window.host.accessibilityElements().contains { $0.label.hasPrefix(L10n.string("Running (home)")) },
+                      "The home shows the desk")
+        let transport = try XCTUnwrap(fixture.transport(streaming.id))
+
+        let streamed = await window.measure("12 tool calls beside the desk") {
+            await ClaudeToolCallStream(emit: { await transport.emit($0) },
+                                       pause: { window.host.settle(passes: 1, interval: 0.004) }).run(calls: 12)
+        }
+        // The task's own status reports may redraw the desk; its fragments and plan-limit reports may not.
+        // Before, the home read the accounts' limits as it was made, and each report drew it again (13).
+        XCTAssertLessThanOrEqual(streamed[.desk], 2, "Streaming redrew the desk")
+        XCTAssertLessThanOrEqual(streamed[.deskRow], 2, "Streaming redrew the desk's lines")
+
+        let unread = await window.measure("another task marked unread beside the desk") {
+            await model.store.markUnread(id: other.id)
+        }
+        XCTAssertGreaterThanOrEqual(unread[.desk], 1, "The desk lists the change")
+        XCTAssertLessThanOrEqual(unread[.deskRow], 1, "Lines that did not change were drawn again")
+    }
+
     /// The composer, its bash-mode actions and its connectors are made afresh each time the task's
     /// conversation publishes; made again for the same task they are equal, and a change in what
     /// they show makes them unequal.
@@ -348,7 +383,7 @@ final class StreamingWindowRedrawTests: XCTestCase {
             let counts = Counts(values: ViewBodyCensus.counts)
             print("[redraw] \(name): window \(counts[.mainWindow]), rows \(counts[.sidebarRow]), "
                   + "composer \(counts[.composer]), surface \(counts[.taskSurface]), rail \(counts[.sessionRail]), "
-                  + "main thread \(MainThreadClock.since(start))")
+                  + "desk \(counts[.desk]), desk lines \(counts[.deskRow]), main thread \(MainThreadClock.since(start))")
             return counts
         }
 

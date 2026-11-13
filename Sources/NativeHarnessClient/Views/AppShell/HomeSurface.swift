@@ -40,8 +40,9 @@ struct NewTaskHomeActivity {
     var stoppedSchedules: [ScheduledTask] = []
     /// A suggested task neither started nor dismissed (`TaskSuggestionStore.resolution`).
     var isSuggestionOpen: (TaskAttentionSuggestion, UUID) -> Bool = { _, _ in true }
-    /// What is wrong now: accounts nearly out of their limits, the disk, the Mac.
-    var notices: [NewTaskHomeNotice] = []
+    /// The accounts nearly out of their limits. Read by the notice line in its own body: the readings
+    /// change with every plan-limit report a running turn makes, which must not redraw the home.
+    var notices: () -> [NewTaskHomeNotice] = { [] }
     /// Token usage counted from this Mac's transcripts, while Settings › Usage counts it; nil leaves
     /// the band out. The band reads it in its own body, so a new count redraws the band alone.
     var usage: (() -> TokenUsageOverview)? = nil
@@ -62,6 +63,11 @@ struct NewTaskHomeActivity {
     var answerLine: (UUID) -> String? = { _ in nil }
     /// When a task's latest turn started and what it suggested (`AppModel.latestTurnBySessionID`).
     var latestTurn: (UUID) -> TaskLatestTurn? = { _ in nil }
+    /// The tasks an archived task was started from (`SessionStore.archivedParentTaskIDs`), which the desk
+    /// counts as coordinators.
+    var archivedParents: Set<UUID> = []
+    /// What a waiting task's newest request asks, on one line: the question, or the command to approve.
+    var requestLine: (SessionRecord) -> String? = { _ in nil }
 }
 
 /// The new-task screen, which is Yardlet's home: the projects with what their tasks need, then the
@@ -121,18 +127,12 @@ struct NewTaskHome: View {
     /// next task that needs them replaces.
     @State private var replyTaskID: UUID?
     @State private var answeredTaskID: UUID?
+    /// The desk is shown only while its development switch is on (`DeskPreview`).
+    @AppStorage(DeskPreview.key, store: .yardlet) private var showsDeskPreview = false
+    @State private var homeView = NewTaskHomeView.now
 
     /// How often the screen reads the Mac's condition again while it shows.
     static let conditionInterval: Duration = .seconds(60)
-
-    /// The notices: the accounts' limits, then the Mac's condition.
-    private var notices: [NewTaskHomeNotice] {
-        // The usage band shows the limits closest to running out; the line keeps the Mac's.
-        let accounts = activity.usage == nil ? activity.notices : activity.notices.filter {
-            if case .usage = $0 { return false } else { return true }
-        }
-        return accounts + macConditions
-    }
 
     /// The task the composer answers, while the sidebar still lists it.
     private var replyingSession: SessionRecord? {
@@ -140,41 +140,33 @@ struct NewTaskHome: View {
         return activity.sessions.first { $0.id == id }
     }
 
+    /// No project and no task yet: the title and the composer alone, with no view to switch to.
+    private var isFirstRun: Bool { projects.isEmpty && activity.sessions.isEmpty }
+
+    /// The header with "Now | Projects" shows while the desk's development switch is on.
+    private var showsViewSwitch: Bool { showsDeskPreview && !isFirstRun }
+
+    private var showsDesk: Bool { showsViewSwitch && homeView == .now }
+
     var body: some View {
         GeometryReader { viewport in
-            let columns = NewTaskHomeLayout.columns(width: viewport.size.width)
-            VStack(spacing: 0) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 22) {
-                        if let usage = activity.usage {
-                            TokenUsageHomeBand(overview: usage, columns: columns, onOpen: activity.onOpenUsage)
-                        }
-                        lists(.projects, viewport: viewport, columns: columns)
-                    }
-                        .frame(maxWidth: columns > 1 ? NewTaskHomeLayout.gridWidth : NewTaskHomeLayout.composerWidth)
-                        .padding(.horizontal, NewTaskHomeLayout.inset)
-                        .padding(.top, 28)
-                        .padding(.bottom, 16)
-                        .frame(maxWidth: .infinity)
-                        .accessibilitySortPriority(ParityAccessibility.secondary)
-                }
-                .defaultScrollAnchor(.top)
-                VStack(spacing: 10) {
-                    if !notices.isEmpty { noticeLine(notices) }
-                    if let session = replyingSession, let reply {
-                        replyPane(session, reply: reply, height: NewTaskHomeLayout.replyHeight(viewport.size.height))
-                    } else {
-                        lists(.folder, viewport: viewport, columns: 1)
-                        hero
-                    }
-                }
-                .frame(maxWidth: NewTaskHomeLayout.composerWidth)
-                .padding(.horizontal, NewTaskHomeLayout.inset)
-                .padding(.top, 14)
-                .padding(.bottom, 20)
-                .frame(maxWidth: .infinity)
+            if showsDesk {
+                DeskHome(
+                    activity: activity, size: viewport.size, replyTaskID: replyingSession?.id, onAction: perform,
+                    keyboard: $listKeyboard, focus: $listFocus,
+                    onListed: { entries in
+                        listed[.desk] = entries
+                        relist()
+                    },
+                    onReturnToComposer: returnToComposer,
+                    viewSwitch: { NewTaskHomeViewSwitch(selection: $homeView) },
+                    bottom: { bottom(viewport: viewport) })
+                    .accessibilitySortPriority(ParityAccessibility.secondary)
+            } else {
+                projectsView(viewport: viewport)
             }
         }
+        .onChange(of: showsDesk) { relist() }
         .onChange(of: draft.workspaceURL, initial: true) { _, workspace in
             isInRepository = workspace.map { GitWorktreeOriginResolver.isInRepository($0) } ?? false
         }
@@ -227,6 +219,51 @@ struct NewTaskHome: View {
         }
     }
 
+    /// The projects in their columns over the composer, the header with the view switch over them while
+    /// the desk can be chosen.
+    private func projectsView(viewport: GeometryProxy) -> some View {
+        let columns = NewTaskHomeLayout.columns(width: viewport.size.width)
+        return VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    if showsViewSwitch {
+                        DeskHeader(date: activity.now) { NewTaskHomeViewSwitch(selection: $homeView) }
+                    }
+                    if let usage = activity.usage {
+                        TokenUsageHomeBand(overview: usage, columns: columns, onOpen: activity.onOpenUsage)
+                    }
+                    lists(.projects, viewport: viewport, columns: columns)
+                }
+                    .frame(maxWidth: columns > 1 ? NewTaskHomeLayout.gridWidth : NewTaskHomeLayout.composerWidth)
+                    .padding(.horizontal, NewTaskHomeLayout.inset)
+                    .padding(.top, showsViewSwitch ? 14 : 28)
+                    .padding(.bottom, 16)
+                    .frame(maxWidth: .infinity)
+                    .accessibilitySortPriority(ParityAccessibility.secondary)
+            }
+            .defaultScrollAnchor(.top)
+            VStack(spacing: 10) { bottom(viewport: viewport) }
+                .frame(maxWidth: NewTaskHomeLayout.composerWidth)
+                .padding(.horizontal, NewTaskHomeLayout.inset)
+                .padding(.top, 14)
+                .padding(.bottom, 20)
+                .frame(maxWidth: .infinity)
+        }
+    }
+
+    /// Under the lists: what is wrong now, then the folder's rows, the title and the composer, or the
+    /// composer answering a task.
+    @ViewBuilder
+    private func bottom(viewport: GeometryProxy) -> some View {
+        NewTaskHomeNoticeLine(accounts: activity.notices, showsUsage: activity.usage == nil, conditions: macConditions)
+        if let session = replyingSession, let reply {
+            replyPane(session, reply: reply, height: NewTaskHomeLayout.replyHeight(viewport.size.height))
+        } else {
+            lists(.folder, viewport: viewport, columns: 1)
+            hero
+        }
+    }
+
     private func lists(_ part: NewTaskHomeLists.Part, viewport: GeometryProxy, columns: Int) -> NewTaskHomeLists {
         NewTaskHomeLists(
             part: part, folder: draft.workspaceURL, startsChat: draft.startsChat,
@@ -247,8 +284,11 @@ struct NewTaskHome: View {
         )
     }
 
+    /// The part over the composer that lists lines now: the desk or the projects.
+    private var topPart: NewTaskHomeLists.Part { showsDesk ? .desk : .projects }
+
     private func relist() {
-        listKeyboard.list((listed[.projects] ?? []) + (listed[.folder] ?? []))
+        listKeyboard.list((listed[topPart] ?? []) + (listed[.folder] ?? []))
     }
 
     /// The task the composer answers: the line naming it, then its own conversation and composer.
@@ -275,25 +315,6 @@ struct NewTaskHome: View {
     /// place, else the new task does (`answeredTaskID`).
     private func replied() {
         answeredTaskID = replyTaskID
-    }
-
-    /// What is wrong now, on one line over the title: an account nearly out of its limit, a disk
-    /// nearly full, a Mac short of memory or slowing down to cool.
-    private func noticeLine(_ notices: [NewTaskHomeNotice]) -> some View {
-        HStack(spacing: 7) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 10.5, weight: .medium))
-                .foregroundStyle(.orange)
-            Text(notices.map(\.text).joined(separator: " · "))
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 10)
-        .help(notices.map(\.text).joined(separator: "\n"))
-        .accessibilityElement(children: .combine)
     }
 
     private var hero: some View {
@@ -352,13 +373,13 @@ struct NewTaskHome: View {
     /// the lists, when there is one.
     private func enterLists(at taskID: UUID? = nil) -> Bool {
         let line = taskID.flatMap { id in
-            (listed[.projects] ?? []).first { entry in
+            (listed[topPart] ?? []).first { entry in
                 if case let .row(_, rowID) = entry { return rowID == id.uuidString }
                 return false
             }
         }
         guard listKeyboard.enter(at: line) else { return false }
-        listFocus = (listed[.projects] ?? []).isEmpty ? .folder : .projects
+        listFocus = (listed[topPart] ?? []).isEmpty ? .folder : topPart
         return true
     }
 
@@ -401,6 +422,39 @@ struct NewTaskHome: View {
             returnToComposer()
         case let .openSchedule(id):
             activity.onOpenSchedule(id)
+        }
+    }
+}
+
+/// What is wrong now, on one line over the title: an account nearly out of its limit (unless the usage
+/// band shows the limits), a disk nearly full, a Mac short of memory or slowing down to cool. Nothing
+/// while all is well. It reads the accounts' limits in its own body, so a new reading redraws this line
+/// alone.
+struct NewTaskHomeNoticeLine: View {
+    let accounts: () -> [NewTaskHomeNotice]
+    /// The usage band is not shown, so this line names the accounts' limits.
+    let showsUsage: Bool
+    let conditions: [NewTaskHomeNotice]
+
+    var body: some View {
+        let notices = accounts().filter { notice in
+            if case .usage = notice { return showsUsage } else { return true }
+        } + conditions
+        if !notices.isEmpty {
+            HStack(spacing: 7) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(.orange)
+                Text(notices.map(\.text).joined(separator: " · "))
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .help(notices.map(\.text).joined(separator: "\n"))
+            .accessibilityElement(children: .combine)
         }
     }
 }

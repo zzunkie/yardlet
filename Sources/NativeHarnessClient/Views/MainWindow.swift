@@ -1857,8 +1857,10 @@ struct MainWindow: View {
                 },
                 stoppedSchedules: model.scheduledTasks.schedules.filter(\.hasStoppedItself),
                 isSuggestionOpen: { model.taskSuggestions.resolution(of: $0.id, in: $1) == nil },
-                notices: NewTaskHomeListsProjection.usageNotices(
-                    choices: model.connections.menuBarUsageChoices(for: HarnessCatalog.builtIns.map(\.id))),
+                notices: {
+                    NewTaskHomeListsProjection.usageNotices(
+                        choices: model.connections.menuBarUsageChoices(for: HarnessCatalog.builtIns.map(\.id)))
+                },
                 usage: model.tokenUsage.isEnabled ? { model.tokenUsageOverview() } : nil,
                 onOpenUsage: { presentSettings(.usage) },
                 now: model.scheduledTasks.displayNow,
@@ -1867,7 +1869,9 @@ struct MainWindow: View {
                 onOpenSchedule: showSchedule,
                 onSetAside: { projects.setAside($0, through: $1) },
                 answerLine: { model.answerLineBySessionID[$0] },
-                latestTurn: { model.latestTurnBySessionID[$0] }),
+                latestTurn: { model.latestTurnBySessionID[$0] },
+                archivedParents: model.store.archivedParentTaskIDs,
+                requestLine: { AppModelRemoteBridge.requestLine(of: $0, in: model) }),
             reply: NewTaskHomeReplyServices(
                 content: { session, hooks in AnyView(homeReplyContent(session, hooks: hooks)) },
                 isShownElsewhere: { model.splits.activeSplit?.pane(hosting: $0) != nil },

@@ -63,6 +63,7 @@ projects unless the scene says otherwise. Phases are measured after the scene ha
 | `codex-switch` | ten Codex tasks, each a turn of 400 finished commands with output followed by the reasoning, commands and answers of a 400-second stream (about 540 items, 1.4 MB) | `switch` (30): another task opened every 1.5 seconds, each after the four the window keeps; then `stream-switch` (120): three tasks at a time stream an answer for 30 seconds while another task opens every 2 seconds |
 | `memory-cycle` | the same ten long Codex tasks, loaded once; history stays fixed while views are repeatedly opened and let go | `warm` (30), `revisit` (60 by default, `--cycle-seconds` changes it), `recovered` (15 at rest) |
 | `composer-input` | a 60-turn Claude task streaming while its actual field editor receives alternating plain text and marked-text commits | `typing` (20): application-side dispatch, edit and layout latency, without sending the draft |
+| `home` | the home over 400 tasks in 40 projects, every fourth a subtask of the one before, while three Claude Code answers stream | `projects` (15): the home's projects; then `desk` (15): its desk, which the development switch (`YardletDeskPreview`) shows |
 
 The fakes stream about 30 fragments a second, the rate of a working agent, in the providers' own frame
 shapes: Claude Code's `stream-json` with partial messages, and Codex App Server notifications. A message
