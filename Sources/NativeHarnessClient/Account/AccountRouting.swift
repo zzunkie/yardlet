@@ -21,7 +21,9 @@ import Foundation
 ///    The account's headroom is its smallest pace, divided by one more than the tasks running on it,
 ///    so several tasks started at once spread over the accounts.
 /// 2. An account with any window at or under `nearlySpentFraction` left (and not yet reset) is
-///    nearly spent; it is chosen only when every account is, the one that frees up first.
+///    nearly spent; it is chosen only when every account is. Then an account with something left in
+///    every window comes first, the one that frees up first; an account with a window used up only
+///    when every account has one, again the one that frees up first.
 /// 3. An account with no reading comes after the ones with room and before the nearly spent.
 /// Ties go to the account new tasks start on, then the list's order.
 enum AccountRouting {
@@ -40,6 +42,8 @@ enum AccountRouting {
         let pace: Double
 
         var isNearlySpent: Bool { left <= AccountRouting.nearlySpentFraction }
+        /// Nothing left: a task this window applies to stops at once.
+        var isUsedUp: Bool { left <= 0 }
     }
 
     struct Headroom: Equatable, Sendable {
@@ -54,6 +58,7 @@ enum AccountRouting {
             return spent.max { ($0.resetsAt ?? .distantFuture) < ($1.resetsAt ?? .distantFuture) }
         }
         var isNearlySpent: Bool { windows.contains(where: \.isNearlySpent) }
+        var isUsedUp: Bool { windows.contains(where: \.isUsedUp) }
         /// When every nearly spent window has reset; nil when one of them gave no reset.
         var freesUpAt: Date? {
             let spent = windows.filter(\.isNearlySpent)
@@ -172,6 +177,8 @@ enum AccountRouting {
             return pick(first, .noReading)
         }
         return read.filter { $0.headroom?.isNearlySpent == true }.min { lhs, rhs in
+            let leftUsedUp = lhs.headroom?.isUsedUp == true, rightUsedUp = rhs.headroom?.isUsedUp == true
+            if leftUsedUp != rightUsedUp { return rightUsedUp }
             let left = lhs.headroom?.freesUpAt ?? .distantFuture
             let right = rhs.headroom?.freesUpAt ?? .distantFuture
             if left != right { return left < right }

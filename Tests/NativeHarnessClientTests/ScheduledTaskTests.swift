@@ -524,13 +524,13 @@ final class ScheduledTaskTests: XCTestCase {
 
         // Every account is nearly spent: the one that frees up first.
         accounts.read("work", used: 0.95, resetsIn: 4)
-        accounts.read("roomy", used: 1, resetsIn: 1)
+        accounts.read("roomy", used: 0.97, resetsIn: 1)
         await model.scheduledTasks.runNow(id)
         (run, task) = try await latestRun()
         XCTAssertEqual(task.connection, accounts["roomy"])
         XCTAssertEqual(run.account?.basis, .nearlySpent)
         XCTAssertNotNil(run.account?.freesUpAt)
-        accounts.read("roomy", used: 1, resetsIn: 5)
+        accounts.read("roomy", used: 0.97, resetsIn: 5)
         await model.scheduledTasks.runNow(id)
         (run, task) = try await latestRun()
         XCTAssertEqual(task.connection, accounts["work"], "Its own account frees up first")

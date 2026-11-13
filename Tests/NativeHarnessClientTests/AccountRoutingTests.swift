@@ -33,7 +33,8 @@ import XCTest
     }
 
     /// An account with a window at or under 10% left is chosen only when every account is, and then the
-    /// one that frees up first; an account without a reading comes before the nearly spent.
+    /// one that frees up first, an account with a window used up only when every account has one; an
+    /// account without a reading comes before the nearly spent.
     func testNearlySpentAccountsComeLastAndTheOneThatFreesUpFirstWins() throws {
         let spentSoon = choice("spent-soon", windows: [session(used: 0.95, resetsIn: 3 / 24), weekly(used: 0.1, resetsIn: 5)])
         let spentLong = choice("spent-long", windows: [session(used: 0.2), weekly(used: 0.92, resetsIn: 2)])
@@ -52,6 +53,14 @@ import XCTest
         let assignment = AccountAssignment(choice: last.choice, origin: .automatic, pick: last, at: now)
         XCTAssertEqual(assignment.freesUpAt, now.addingTimeInterval(3 * 3600))
         XCTAssertEqual(assignment.usedFraction, 0.95, "The reason names the window that is nearly spent")
+
+        let usedUp = choice("used-up", windows: [session(used: 0), weekly(used: 1, resetsIn: 1)])
+        let usedUpLater = choice("used-up-later", windows: [weekly(used: 1, resetsIn: 3)])
+        XCTAssertEqual(AccountRouting.pick([candidate(usedUp), candidate(usedUpLater), candidate(spentLong)],
+                                           model: nil, now: now)?.choice.id, "spent-long",
+                       "A task on a used up window stops at once: an account with some left goes first, though it frees up later")
+        XCTAssertEqual(AccountRouting.pick([candidate(usedUpLater), candidate(usedUp)], model: nil, now: now)?.choice.id,
+                       "used-up", "When every account has a window used up, the one that frees up first")
     }
 
     /// A limit of one model counts for a task on that model, and for one whose model is not known.

@@ -70,6 +70,9 @@ it, leaves out a model another account's list names is passed over however much 
 spent account then keep their account rather than go to one that would refuse the model.
 No authentication or history files are copied and no account folder changes. The reason for each
 assignment is kept in the Yardlet file `~/.yardlet/account-assignments.json` (task ID → account ID, window and time).
+An account with a limit window at or under 10% left is nearly spent, and is picked only when every account is. Of
+those, an account with something left in every limit comes first, the one that frees up first; an account with a limit
+used up, where a task would stop at once, is picked only when every account has one, again the one that frees up first.
 Assignment stays within the harness: when every account is nearly out, an agent's tool result names the other harnesses
 with room and the agent chooses (see [AGENT_BROWSER_TOOLS.md](AGENT_BROWSER_TOOLS.md), "Room on other harnesses").
 
@@ -79,8 +82,8 @@ tasks start on, unless that account's last reading says it is nearly spent (a li
 and the accounts in automatic assignment. A run that continues a Claude task first moves the task, as Continue with
 another account does, to the account picked among its own and the accounts that share its history, are in automatic
 assignment and are signed in; only the binding changes, and the provider ID, scope and history stay. When every account
-is nearly spent the run goes to the one that frees up first. A run with no other account, or whose move is refused,
-keeps its account and goes as before. So does a run to a task that a move would have to wait for (background work,
+is nearly spent the run goes to the account automatic assignment then picks, as above. A run with no other account, or
+whose move is refused, keeps its account and goes as before. So does a run to a task that a move would have to wait for (background work,
 hosted runs, a message on its way), since moving closes its CLI; a run to a task that already waits to move sends its
 message after that move. While Settings › Harness Accounts moves tasks to an account with room, a continued task
 whose prompt cache still lives (its last activity less than an hour ago) stays on its account, since moving it would
