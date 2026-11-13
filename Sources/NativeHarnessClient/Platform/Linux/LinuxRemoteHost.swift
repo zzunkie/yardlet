@@ -3,18 +3,26 @@ import Glibc
 import YardletRemote
 
 extension RemoteHostPlatform {
-    /// The Linux host's: the computer named by its host name, always on power, and nothing to keep awake. The relay the
+    /// The Linux host's, keeping to private networks.
+    static var current: RemoteHostPlatform { linux(reach: .privateNetworks) }
+
+    /// The Linux host's: the direct-path listener on BSD sockets (`RemoteLinuxListener`), on loopback, private and
+    /// Tailscale addresses unless the person chose every address; the interfaces from `getifaddrs` and their changes
+    /// from netlink; the computer named by its host name, always on power, and nothing to keep awake. The relay the
     /// build carries is in files beside its executable, as the Windows app's is.
-    static var current: RemoteHostPlatform {
+    static func linux(reach: RemoteLinuxListener.Reach) -> RemoteHostPlatform {
         RemoteHostPlatform(
-            makeListener: { _, _ in nil },
-            watchNetwork: { _ in nil },
-            interfaces: { [] },
-            resolveName: { _ in nil },
+            makeListener: { server, identity in
+                RemoteLinuxListener(server: server, staticKey: identity.noise, reach: reach)
+            },
+            watchNetwork: { changed in RemoteAddressSelection.watchSystemInterfaces(changed) },
+            interfaces: RemoteAddressSelection.systemInterfaces,
+            resolveName: RemoteAddressSelection.magicDNSName(for:),
             isOnPower: { true },
             holdAwake: { _ in nil },
             computerName: { LinuxHostName.current },
-            builtInRelay: { RemoteHostPlatform.relay(besides: Bundle.main.executableURL) })
+            builtInRelay: { RemoteHostPlatform.relay(besides: Bundle.main.executableURL) },
+            advertisesPublicAddresses: reach == .everyAddress)
     }
 }
 
@@ -22,13 +30,15 @@ extension RemoteControlService {
     /// The remote for the Linux host: the paired devices, the audit log and the keys under the data folder's `remote/`
     /// (`LinuxHostPaths`), in the Mac's format. Signing in to a relay account is not offered, so no account token is
     /// kept.
-    static func live(model: AppModel, name: String? = nil) -> RemoteControlService {
+    static func live(model: AppModel, name: String? = nil,
+                     reach: RemoteLinuxListener.Reach = .privateNetworks) -> RemoteControlService {
         let folder = LinuxHostPaths.remoteFolder()
         return RemoteControlService(
             bridge: AppModelRemoteBridge(model: model),
             deviceStore: RemoteDeviceStore(fileURL: folder.appending(path: "devices.json")),
             audit: RemoteAuditLog(fileURL: folder.appending(path: "audit.log")),
             identityStore: RemoteFileIdentityStore(fileURL: folder.appending(path: "identity.json")),
+            platform: .linux(reach: reach),
             macName: name,
             appVersion: LinuxHostVersion.current)
     }

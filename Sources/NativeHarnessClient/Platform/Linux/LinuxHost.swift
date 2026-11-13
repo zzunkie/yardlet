@@ -14,21 +14,23 @@ final class LinuxHost {
     let model: AppModel
     let remote: RemoteControlService
     let name: String
+    let reach: RemoteLinuxListener.Reach
     private var control: UnixSocketListener?
     /// The first look for the harnesses' installs, on the login shell's `PATH`; `status` answers once it is done, so it
     /// never lists a harness as missing that the host is still looking for.
     private var harnessesFound: Task<Void, Never>?
     private var isStopping = false
 
-    private init(name: String) {
+    private init(name: String, reach: RemoteLinuxListener.Reach) {
         self.name = name
+        self.reach = reach
         model = AppModel.live()
-        remote = RemoteControlService.live(model: model, name: name)
+        remote = RemoteControlService.live(model: model, name: name, reach: reach)
         model.remoteControl = remote
     }
 
     /// Starts the host and runs it until it is stopped; never returns.
-    static func run(name: String?) -> Never {
+    static func run(name: String?, reach: RemoteLinuxListener.Reach) -> Never {
         // A write to a harness or a device that has gone must fail as an error, not end the host.
         LinuxSignals.absorb(SIGPIPE)
         let lock: HostLock
@@ -38,7 +40,7 @@ final class LinuxHost {
             HostOutput.error("\(error)")
             exit(1)
         }
-        let host = LinuxHost(name: name ?? LinuxHostName.current)
+        let host = LinuxHost(name: name ?? LinuxHostName.current, reach: reach)
         host.watchSignals()
         Task { await host.start(lock: lock) }
         // The engine's timers run on the main run loop, which also runs the main actor's work here; a timer that never
@@ -202,7 +204,8 @@ final class LinuxHost {
         return HostStatus(
             version: LinuxHostVersion.current, processID: getpid(), name: name,
             dataFolder: LinuxHostPaths.dataRootLocation().path(percentEncoded: false),
-            remote: HostStatus.Remote(enabled: remote.isEnabled, direct: direct, port: port, directFailure: reach.directFailure,
+            remote: HostStatus.Remote(enabled: remote.isEnabled, listensOn: self.reach.rawValue, direct: direct, port: port,
+                                      directFailure: reach.directFailure,
                                       addresses: remote.directHosts, relay: relay, relayFailure: relayFailure),
             devices: devices, harnesses: harnesses, projects: projects(),
             tasks: model.store.sessions.count, runningTasks: model.activeLocalSessions.count,

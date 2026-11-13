@@ -1,13 +1,17 @@
 import Dispatch
 import Foundation
 import Glibc
+import YardletRemote
 
 /// `yardlet`, the Linux host's command (docs/LINUX_HOST.md). `yardlet host start` runs the host in the foreground;
 /// the other commands reach the running host over its control socket.
 @main
 enum YardletCommand {
     static let usage = """
-    usage: yardlet host start [--name NAME]   Run the host in the foreground until it is stopped.
+    usage: yardlet host start [--name NAME] [--every-address]
+                                          Run the host in the foreground until it is stopped. It takes
+                                          connections on loopback, private and Tailscale addresses, and
+                                          on public ones too with --every-address.
            yardlet host status [--json]       Show the running host: its paths, devices and harnesses.
            yardlet host pair [--no-wait]      Show a link and a QR code that pair a device with this host.
            yardlet host project add FOLDER    Make FOLDER a project that devices can start tasks in.
@@ -41,10 +45,10 @@ enum YardletCommand {
         let options = Array(arguments.dropFirst())
         switch arguments.first {
         case "start":
-            guard options.isEmpty || (options.count == 2 && options[0] == "--name" && !options[1].isEmpty) else {
-                return refuse("usage: yardlet host start [--name NAME]")
+            guard let start = StartOptions(options) else {
+                return refuse("usage: yardlet host start [--name NAME] [--every-address]")
             }
-            LinuxHost.run(name: options.count == 2 ? options[1] : nil)
+            LinuxHost.run(name: start.name, reach: start.reach)
         case "status":
             return status(json: options == ["--json"])
         case "pair":
@@ -53,6 +57,27 @@ enum YardletCommand {
             return project(options)
         default:
             return refuse(usage)
+        }
+    }
+
+    /// What `start` takes: the name devices see, and whether to listen on every address.
+    struct StartOptions: Equatable {
+        var name: String?
+        var reach: RemoteLinuxListener.Reach = .privateNetworks
+
+        init?(_ arguments: [String]) {
+            var rest = arguments[...]
+            while let option = rest.popFirst() {
+                switch option {
+                case "--name":
+                    guard let value = rest.popFirst(), !value.isEmpty else { return nil }
+                    name = value
+                case "--every-address":
+                    reach = .everyAddress
+                default:
+                    return nil
+                }
+            }
         }
     }
 
@@ -96,7 +121,8 @@ enum YardletCommand {
         switch remote.direct {
         case "ready":
             let addresses = remote.addresses.isEmpty ? "no Tailscale or private address yet" : remote.addresses.joined(separator: ", ")
-            lines.append("Direct: listening on port \(remote.port.map(String.init) ?? "?"): \(addresses)")
+            let scope = remote.listensOn == "all" ? "every address" : "loopback, private and Tailscale addresses"
+            lines.append("Direct: listening on port \(remote.port.map(String.init) ?? "?") of \(scope); devices are told \(addresses)")
         case "failed": lines.append("Direct: failed: \(remote.directFailure ?? "unknown")")
         default: lines.append("Direct: \(remote.direct)")
         }
@@ -131,7 +157,9 @@ enum YardletCommand {
             if json {
                 print(String(decoding: (try? JSONEncoder.hostControl.encode(opened)) ?? Data(), as: UTF8.self))
             } else {
-                print("Open this link on the device, or scan the code with the Yardlet app:\n")
+                print("Scan the code with the Yardlet app, or open the link on the device:\n")
+                // A terminal shows the code; output to a file or a pipe gets the link alone.
+                if isatty(STDOUT_FILENO) == 1, let code = TerminalQRCode.render(link) { print(code + "\n") }
                 print(link)
                 if let expiresAt = opened.expiresAt {
                     print("\nThe link works once, until \(expiresAt.formatted(date: .omitted, time: .shortened)).")

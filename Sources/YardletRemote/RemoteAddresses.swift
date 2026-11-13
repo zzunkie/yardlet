@@ -189,9 +189,87 @@ public enum RemoteAddressSelection {
         guard getnameinfo(address, socklen_t(length), &host, DWORD(host.count), nil, 0, NI_NUMERICHOST) == 0 else { return nil }
         return String(decoding: host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
+
+    #elseif canImport(Glibc)
+
+    /// Every IPv4 and IPv6 address of the computer's interfaces that are up (`getifaddrs`), each under its interface's
+    /// name. Reads only.
+    public static func systemInterfaces() -> [RemoteInterfaceAddress] {
+        var first: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&first) == 0, let start = first else { return [] }
+        defer { freeifaddrs(first) }
+        var result: [RemoteInterfaceAddress] = []
+        for pointer in sequence(first: start, next: { $0.pointee.ifa_next }) {
+            let entry = pointer.pointee
+            guard entry.ifa_flags & UInt32(IFF_UP) != 0, let address = entry.ifa_addr else { continue }
+            let family: RemoteInterfaceAddress.Family
+            let length: Int
+            switch Int32(address.pointee.sa_family) {
+            case AF_INET:
+                family = .ipv4
+                length = MemoryLayout<sockaddr_in>.size
+            case AF_INET6:
+                family = .ipv6
+                length = MemoryLayout<sockaddr_in6>.size
+            default: continue
+            }
+            guard let text = numericHost(address, length: Int32(length)) else { continue }
+            result.append(RemoteInterfaceAddress(interface: String(cString: entry.ifa_name), address: text, family: family))
+        }
+        return result
+    }
+
+    /// The computer's MagicDNS name, when the system resolver names its Tailscale IPv4 address with one
+    /// (`*.ts.net`). A reverse lookup only; it blocks, so call it off the main thread.
+    public static func magicDNSName(for ipv4: String) -> String? {
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        guard inet_pton(AF_INET, ipv4, &address.sin_addr) == 1 else { return nil }
+        var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+        let status = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getnameinfo($0, socklen_t(MemoryLayout<sockaddr_in>.size), &host, socklen_t(host.count), nil, 0, NI_NAMEREQD)
+            }
+        }
+        guard status == 0 else { return nil }
+        return tailnetName(host)
+    }
+
+    /// Calls `changed` on a thread of its own whenever an interface or one of its addresses comes or goes (a netlink
+    /// socket on the kernel's link and address groups), until the returned stop is called; nil when the kernel refuses
+    /// the socket.
+    public static func watchSystemInterfaces(_ changed: @escaping @Sendable () -> Void) -> (() -> Void)? {
+        RemoteNetlinkWatch.start(changed).map { watch in { watch.stop() } }
+    }
+
+    /// An address as text, as `getnameinfo` writes it.
+    static func numericHost(_ address: UnsafePointer<sockaddr>, length: Int32) -> String? {
+        var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+        guard getnameinfo(address, socklen_t(length), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else { return nil }
+        return String(decoding: host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    }
     #endif
 
-    #if canImport(Darwin) || os(Windows)
+    /// Whether a host that keeps to private networks listens on `address`: loopback, a private IPv4 address of the
+    /// same network (RFC 1918) or a Tailscale address. The Linux host listens on these alone unless the person chose
+    /// every address (docs/LINUX_HOST.md, "Direct paths").
+    public static func isPrivateListeningAddress(_ address: String) -> Bool {
+        address == "127.0.0.1" || address == "::1" || isPrivateLAN(address) || isTailscale(address)
+    }
+
+    /// A public address a phone can be told when the host listens on every address: an IPv4 address that is not
+    /// private, loopback, link-local or Tailscale's, or a global IPv6 address (2000::/3).
+    public static func isPublic(_ address: String) -> Bool {
+        if let ipv4 = bytes(of: address, family: AF_INET, count: 4) {
+            return !(ipv4[0] == 127 || ipv4[0] == 0 || ipv4[0] >= 224 || ipv4[0] == 169 && ipv4[1] == 254
+                || isPrivateLAN(address) || isTailscale(address))
+        }
+        let bare = address.split(separator: "%", maxSplits: 1).first.map(String.init) ?? address
+        guard let ipv6 = bytes(of: bare, family: AF_INET6, count: 16) else { return false }
+        return ipv6[0] & 0xE0 == 0x20
+    }
+
+    #if canImport(Darwin) || os(Windows) || canImport(Glibc)
     /// The name a reverse lookup wrote, when it is a Tailscale MagicDNS one.
     private static func tailnetName(_ host: [CChar]) -> String? {
         var name = String(decoding: host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)

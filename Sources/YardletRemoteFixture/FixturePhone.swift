@@ -7,8 +7,14 @@ import YardletRemote
 /// each step. The answer is the one that names TEXT, as the Windows app's stand-in harness words its answers. It
 /// exits 0 once that answer has come in, and 1 when anything fails or `timeout` passes first. The Windows app's
 /// host check uses it (Windows/scripts/check-remote-host.ps1).
+///
+/// With `--new-chat HARNESS` instead of `--task`, it starts a chat on that harness with TEXT as its first message, as
+/// a phone's new-task screen does, and allows each approval the chat then waits on, as a person would on the phone:
+/// the Linux host's check uses it, since a headless host has no card of its own to allow on
+/// (scripts/linux/check-remote.sh).
 enum FixturePhone {
-    static func run(link text: String, task title: String, message: String, timeout: TimeInterval = 180) async -> Int32 {
+    static func run(link text: String, task title: String, newChat harness: String? = nil, message: String,
+                    timeout: TimeInterval = 180) async -> Int32 {
         guard let url = URL(string: text), let link = RemoteSecurePairingURL.parse(url) else {
             print("Phone: not a pairing link")
             return 1
@@ -33,11 +39,32 @@ enum FixturePhone {
         }
         defer { deadline.cancel() }
         var taskID: String?
+        var allowed: Set<String> = []
         for await inbound in connection.inbound {
             switch inbound {
             case let .state(.connected(path, _)):
                 print("Phone: connected through \(path)")
+                if let harness, taskID == nil {
+                    _ = await connection.send(id: "create", .createTask(RemoteTaskStart(
+                        projectID: "chats", text: message, harness: harness)))
+                    continue
+                }
                 _ = await connection.send(id: "snapshot", .snapshot)
+            case let .response(response) where response.re == "create":
+                guard response.ok, let id = response.taskId else {
+                    print("Phone: the chat did not start: \(response.error?.message ?? "no task")")
+                    await connection.stop()
+                    return 1
+                }
+                print("Phone: started a chat on \(harness ?? "")")
+                taskID = id
+                _ = await connection.send(id: "subscribe", .subscribeTask(taskID: id))
+            case let .event(event) where event.event == .attention && event.taskId == taskID
+                && event.pendingRequest == .approval && harness != nil:
+                guard let requestID = event.requestId, allowed.insert(requestID).inserted else { continue }
+                print("Phone: allowing \(event.summary ?? "a request")")
+                _ = await connection.send(id: "allow", .answerApproval(taskID: event.taskId ?? "", requestID: requestID,
+                                                                         answer: .allowOnce))
             case let .state(.waiting(_, reason)):
                 print("Phone: reconnecting: \(reason)")
             case .state(.revoked), .state(.stopped):

@@ -612,9 +612,13 @@ final class RemoteControlService {
         let tailscale4 = interfaceAddresses.filter { $0.family == .ipv4 && RemoteAddressSelection.isTailscale($0.address) }.map(\.address)
         let tailscale6 = interfaceAddresses.filter { $0.family == .ipv6 && RemoteAddressSelection.isTailscale($0.address) }
             .map { "[\($0.address)]" }
-        var hosts = Array(NSOrderedSet(array: local + tailscale4)) as? [String] ?? []
+        let publicAddresses = platform.advertisesPublicAddresses
+            ? interfaceAddresses.filter { RemoteAddressSelection.isPublic($0.address) } : []
+        let public4 = publicAddresses.filter { $0.family == .ipv4 }.map(\.address)
+        let public6 = publicAddresses.filter { $0.family == .ipv6 }.map { "[\($0.address)]" }
+        var hosts = Array(NSOrderedSet(array: local + tailscale4 + public4)) as? [String] ?? []
         if let magicDNSName { hosts.append(magicDNSName) }
-        hosts += tailscale6
+        hosts += tailscale6 + public6
         return hosts.map { "\($0):\(securePort)" }
     }
 
@@ -694,6 +698,9 @@ struct RemoteHostPlatform {
     var computerName: () -> String
     /// The relay the build carries and a second address of it, nil in a build without one.
     var builtInRelay: () -> (url: String, alternate: String?)?
+    /// Whether its listener takes connections on public addresses too, which devices are then told after the private
+    /// and Tailscale ones: a Linux host the person chose that for. The Mac's and Windows' name only the latter.
+    var advertisesPublicAddresses = false
 }
 
 extension RemoteHostPlatform {

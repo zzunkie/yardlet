@@ -14,7 +14,7 @@ import YardletRemoteFixtureSupport
 //   swift run --build-system native yardlet-remote-fixture [--single-use-pairing] [--secure-port 47616]
 //       [--host 10.0.2.2:47616]… [--relay ws://127.0.0.1:8787] [--relay-public ws://10.0.2.2:8787]
 //       [--approve-links] [--signed-out HARNESS]…
-//   swift run --build-system native yardlet-remote-fixture --pair LINK --task TITLE --send TEXT
+//   swift run --build-system native yardlet-remote-fixture --pair LINK (--task TITLE | --new-chat HARNESS) --send TEXT
 //
 // It serves the protocol (§11–§17) with a fixed fixture Mac key and prints the pairing URL (its secret is
 // fixed and reusable unless --single-use-pairing). --relay opens the fixture's room on a local relay
@@ -45,11 +45,12 @@ func value(after flag: String) -> String? {
 if arguments.contains("--help") || arguments.contains("-h") {
     print("usage: yardlet-remote-fixture [--single-use-pairing] [--secure-port PORT] [--host HOST:PORT]… "
           + "[--relay URL] [--relay-public URL] [--approve-links] [--signed-out HARNESS]…\n"
-          + "       yardlet-remote-fixture --pair LINK --task TITLE --send TEXT")
+          + "       yardlet-remote-fixture --pair LINK (--task TITLE | --new-chat HARNESS) --send TEXT")
     exit(0)
 }
 if let link = value(after: "--pair") {
-    exit(await FixturePhone.run(link: link, task: value(after: "--task") ?? "", message: value(after: "--send") ?? ""))
+    exit(await FixturePhone.run(link: link, task: value(after: "--task") ?? "", newChat: value(after: "--new-chat"),
+                                message: value(after: "--send") ?? ""))
 }
 let singleUse = arguments.contains("--single-use-pairing")
 #if canImport(Network)

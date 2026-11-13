@@ -35,6 +35,9 @@ struct HostControlReply: Codable, Equatable {
 struct HostStatus: Codable, Equatable {
     struct Remote: Codable, Equatable {
         var enabled: Bool
+        /// Where the direct-path listener takes connections: `private` (loopback, private and Tailscale addresses) or
+        /// `all`, which the person chose with `--every-address`.
+        var listensOn: String
         /// The direct-path listener: `stopped`, `starting`, `ready` or `failed`.
         var direct: String
         var port: UInt16?
