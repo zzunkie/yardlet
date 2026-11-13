@@ -405,6 +405,139 @@ final class NewTaskHomeTests: XCTestCase {
         XCTAssertEqual(draft.text, "Also tidy the README.\n\nContinue on main.")
     }
 
+    // MARK: - The desk
+
+    func testTheDeskPutsWhatWaitsFirstWhereverItsTaskSits() {
+        func subtask(_ title: String, of parent: SessionRecord, at time: TimeInterval, status: SessionStatus = .completed,
+                     unread: Bool = false, parentRead: Bool = false) -> SessionRecord {
+            SessionRecord(harness: .claudeCode, workspaceURL: Self.folder, runtimeExecutableURL: URL(filePath: "/tmp/runtime"),
+                          title: title, status: status, updatedAt: Date(timeIntervalSince1970: time),
+                          hasUnreadUpdate: unread, isParentRead: parentRead,
+                          completionState: status == .failed ? .failed : .completed, parentTaskID: parent.id)
+        }
+        // A coordinator whose subtasks run, wait, failed and finished, its own report unread.
+        let coordinator = task("Coordinate the release", at: 50, unread: true)
+        let approval = subtask("Push the branch", of: coordinator, at: 90, status: .waitingForApproval)
+        let running = subtask("Run the tests", of: coordinator, at: 80, status: .running)
+        let nested = SessionRecord(harness: .codex, workspaceURL: Self.folder, runtimeExecutableURL: URL(filePath: "/tmp/runtime"),
+                                   title: "Nested", status: .running, updatedAt: Date(timeIntervalSince1970: 81),
+                                   parentTaskID: running.id)
+        let failed = subtask("Build the bundle", of: coordinator, at: 70, status: .failed, unread: true)
+        let readByParent = subtask("Read the docs", of: coordinator, at: 60, unread: true, parentRead: true)
+        let unreadByParent = subtask("Sort the issues", of: coordinator, at: 65, unread: true)
+        // A task that coordinated tasks now all archived, and tasks of their own.
+        let archivedCoordinator = task("Plan the week", at: 40, unread: true)
+        let alone = task("Tidy the README", at: 85, status: .running)
+        let finished = task("Compare clauses", at: 30, unread: true)
+        let checks = task("Speed up the list", at: 20)
+        let idle = task("Old work", at: 10)
+        let sessions = [coordinator, approval, running, nested, failed, readByParent, unreadByParent,
+                        archivedCoordinator, alone, finished, checks, idle]
+        let details = [failed.id: TaskAttentionDetail(errorMessage: "Build failed")]
+        let prs = [checks.id: pullRequest(48, checks: .failing), finished.id: pullRequest(9, checks: .passing)]
+
+        let desk = DeskProjection.desk(sessions: sessions, details: details, archivedParents: [archivedCoordinator.id],
+                                       agents: { $0 == alone.id ? 2 : 0 }, pullRequest: { prs[$0] })
+
+        XCTAssertEqual(desk.waiting.map(\.id), [approval.id, failed.id, coordinator.id, archivedCoordinator.id, checks.id],
+                       "A request first, then what stopped or reports, the most recent first, wherever the task is nested")
+        XCTAssertEqual(desk.waiting.map(\.kind), [
+            .request(.awaitingApproval), .stopped(.failed(message: "Build failed")), .report, .report,
+            .checksFailed(pullRequest(48, checks: .failing)),
+        ])
+        XCTAssertEqual(desk.finished.map(\.id), [unreadByParent.id, finished.id],
+                       "A result its parent read is not here; one no coordinator wrote is")
+        XCTAssertEqual(desk.families.map(\.id), [alone.id, coordinator.id], "Families with a task running, most recent first")
+        let family = desk.families[1]
+        XCTAssertNil(family.status, "The coordinator itself does nothing")
+        XCTAssertEqual(family.members.map(\.id), [approval.id, nested.id, running.id],
+                       "Its waiting and running tasks under it, the most urgent first, at any depth")
+        XCTAssertEqual(family.running, 2)
+        XCTAssertEqual(desk.families[0].members, [])
+        XCTAssertEqual(desk.families[0].agents, 2)
+
+        // The header's numbers are the zones'.
+        XCTAssertEqual(desk.running, desk.families.reduce(0) { $0 + $1.running })
+        XCTAssertEqual(desk.running, 3)
+        XCTAssertEqual(desk.waiting.count,
+                       TaskAttentionProjection.attentionList(in: sessions, details: details).count - desk.finished.count + 1,
+                       "Everything the Dock badge counts is on the desk, plus the idle task's failing checks")
+        XCTAssertFalse(desk.isQuiet)
+
+        // Nothing waits, runs or is unread: a quiet day.
+        XCTAssertTrue(DeskProjection.desk(sessions: [idle, readByParent]).isQuiet)
+    }
+
+    func testTheDeskListsTodaysRunsAndUnreadMail() throws {
+        let calendar = Calendar(identifier: .gregorian)
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 11, day: 9, hour: 15, minute: 25)))
+        func time(_ hour: Int, _ minute: Int = 0, day: Int = 9) -> Date {
+            calendar.date(from: DateComponents(year: 2026, month: 11, day: day, hour: hour, minute: minute))!
+        }
+        var morning = ScheduledTask(name: "Promotion check", prompt: "", trigger: .daily(ScheduleTime(hour: 10, minute: 0)),
+                                    destination: ScheduleDestination(harness: .claudeCode))
+        morning.state.runs = [
+            ScheduledTaskRun(slot: time(10), at: time(10), trigger: .scheduled, outcome: .started),
+            ScheduledTaskRun(slot: time(10, day: 8), at: time(10, day: 8), trigger: .scheduled, outcome: .started),
+        ]
+        var evening = ScheduledTask(name: "Daily review", prompt: "", trigger: .daily(ScheduleTime(hour: 17, minute: 40)),
+                                    destination: ScheduleDestination(harness: .codex))
+        evening.state.runs = [ScheduledTaskRun(slot: time(12), at: time(12), trigger: .scheduled, outcome: .skipped)]
+        let off = ScheduledTask(name: "Off", prompt: "", trigger: .daily(ScheduleTime(hour: 20, minute: 0)),
+                                destination: ScheduleDestination(harness: .codex), isEnabled: false)
+        let runs = DeskProjection.todayRuns(schedules: [(morning, time(10, day: 10)), (evening, time(17, 40)),
+                                                        (off, time(20))], now: now, calendar: calendar)
+        XCTAssertEqual(runs.map(\.kind), [.ran, .upcoming], "What ran today, then what is still to come; nothing skipped or off")
+        XCTAssertEqual(runs.map(\.at), [time(10), time(17, 40)])
+        XCTAssertEqual(Desk(today: runs).remainingToday, 1)
+
+        let key = { MailThreadKey(accountID: UUID(), threadID: $0) }
+        let mail = [
+            MailThreadSummary(id: key("a"), subject: "Read", senders: [], snippet: "", date: time(9), messageCount: 1,
+                              isUnread: false, isStarred: false, hasAttachments: false, hasDraft: false),
+            MailThreadSummary(id: key("b"), subject: "Older", senders: [], snippet: "", date: time(8), messageCount: 1,
+                              isUnread: true, isStarred: false, hasAttachments: false, hasDraft: false),
+            MailThreadSummary(id: key("c"), subject: "Newer", senders: [], snippet: "", date: time(11), messageCount: 1,
+                              isUnread: true, isStarred: false, hasAttachments: false, hasDraft: false),
+        ]
+        XCTAssertEqual(DeskProjection.unreadMail(mail).map(\.subject), ["Newer", "Older"])
+    }
+
+    func testTheDeskLayoutFollowsTheHomesWidth() {
+        XCTAssertEqual(DeskLayout.choose(width: 879, calendarOn: true), .one)
+        XCTAssertEqual(DeskLayout.choose(width: 880, calendarOn: true), .two)
+        XCTAssertEqual(DeskLayout.choose(width: 1_199, calendarOn: true), .two)
+        XCTAssertEqual(DeskLayout.choose(width: 1_200, calendarOn: true), .zones)
+        XCTAssertEqual(DeskLayout.choose(width: 1_200, calendarOn: false), .two, "Three zones need the calendar")
+        XCTAssertEqual(DeskLayout.choose(width: 879, calendarOn: false), .one)
+    }
+
+    /// Four hundred tasks in forty projects, a quarter of them subtasks: the desk is laid out once for
+    /// the whole of it (about 2 ms in a debug build on an M-series Mac), and printed to compare.
+    func testTheDeskIsLaidOutOnceForFourHundredTasks() {
+        var sessions: [SessionRecord] = []
+        var details: [UUID: TaskAttentionDetail] = [:]
+        for index in 0..<400 {
+            let folder = URL(filePath: "/tmp/new-task-home/project-\(index % 40)")
+            let parent = index % 4 == 3 ? sessions[index - 1].id : nil
+            let status: SessionStatus = [.running, .completed, .completed, .waitingForApproval, .ready][index % 5]
+            let session = SessionRecord(harness: index.isMultiple(of: 2) ? .claudeCode : .codex, workspaceURL: folder,
+                                        runtimeExecutableURL: URL(filePath: "/tmp/runtime"), title: "Task \(index)",
+                                        status: status, updatedAt: Date(timeIntervalSince1970: Double(index)),
+                                        hasUnreadUpdate: index % 3 == 0, completionState: .completed, parentTaskID: parent)
+            if index % 7 == 0 { details[session.id] = TaskAttentionDetail(pendingRequest: .input) }
+            sessions.append(session)
+        }
+        let clock = ContinuousClock()
+        var desk = Desk()
+        let elapsed = clock.measure {
+            for _ in 0..<10 { desk = DeskProjection.desk(sessions: sessions, details: details) }
+        }
+        print("The desk of 400 tasks: \(elapsed / 10) per layout")
+        XCTAssertFalse(desk.waiting.isEmpty)
+        XCTAssertFalse(desk.families.isEmpty)
+    }
+
     // MARK: - Keyboard
 
     func testTheKeyboardMovesFromTheComposerThroughTheRowsAndBack() {

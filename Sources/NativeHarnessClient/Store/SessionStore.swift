@@ -11,11 +11,15 @@ final class SessionStore {
             archivedParentIDs = Dictionary(
                 (archivedSessions ?? []).compactMap { record in record.session.parentTaskID.map { (record.id, $0) } },
                 uniquingKeysWith: { first, _ in first })
+            archivedParentTaskIDs = Set(archivedParentIDs.values)
         }
     }
     /// The task each archived task was started from, which the sidebar follows to nest a task whose
     /// parent is archived under the nearest task it lists (`SidebarProjection.nest`).
     private(set) var archivedParentIDs: [UUID: UUID] = [:]
+    /// The tasks an archived task was started from: a task whose subtasks are all archived still
+    /// coordinated them (`DeskProjection.desk`).
+    private(set) var archivedParentTaskIDs: Set<UUID> = []
     /// The shown task, or the focused split pane's task. `SplitStore` owns the arrangement and
     /// keeps this mirror in step, so existing single-selection callers and tests stay unchanged.
     var selectedSessionID: SessionRecord.ID? {
