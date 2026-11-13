@@ -48,7 +48,7 @@ enum YardletCommand {
         case "status":
             return status(json: options == ["--json"])
         case "pair":
-            return pair(waits: options != ["--no-wait"], json: options.contains("--json"))
+            return pair(waits: !options.contains("--no-wait"), json: options.contains("--json"))
         case "project":
             return project(options)
         default:
