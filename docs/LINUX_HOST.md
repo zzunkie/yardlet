@@ -184,9 +184,9 @@ sets, pairs a phone that chats with it, updates to a newer package (the service 
 says it is up to date), and uninstalls, which leaves linger on as it found it. `scripts/linux/check-distribution.sh`
 runs the package in the containers of the distributions below, on the runner's network, and tries the relay with each
 one's libcurl against the relay run locally (`relay/`, `wrangler dev`), as `ws://` and as `wss://` through a TLS proxy
-whose certificate a CA made for the run signed (`scripts/linux/tls-proxy.py`): the fixture host opens its room and the
-fixture's phone pairs through it and gets an answer, and before the system trusts that CA the `wss://` room does not
-open. These are checks to read, not required ones.
+whose certificate a CA made for the run signed (`scripts/linux/tls-proxy.py`): the host opens its room there, the
+fixture host opens one too and the fixture's phone pairs through it and gets an answer, and before the system trusts
+that CA the `wss://` room does not open. Neither check opens rooms on the relay the package carries. These are checks to read, not required ones.
 
 ```sh
 swift build --product yardlet --force-resolved-versions

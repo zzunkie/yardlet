@@ -1,7 +1,8 @@
 #!/bin/sh
 # Installs the packed Linux host in a distribution's container and checks it there (docs/LINUX_HOST.md,
 # "Distributions"): the installer runs it or refuses it as EXPECT says (`runs`, or `refuses` for a glibc older than
-# 2.35), the host starts and answers `status`, and the relay works with this distribution's libcurl. The fixture host
+# 2.35), the host starts, answers `status` and opens its room on the local relay, and the relay works with this
+# distribution's libcurl. The fixture host
 # (yardlet-remote-fixture, built beside the package) opens its room on the local relay, as ws://127.0.0.1:8787 and
 # through TLS as wss://127.0.0.1:8443 (scripts/linux/tls-proxy.py, its certificate signed by the test CA in TLS), and
 # the fixture's phone pairs through it, starts a chat and gets its answer. Before the system trusts that CA, the wss
@@ -22,7 +23,8 @@ case " $ID ${ID_LIKE:-} " in
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends curl ca-certificates libsqlite3-0 > /dev/null
     ;;
   *" fedora "* | *" rhel "* | *" centos "*) dnf install -y -q curl sqlite-libs findutils > /dev/null 2>&1 || true ;;
-  *" arch "*) pacman -Sy --noconfirm --needed curl sqlite > /dev/null ;;
+  # Arch upgrades as a whole: a pinned image's packages and a fresh package list do not mix.
+  *" arch "*) pacman -Syu --noconfirm --needed curl sqlite > /dev/null ;;
 esac
 glibc=$(getconf GNU_LIBC_VERSION | awk '{ print $2 }')
 libcurl=$(curl --version | head -n 1 | sed -E 's/.*libcurl\/([^ ]+).*/\1/')
@@ -43,6 +45,9 @@ cat "$work/install.log"
 [ "$expect" = runs ] || { echo "The installer did not refuse glibc $glibc"; exit 1; }
 yardlet="$home/.local/bin/yardlet"
 "$yardlet" --version
+# The host's own relay socket opens on the local relay rather than the one the package carries.
+printf 'ws://127.0.0.1:8787\n' > "$home/.local/lib/yardlet/YardletRelayURL"
+rm -f "$home/.local/lib/yardlet/YardletRelayAlternateURL"
 
 "$yardlet" host start > "$work/host.log" 2>&1 &
 host=$!
@@ -52,6 +57,12 @@ for _ in $(seq 60); do
   sleep 1
 done
 [ -n "$up" ] || { cat "$work/host.log"; echo "| $name | $glibc | $libcurl | did not start | - | - |" > "$result"; exit 1; }
+hostRelay=no
+for _ in $(seq 30); do
+  "$yardlet" host status --json > "$work/status.json" 2> /dev/null || true
+  if grep -q '"relay":"connected"' "$work/status.json"; then hostRelay=yes; break; fi
+  sleep 1
+done
 "$yardlet" host status
 kill -TERM $host
 wait $host || { cat "$work/host.log"; echo 'The host did not stop cleanly'; exit 1; }
@@ -100,6 +111,7 @@ case " $ID ${ID_LIKE:-} " in
 esac
 secure=$(relay_chat wss://127.0.0.1:8443 secure)
 
+[ "$hostRelay" = yes ] || plain="no (the host's room did not open)"
 echo "| $name | $glibc | $libcurl | runs | $plain | $secure |" > "$result"
 cat "$result"
 [ "$plain" = yes ] && [ "$secure" = yes ] || { echo 'The relay did not work here'; exit 1; }

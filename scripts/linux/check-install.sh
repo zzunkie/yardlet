@@ -13,9 +13,23 @@ here=$(cd "$(dirname "$0")" && pwd)
 serve=$(mktemp -d)
 logs=$(mktemp -d)
 cp "$artifacts"/yardlet-host-* "$serve/"
+package=yardlet-host-linux-$(uname -m).tar.gz
+# Serves the package again without the relay it carries, which a check must not open rooms on, and with VERSION when
+# given, as the next release would serve it.
+repack() {
+  local work
+  work=$(mktemp -d)
+  tar -xzf "$serve/$package" -C "$work"
+  rm -f "$work/yardlet/YardletRelayURL" "$work/yardlet/YardletRelayAlternateURL"
+  [[ -z ${1:-} ]] || printf '%s\n' "$1" > "$work/yardlet/YardletVersion"
+  tar -C "$work" -czf "$serve/$package" yardlet
+  (cd "$serve" && sha256sum "$package" > "$package.sha256")
+}
+repack
 python3 -m http.server --bind 127.0.0.1 --directory "$serve" 8765 > "$logs/http.log" 2>&1 &
 server=$!
-trap 'kill $server 2>/dev/null || true; journalctl --user -u yardlet-host.service --no-pager 2>/dev/null | tail -n 60 || true' EXIT
+trap 'kill $server 2>/dev/null || true; journalctl --user -u yardlet-host.service --no-pager 2>/dev/null | tail -n 60 || true
+  echo "--- the stand-in'"'"'s calls"; cat "$HOME/stand-in/calls.log" 2>/dev/null || echo "(none)"' EXIT
 export YARDLET_HOST_DOWNLOAD=http://127.0.0.1:8765
 
 # systemd's user manager for this account, as a login would start it; a runner has no login session of its own.
@@ -65,14 +79,8 @@ link=$("$yardlet" host pair --no-wait --json | sed -E 's/.*"link":"([^"]*)".*/\1
 "$artifacts/yardlet-remote-fixture" --pair "$link" --new-chat kimi-code --send 'Add the install steps'
 
 echo '--- update'
-# The same package with a newer version, as the next release would serve it.
-repack=$(mktemp -d)
-package=yardlet-host-linux-$(uname -m).tar.gz
-tar -xzf "$serve/$package" -C "$repack"
 next="$version-update-check"
-printf '%s\n' "$next" > "$repack/yardlet/YardletVersion"
-tar -C "$repack" -czf "$serve/$package" yardlet
-(cd "$serve" && sha256sum "$package" > "$package.sha256")
+repack "$next"
 "$yardlet" host update | tee "$logs/update.txt"
 grep -q "Updated the Yardlet host from $version to $next" "$logs/update.txt"
 grep -q 'Restarted the service' "$logs/update.txt"
