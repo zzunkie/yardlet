@@ -391,6 +391,9 @@ private final class RemoteLinuxServing: @unchecked Sendable {
             }
             guard socket >= 0 else {
                 if errno == EINTR || errno == ECONNABORTED { continue }
+                // Out of descriptors or memory, the connection still waits and poll would wake at once for it again:
+                // the thread rests before it next looks.
+                if [EMFILE, ENFILE, ENOBUFS, ENOMEM].contains(errno) { usleep(100_000) }
                 return
             }
             let host = withUnsafePointer(to: address) {
