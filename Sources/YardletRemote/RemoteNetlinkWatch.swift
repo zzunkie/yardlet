@@ -31,11 +31,10 @@ final class RemoteNetlinkWatch: @unchecked Sendable {
                                       | Int32(SOCK_NONBLOCK.rawValue), netlinkRoute)
         guard descriptor >= 0 else { return nil }
         // struct sockaddr_nl: the family, two bytes of padding, the port ID (0: the kernel's choice) and the groups.
-        var address = (sa_family_t(AF_NETLINK), UInt16(0), UInt32(0), groups)
-        let bound = withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                bind(descriptor, $0, socklen_t(MemoryLayout.size(ofValue: address)))
-            }
+        let address = (sa_family_t(AF_NETLINK), UInt16(0), UInt32(0), groups)
+        let length = socklen_t(MemoryLayout.size(ofValue: address))
+        let bound = withUnsafePointer(to: address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(descriptor, $0, length) }
         }
         var pipe: [Int32] = [-1, -1]
         guard bound == 0, Glibc.pipe(&pipe) == 0 else {
