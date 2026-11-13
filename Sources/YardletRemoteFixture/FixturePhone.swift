@@ -8,8 +8,9 @@ import YardletRemote
 /// exits 0 once that answer has come in, and 1 when anything fails or `timeout` passes first. The Windows app's
 /// host check uses it (Windows/scripts/check-remote-host.ps1).
 ///
-/// With `--new-chat HARNESS` instead of `--task`, it starts a chat on that harness with TEXT as its first message, as
-/// a phone's new-task screen does, and allows each approval the chat then waits on, as a person would on the phone:
+/// With `--new-chat HARNESS` instead of `--task`, it lists the host's tasks, which is what has the host send it their
+/// requests, starts a chat on that harness with TEXT as its first message, as a phone's new-task screen does, and
+/// allows each approval the chat then waits on, as a person would on the phone:
 /// the Linux host's check uses it, since a headless host has no card of its own to allow on
 /// (scripts/linux/check-remote.sh).
 enum FixturePhone {
@@ -46,12 +47,11 @@ enum FixturePhone {
             switch inbound {
             case let .state(.connected(path, _)):
                 print("Phone: connected through \(path)")
+                _ = await connection.send(id: "snapshot", .snapshot)
                 if let harness, taskID == nil {
                     _ = await connection.send(id: "create", .createTask(RemoteTaskStart(
                         projectID: "chats", text: message, harness: harness)))
-                    continue
                 }
-                _ = await connection.send(id: "snapshot", .snapshot)
             case let .response(response) where response.re == "create":
                 guard response.ok, let id = response.taskId else {
                     print("Phone: the chat did not start: \(response.error?.message ?? "no task")")
@@ -75,7 +75,7 @@ enum FixturePhone {
             case let .response(response) where response.re == "snapshot":
                 let tasks = response.tasks ?? []
                 print("Phone: tasks: \(tasks.count)")
-                guard taskID == nil else { continue }
+                guard taskID == nil, harness == nil else { continue }
                 guard let task = tasks.first(where: { $0.title == title }) else {
                     print("Phone: no task named \(title)")
                     await connection.stop()
