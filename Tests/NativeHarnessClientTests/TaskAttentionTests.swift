@@ -9,12 +9,13 @@ final class TaskAttentionTests: XCTestCase {
         at time: TimeInterval,
         status: SessionStatus = .ready,
         unread: Bool = false,
+        parentRead: Bool = false,
         folder: String = "/tmp/attention",
         harness: HarnessKind = .claudeCode
     ) -> SessionRecord {
         SessionRecord(harness: harness, workspaceURL: URL(filePath: folder),
             runtimeExecutableURL: URL(filePath: "/tmp/runtime"), title: title, status: status,
-            updatedAt: Date(timeIntervalSince1970: time), hasUnreadUpdate: unread)
+            updatedAt: Date(timeIntervalSince1970: time), hasUnreadUpdate: unread, isParentRead: parentRead)
     }
 
     // MARK: - The one definition
@@ -35,6 +36,15 @@ final class TaskAttentionTests: XCTestCase {
         XCTAssertEqual(state(task("Shell, unread", at: 0, status: .completed, unread: true), busy: true), .unread)
         XCTAssertEqual(state(task("Read", at: 0, status: .completed)), .idle)
         XCTAssertEqual(state(task("Failed, read", at: 0, status: .failed)), .idle)
+        // A result the task's parent read for the person leaves attention (the Dock badge, ⌥⌘A, the activity
+        // view, the phone); the sidebar's mark stays until the person opens it.
+        let parentRead = task("Read by its parent", at: 0, status: .completed, unread: true, parentRead: true)
+        XCTAssertEqual(state(parentRead), .idle)
+        XCTAssertEqual(state(parentRead, busy: true), .active)
+        XCTAssertEqual(TaskAttentionProjection.count(in: [parentRead]), 0)
+        XCTAssertEqual(SidebarTaskIndicatorProjection.status(of: parentRead), .unread)
+        XCTAssertFalse(task("Read by the person", at: 0, parentRead: true).isParentRead,
+                       "Only an unread result is one a parent read")
         XCTAssertEqual([TaskAttentionState.waiting, .unread, .active, .idle].map(\.needsAttention),
                        [true, true, false, false])
         XCTAssertEqual([TaskAttentionState.idle, .active, .waiting, .unread].sorted(), [.waiting, .unread, .active, .idle])

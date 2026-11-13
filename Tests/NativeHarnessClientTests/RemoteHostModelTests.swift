@@ -1076,6 +1076,8 @@ final class RemoteHostModelTests: XCTestCase {
             task(6, .active, .running, running: true, parent: 1),
             task(7, .unread, .unread, projectID: RemoteTaskProjection.chatsProjectID, unread: true),
             task(8, .idle, nil),
+            // The host's attention leaves a result its parent read idle; its mark stays.
+            task(9, .idle, .unread, unread: true),
         ]
         tasks[7].completed = true
         tasks[7].answerLine = "The update is ready."
@@ -1088,7 +1090,7 @@ final class RemoteHostModelTests: XCTestCase {
         ], tasks: tasks)
         XCTAssertEqual(mirror.groups.map(\.displayName), ["acme-web"])
         XCTAssertEqual(mirror.projects.first?.isPinned, true)
-        XCTAssertEqual(mirror.groups.first?.sessions.count, 7)
+        XCTAssertEqual(mirror.groups.first?.sessions.count, 8)
         XCTAssertEqual(mirror.chats.map(\.title), ["Task 7"])
         XCTAssertEqual(mirror.sessions.first { $0.title == "Task 6" }?.parentTaskID, UUID(uuidString: Self.taskID(1)))
         func status(_ number: Int) -> SidebarTaskStatus? {
@@ -1103,6 +1105,8 @@ final class RemoteHostModelTests: XCTestCase {
         XCTAssertEqual(status(6), .running)
         XCTAssertEqual(status(7), .unread)
         XCTAssertNil(status(8))
+        XCTAssertEqual(status(9), .unread)
+        XCTAssertEqual(tasks.map(RemoteSidebarMirror.needsAttention), [true, true, true, true, false, false, true, false, false])
         let finishedID = try XCTUnwrap(UUID(uuidString: Self.taskID(8)))
         XCTAssertEqual(mirror.sessions.first { $0.id == finishedID }?.status, .completed)
         XCTAssertEqual(mirror.answerLines[finishedID], "The update is ready.")

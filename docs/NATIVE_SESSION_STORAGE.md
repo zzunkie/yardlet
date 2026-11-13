@@ -122,6 +122,11 @@ read nothing in it, whatever mode the files inside have.
   with the task's fields (`SessionRecord.idleCompactions`) and cleared when the task is deleted. Claude Code's records
   cannot tell such a compaction from a `/compact` the person sent; this list is what lets a read show it as it showed
   live. Existing rows keep none, and earlier builds ignore the column and their saves leave it as it is.
+- **Results a parent read:** `sessions.parent_read INTEGER NOT NULL DEFAULT 0`: 1 while the task's unread result is one
+  its parent task already read (`SessionRecord.isParentRead`; docs/AGENT_BROWSER_TOOLS.md, "Session tools"), so
+  attention no longer counts it while the sidebar's unread mark stays. It is 1 only together with `unread`: the person's
+  read clears both, and the next unread result no parent read sets it back to 0. Existing rows read as 0, and earlier
+  builds ignore the column and their saves leave it as it is.
 - **Read cache:** `~/.yardlet/transcripts/<task UUID>.json` keeps the newest 500 `[TranscriptEntry]` of every harness's
   task. A save while the task streams (about once a second) adds only the entries that are new or changed to
   `<task UUID>.jsonl`, one `{"entry":…}` a line after a first line `{"snapshot":<bytes>}` naming the size of the `.json`

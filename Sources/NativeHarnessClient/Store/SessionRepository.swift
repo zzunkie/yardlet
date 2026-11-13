@@ -149,9 +149,9 @@ actor SQLiteSessionRepository: SessionRepository {
         created_at, updated_at, provider_session_id, unread, completion_state,
         environment_scope, pinned, title_origin, provider_options, inherited_context, connection_binding,
         project_id, additional_roots, origin_workspace_path, worktree_name, branch, parent_task_id,
-        lineage_detached, previous_titles, placed_started_from_task_id, moved_to_chats, idle_compactions
+        lineage_detached, previous_titles, placed_started_from_task_id, moved_to_chats, idle_compactions, parent_read
         """
-    private static let recordColumnCount: Int32 = 28
+    private static let recordColumnCount: Int32 = 29
 
     private func record(from statement: OpaquePointer) throws -> SessionRecord {
         let harnessValue = text(statement, column: 1)
@@ -187,6 +187,7 @@ actor SQLiteSessionRepository: SessionRepository {
             updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 7)),
             providerSessionID: providerSessionID,
             hasUnreadUpdate: hasUnreadUpdate,
+            isParentRead: sqlite3_column_int(statement, 28) != 0,
             completionState: completionState,
             isPinned: isPinned,
             providerOptions: providerOptions,
@@ -220,8 +221,8 @@ actor SQLiteSessionRepository: SessionRepository {
                 environment_scope, pinned, title_origin, provider_options, inherited_context, connection_binding,
                 project_id, additional_roots, origin_workspace_path, worktree_name, branch, parent_task_id,
                 lineage_detached, previous_titles, placed_started_from_task_id, moved_to_chats, idle_compactions,
-                archived
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                parent_read, archived
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
             ON CONFLICT(id) DO UPDATE SET
                 harness = excluded.harness,
                 workspace_path = excluded.workspace_path,
@@ -248,7 +249,8 @@ actor SQLiteSessionRepository: SessionRepository {
                 previous_titles = excluded.previous_titles,
                 placed_started_from_task_id = excluded.placed_started_from_task_id,
                 moved_to_chats = excluded.moved_to_chats,
-                idle_compactions = excluded.idle_compactions;
+                idle_compactions = excluded.idle_compactions,
+                parent_read = excluded.parent_read;
             """
         let statement = try prepare(sql)
         defer { sqlite3_finalize(statement) }
@@ -296,6 +298,7 @@ actor SQLiteSessionRepository: SessionRepository {
         sqlite3_bind_int(statement, 27, session.isMovedToChats ? 1 : 0)
         bindOptional(session.idleCompactions.isEmpty ? nil : encodeStringList(session.idleCompactions),
                      to: 28, in: statement)
+        sqlite3_bind_int(statement, 29, session.isParentRead ? 1 : 0)
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw SessionRepositoryError.statementFailed(errorMessage())
         }
@@ -486,6 +489,9 @@ actor SQLiteSessionRepository: SessionRepository {
         // The compactions Yardlet made of an idle task arrived with idle compaction. Existing rows keep none;
         // an earlier build ignores the column and its saves leave it as it is.
         try addColumnIfMissing(name: "idle_compactions", definition: "TEXT")
+        // A result the parent task read arrived with keeping it out of attention. Existing rows read as
+        // not read by a parent; an earlier build ignores the column and its saves leave it as it is.
+        try addColumnIfMissing(name: "parent_read", definition: "INTEGER NOT NULL DEFAULT 0")
     }
 
     private func addColumnIfMissing(name: String, definition: String) throws {

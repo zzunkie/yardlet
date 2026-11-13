@@ -93,7 +93,8 @@ struct RemoteSidebarMirror: Equatable {
     }
 
     /// The host's task as a record the sidebar reads: its harness, title, when it was last active, its pin, the task
-    /// it is nested under, and a status the host's mark reads back from.
+    /// it is nested under, and a status the host's mark reads back from. An unread result the host's attention leaves
+    /// idle is one its parent read (`SessionRecord.isParentRead`).
     static func session(_ task: RemoteTask, id: UUID, folder: URL, project: Project?) -> SessionRecord {
         let status: SessionStatus = switch task.indicator {
         // A tab handed to the person is the browser's wait, not the turn's (`detail`).
@@ -112,6 +113,7 @@ struct RemoteSidebarMirror: Equatable {
         return SessionRecord(id: id, harness: HarnessKind(rawValue: task.harness), workspaceURL: folder,
                              runtimeExecutableURL: folder, title: task.title, status: status, createdAt: updatedAt,
                              updatedAt: updatedAt, hasUnreadUpdate: task.unread || task.attention == .unread,
+                             isParentRead: task.unread && task.attention == .idle,
                              completionState: completion(task), isPinned: task.pinned,
                              projectID: project?.id, parentTaskID: task.parentTaskId.flatMap(UUID.init(uuidString:)))
     }

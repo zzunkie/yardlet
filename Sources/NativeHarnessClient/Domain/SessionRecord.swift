@@ -68,6 +68,12 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
     var updatedAt: Date
     var providerSessionID: String?
     var hasUnreadUpdate: Bool
+    /// The task's parent task already read its unread result: the parent read the finished turn
+    /// (`read_task`, `wait_tasks`), or the turn's last call sent the parent a message it took
+    /// (`AppModel.turnEndReachedParent`). Attention (`TaskAttentionProjection`) no longer counts the
+    /// result, while the sidebar's unread mark stays until the person opens the task. Only with
+    /// `hasUnreadUpdate`: the person's read clears both, and a result no parent read clears it.
+    var isParentRead: Bool
     var completionState: SessionCompletionState
     var isPinned: Bool
     var providerOptions: [String: String]
@@ -143,6 +149,7 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
         updatedAt: Date = Date(),
         providerSessionID: String? = nil,
         hasUnreadUpdate: Bool = false,
+        isParentRead: Bool = false,
         completionState: SessionCompletionState = .none,
         isPinned: Bool = false,
         providerOptions: [String: String] = [:],
@@ -172,6 +179,7 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
         self.updatedAt = updatedAt
         self.providerSessionID = providerSessionID
         self.hasUnreadUpdate = hasUnreadUpdate
+        self.isParentRead = hasUnreadUpdate && isParentRead
         self.completionState = completionState
         self.isPinned = isPinned
         self.providerOptions = providerOptions
@@ -258,6 +266,7 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
         case updatedAt
         case providerSessionID
         case hasUnreadUpdate
+        case isParentRead
         case completionState
         case isPinned
         case providerOptions
@@ -295,6 +304,8 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         providerSessionID = try container.decodeIfPresent(String.self, forKey: .providerSessionID)
         hasUnreadUpdate = try container.decodeIfPresent(Bool.self, forKey: .hasUnreadUpdate) ?? false
+        let parentRead = try container.decodeIfPresent(Bool.self, forKey: .isParentRead) ?? false
+        isParentRead = hasUnreadUpdate && parentRead
         completionState = try container.decodeIfPresent(SessionCompletionState.self, forKey: .completionState) ?? .none
         isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
         providerOptions = try container.decodeIfPresent(

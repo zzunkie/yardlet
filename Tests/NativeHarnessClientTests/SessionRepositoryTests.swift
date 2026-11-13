@@ -42,6 +42,7 @@ final class SessionRepositoryTests: XCTestCase {
             updatedAt: timestamp,
             providerSessionID: "codex-thread-1",
             hasUnreadUpdate: true,
+            isParentRead: true,
             completionState: .completed,
             isPinned: true,
             providerOptions: ["model": "gpt-5", "sandbox": "enabled"],

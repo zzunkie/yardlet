@@ -1157,6 +1157,123 @@ final class SessionToolTests: XCTestCase {
         await model.shutdown()
     }
 
+    // MARK: - Results a parent read
+
+    /// A child task's finished result its parent read (`read_task`'s latest page, `wait_tasks`' answer) leaves
+    /// attention, the Dock badge among it, while the sidebar's unread mark stays until the person opens the task
+    /// (`SessionRecord.isParentRead`). Another task's read, a read while the turn still ran, and a failed result stay
+    /// the person's, and so does the next result no parent read.
+    func testAParentsReadOfItsChildsFinishedResultTakesItOutOfAttention() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let model = fixture.model
+        let child = fixture.sibling.id
+        func record() throws -> SessionRecord { try XCTUnwrap(model.store.sessions.first { $0.id == child }) }
+        func read(from caller: SessionRecord) async {
+            _ = await call(model, "read_task", ["task_id": child.uuidString], from: caller)
+        }
+        func wait(from caller: SessionRecord) async {
+            _ = await call(model, "wait_tasks", ["ids": [child.uuidString], "timeout_seconds": 0], from: caller)
+        }
+        await model.store.markUnread(id: child)
+        let badge = model.attentionBadgeCount
+
+        await read(from: fixture.busy)
+        await wait(from: fixture.busy)
+        XCTAssertFalse(try record().isParentRead, "A task that is not its parent reads it for no one")
+
+        await wait(from: fixture.caller)
+        XCTAssertTrue(try record().isParentRead)
+        XCTAssertTrue(try record().hasUnreadUpdate)
+        XCTAssertEqual(model.attentionBadgeCount, badge - 1)
+        XCTAssertEqual(SidebarTaskIndicatorProjection.status(of: try record()), .unread, "The sidebar's mark stays")
+        await model.store.markRead(id: child)
+        XCTAssertFalse(try record().hasUnreadUpdate || record().isParentRead, "The person's read clears both")
+
+        await model.store.markUnread(id: child)
+        try await model.store.updateSession(id: child, status: .running)
+        await read(from: fixture.caller)
+        await wait(from: fixture.caller)
+        XCTAssertFalse(try record().isParentRead, "Read while its turn still ran")
+        try await model.store.updateSession(id: child, status: .ready, hasUnreadUpdate: true, completionState: .completed)
+        XCTAssertFalse(try record().isParentRead)
+
+        await read(from: fixture.caller)
+        XCTAssertTrue(try record().isParentRead)
+        try await model.store.updateSession(id: child, status: .completed, hasUnreadUpdate: true)
+        XCTAssertFalse(try record().isParentRead, "The next result no parent read is the person's")
+
+        try await model.store.updateSession(id: child, status: .failed, hasUnreadUpdate: true)
+        await wait(from: fixture.caller)
+        await read(from: fixture.caller)
+        XCTAssertFalse(try record().isParentRead, "A failed turn stays the person's")
+        await model.shutdown()
+    }
+
+    /// A child task's turn whose last call sent its parent a message the parent took at once ends with a result the
+    /// parent has: it leaves attention at the turn's end, the sidebar's mark staying. A call after the report, or a
+    /// report left waiting for the parent, keeps the result the person's, and such a result clears the earlier mark.
+    func testAChildsTurnThatEndsOnAReportItsParentTookLeavesAttention() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let model = fixture.model
+        let adapter = fixture.adapter
+        let child = fixture.sibling.id
+        func record() throws -> SessionRecord { try XCTUnwrap(model.store.sessions.first { $0.id == child }) }
+        /// One turn of the child, started by its parent's message: it reports to its parent, makes `callsAfter`, and
+        /// answers. What the report's call answered.
+        func turn(_ number: Int, callsAfter: [String] = []) async throws -> String {
+            let asked = await call(model, "send_message_to_task", ["task_id": child.uuidString, "message": "Go \(number)."],
+                                   from: fixture.caller)
+            XCTAssertTrue(asked.text.hasPrefix("Delivered"), asked.text)
+            let report = HarnessActivity(id: "report-\(number)", kind: "mcp__yardlet__send_message_to_task",
+                                         title: "send_message_to_task")
+            await adapter.emit(.activityStarted(report), for: child)
+            let reported = await call(model, "send_message_to_task",
+                                      ["task_id": fixture.caller.id.uuidString, "message": "Done \(number)."],
+                                      from: fixture.sibling)
+            await adapter.emit(.activityCompleted(report), for: child)
+            for (index, kind) in callsAfter.enumerated() {
+                let after = HarnessActivity(id: "call-\(number)-\(index)", kind: kind, title: kind)
+                await adapter.emit(.activityStarted(after), for: child)
+                await adapter.emit(.activityCompleted(after), for: child)
+            }
+            await adapter.emit(.assistantMessageCompleted("Reported \(number)."), for: child)
+            await adapter.emit(.turnCompleted, for: child)
+            await adapter.emit(.sessionStatusChanged(.ready), for: child)
+            return reported.text
+        }
+        func ended() async throws {
+            try await waitUntil { (try? record())?.status == .ready && !model.sessionTools.reportedToParent.contains(child) }
+        }
+
+        let reported1 = try await turn(1)
+        XCTAssertTrue(reported1.hasPrefix("Delivered"), reported1)
+        try await waitUntil { (try? record())?.hasUnreadUpdate == true }
+        XCTAssertTrue(try record().isParentRead, "Marked with the unread mark, not after it")
+        try await ended()
+        XCTAssertEqual(TaskAttentionProjection.state(of: try record(), detail: model.taskAttentionDetails[child]), .idle)
+        XCTAssertEqual(SidebarTaskIndicatorProjection.status(of: try record(), detail: model.taskAttentionDetails[child]),
+                       .unread)
+
+        // The parent works now, and takes the next report into its turn; but the child called on after it.
+        let reported2 = try await turn(2, callsAfter: ["Bash"])
+        XCTAssertTrue(reported2.hasPrefix("Delivered"), reported2)
+        try await waitUntil { (try? record())?.isParentRead == false }
+        XCTAssertTrue(try record().hasUnreadUpdate)
+        try await ended()
+
+        // A report that waits for the parent to start is not one it has.
+        await model.store.markRead(id: child)
+        model.sessionTools.enqueue(.init(id: fixture.caller.id, callerID: UUID(), firstMessage: "Start", start: { _ in }))
+        let reported3 = try await turn(3)
+        XCTAssertTrue(reported3.hasPrefix("Queued"), reported3)
+        try await waitUntil { (try? record())?.hasUnreadUpdate == true }
+        XCTAssertFalse(try record().isParentRead)
+        model.sessionTools.dequeue(fixture.caller.id)
+        await model.shutdown()
+    }
+
     // MARK: - create_task
 
     func testCreateTaskMakesAChildTaskNestedUnderTheCallerWithoutTakingTheWindow() async throws {

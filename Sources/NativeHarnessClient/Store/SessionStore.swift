@@ -189,12 +189,15 @@ final class SessionStore {
     /// - Parameter updatesRecency: whether the change is activity that moves the task up the
     ///   sidebar: a turn starting, running, waiting, ending or failing. Connecting a runtime to a
     ///   saved task, and the ready state it reports when no turn was running, are not.
+    /// - Parameter readByParent: with `hasUnreadUpdate`, whether the task's parent already has the
+    ///   result (`SessionRecord.isParentRead`); any other unread mark is one no parent read.
     func updateSession(
         id: UUID,
         status: SessionStatus? = nil,
         providerSessionID: String? = nil,
         setProviderSessionID: Bool = false,
         hasUnreadUpdate: Bool? = nil,
+        readByParent: Bool = false,
         completionState: SessionCompletionState? = nil,
         inheritedContextDelivered: Bool? = nil,
         inheritedContext: SideChatContext? = nil,
@@ -214,6 +217,7 @@ final class SessionStore {
             }
             if let hasUnreadUpdate {
                 updated.hasUnreadUpdate = hasUnreadUpdate
+                updated.isParentRead = hasUnreadUpdate && readByParent
             }
             if let completionState {
                 updated.completionState = completionState
@@ -471,15 +475,28 @@ final class SessionStore {
         }
     }
 
+    /// The person read the task: its result is no longer unread, nor one only its parent read.
     func markRead(id: UUID) async {
         guard sessions.first(where: { $0.id == id })?.hasUnreadUpdate == true else { return }
+        func read(_ session: inout SessionRecord) {
+            session.hasUnreadUpdate = false
+            session.isParentRead = false
+        }
         do {
-            try await modify(id) { $0.hasUnreadUpdate = false }
+            try await modify(id, read)
         } catch {
             // Read state is advisory UI metadata; keep the in-memory selection usable if a
             // background index write is unavailable.
-            if let current = sessions.firstIndex(where: { $0.id == id }) { sessions[current].hasUnreadUpdate = false }
+            if let current = sessions.firstIndex(where: { $0.id == id }) { read(&sessions[current]) }
         }
+    }
+
+    /// The task's parent read its unread result for the person (`SessionRecord.isParentRead`).
+    func markParentRead(id: UUID) async {
+        guard let session = sessions.first(where: { $0.id == id }), session.hasUnreadUpdate, !session.isParentRead
+        else { return }
+        // A read by the person that finishes during the save leaves nothing for a parent to have read.
+        _ = try? await modify(id) { $0.isParentRead = $0.hasUnreadUpdate }
     }
 
     /// "Mark all as read" in the activity view: each task in turn, as opening it would.

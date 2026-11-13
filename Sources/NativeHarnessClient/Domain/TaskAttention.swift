@@ -32,6 +32,13 @@ struct TaskAttentionDetail: Equatable, Sendable {
 
     static let none = TaskAttentionDetail()
 
+    /// The latest turn left the person nothing but its result: no request open or waiting, no failure
+    /// or plan limit, no lost connection, no browser tab waiting.
+    var leavesOnlyAResult: Bool {
+        pendingRequest == nil && idleRequest == nil && usageLimit == nil && errorMessage == nil && !isReconnecting
+            && browserWait == nil
+    }
+
     /// The latest turn of a transcript: everything after the last request the person sent. A
     /// message read into the running turn belongs to it.
     static func reading(_ entries: [TranscriptEntry]) -> TaskAttentionDetail {
@@ -254,7 +261,9 @@ enum TaskAttentionProjection {
     /// result (a failed one included) is unread, else active while a bash-mode command runs, else
     /// idle. A task can wait without its status saying so: Codex keeps a turn running while it asks
     /// the person a question. Unlike the Codex app's `Jtr`, a running turn is not unread: the Dock
-    /// badge counted only finished results first, and this keeps that.
+    /// badge counted only finished results first, and this keeps that. A result the task's parent
+    /// already read (`SessionRecord.isParentRead`) is not unread here, though the sidebar's mark
+    /// still shows it until the person opens the task.
     static func state(
         of session: SessionRecord,
         detail: TaskAttentionDetail? = nil,
@@ -263,7 +272,7 @@ enum TaskAttentionProjection {
         if waitingRequest(of: session, detail: detail) != nil || detail?.browserWait != nil { return .waiting }
         // A turn a lost connection cut off continues on its own: the task is still working.
         if session.status == .running || detail?.isReconnecting == true { return .active }
-        if session.hasUnreadUpdate { return .unread }
+        if session.hasUnreadUpdate, !session.isParentRead { return .unread }
         if isShellBusy { return .active }
         return .idle
     }
@@ -277,6 +286,14 @@ enum TaskAttentionProjection {
         case .running: detail?.pendingRequest
         case .ready, .completed, .failed: detail?.idleRequest
         }
+    }
+
+    /// Whether the task's latest turn ended with a result and nothing more for the person: no turn
+    /// runs, it did not fail, and it left nothing else (`TaskAttentionDetail.leavesOnlyAResult`). Only
+    /// such a result is one a parent can read for the person (`SessionRecord.isParentRead`).
+    static func endedWithResult(_ session: SessionRecord, detail: TaskAttentionDetail?) -> Bool {
+        (session.status == .ready || session.status == .completed) && session.completionState == .completed
+            && (detail ?? .none).leavesOnlyAResult
     }
 
     static func place(

@@ -335,6 +335,20 @@ not take a task ID cut short, as agents write one in prose; one that begins exac
 whole ID. A `read_task` cursor that names no turn of the task says whether it is `list_tasks`' cursor or another
 task's.
 
+Results a parent read: a child task's finished result its parent task already has leaves the person's attention
+(`SessionRecord.isParentRead`, the index's `parent_read` column): the Dock badge, Next Task Needing Attention (⌥⌘A),
+the activity view, the menu bar, the home and the phone's `attention` no longer count it, a sidebar grouped by state
+places it as idle, and `list_tasks`, `read_task` and `wait_tasks` call it `idle`. The sidebar's blue dot stays until
+the person opens the task. The parent is the task the sidebar nests the child under, not a subagent it runs or a task
+further up, and it has the result when the child's turn ended without failing, a plan limit or anything waiting on the
+person, and then either the parent read the latest page with `read_task` (no `cursor`) or got the answer from
+`wait_tasks`, or the turn's last call was a `send_message_to_task` to the parent that the parent took at once (an idle
+parent started a turn on it, a running one got it in its turn). A report left waiting (behind a turn that takes
+nothing while it runs, for the parent to start, for a usage limit to reset or for an account move) is not one the
+parent has, nor is a turn that made another call after it. That a turn reported is kept in memory only, so a turn that
+ended on one before a relaunch is unread as before. The person's read clears the mark with the unread mark, and the
+next result no parent read clears it.
+
 Where `create_task` puts the task: left empty, the task is nested under the calling task. `topLevel: true`
 makes a top-level task with no parent, as if it were created in the new task window, and `parent_task_id` makes it under
 that open task (a child task that gives its own parent makes it beside itself). Giving both, or a missing or archived

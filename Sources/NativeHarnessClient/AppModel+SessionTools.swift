@@ -283,6 +283,8 @@ extension AppModel: SessionToolHandling {
         if let next = conversation.cursor { head += " Pass cursor \"\(next)\" for earlier turns." }
         head += " " + SessionToolText.untrustedNote
         let body = conversation.text.isEmpty ? "(No conversation yet.)" : conversation.text
+        // The latest page holds the latest turn's result.
+        if cursor == nil, conversation.shownTurns > 0 { await sessionToolNoteParentRead(of: id, by: caller) }
         return .text(head + "\n\n" + body)
     }
 
@@ -365,6 +367,8 @@ extension AppModel: SessionToolHandling {
     // MARK: - send_message_to_task
 
     private func sendMessageToTask(_ arguments: JSONValue, caller: SessionToolCaller) async -> AgentToolResult {
+        // Whether the caller's latest message reached its parent is this call's to say.
+        sessionTools.reportedToParent.remove(caller.id)
         guard let reference = arguments["task_id"]?.stringValue?.trimmingCharacters(in: .whitespaces),
               !reference.isEmpty else { return .error("Not sent: task_id is required.") }
         let message = (arguments["message"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -394,7 +398,12 @@ extension AppModel: SessionToolHandling {
         let sender = TaskMessage(senderID: caller.hostTaskID.uuidString, senderName: caller.title, body: message,
                                  quotes: quoted.quotes)
         let title = target.title.isEmpty ? "" : " (\(target.title))"
-        switch await deliverTaskMessage(sender, to: target) {
+        let delivery = await deliverTaskMessage(sender, to: target)
+        if delivery == .delivered || delivery == .steered,
+           store.sessions.first(where: { $0.id == caller.id })?.parentTaskID == target.id {
+            sessionTools.reportedToParent.insert(caller.id)
+        }
+        switch delivery {
         case .delivered:
             return .text("Delivered to task \(target.id.uuidString)\(title); it started a turn on the message." + quoted.lines)
         case .steered:
@@ -578,7 +587,32 @@ extension AppModel: SessionToolHandling {
             ?? SessionToolPolicy.waitDefault
         _ = await waitForAny(ids, timeout: min(requested, caller.remaining))
         let states = ids.map { sessionToolOutcome(of: $0) }
+        for (id, state) in zip(ids, states) where state.kind == "task" && state.ended && state.answer != nil {
+            await sessionToolNoteParentRead(of: id, by: caller)
+        }
         return .text(SessionToolText.json(states))
+    }
+
+    // MARK: - Results a parent read
+
+    /// The caller read a finished result of a child task of its own, for the person: attention no
+    /// longer counts it (`SessionRecord.isParentRead`). Only the task's own parent counts, not a
+    /// subagent it runs or a task further up; a turn still running, a failure, a plan limit or a
+    /// request stays the person's.
+    func sessionToolNoteParentRead(of id: UUID, by caller: SessionToolCaller) async {
+        guard let child = store.sessions.first(where: { $0.id == id }), child.parentTaskID == caller.id,
+              child.hasUnreadUpdate, !child.isParentRead,
+              TaskAttentionProjection.endedWithResult(child, detail: taskAttentionDetails[id]) else { return }
+        await store.markParentRead(id: id)
+    }
+
+    /// Whether the result a turn of the task ends with is one its parent already has: the turn's last
+    /// tool call sent the parent a message the parent took (`SessionToolCenter.reportedToParent`), and
+    /// the turn left nothing else for the person. A task that sent its parent nothing is one lookup.
+    func turnEndReachedParent(_ id: UUID) -> Bool {
+        guard sessionTools.reportedToParent.contains(id), (taskAttentionDetails[id] ?? .none).leavesOnlyAResult
+        else { return false }
+        return latestTurnEndsWithSessionToolCall(SessionToolCatalog.sendMessageToTask, in: id)
     }
 
     struct SessionToolOutcome: Encodable, Equatable {
@@ -1192,13 +1226,39 @@ extension AppModel: SessionToolHandling {
                 return SessionToolCallRecord(id: item.id, hasResult: item.lifecycle == .completed || call.status != "inProgress")
             }
         }
-        let names: Set<String> = ["mcp__\(AgentToolEnvironment.serverName)__\(tool)", tool]
         return (transcriptBySessionID[taskID] ?? []).compactMap { entry in
-            guard case let .activity(activity, state) = entry.content,
-                  [activity.kind, activity.title].contains(where: { names.contains($0) || $0.hasSuffix(": \(tool)") })
+            guard case let .activity(activity, state) = entry.content, Self.isSessionToolCall(activity, named: tool)
             else { return nil }
             return SessionToolCallRecord(id: activity.id, hasResult: state != .running)
         }
+    }
+
+    /// Whether a transcript's tool call is one to Yardlet's `tool`: Claude Code's `mcp__yardlet__<tool>`,
+    /// or another harness's by the names `ConversationAgentRunProjection` reads.
+    static func isSessionToolCall(_ activity: HarnessActivity, named tool: String) -> Bool {
+        let names: Set<String> = ["mcp__\(AgentToolEnvironment.serverName)__\(tool)", tool]
+        return [activity.kind, activity.title].contains { names.contains($0) || $0.hasSuffix(": \(tool)") }
+    }
+
+    /// Whether the latest turn's last tool call is one to Yardlet's `tool`, in the record
+    /// `sessionToolCallRecords` reads: messages, thinking and plans after it leave it the last, any
+    /// other call does not. Only the latest turn is read, from its end.
+    func latestTurnEndsWithSessionToolCall(_ tool: String, in taskID: UUID) -> Bool {
+        if let turns = codexPresentationBySessionID[taskID]?.thread?.turns, let turn = turns.last {
+            for item in turn.items.reversed() {
+                switch item.content {
+                case .userMessage, .hookPrompt, .agentMessage, .plan, .reasoning, .contextCompaction, .notice: continue
+                case let .mcpToolCall(call): return call.server == AgentToolEnvironment.serverName && call.tool == tool
+                default: return false
+                }
+            }
+            return false
+        }
+        for entry in (transcriptBySessionID[taskID] ?? []).reversed() {
+            if case let .activity(activity, _) = entry.content { return Self.isSessionToolCall(activity, named: tool) }
+            if entry.opensTurn { return false }
+        }
+        return false
     }
 
     /// Archives the caller's own task after `archive_task` answered, in the order that leaves the

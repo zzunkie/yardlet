@@ -384,6 +384,11 @@ final class SessionToolCenter {
     /// The tasks archiving themselves: `archive_task` answered "self", and their turn stops before
     /// they are archived.
     @ObservationIgnored private(set) var archivingSelf: Set<UUID> = []
+    /// The tasks whose latest `send_message_to_task` this turn went to their parent task, which took it
+    /// at once (`TaskMessageDelivery.delivered` or `.steered`). A turn that ends on that call ends with a
+    /// result its parent has (`AppModel.turnEndReachedParent`); the turn's end forgets it. Kept in memory
+    /// only: after a relaunch such a result reads as unread, as any other.
+    @ObservationIgnored var reportedToParent: Set<UUID> = []
 
     init(defaults: UserDefaults = .yardlet) {
         self.defaults = defaults

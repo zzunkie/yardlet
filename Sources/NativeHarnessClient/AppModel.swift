@@ -6630,6 +6630,7 @@ final class AppModel {
             try? await store.updateSession(
                 id: event.localSessionID,
                 hasUnreadUpdate: shouldMarkUnread ? true : nil,
+                readByParent: shouldMarkUnread && !failed && turnEndReachedParent(event.localSessionID),
                 completionState: failed ? nil : .completed
             )
             // Whether a task on screen notifies too is Settings' (`TaskNotificationKind`).
@@ -6708,8 +6709,11 @@ final class AppModel {
             id: id,
             status: status,
             hasUnreadUpdate: marksUnread ? true : nil,
+            readByParent: marksUnread && status == .completed && turnEndReachedParent(id),
             updatesRecency: !isIdleCompaction && (cause != .providerStatus || status != .ready || endsTurn)
         )
+        // What the turn's last call sent its parent belonged to the turn that ended.
+        sessionTools.reportedToParent.remove(id)
         if endsTurn {
             coordinationLog.record(.init(event: "turn-ended", task: id.uuidString,
                                          harness: store.sessions.first { $0.id == id }?.harness.rawValue,

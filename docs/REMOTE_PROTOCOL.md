@@ -120,7 +120,7 @@ Mac's language). Listed in sidebar order. No folder paths are sent.
 | `title` | the sidebar title |
 | `harness`, `harnessName` | e.g. `codex`/`Codex`, `claude-code`/`Claude Code`, `antigravity-cli` |
 | `projectId` | the project it is listed under |
-| `attention` | the sidebar's one attention state: `waiting` (an approval or a question waits for the person), `unread` (a finished result, failed included, not read yet), `active` (a turn or bash command is working), `idle` |
+| `attention` | the sidebar's one attention state: `waiting` (an approval or a question waits for the person), `unread` (a finished result, failed included, not read yet, unless the task's parent task already read it: then `idle` with `unread: true`), `active` (a turn or bash command is working), `idle` |
 | `indicator` | the sidebar row's mark, absent when none: `awaitingApproval` (green dot), `needsInput` (orange dot), `failed` (red warning), `usageLimit` (gauge), `running` (gray dot), `unread` (blue dot) |
 | `pendingRequest` | `approval` or `input` while `waiting` |
 | `unread` | the task holds an unread result |
