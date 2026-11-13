@@ -37,7 +37,12 @@ jobs:
       - name: Generate the WinUI bindings
         shell: pwsh
         run: Windows/scripts/generate-bindings.ps1
+      # Swift 6.4.1's build sometimes stops while it plans on a Windows runner: it waits for the clang processes that
+      # report the compiler's macros (`clang -v -E -dM`), and they wait for it to read their output. A rerun plans
+      # as usual, so each build step ends at a limit well above its usual time (about 30 minutes here, one minute for
+      # the fixture host) rather than at the job's two hours.
       - name: Build
+        timeout-minutes: 50
         shell: pwsh
         run: |
           $started = Get-Date
@@ -55,6 +60,11 @@ jobs:
       - name: Open the app
         shell: powershell
         run: Windows/scripts/check-window.ps1 -Executable "$env:APP_BIN\NativeHarnessClient.exe" -Name app -OutDirectory window-check
+      # Its limit is the one the Build step explains.
+      - name: Build the fixture host
+        timeout-minutes: 10
+        shell: pwsh
+        run: swift build -c release --product yardlet-remote-fixture --force-resolved-versions
       # The remote client against a host it can reach on the runner: the relay run locally and the fixture
       # host on it (docs/REMOTE_PROTOCOL.md, "Fixture server" and "Relay").
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -66,8 +76,6 @@ jobs:
         shell: pwsh
         run: |
           npm ci --prefix relay
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          swift build -c release --product yardlet-remote-fixture --force-resolved-versions
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Windows/scripts/start-remote-host.ps1 -Fixture "$env:APP_BIN\yardlet-remote-fixture.exe" -OutDirectory window-check
           $link = Get-Content window-check/pairing-link.txt
