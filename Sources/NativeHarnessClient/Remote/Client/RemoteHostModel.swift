@@ -53,6 +53,8 @@ final class RemoteHostModel: Identifiable {
     private(set) var offersFileRewind = false
     private(set) var offersSchedules = false
     private(set) var offersWorkspaceFiles = false
+    /// The Files panel saves to the host (`writeFile`, §15.27).
+    private(set) var offersWorkspaceFileWrites = false
     private(set) var offersTaskFiles = false
     private(set) var offersReview = false
     /// The host's Review stages, unstages and discards for this window (§15.26).
@@ -341,6 +343,7 @@ final class RemoteHostModel: Identifiable {
             if !offersTaskRail { taskRailFacts.removeAll() }
             if case let .task(taskID) = selection { Task { await readTaskRail(taskID) } }
             offersWorkspaceFiles = response.workspaceFiles == true
+            offersWorkspaceFileWrites = response.workspaceFileWrites == true
             offersTerminals = response.terminals == true
             nextSteps = response.nextSteps == true
             bankedResets = response.bankedResets == true
@@ -667,6 +670,7 @@ final class RemoteHostModel: Identifiable {
         case .setting, .confirmation: L10n.format("That choice isn't offered on %@ now.", host)
         case .terminal: L10n.format("To use this from here, allow Terminal for this device in Settings › Remote › Paired devices on %@.", host)
         case .fileWrites: L10n.format("To change files from here, allow Write files for this device in Settings › Remote › Paired devices on %@.", host)
+        case .fileChanged: L10n.string("This file changed on disk. Your edits are preserved.")
         case .account: L10n.format("That account can't be used on %@ now.", host)
         case .worktree: L10n.string("The folder isn't in a Git repository, so it can't have a worktree.")
         case .attachments: L10n.string("This harness doesn't take these pictures or files.")

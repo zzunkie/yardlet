@@ -21,6 +21,9 @@ final class RemoteHostFiles {
     private(set) var outputs: [String: [RemoteOutput]] = [:]
     /// The file being read now, by its name, for the window's line.
     private(set) var reading: String?
+    /// Each task's Files panel as it was left: the file open, where it was read and edits not saved yet, kept in memory
+    /// only, so they outlast the panel while this window shows another task or tab.
+    @ObservationIgnored var panels: [String: WorkspaceFilePreferences] = [:]
     @ObservationIgnored weak var model: RemoteHostModel?
     @ObservationIgnored private let folder: URL
     /// A read that waited this many times for the host's budget gives up.

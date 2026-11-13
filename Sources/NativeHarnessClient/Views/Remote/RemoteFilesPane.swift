@@ -15,7 +15,13 @@ struct RemoteFilesPane: View {
         self.taskID = taskID
         self.workspaceURL = workspaceURL
         self.onClose = onClose
-        _state = State(initialValue: WorkspaceFilesState(provider: RemoteWorkspaceFiles(model: model, taskID: taskID)))
+        let state = WorkspaceFilesState(preferences: model.files.panels[taskID] ?? .init(),
+                                        provider: RemoteWorkspaceFiles(model: model, taskID: taskID))
+        state.onChange = { [weak model, weak state] in
+            guard let model, let state else { return }
+            model.files.panels[taskID] = state.preferences
+        }
+        _state = State(initialValue: state)
     }
 
     var body: some View {

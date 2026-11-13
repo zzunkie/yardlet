@@ -42,6 +42,14 @@ public struct RemoteFilePart: Equatable, Sendable {
     }
 }
 
+/// Where `writeFile` writes (§15.27): a regular file below the task's working folder, by names that hold no link.
+public struct RemoteFileWriteTarget: Equatable, Sendable {
+    /// The task's working folder, with its links resolved.
+    public var folder: URL
+    /// The file below it, its names joined with `/`, as `index` lists it.
+    public var path: String
+}
+
 /// Reads a part of a task's file for a phone (§15.22). A paired phone steers tasks, but this must not become a way to
 /// read any file on the Mac. A path is served only when it names a regular file that is one of the task's outputs or,
 /// with every symbolic link resolved, lies inside one of the task's folders (whole path components, compared byte for
@@ -63,6 +71,10 @@ public enum RemoteFileReader {
 
     /// The longest path a request may name, in bytes (the Mac's own `PATH_MAX` is shorter).
     static let maxPathBytes = 4_096
+
+    /// The rules a request's path is judged by: this platform's, with POSIX names compared byte for byte, since two
+    /// spellings Swift's strings call one name can be two folders on disk (`PathRules.comparesBytes`).
+    static let rules = PathRules.current.comparingBytes
 
     static func refused() -> RemoteError { RemoteError(.notFound, "No such file, or not one of the task's files") }
 
@@ -153,23 +165,69 @@ public enum RemoteFileReader {
     /// reads the path, the kernel through a link or a provider by its text. A folder that is the home folder or holds
     /// it gives nothing.
     public static func relativePath(_ path: String, in folder: URL, home: String = NSHomeDirectory()) -> String? {
-        guard !path.isEmpty, path.utf8.count <= maxPathBytes, !path.utf8.contains(0) else { return nil }
+        guard !path.isEmpty, path.utf8.count <= maxPathBytes, !path.utf8.contains(0),
+              rules.isAbsolute(path) || rules.isRelative(path), !rules.names(path).contains("..") else { return nil }
         #if canImport(Darwin)
         let written = lexical(folder.path(percentEncoded: false))
-        guard !path.split(separator: "/").contains(".."),
-              let root = realPath(written), !holdsHome(root, home: realPath(home) ?? lexical(home)),
+        guard let root = realPath(written), !holdsHome(root, home: realPath(home) ?? lexical(home)),
               let resolved = landing(path.hasPrefix("/") ? path : written + "/" + path) else { return nil }
         #else
-        // No `realpath` here, and no reads of a task's files either: Foundation's own resolving, by whole components.
-        func clean(_ url: URL) -> String {
-            lexical(url.resolvingSymlinksInPath().standardizedFileURL.path(percentEncoded: false))
-        }
-        let root = clean(folder)
-        let resolved = clean(NSString(string: path).isAbsolutePath ? URL(filePath: path) : folder.appending(path: path))
-        guard !isInside(clean(URL(filePath: home)), root) else { return nil }
+        // No `realpath` here, and no reads of a task's files either: Foundation's own resolving, by these rules.
+        func resolving(_ url: URL) -> String { rules.path(of: url.resolvingSymlinksInPath().standardizedFileURL) }
+        let root = resolving(folder)
+        let resolved = resolving(rules.url(for: path, in: folder))
+        guard !rules.isInside(resolving(URL(filePath: home)), folder: root) else { return nil }
         #endif
-        guard resolved != root, isInside(resolved, root) else { return nil }
-        return String(decoding: resolved.utf8.dropFirst(root.utf8.count + 1), as: UTF8.self)
+        guard let relative = rules.relativePath(of: resolved, in: root), !relative.isEmpty else { return nil }
+        return relative
+    }
+
+    /// `path` as `writeTarget` takes it, by its text alone under `rules`: the names below `folder` joined with `/`, as
+    /// `index` lists them. Nil for a path that is absolute, starts at the home folder (`~`), climbs (`..`), names
+    /// nothing (`.`, an empty name) or names what Windows reads as another name, and for every path when `folder` is
+    /// the home folder or holds it. Nothing is looked up.
+    static func writePath(_ path: String, in folder: String, home: String,
+                          rules: PathRules = RemoteFileReader.rules) -> String? {
+        guard !path.isEmpty, path.utf8.count <= maxPathBytes, !path.utf8.contains(0), rules.isRelative(path),
+              !rules.isInside(home, folder: folder) else { return nil }
+        let names = rules.names(path)
+        guard names.first != "~", !names.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) else { return nil }
+        let joined = names.joined(separator: "/")
+        guard let relative = rules.relativePath(of: folder + "/" + joined, in: folder), !relative.isEmpty else { return nil }
+        return relative
+    }
+
+    /// Where a device's `writeFile` may write (§15.27): `path`, relative to the task's working folder as `index` lists
+    /// it, below that folder with its links resolved. Only the folder `workspaceFiles` lists counts, not the task's
+    /// other folders or its outputs, as the Mac's Files panel saves only in the task's folder. The file must be a
+    /// regular file there already, at most `maxWriteFileBytes`, with no symbolic link below the folder on the way to it
+    /// or in its own place; nothing is created. Anything else, and every file of a folder that is the home folder or
+    /// holds it, is refused (`notAllowed`) the same whether or not it exists, by `writePath` before anything is looked
+    /// up. The writer goes down from the folder through no-follow descriptors (`WorkspaceFileReplacement`), so a link put
+    /// in place since this check is refused there. Blocks: callers run it with `perform`.
+    public static func writeTarget(_ path: String, in scope: RemoteFileScope,
+                                   home: String = NSHomeDirectory()) -> Result<RemoteFileWriteTarget, RemoteError> {
+        guard !path.isEmpty, path.utf8.count <= maxPathBytes, !path.utf8.contains(0) else {
+            return .failure(RemoteError(.badRequest, "Unreadable path"))
+        }
+        #if canImport(Darwin)
+        let refused = RemoteError(.notAllowed, "Not a file of the task's folder that can be written")
+        let written = scope.folder.path(percentEncoded: false)
+        let realHome = realPath(home) ?? lexical(home)
+        guard written.hasPrefix("/"), let folder = realPath(lexical(written)), !holdsHome(folder, home: realHome),
+              let relative = writePath(path, in: folder, home: realHome) else { return .failure(refused) }
+        let target = (folder == "/" ? "" : folder) + "/" + relative
+        var info = stat()
+        // The resolved path is the path itself, byte for byte: no link below the folder, the file's own place included.
+        guard let real = realPath(target), real.utf8.elementsEqual(target.utf8),
+              lstat(target, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { return .failure(refused) }
+        guard info.st_size <= RemoteProtocol.maxWriteFileBytes else {
+            return .failure(RemoteError(.tooLarge, "A file written is at most 4 MiB"))
+        }
+        return .success(RemoteFileWriteTarget(folder: URL(filePath: folder, directoryHint: .isDirectory), path: relative))
+        #else
+        return .failure(RemoteError(.unavailable))
+        #endif
     }
 
     #if canImport(Darwin)
@@ -235,16 +293,11 @@ public enum RemoteFileReader {
         return String(cleaned.prefix(120))
     }
 
-    /// `path` is `root` or lies under it, by whole path components (`/a/bc` is not under `/a/b`), compared byte for byte:
-    /// two spellings of a name that Swift's strings call equal (NFC and NFD) are two names here.
+    /// `path` is `root` or lies under it, by whole path components (`/a/bc` is not under `/a/b`), under `rules`: on
+    /// POSIX compared byte for byte, so two spellings of a name that Swift's strings call equal (NFC and NFD) are two
+    /// names here, and on Windows as NTFS compares them.
     static func isInside(_ path: String, _ root: String) -> Bool {
-        let slash = UInt8(ascii: "/")
-        let path = Array(path.utf8)
-        var root = Array(root.utf8)
-        while root.count > 1, root.last == slash { root.removeLast() }
-        if root == [slash] { return path.first == slash }
-        guard path.starts(with: root) else { return false }
-        return path.count == root.count || path[root.count] == slash
+        rules.isInside(path, folder: root)
     }
 
     /// An absolute path with `.`, `..` and repeated slashes taken out by its text alone, nothing looked up.

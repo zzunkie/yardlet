@@ -322,13 +322,30 @@ final class RemoteHostModelTests: XCTestCase {
         await host.shutdown()
     }
 
-    /// The client uses the same Files panel, reading from a real host workspace over the encrypted loopback.
-    func testWorkspaceFilesReadAndRenderTheHostsFilesWithoutWriting() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "remote-files-\(UUID())")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+    /// The client uses the same Files panel over the encrypted loopback: it reads a real host workspace, and saves to it as
+    /// the local panel saves, over the bytes it read, only while the device has Write files. Nothing outside the folder
+    /// the panel lists, through a link or into what is not a regular file is written. Drawn into `.build/remote-files-qa`,
+    /// in the language the run draws in (`-AppleLanguages '(ko)'` for Korean), light and dark, local beside remote:
+    /// `list`, `source`, `edited` (Save offered on both) and `not-allowed` (the remote save refused without Write files).
+    func testWorkspaceFilesReadRenderAndSaveTheHostsFiles() async throws {
+        let manager = FileManager.default
+        let base = manager.temporaryDirectory.appending(path: "remote-files-\(UUID())")
+        let root = base.appending(path: "workspace")
+        try manager.createDirectory(at: root, withIntermediateDirectories: true)
+        try manager.createDirectory(at: base.appending(path: "outside"), withIntermediateDirectories: true)
+        defer { try? manager.removeItem(at: base) }
         let text = "import Foundation\n\nstruct Greeting {\n    let message = \"Hello from the host\"\n}\n"
-        try Data(text.utf8).write(to: root.appending(path: "Greeting.swift"))
+        let file = root.appending(path: "Greeting.swift")
+        try Data(text.utf8).write(to: file)
+        try manager.setAttributes([.posixPermissions: 0o640], ofItemAtPath: file.path(percentEncoded: false))
+        // Beside it, what no save reaches: a file outside, a link to it, a folder linked out and a FIFO.
+        let secret = base.appending(path: "outside/secret.txt")
+        try Data("secret".utf8).write(to: secret)
+        try manager.createSymbolicLink(atPath: root.appending(path: "escape.swift").path(percentEncoded: false),
+                                       withDestinationPath: "../outside/secret.txt")
+        try manager.createSymbolicLink(atPath: root.appending(path: "away").path(percentEncoded: false),
+                                       withDestinationPath: "../outside")
+        XCTAssertEqual(mkfifo(root.appending(path: "pipe").path(percentEncoded: false), 0o600), 0)
         let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteHostFiles")))
         let host = AppModel(store: SessionStore(repository: InMemorySessionRepository()),
             runtimeSelections: RuntimeSelectionStore(defaults: defaults),
@@ -336,11 +353,11 @@ final class RemoteHostModelTests: XCTestCase {
         let created = await host.createSession(harness: .claudeCode, workspaceURL: root,
             runtimeExecutableURL: URL(filePath: "/tmp/claude"), title: "Read the workspace")
         let session = try XCTUnwrap(created)
-        let stack = try await LoopbackStack(bridge: AppModelRemoteBridge(model: host), port: 47876)
+        let stack = try await LoopbackStack(name: "Mac Studio", bridge: AppModelRemoteBridge(model: host), port: 47876)
         defer { stack.stop() }
         let ticket = await stack.server.openPairing()
         let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
-            name: "Host", hosts: ["127.0.0.1:\(stack.port)"]).url)
+            name: "Mac Studio", hosts: ["127.0.0.1:\(stack.port)"]).url)
         let directory = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
             hello: RemoteHandshakeHello(name: "Client", platform: "macos", appVersion: "test"))
         let paired = try await directory.pair(link: link.absoluteString)
@@ -348,6 +365,8 @@ final class RemoteHostModelTests: XCTestCase {
         defer { directory.close(paired.id) }
         try await waitUntil { client.hasSnapshot }
         XCTAssertTrue(client.offersWorkspaceFiles)
+        XCTAssertTrue(client.offersWorkspaceFileWrites)
+        let deviceID = try XCTUnwrap(client.host.deviceID)
         let remote = WorkspaceFilesState(provider: RemoteWorkspaceFiles(model: client, taskID: session.id.uuidString))
         let clientWorkspace = URL(filePath: "/remote-host/Workspace")
         let local = WorkspaceFilesState()
@@ -357,17 +376,21 @@ final class RemoteHostModelTests: XCTestCase {
         XCTAssertEqual(remote.index.paths, local.index.paths)
         XCTAssertEqual(remote.index.paths, ["Greeting.swift"])
         let directoryURL = try WindowlessRender.directory("remote-files-qa")
-        func render(_ name: String) throws {
+        let language = Locale.preferredLanguages.first.map { String($0.prefix(2)) } ?? "en"
+        func render(_ name: String, check: ([WindowlessRender.AccessibilityElement]) -> Void = { _ in }) throws {
             for appearance in WindowlessRender.Appearance.allCases {
                 let view = HStack(spacing: 1) {
                     FilesPane(workspaceURL: root, state: local, onClose: {}).frame(width: 520)
-                    FilesPane(workspaceURL: clientWorkspace, state: remote, onClose: {}).frame(width: 520)
+                    // As `RemoteFilesPane` gives it: the host's folder once listed, never read on this Mac.
+                    FilesPane(workspaceURL: remote.resolvedWorkspace ?? clientWorkspace, state: remote, onClose: {})
+                        .frame(width: 520)
                 }.environment(\.colorScheme, appearance.colorScheme)
                 let rendered = WindowlessRender.Host(view, size: NSSize(width: 1041, height: 520), appearance: appearance)
                 defer { rendered.close() }
                 rendered.settle(passes: 8)
+                check(WindowlessRender.accessibilityElements(in: rendered.hosting))
                 try WindowlessRender.writePNG(rendered.capture().bitmap,
-                    to: directoryURL.appending(path: "\(name)-local-remote-\(appearance.suffix).png"))
+                    to: directoryURL.appending(path: "\(name)-local-remote-\(language)-\(appearance.suffix).png"))
             }
         }
         try render("list")
@@ -376,14 +399,73 @@ final class RemoteHostModelTests: XCTestCase {
         try await waitUntil { !remote.isLoading && !local.isLoading }
         XCTAssertEqual(remote.document?.text, text)
         XCTAssertEqual(remote.document?.text, local.document?.text)
-        XCTAssertFalse(remote.canEdit)
-        XCTAssertNil(remote.document?.sourceDigest)
         XCTAssertEqual(remote.document?.tokens, local.document?.tokens)
-        XCTAssertEqual(remote.document?.isEditable, false)
-        remote.edit("changed")
-        await remote.save(in: clientWorkspace)
-        XCTAssertEqual(try String(contentsOf: root.appending(path: "Greeting.swift"), encoding: .utf8), text)
+        XCTAssertTrue(remote.canEdit)
+        XCTAssertEqual(remote.document?.isEditable, true)
+        XCTAssertEqual(remote.document?.sourceDigest, local.document?.sourceDigest, "The copy's digest is the host file's")
         try render("source")
+
+        // Without the device's Write files the host refuses, the edit stays and the file is as it was.
+        let changed = text.replacingOccurrences(of: "Hello from the host", with: "Hello from the client")
+        remote.edit(changed)
+        local.edit(changed)
+        XCTAssertTrue(remote.isDirty)
+        try render("edited") { elements in
+            XCTAssertEqual(elements.filter { $0.role == "AXButton" && $0.label == L10n.string("Save") }.count, 2,
+                           "Save on both panels: \(elements)")
+        }
+        await remote.save(in: clientWorkspace)
+        XCTAssertEqual(remote.saveError, L10n.format(
+            "To change files from here, allow Write files for this device in Settings › Remote › Paired devices on %@.", client.name))
+        XCTAssertTrue(remote.isDirty)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), text)
+        try render("not-allowed")
+
+        // With it, the file is saved whole in its own place and keeps its permissions.
+        try await stack.server.setPermission(.fileWrites, allowed: true, for: deviceID)
+        await remote.save(in: clientWorkspace)
+        XCTAssertNil(remote.saveError)
+        XCTAssertFalse(remote.isDirty)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), changed)
+        let attributes = try manager.attributesOfItem(atPath: file.path(percentEncoded: false))
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o640)
+        XCTAssertEqual(try manager.contentsOfDirectory(atPath: root.path(percentEncoded: false)).sorted(),
+                       ["Greeting.swift", "away", "escape.swift", "pipe"], "No temporary file is left")
+
+        // A file changed on the host since it was read is not overwritten, and the edit stays.
+        try Data("edited on the host\n".utf8).write(to: file)
+        remote.edit(changed + "// and again\n")
+        await remote.save(in: clientWorkspace)
+        XCTAssertEqual(remote.saveError, WorkspaceFileError.changedOnDisk.localizedDescription)
+        XCTAssertTrue(remote.isDirty)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "edited on the host\n")
+
+        // A link in the file's place or on the way to it, and what is not a regular file, are refused and nothing is
+        // written (the rest of the boundary: `RemoteBridgeTests`). Each save is a command, of which a device sends ten at
+        // once.
+        let secretDigest = WorkspaceFileService.digest(Data("secret".utf8))
+        for path in ["escape.swift", "away/secret.txt", "pipe"] {
+            let answer = await client.response(to: .writeFile(taskID: session.id.uuidString, path: path,
+                                                              data: Data("written".utf8), sha256: secretDigest))
+            XCTAssertEqual(answer.error?.code, .notAllowed, path)
+            XCTAssertNil(answer.error?.reason, path)
+            XCTAssertFalse(answer.error?.message.contains("secret") ?? true, path)
+        }
+        XCTAssertEqual(try String(contentsOf: secret, encoding: .utf8), "secret")
+        let unknownTask = await client.response(to: .writeFile(taskID: UUID().uuidString, path: "Greeting.swift",
+                                                               data: Data(), sha256: secretDigest))
+        XCTAssertEqual(unknownTask.error?.code, .notFound)
+
+        // Turning Write files off again refuses the next save at once.
+        try await stack.server.setPermission(.fileWrites, allowed: false, for: deviceID)
+        remote.discard(in: clientWorkspace)
+        try await waitUntil { !remote.isLoading }
+        remote.edit("after the permission went\n")
+        await remote.save(in: clientWorkspace)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "edited on the host\n")
+        XCTAssertEqual(remote.saveError, L10n.format(
+            "To change files from here, allow Write files for this device in Settings › Remote › Paired devices on %@.", client.name))
+
         let outside = await client.response(to: .readFile(taskID: session.id.uuidString, path: "../outside.txt", offset: 0))
         XCTAssertEqual(outside.error?.code, .notFound)
         let project = try XCTUnwrap(client.projects.first { $0.id != "chats" })
@@ -396,6 +478,18 @@ final class RemoteHostModelTests: XCTestCase {
         XCTAssertEqual(unknownProject.error?.code, .notFound)
         let missing = await client.response(to: .workspaceFiles(taskID: UUID().uuidString))
         XCTAssertEqual(missing.error?.code, .notFound)
+
+        // A host without `workspaceFileWrites` (an older Yardlet) is asked nothing: Save says to update it.
+        let older = RemoteHostModel(host: RemoteSavedHost(name: "Older", hostKey: Data(repeating: 7, count: 32), direct: []),
+            clientKey: .generate(), hello: RemoteHandshakeHello(name: "Client"), store: nil)
+        XCTAssertFalse(older.offersWorkspaceFileWrites)
+        do {
+            _ = try await RemoteWorkspaceFiles(model: older, taskID: session.id.uuidString).save(path: "Greeting.swift",
+                text: changed, expectedDigest: secretDigest, encoding: .utf8, in: clientWorkspace)
+            XCTFail("An older host saves nothing")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, L10n.string("Update Yardlet on the host to use this panel."))
+        }
         await host.shutdown()
     }
 

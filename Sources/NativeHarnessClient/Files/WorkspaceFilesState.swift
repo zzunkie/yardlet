@@ -51,11 +51,11 @@ final class WorkspaceFilesState {
         self.preferences = preferences
         self.provider = provider
     }
-    var isDirty: Bool { isLocal && document.flatMap { preferences.drafts?[$0.path] } != nil }
-    var canEdit: Bool { isLocal && document?.isEditable == true && document?.sourceDigest != nil && !isSaving }
+    var isDirty: Bool { document.flatMap { preferences.drafts?[$0.path] } != nil }
+    var canEdit: Bool { document?.isEditable == true && document?.sourceDigest != nil && !isSaving }
 
     func edit(_ text: String) {
-        guard isLocal, let document, document.isEditable, let digest = document.sourceDigest else { return }
+        guard let document, document.isEditable, let digest = document.sourceDigest else { return }
         var draft = preferences.drafts?[document.path] ?? .init(text: document.text, originalText: document.text, digest: digest, encoding: document.encoding)
         draft.text = text
         var drafts = preferences.drafts ?? [:]
@@ -85,14 +85,13 @@ final class WorkspaceFilesState {
     }
 
     func save(in workspace: URL) async {
-        guard isLocal, !isSaving, let document, let draft = preferences.drafts?[document.path] else { return }
+        guard !isSaving, let document, let draft = preferences.drafts?[document.path] else { return }
         let path = document.path
         isSaving = true; saveError = nil
         defer { isSaving = false }
         do {
-            let result = try await Task.detached(priority: .userInitiated) {
-                try WorkspaceFileService.save(path: path, text: draft.text, expectedDigest: draft.digest, encoding: draft.encoding, in: workspace)
-            }.value
+            let result = try await provider.save(path: path, text: draft.text, expectedDigest: draft.digest,
+                                                 encoding: draft.encoding, in: workspace)
             var drafts = preferences.drafts ?? [:]
             if drafts[path]?.text == draft.text { drafts.removeValue(forKey: path) }
             else if var newer = drafts[path] { newer.originalText = result.text; newer.digest = result.sourceDigest!; drafts[path] = newer }
@@ -170,7 +169,7 @@ final class WorkspaceFilesState {
         if refresh || document?.path != location.relativePath { document = nil }
         media = nil
         isLoading = true
-        let draft = isLocal ? preferences.drafts?[location.relativePath] : nil
+        let draft = preferences.drafts?[location.relativePath]
         let provider = provider
         loadTask = Task { [weak self] in
             do {

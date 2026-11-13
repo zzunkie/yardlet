@@ -172,6 +172,8 @@ final class RemoteProtocolTests: XCTestCase {
             .writeReview(taskID: "T1", change: RemoteReviewChange(.stage, expected: Self.fingerprint), confirmed: false),
             .writeReview(taskID: "T1", change: RemoteReviewChange(.discard, repository: "/tmp/repo", expected: Self.fingerprint),
                          confirmed: true),
+            .writeFile(taskID: "T1", path: "Sources/main.swift", data: Data("let x = 1\n".utf8),
+                       sha256: String(repeating: "a", count: 64)),
             .presence(active: true),
             .archivedTasks(cursor: nil),
             .archivedTasks(cursor: "40"),
@@ -341,8 +343,9 @@ final class RemoteProtocolTests: XCTestCase {
                                                         passwordField: true)])
     }
 
-    /// §15.22 as the contract writes it: both requests read and write back the same JSON and are not commands, and both
-    /// answers decode and encode back the same, the part's bytes as base64.
+    /// §15.22 and §15.27 as the contract writes them: the reads read and write back the same JSON and are not commands,
+    /// and both answers decode and encode back the same, the part's bytes as base64. A save is a command that takes the
+    /// device's Write files, with its bytes in strict base64 and the SHA-256 of what was read.
     func testTheDocumentedTaskFilesDecode() throws {
         let requests: [(String, RemoteRequest)] = [
             (#"{"id": "34", "type": "taskOutputs", "taskId": "4C1F…"}"#, .taskOutputs(taskID: "4C1F…")),
@@ -365,6 +368,33 @@ final class RemoteProtocolTests: XCTestCase {
             guard case let .failure(failure) = RemoteRequestEnvelope.decode(Data(json.utf8)) else { return XCTFail(json) }
             XCTAssertEqual(failure.error.code, .badRequest, json)
         }
+
+        let text = Data("struct App {}\n".utf8)
+        let digest = String(repeating: "0f", count: 32)
+        let save = #"{"id": "files-2", "type": "writeFile", "taskId": "T", "path": "Sources/App.swift", "data": "<base64 of at most 4 MiB>", "sha256": "<64 lowercase hex digits>"}"#
+            .replacingOccurrences(of: "<base64 of at most 4 MiB>", with: text.base64EncodedString())
+            .replacingOccurrences(of: "<64 lowercase hex digits>", with: digest)
+        let envelope = try decode(save)
+        XCTAssertEqual(envelope.request, .writeFile(taskID: "T", path: "Sources/App.swift", data: text, sha256: digest))
+        XCTAssertTrue(envelope.request.isCommand)
+        XCTAssertEqual(envelope.request.requiredPermission, .fileWrites)
+        XCTAssertEqual(envelope.request.taskID, "T")
+        let encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: envelope.encoded()) as? NSDictionary)
+        XCTAssertEqual(encoded, try XCTUnwrap(JSONSerialization.jsonObject(with: Data(save.utf8)) as? NSDictionary))
+        func saving(_ fields: String) -> RemoteErrorCode? {
+            let json = #"{"id":"41","type":"writeFile","taskId":"T","path":"a.txt""# + fields + "}"
+            guard case let .failure(failure) = RemoteRequestEnvelope.decode(Data(json.utf8)) else { return nil }
+            return failure.error.code
+        }
+        XCTAssertNil(saving(#","data":"","sha256":"\#(digest)""#), "An empty file")
+        for fields in [#","sha256":"\#(digest)""#, #","data":"eA==""#, #","data":"eA==","sha256":"\#(digest.uppercased())""#,
+                       #","data":"eA==","sha256":"\#(digest.dropLast())""#, #","data":"e A==","sha256":"\#(digest)""#] {
+            XCTAssertEqual(saving(fields), .badRequest, fields)
+        }
+        let over = Data(count: RemoteProtocol.maxWriteFileBytes + 1).base64EncodedString()
+        XCTAssertEqual(saving(#","data":"\#(over)","sha256":"\#(digest)""#), .tooLarge)
+        let largest = Data(count: RemoteProtocol.maxWriteFileBytes).base64EncodedString()
+        XCTAssertNil(saving(#","data":"\#(largest)","sha256":"\#(digest)""#))
 
         let outputs = #"""
         {"re": "34", "ok": true, "outputs": [

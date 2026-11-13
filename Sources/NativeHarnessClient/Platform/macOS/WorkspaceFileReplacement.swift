@@ -4,11 +4,13 @@ import Foundation
 
 /// The macOS part of saving a workspace file. The replacement goes through no-follow directory
 /// descriptors so a concurrent link swap cannot move the write outside the workspace, and it
-/// happens only while the file still holds the bytes the person reviewed.
+/// happens only while the file still holds the bytes the person reviewed. `authorize` runs last,
+/// immediately before the new file takes the old one's place, and stops the save by throwing.
 enum WorkspaceFileReplacement {
     static func digest(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
 
-    static func replace(path: String, in root: URL, with data: Data, expectedDigest: String, maximumBytes: Int) throws {
+    static func replace(path: String, in root: URL, with data: Data, expectedDigest: String, maximumBytes: Int,
+                        authorize: () throws -> Void = {}) throws {
         // Hold no-follow directory descriptors so a concurrent link replacement cannot move
         // the write outside this workspace. Replace through the same parent descriptor.
         var parent = Darwin.open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
@@ -47,6 +49,7 @@ enum WorkspaceFileReplacement {
         try handle.seek(toOffset: 0)
         guard digest(try handle.read(upToCount: maximumBytes + 1) ?? Data()) == expectedDigest else { throw WorkspaceFileError.changedOnDisk }
         try Task.checkCancellation()
+        try authorize()
         guard Darwin.renameat(parent, temporary, parent, name) == 0 else { throw WorkspaceFileError.notWritable }
     }
 }

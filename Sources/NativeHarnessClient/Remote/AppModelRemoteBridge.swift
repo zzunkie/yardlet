@@ -142,6 +142,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         snapshot.scheduleEditing = true
         snapshot.scheduleTimeZone = model.scheduledTasks.calendar().timeZone.identifier
         snapshot.taskFiles = true
+        snapshot.workspaceFileWrites = true
         Self.decorateProjectActions(&snapshot, model: model)
         snapshot.taskControls = true
         snapshot.conversationBodies = true

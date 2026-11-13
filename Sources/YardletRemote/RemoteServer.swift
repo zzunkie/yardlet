@@ -167,6 +167,10 @@ public protocol RemoteBridge: AnyObject, Sendable {
     func writeReview(taskID: String, change: RemoteReviewChange, confirmed: Bool, permit: RemoteFileWritePermit) async -> RemoteError?
     func projectFileScope(projectID: String) async -> Result<RemoteFileScope, RemoteError>
     func fileScope(taskID: String) async -> Result<RemoteFileScope, RemoteError>
+    /// Saves a file of the task's working folder at a device's word (§15.27), where `RemoteFileReader.writeTarget` allows,
+    /// over the file whose SHA-256 is `sha256` only, checking `permit` immediately before the write. A bridge that answers
+    /// it says so in its snapshot (`workspaceFileWrites`).
+    func writeFile(taskID: String, path: String, data: Data, sha256: String, permit: RemoteFileWritePermit) async -> RemoteError?
     /// The controls the task's composer shows for its settings (§15.23); `prepare` reads the choices first, as opening
     /// the Mac's menu does. Told as `.taskSettings` when they change since this read. A bridge that answers this,
     /// `setTaskSetting`, `composerCommands`, `runComposerCommand`, `forkTask` and `editMessage` says so in its snapshot
@@ -256,6 +260,9 @@ extension RemoteBridge {
     public func railAction(taskID: String, action: String, targetID: String?, confirmed: Bool) async -> RemoteError? { RemoteError(.unavailable) }
     public func subtask(taskID: String, activityID: String, stop: Bool) async -> Result<RemoteSubtaskTranscript, RemoteError> { .failure(RemoteError(.unavailable)) }
     public func fileRewind(taskID: String, action: RemoteFileRewindAction, pointID: String?, receipt: String?, confirmed: Bool, permit: RemoteFileWritePermit?) async -> Result<RemoteFileRewind, RemoteError> { .failure(RemoteError(.unavailable)) }
+    public func writeFile(taskID: String, path: String, data: Data, sha256: String, permit: RemoteFileWritePermit) async -> RemoteError? {
+        RemoteError(.unavailable)
+    }
     public func openOriginalConversation(taskID: String) async -> Result<String, RemoteError> { .failure(RemoteError(.unavailable)) }
     public func taskAccounts(taskID: String, refresh: Bool) async -> Result<[RemoteAccount], RemoteError> { .failure(RemoteError(.unavailable)) }
     public func archivedTasks(cursor: String?) async -> Result<RemoteArchivePage, RemoteError> { .failure(RemoteError(.unavailable)) }
@@ -1762,6 +1769,16 @@ public actor RemoteServer {
             }
         case let .readFile(taskID, path, offset):
             await readFile(envelope.id, taskID: taskID, path: path, offset: offset, on: id)
+        case let .writeFile(taskID, path, data, sha256):
+            // The permit is taken in this turn of the actor with the permission check above; the audit line names the
+            // task and the outcome, never the file or what it holds.
+            let permitID = UUID()
+            let permit = fileWritePermit(on: id, requestID: permitID)
+            defer { fileWritePermits[id]?[permitID] = nil; permit?.revoke() }
+            await command(envelope.id, request: request, on: id) {
+                guard let permit else { return RemoteError(.notAllowed, reason: .fileWrites) }
+                return await self.bridge.writeFile(taskID: taskID, path: path, data: data, sha256: sha256, permit: permit)
+            }
         case let .taskRail(taskID, watching):
             if !watching {
                 connections[id]?.followsRail.remove(taskID)
@@ -2047,6 +2064,7 @@ public actor RemoteServer {
             response.scheduleTimeZone = published?.scheduleTimeZone
             response.taskFiles = published?.taskFiles == true && RemoteFileReader.isSupported ? true : nil
             response.workspaceFiles = response.taskFiles
+            response.workspaceFileWrites = response.workspaceFiles == true && published?.workspaceFileWrites == true ? true : nil
             response.presence = true
             response.composerExtensions = published?.composerExtensions == true ? true : nil
             response.taskControls = published?.taskControls == true ? true : nil

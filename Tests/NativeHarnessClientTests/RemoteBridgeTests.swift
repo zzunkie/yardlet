@@ -1365,19 +1365,27 @@ final class RemoteBridgeTests: XCTestCase {
         await model.shutdown()
     }
 
-    func testWorkspaceFileIndexUsesTheReadFileBoundary() async throws {
+    /// The listing and a device's saves keep to `readFile`'s boundary. A save replaces only a regular file the listing
+    /// could name, over the bytes the device read, in its own place with its permissions, while the permit holds; a link
+    /// there or on the way, a folder, a FIFO, a file that is not there, a path that climbs, starts at home or is absolute,
+    /// and a folder that holds the home folder write nothing.
+    func testWorkspaceFileIndexAndWritesUseTheReadFileBoundary() async throws {
         let manager = FileManager.default
         let base = manager.temporaryDirectory.appending(path: "remote-index-\(UUID())")
         let root = base.appending(path: "workspace")
         try manager.createDirectory(at: root.appending(path: "Sources"), withIntermediateDirectories: true)
         defer { try? manager.removeItem(at: base) }
-        try Data("safe".utf8).write(to: root.appending(path: "Sources/main.swift"))
+        let main = root.appending(path: "Sources/main.swift")
+        try Data("safe".utf8).write(to: main)
         try Data("private".utf8).write(to: base.appending(path: "secret.txt"))
         try manager.createSymbolicLink(at: root.appending(path: "linked.txt"), withDestinationURL: base.appending(path: "secret.txt"))
         try manager.createSymbolicLink(at: root.appending(path: "outside"), withDestinationURL: base)
+        try manager.createSymbolicLink(at: root.appending(path: "inside.swift"), withDestinationURL: main)
+        XCTAssertEqual(mkfifo(root.appending(path: "pipe").path(percentEncoded: false), 0o600), 0)
         let session = SessionRecord(harness: .claudeCode, workspaceURL: root, runtimeExecutableURL: URL(filePath: "/tmp/claude"), title: "Files")
         let model = try Self.model(sessions: [session], transcripts: [:])
         let bridge = AppModelRemoteBridge(model: model)
+        XCTAssertTrue(bridge.snapshot().workspaceFileWrites)
         let scope = try await bridge.fileScope(taskID: session.id.uuidString).get()
         let index = try RemoteFileReader.index(in: scope).get()
         XCTAssertEqual(index.paths, ["Sources/main.swift"])
@@ -1386,6 +1394,45 @@ final class RemoteBridgeTests: XCTestCase {
         if case let .failure(error) = RemoteFileReader.index(in: .init(folder: base), home: root.path) {
             XCTAssertEqual(error.code, .notFound)
         } else { XCTFail("A folder containing home must not enumerate") }
+
+        let digest = { (text: String) in WorkspaceFileService.digest(Data(text.utf8)) }
+        func write(_ path: String, _ text: String = "written", over read: String = "safe", in folder: RemoteFileScope = scope,
+                   permit: RemoteFileWritePermit = RemoteFileWritePermit(), home: String = NSHomeDirectory()) -> RemoteError? {
+            AppModelRemoteBridge.writeWorkspaceFile(path, data: Data(text.utf8), sha256: digest(read), in: folder,
+                                                    permit: permit, home: home)
+        }
+        try manager.setAttributes([.posixPermissions: 0o604], ofItemAtPath: main.path(percentEncoded: false))
+        for path in ["linked.txt", "outside/secret.txt", "inside.swift", "Sources", "pipe", "missing.swift", "../secret.txt",
+                     base.appending(path: "secret.txt").path(percentEncoded: false), main.path(percentEncoded: false),
+                     "~/secret.txt", "Sources/../Sources/main.swift", "./Sources/main.swift", "Sources//main.swift"] {
+            XCTAssertEqual(write(path, over: "private")?.code, .notAllowed, path)
+        }
+        XCTAssertEqual(write("Sources/main.swift", home: root.path(percentEncoded: false))?.code, .notAllowed, "The home folder")
+        XCTAssertEqual(write("workspace/Sources/main.swift", in: .init(folder: base), home: root.path(percentEncoded: false))?.code,
+                       .notAllowed, "A folder holding the home folder")
+        let revoked = RemoteFileWritePermit()
+        revoked.revoke()
+        XCTAssertEqual(write("Sources/main.swift", permit: revoked)?.reason, .fileWrites)
+        XCTAssertEqual(write("Sources/main.swift", over: "something else")?.reason, .fileChanged)
+        XCTAssertEqual(write("Sources/main.swift", String(repeating: "x", count: RemoteProtocol.maxWriteFileBytes + 1))?.code,
+                       .tooLarge)
+        XCTAssertEqual(try String(contentsOf: base.appending(path: "secret.txt"), encoding: .utf8), "private")
+        XCTAssertEqual(try String(contentsOf: main, encoding: .utf8), "safe")
+        XCTAssertFalse(manager.fileExists(atPath: root.appending(path: "missing.swift").path(percentEncoded: false)))
+
+        XCTAssertNil(write("Sources/main.swift", "saved"))
+        XCTAssertEqual(try String(contentsOf: main, encoding: .utf8), "saved")
+        let attributes = try manager.attributesOfItem(atPath: main.path(percentEncoded: false))
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o604, "The file keeps its permissions")
+        XCTAssertEqual(try manager.contentsOfDirectory(atPath: root.appending(path: "Sources").path(percentEncoded: false)),
+                       ["main.swift"], "No temporary file is left")
+        let unknown = await bridge.writeFile(taskID: UUID().uuidString, path: "Sources/main.swift", data: Data(),
+                                             sha256: digest("saved"), permit: RemoteFileWritePermit())
+        XCTAssertEqual(unknown?.code, .notFound)
+        let saved = await bridge.writeFile(taskID: session.id.uuidString, path: "Sources/main.swift", data: Data("again".utf8),
+                                           sha256: digest("saved"), permit: RemoteFileWritePermit())
+        XCTAssertNil(saved)
+        XCTAssertEqual(try String(contentsOf: main, encoding: .utf8), "again")
         await model.shutdown()
     }
 

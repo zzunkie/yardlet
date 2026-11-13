@@ -98,6 +98,13 @@ final class WorkspaceFileTests: XCTestCase {
                                ("C:\\e\u{301}\\x", "C:\\\u{E9}"), ("C:\\SS\\x", "C:\\ß"), ("C:\\Users\\me\\proj\\a", "C:")] {
             XCTAssertNil(windows.relativePath(of: path, in: folder), "\(path) in \(folder)")
         }
+        // A boundary another device's request must not cross compares POSIX names byte for byte, as a file system that
+        // keeps names as bytes does; Windows' already compare as NTFS does.
+        XCTAssertEqual(posix.relativePath(of: "/work/caf\u{E9}/x", in: "/work/cafe\u{301}"), "x")
+        XCTAssertNil(posix.comparingBytes.relativePath(of: "/work/caf\u{E9}/x", in: "/work/cafe\u{301}"))
+        XCTAssertEqual(posix.comparingBytes.relativePath(of: "/work/app/./src//a.swift", in: "/work/app/"), "src/a.swift")
+        XCTAssertEqual(windows.comparingBytes.relativePath(of: "c:\\USERS\\Me\\a", in: "C:\\Users\\me"), "a")
+        XCTAssertNil(windows.comparingBytes.relativePath(of: "C:\\e\u{301}\\x", in: "C:\\\u{E9}"))
         XCTAssertEqual(windows.path(of: URL(string: "file://server/share/x")!), "//server/share/x")
         XCTAssertEqual(posix.path(of: URL(string: "file://server/share/x")!), "/share/x")
 

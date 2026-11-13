@@ -44,6 +44,8 @@ public enum RemoteProtocol {
     public static let maxOutputs = 50
     public static let maxReadFileBytes = 100 * 1024 * 1024
     public static let maxReadPartBytes = 4 * 1024 * 1024
+    /// The largest file `writeFile` writes, in its one message: what one `readFile` part holds (§15.27).
+    public static let maxWriteFileBytes = maxReadPartBytes
     /// What one device's `readFile` answers may carry in all: up to 32 MiB at once, then 32 MiB per 10 s (§15.22).
     public static let readFileBudgetBytes = 32 * 1024 * 1024
     public static let readFileBudgetWindow: TimeInterval = 10
@@ -126,8 +128,11 @@ public enum RemoteRefusal: String, Codable, Sendable, CaseIterable {
     /// lets an agent act without asking: a permission the host asks to confirm, and an answer that allows more than the
     /// one call it answers.
     case terminal
-    /// The device's Write files permission is off on the host (§15.28): a file restore or a Review change.
+    /// The device's Write files permission is off on the host (§15.28): a file restore, a Review change, or saving a
+    /// workspace file.
     case fileWrites
+    /// The file is no longer what the client read: it changed on the host since (§15.27).
+    case fileChanged
     /// The account is not one the host can start this harness on now.
     case account
     /// A new worktree was asked for in a project that is not in a Git repository.
@@ -338,6 +343,8 @@ public struct RemoteSnapshot: Equatable, Sendable {
     public var subtasks: Bool = false
     public var taskNotices: Bool = false
     public var fileRewind: Bool = false
+    /// The bridge answers `writeFile` for the files `workspaceFiles` lists (§15.27).
+    public var workspaceFileWrites: Bool = false
     public var composerExtensions: Bool = false
     public var hostSettings: Bool = false
     public var hostAccounts: Bool = false
@@ -1153,6 +1160,8 @@ public enum RemoteRequest: Equatable, Sendable {
     case readFile(taskID: String, path: String, offset: Int)
     case workspaceFiles(taskID: String)
     case projectWorkspaceFiles(projectID: String)
+    /// A file of the task's working folder, saved whole over the one the client read, whose SHA-256 is `sha256` (§15.27).
+    case writeFile(taskID: String, path: String, data: Data, sha256: String)
     /// A desktop in use, or no longer (§18): the Mac holds phone pushes meanwhile.
     case presence(active: Bool)
     /// A task's composer controls, its slash commands, and the edit and fork of its turns (§15.23). `prepare` reads
@@ -1260,6 +1269,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case .readFile: "readFile"
         case .workspaceFiles: "workspaceFiles"
         case .projectWorkspaceFiles: "projectWorkspaceFiles"
+        case .writeFile: "writeFile"
         case .presence: "presence"
         case .taskRail: "taskRail"
         case .railAction: "railAction"
@@ -1308,6 +1318,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case .readReview, .workspaceFiles, .projectWorkspaceFiles, .composerState, .composerAction: nil
         case let .fileRewind(_, action, _, _, _): action == .restore ? .fileWrites : nil
         case .writeReview: .fileWrites
+        case .writeFile: .fileWrites
         case .subtask, .cancelAccountMove: nil
         case .openTerminal, .terminalInput, .terminalResize, .terminalStatus, .terminalOutputAck, .closeTerminal: .terminal
         case .openTab, .closeTab, .answerTabPermission: nil
@@ -1340,7 +1351,8 @@ public enum RemoteRequest: Equatable, Sendable {
              let .suggestionOptions(id, _, _, _, _, _, _), let .setPinned(id, _),
              let .archiveTask(id), let .limitAccounts(id), let .continueWithAccount(id, _), let .setAutoContinue(id, _),
              let .actOnQueued(id, _, _), let .answerHandoff(id, _, _), let .chooseAnswer(id, _, _, _, _),
-             let .readReview(id, _), let .writeReview(id, _, _), let .workspaceFiles(id), let .taskOutputs(id), let .readFile(id, _, _), let .taskSettings(id, _), let .setTaskSetting(id, _, _, _),
+             let .readReview(id, _), let .writeReview(id, _, _), let .workspaceFiles(id), let .taskOutputs(id), let .readFile(id, _, _),
+             let .writeFile(id, _, _, _), let .taskSettings(id, _), let .setTaskSetting(id, _, _, _),
              let .composerState(id), let .composerAction(id, _, _, _), let .composerCommands(id), let .runComposerCommand(id, _, _), let .editMessage(id, _, _), let .forkTask(id, _),
              let .watchTab(id, _, _, _, _, _), let .unwatchTab(id),
              let .tabFrameAck(id, _, _), let .tabInput(id, _, _), let .openTab(id, _, _), let .closeTab(id, _),
@@ -1402,6 +1414,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case let .subtask(_, _, stop): stop
         case let .fileRewind(_, action, _, _, _): action == .restore
         case .writeReview: true
+        case .writeFile: true
         case .cancelAccountMove: true
         case .openOriginalConversation, .projectAction, .taskAction: true
         case .saveScheduledTask, .deleteScheduledTasks: true
@@ -1522,6 +1535,7 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         var prompt: Int?
         var harnesses: [String]?
         var automaticAssignment: Bool?
+        var sha256: String?
     }
 
     private struct WireImage: Codable {
@@ -1830,6 +1844,23 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             }
             guard let offset = wire.offset, offset >= 0 else { return fail(.badRequest, "Missing or negative offset") }
             request = .readFile(taskID: taskID, path: path, offset: offset)
+        case "writeFile":
+            guard let taskID = required(wire.taskId), let path = required(wire.path),
+                  path.utf8.count <= RemoteFileReader.maxPathBytes, !path.utf8.contains(0) else {
+                return fail(.badRequest, "Missing or invalid taskId or path")
+            }
+            guard let digest = wire.sha256, digest.utf8.count == 64,
+                  digest.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
+                return fail(.badRequest, "sha256 must be 64 lowercase hexadecimal digits")
+            }
+            guard let encoded = wire.data else { return fail(.badRequest, "Missing data") }
+            // Measured before it is decoded, and decoded strictly, so what is written is exactly what was sent.
+            guard encoded.utf8.count <= 4 * ((RemoteProtocol.maxWriteFileBytes + 2) / 3) else {
+                return fail(.tooLarge, "A file written is at most 4 MiB")
+            }
+            guard let data = Data(base64Encoded: encoded) else { return fail(.badRequest, "Invalid base64 data") }
+            guard data.count <= RemoteProtocol.maxWriteFileBytes else { return fail(.tooLarge, "A file written is at most 4 MiB") }
+            request = .writeFile(taskID: taskID, path: path, data: data, sha256: digest)
         case "taskRail", "railAction":
             guard let taskID = required(wire.taskId) else { return fail(.badRequest, "Missing taskId") }
             if wire.type == "taskRail" { request = .taskRail(taskID: taskID, watching: wire.watching != false) }
@@ -2191,6 +2222,11 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             wire.taskId = taskID
             wire.path = path
             wire.offset = offset
+        case let .writeFile(taskID, path, data, sha256):
+            wire.taskId = taskID
+            wire.path = path
+            wire.data = data.base64EncodedString()
+            wire.sha256 = sha256
         case let .taskRail(taskID, watching):
             wire.taskId = taskID; wire.watching = watching ? nil : false
         case let .railAction(taskID, action, targetID, confirmed):
@@ -2369,6 +2405,8 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     public var taskFiles: Bool?
     /// Workspace file names in the task folder (§15.27). Reads use `readFile`.
     public var workspaceFiles: Bool?
+    /// The host answers `writeFile` for them (§15.27).
+    public var workspaceFileWrites: Bool?
     public var workspaceRoot: String?
     public var filePaths: [String]?
     public var filesLimited: Bool?

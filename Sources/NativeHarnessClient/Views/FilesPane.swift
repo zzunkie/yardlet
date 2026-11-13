@@ -81,7 +81,7 @@ struct FilesPane: View {
                     location: state.requestedLocation, navigationID: state.navigationID,
                     fontSize: 12 * interfaceScale, focus: keyboardFocus,
                     onBookmark: { state.preferences.bookmarks[document.path] = $0 },
-                    onNavigated: { state.didNavigate($0) }, onEdit: state.isLocal && document.isEditable ? { state.edit($0) } : nil,
+                    onNavigated: { state.didNavigate($0) }, onEdit: document.isEditable ? { state.edit($0) } : nil,
                     isSaving: state.isSaving)
             }
             .loadsFileTasks(for: state.isLocal ? fileURL(document.path) : nil, into: $fileTasks)
@@ -162,7 +162,7 @@ private struct FileNotice: View {
 
     var body: some View {
         let isOutside = WorkspaceFileLocation(relativePath: document.path).isOutsideWorkspace
-        if document.isPartial || document.isLossy || (isLocal && !document.isEditable) {
+        if document.isPartial || document.isLossy || !document.isEditable {
             HStack(spacing: 10) {
                 Text(L10n.string(document.isPartial ? "Large file: only its beginning is shown"
                                  : isOutside ? "Outside the task's folder: not editable here"

@@ -1,11 +1,15 @@
 import Foundation
 
-/// The Files panel reads through this boundary. Remote providers never resolve host paths on this Mac.
+/// The Files panel reads and saves through this boundary. Remote providers never resolve host paths on this Mac.
 @MainActor
 protocol WorkspaceFiles {
     var isLocal: Bool { get }
     func index(in workspace: URL) async throws -> WorkspaceFileIndex
     func read(_ location: WorkspaceFileLocation, in workspace: URL) async throws -> WorkspaceFileContent
+    /// Saves `text` over the file at `path` while it still holds the bytes it was read as (`expectedDigest`); the file
+    /// as saved, or `WorkspaceFileError.changedOnDisk` when it changed since.
+    func save(path: String, text: String, expectedDigest: String, encoding: WorkspaceFileEncoding,
+              in workspace: URL) async throws -> WorkspaceFileDocument
 }
 
 enum WorkspaceFileContent: Sendable {
@@ -26,5 +30,11 @@ struct LocalWorkspaceFiles: WorkspaceFiles {
             return .document(try WorkspaceFileService.read(location, in: workspace))
         }
         return try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
+    }
+    func save(path: String, text: String, expectedDigest: String, encoding: WorkspaceFileEncoding,
+              in workspace: URL) async throws -> WorkspaceFileDocument {
+        try await Task.detached(priority: .userInitiated) {
+            try WorkspaceFileService.save(path: path, text: text, expectedDigest: expectedDigest, encoding: encoding, in: workspace)
+        }.value
     }
 }

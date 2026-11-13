@@ -1337,6 +1337,120 @@ final class RemoteServerTests: XCTestCase {
                                                    home: files.folder), "A folder above the home folder")
     }
 
+    /// A save names a file below the task's working folder as its listing does, and `writePath` judges that by its text
+    /// before anything is looked up: never absolute, from home (`~`), through `..` or `.`, by an empty name or one
+    /// Windows reads as another, and never in a folder that is or holds the home folder. The rules are this platform's
+    /// with POSIX names compared byte for byte; Windows' are pure functions, so this Mac runs them too.
+    func testAWritePathIsBelowTheTasksFolderByItsTextAlone() throws {
+        let posix = PathRules.posix.comparingBytes
+        func posixPath(_ path: String, in folder: String = "/work/app", home: String = "/Users/me") -> String? {
+            RemoteFileReader.writePath(path, in: folder, home: home, rules: posix)
+        }
+        XCTAssertEqual(posixPath("Sources/main.swift"), "Sources/main.swift")
+        XCTAssertEqual(posixPath("caf\u{E9}.md"), "caf\u{E9}.md")
+        for path in ["", "/work/app/main.swift", "~/main.swift", "~", "../app/main.swift", "Sources/../main.swift",
+                     "./main.swift", "Sources//main.swift", "Sources/", ".", "a\u{0}b"] {
+            XCTAssertNil(posixPath(path), path)
+        }
+        XCTAssertNil(posixPath("main.swift", in: "/Users"), "A folder holding the home folder")
+        XCTAssertNil(posixPath("main.swift", in: "/Users/me"), "The home folder itself")
+        XCTAssertEqual(posixPath("main.swift", in: "/Users/me/app"), "main.swift")
+        XCTAssertNil(posixPath("main.swift", in: "work/app"), "A folder that is not absolute")
+        // Byte for byte: the home folder's name in another composition is another folder.
+        XCTAssertEqual(posixPath("x", in: "/Users/cafe\u{301}", home: "/Users/caf\u{E9}"), "x")
+        XCTAssertTrue(RemoteFileReader.rules.comparesBytes)
+
+        let windows = PathRules.windows.comparingBytes
+        func windowsPath(_ path: String, in folder: String = "C:\\Users\\me\\app", home: String = "C:\\Users\\me") -> String? {
+            RemoteFileReader.writePath(path, in: folder, home: home, rules: windows)
+        }
+        XCTAssertEqual(windowsPath("Sources\\main.swift"), "Sources/main.swift")
+        XCTAssertEqual(windowsPath("Sources/main.swift"), "Sources/main.swift")
+        for path in ["C:\\Users\\me\\app\\main.swift", "\\main.swift", "C:main.swift", "\\\\server\\share\\x", "..\\app\\x",
+                     "Sources\\..\\x", "~\\x", "NUL", "Sources\\con.txt", "notes.", "notes ", "Sources\\\\x"] {
+            XCTAssertNil(windowsPath(path), path)
+        }
+        XCTAssertNil(windowsPath("x", in: "c:\\USERS"), "A folder holding the home folder, in another case")
+        XCTAssertNil(windowsPath("x", in: "\\\\?\\C:\\Users\\Me"), "The home folder in its long form")
+        XCTAssertEqual(windowsPath("x", in: "\\\\server\\share\\app"), "x")
+        XCTAssertEqual(windowsPath("x", in: "D:\\Users\\me"), "x", "Another drive")
+        XCTAssertEqual(windowsPath("x", in: "C:\\Users\\e\u{301}", home: "C:\\Users\\\u{E9}"), "x", "Composition kept, as NTFS keeps it")
+    }
+
+    /// `writeTarget` takes a regular file below the task's working folder by names that hold no link, the file's own
+    /// place included, and nothing else; the task's other folders and outputs are read, not written.
+    func testAWriteTargetIsARegularFileOfTheWorkingFolderWithNoLink() throws {
+        let files = try TaskFiles()
+        defer { files.remove() }
+        try FileManager.default.createSymbolicLink(atPath: files.folder + "/away", withDestinationPath: "../outside")
+        try FileManager.default.createSymbolicLink(atPath: files.folder + "/here", withDestinationPath: "docs")
+        func code(_ path: String, home: String = NSHomeDirectory()) -> RemoteErrorCode? {
+            guard case let .failure(error) = RemoteFileReader.writeTarget(path, in: files.scope, home: home) else { return nil }
+            return error.code
+        }
+        XCTAssertEqual(try RemoteFileReader.writeTarget("docs/report.md", in: files.scope).get(),
+                       RemoteFileWriteTarget(folder: URL(filePath: files.folder, directoryHint: .isDirectory), path: "docs/report.md"))
+        for path in ["escape.txt", "latest.md", "away/secret.txt", "here/report.md", "docs", "pipe", "missing.txt",
+                     files.folder + "/notes.txt", files.root + "/other/data.csv", files.summary, "../outside/secret.txt"] {
+            XCTAssertEqual(code(path), .notAllowed, path)
+        }
+        XCTAssertEqual(code("notes.txt", home: files.folder), .notAllowed, "The home folder")
+        XCTAssertEqual(code("notes.txt", home: files.folder + "/docs"), .notAllowed, "A folder holding the home folder")
+        XCTAssertEqual(code(""), .badRequest)
+    }
+
+    /// `writeFile` takes the device's Write files permission, checked when it arrives and held as a permit the bridge
+    /// checks before it writes. The snapshot offers it only beside the workspace listing. Its audit line names the task
+    /// and the outcome, never the file or what it holds.
+    func testAWorkspaceFileIsWrittenOnlyWithTheDevicesWriteFilesPermission() async throws {
+        let harness = try await ServerHarness()
+        var snapshot = FakeBridge.snapshot
+        snapshot.workspaceFileWrites = true
+        await harness.bridge.setSnapshot(snapshot)
+        let phone = try await harness.authenticatedPhone()
+        let connection = try XCTUnwrap(phone.id)
+        let devices = await harness.devices.all()
+        let device = try XCTUnwrap(devices.first)
+        var sent = 0
+        func ask(_ request: RemoteRequest) async throws -> RemoteResponse {
+            sent += 1
+            await harness.server.receive(RemoteRequestEnvelope(id: "w\(sent)", request: request).encoded(), on: connection)
+            return try await phone.response("w\(sent)")
+        }
+        let withoutListing = try await ask(.snapshot)
+        XCTAssertNil(withoutListing.workspaceFileWrites, "Not without workspaceFiles")
+        snapshot.taskFiles = true
+        await harness.bridge.setSnapshot(snapshot)
+        let listed = try await ask(.snapshot)
+        XCTAssertEqual(listed.workspaceFiles, true)
+        XCTAssertEqual(listed.workspaceFileWrites, true)
+
+        let write = RemoteRequest.writeFile(taskID: "A", path: "Sources/secret-name.swift", data: Data("secret contents".utf8),
+                                            sha256: String(repeating: "0", count: 64))
+        let refused = try await ask(write)
+        XCTAssertEqual(refused.error?.code, .notAllowed)
+        XCTAssertEqual(refused.error?.reason, .fileWrites)
+        let none = await harness.bridge.writes
+        XCTAssertTrue(none.isEmpty, "The bridge is not asked")
+        try await harness.server.setPermission(.fileWrites, allowed: true, for: device.id)
+        let saved = try await ask(write)
+        XCTAssertTrue(saved.ok)
+        await harness.bridge.failNext(RemoteError(.notAllowed, "Changed", reason: .fileChanged))
+        let changed = try await ask(write)
+        XCTAssertEqual(changed.error?.reason, .fileChanged)
+        let writes = await harness.bridge.writes
+        XCTAssertEqual(writes.map(\.path), ["Sources/secret-name.swift", "Sources/secret-name.swift"])
+        XCTAssertEqual(writes.map(\.permitHeld), [true, true])
+        let permits = await harness.server.fileWritePermits[connection] ?? [:]
+        XCTAssertTrue(permits.isEmpty, "A write's permit goes with its answer")
+
+        let audit = harness.audit.entries().filter { $0.type == "writeFile" }
+        XCTAssertEqual(audit.map(\.result), ["notAllowed", "ok", "notAllowed"])
+        XCTAssertTrue(audit.allSatisfy { $0.task == "A" && $0.file == nil && $0.byteCount == nil && $0.device == device.id }, "\(audit)")
+        let log = try String(contentsOf: harness.auditURL, encoding: .utf8)
+        XCTAssertFalse(log.contains("secret"), log)
+    }
+
     // MARK: - Browser tabs (§15.25)
 
     /// A watched tab's frames: the first at once, the next only once the client acknowledged the last and the tab drew
@@ -2121,6 +2235,14 @@ actor FakeBridge: RemoteBridge {
     func fileScope(taskID: String) -> Result<RemoteFileScope, RemoteError> {
         guard !fileScopes.isEmpty else { return .failure(RemoteError(.unavailable)) }
         return fileScopes[taskID].map { .success($0) } ?? .failure(RemoteError(.notFound))
+    }
+    /// The saves that reached the bridge (§15.27), and whether each one's permit held there.
+    struct Write: Sendable { var path: String; var data: Data; var permitHeld: Bool }
+    private(set) var writes: [Write] = []
+    func writeFile(taskID: String, path: String, data: Data, sha256: String, permit: RemoteFileWritePermit) -> RemoteError? {
+        writes.append(Write(path: path, data: data, permitHeld: permit.isValid))
+        defer { nextFailure = nil }
+        return nextFailure
     }
 
     func browserTabs(taskID: String) async -> Result<[RemoteBrowserTab], RemoteError> {

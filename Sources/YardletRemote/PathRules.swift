@@ -5,7 +5,8 @@ import Foundation
 /// separators, `.` and `..` are taken out by name, and nothing is looked up, so a caller that must not be led out of
 /// a folder through a link resolves the links first.
 ///
-/// macOS and Linux: an absolute path starts with `/`, and names compare as Swift compares strings. Windows: an
+/// macOS and Linux: an absolute path starts with `/`, and names compare as Swift compares strings, or byte for byte
+/// (`comparesBytes`). Windows: an
 /// absolute path starts with a drive (`C:\`, or `/C:/` as a file URL's path writes it) or names a share
 /// (`\\server\share`), also in the `\\?\` and `\\.\` forms; `\` and `/` both separate names, and names compare in any
 /// case, one character for one, as NTFS compares them. There `\x` (the current drive's root) and `C:x` (drive C's
@@ -13,15 +14,29 @@ import Foundation
 /// some names as something else than their text: it drops periods and spaces a name ends in, and a device's name
 /// (`NUL`, `CON`, `COM1`) is that device in any folder. A path with such a name is in no folder by these rules
 /// (`isReadAsAnotherNameOnWindows`), since its text does not say where it leads.
-struct PathRules: Equatable, Sendable {
+///
+/// They live with the remote protocol, below the app, because the host checks a remote request's folder boundary with
+/// them too (docs/REMOTE_PROTOCOL.md §15.22) and the phone app builds this module alone.
+public struct PathRules: Equatable, Sendable {
     /// Windows' rules rather than POSIX's.
-    let isWindows: Bool
+    public let isWindows: Bool
+    /// POSIX names compare byte for byte, by their UTF-8, rather than as Swift compares strings, which reads two
+    /// spellings of a name as one (`é` composed, or `e` and an accent). A file system that keeps names as bytes, as
+    /// Linux's do, holds two folders under those spellings, so a boundary another device's request must not cross
+    /// compares this way (`comparingBytes`). Windows' names compare as NTFS compares them either way, which keeps
+    /// their composition.
+    public let comparesBytes: Bool
 
-    static let posix = PathRules(isWindows: false)
-    static let windows = PathRules(isWindows: true)
+    init(isWindows: Bool, comparesBytes: Bool = false) {
+        self.isWindows = isWindows
+        self.comparesBytes = comparesBytes
+    }
+
+    public static let posix = PathRules(isWindows: false)
+    public static let windows = PathRules(isWindows: true)
 
     /// This platform's rules.
-    static let current: PathRules = {
+    public static let current: PathRules = {
         #if os(Windows)
         return .windows
         #else
@@ -29,14 +44,17 @@ struct PathRules: Equatable, Sendable {
         #endif
     }()
 
+    /// These rules with POSIX names compared byte for byte (`comparesBytes`).
+    public var comparingBytes: PathRules { PathRules(isWindows: isWindows, comparesBytes: true) }
+
     /// Whether `path` names the same place wherever it is read from.
-    func isAbsolute(_ path: String) -> Bool {
+    public func isAbsolute(_ path: String) -> Bool {
         parsed(path) != nil
     }
 
     /// Whether `path` is read from the folder it is given in: it starts at no root, and on Windows at no drive.
     /// An empty path is relative.
-    func isRelative(_ path: String) -> Bool {
+    public func isRelative(_ path: String) -> Bool {
         var scalars = path.unicodeScalars.makeIterator()
         guard let first = scalars.next() else { return true }
         guard !isSeparator(first) else { return false }
@@ -45,14 +63,14 @@ struct PathRules: Equatable, Sendable {
 
     /// The names `path` is made of, split at this platform's separators; the empty names of a repeated, leading or
     /// trailing separator are kept.
-    func names(_ path: String) -> [String] {
+    public func names(_ path: String) -> [String] {
         path.unicodeScalars.split(omittingEmptySubsequences: false, whereSeparator: isSeparator)
             .map { String(Substring($0)) }
     }
 
     /// `path` below `folder`, its names joined with `/`, or "" when it is `folder` itself; nil when it lies anywhere
     /// else or either is not absolute.
-    func relativePath(of path: String, in folder: String) -> String? {
+    public func relativePath(of path: String, in folder: String) -> String? {
         guard !(isWindows && names(path).contains(where: Self.isReadAsAnotherNameOnWindows)) else { return nil }
         guard let path = parsed(path), let folder = parsed(folder),
               path.root.count == folder.root.count, zip(path.root, folder.root).allSatisfy(same),
@@ -64,7 +82,7 @@ struct PathRules: Equatable, Sendable {
     /// POSIX it is `path` itself, so a Mac compares paths as it always has. On Windows an absolute path is its root
     /// and names with `.` and `..` taken out, each in the case NTFS compares it, so `C:\Repo`, `c:/repo/` and
     /// `\\?\C:\Repo` are one key; any other path is its names folded the same way.
-    func key(_ path: String) -> String {
+    public func key(_ path: String) -> String {
         guard isWindows else { return path }
         guard let parsed = parsed(path) else {
             return names(path).map(Self.foldedName).joined(separator: "/")
@@ -73,30 +91,30 @@ struct PathRules: Equatable, Sendable {
     }
 
     /// Whether `path` is `folder` or lies inside it.
-    func isInside(_ path: String, folder: String) -> Bool {
+    public func isInside(_ path: String, folder: String) -> Bool {
         relativePath(of: path, in: folder) != nil
     }
 
     /// Whether `path` lies inside `folder` and is not `folder` itself.
-    func isStrictlyInside(_ path: String, folder: String) -> Bool {
+    public func isStrictlyInside(_ path: String, folder: String) -> Bool {
         relativePath(of: path, in: folder).map { !$0.isEmpty } ?? false
     }
 
-    func relativePath(of url: URL, in folder: URL) -> String? {
+    public func relativePath(of url: URL, in folder: URL) -> String? {
         relativePath(of: path(of: url), in: path(of: folder))
     }
 
-    func isInside(_ url: URL, folder: URL) -> Bool {
+    public func isInside(_ url: URL, folder: URL) -> Bool {
         relativePath(of: url, in: folder) != nil
     }
 
-    func isStrictlyInside(_ url: URL, folder: URL) -> Bool {
+    public func isStrictlyInside(_ url: URL, folder: URL) -> Bool {
         relativePath(of: url, in: folder).map { !$0.isEmpty } ?? false
     }
 
     /// `url`'s path as these rules read it; on Windows a share's server, which a file URL may keep as its host,
     /// leads it (`//server/share/x`).
-    func path(of url: URL) -> String {
+    public func path(of url: URL) -> String {
         let path = url.path(percentEncoded: false)
         guard isWindows, let host = url.host(percentEncoded: false), !host.isEmpty,
               host.lowercased() != "localhost" else { return path }
@@ -104,7 +122,7 @@ struct PathRules: Equatable, Sendable {
     }
 
     /// The file `path` names: itself when it is absolute, else read from `folder`.
-    func url(for path: String, in folder: URL, directoryHint: URL.DirectoryHint = .inferFromPath) -> URL {
+    public func url(for path: String, in folder: URL, directoryHint: URL.DirectoryHint = .inferFromPath) -> URL {
         if isAbsolute(path) { return URL(filePath: path, directoryHint: directoryHint) }
         return folder.appending(path: isWindows ? path.replacingOccurrences(of: "\\", with: "/") : path,
                                 directoryHint: directoryHint)
@@ -156,7 +174,7 @@ struct PathRules: Equatable, Sendable {
     /// Whether Windows opens something other than what `name` spells: a name that ends in a period or a space, which
     /// Windows drops (`.` and `..` are themselves), or a device's name, alone or before an extension or a colon
     /// (`NUL`, `con.txt`, `COM1:`), which is the device wherever it is written.
-    static func isReadAsAnotherNameOnWindows(_ name: String) -> Bool {
+    public static func isReadAsAnotherNameOnWindows(_ name: String) -> Bool {
         guard !name.isEmpty, name != ".", name != ".." else { return false }
         if name.hasSuffix(".") || name.hasSuffix(" ") { return true }
         var stem = name.prefix { $0 != "." && $0 != ":" }
@@ -181,7 +199,8 @@ struct PathRules: Equatable, Sendable {
     }
 
     private func same(_ first: String, _ second: String) -> Bool {
-        isWindows ? Self.folded(first) == Self.folded(second) : first == second
+        isWindows ? Self.folded(first) == Self.folded(second)
+            : comparesBytes ? first.utf8.elementsEqual(second.utf8) : first == second
     }
 
     private static func foldedName(_ name: String) -> String {

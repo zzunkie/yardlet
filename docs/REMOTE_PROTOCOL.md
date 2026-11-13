@@ -556,7 +556,8 @@ reason words the refusal by its `code`.
 | `setting` | a setting, or a value of it, the Mac's menus do not offer now (§15.16) |
 | `confirmation` | a choice the Mac asks to confirm, sent without `confirmed` (§15.16) |
 | `terminal` | the device's Terminal permission is off: a terminal, or a choice that lets an agent act without asking (§15.28) |
-| `fileWrites` | the device's Write files permission is off: a file restore or a Review change (§15.26, §15.28) |
+| `fileWrites` | the device's Write files permission is off: a Review change (§15.26), a save from the Files panel (§15.27) or a file restore (§15.31) |
+| `fileChanged` | the file is no longer the one the client read: it changed on the Mac since (§15.27) |
 | `account` | an account the Mac cannot start or move the task on now (§15.16, §15.33) |
 | `worktree` | a new worktree asked for outside a Git repository (§15.16, §15.35) |
 | `attachments` | pictures or files the harness or the task does not take (§4.4, §15.16) |
@@ -1481,7 +1482,8 @@ task's own folders that the conversation names. Files the other way, from the ph
   symbolic links resolved, and `name` is that path's last part. The Mac serves a regular file only, at most 100 MiB,
   and only when it is one of the task's outputs (above) or, once symbolic links are resolved, lies inside one of the
   task's own folders (its working folder or worktree and the project's other folders, as the task was given them),
-  by whole path components compared byte for byte. An output is the file in its own place: its folder's links are
+  by whole path components compared byte for byte, by the app's own path rules (`PathRules` with `comparingBytes`;
+  docs/PLATFORM_PORTABILITY.md, "Paths and executable lookup"). An output is the file in its own place: its folder's links are
   followed, but a symbolic link put where it was is not. Nothing a request names is looked up before its path, by
   its text, is one of the outputs or under one of the folders. A folder that is the Mac's home folder or holds it
   (`/`, `/Users`, by any path, `/System/Volumes/Data/Users` too) gives no files of its own: a task there serves
@@ -1960,12 +1962,49 @@ Traversal uses directory descriptors, skips symbolic links and non-regular files
 through their existing links and Outputs card, rather than being enumerated here.
 
 Content uses `readFile` (§15.22), including its scope checks, size limit, rate budget and audit records.
-The desktop uses the same Files panel and reader as local files, with a remote provider that reads the
+The desktop uses the same Files panel, reader and editor as local files, with a remote provider that reads the
 host's file into the window's private temporary copies. It never resolves a host path against the
-client's filesystem. Image and PDF previews read those copies; text preserves its host-relative path.
-Read-only access is a provider permission, independent of the document's size and encoding; small source files
-keep the same syntax colors and layout. The remote panel has no editing or saving operation, shows Save disabled, and offers no client Finder
-or local-app actions for a host path. Copies are removed when the host window closes, as in §18.
+client's filesystem, and a save writes nothing on the client: the copy stays a copy. Image and PDF previews read
+those copies; text preserves its host-relative path. Small source files keep the same syntax colors and layout, and
+what the local panel edits is editable: a whole text file of at most 2 MiB that decodes, named by a path relative to
+the task's folder. The remote panel offers no client Finder or local-app actions for a host path. Copies are removed
+when the host window closes, as in §18; the panel's open file, reading place and unsaved edits stay with the window,
+in memory, per task.
+
+A snapshot can also carry `workspaceFileWrites: true`, only beside `workspaceFiles`. The host then answers
+`writeFile`, the panel's Save:
+
+```json
+{"id": "files-2", "type": "writeFile", "taskId": "T", "path": "Sources/App.swift", "data": "<base64 of at most 4 MiB>", "sha256": "<64 lowercase hex digits>"}
+```
+
+```json
+{"re": "files-2", "ok": true}
+```
+
+`path` names a file in the folder `workspaceFiles` lists, relative to it, as the listing names it. `data` is the
+file's new contents in strict base64, at most 4 MiB decoded (one `readFile` part), and `sha256` is the SHA-256 of the
+bytes the client read. The host replaces the file only when it is a regular file there already, reached from the
+folder (its links resolved, as for the listing) by names none of which is a symbolic link, the file's own place
+included, and only while the file still holds bytes with that SHA-256, as the local panel saves: the save stops if
+the file changed since it was read. It writes the new contents to a temporary file beside it, with the file's
+permissions and other metadata, and renames that over the file, so a failed write never leaves a half-written file.
+Nothing is created, and the task's other folders and outputs are read, not written: the Mac's Files panel saves only
+in the task's folder. A folder that is the home folder or holds it saves nothing, as it lists nothing. `writeFile`
+takes the device's `fileWrites` permission (§15.28), checked when the request arrives and again, through a permit
+the host revokes with the permission or the connection, immediately before the rename. Errors: `badRequest` (no
+`taskId` or `path`, `data` not strict base64, `sha256` not 64 lowercase hexadecimal digits), `tooLarge` (over 4 MiB,
+or a file there over it), `notFound` (no such task), `notAllowed` with reason `fileWrites` (the permission is off)
+or `fileChanged` (the file is no longer the one the client read), `notAllowed` without a reason for any other path
+(absolute, starting with `~`, with an empty, `.` or `..` name, through or at a symbolic link, at what is not a
+regular file or is not there), whether or not it exists, and `unavailable` when the write fails. No error carries a
+path or the file's contents. It is a command (§7), and the audit log (§4.4) records the device, `writeFile`, the task,
+the result and its reason, never the path, the file's name, its contents or its size.
+
+A client offers Save as the local panel does. Against a host without `workspaceFileWrites` (an older Yardlet), Save
+says to update Yardlet on the host and sends nothing; with it but without the permission, the panel says to allow
+Write files for this device in the host's Settings › Remote › Paired devices. Either way the edit stays until it is
+saved or discarded.
 
 ### 15.28 Per-device permissions
 
@@ -2016,10 +2055,10 @@ removal `revoke`. Repeated `watchTab` entries are coalesced for sixty seconds pe
 refusals are coalesced per device, request type and result, independent of the unvalidated task ID. A permission
 transition clears that device's refusal window so its first newly refused operation is recorded.
 
-These permissions reserve separate authorization for terminal sessions, direct file writes and host settings.
-They do not add file-writing or settings-changing requests by themselves. `fileWrites` guards a file restore
-(`fileRewind` with `restore`) and Review changes (`writeReview`, §15.26); its refusal carries reason `fileWrites`. Credentials, vault entries, sign-in and
-remote device management remain on the host.
+These permissions authorize terminal sessions (§15.29), direct file writes (Review changes, `writeReview`, §15.26;
+the Files panel's save, `writeFile`, §15.27; and a file restore, `fileRewind`'s `restore`, §15.31) and host
+settings (§15.36, §15.37). A request refused for Terminal or Write files carries the reason `terminal` or
+`fileWrites` (§8). Credentials, vault entries, sign-in and remote device management remain on the host.
 
 `terminal` also guards every choice that lets an agent act without asking, since such an agent can run what a shell
 runs. Without it the host treats a request's `confirmed` as absent for `createTask`, a suggestion's Start
