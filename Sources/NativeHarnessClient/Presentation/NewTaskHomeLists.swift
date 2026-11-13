@@ -606,6 +606,37 @@ enum NewTaskHomeListsProjection {
     }
 }
 
+/// What the home's Projects view counts in its header: the projects it lists, their open pull requests,
+/// and the projects left alone for a while.
+struct NewTaskHomeProjectFacts: Equatable, Sendable {
+    var projects = 0
+    var pullRequests = 0
+    var leftForAWhile = 0
+
+    init(projects: Int = 0, pullRequests: Int = 0, leftForAWhile: Int = 0) {
+        self.projects = projects
+        self.pullRequests = pullRequests
+        self.leftForAWhile = leftForAWhile
+    }
+
+    init(summaries: [NewTaskProjectSummary], idle: [NewTaskIdleProject]) {
+        self.init(projects: summaries.filter { $0.project != nil }.count + idle.count,
+                  pullRequests: summaries.reduce(0) { $0 + $1.pullRequests.count } + idle.reduce(0) { $0 + $1.pullRequests.count },
+                  leftForAWhile: idle.count)
+    }
+
+    /// "6 projects · 2 open pull requests · 2 left for a while"; nil when there is nothing to count.
+    var summary: String? {
+        var parts: [String] = []
+        if projects > 0 { parts.append(projects == 1 ? L10n.string("1 project") : L10n.format("%lld projects", projects)) }
+        if pullRequests > 0 {
+            parts.append(pullRequests == 1 ? L10n.string("1 open pull request") : L10n.format("%lld open pull requests", pullRequests))
+        }
+        if leftForAWhile > 0 { parts.append(L10n.format("%lld left for a while", leftForAWhile)) }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+}
+
 /// A running task in Running: how many running tasks and agents it has under it, and since when its
 /// turn runs.
 struct NewTaskRunningRow: Equatable, Identifiable, Sendable {

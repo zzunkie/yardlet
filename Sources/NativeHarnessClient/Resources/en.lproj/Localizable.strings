@@ -4029,3 +4029,6 @@
 "Calendar handoff Mac %@ %@" = "Calendar on this Mac · event %1$@, read with %2$@";
 "Accept invitation" = "Accept";
 "Decline invitation" = "Decline";
+"%lld projects" = "%lld projects";
+"1 project" = "1 project";
+"%lld left for a while" = "%lld left for a while";

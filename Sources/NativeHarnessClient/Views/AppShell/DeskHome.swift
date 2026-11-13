@@ -1,10 +1,13 @@
 import AppKit
 import SwiftUI
 
-/// Which view the home shows: the desk ("Now") or the projects.
+/// Which view the home shows: the desk ("Now") or the projects. The home opens on the one chosen last.
 enum NewTaskHomeView: String, CaseIterable, Sendable {
     case now
     case projects
+
+    /// Where the choice is kept.
+    static let key = "YardletHomeView"
 }
 
 /// The desk shows only while this development switch is on, until it becomes the home's first view:
@@ -12,6 +15,28 @@ enum NewTaskHomeView: String, CaseIterable, Sendable {
 /// With it on, the home's header offers "Now | Projects".
 enum DeskPreview {
     static let key = "YardletDeskPreview"
+}
+
+/// Where the home's header stands, the same in both views so it stays put as they switch: over the
+/// columns of a wide home, over the single column of a narrow one.
+struct DeskHeaderPlacement: ViewModifier {
+    let width: CGFloat
+
+    func body(content: Content) -> some View {
+        if width < DeskLayout.twoColumnWidth {
+            content
+                .frame(maxWidth: NewTaskHomeLayout.composerWidth)
+                .padding(.horizontal, NewTaskHomeLayout.inset)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 14)
+                .padding(.bottom, 10)
+        } else {
+            content
+                .padding(.horizontal, 30)
+                .padding(.top, 14)
+                .padding(.bottom, 10)
+        }
+    }
 }
 
 /// The home's header: today's date, what the view counts, and the view switch.
@@ -130,9 +155,7 @@ struct DeskHome<Switch: View, Bottom: View>: View {
     private func two(_ desk: Desk) -> some View {
         VStack(spacing: 0) {
             header(desk)
-                .padding(.horizontal, 30)
-                .padding(.top, 14)
-                .padding(.bottom, 10)
+                .modifier(DeskHeaderPlacement(width: size.width))
             HStack(alignment: .top, spacing: 36) {
                 VStack(spacing: 0) {
                     DeskScroll { keyboardZones(desk) { waitingZone(desk, detailLines: 2) } }
@@ -156,8 +179,7 @@ struct DeskHome<Switch: View, Bottom: View>: View {
     private func one(_ desk: Desk) -> some View {
         VStack(spacing: 0) {
             header(desk)
-                .padding(.top, 14)
-                .padding(.bottom, 10)
+                .modifier(DeskHeaderPlacement(width: size.width))
             DeskScroll {
                 keyboardZones(desk) {
                     VStack(alignment: .leading, spacing: 18) {
@@ -168,11 +190,12 @@ struct DeskHome<Switch: View, Bottom: View>: View {
                 }
                 .padding(.bottom, 12)
             }
+            .frame(maxWidth: NewTaskHomeLayout.composerWidth)
+            .padding(.horizontal, NewTaskHomeLayout.inset)
+            .frame(maxWidth: .infinity)
             bottomPane
+                .padding(.horizontal, NewTaskHomeLayout.inset)
         }
-        .frame(maxWidth: NewTaskHomeLayout.composerWidth)
-        .padding(.horizontal, NewTaskHomeLayout.inset)
-        .frame(maxWidth: .infinity)
     }
 
     /// A quiet day: nothing waits, runs or is unread. Today and the composer, as the two apps' homes.

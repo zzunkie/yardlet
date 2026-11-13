@@ -54,6 +54,8 @@ struct NewTaskHomeLists: View {
     /// Reads what a project left alone for a while left unfinished in its folder.
     var readLeftWork: @Sendable (URL) async -> GitLeftWork? = { await GitLeftWork.read($0) }
     var openURL: (URL) -> Void = { NSWorkspace.shared.open($0) }
+    /// What the projects count, for the header over them (`NewTaskHomeProjectFacts`).
+    var onFacts: ((NewTaskHomeProjectFacts) -> Void)? = nil
 
     @Environment(TaskPullRequestMonitor.self) private var pullRequests: TaskPullRequestMonitor?
     @State private var expanded: Set<NewTaskHomeSection> = []
@@ -278,6 +280,9 @@ struct NewTaskHomeLists: View {
             handle(.tab, layout: layout)
         }
         .onChange(of: layout.entries, initial: true) { _, entries in onListed(part, entries) }
+        .onChange(of: NewTaskHomeProjectFacts(summaries: summaries, idle: idle), initial: true) { _, facts in
+            if part == .projects { onFacts?(facts) }
+        }
         .onChange(of: summaries.map(\.id), initial: true) { _, ids in
             places = NewTaskHomeListsProjection.places(places, listing: ids)
         }

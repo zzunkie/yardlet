@@ -4029,3 +4029,6 @@
 "Calendar handoff Mac %@ %@" = "이 Mac의 캘린더 · 일정 %1$@ (%2$@ 도구로 읽기)";
 "Accept invitation" = "수락";
 "Decline invitation" = "거절";
+"%lld projects" = "프로젝트 %lld개";
+"1 project" = "프로젝트 1개";
+"%lld left for a while" = "한동안 손대지 않은 %lld개";

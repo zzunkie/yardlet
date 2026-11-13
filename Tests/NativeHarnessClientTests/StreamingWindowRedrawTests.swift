@@ -224,8 +224,8 @@ final class StreamingWindowRedrawTests: XCTestCase {
     /// The desk shown while a task streams in the background: what the task streams does not draw the
     /// desk again, and another task's new state draws the desk and its own line, not every line.
     func testTheDeskIsDrawnAgainOnlyForWhatChanged() async throws {
-        UserDefaults.yardlet.set(true, forKey: DeskPreview.key)
-        defer { UserDefaults.yardlet.removeObject(forKey: DeskPreview.key) }
+        DeskPreview.show()
+        defer { DeskPreview.hide() }
         let fixture = try await makeFixture(tasks: 12)
         let model = fixture.model, streaming = fixture.tasks[0], other = fixture.tasks[5]
         for task in fixture.tasks[6...9] { await model.store.markUnread(id: task.id) }

@@ -578,8 +578,8 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         let directory = try WindowlessRender.directory("desk-qa/\(language)")
         let runtimes = try runtimes()
         let mailbox = try await deskMailbox()
-        UserDefaults.yardlet.set(true, forKey: DeskPreview.key)
-        defer { UserDefaults.yardlet.removeObject(forKey: DeskPreview.key) }
+        DeskPreview.show()
+        defer { DeskPreview.hide() }
         let regular = NSSize(width: 1_040, height: 820), wide = NSSize(width: 1_449, height: 1_125)
         let narrow = NSSize(width: 740, height: 760)
         let scenes: [(name: String, day: DeskDay?, size: NSSize)] = [
@@ -648,8 +648,8 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         let directory = try WindowlessRender.directory("desk-qa/\(language)")
         let runtimes = try runtimes()
         let mailbox = try await deskMailbox()
-        UserDefaults.yardlet.set(true, forKey: DeskPreview.key)
-        defer { UserDefaults.yardlet.removeObject(forKey: DeskPreview.key) }
+        DeskPreview.show()
+        defer { DeskPreview.hide() }
         for (name, size) in [("reply-1040", NSSize(width: 1_040, height: 820)), ("reply-1449", NSSize(width: 1_449, height: 1_125))] {
             for appearance in WindowlessRender.Appearance.allCases {
                 let fixture = deskFixture(.busy).fixture
@@ -689,14 +689,52 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         }
     }
 
+    /// The Projects view is the home as it was under the header the desk shares, which counts its projects;
+    /// the home opens on the view chosen last. Drawn beside the home without the development switch at the
+    /// widths a person's window gives it, into `.build/desk-qa/<language>/`.
+    func testTheProjectsViewIsTheHomeUnderTheHeader() throws {
+        let language = (Locale.preferredLanguages.first ?? "en").hasPrefix("ko") ? "ko" : "en"
+        let directory = try WindowlessRender.directory("desk-qa/\(language)")
+        let runtimes = try runtimes()
+        defer { DeskPreview.hide() }
+        for size in [NSSize(width: 1_040, height: 820), NSSize(width: 1_449, height: 1_125)] {
+            var names: [Bool: [String]] = [:]
+            for switchOn in [false, true] {
+                UserDefaults.yardlet.set(switchOn, forKey: DeskPreview.key)
+                UserDefaults.yardlet.set(NewTaskHomeView.projects.rawValue, forKey: NewTaskHomeView.key)
+                for appearance in WindowlessRender.Appearance.allCases {
+                    let host = WindowlessRender.Host(home(size: size, scheme: appearance.colorScheme, runtimes: runtimes),
+                                                     size: size, appearance: appearance)
+                    defer { host.close() }
+                    host.settle(passes: 10)
+                    let name = "\(switchOn ? "projects" : "home")-\(Int(size.width))-\(appearance.suffix).png"
+                    try WindowlessRender.writePNG(try host.capture().bitmap, to: directory.appending(path: name))
+                    guard appearance == .light else { continue }
+                    names[switchOn] = headerNames(in: host)
+                    let elements = host.accessibilityElements()
+                    let report = elements.map(\.description).joined(separator: "\n")
+                    XCTAssertEqual(!controls(in: host, role: .radioButton).filter { $0.label == L10n.string("Projects") }.isEmpty,
+                                   switchOn, report)
+                    if switchOn {
+                        XCTAssertTrue(elements.contains {
+                            $0.label.contains(L10n.format("%lld projects", 6) + " · " + L10n.format("%lld open pull requests", 4)
+                                              + " · " + L10n.format("%lld left for a while", 2))
+                        }, "The header counts the projects, their pull requests and the ones left: \(report)")
+                    }
+                }
+            }
+            XCTAssertEqual(names[true], names[false], "The same projects in the same order")
+        }
+    }
+
     /// The keyboard goes through the desk as through the projects: Tab from the composer to the first line
     /// waiting on the person, Return answers it in the composer's place; ↓ past what waits reaches what
     /// runs, and Return opens it.
     func testTheKeyboardGoesThroughTheDesksZones() async throws {
         let runtimes = try runtimes()
         let mailbox = try await deskMailbox()
-        UserDefaults.yardlet.set(true, forKey: DeskPreview.key)
-        defer { UserDefaults.yardlet.removeObject(forKey: DeskPreview.key) }
+        DeskPreview.show()
+        defer { DeskPreview.hide() }
         let size = NSSize(width: 1_040, height: 820)
         var opened: [String] = []
         let host = WindowlessRender.Host(
@@ -1134,5 +1172,19 @@ private struct ReplyTaskHost: View {
             providerUsage: nil, isProviderAttached: true, onShowCodexCapabilities: {},
             conversationActions: conversation, composerActions: composer)
             .environment(\.taskKeyboardFocus, workspace.keyboardFocus)
+    }
+}
+
+extension DeskPreview {
+    /// The desk on the home: its switch on and "Now" the view. The home remembers the view the person
+    /// chose, so a test that chose Projects would otherwise leave it to the next.
+    static func show() {
+        UserDefaults.yardlet.set(true, forKey: key)
+        UserDefaults.yardlet.removeObject(forKey: NewTaskHomeView.key)
+    }
+
+    static func hide() {
+        UserDefaults.yardlet.removeObject(forKey: key)
+        UserDefaults.yardlet.removeObject(forKey: NewTaskHomeView.key)
     }
 }

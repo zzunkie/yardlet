@@ -129,7 +129,10 @@ struct NewTaskHome: View {
     @State private var answeredTaskID: UUID?
     /// The desk is shown only while its development switch is on (`DeskPreview`).
     @AppStorage(DeskPreview.key, store: .yardlet) private var showsDeskPreview = false
-    @State private var homeView = NewTaskHomeView.now
+    /// The view the person chose last, kept for the next home (`NewTaskHomeView.key`).
+    @AppStorage(NewTaskHomeView.key, store: .yardlet) private var homeView = NewTaskHomeView.now
+    /// What the projects count, for the header over them.
+    @State private var projectFacts = NewTaskHomeProjectFacts()
 
     /// How often the screen reads the Mac's condition again while it shows.
     static let conditionInterval: Duration = .seconds(60)
@@ -224,11 +227,12 @@ struct NewTaskHome: View {
     private func projectsView(viewport: GeometryProxy) -> some View {
         let columns = NewTaskHomeLayout.columns(width: viewport.size.width)
         return VStack(spacing: 0) {
+            if showsViewSwitch {
+                DeskHeader(date: activity.now, summary: projectFacts.summary) { NewTaskHomeViewSwitch(selection: $homeView) }
+                    .modifier(DeskHeaderPlacement(width: viewport.size.width))
+            }
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    if showsViewSwitch {
-                        DeskHeader(date: activity.now) { NewTaskHomeViewSwitch(selection: $homeView) }
-                    }
                     if let usage = activity.usage {
                         TokenUsageHomeBand(overview: usage, columns: columns, onOpen: activity.onOpenUsage)
                     }
@@ -236,7 +240,7 @@ struct NewTaskHome: View {
                 }
                     .frame(maxWidth: columns > 1 ? NewTaskHomeLayout.gridWidth : NewTaskHomeLayout.composerWidth)
                     .padding(.horizontal, NewTaskHomeLayout.inset)
-                    .padding(.top, showsViewSwitch ? 14 : 28)
+                    .padding(.top, showsViewSwitch ? 4 : 28)
                     .padding(.bottom, 16)
                     .frame(maxWidth: .infinity)
                     .accessibilitySortPriority(ParityAccessibility.secondary)
@@ -280,7 +284,8 @@ struct NewTaskHome: View {
                 listed[part] = entries
                 relist()
             },
-            onReturnToComposer: returnToComposer, readFolderGit: readFolderGit, readLeftWork: readLeftWork
+            onReturnToComposer: returnToComposer, readFolderGit: readFolderGit, readLeftWork: readLeftWork,
+            onFacts: { facts in if facts != projectFacts { projectFacts = facts } }
         )
     }
 
