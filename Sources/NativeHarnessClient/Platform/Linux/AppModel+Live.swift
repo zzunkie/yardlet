@@ -1,4 +1,5 @@
 import Foundation
+import Glibc
 
 /// The Linux host's model: its stores in the data folder (`LinuxHostPaths`), Platform/Portable for the services the
 /// Linux layer does not provide, and no browser host or screens (docs/LINUX_HOST.md).
@@ -6,7 +7,7 @@ extension AppModel {
     static func live() -> AppModel {
         // The person's login shell sets the PATH the harnesses are found on; a systemd service has none of it
         // (docs/LINUX_HOST.md, "Finding the harnesses").
-        LoginShellPath.startReading(shell: ShellLaunchEnvironment.loginShellPath())
+        LoginShellPath.startReading(shell: LinuxLoginShell.path())
         let codexEnvironmentManager = CodexEnvironmentManager(
             paths: CodexEnvironmentPaths.live()
         )
@@ -63,5 +64,17 @@ extension AppModel {
         } catch {
             return storageUnavailable(error, codexEnvironmentManager: codexEnvironmentManager)
         }
+    }
+}
+
+/// The account's shell from the user database, as the Mac takes it, then `$SHELL`: a systemd service may start without
+/// `$SHELL`, and the shell decides which profile sets the `PATH`.
+enum LinuxLoginShell {
+    static func path(environment: [String: String] = ProcessInfo.processInfo.environment) -> String {
+        if let entry = getpwuid(getuid()), let raw = entry.pointee.pw_shell {
+            let path = String(cString: raw)
+            if path.hasPrefix("/"), FileManager.default.isExecutableFile(atPath: path) { return path }
+        }
+        return ShellLaunchEnvironment.loginShellPath(environment: environment)
     }
 }

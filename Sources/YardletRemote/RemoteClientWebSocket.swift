@@ -174,9 +174,9 @@ final class RemoteClientWebSocket: @unchecked Sendable {
         }
     }
 }
-#else
+#elseif !os(Linux)
 
-/// Foundation here offers no extensions and has no other WebSocket.
+/// Foundation here offers no extensions and has no other WebSocket. Linux has its own (`RemoteCurlWebSocket.swift`).
 typealias RemoteClientWebSocket = URLSessionWebSocketTask
 
 extension URLSessionWebSocketTask {

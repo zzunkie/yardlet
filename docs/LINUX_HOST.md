@@ -63,22 +63,23 @@ the host's sockets.
 
 A systemd service starts with systemd's `PATH`, without the folders the person's shell profile adds (`~/.local/bin`
 for Claude Code, npm's global folder, nvm's). As the Mac app does when the Dock opens it, the host asks the person's
-login shell for its `PATH` once at start (`Runtime/LoginShellPath.swift`, `$SHELL -l -i`, at most five seconds) and
-starts harnesses with it. Started from a terminal, it keeps that terminal's `PATH`.
+login shell (the account's shell in the user database, else `$SHELL`) for its `PATH` once at start
+(`Runtime/LoginShellPath.swift`, `-l -i`, at most five seconds) and starts harnesses with it; `status` answers once
+that first look for the harnesses is done. Started from a terminal, it keeps that terminal's `PATH`.
 
 ## The relay
 
-Foundation on Linux opens a WebSocket through the system's libcurl, which speaks it only when it was built with
-WebSocket support: curl 8.11 and later have it by default, and earlier ones only when the distribution turned on what
-was then experimental. The host reads the protocols its libcurl lists (`curl_version_info`) once at start
-(`Platform/Linux/LinuxRelaySupport.swift`); when `ws` is not among them it leaves the relay off and says so in
-`status`, and devices reach it by its direct paths alone (`RemoteHostPlatform.relayUnavailable`). Ubuntu 22.04's
-curl 7.81 has none.
+Foundation on Linux opens a WebSocket through libcurl only when it was built against libcurl 7.86 or later and the
+system's libcurl was built with WebSocket support (curl 8.11 turned it on by default). The toolchain the host is built
+with, Ubuntu 22.04's, was built against curl 7.81, so its `URLSessionWebSocketTask` never opens one, whatever the
+system's libcurl. The host's relay socket (`YardletRemote/RemoteCurlWebSocket.swift`) asks libcurl only for the
+connection (`CURLOPT_CONNECT_ONLY`: TCP, TLS checked against the system's certificates, a proxy the environment names),
+which every libcurl gives, and speaks RFC 6455's handshake and frames on it itself, so the relay opens on every
+distribution the host runs on.
 
 ## What it does not have yet
 
-The direct-path listener: until it comes, a device reaches the host only through the relay, and only where the relay
-opens. A QR code for pairing, a systemd service, the release tarballs and their installer, and harness sign-in from the
+The direct-path listener: until it comes, a device reaches the host only through the relay. A QR code for pairing, a systemd service, the release tarballs and their installer, and harness sign-in from the
 terminal are still to come.
 
 ## Where it is built

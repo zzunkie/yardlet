@@ -3,9 +3,8 @@ import Glibc
 import YardletRemote
 
 extension RemoteHostPlatform {
-    /// The Linux host's: the relay where this computer's libcurl can open its socket (`LinuxRelaySupport`), the computer
-    /// named by its host name, always on power, and nothing to keep awake. The relay the build carries is in files
-    /// beside its executable, as the Windows app's is.
+    /// The Linux host's: the computer named by its host name, always on power, and nothing to keep awake. The relay the
+    /// build carries is in files beside its executable, as the Windows app's is.
     static var current: RemoteHostPlatform {
         RemoteHostPlatform(
             makeListener: { _, _ in nil },
@@ -15,8 +14,7 @@ extension RemoteHostPlatform {
             isOnPower: { true },
             holdAwake: { _ in nil },
             computerName: { LinuxHostName.current },
-            builtInRelay: { RemoteHostPlatform.relay(besides: Bundle.main.executableURL) },
-            relayUnavailable: { LinuxRelaySupport.unavailableReason })
+            builtInRelay: { RemoteHostPlatform.relay(besides: Bundle.main.executableURL) })
     }
 }
 

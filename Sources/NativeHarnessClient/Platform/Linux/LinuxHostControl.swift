@@ -44,8 +44,6 @@ struct HostStatus: Codable, Equatable {
         /// The relay: `off`, `connecting`, `connected` or `failed`, nil when no relay is configured.
         var relay: String?
         var relayFailure: String?
-        /// Why this computer cannot open the relay's socket, when it cannot.
-        var relayUnavailable: String?
     }
 
     struct Device: Codable, Equatable {

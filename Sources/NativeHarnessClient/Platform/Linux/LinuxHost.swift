@@ -15,6 +15,9 @@ final class LinuxHost {
     let remote: RemoteControlService
     let name: String
     private var control: UnixSocketListener?
+    /// The first look for the harnesses' installs, on the login shell's `PATH`; `status` answers once it is done, so it
+    /// never lists a harness as missing that the host is still looking for.
+    private var harnessesFound: Task<Void, Never>?
     private var isStopping = false
 
     private init(name: String) {
@@ -51,6 +54,7 @@ final class LinuxHost {
     private func start(lock: HostLock) async {
         if let problem = model.bootstrapError { HostOutput.error(problem) }
         let newestRuntimes = Task { await model.runtimeSelections.findNewest() }
+        harnessesFound = newestRuntimes
         await model.restoreIndex()
         if model.hasRestoredIndex {
             // What the last stop cut off continues alongside the rest of the start.
@@ -79,7 +83,6 @@ final class LinuxHost {
         HostOutput.line("Data: \(LinuxHostPaths.dataRootLocation().path(percentEncoded: false))")
         let found = model.runtimeSelections.connectedDescriptors.map(\.displayName)
         HostOutput.line("Harnesses: \(found.isEmpty ? "none found on the PATH" : found.joined(separator: ", "))")
-        if let reason = remote.relayUnavailableReason { HostOutput.line("Relay: off, since \(reason).") }
         HostOutput.line("Pair a device with `yardlet host pair`.")
         _ = lock
     }
@@ -123,6 +126,7 @@ final class LinuxHost {
     private func answer(_ request: HostControlRequest) async -> HostControlReply {
         switch request.command {
         case .status:
+            await harnessesFound?.value
             return HostControlReply(status: status())
         case .pair:
             await remote.startPairing()
@@ -199,8 +203,7 @@ final class LinuxHost {
             version: LinuxHostVersion.current, processID: getpid(), name: name,
             dataFolder: LinuxHostPaths.dataRootLocation().path(percentEncoded: false),
             remote: HostStatus.Remote(enabled: remote.isEnabled, direct: direct, port: port, directFailure: reach.directFailure,
-                                      addresses: remote.directHosts, relay: relay, relayFailure: relayFailure,
-                                      relayUnavailable: remote.relayUnavailableReason),
+                                      addresses: remote.directHosts, relay: relay, relayFailure: relayFailure),
             devices: devices, harnesses: harnesses, projects: projects(),
             tasks: model.store.sessions.count, runningTasks: model.activeLocalSessions.count,
             pairing: currentPairing)

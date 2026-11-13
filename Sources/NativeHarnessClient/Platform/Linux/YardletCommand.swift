@@ -100,9 +100,7 @@ enum YardletCommand {
         case "failed": lines.append("Direct: failed: \(remote.directFailure ?? "unknown")")
         default: lines.append("Direct: \(remote.direct)")
         }
-        if let reason = remote.relayUnavailable {
-            lines.append("Relay: off, since \(reason)")
-        } else if let relay = remote.relay {
+        if let relay = remote.relay {
             lines.append("Relay: \(relay)" + (remote.relayFailure.map { ": \($0)" } ?? ""))
         } else {
             lines.append("Relay: none configured")
