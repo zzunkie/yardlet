@@ -269,7 +269,8 @@ struct HostLock {
 enum HostOutput {
     static func line(_ text: String) {
         print(text)
-        fflush(stdout)
+        // Standard output to the journal is a pipe, which C buffers whole; each line goes at once.
+        fflush(nil)
     }
 
     static func error(_ text: String) {

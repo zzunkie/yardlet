@@ -17,7 +17,6 @@ enum YardletCommand {
 
     @MainActor
     static func main() {
-        setvbuf(stdout, nil, _IOLBF, 0)
         exit(run(Array(CommandLine.arguments.dropFirst())))
     }
 
@@ -153,6 +152,7 @@ enum YardletCommand {
         }
         interrupt.resume()
         if !json { print("Waiting for the device… (Control-C stops)") }
+        fflush(nil)
         let deadline = (pairing.expiresAt ?? Date().addingTimeInterval(300)).addingTimeInterval(5)
         while Date() < deadline {
             Thread.sleep(forTimeInterval: 1)
