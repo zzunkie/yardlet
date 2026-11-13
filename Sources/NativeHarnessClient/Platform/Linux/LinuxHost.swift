@@ -105,6 +105,8 @@ final class LinuxHost {
             control?.stop()
             await remote.shutdown()
             await model.shutdown()
+            // Foundation on Linux writes preferences to disk only when asked.
+            UserDefaults.yardlet.synchronize()
             exit(0)
         }
     }

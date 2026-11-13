@@ -15,7 +15,7 @@ log=$home/../host-$$.log
 
 "$yardlet" --version
 echo '--- linked libraries'
-ldd "$yardlet" | sed -e 's/ (0x[0-9a-f]*)//'
+readelf -d "$yardlet" | grep NEEDED || true
 
 echo '--- status before the host starts'
 set +e
@@ -66,3 +66,5 @@ set -e
 
 echo '--- what the host left in its home'
 (cd "$home" && find . -path ./status.json -prune -o -print | sort)
+echo '--- preferences written elsewhere'
+find / -xdev \( -path /proc -o -path "$home" \) -prune -o -name '*.plist' -newer "$log" -print 2>/dev/null | head -20
