@@ -15,7 +15,7 @@ log=$home/../host-$$.log
 
 "$yardlet" --version
 echo '--- linked libraries'
-readelf -d "$yardlet" | grep NEEDED || true
+readelf -dW "$yardlet" 2>/dev/null | awk '/NEEDED/ { print $NF }' | tr -d '[]' || true
 
 echo '--- status before the host starts'
 set +e

@@ -41,6 +41,9 @@ The data folder is `$XDG_DATA_HOME/yardlet`, else `~/.local/share/yardlet`, read
   (`identity.json`, 0600), in the Mac's formats;
 - `host.lock` and `host.sock`, while a host runs.
 
+Its preferences are in `$XDG_CONFIG_HOME/yardlet.plist`, else `~/.config/yardlet.plist`, where Foundation on Linux keeps
+a program's: written when the host stops, and every half minute while it runs.
+
 The keys are in a file because a headless server usually has no keyring. The file is written whole through a
 temporary file the owner alone may read (`RemoteFileIdentityStore`), and a key file that others could read is narrowed
 to its owner before it is read.

@@ -42,6 +42,10 @@ final class LinuxHost {
         // The engine's timers run on the main run loop, which also runs the main actor's work here; a timer that never
         // fires keeps the loop from returning while nothing else is scheduled.
         RunLoop.main.add(Timer(timeInterval: 86_400, repeats: true) { _ in }, forMode: .default)
+        // Foundation on Linux writes preferences to disk only when asked (to `~/.config/yardlet.plist`), and only
+        // what changed, so a host that ends without stopping loses at most the last half minute of them.
+        RunLoop.main.add(Timer(timeInterval: 30, repeats: true) { _ in UserDefaults.yardlet.synchronize() },
+                         forMode: .default)
         while true { RunLoop.main.run() }
     }
 
