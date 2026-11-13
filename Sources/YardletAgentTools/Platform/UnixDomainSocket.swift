@@ -168,7 +168,7 @@ package enum UnixDomainSocket {
         guard getpeereid(descriptor, &user, &group) == 0 else { return false }
         return user == getuid()
         #else
-        return true
+        return peerCredentials(descriptor).map { $0.user == getuid() } ?? false
         #endif
     }
 
@@ -181,9 +181,23 @@ package enum UnixDomainSocket {
         guard getsockopt(descriptor, SOL_LOCAL, LOCAL_PEERPID, &processID, &length) == 0, processID > 0 else { return nil }
         return processID
         #else
-        return nil  // SO_PEERCRED, when a Linux build checks its peers.
+        return peerCredentials(descriptor).flatMap { $0.process > 0 ? $0.process : nil }
         #endif
     }
+
+    #if !canImport(Darwin)
+    /// The peer's process and user as it connected (`SO_PEERCRED`, Linux's `struct ucred`: a pid, a uid and a gid).
+    static func peerCredentials(_ descriptor: Int32) -> (process: Int32, user: uid_t)? {
+        var credentials: (Int32, UInt32, UInt32) = (0, 0, 0)
+        var length = socklen_t(MemoryLayout.size(ofValue: credentials))
+        guard getsockopt(descriptor, SOL_SOCKET, peerCredentialsOption, &credentials, &length) == 0,
+              length == socklen_t(MemoryLayout.size(ofValue: credentials)) else { return nil }
+        return (credentials.0, uid_t(credentials.1))
+    }
+
+    /// `SO_PEERCRED`, the same on every Linux architecture Yardlet builds for.
+    private static let peerCredentialsOption: Int32 = 17
+    #endif
 
     #if canImport(Darwin)
     static let streamType = SOCK_STREAM

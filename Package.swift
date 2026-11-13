@@ -236,6 +236,8 @@ let package = Package(
         // Developer ID library validation. Use the SDK header and system library in every build.
         // Windows supplies its own SQLite (winsqlite3), with the header in the Windows SDK.
         sqliteTarget,
+    ] + (linuxHost ? [] : [
+        // The browser host's parts, which the Linux host has no use for.
         // Mach hand-off of IOSurfaces between the browser host and Yardlet (macOS platform layer).
         .target(
             name: "YardletSurfacePort",
@@ -246,7 +248,8 @@ let package = Package(
         ),
         // CEF accessibility output → the browser host contract's smaller shape. Foundation only, so
         // the browser host uses it and the tests check it against recorded CEF output without CEF.
-        .target(name: "YardletCEFAccessibility"),
+        .target(name: "YardletCEFAccessibility")
+    ]) + [
         // The MCP protocol, the tool catalog, and the local connection shared by the app and
         // yardlet-mcp. Foundation only outside Platform/, like the app's engine.
         .target(name: "YardletAgentTools"),
