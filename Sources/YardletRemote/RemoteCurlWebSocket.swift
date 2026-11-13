@@ -54,7 +54,14 @@ final class RemoteClientWebSocket: @unchecked Sendable {
         self.maximumMessageSize = maximumMessageSize
         self.timeout = timeout
         var ends: [Int32] = [-1, -1]
-        if pipe2(&ends, O_CLOEXEC | O_NONBLOCK) != 0 { ends = [-1, -1] }
+        if pipe(&ends) == 0 {
+            for end in ends {
+                _ = fcntl(end, F_SETFD, FD_CLOEXEC)
+                _ = fcntl(end, F_SETFL, fcntl(end, F_GETFL) | O_NONBLOCK)
+            }
+        } else {
+            ends = [-1, -1]
+        }
         wake = (ends[0], ends[1])
     }
 
