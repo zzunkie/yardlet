@@ -33,7 +33,7 @@
 # --memory-census count created/live/released conversation objects (diagnostic)
 # --no-event-pulse omit memory-cycle's AppKit event boundaries (diagnostic control only)
 # --app-arguments more arguments for every launch of the app, such as a setting to measure with
-#                (`-Yardlet.conversationTableTimeline YES`); the result records them
+#                (`-<defaults key> YES`); the result records them
 #
 # Results: ~/Library/Caches/Yardlet/perf-bench/results/<time>-<commit>.json ($YARDLET_PERF_RESULTS), shared by
 # every checkout and worktree on this Mac, so one branch compares with another. The bench waits for the shared heavy-build lock

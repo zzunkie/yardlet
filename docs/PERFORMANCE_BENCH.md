@@ -41,7 +41,7 @@ what else runs on it, so they are compared between runs on the same Mac.
   must be to be marked (default 15%). `scripts/perf-bench/report.py compare <earlier.json> <later.json>`
   compares two results again.
 - `--app-arguments "<argument> ..."` adds arguments to every launch of the app, such as a setting to measure
-  with (`--app-arguments "-Yardlet.conversationTableTimeline YES"`); the result keeps them as `appArguments`.
+  with (`--app-arguments "-<defaults key> YES"`); the result keeps them as `appArguments`.
 - The command exits with status 1 when a number is over its budget, a planned result is missing, or a
   benchmark could not complete (§4). `contract.json` lists the scenes' required phases and the exact
   in-process tests and measurements; the selected plan is saved in every new result.
@@ -120,8 +120,10 @@ between samples can still be missed.
 bodies over the phase (`ViewBodyCensus`): the window itself (`mainWindowCount`), the task's views around its
 conversation (`taskSurfaceCount`), the session rail's cards, the composer and the sidebar's rows; and the
 conversation's timeline (`conversationTimelineCount`), its turns drawn whole (`conversationTurnCount`), the
-rows it laid out anew to measure their heights (`conversationRowLaidOutCount`) and the turns' hosting views it
-made (`conversationTurnHostingCount`). A streamed state is drawn in one evaluation of the timeline, so a
+rows it laid out anew to measure their heights (`conversationRowLaidOutCount`), the turns' hosting views it
+made (`conversationTurnHostingCount`), the passes that placed its column in the window
+(`conversationLayoutCount`) and the turns that told the reading tracker their place
+(`conversationTurnPlacedCount`). A streamed state is drawn in one evaluation of the timeline, so a
 timeline count well over the states published, or a window drawn while a task streams or the sidebar
 scrolls, is work an update did beyond what it changed.
 
@@ -197,6 +199,11 @@ them under `budgets`, and the command exits with status 1.
   and the same phase grew by 550 MiB.
 - An idle window, with or without running tasks, stays under 1% and 3% of a core; scrolling the long
   sidebar keeps its 95th percentile pass under a 60 Hz frame and no pass over 50 ms.
+- Scrolling a long conversation (`conversation-scroll`) stays under 40% of a core, and under 48% while its
+  last turn streams; a debug build measured 27–32% and 31–39% from one run to the next. The counts that
+  barely move between runs carry tight limits: the passes that placed the conversation's column in the
+  window (about 1,400 while scrolling, 1,570 while streaming), the turns drawn again and the timeline's
+  evaluations, so a change that makes every frame of a scroll lay the conversation out again fails.
 - Neither a Codex task streaming nor the sidebar scrolling evaluates the window (`bodies.mainWindowCount`
   0 in `stream-codex/streaming`, `sidebar/scroll` and `sidebar/scroll-streaming`): the window lists every task,
   and one evaluation of it with the long sidebar held the main thread for over 50 ms.

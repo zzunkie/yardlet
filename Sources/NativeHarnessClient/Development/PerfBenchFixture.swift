@@ -850,10 +850,12 @@ private final class PerfBenchRunner {
 
     /// The views whose bodies a phase counts (`ViewBodyCensus`): the window and the views around the
     /// conversation, and the conversation's timeline, its turns drawn whole, the rows it laid out anew to
-    /// measure them, and the turns' hosting views it made.
+    /// measure them, the turns' hosting views it made, its column placed in the window, and the turns'
+    /// places told to its reading tracker.
     private static let countedBodies: [ViewBodyCensus.Body] = [
         .mainWindow, .taskSurface, .sessionRail, .composer, .sidebarRow,
-        .conversationTimeline, .conversationTurn, .conversationRowLaidOut, .conversationTurnHosting
+        .conversationTimeline, .conversationTurn, .conversationRowLaidOut, .conversationTurnHosting,
+        .conversationLayout, .conversationTurnPlaced
     ]
 
     /// Writes `<n>-<name>.ready` for the script, waits for its `.go` (it starts its sampler then), and
