@@ -33,6 +33,11 @@ struct RemoteNewTaskView: View {
     @FocusState private var isFocused: Bool
     @State private var listKeyboard = NewTaskHomeListKeyboard()
     @FocusState private var listFocus: NewTaskHomeLists.Part?
+    /// The desk and the remembered view, as the local home's (`DeskPreview`, `NewTaskHomeView.key`).
+    @AppStorage(DeskPreview.key, store: .yardlet) private var showsDeskPreview = false
+    @AppStorage(NewTaskHomeView.key, store: .yardlet) private var homeView = NewTaskHomeView.now
+    /// What the host's projects count, for the header over them.
+    @State private var projectFacts = NewTaskHomeProjectFacts()
 
     /// The host's projects that take tasks, and Chats, which the host's own new-task menu always offers and which it
     /// takes before it lists any chat (§15.5).
@@ -45,37 +50,26 @@ struct RemoteNewTaskView: View {
         return projects
     }
 
+    /// No project and no task on the host yet: the title and the composer alone, with no view to switch to.
+    private var isFirstRun: Bool { model.sidebar.sessions.isEmpty && !projects.contains { $0.kind != .chats } }
+
+    private var showsViewSwitch: Bool { showsDeskPreview && !isFirstRun }
+
+    private var showsDesk: Bool { showsViewSwitch && homeView == .now }
+
     var body: some View {
         GeometryReader { viewport in
-            let columns = NewTaskHomeLayout.columns(width: viewport.size.width)
-            VStack(spacing: 0) {
-                // The host's projects with what their tasks need, as the local home lists this Mac's.
-                ScrollView {
-                    homeLists(viewport: viewport, columns: columns)
-                        .frame(maxWidth: columns > 1 ? NewTaskHomeLayout.gridWidth : NewTaskHomeLayout.composerWidth)
-                        .padding(.horizontal, NewTaskHomeLayout.inset)
-                        .padding(.top, 28)
-                        .padding(.bottom, 16)
-                        .frame(maxWidth: .infinity)
-                }
-                .defaultScrollAnchor(.top)
-                VStack(spacing: 0) {
-                    NewTaskHeroTitle(kind: heroKind) { destinationMenuItems }
-                    if projectID == nil || isChat {
-                        NewTaskDestinationButton(title: L10n.string(isChat ? "Chat (no project)" : "Choose project"),
-                                                 systemName: isChat ? "bubble.left" : "folder") {
-                            destinationMenuItems
-                        }
-                        .padding(.top, 8)
-                    }
-                    composer
-                        .padding(.top, 20)
-                }
-                .frame(maxWidth: NewTaskHomeLayout.composerWidth)
-                .padding(.horizontal, NewTaskHomeLayout.inset)
-                .padding(.top, 14)
-                .padding(.bottom, 20)
-                .frame(maxWidth: .infinity)
+            if showsDesk {
+                // The host's desk, as the local home's: what the host's tasks wait on, what runs and what finished.
+                // The host's mail is not read from here, so its lines do not show.
+                DeskHome(
+                    activity: activity, size: viewport.size, onAction: perform,
+                    keyboard: $listKeyboard, focus: $listFocus,
+                    onListed: { listKeyboard.list($0) }, onReturnToComposer: { isFocused = true },
+                    viewSwitch: { NewTaskHomeViewSwitch(selection: $homeView) },
+                    bottom: { newTask })
+            } else {
+                projectsView(viewport: viewport)
             }
         }
         .onAppear {
@@ -103,6 +97,49 @@ struct RemoteNewTaskView: View {
             }
         .task(id: OptionsKey(projectID: projectID, harness: harness, picks: picks, accountID: accountID, connected: model.isConnected)) {
             await readOptions()
+        }
+    }
+
+    /// The host's projects with what their tasks need, as the local home lists this Mac's, the header with the
+    /// view switch over them while the desk can be chosen.
+    private func projectsView(viewport: GeometryProxy) -> some View {
+        let columns = NewTaskHomeLayout.columns(width: viewport.size.width)
+        return VStack(spacing: 0) {
+            if showsViewSwitch {
+                DeskHeader(date: Date(), summary: projectFacts.summary) { NewTaskHomeViewSwitch(selection: $homeView) }
+                    .modifier(DeskHeaderPlacement(width: viewport.size.width))
+            }
+            ScrollView {
+                homeLists(viewport: viewport, columns: columns)
+                    .frame(maxWidth: columns > 1 ? NewTaskHomeLayout.gridWidth : NewTaskHomeLayout.composerWidth)
+                    .padding(.horizontal, NewTaskHomeLayout.inset)
+                    .padding(.top, showsViewSwitch ? 4 : 28)
+                    .padding(.bottom, 16)
+                    .frame(maxWidth: .infinity)
+            }
+            .defaultScrollAnchor(.top)
+            newTask
+                .frame(maxWidth: NewTaskHomeLayout.composerWidth)
+                .padding(.horizontal, NewTaskHomeLayout.inset)
+                .padding(.top, 14)
+                .padding(.bottom, 20)
+                .frame(maxWidth: .infinity)
+        }
+    }
+
+    /// The title naming the project the new task starts in, which is its menu, and the composer.
+    private var newTask: some View {
+        VStack(spacing: 0) {
+            NewTaskHeroTitle(kind: heroKind) { destinationMenuItems }
+            if projectID == nil || isChat {
+                NewTaskDestinationButton(title: L10n.string(isChat ? "Chat (no project)" : "Choose project"),
+                                         systemName: isChat ? "bubble.left" : "folder") {
+                    destinationMenuItems
+                }
+                .padding(.top, 8)
+            }
+            composer
+                .padding(.top, 20)
         }
     }
 
@@ -186,6 +223,7 @@ struct RemoteNewTaskView: View {
         activity.chats = mirror.chats
         activity.answerLine = { mirror.answerLines[$0] }
         activity.latestTurn = { mirror.latestTurns[$0] }
+        activity.pullRequest = { mirror.pullRequests[$0] }
         activity.placeName = { names[$0.id] ?? L10n.string("Chats") }
         activity.onMarkRead = { [model] ids in for id in ids { model.send(.markRead(taskID: id.uuidString)) } }
         return activity
@@ -206,7 +244,8 @@ struct RemoteNewTaskView: View {
             onListed: { _, entries in listKeyboard.list(entries) },
             onReturnToComposer: { isFocused = true },
             // The host's folders are the host's: nothing here reads them.
-            readFolderGit: { _ in .none }, readLeftWork: { _ in nil })
+            readFolderGit: { _ in .none }, readLeftWork: { _ in nil },
+            onFacts: { facts in if facts != projectFacts { projectFacts = facts } })
     }
 
     private func perform(_ action: NewTaskHomeAction) {

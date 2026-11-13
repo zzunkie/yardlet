@@ -12,6 +12,8 @@ struct RemoteSidebarMirror: Equatable {
     var details: [UUID: TaskAttentionDetail] = [:]
     var answerLines: [UUID: String] = [:]
     var latestTurns: [UUID: TaskLatestTurn] = [:]
+    /// The host's reading of each task's pull request, as the task's header shows it.
+    var pullRequests: [UUID: TaskPullRequest] = [:]
     /// The host's projects, as the sidebar's project rows and New task in a project read them.
     var projects: [Project] = []
     /// The host's project ID of each group, by the group's folder.
@@ -83,6 +85,7 @@ struct RemoteSidebarMirror: Equatable {
             answerLines[id] = task.answerLine
             latestTurns[id] = task.latestTurnStartedAt.map { TaskLatestTurn(startedAt: Date(timeIntervalSince1970: TimeInterval($0) / 1000)) }
             if let detail = Self.detail(task) { details[id] = detail }
+            if let pullRequest = Self.pullRequest(task.pullRequest) { pullRequests[id] = pullRequest }
         }
         for remote in remoteProjects where remote.kind != .chats {
             guard let folder = folders[remote.id] else { continue }
@@ -90,6 +93,16 @@ struct RemoteSidebarMirror: Equatable {
                                          project: projectsByID[remote.id]))
         }
         chats = sessionsByProject[RemoteTaskProjection.chatsProjectID] ?? []
+    }
+
+    /// The host's reading of a task's pull request, where it names one with a web address.
+    static func pullRequest(_ remote: RemoteTaskPullRequest?) -> TaskPullRequest? {
+        guard let remote, remote.number > 0, let url = URL(string: remote.url),
+              url.scheme == "https" || url.scheme == "http", url.host() != nil else { return nil }
+        return TaskPullRequest(number: remote.number, url: url, repository: remote.repository,
+            state: remote.state.flatMap(TaskPullRequest.State.init(rawValue:)),
+            checks: remote.checks.flatMap(TaskPullRequest.Checks.init(rawValue:)),
+            review: remote.review.flatMap(TaskPullRequest.Review.init(rawValue:)))
     }
 
     /// The host's task as a record the sidebar reads: its harness, title, when it was last active, its pin, the task

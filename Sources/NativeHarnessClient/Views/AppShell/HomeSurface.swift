@@ -68,6 +68,9 @@ struct NewTaskHomeActivity {
     var archivedParents: Set<UUID> = []
     /// What a waiting task's newest request asks, on one line: the question, or the command to approve.
     var requestLine: (SessionRecord) -> String? = { _ in nil }
+    /// Each task's pull request where it comes with the tasks (a remote window, from the host's list); nil
+    /// asks this Mac's pull request lookup.
+    var pullRequest: ((UUID) -> TaskPullRequest?)?
 }
 
 /// The new-task screen, which is Yardlet's home: the projects with what their tasks need, then the

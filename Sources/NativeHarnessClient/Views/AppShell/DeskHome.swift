@@ -124,7 +124,8 @@ struct DeskHome<Switch: View, Bottom: View>: View {
         let desk = kept(DeskProjection.desk(
             sessions: activity.sessions, details: activity.details, shellBusy: activity.shellBusy,
             archivedParents: activity.archivedParents, agents: activity.agents,
-            pullRequest: { pullRequests?.pullRequest(for: $0) }, schedules: activity.schedules, now: activity.now))
+            pullRequest: activity.pullRequest ?? { pullRequests?.pullRequest(for: $0) }, schedules: activity.schedules,
+            now: activity.now))
         let layout = DeskLayout.choose(width: size.width, calendarOn: calendarOn)
         let entries = entries(desk)
         Group {

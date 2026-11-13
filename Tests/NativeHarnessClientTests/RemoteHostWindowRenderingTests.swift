@@ -1370,6 +1370,59 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
                 RailHomeListsRender(activity: remote).frame(width: 640)
             }
         }
+
+        // The host's desk lists what this Mac's would, the host's pull requests read from its list: the coordinator's
+        // failing checks wait on the person, its family runs.
+        func desk(_ activity: NewTaskHomeActivity, pullRequest: @escaping (UUID) -> TaskPullRequest?) -> Desk {
+            DeskProjection.desk(sessions: activity.sessions, details: activity.details, shellBusy: activity.shellBusy,
+                                archivedParents: activity.archivedParents, agents: activity.agents,
+                                pullRequest: pullRequest, schedules: activity.schedules, now: activity.now)
+        }
+        func lines(_ desk: Desk) -> [String] {
+            desk.waiting.map { item in
+                if case let .checksFailed(pullRequest) = item.kind { return "\(item.id) checks failed #\(pullRequest.number)" }
+                return "\(item.id) \(item.kind)"
+            }
+        }
+        let remoteDesk = desk(remote, pullRequest: try XCTUnwrap(remote.pullRequest))
+        let localDesk = desk(local, pullRequest: { host.pullRequests.pullRequest(for: $0) })
+        XCTAssertEqual(lines(remoteDesk), lines(localDesk))
+        XCTAssertEqual(lines(remoteDesk), ["\(fixture.task.id) checks failed #341"])
+        XCTAssertEqual(remoteDesk.families.map(\.id), localDesk.families.map(\.id))
+        XCTAssertEqual(remoteDesk.families.map(\.id), [fixture.task.id])
+        DeskPreview.show()
+        defer { DeskPreview.hide() }
+        model.select(.newTask)
+        let wide = NSSize(width: 1_280, height: 820)
+        try await render("remote-desk", size: wide, titled: true, title: model.name) {
+            RemoteHostView(model: model, directory: hosts)
+        } check: { elements in
+            XCTAssertTrue(elements.contains { $0.label.contains(L10n.string("Checks failed")) }, elements.description)
+            XCTAssertTrue(elements.contains { $0.label.contains("Review the migration") }, elements.description)
+            XCTAssertTrue(elements.contains { $0.label.contains("Migrate the session index") }, elements.description)
+        }
+
+        // The host renaming the running subtask draws the desk and that family's line again, not the line that waits.
+        let window = WindowlessRender.Host(RemoteHostView(model: model, directory: hosts), size: wide, appearance: .light)
+        defer { window.close() }
+        window.settle(passes: 20)
+        let child = try XCTUnwrap(host.store.sessions.first { $0.parentTaskID == fixture.task.id })
+        ViewBodyCensus.isEnabled = true
+        ViewBodyCensus.reset()
+        defer {
+            ViewBodyCensus.isEnabled = false
+            ViewBodyCensus.reset()
+        }
+        try await host.store.renameSession(id: child.id, title: "Review the migration again")
+        try await waitUntil {
+            window.settle(passes: 1)
+            return model.sidebar.sessions.contains { $0.title == "Review the migration again" }
+        }
+        window.settle(passes: 10)
+        let counts = ViewBodyCensus.counts
+        XCTAssertGreaterThanOrEqual(counts[.desk] ?? 0, 1, "The desk lists the host's change")
+        XCTAssertLessThanOrEqual(counts[.desk] ?? 0, 2, "\(counts)")
+        XCTAssertEqual(counts[.deskRow] ?? 0, 1, "Only the family whose member changed: \(counts)")
         hosts.close(paired.id)
         await host.shutdown()
     }

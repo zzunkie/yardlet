@@ -27,13 +27,7 @@ extension RemoteHostModel {
                 }
             },
             pullRequest: { session in
-                guard let pr = self.tasks.first(where: { $0.id == session.id.uuidString })?.pullRequest,
-                      pr.number > 0, let url = URL(string: pr.url),
-                      url.scheme == "https" || url.scheme == "http", url.host() != nil else { return nil }
-                return TaskPullRequest(number: pr.number, url: url, repository: pr.repository,
-                    state: pr.state.flatMap(TaskPullRequest.State.init(rawValue:)),
-                    checks: pr.checks.flatMap(TaskPullRequest.Checks.init(rawValue:)),
-                    review: pr.review.flatMap(TaskPullRequest.Review.init(rawValue:)))
+                RemoteSidebarMirror.pullRequest(self.tasks.first { $0.id == session.id.uuidString }?.pullRequest)
             })
     }
 }
