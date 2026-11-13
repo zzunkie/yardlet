@@ -183,20 +183,18 @@ of the release, installs the service, which finds the stand-in harness on a `PAT
 sets, pairs a phone that chats with it, updates to a newer package (the service restarts on it, and a second update
 says it is up to date), and uninstalls, which leaves linger on as it found it. `scripts/linux/check-distribution.sh`
 runs the package in the containers of the distributions below, on the runner's network, and tries the relay with each
-one's libcurl against the relay run locally (`relay/`, `wrangler dev`): the fixture host opens its room and the
-fixture's phone pairs through it and gets an answer. That job fails when the host's own reading of its libcurl and
-what the relay does there disagree. These are checks to read, not required ones.
+one's libcurl against the relay run locally (`relay/`, `wrangler dev`), as `ws://` and as `wss://` through a TLS proxy
+whose certificate a CA made for the run signed (`scripts/linux/tls-proxy.py`): the fixture host opens its room and the
+fixture's phone pairs through it and gets an answer, and before the system trusts that CA the `wss://` room does not
+open. These are checks to read, not required ones.
+
+```sh
+swift build --product yardlet --force-resolved-versions
+```
 
 ## Distributions
 
 What the checks above found, for the package built on Ubuntu 22.04:
 
-| Distribution | glibc | libcurl | The host | The relay |
-| --- | --- | --- | --- | --- |
-| Debian 12 | 2.36 | 7.88.1 | runs | off: no WebSocket support |
-| Ubuntu 22.04 | 2.35 | 7.81.0 | runs | off: no WebSocket support |
-| Rocky Linux 9 | 2.34 | | refused: needs glibc 2.35 | |
-
-```sh
-swift build --product yardlet --force-resolved-versions
-```
+| Distribution | glibc | libcurl | The host | The relay (ws) | The relay (wss) |
+| --- | --- | --- | --- | --- | --- |

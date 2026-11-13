@@ -26,7 +26,7 @@ export DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus
 systemctl --user show-environment > /dev/null
 
 echo '--- install'
-for _ in $(seq 10); do curl -fsS "$YARDLET_HOST_DOWNLOAD/yardlet-host-install.sh" > /dev/null && break; sleep 1; done
+for _ in $(seq 10); do curl -fsS "$YARDLET_HOST_DOWNLOAD/yardlet-host-install.sh" > /dev/null 2>&1 && break; sleep 1; done
 curl -fsSL "$YARDLET_HOST_DOWNLOAD/yardlet-host-install.sh" | sh
 yardlet=$HOME/.local/bin/yardlet
 version=$("$yardlet" --version | awk '{ print $2 }')

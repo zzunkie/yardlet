@@ -154,8 +154,8 @@ jobs:
           chmod +x linux-host-package/yardlet-remote-fixture
           scripts/linux/check-install.sh linux-host-package
 
-  # The package on the distributions a server runs, and the relay with each one's libcurl
-  # (scripts/linux/check-distribution.sh): the host's own reading of its libcurl must match what the relay does there.
+  # The package on the distributions a server runs, and the relay with each one's libcurl, over ws and through TLS
+  # (scripts/linux/check-distribution.sh).
   distributions:
     name: Run the Linux host on ${{ matrix.name }}
     needs: package
@@ -201,15 +201,27 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-      # The relay run locally (relay/README.md), which the container reaches on the runner's loopback.
+      # The relay run locally (relay/README.md), which the container reaches on the runner's loopback, and in front of
+      # it TLS on 8443 with a certificate for 127.0.0.1 from a CA made for this run alone.
       - name: Start the relay
         env:
           WRANGLER_SEND_METRICS: 'false'
         run: |
           npm ci --prefix relay
           (cd relay && nohup npm run dev > ../relay.log 2>&1 &)
-          for _ in $(seq 60); do curl -fs http://127.0.0.1:8787/v1/health > /dev/null && exit 0; sleep 2; done
-          cat relay.log
+          mkdir tls && cd tls
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -out ca.crt -days 1 -subj '/CN=Yardlet CI test CA' 2> /dev/null
+          openssl req -newkey rsa:2048 -nodes -keyout server.key -out server.csr -subj '/CN=127.0.0.1' 2> /dev/null
+          printf 'subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth\n' > server.ext
+          openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 1 -extfile server.ext -out server.crt 2> /dev/null
+          rm ca.key
+          (nohup python3 ../scripts/linux/tls-proxy.py server.crt server.key 8443 8787 > ../tls-proxy.log 2>&1 &)
+          cd ..
+          for _ in $(seq 60); do
+            curl -fs http://127.0.0.1:8787/v1/health > /dev/null && curl -fs --cacert tls/ca.crt https://127.0.0.1:8443/v1/health > /dev/null && exit 0
+            sleep 2
+          done
+          cat relay.log tls-proxy.log
           exit 1
       - name: Install and run the host, and try the relay
         env:
@@ -218,9 +230,9 @@ jobs:
         run: |
           chmod +x linux-host-package/yardlet-remote-fixture
           docker run --rm --network host -v "$PWD/linux-host-package:/artifacts:ro" -v "$PWD/scripts/linux:/checks:ro" \
-            -v "$PWD:/out" "$IMAGE" sh /checks/check-distribution.sh /artifacts "$EXPECT" /out/result.md
+            -v "$PWD/tls:/tls:ro" -v "$PWD:/out" "$IMAGE" sh /checks/check-distribution.sh /artifacts "$EXPECT" /out/result.md /tls
       - name: Report
         if: always()
         run: |
-          { echo '| Distribution | glibc | libcurl | Host | Relay works |'; echo '| --- | --- | --- | --- | --- |'
-            cat result.md 2>/dev/null || echo "| ${{ matrix.name }} | | | did not finish | |"; } >> "$GITHUB_STEP_SUMMARY"
+          { echo '| Distribution | glibc | libcurl | Host | Relay (ws) | Relay (wss) |'; echo '| --- | --- | --- | --- | --- | --- |'
+            cat result.md 2>/dev/null || echo "| ${{ matrix.name }} | | | did not finish | | |"; } >> "$GITHUB_STEP_SUMMARY"
