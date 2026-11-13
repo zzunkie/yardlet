@@ -3047,6 +3047,12 @@
 "Pop-ups were blocked on this page." = "Pop-ups were blocked on this page.";
 "Control and reprogram your MIDI devices" = "Control and reprogram your MIDI devices";
 "Know when you're using this Mac" = "Know when you're using this Mac";
+"On %1$@, %2$@ wants to: %3$@" = "On %1$@, %2$@ wants to: %3$@";
+"Use its fonts" = "Use its fonts";
+"Connect to apps running on it" = "Connect to apps running on it";
+"Edit its files" = "Edit its files";
+"Know when it is in use" = "Know when it is in use";
+"This permission request is no longer open." = "This permission request is no longer open.";
 
 /* Picking an element in the browser and marking up attached images */
 "Select an element" = "Select an element";

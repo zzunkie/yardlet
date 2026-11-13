@@ -194,7 +194,8 @@ badge read (`TaskAttentionProjection`, `SidebarTaskIndicatorProjection`).
 
 Commands act through the same paths as the Mac's own controls. Every command is written to the Mac's
 local audit log with its type, task ID (or schedule ID, §15.21), device and result, and a refusal's `reason` and
-`setting` — never the message text or a setting's value. The log keeps its last 2,000 lines, so a refusal that can
+`setting` — never the message text or a setting's value. An answer to a site's permission prompt (§15.25) also
+records the answer and, once taken, the prompt's site and permissions. The log keeps its last 2,000 lines, so a refusal that can
 be repeated at will is written at most once a minute: a refused handshake by its result and path, a request a
 device's permissions refuse by device, request and setting. `ok: true`
 means the Mac accepted the command; what happens next arrives as events.
@@ -613,7 +614,9 @@ swift run --build-system native yardlet-remote-fixture --secure-port 47700 --sin
     browser tabs. The page draws as PNG and takes clicks, typing and keys: tap the username field and type, Tab or
     tap to the password field (the list marks it `passwordField`), then Sign in; with both filled the page says it is
     signed in, and I'm done answers the handoff. Thirty seconds after an answer the page signs out and the handoff
-    comes back.
+    comes back. Its other tab, a static page, has a camera and microphone permission prompt numbered past 2^53
+    (`permission`, `waiting` `permission`); `answerTabPermission` takes it while that tab is watched, and thirty
+    seconds later the page asks again under the next number.
 
 ## 10. Revisions
 
@@ -1680,10 +1683,12 @@ The phone sees a task's browser tab and uses it, for a step only the person can 
 sign-in, a two-factor code, an approval button, often the tab a browser handoff (§15.18) gave them. The Mac sends
 pictures of the tab's visible page while the phone watches it, and the phone's taps, scrolling and typing go to the
 page as the Mac's own browser panel sends the person's. Hosts advertising `tabControls` also accept addresses and
-tab closes within the watched task (§15.30); browsing outside a task stays on the Mac.
+tab closes within the watched task (§15.30), and hosts advertising `tabPermissions` take the answer to a site's
+permission prompt in the watched tab (below); browsing outside a task stays on the Mac.
 
 - The snapshot carries `browserTabs: true` when the Mac answers the requests below (it has a browser engine). A phone
-  offers a task's browser only then. It also carries `tabLists: true` when `watchTab` takes `listOnly` (below).
+  offers a task's browser only then. It also carries `tabLists: true` when `watchTab` takes `listOnly` (below), and
+  `tabPermissions: true` when the Mac answers `answerTabPermission` (below).
 - ```json
   {"id": "40", "type": "watchTab", "taskId": "4C1F…", "maxWidth": 1080, "maxHeight": 2000,
    "viewport": {"width": 390, "height": 844, "mobile": true}}
@@ -1716,7 +1721,8 @@ tab closes within the watched task (§15.30); browsing outside a task stays on t
   password manager filled), `active`, `loading`, `canGoBack`, `canGoForward`, `waiting` (what the tab waits on from the
   person, the most pressing: `handoff`, `passkey`, `signIn`, `permission`, `externalApp`, `javaScriptDialog`,
   `fileChooser`), `requestId` and `reason` (the handoff's, §15.18), `passwordField` (the page's focused field is a
-  password field). Not a command. Errors: `notFound` (no such task, or no such tab of it), `unavailable` (no browser
+  password field), `permission` (the site's permission prompt up on the tab, also while `waiting` names a more pressing
+  wait; below). Not a command. Errors: `notFound` (no such task, or no such tab of it), `unavailable` (no browser
   engine).
 - `{"event": "tabFrame", "seq": 51, "taskId": "4C1F…", "tabId": "9B21…", "frame": 3, "image": "<base64>",
   "mediaType": "image/jpeg", "width": 1080, "height": 675, "viewportWidth": 1280, "viewportHeight": 800}`: the watched
@@ -1769,6 +1775,40 @@ tab closes within the watched task (§15.30); browsing outside a task stays on t
   Mac; a key or button that is not taken; a `file:` page outside the task's files, in the page or any of its frames;
   the page or one of its frames moved while the input went), `rateLimited`,
   `unavailable` (the page did not answer, or a password field could not be protected, below).
+- A site's permission prompt, as the Mac's panel shows it in its permission bar, is listed on its tab while it is up:
+
+  ```json
+  "permission": {"prompt": 4611686018427387905, "origin": "https://meet.google.com",
+                 "permissions": ["camera", "microphone"]}
+  ```
+
+  `prompt` names this prompt; a newer one on the tab, or the same site asking again, has another. It is Chromium's
+  64-bit number, which can be past 2^53 (camera and microphone prompts are), so a client reads it as a 64-bit integer
+  and sends it back unchanged. `origin` is the site that asks; `permissions` are Chromium's names for what it asks,
+  as the Mac has them: `camera`, `microphone`, `geolocation`, `notifications`, `clipboard`, `multipleDownloads`,
+  `storageAccess`, `topLevelStorageAccess`, `localFonts`, `windowManagement`, `localNetworkAccess`, `localNetwork`,
+  `loopbackNetwork`, `fileSystemAccess`, `midiSysex`, `idleDetection` and others; a client shows a name it does not
+  know as it is. The field is absent when no prompt is up, and for a `file:` page listed as `file://` (whose prompt is
+  answered on the Mac). It comes and goes with `browserTabsChanged`.
+- ```json
+  {"id": "42", "type": "answerTabPermission", "taskId": "4C1F…", "tabId": "9B21…", "prompt": 4611686018427387905,
+   "answer": "allow"}
+  ```
+
+  The person's answer to the watched tab's prompt `prompt`, `{"re": "42", "ok": true}`. `answer` is `allow`, `block`
+  or `dismiss`: the bar's Allow, Block and Close. Hosts advertising `tabPermissions`. The answer is the person's, as
+  the Mac's permission bar gives it, and goes the same way: Chromium keeps an allow or a block for the site, so the
+  site uses the Mac's camera, microphone, location or the rest. It reaches only the tab the connection watches
+  (`watchTab` with that tab, not `listOnly`), in the order of the connection's input and under its watch, as
+  `tabInput` (it shares that input's queue and permit, §15.30), and only that very prompt: a prompt answered on the
+  Mac meanwhile, or one the page asked again under a newer number, is `notFound`, so an answer never reaches a later
+  prompt. Not a command. Errors: `badRequest` (`taskId`, `tabId` or `prompt` missing, another `answer`), `notFound`
+  (no such task or tab, or that prompt is no longer up), `notAllowed` (not the watched task or tab, or its watch
+  ended; a passkey or site sign-in window, one whose tab Chromium does not name, or a page's dialog is up; a `file:`
+  page outside the task's files, in the page or any of its frames), `rateLimited`, `unavailable` (no browser engine).
+  The audit log (§4.4) records each answer with the answer, the device, the task and the result, and for one taken
+  the prompt's `origin` and `permissions`; nothing else of the page. A refusal is recorded at most once a minute per
+  device, task and result.
 - `{"type": "unwatchTab", "taskId": "4C1F…"}`: stops the watch. Closing the connection, removing the device, the remote
   turning off and the tab closing stop it too, input under way included. Not a command.
 - **What the Mac does:** only the listed task's own tabs, as its side panel and the agent's browser tools see them;
@@ -1804,7 +1844,8 @@ tab closes within the watched task (§15.30); browsing outside a task stays on t
   are made only while watched; the Mac keeps none. The audit log (§4.4) records each `watchTab` and, at most once a
   minute per device, task, kind and result, a `tabInput`'s kind (`click`, `text`, …), never what was typed. Chromium's
   own windows (a passkey, a site's sign-in), macOS prompts and a page's dialogs stay on the Mac; while one is up, the
-  tab's `waiting` says so.
+  tab's `waiting` says so. A site's permission prompt is the page's own question, answered from a client with
+  `answerTabPermission`; macOS's own prompt for Yardlet's camera, microphone or location stays on the Mac.
 - **What a phone needs:**
   - Draw the frame fitted to the screen, keeping its shape, and let the person zoom and pan the picture. A tap at a
     point of the picture is `click` at that point times `viewportWidth / width` (the same factor both ways); a double tap
@@ -1824,8 +1865,14 @@ tab closes within the watched task (§15.30); browsing outside a task stays on t
     reconnecting. A frame arrives about a quarter of a second after the page changes on the same network; through the
     relay, each frame waits for the one before it, so a slow link means fewer frames, never a queue.
   - With `requestId` on the watched tab, show the handoff's `reason` and its Done and Decline (`answerHandoff`, §15.18)
-    above the picture, as the Mac's panel does. With another `waiting`, say what waits on the Mac (§15.19's
-    "Steps that are not requests").
+    above the picture, as the Mac's panel does. From a host advertising `tabPermissions`, with `permission` on the
+    watched tab, show the permission bar below it (both when both are up): who asks and for what, and Block, Allow
+    and Close (`answerTabPermission`). The words name the host as the Mac whose camera, microphone or location the
+    site asks for, as Yardlet on another computer does: "On %1$@, %2$@ wants to: %3$@" with the host's name, the site's
+    host and the permissions in the Mac's words ("Use your camera", "Use your microphone", "Know your location" …).
+    Take the bar down once answered; on `notFound`, nothing waits for that answer any more. With another `waiting`, or
+    a `permission` wait from a host without `tabPermissions`, say what waits on the Mac (§15.19's "Steps that are not
+    requests").
 
 ### 15.26 Read-only Review
 
@@ -2051,9 +2098,11 @@ to another task's tabs.
   event reports whether the tab actually closed.
 
 Both requests require a current browser watch for the same task. They share the bounded, ordered input queue
-and revocable watch permit with `tabInput`. Ending the watch, changing tasks, removing the device or disconnecting
+and revocable watch permit with `tabInput`, as `answerTabPermission` (§15.25) does, which also requires the watch to
+be of that very tab. Ending the watch, changing tasks, removing the device or disconnecting
 invalidates queued actions. The host rechecks the task, target tab, page boundary and blocking dialogs immediately
-before acting. Audits record the request type, task, device and outcome, never the address or page contents.
+before acting. Audits record the request type, task, device and outcome, never the address or page contents; a
+refusal is recorded at most once a minute per device, request, task and result.
 
 The desktop client provides `openHostBrowserLink` for window and terminal link handlers to route `localhost`,
 `*.localhost`, IPv4 loopback and IPv6 loopback to the host's browser panel. Callers use the hook before default-browser
@@ -2589,7 +2638,8 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   composer's own controls (a choice the host asks about first is asked about here too), the slash commands that may
   run from here in "+" and a typed `/` list, and a turn's Edit message and Fork from here. A task's browser (§15.25)
   shows in a side panel where the host's window has the task's browser panel: the task's tabs in the panel's strip,
-  Back, Forward and Reload, the handoff's bar, and the watched tab's page, which takes clicks, drags, the trackpad,
+  Back, Forward and Reload, the handoff's bar, with `tabPermissions` the permission bar of the Mac's panel (its
+  words naming the host, the two bars one above the other when both are up), and the watched tab's page, which takes clicks, drags, the trackpad,
   keys and the input method's committed text (what it is still composing shows on the client until committed; ⌘V
   types the client's own clipboard; secure keyboard entry is on while the page's password field has the keyboard). The
   page lays out at the panel's size (`viewport`, never as a phone), and follows the panel once it rests 200 ms at a new

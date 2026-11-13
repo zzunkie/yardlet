@@ -1485,6 +1485,40 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertEqual(typing.last, "Input.insertText")
         XCTAssertTrue(signIn.vaultFills.holdShownDocument(in: []))
 
+        // A site's permission prompt is listed and answered as the panel's bar answers it, only while that very prompt
+        // is up: Chromium's media prompts have numbers past 2^53.
+        let camera = (1 << 62) | 3
+        func ask(_ id: Int) {
+            connection.eventHandler?(.permissionPrompt(tab: signIn.id, prompt: BrowserPermissionPrompt(
+                id: id, origin: "https://github.com", permissions: ["camera", "microphone"])))
+        }
+        func answer(_ prompt: Int, _ given: RemoteTabPermissionAnswer, task: String? = nil) async -> RemoteError? {
+            if case let .failure(error) = await bridge.answerTabPermission(taskID: task ?? taskID, tabID: tabID, prompt: prompt,
+                                                                           answer: given, permit: RemoteTabPermit()) { return error }
+            return nil
+        }
+        ask(camera)
+        XCTAssertTrue(bridge.snapshot().tabPermissions)
+        let asking = try await bridge.browserTabs(taskID: taskID).get()
+        XCTAssertEqual(asking[1].permission, RemoteTabPermission(prompt: camera, origin: "https://github.com",
+                                                                 permissions: ["camera", "microphone"]))
+        XCTAssertEqual(asking[1].waiting, "permission")
+        XCTAssertTrue(RemoteJSON.string(asking).contains(#""prompt":\#(camera)"#), "the number goes whole")
+        let foreignAnswer = await answer(camera, .allow, task: other.id.uuidString)
+        XCTAssertEqual(foreignAnswer?.code, .notFound, "another task's tab")
+        let allowed = await answer(camera, .allow)
+        XCTAssertNil(allowed)
+        XCTAssertTrue(connection.sent.contains(.permissionResult(tab: signIn.id, prompt: camera, result: .allow)))
+        XCTAssertNil(signIn.permissionPrompt)
+        let answeredAgain = await answer(camera, .block)
+        XCTAssertEqual(answeredAgain?.code, .notFound)
+        ask(camera + 1)
+        let stale = await answer(camera, .block)
+        XCTAssertEqual(stale?.code, .notFound, "an answer to the last prompt never reaches a newer one")
+        XCTAssertEqual(signIn.permissionPrompt?.id, camera + 1)
+        XCTAssertFalse(connection.sent.contains(.permissionResult(tab: signIn.id, prompt: camera, result: .block)))
+        XCTAssertFalse(connection.sent.contains(.permissionResult(tab: signIn.id, prompt: camera + 1, result: .block)))
+
         // The panel's Back; nothing under a passkey window; another task's tab is not found.
         let back = await bridge.tabInput(taskID: taskID, tabID: tabID, input: RemoteTabInput(kind: .navigate, action: "back"), permit: RemoteTabPermit())
         XCTAssertNil(back)
@@ -1493,6 +1527,8 @@ final class RemoteBridgeTests: XCTestCase {
                                                  tabs: [signIn.id]))
         let underWindow = await bridge.tabInput(taskID: taskID, tabID: tabID, input: .click(x: 10, y: 10), permit: RemoteTabPermit())
         XCTAssertEqual(underWindow?.code, .notAllowed)
+        let answerUnderWindow = await answer(camera + 1, .allow)
+        XCTAssertEqual(answerUnderWindow?.code, .notAllowed, "the window over the page is answered on the Mac first")
         let foreign = await bridge.tabInput(taskID: other.id.uuidString, tabID: tabID, input: .click(x: 10, y: 10), permit: RemoteTabPermit())
         XCTAssertEqual(foreign?.code, .notFound)
 
@@ -1503,6 +1539,9 @@ final class RemoteBridgeTests: XCTestCase {
         let closeUnderDialog = await bridge.closeTab(taskID: taskID, tabID: tabID, permit: RemoteTabPermit())
         XCTAssertEqual(closeUnderDialog?.code, .notAllowed)
         connection.eventHandler?(.chromiumWindow(isShown: false, titles: [], kinds: [], ids: [], tabs: []))
+        let dismissed = await answer(camera + 1, .dismiss)
+        XCTAssertNil(dismissed)
+        XCTAssertTrue(connection.sent.contains(.permissionResult(tab: signIn.id, prompt: camera + 1, result: .dismiss)))
         let foreignClose = await bridge.closeTab(taskID: other.id.uuidString, tabID: tabID, permit: RemoteTabPermit())
         XCTAssertEqual(foreignClose?.code, .notFound)
         let revoked = RemoteTabPermit()

@@ -52,6 +52,10 @@ final class RemoteBrowserModel {
     /// The last input the host refused, in a line for the panel.
     var refusal: String?
     var canControlTabs = false
+    /// The host takes the answer to a site's permission prompt from here (`tabPermissions`).
+    var answersPermissions = false
+    /// The prompt answered from here: its bar stays down while the host's list still has it.
+    private(set) var answeredPrompt: Int?
     /// The host follows a task's list without a watched tab (`listOnly`).
     @ObservationIgnored var listsTabs = false
     /// The task the window shows, whose list is followed while the panel shows none of its tabs.
@@ -77,6 +81,13 @@ final class RemoteBrowserModel {
     nonisolated static let panelRest: Duration = .milliseconds(200)
 
     var watchedTab: RemoteBrowserTab? { tabs.first { $0.tabId == tabID } }
+
+    /// The watched tab's permission prompt for the panel's bar, while the host takes its answer from here and it was not
+    /// answered already.
+    var shownPermission: RemoteTabPermission? {
+        guard answersPermissions, let permission = watchedTab?.permission, permission.prompt != answeredPrompt else { return nil }
+        return permission
+    }
 
     // MARK: - Watching
 
@@ -229,6 +240,22 @@ final class RemoteBrowserModel {
                 // A file outside the task's opens only from the host's own screen, or where the task's agent opened it.
                 self.refusal = L10n.format("Files outside this task's folders open only on %@.", self.hostName)
             } else { self.refusal = Self.refusal(response.error, host: self.hostName) }
+        }
+    }
+
+    /// Answers the watched tab's permission prompt on the host, as its panel's permission bar does. The bar goes at once;
+    /// it comes back with the host's refusal unless the prompt is no longer up there.
+    func answerPermission(_ answer: RemoteTabPermissionAnswer) {
+        guard let taskID, let tabID, let permission = shownPermission else { return }
+        answeredPrompt = permission.prompt
+        send(.answerTabPermission(taskID: taskID, tabID: tabID, prompt: permission.prompt, answer: answer)) { [weak self] response in
+            guard let self, !response.ok else { return }
+            let gone = response.error?.code == .notFound
+            if !gone, self.answeredPrompt == permission.prompt { self.answeredPrompt = nil }
+            guard self.taskID == taskID else { return }
+            // Answered on the host meanwhile, or the page moved on or closed: nothing waits for this answer.
+            self.refusal = gone ? L10n.string("This permission request is no longer open.")
+                : Self.refusal(response.error, host: self.hostName)
         }
     }
 

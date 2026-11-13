@@ -376,6 +376,26 @@ final class RemoteFixtureTests: XCTestCase {
         _ = try await ask("watchTab", #","taskId":"\#(ID.handoff)","viewport":{"width":390,"height":844,"mobile":true}"#)
         try await waitFor { phone.events(.tabFrame).last?.viewportWidth == 390 }
         XCTAssertEqual(phone.events(.tabFrame).last?.width, 390)
+
+        // The static page's site asks for the camera and microphone, under a number past 2^53: answered on that tab once
+        // it is watched, and only once.
+        XCTAssertEqual(snapshot.tabPermissions, true)
+        let asking = try XCTUnwrap(watching.tabs?.first?.permission)
+        XCTAssertEqual(asking.permissions, ["camera", "microphone"])
+        XCTAssertGreaterThan(asking.prompt, 1 << 53)
+        XCTAssertEqual(watching.tabs?.first?.waiting, "permission")
+        func answer(_ given: String) async throws -> RemoteResponse {
+            try await ask("answerTabPermission",
+                          #","taskId":"\#(ID.handoff)","tabId":"\#(RemoteFixtureTabs.docsTab)","prompt":\#(asking.prompt),"answer":"\#(given)""#)
+        }
+        let unwatched = try await answer("allow")
+        XCTAssertEqual(unwatched.error?.code, .notAllowed, "the tab is not the one watched")
+        _ = try await ask("watchTab", #","taskId":"\#(ID.handoff)","tabId":"\#(RemoteFixtureTabs.docsTab)""#)
+        let allowed = try await answer("allow")
+        XCTAssertTrue(allowed.ok)
+        try await waitFor { phone.events(.browserTabsChanged).last?.tabs?.first?.permission == nil }
+        let again = try await answer("block")
+        XCTAssertEqual(again.error?.code, .notFound, "that prompt is no longer up")
     }
 
     private func waitFor(_ condition: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {

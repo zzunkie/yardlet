@@ -1122,28 +1122,6 @@ final class BrowserHostPaneController {
         (code <= -200 && code > -220) || code == -150
     }
 
-    /// The bar's sentence, in Chrome's words: who asks, and for what.
-    static func permissionText(_ prompt: BrowserPermissionPrompt) -> String {
-        let names: [String: String] = [
-            "notifications": "Show notifications", "geolocation": "Know your location",
-            "clipboard": "See text and images copied to the clipboard", "multipleDownloads": "Download multiple files",
-            "storageAccess": "Use cookies and site data from another site",
-            "topLevelStorageAccess": "Use cookies and site data from another site",
-            "localFonts": "Use the fonts on this Mac", "windowManagement": "Manage windows on all your displays",
-            "localNetworkAccess": "Connect to devices on your local network",
-            "localNetwork": "Connect to devices on your local network",
-            "loopbackNetwork": "Connect to apps on this Mac", "fileSystemAccess": "Edit files on this Mac",
-            "camera": "Use your camera", "microphone": "Use your microphone",
-            "midiSysex": "Control and reprogram your MIDI devices", "idleDetection": "Know when you're using this Mac"
-        ]
-        var seen = Set<String>()
-        let wants = prompt.permissions.map { names[$0].map(L10n.string) ?? $0 }.filter { seen.insert($0).inserted }
-        let origin = URL(string: prompt.origin).map { url in
-            (url.host() ?? prompt.origin) + (url.port.map { ":\($0)" } ?? "")
-        } ?? prompt.origin
-        return L10n.format("%@ wants to: %@", origin, wants.joined(separator: ", "))
-    }
-
     /// Shows the tab's JavaScript dialog over the page, or none.
     private func showJavaScriptDialog(_ dialog: BrowserJavaScriptDialog?) {
         guard dialog != javaScriptDialog else { return }
@@ -1295,7 +1273,9 @@ struct BrowserHostPane: View {
                     VStack(spacing: 0) {
                         if let handoff = controller.handoff { handoffBar(handoff) }
                         if controller.isUnresponsive { unresponsiveBar }
-                        if let prompt = controller.permissionPrompt { permissionBar(prompt) }
+                        if let prompt = controller.permissionPrompt {
+                            BrowserPermissionBar(text: BrowserPermissionBar.text(prompt)) { controller.answerPermission($0) }
+                        }
                         if let question = controller.externalAppQuestion { externalAppBar(question) }
                         if let chooser = controller.fileDialog, controller.fileDialogByAgent { fileChooserBar(chooser) }
                         if let offer = controller.vaultOffer { vaultOfferBar(offer) }
@@ -1585,29 +1565,6 @@ struct BrowserHostPane: View {
         .accessibilityLabel(L10n.string("Select an element"))
         .accessibilityHint(help)
         .accessibilityAddTraits(controller.isPickingElement ? .isSelected : [])
-    }
-
-    /// Chrome's permission bubble, as a bar above the page: Block, Allow, or close it unanswered.
-    private func permissionBar(_ prompt: BrowserPermissionPrompt) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "hand.raised").foregroundStyle(.secondary)
-            Text(BrowserHostPaneController.permissionText(prompt))
-                .font(.callout)
-                .lineLimit(3)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 8)
-            Button(L10n.string("Block")) { controller.answerPermission(.block) }
-                .controlSize(.small)
-            Button(L10n.string("Allow")) { controller.answerPermission(.allow) }
-                .controlSize(.small)
-            ParityIconButton(systemName: "xmark", help: L10n.string("Close")) { controller.answerPermission(.dismiss) }
-        }
-        .padding(.horizontal, 10).padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(ParityTheme.subtleFill)
-        .background(.background)
-        .overlay(alignment: .bottom) { Rectangle().fill(ParityTheme.separator).frame(height: 1) }
-        .accessibilityElement(children: .contain)
     }
 
     /// Chrome's "Open ‹app›?" for another app's address, as a bar above the page like the permission bubble's:

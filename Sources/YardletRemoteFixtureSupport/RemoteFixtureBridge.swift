@@ -25,8 +25,8 @@ import YardletRemote
 /// not connected to its harness does, each task offers its slash commands that may run from elsewhere (Compact, a new
 /// chat, Codex's fork and Plan mode), and a task's latest message is edited and its turns forked as on the Mac. Since then
 /// (§15.25) "Publish the release notes" has two browser tabs, a static page and the sign-in page it hands to the person,
-/// which draws as PNG and takes clicks, typing and keys (`RemoteFixtureTabs`). Nothing else is read from or written to
-/// the Mac.
+/// which draws as PNG and takes clicks, typing and keys (`RemoteFixtureTabs`); the static page's site asks for the camera
+/// and microphone, and asks again 30 seconds after an answer. Nothing else is read from or written to the Mac.
 public actor RemoteFixtureBridge: RemoteBridge {
     public enum ID {
         public static let approval = "0F1E0001-0000-4000-8000-000000000001"
@@ -136,6 +136,8 @@ public actor RemoteFixtureBridge: RemoteBridge {
     /// The handoff task's browser tabs (§15.25), and what a phone watches of them.
     private var browser = RemoteFixtureTabs()
     private var watchedTabs: Set<RemoteTabWatch> = []
+    /// The static page's next permission prompt, once its last was answered.
+    private var permissionTimer: Task<Void, Never>?
 
     /// Harnesses (by id) whose login the fixture Mac has signed out: a new task on one is refused (§15.16).
     private let signedOut: Set<String>
@@ -223,6 +225,7 @@ public actor RemoteFixtureBridge: RemoteBridge {
                               newTask: RemoteNewTask(harness: "claude-code", harnessName: "Claude Code"), followUp: .steer,
                               scheduledTasks: true, taskFiles: true, taskControls: true, browserTabs: true)
         snapshot.scheduleEditing = true
+        snapshot.tabPermissions = true
         snapshot.hostAccounts = true
         snapshot.suggestionOptions = true
         return snapshot
@@ -711,6 +714,31 @@ public actor RemoteFixtureBridge: RemoteBridge {
         let change = browser.input(input, on: tabID)
         if !change.isEmpty { browserChanged(picture: change.contains(.picture), list: change.contains(.list)) }
         return nil
+    }
+
+    public func answerTabPermission(taskID: String, tabID: String, prompt: Int, answer: RemoteTabPermissionAnswer,
+                                    permit: RemoteTabPermit) async -> Result<RemoteTabPermission, RemoteError> {
+        guard permit.isValid else { return .failure(RemoteError(.notAllowed, "The watch ended")) }
+        guard taskID == ID.handoff, [RemoteFixtureTabs.signInTab, RemoteFixtureTabs.docsTab].contains(tabID) else {
+            return .failure(RemoteError(.notFound))
+        }
+        guard tabID == RemoteFixtureTabs.docsTab, let asked = browser.permission, asked.prompt == prompt else {
+            return .failure(RemoteError(.notFound, "The permission prompt is no longer up"))
+        }
+        browser.permission = nil
+        browserChanged()
+        permissionTimer?.cancel()
+        permissionTimer = Task {
+            await self.pause(30)
+            guard !Task.isCancelled else { return }
+            self.askPermissionAgain(after: prompt)
+        }
+        return .success(asked)
+    }
+
+    private func askPermissionAgain(after prompt: Int) {
+        browser.askAgain(after: prompt)
+        browserChanged()
     }
 
     /// The handoff the sign-in tab waits on, if one does.

@@ -540,6 +540,21 @@ final class RemoteHostModelTests: XCTestCase {
         try await waitUntil { browser.watchedTab?.requestId == nil }
         try await waitUntil { conversation.presentation.turns.last?.requests.isEmpty == true }
 
+        // The other tab's site asks for the camera and microphone: the panel's bar names the host, and Allow answers
+        // there; the bar goes at once and stays down.
+        XCTAssertTrue(browser.answersPermissions)
+        browser.select(RemoteFixtureTabs.docsTab)
+        try await waitUntil { browser.tabID == RemoteFixtureTabs.docsTab && browser.shownPermission != nil }
+        let asked = try XCTUnwrap(browser.shownPermission)
+        let prompt = BrowserPermissionPrompt(id: asked.prompt, origin: asked.origin, permissions: asked.permissions)
+        XCTAssertEqual(BrowserPermissionBar.text(prompt, host: model.name),
+                       L10n.format("On %1$@, %2$@ wants to: %3$@", "Mac Studio", "docs.github.com",
+                                   [L10n.string("Use your camera"), L10n.string("Use your microphone")].joined(separator: ", ")))
+        browser.answerPermission(.allow)
+        XCTAssertNil(browser.shownPermission, "the bar goes at once")
+        try await waitUntil { browser.watchedTab?.permission == nil }
+        XCTAssertNil(browser.refusal)
+
         browser.hide()
         XCTAssertNil(browser.taskID)
         XCTAssertNil(browser.frame)

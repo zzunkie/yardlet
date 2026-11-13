@@ -120,6 +120,7 @@ final class RemoteProtocolTests: XCTestCase {
             .openTab(taskID: "T1", tabID: nil, address: "http://localhost:3000"),
             .openTab(taskID: "T1", tabID: "K", address: "https://example.com"),
             .closeTab(taskID: "T1", tabID: "K"),
+            .answerTabPermission(taskID: "T1", tabID: "K", prompt: (1 << 62) | 7, answer: .allow),
             .hostSettings(watching: true),
             .hostSettings(watching: false),
             .setHostSetting(setting: "follow_up_behavior", value: "steer", confirmed: true),

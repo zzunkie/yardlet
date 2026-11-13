@@ -116,6 +116,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         snapshot.browserTabs = browser.isAvailable
         snapshot.terminals = RemoteTerminalBridge.isAvailable
         snapshot.tabControls = browser.isAvailable
+        snapshot.tabPermissions = browser.isAvailable
         snapshot.tabLists = browser.isAvailable
         snapshot.hostSettings = true
         snapshot.hostAccounts = true

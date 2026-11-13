@@ -4,8 +4,9 @@ import SwiftUI
 import YardletRemote
 
 /// A host task's browser in the window's side panel (docs/REMOTE_PROTOCOL.md §15.25), where the Mac's own window shows
-/// the task's browser panel: its tabs in the panel's strip, Back, Forward and Reload, the handoff's bar, and the watched
-/// tab's page as the host pictures it, which takes clicks, drags, scrolling and typing, sent back to the page there.
+/// the task's browser panel: its tabs in the panel's strip, Back, Forward and Reload, the handoff's bar and the site's
+/// permission bar, and the watched tab's page as the host pictures it, which takes clicks, drags, scrolling and typing,
+/// sent back to the page there.
 /// Addresses and tab closes are performed on the host.
 struct RemoteBrowserPanel: View {
     let model: RemoteHostModel
@@ -81,6 +82,8 @@ struct RemoteBrowserPanel: View {
 
     // MARK: - Bars
 
+    /// The handoff's bar and the site's permission bar, one above the other when both are up, as in the Mac's panel; any
+    /// other wait, and a permission prompt on a host that takes no answer from here, in a line naming the host.
     @ViewBuilder
     private var bars: some View {
         if let tab = browser.watchedTab, let requestID = tab.requestId, let taskID = browser.taskID {
@@ -89,7 +92,17 @@ struct RemoteBrowserPanel: View {
             }, done: {
                 model.send(.answerHandoff(taskID: taskID, requestID: requestID, answer: .done))
             })
-        } else if let tab = browser.watchedTab, let waiting = tab.waiting.flatMap(BrowserPersonWait.Kind.init(rawValue:)) {
+        }
+        if let permission = browser.shownPermission {
+            let prompt = BrowserPermissionPrompt(id: permission.prompt, origin: permission.origin,
+                                                 permissions: permission.permissions)
+            BrowserPermissionBar(text: BrowserPermissionBar.text(prompt, host: model.name)) {
+                browser.answerPermission(RemoteTabPermissionAnswer($0))
+            }
+        }
+        if let tab = browser.watchedTab, tab.requestId == nil,
+           let waiting = tab.waiting.flatMap(BrowserPersonWait.Kind.init(rawValue:)),
+           waiting != .permission || !browser.answersPermissions || tab.permission == nil {
             noticeBar(L10n.format("%@. Answer it on %@.",
                                   BrowserPersonWaitText.describe(BrowserPersonWait(kind: waiting, id: ""),
                                                                  site: tab.url.flatMap { URL(string: $0)?.host() }),

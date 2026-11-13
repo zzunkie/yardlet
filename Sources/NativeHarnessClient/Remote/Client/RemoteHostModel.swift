@@ -360,6 +360,7 @@ final class RemoteHostModel: Identifiable {
             }
             offersBrowser = response.browserTabs == true
             browser.canControlTabs = response.tabControls == true
+            browser.answersPermissions = response.tabPermissions == true
             browser.listsTabs = response.browserTabs == true && response.tabLists == true
             offersHostAccounts = response.hostAccounts == true
             hasSnapshot = true

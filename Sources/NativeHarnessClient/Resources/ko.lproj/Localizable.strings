@@ -3047,6 +3047,12 @@
 "Pop-ups were blocked on this page." = "이 페이지에서 팝업이 차단되었습니다.";
 "Control and reprogram your MIDI devices" = "MIDI 기기 제어 및 재프로그래밍";
 "Know when you're using this Mac" = "이 Mac을 사용 중인지 알기";
+"On %1$@, %2$@ wants to: %3$@" = "%2$@에서 %1$@의 다음 권한을 요청합니다: %3$@";
+"Use its fonts" = "설치된 글꼴 사용";
+"Connect to apps running on it" = "실행 중인 앱에 연결";
+"Edit its files" = "파일 수정";
+"Know when it is in use" = "사용 중인지 알기";
+"This permission request is no longer open." = "이 권한 요청은 이미 닫혔습니다.";
 
 /* Picking an element in the browser and marking up attached images */
 "Select an element" = "요소 고르기";

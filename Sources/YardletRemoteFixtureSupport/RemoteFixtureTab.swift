@@ -3,8 +3,10 @@ import YardletRemote
 
 /// The fixture's browser tabs (§15.25): "Publish the release notes" waits on a sign-in page handed to the person, which
 /// takes clicks, typing and keys as a page would (the username shows, the password as dots, Sign in checks that both
-/// are there), and a second tab of the same task holds a static page. A phone that asks for its own size (`viewport`)
-/// gets the pages laid out at it. Nothing typed is kept but the username and the password's length.
+/// are there), and a second tab of the same task holds a static page whose site asks for the camera and microphone, as
+/// a permission prompt the phone answers (its number past 2^53, as Chromium's media prompts have). A phone that asks for
+/// its own size (`viewport`) gets the pages laid out at it. Nothing typed is kept but the username and the password's
+/// length.
 struct RemoteFixtureTabs {
     enum Field: Equatable {
         case username
@@ -13,6 +15,8 @@ struct RemoteFixtureTabs {
 
     static let signInTab = "0F1E7AB1-0000-4000-8000-00000000007A"
     static let docsTab = "0F1E7AB2-0000-4000-8000-00000000007B"
+    static let firstPermission = RemoteTabPermission(prompt: (1 << 62) | 1, origin: "https://docs.github.com",
+                                                     permissions: ["camera", "microphone"])
     /// The pages' size in CSS pixels when no one asks for another, drawn one pixel per CSS pixel.
     static let viewport = (width: 640, height: 400)
     /// The size a watching phone asked for, which the pages are laid out at while it watches.
@@ -25,13 +29,16 @@ struct RemoteFixtureTabs {
     var refused = false
     /// The front tab of the task's panel.
     var front = signInTab
+    /// The static page's permission prompt until it is answered (`askAgain` brings another).
+    var permission: RemoteTabPermission? = RemoteFixtureTabs.firstPermission
 
     /// The task's tabs, the sign-in page handed over while `handoff` waits.
     func listed(handoff: (requestID: String, reason: String)?) -> [RemoteBrowserTab] {
         [
             RemoteBrowserTab(tabId: Self.docsTab, title: "Managing releases in a repository - GitHub Docs",
                              url: "https://docs.github.com/en/repositories/releasing-projects-on-github",
-                             active: front == Self.docsTab ? true : nil),
+                             active: front == Self.docsTab ? true : nil, waiting: permission == nil ? nil : "permission",
+                             permission: permission),
             RemoteBrowserTab(tabId: Self.signInTab, title: signedIn ? "New release · acme/web" : "Sign in to GitHub · GitHub",
                              url: signedIn ? "https://github.com/acme/web/releases/new" : "https://github.com/login",
                              active: front == Self.signInTab ? true : nil, canGoBack: true,
@@ -119,9 +126,17 @@ struct RemoteFixtureTabs {
         }
     }
 
-    /// Back to the sign-in page, for the next handoff.
+    /// Back to the sign-in page, for the next handoff; the static page's prompt stays as it is.
     mutating func signOut() {
+        let permission = permission
         self = RemoteFixtureTabs(size: size, front: front)
+        self.permission = permission
+    }
+
+    /// The static page asks again, under the next number: an answer to the last one reaches nothing.
+    mutating func askAgain(after prompt: Int) {
+        permission = RemoteTabPermission(prompt: prompt + 1, origin: Self.firstPermission.origin,
+                                         permissions: Self.firstPermission.permissions)
     }
 
     // MARK: - Pictures

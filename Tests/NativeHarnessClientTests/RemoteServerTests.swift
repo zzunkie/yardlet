@@ -1344,7 +1344,8 @@ final class RemoteServerTests: XCTestCase {
     /// keeps its kind, never what was typed. Letting the tab go and closing the connection stop the frames and tell the
     /// bridge, so the tab stops painting. A tab's acknowledgements and input have a rate of their own.
     func testAWatchedTabsFramesWaitForTheirAcknowledgementAndStopWithTheWatch() async throws {
-        let harness = try await ServerHarness()
+        let clock = RemoteTestClock()
+        let harness = try await ServerHarness(clock: clock)
         let phone = try await harness.authenticatedPhone()
         await harness.send(#"{"id":"1","type":"watchTab","taskId":"A","maxWidth":640}"#, on: phone)
         let watching = try await phone.response("1")
@@ -1402,6 +1403,7 @@ final class RemoteServerTests: XCTestCase {
         XCTAssertTrue(typed)
         let inputs = await harness.bridge.tabInputs
         XCTAssertEqual(inputs, [.text("hunter2-secret")])
+
         let audit = harness.audit.entries().filter { $0.type == "tabInput" || $0.type == "watchTab" }
         XCTAssertEqual(audit.map(\.type), ["watchTab", "tabInput", "tabInput", "tabInput"])
         XCTAssertEqual(audit.map(\.input), [nil, "click", "click", "text"])
@@ -1490,6 +1492,41 @@ final class RemoteServerTests: XCTestCase {
         let tooWide = try await phone.response("vp2").error?.code
         XCTAssertEqual(tooWide, .badRequest)
 
+        // A site's permission prompt is answered on the watched tab only, and only while that very prompt is up.
+        // The tab requests above used the connection's whole burst; a second later it has room again.
+        clock.advance(by: 1)
+        await harness.bridge.setTabs([RemoteBrowserTab(tabId: "T1", title: "Meet", active: true),
+                                      RemoteBrowserTab(tabId: "T2", title: "Docs")])
+        await harness.send(#"{"id":"wp","type":"watchTab","taskId":"A","tabId":"T1"}"#, on: phone)
+        _ = try await phone.response("wp")
+        func answer(_ id: String, task: String = "A", tab: String = "T1", prompt: Int = 7, _ given: String = "allow") async {
+            await harness.send(#"{"id":"\#(id)","type":"answerTabPermission","taskId":"\#(task)","tabId":"\#(tab)","prompt":\#(prompt),"answer":"\#(given)"}"#,
+                               on: phone)
+        }
+        await answer("p1", tab: "T2")
+        let otherTab = try await phone.response("p1").error?.code
+        XCTAssertEqual(otherTab, .notAllowed, "a tab the connection does not watch")
+        await answer("p2", task: "B")
+        let otherTask = try await phone.response("p2").error?.code
+        XCTAssertEqual(otherTask, .notAllowed, "a task the connection does not watch")
+        await answer("p3", "maybe")
+        let unknown = try await phone.response("p3").error?.code
+        XCTAssertEqual(unknown, .badRequest)
+        await answer("p4")
+        let allowed = try await phone.response("p4").ok
+        XCTAssertTrue(allowed)
+        await answer("p5", "block")
+        let stale = try await phone.response("p5").error?.code
+        XCTAssertEqual(stale, .notFound, "the prompt answered is no longer up")
+        let permissionAnswers = await harness.bridge.permissionAnswers
+        XCTAssertEqual(permissionAnswers, [.allow])
+        let answers = harness.audit.entries().filter { $0.type == "answerTabPermission" }
+        XCTAssertEqual(answers.map(\.result), ["notAllowed", "notAllowed", "ok", "notFound"])
+        XCTAssertEqual(answers.map(\.input), ["allow", "allow", "allow", "block"])
+        XCTAssertEqual(answers[2].origin, "https://meet.google.com")
+        XCTAssertEqual(answers[2].permissions, ["camera", "microphone"])
+        XCTAssertEqual(answers.compactMap(\.origin).count, 1, "nothing of a prompt that was not answered")
+
         await harness.send(#"{"id":"10","type":"watchTab","taskId":"A","tabId":"T9"}"#, on: phone)
         let missing = try await phone.response("10").error?.code
         XCTAssertEqual(missing, .notFound)
@@ -1527,6 +1564,10 @@ final class RemoteServerTests: XCTestCase {
                            on: phone)
         let input = try await phone.response("2").error?.code
         XCTAssertEqual(input, .notAllowed, "a list watch takes no input")
+        await harness.send(#"{"id":"3","type":"answerTabPermission","taskId":"A","tabId":"T3","prompt":7,"answer":"allow"}"#,
+                           on: phone)
+        let answered = try await phone.response("3").error?.code
+        XCTAssertEqual(answered, .notAllowed, "nor answers a site's permission prompt")
         let inputs = await harness.bridge.tabInputs
         XCTAssertTrue(inputs.isEmpty)
     }
@@ -2114,6 +2155,19 @@ actor FakeBridge: RemoteBridge {
     }
     func setTabs(_ tabs: [RemoteBrowserTab]) { self.tabs = tabs }
     func setPicture(_ picture: Data) { self.picture = picture }
+    /// Tab T1's permission prompt, until it is answered, and the answers that reached it.
+    private var tabPermission: RemoteTabPermission? = RemoteTabPermission(prompt: 7, origin: "https://meet.google.com",
+                                                                          permissions: ["camera", "microphone"])
+    private(set) var permissionAnswers: [RemoteTabPermissionAnswer] = []
+    func answerTabPermission(taskID: String, tabID: String, prompt: Int, answer: RemoteTabPermissionAnswer,
+                             permit: RemoteTabPermit) async -> Result<RemoteTabPermission, RemoteError> {
+        guard taskID == "A", tabID == "T1", let asked = tabPermission, asked.prompt == prompt else {
+            return .failure(RemoteError(.notFound))
+        }
+        tabPermission = nil
+        permissionAnswers.append(answer)
+        return .success(asked)
+    }
 
     private(set) var watchesHostSettings = false
     private(set) var hostSettingsPage = RemoteHostSettings(

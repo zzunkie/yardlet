@@ -199,6 +199,10 @@ public protocol RemoteBridge: AnyObject, Sendable {
     /// `permit` before each step it sends: the watch it came under may end meanwhile.
     func openTab(taskID: String, tabID: String?, address: String, permit: RemoteTabPermit) async -> Result<String, RemoteError>
     func closeTab(taskID: String, tabID: String, permit: RemoteTabPermit) async -> RemoteError?
+    /// The person's answer to the tab's permission prompt `prompt`, as the panel's permission bar gives it, and that
+    /// prompt's origin and permissions; `notFound` once that prompt is no longer up, whatever came after it.
+    func answerTabPermission(taskID: String, tabID: String, prompt: Int, answer: RemoteTabPermissionAnswer,
+                             permit: RemoteTabPermit) async -> Result<RemoteTabPermission, RemoteError>
     func tabInput(taskID: String, tabID: String, input: RemoteTabInput, permit: RemoteTabPermit) async -> RemoteError?
     /// Whether the Mac announces the finish of a task that just became unread, as its own notification would (§5.2).
     func announcesFinish(of taskID: String) async -> Bool
@@ -270,6 +274,10 @@ extension RemoteBridge {
     }
     public func closeTab(taskID: String, tabID: String, permit: RemoteTabPermit) async -> RemoteError? {
         RemoteError(.unavailable)
+    }
+    public func answerTabPermission(taskID: String, tabID: String, prompt: Int, answer: RemoteTabPermissionAnswer,
+                                    permit: RemoteTabPermit) async -> Result<RemoteTabPermission, RemoteError> {
+        .failure(RemoteError(.unavailable))
     }
 
     public func readReview(taskID: String, query: RemoteReviewQuery) async -> Result<RemoteReviewResult, RemoteError> {
@@ -1863,7 +1871,7 @@ public actor RemoteServer {
             unwatchTab(envelope.id, taskID: taskID, on: id)
         case let .tabFrameAck(taskID, tabID, frame):
             acknowledgeTabFrame(envelope.id, taskID: taskID, tabID: tabID, frame: frame, on: id)
-        case .openTab, .closeTab:
+        case .openTab, .closeTab, .answerTabPermission:
             tabControl(envelope.id, request: request, on: id)
         case let .tabInput(taskID, tabID, input):
             tabInput(envelope.id, taskID: taskID, tabID: tabID, input: input, on: id)
@@ -2035,6 +2043,7 @@ public actor RemoteServer {
             response.fileRewind = published?.fileRewind == true ? true : nil
             response.taskActions = published?.taskActions == true ? true : nil
             response.tabControls = published?.tabControls == true ? true : nil
+            response.tabPermissions = published?.tabPermissions == true ? true : nil
             response.tabLists = published?.tabLists == true ? true : nil
             response.hostSettings = published?.hostSettings == true ? true : nil
             response.hostAccounts = published?.hostAccounts == true ? true : nil

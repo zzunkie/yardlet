@@ -80,10 +80,12 @@ public struct RemoteBrowserTab: Codable, Equatable, Sendable {
     public var reason: String?
     /// The page's focused field is a password field: a client masks what it types into it.
     public var passwordField: Bool?
+    /// The site's permission prompt up on the tab, also while `waiting` names a more pressing wait.
+    public var permission: RemoteTabPermission?
 
     public init(tabId: String, title: String? = nil, url: String? = nil, active: Bool? = nil, loading: Bool? = nil,
                 canGoBack: Bool? = nil, canGoForward: Bool? = nil, waiting: String? = nil, requestId: String? = nil,
-                reason: String? = nil, passwordField: Bool? = nil) {
+                reason: String? = nil, passwordField: Bool? = nil, permission: RemoteTabPermission? = nil) {
         self.tabId = tabId
         self.title = title
         self.url = url
@@ -95,7 +97,30 @@ public struct RemoteBrowserTab: Codable, Equatable, Sendable {
         self.requestId = requestId
         self.reason = reason
         self.passwordField = passwordField
+        self.permission = permission
     }
+}
+
+/// A site's permission prompt in a task's tab, as the Mac's browser panel shows it in its permission bar: the page's
+/// origin and what it asks for, in Chromium's names (`camera`, `microphone`, `geolocation`, `notifications` …).
+public struct RemoteTabPermission: Codable, Equatable, Sendable {
+    /// The prompt, which `answerTabPermission` names: a newer prompt on the same tab has another. Chromium's 64-bit
+    /// number, which can be past 2^53.
+    public var prompt: Int
+    public var origin: String
+    public var permissions: [String]
+
+    public init(prompt: Int, origin: String, permissions: [String]) {
+        self.prompt = prompt
+        self.origin = origin
+        self.permissions = permissions
+    }
+}
+
+/// The person's answer to a site's permission prompt, as the panel's Allow, Block and Close give it: Chromium keeps an
+/// allow or a block for the site.
+public enum RemoteTabPermissionAnswer: String, Codable, Sendable, CaseIterable {
+    case allow, block, dismiss
 }
 
 /// One picture of a tab's visible page, and the page's size it shows.

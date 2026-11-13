@@ -3,7 +3,8 @@ import Observation
 import YardletRemote
 
 /// A task's browser tabs for the remote (docs/REMOTE_PROTOCOL.md §15.25): the tabs the task's side panel lists, a picture
-/// of a watched tab's visible page, and the person's clicks, scrolling and typing sent to it.
+/// of a watched tab's visible page, the person's clicks, scrolling and typing sent to it, and their answer to its site's
+/// permission prompt, as the panel's permission bar gives it.
 ///
 /// It goes through the paths the Mac already has: the task's tabs as the panel and the agent's tools see them
 /// (`BrowserHostClient.tabs(forSession:)`, opening the ones the panel saved first, as the agent's first call does),
@@ -102,6 +103,8 @@ final class RemoteTabBridge {
                await !showsAllowedPage(address, taskID: taskID, in: open[index]) {
                 listed[index].url = "file://"
                 listed[index].title = nil
+                // Its permission prompt is answered on the Mac, as the page is shown and driven there.
+                listed[index].permission = nil
             }
         }
         return .success(listed)
@@ -127,6 +130,9 @@ final class RemoteTabBridge {
         listed.requestId = handoff?.notice
         listed.reason = handoff.flatMap { RemoteText.short($0.reason, RemoteText.requestDetailLimit) }
         listed.passwordField = tab.isPasswordFieldFocused ? true : nil
+        listed.permission = tab.permissionPrompt.map {
+            RemoteTabPermission(prompt: $0.id, origin: $0.origin, permissions: $0.permissions)
+        }
         return listed
     }
 
@@ -392,6 +398,30 @@ final class RemoteTabBridge {
         return nil
     }
 
+    /// The person's answer to the watched tab's permission prompt, as the panel's permission bar gives it
+    /// (`BrowserTab.answerPermission`): Chromium keeps an allow or a block for the site. Only while that very prompt is
+    /// up: a prompt the page asked again, or answered here meanwhile, is `notFound`, so an answer never reaches a newer
+    /// prompt. The page's boundaries are the input's: nothing over it, and no `file:` page outside the task's files.
+    func answerPermission(taskID: String, tabID: String, prompt: Int, answer: RemoteTabPermissionAnswer,
+                          permit: RemoteTabPermit) async -> Result<RemoteTabPermission, RemoteError> {
+        guard permit.isValid else { return .failure(RemoteError(.notAllowed, "The watch ended")) }
+        let tab: BrowserTab
+        switch watchedTab(taskID: taskID, tabID: tabID) {
+        case let .success(found): tab = found
+        case let .failure(error): return .failure(error)
+        }
+        guard tab.permissionPrompt?.id == prompt else { return .failure(Self.promptGone) }
+        if let refusal = await stepRefusal(tab, permit, PageScope(taskID: taskID)) { return .failure(refusal) }
+        // Checked again after the page's checks, with nothing to wait on between this and the answer.
+        guard resolve(taskID) != nil, !tab.isClosed, let asked = tab.permissionPrompt, asked.id == prompt else {
+            return .failure(Self.promptGone)
+        }
+        tab.answerPermission(BrowserPermissionResult(answer))
+        return .success(RemoteTabPermission(prompt: asked.id, origin: asked.origin, permissions: asked.permissions))
+    }
+
+    private static let promptGone = RemoteError(.notFound, "The permission prompt is no longer up")
+
     // MARK: - Input
 
     /// The person's input to a watched tab, as trusted input the page cannot tell from a keyboard and mouse here. Each
@@ -649,6 +679,10 @@ extension AppModelRemoteBridge {
     func closeTab(taskID: String, tabID: String, permit: RemoteTabPermit) async -> RemoteError? {
         await browser.close(taskID: taskID, tabID: tabID, permit: permit)
     }
+    func answerTabPermission(taskID: String, tabID: String, prompt: Int, answer: RemoteTabPermissionAnswer,
+                             permit: RemoteTabPermit) async -> Result<RemoteTabPermission, RemoteError> {
+        await browser.answerPermission(taskID: taskID, tabID: tabID, prompt: prompt, answer: answer, permit: permit)
+    }
 
     func browserTabs(taskID: String) async -> Result<[RemoteBrowserTab], RemoteError> {
         await browser.tabs(taskID: taskID)
@@ -668,5 +702,25 @@ extension AppModelRemoteBridge {
 
     func tabInput(taskID: String, tabID: String, input: RemoteTabInput, permit: RemoteTabPermit) async -> RemoteError? {
         await browser.input(taskID: taskID, tabID: tabID, input, permit: permit)
+    }
+}
+
+extension BrowserPermissionResult {
+    init(_ answer: RemoteTabPermissionAnswer) {
+        switch answer {
+        case .allow: self = .allow
+        case .block: self = .block
+        case .dismiss: self = .dismiss
+        }
+    }
+}
+
+extension RemoteTabPermissionAnswer {
+    init(_ result: BrowserPermissionResult) {
+        switch result {
+        case .allow: self = .allow
+        case .block: self = .block
+        case .dismiss: self = .dismiss
+        }
     }
 }

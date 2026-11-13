@@ -326,6 +326,8 @@ public struct RemoteSnapshot: Equatable, Sendable {
     public var bankedResets: Bool = false
     public var taskActions: Bool = false
     public var tabControls: Bool = false
+    /// The bridge answers `answerTabPermission` for a site's permission prompt in a watched tab (§15.25).
+    public var tabPermissions: Bool = false
     /// The bridge follows a task's tab list without watching a tab (`watchTab`'s `listOnly`, §15.25).
     public var tabLists: Bool = false
     public var subtasks: Bool = false
@@ -1178,6 +1180,8 @@ public enum RemoteRequest: Equatable, Sendable {
 
     case openTab(taskID: String, tabID: String?, address: String)
     case closeTab(taskID: String, tabID: String)
+    /// The person's answer to the permission prompt `prompt` of the watched tab (§15.25).
+    case answerTabPermission(taskID: String, tabID: String, prompt: Int, answer: RemoteTabPermissionAnswer)
     /// The host's Settings sheet (§15.36).
     case hostSettings(watching: Bool = true)
     case setHostSetting(setting: String, value: String, confirmed: Bool = false)
@@ -1271,6 +1275,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case .terminalOutputAck: "terminalOutputAck"
         case .openTab: "openTab"
         case .closeTab: "closeTab"
+        case .answerTabPermission: "answerTabPermission"
         case .hostSettings: "hostSettings"
         case .setHostSetting: "setHostSetting"
         case .saveHostInstructions: "saveHostInstructions"
@@ -1296,7 +1301,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case let .fileRewind(_, action, _, _, _): action == .restore ? .fileWrites : nil
         case .subtask, .cancelAccountMove: nil
         case .openTerminal, .terminalInput, .terminalResize, .terminalStatus, .terminalOutputAck, .closeTerminal: .terminal
-        case .openTab, .closeTab: nil
+        case .openTab, .closeTab, .answerTabPermission: nil
         case .hostSettings: nil
         case .setHostSetting, .saveHostInstructions, .hostCLIUpdate: .settings
         case .snapshot, .subscribeTask, .loadOlder, .unsubscribeTask, .ping, .sendMessage,
@@ -1330,7 +1335,7 @@ public enum RemoteRequest: Equatable, Sendable {
              let .composerState(id), let .composerAction(id, _, _, _), let .composerCommands(id), let .runComposerCommand(id, _, _), let .editMessage(id, _, _), let .forkTask(id, _),
              let .watchTab(id, _, _, _, _, _), let .unwatchTab(id),
              let .tabFrameAck(id, _, _), let .tabInput(id, _, _), let .openTab(id, _, _), let .closeTab(id, _),
-             let .openTerminal(id, _, _), let .terminalInput(id, _, _), let .terminalResize(id, _, _, _),
+             let .answerTabPermission(id, _, _, _), let .openTerminal(id, _, _), let .terminalInput(id, _, _), let .terminalResize(id, _, _, _),
              let .closeTerminal(id, _), let .terminalOutputAck(id, _, _), let .terminalStatus(id, _): id
         case .projectWorkspaceFiles, .snapshot, .ping, .createTask, .newTaskOptions, .registerPush, .unregisterPush, .forgetDevice,
              .answerLink, .uploadFile, .revealLink, .scheduledTasks, .runScheduledTask, .setScheduledTaskEnabled,
@@ -1410,7 +1415,7 @@ public enum RemoteRequest: Equatable, Sendable {
     /// input come several times a second.
     public var isTabTraffic: Bool {
         switch self {
-        case .watchTab, .unwatchTab, .tabFrameAck, .tabInput, .openTab, .closeTab: true
+        case .watchTab, .unwatchTab, .tabFrameAck, .tabInput, .openTab, .closeTab, .answerTabPermission: true
         default: false
         }
     }
@@ -1503,6 +1508,7 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         var rows: Int?
         var sequence: Int?
         var address: String?
+        var prompt: Int?
         var harnesses: [String]?
         var automaticAssignment: Bool?
     }
@@ -1915,6 +1921,14 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
                 return fail(.badRequest, "Missing taskId or tabId")
             }
             request = .closeTab(taskID: taskID, tabID: tabID)
+        case "answerTabPermission":
+            guard let taskID = required(wire.taskId), let tabID = required(wire.tabId), let prompt = wire.prompt else {
+                return fail(.badRequest, "Missing taskId, tabId or prompt")
+            }
+            guard let answer = wire.answer.flatMap(RemoteTabPermissionAnswer.init(rawValue:)) else {
+                return fail(.badRequest, "answer must be allow, block or dismiss")
+            }
+            request = .answerTabPermission(taskID: taskID, tabID: tabID, prompt: prompt, answer: answer)
         case "tabInput":
             guard let taskID = required(wire.taskId), let tabID = required(wire.tabId), let input = wire.input else {
                 return fail(.badRequest, "Missing taskId, tabId or input")
@@ -1984,6 +1998,8 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             wire.taskId = taskID; wire.tabId = tabID; wire.address = address
         case let .closeTab(taskID, tabID):
             wire.taskId = taskID; wire.tabId = tabID
+        case let .answerTabPermission(taskID, tabID, prompt, answer):
+            wire.taskId = taskID; wire.tabId = tabID; wire.prompt = prompt; wire.answer = answer.rawValue
         case .snapshot, .ping:
             break
         case let .subscribeTask(taskID, detail):
@@ -2367,6 +2383,7 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     public var rewind: RemoteFileRewind?
     public var taskActions: Bool?
     public var tabControls: Bool?
+    public var tabPermissions: Bool?
     public var tabLists: Bool?
     public var browserTabs: Bool?
     /// `watchTab` (§15.25): the task's tabs, and the one watched.

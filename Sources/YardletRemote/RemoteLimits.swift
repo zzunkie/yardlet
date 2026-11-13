@@ -121,9 +121,9 @@ public enum RemoteHandshakeAdmission {
 }
 
 /// A local record of what remote devices did: when, which device, the request's type, its task or
-/// schedule, the name of a file it opened, the kind of a browser tab's input, the result and why it was refused.
-/// Never a message's text, what was typed into a tab, a setting's value, or a file's path. One JSON
-/// object per line, trimmed to the latest lines.
+/// schedule, the name of a file it opened, the kind of a browser tab's input, the site and permissions a permission
+/// answer was for, the result and why it was refused. Never a message's text, what was typed into a tab, a setting's
+/// value, or a file's path. One JSON object per line, trimmed to the latest lines.
 public final class RemoteAuditLog: @unchecked Sendable {
     public struct Entry: Codable, Equatable, Sendable {
         public var at: Date
@@ -138,12 +138,16 @@ public final class RemoteAuditLog: @unchecked Sendable {
         public var setting: String? = nil
         /// The name of the file a `readFile` opened or was refused (§15.22), never its path.
         public var file: String?
-        /// The kind of a browser tab's input (§15.25: `click`, `text`, `key` …), never what was typed.
+        /// The kind of a browser tab's input (§15.25: `click`, `text`, `key` …), never what was typed; the answer
+        /// (`allow`, `block`, `dismiss`) of `answerTabPermission`.
         public var input: String?
         public var byteCount: Int?
         public var result: String
         /// Why a command was refused (`RemoteRefusal`), when the host said.
         public var reason: String? = nil
+        /// The site and the permissions (Chromium's names) of the prompt `answerTabPermission` answered.
+        public var origin: String? = nil
+        public var permissions: [String]? = nil
     }
 
     private let fileURL: URL
@@ -160,9 +164,11 @@ public final class RemoteAuditLog: @unchecked Sendable {
 
     public func record(device: String?, type: String, task: String?, schedule: String? = nil, project: String? = nil,
                        setting: String? = nil, file: String? = nil, input: String? = nil, byteCount: Int? = nil,
-                       result: String, reason: String? = nil, at: Date = Date()) {
+                       result: String, reason: String? = nil, origin: String? = nil, permissions: [String]? = nil,
+                       at: Date = Date()) {
         let entry = Entry(at: at, device: device, type: type, task: task, schedule: schedule, project: project,
-                          setting: setting, file: file, input: input, byteCount: byteCount, result: result, reason: reason)
+                          setting: setting, file: file, input: input, byteCount: byteCount, result: result, reason: reason,
+                          origin: origin, permissions: permissions)
         queue.async { [self, fileURL, keptLines] in
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
