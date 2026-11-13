@@ -29,7 +29,18 @@ mkdir "$stage/yardlet"
 cp "$bin/yardlet" "$stage/yardlet/yardlet"
 strip --strip-debug "$stage/yardlet/yardlet"
 # The resources the program reads through Bundle.module, which looks for them beside it.
-for resources in "$bin"/*.resources; do cp -R "$resources" "$stage/yardlet/"; done
+accessor=$(find .build -path '*yardlet*' -name resource_bundle_accessor.swift | head -n 1)
+echo "--- $accessor"
+cat "$accessor" || true
+echo "--- $bin"
+ls -la "$bin"
+found=
+for resources in "$bin"/*.resources "$bin"/*.bundle; do
+  [[ -d $resources ]] || continue
+  cp -R "$resources" "$stage/yardlet/"
+  found=yes
+done
+[[ -n $found ]] || { echo "No resource bundle beside the program in $bin"; exit 1; }
 printf '%s\n' "$version" > "$stage/yardlet/YardletVersion"
 first_line() {
   if [[ -n ${1:-} ]]; then printf '%s' "$1"; elif [[ -f $2 ]]; then head -n 1 "$2" | tr -d '[:space:]'; fi
