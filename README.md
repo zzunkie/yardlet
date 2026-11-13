@@ -4,20 +4,17 @@
 [![Release](https://img.shields.io/github/v/release/zzunkie/yardlet?label=release)](https://github.com/zzunkie/yardlet/releases/latest)
 [![License: MIT](https://img.shields.io/github/license/zzunkie/yardlet)](LICENSE)
 [![macOS 15+](https://img.shields.io/badge/macOS-15%2B-000000?logo=apple&logoColor=white)](#requirements)
-[![Swift 6.4](https://img.shields.io/badge/Swift-6.4-F05138?logo=swift&logoColor=white)](#development)
-[![Homebrew](https://img.shields.io/badge/Homebrew-tap-FBB040?logo=homebrew&logoColor=white)](https://github.com/zzunkie/homebrew-tap)
-
-<a href="https://www.producthunt.com/products/yardlet-2"><picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1294326&theme=dark">
-  <img alt="Yardlet, featured on Product Hunt" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1294326&theme=light" width="200">
-</picture></a>
-<a href="https://www.opensourcealternatives.to"><img src="https://www.opensourcealternatives.to/badge-osa.svg" alt="As seen on Open Source Alternatives"></a>
 
 Lightweight, non-intrusive, yet versatile ADE. Yardlet is a native macOS app that runs the real agent
 CLIs you already use, Codex, Claude Code, OpenCode, Antigravity CLI and others, side by side in one
 window of projects and tasks, each with the agent loop, sign-in and session history it already has.
 It adds no agent layer of its own: no hooks, no wrappers around the agent commands, and nothing
 written into the agents' settings.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/main-dark.png">
+  <img alt="A Codex task in Yardlet: the conversation, with the changes, pull request checks, progress and settings beside it" src="docs/images/main-light.png">
+</picture>
 
 Yardlet is written in Swift and SwiftUI; it is not a web view. It uses 53 MiB of memory at rest after a
 first launch and 214 MiB with ten tasks streaming at once, not counting the agents' own CLIs (Yardlet
@@ -26,11 +23,6 @@ proxy their accounts: it starts the CLI you already use, with the account you al
 
 Most of us will end up with an agent workbench of our own. Yardlet began as one, built for working with
 several agents and accounts every day, and it is shared for anyone who doesn't have one yet.
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/main-dark.png">
-  <img alt="A Codex task in Yardlet: the conversation, with the changes, pull request checks, progress and settings beside it" src="docs/images/main-light.png">
-</picture>
 
 ## What it does
 
