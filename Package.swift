@@ -43,8 +43,16 @@ let windowsApp = !engineOnly
 #else
 let windowsApp = false
 #endif
+// On Linux the app target is the headless host, `yardlet` (docs/LINUX_HOST.md): the engine, Platform/Portable and
+// Platform/Linux, with no screens. It serves the computer's tasks to the Mac, Windows and phone apps over the remote.
+#if os(Linux)
+let linuxHost = !engineOnly
+#else
+let linuxHost = false
+#endif
 let macOSLayers = ["Views", "Browser", "Development", "Platform/macOS", "NativeHarnessClientApp.swift"]
 let windowsLayers = ["WinUI", "Platform/Windows"]
+let linuxLayers = ["Platform/Linux"]
 // Platform/Portable holds Foundation versions of what each platform layer provides under the same
 // names, for the engine-only build and for what the Windows layer does not provide yet; the Mac app
 // has its own in Platform/macOS.
@@ -52,6 +60,8 @@ let otherPlatformLayers = ["Platform/Portable"]
 // The Platform/Portable files whose parts the Windows layer provides, which the Windows app leaves out.
 let portableFilesWindowsReplaces = ["Platform/Portable/PortableProcesses.swift", "Platform/Portable/PortableRemoteHost.swift",
                                     "Platform/Portable/PortableNotifications.swift", "Platform/Portable/PortableAccounts.swift"]
+// The Platform/Portable files whose parts the Linux layer provides, which the Linux host leaves out.
+let portableFilesLinuxReplaces = ["Platform/Portable/PortableProcesses.swift", "Platform/Portable/PortableRemoteHost.swift"]
 
 // The phone remote's direct-path listener on the Mac uses Network.framework, which a build on another platform
 // leaves out. Windows has its own on Winsock (RemoteWinsockListener.swift, which builds only there); elsewhere the
@@ -72,11 +82,11 @@ let sqliteTarget: Target = .target(
 let sqliteTarget: Target = .systemLibrary(name: "CSQLite")
 #endif
 
-// The QR code the Windows app's Settings › Remote shows, drawn from Swift QR Code Generator (THIRD_PARTY_NOTICES.md).
-// Every build declares the package and names it for Windows alone, so a build elsewhere neither links it nor drops
-// its pin from Package.resolved, which the Windows builds read as it is.
+// The QR code the Windows app's Settings › Remote shows and the Linux host prints for pairing, drawn from Swift QR Code
+// Generator (THIRD_PARTY_NOTICES.md). Every build declares the package and names it for Windows and Linux alone, so the
+// Mac's build neither links it nor drops its pin from Package.resolved, which the Windows builds read as it is.
 let qrCode: Target.Dependency = .product(name: "QRCodeGenerator", package: "swift-qrcode-generator",
-                                          condition: .when(platforms: [.windows]))
+                                          condition: .when(platforms: [.windows, .linux]))
 
 let appTarget: Target = windowsApp
     ? .executableTarget(
@@ -90,7 +100,7 @@ let appTarget: Target = windowsApp
             .product(name: "WinUIBindings", package: "Bindings"),
             qrCode
         ],
-        exclude: macOSLayers + portableFilesWindowsReplaces,
+        exclude: macOSLayers + linuxLayers + portableFilesWindowsReplaces,
         resources: [
             .process("Resources")
         ],
@@ -99,6 +109,22 @@ let appTarget: Target = windowsApp
         linkerSettings: [
             .unsafeFlags(["-Xlinker", "/SUBSYSTEM:WINDOWS", "-Xlinker", "/ENTRY:mainCRTStartup"],
                          .when(platforms: [.windows], configuration: .release))
+        ]
+    )
+    : linuxHost
+    ? .executableTarget(
+        name: "NativeHarnessClient",
+        dependencies: [
+            "CSQLite",
+            "YardletAgentTools",
+            "YardletRemote",
+            .product(name: "Crypto", package: "swift-crypto"),
+            .product(name: "Markdown", package: "swift-markdown"),
+            qrCode
+        ],
+        exclude: macOSLayers + windowsLayers + portableFilesLinuxReplaces,
+        resources: [
+            .process("Resources")
         ]
     )
     : engineOnly
@@ -112,7 +138,7 @@ let appTarget: Target = windowsApp
             .product(name: "Markdown", package: "swift-markdown"),
             qrCode
         ],
-        exclude: macOSLayers + windowsLayers,
+        exclude: macOSLayers + windowsLayers + linuxLayers,
         resources: [
             .process("Resources")
         ]
@@ -131,7 +157,7 @@ let appTarget: Target = windowsApp
             .product(name: "Sparkle", package: "Sparkle", condition: .when(platforms: [.macOS])),
             qrCode
         ],
-        exclude: otherPlatformLayers + windowsLayers,
+        exclude: otherPlatformLayers + windowsLayers + linuxLayers,
         resources: [
             .process("Resources")
         ],
@@ -152,15 +178,18 @@ let package = Package(
         .iOS(.v17)
     ],
     products: (engineOnly ? [] : [
-        .executable(name: "NativeHarnessClient", targets: ["NativeHarnessClient"])
+        // The Linux host's executable is `yardlet`, the command its install puts on the PATH.
+        .executable(name: linuxHost ? "yardlet" : "NativeHarnessClient", targets: ["NativeHarnessClient"])
     ]) + [
         // The Yardlet MCP server a harness starts over stdio; build-app.sh places it in
         // Contents/Helpers. It forwards tool calls to the running app (docs/AGENT_BROWSER_TOOLS.md).
         .executable(name: "yardlet-mcp", targets: ["YardletMCP"]),
+    ] + (linuxHost ? [] : [
         // The launch daemon behind Settings › General › "Keep tasks working with the lid closed";
         // build-app.sh places it in Contents/Helpers beside its launchd property list
-        // (docs/SLEEP_PREVENTION.md).
-        .executable(name: "yardlet-lid-helper", targets: ["YardletLidHelper"]),
+        // (docs/SLEEP_PREVENTION.md). The Linux host leaves it out: it is the Mac's alone.
+        .executable(name: "yardlet-lid-helper", targets: ["YardletLidHelper"])
+    ]) + [
         // The phone remote's fixture server: the remote protocol on loopback with fixture tasks, for
         // building the Android client without real tasks (docs/REMOTE_PROTOCOL.md §9).
         .executable(name: "yardlet-remote-fixture", targets: ["YardletRemoteFixture"]),
@@ -188,7 +217,7 @@ let package = Package(
         )
     ] + (windowsApp ? [
         .package(path: "Windows/Bindings")
-    ] : []) + (engineOnly || windowsApp ? [] : [
+    ] : []) + (engineOnly || windowsApp || linuxHost ? [] : [
         .package(
             url: "https://github.com/migueldeicaza/SwiftTerm.git",
             exact: "1.18.0"
@@ -225,6 +254,7 @@ let package = Package(
             name: "YardletMCP",
             dependencies: ["YardletAgentTools"]
         ),
+    ] + (linuxHost ? [] : [
         // The lid helper's state, its XPC interface and the power readings it shares with the app.
         .target(
             name: "YardletLidSleep",
@@ -233,7 +263,8 @@ let package = Package(
         .executableTarget(
             name: "YardletLidHelper",
             dependencies: ["YardletLidSleep"]
-        ),
+        )
+    ]) + [
         // The phone remote (docs/REMOTE_PROTOCOL.md): the protocol, pairing and the server, with no
         // UI, and the WebSocket listeners (Network.framework on the Mac; Winsock, IP Helper and DNS-SD on
         // Windows). The app adds the bridge to its model.
@@ -263,7 +294,13 @@ let package = Package(
             ]
         ),
         appTarget
-    ] + (engineOnly || windowsApp ? [] : [
+    ] + (linuxHost ? [
+        // The Linux layer's own tests, which build against the Linux host.
+        .testTarget(
+            name: "YardletHostTests",
+            dependencies: ["NativeHarnessClient", "YardletRemote", "YardletAgentTools"]
+        )
+    ] : []) + (engineOnly || windowsApp || linuxHost ? [] : [
         // The tests build against the Mac app, SwiftTerm included.
         .testTarget(
             name: "NativeHarnessClientTests",

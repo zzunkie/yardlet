@@ -1,7 +1,8 @@
 # Engine portability
 
 Yardlet runs on macOS. Windows is in progress: the engine is kept in cross-platform Swift, and each platform gets its
-own screens. The engine builds on its own on macOS, Linux and Windows. The Windows app, the engine with WinUI 3
+own screens. The engine builds on its own on macOS, Linux and Windows. On Linux it is also a headless host, `yardlet
+host`, which serves the computer's tasks to the other apps over the remote (docs/LINUX_HOST.md). The Windows app, the engine with WinUI 3
 screens ("The Windows app" below), builds and opens its window on Windows, finds, starts and ends harness CLIs by
 Windows' rules, signs in to them, starts tasks of its own with them and reads their saved history, answers
 their requests in the Mac's forms, notifies when a task waits or finishes, follows another computer's Yardlet over the
@@ -17,12 +18,14 @@ in the official source or a build is marked "confirmed"; the rest is "not confir
 - **Screen and platform layers (outside the check):** `Views/`, `WinUI/` (the Windows app's screens), `Browser/` (the
   WebKit preview), `Development/` (visual fixtures and QA), `Platform/` and `NativeHarnessClientApp.swift`.
 - Engine code names the platform's parts directly, and each platform defines them under the same names in its own
-  folder: `Platform/macOS/` for the Mac app, `Platform/Windows/` for the Windows app, and `Platform/Portable/` for a
-  build of the engine on its own and for what the Windows layer does not provide yet. Some parts
+  folder: `Platform/macOS/` for the Mac app, `Platform/Windows/` for the Windows app, `Platform/Linux/` for the Linux
+  host, and `Platform/Portable/` for a build of the engine on its own and for what the Windows and Linux layers do not
+  provide yet. Some parts
   are protocols the engine owns with a platform's implementation (`LocalSystemNotificationCenter` implements
   `SystemNotificationCenter`, `LiveProcessTable` implements `ProcessTableReading`); others are types or extensions the
   engine calls by name. The app's model is put together in `Platform/macOS/AppModel+Live.swift`, which hands the engine
-  the Mac's browser host; the Windows app's in `Platform/Windows/AppModel+Live.swift`.
+  the Mac's browser host; the Windows app's in `Platform/Windows/AppModel+Live.swift`, and the Linux host's in
+  `Platform/Linux/AppModel+Live.swift`.
 
 ## Building the engine on its own
 
@@ -31,7 +34,7 @@ YARDLET_ENGINE_ONLY=1 swift build --build-system native --target NativeHarnessCl
 ```
 
 With `YARDLET_ENGINE_ONLY=1`, `Package.swift` turns the app target into a library that leaves out `Views/`, `WinUI/`,
-`Browser/`, `Development/`, `Platform/macOS/`, `Platform/Windows/` and `NativeHarnessClientApp.swift`, and drops the
+`Browser/`, `Development/`, `Platform/macOS/`, `Platform/Windows/`, `Platform/Linux/` and `NativeHarnessClientApp.swift`, and drops the
 SwiftTerm and Sparkle packages and the test target. This is the build a platform other than macOS makes, and on a Mac it checks that the engine still
 stands without the screens. `--force-resolved-versions` keeps `Package.resolved` as the full build pins it; without
 it, the build rewrites the file without the packages it leaves out.

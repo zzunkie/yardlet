@@ -571,8 +571,12 @@ final class RemoteControlService {
         }
     }
 
+    /// Why the relay cannot be used on this computer, nil when it can (`RemoteHostPlatform.relayUnavailable`).
+    var relayUnavailableReason: String? { platform.relayUnavailable() }
+
     private func startRelay() {
-        guard listens, isEnabled, isRelayEnabled, relayClient == nil, let url = relayURL else { return }
+        guard listens, isEnabled, isRelayEnabled, relayClient == nil, let url = relayURL,
+              platform.relayUnavailable() == nil else { return }
         guard let identity else {
             activate()
             return
@@ -694,6 +698,9 @@ struct RemoteHostPlatform {
     var computerName: () -> String
     /// The relay the build carries and a second address of it, nil in a build without one.
     var builtInRelay: () -> (url: String, alternate: String?)?
+    /// Why this computer cannot open the relay's socket, nil when it can: a Linux host whose libcurl has no WebSocket
+    /// support (docs/LINUX_HOST.md, "The relay"). The remote then serves its direct paths alone.
+    var relayUnavailable: () -> String? = { nil }
 }
 
 extension RemoteHostPlatform {

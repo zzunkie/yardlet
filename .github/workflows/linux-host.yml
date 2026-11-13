@@ -1,0 +1,88 @@
+name: Linux host
+
+# The headless Linux host, `yardlet` (docs/LINUX_HOST.md): built for x86_64 and aarch64 in swift.org's Ubuntu 22.04
+# image, its Linux layer's tests run, and the host started, asked for its status and stopped as a person would, for
+# every pull request that changes more than documents and for main. It informs and is not a required check.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - docs/**
+      - '**/*.md'
+      - LICENSE
+  pull_request:
+    paths-ignore:
+      - docs/**
+      - '**/*.md'
+      - LICENSE
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-host-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # As in ci.yml: a commit a pull request's run already built is not built again when it lands.
+  tested-in-pull-request:
+    name: Look for a passing pull request run
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      passed: ${{ steps.find.outputs.passed }}
+    steps:
+      - id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/linux-host.yml/runs?event=pull_request&status=success&head_sha=$GITHUB_SHA&per_page=1" --jq .total_count) || runs=0
+          if [[ $runs -gt 0 ]]; then echo "passed=true" >> "$GITHUB_OUTPUT"; fi
+
+  host:
+    name: Build and check the Linux host (${{ matrix.arch }})
+    needs: tested-in-pull-request
+    if: ${{ !cancelled() && needs.tested-in-pull-request.outputs.passed != 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    # swift.org's official Ubuntu 22.04 image, pinned by digest: its glibc (2.35) is the oldest a release runs on.
+    container: swift:6.4.2-jammy@sha256:18a1cdd3e55ee32b0b3e1a15f12a4e1320b67544e542ed96c907629e5e434144
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Show the toolchain
+        run: swift --version
+      # The compiler's errors also go to the run's summary and to the check run's annotations, which the API gives
+      # without a sign-in.
+      - name: Build
+        shell: bash
+        run: |
+          set +e +o pipefail
+          swift build --build-tests --force-resolved-versions -Xswiftc -continue-building-after-errors 2>&1 | tee build.log
+          code=${PIPESTATUS[0]}
+          errors=$(sed -e 's/\x1b\[[0-9;]*m//g' build.log | grep -E 'error:' | sort -u | head -200 || true)
+          if [[ -n $errors ]]; then
+            { echo '### Build errors'; echo '```'; echo "$errors"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            while IFS= read -r line; do echo "::notice title=Build error::$line"; done <<< "$(echo "$errors" | head -50)"
+          fi
+          exit "$code"
+      # In a home of their own: nothing the tests start reads or writes the runner's.
+      - name: Test the Linux layer
+        shell: bash
+        run: HOME="$(mktemp -d)" swift test --skip-build --force-resolved-versions --filter YardletHostTests
+      - name: Start, ask and stop the host
+        shell: bash
+        run: scripts/linux/check-host.sh "$(swift build --show-bin-path)"
