@@ -29,6 +29,11 @@ import YardletRemoteFixtureSupport
 // stream as a full one, so there it is not buffered.
 #if os(Windows)
 setvbuf(stdout, nil, _IONBF, 0)
+#elseif os(Linux)
+// Glibc's `stdout` is a mutable C global, which Swift 6 does not let code read; its value is read through its address.
+if let standardOutput = dlsym(nil, "stdout")?.assumingMemoryBound(to: UnsafeMutablePointer<FILE>?.self).pointee {
+    setvbuf(standardOutput, nil, _IOLBF, 0)
+}
 #else
 setvbuf(stdout, nil, _IOLBF, 0)
 #endif
