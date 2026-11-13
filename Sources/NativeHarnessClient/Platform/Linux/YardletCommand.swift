@@ -16,6 +16,10 @@ enum YardletCommand {
            yardlet host pair [--no-wait]      Show a link and a QR code that pair a device with this host.
            yardlet host project add FOLDER    Make FOLDER a project that devices can start tasks in.
            yardlet host project list          List the projects.
+           yardlet host service install [--name NAME] [--every-address]
+                                              Run the host as a systemd user service, now and at every boot.
+           yardlet host service uninstall     Stop and remove the service, and list what stays.
+           yardlet host update                Install the latest release's host, as installing did.
            yardlet --version
     """
 
@@ -55,6 +59,21 @@ enum YardletCommand {
             return pair(waits: !options.contains("--no-wait"), json: options.contains("--json"))
         case "project":
             return project(options)
+        case "service":
+            switch options.first {
+            case "install":
+                let rest = Array(options.dropFirst())
+                guard StartOptions(rest) != nil else {
+                    return refuse("usage: yardlet host service install [--name NAME] [--every-address]")
+                }
+                return LinuxHostService.install(options: rest)
+            case "uninstall" where options.count == 1:
+                return LinuxHostService.uninstall()
+            default:
+                return refuse("usage: yardlet host service install [--name NAME] [--every-address] | yardlet host service uninstall")
+            }
+        case "update" where options.isEmpty:
+            return LinuxHostUpdate.run()
         default:
             return refuse(usage)
         }

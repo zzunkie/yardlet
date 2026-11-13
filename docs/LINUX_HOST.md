@@ -8,6 +8,55 @@ with them from another device. There is no Linux app with screens.
 It is the engine (docs/PLATFORM_PORTABILITY.md) with `Platform/Portable/` and `Platform/Linux/`, built on Linux as
 the app target `NativeHarnessClient` and the product `yardlet`.
 
+## Installing
+
+```sh
+curl -fsSL https://github.com/zzunkie/yardlet/releases/latest/download/yardlet-host-install.sh | sh
+yardlet host service install
+yardlet host pair
+```
+
+The installer (`scripts/linux/install.sh`, carried by a release as `yardlet-host-install.sh`) installs for the person's
+own account, without root: the program in `~/.local/lib/yardlet` and the command at `~/.local/bin/yardlet`. It checks
+that the computer can run the host (Linux on x86_64 or aarch64, glibc 2.35 or later, libcurl and SQLite, and it names
+the package to install when one is missing), downloads `yardlet-host-linux-ARCH.tar.gz` and its `.sha256` from the
+latest release, checks the package against it, and puts the program in place of one installed before it in one
+rename. `YARDLET_HOST_DOWNLOAD` names another place to download from.
+
+The package (`scripts/linux/package-host.sh`) is `yardlet` with the Swift runtime linked in (`--static-swift-stdlib`),
+built on Ubuntu 22.04 so it runs on that glibc or a later one, with its resources, its version (`YardletVersion`) and the
+relay a public build carries (`YardletRelayURL`) beside it. It needs glibc, libcurl and SQLite from the system. The
+harnesses are the person's own installs, found as below; the host installs none.
+
+## Keeping it running
+
+`yardlet host service install [--name NAME] [--every-address]` writes a systemd user unit,
+`~/.config/systemd/user/yardlet-host.service`, that runs `yardlet host start` with those options, enables it and starts
+it now; systemd starts it again at every boot and after a failure, and its output is in
+`journalctl --user -u yardlet-host.service`. Stopping it ends the harnesses with the unit's processes
+(`KillMode=control-group`). Without linger, systemd stops a person's services when they log out, so `install` turns
+linger on when it is off (`loginctl enable-linger`) and writes in the unit that it did (`X-YardletEnabledLinger=yes`, a
+key systemd ignores); where turning it on needs an administrator, it says to run `sudo loginctl enable-linger USER`.
+A host already running in a terminal must be stopped first.
+
+`yardlet host service uninstall` stops the service, disables it and removes the unit, turns linger off only when the
+unit says Yardlet turned it on, and lists what stays:
+
+- the data folder (below): the tasks, transcripts, projects and the remote's keys and paired devices;
+- the program, `~/.local/lib/yardlet` and `~/.local/bin/yardlet`, which removing uninstalls the host;
+- the preferences, `~/.config/yardlet.plist`;
+- each harness's own sign-in and history (`~/.claude`, `~/.codex` and the like), which belong to the harness.
+
+Nothing else is written outside these: no system file, no package and no change to the shell's profile.
+
+## Updating
+
+`yardlet host update` downloads the latest release's installer and runs it, as installing did: when the release's
+package is the one installed (the same SHA-256, kept in `~/.local/lib/yardlet/.package-sha256`) it says the host is up
+to date and changes nothing; otherwise it puts the new program in place and restarts the service when it runs. The
+installer and the package come from GitHub Releases over HTTPS, the package checked against the SHA-256 the release
+lists beside it. The package is not signed yet, so that check is as strong as the release's own download.
+
 ## Commands
 
 ```sh
@@ -17,6 +66,10 @@ yardlet host status [--json]       # Show the running host: its paths, devices a
 yardlet host pair [--no-wait]      # Show a QR code and a link that pair a device with this host.
 yardlet host project add FOLDER    # Make FOLDER a project that devices can start tasks in.
 yardlet host project list          # List the projects.
+yardlet host service install [--name NAME] [--every-address]
+                                   # Run the host as a systemd user service, now and at every boot.
+yardlet host service uninstall     # Stop and remove the service, and list what stays.
+yardlet host update                # Install the latest release's host, as installing did.
 yardlet --version
 ```
 
@@ -108,8 +161,7 @@ distribution the host runs on.
 
 ## What it does not have yet
 
-A systemd service, the release tarballs and their installer, and harness sign-in from the terminal are still to come.
-As on Windows, there is no Yardlet MCP server (so no connectors or session tools), terminal panel, browser panel or
+Harness sign-in from the terminal is still to come. As on Windows, there is no Yardlet MCP server (so no connectors or session tools), terminal panel, browser panel or
 vault.
 
 ## Where it is built
@@ -123,7 +175,27 @@ listens on loopback and the runner's private address and not on every address, a
 pairing QR code reads back as its link (zbar), and the fixture's phone (`yardlet-remote-fixture --pair LINK --new-chat
 kimi-code`) pairs, starts a chat on the Windows checks' stand-in harness through the host, allows its request and gets
 its answer; stopping the host ends the stand-in and the process it detached, and with `--every-address` the host
-listens on every address. It is a check to read, not a required one.
+listens on every address.
+
+The same workflow packs the release for both architectures as run artifacts (it makes no release and no tag) and
+checks them. On an Ubuntu runner, whose systemd is real, `scripts/linux/check-install.sh` installs from a served copy
+of the release, installs the service, which finds the stand-in harness on a `PATH` only the login shell's profile
+sets, pairs a phone that chats with it, updates to a newer package (the service restarts on it, and a second update
+says it is up to date), and uninstalls, which leaves linger on as it found it. `scripts/linux/check-distribution.sh`
+runs the package in the containers of the distributions below, on the runner's network, and tries the relay with each
+one's libcurl against the relay run locally (`relay/`, `wrangler dev`): the fixture host opens its room and the
+fixture's phone pairs through it and gets an answer. That job fails when the host's own reading of its libcurl and
+what the relay does there disagree. These are checks to read, not required ones.
+
+## Distributions
+
+What the checks above found, for the package built on Ubuntu 22.04:
+
+| Distribution | glibc | libcurl | The host | The relay |
+| --- | --- | --- | --- | --- |
+| Debian 12 | 2.36 | 7.88.1 | runs | off: no WebSocket support |
+| Ubuntu 22.04 | 2.35 | 7.81.0 | runs | off: no WebSocket support |
+| Rocky Linux 9 | 2.34 | | refused: needs glibc 2.35 | |
 
 ```sh
 swift build --product yardlet --force-resolved-versions

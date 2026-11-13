@@ -96,3 +96,131 @@ jobs:
       - name: Pair a phone over the direct path and chat through the host
         shell: bash
         run: scripts/linux/check-remote.sh "$(swift build --show-bin-path)"
+
+  # The release package (scripts/linux/package-host.sh): the host with the Swift runtime linked in, its resources,
+  # version and built-in relay, and the installer as a release carries it, with the fixture built the same way for the
+  # checks below. Uploaded as a run artifact; a release is made by hand and is never made here.
+  package:
+    name: Pack the Linux host (${{ matrix.arch }})
+    needs: tested-in-pull-request
+    if: ${{ !cancelled() && needs.tested-in-pull-request.outputs.passed != 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    container: swift:6.4.2-jammy@sha256:18a1cdd3e55ee32b0b3e1a15f12a4e1320b67544e542ed96c907629e5e434144
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install SQLite's header
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends libsqlite3-dev
+      - name: Pack
+        shell: bash
+        # The relay a public build carries, as the Mac's and the Windows app's do.
+        env:
+          YARDLET_RELAY_URL: https://relay.yardlet.app
+        run: scripts/linux/package-host.sh linux-host-package --fixture
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: yardlet-host-linux-${{ matrix.arch }}
+          path: linux-host-package/
+          retention-days: 14
+
+  # The person's path on a runner whose systemd is real: install, the service, a phone through it, an update and the
+  # uninstall (scripts/linux/check-install.sh).
+  install:
+    name: Install, run as a service and update the Linux host
+    needs: package
+    if: ${{ !cancelled() && needs.package.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: yardlet-host-linux-x86_64
+          path: linux-host-package
+      - name: Install, serve, update and uninstall
+        run: |
+          chmod +x linux-host-package/yardlet-remote-fixture
+          scripts/linux/check-install.sh linux-host-package
+
+  # The package on the distributions a server runs, and the relay with each one's libcurl
+  # (scripts/linux/check-distribution.sh): the host's own reading of its libcurl must match what the relay does there.
+  distributions:
+    name: Run the Linux host on ${{ matrix.name }}
+    needs: package
+    if: ${{ !cancelled() && needs.package.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Debian 12
+            image: debian:12@sha256:268fb24c39bca92d326dd83ea3abebe4a3f7751c804ffef23bb6d857dd343ff8
+            expect: runs
+          - name: Debian 13
+            image: debian:13@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6
+            expect: runs
+          - name: Ubuntu 22.04
+            image: ubuntu:22.04@sha256:74b12b11ffa550fba1929ad4d8d16533c34f6612728469671afba1b03b66881c
+            expect: runs
+          - name: Ubuntu 24.04
+            image: ubuntu:24.04@sha256:2198e4c65076e9cb0b3d695219df667c0e3b0072da64ca3c2648aca17dcecaf5
+            expect: runs
+          - name: Ubuntu 25.10
+            image: ubuntu:25.10@sha256:7cc5e35f6567ee8c66d2abb4aab0fd866669e6207c237c3a8f0947a5c7f17092
+            expect: runs
+          - name: Fedora 42
+            image: fedora:42@sha256:99e203b80b1c3d8f7e161ec10a68fd02b081ef83a3963553e513c82846b97814
+            expect: runs
+          - name: Arch Linux
+            image: archlinux:latest@sha256:d4594bb2300cba11f41c2f27923eb56f63d9988909c402f9c95517d1e362c899
+            expect: runs
+          - name: Rocky Linux 9
+            image: rockylinux:9@sha256:d7be1c094cc5845ee815d4632fe377514ee6ebcf8efaed6892889657e5ddaaa6
+            expect: refuses
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: yardlet-host-linux-x86_64
+          path: linux-host-package
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      # The relay run locally (relay/README.md), which the container reaches on the runner's loopback.
+      - name: Start the relay
+        env:
+          WRANGLER_SEND_METRICS: 'false'
+        run: |
+          npm ci --prefix relay
+          (cd relay && nohup npm run dev > ../relay.log 2>&1 &)
+          for _ in $(seq 60); do curl -fs http://127.0.0.1:8787/v1/health > /dev/null && exit 0; sleep 2; done
+          cat relay.log
+          exit 1
+      - name: Install and run the host, and try the relay
+        env:
+          IMAGE: ${{ matrix.image }}
+          EXPECT: ${{ matrix.expect }}
+        run: |
+          chmod +x linux-host-package/yardlet-remote-fixture
+          docker run --rm --network host -v "$PWD/linux-host-package:/artifacts:ro" -v "$PWD/scripts/linux:/checks:ro" \
+            -v "$PWD:/out" "$IMAGE" sh /checks/check-distribution.sh /artifacts "$EXPECT" /out/result.md
+      - name: Report
+        if: always()
+        run: |
+          { echo '| Distribution | glibc | libcurl | Host | Relay works |'; echo '| --- | --- | --- | --- | --- |'
+            cat result.md 2>/dev/null || echo "| ${{ matrix.name }} | | | did not finish | |"; } >> "$GITHUB_STEP_SUMMARY"
