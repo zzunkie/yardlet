@@ -215,7 +215,9 @@ final class LinuxHost {
 }
 
 /// The lock a running host holds on `host.lock` in its data folder, with its process ID in the file, so a second host
-/// for the same person does not start beside it. The lock ends with the process.
+/// for the same person does not start beside it. It is a POSIX record lock, which the system ends with the process and
+/// which `runningProcessID` asks about without taking it: a `status` asking at the moment a host starts must not keep
+/// that host from starting.
 struct HostLock {
     enum Failure: Error, CustomStringConvertible {
         case running(Int32?)
@@ -239,35 +241,39 @@ struct HostLock {
         let path = LinuxHostPaths.lockFile()
         let descriptor = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
         guard descriptor >= 0 else { throw Failure.failed("\(path) could not be opened: \(String(cString: strerror(errno)))") }
-        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
-            let holder = holderProcessID(descriptor)
+        var lock = wholeFile(F_WRLCK)
+        guard fcntl(descriptor, F_SETLK, &lock) == 0 else {
+            let holder = holder(of: descriptor)
             close(descriptor)
             throw Failure.running(holder)
         }
         let text = "\(getpid())\n"
         _ = ftruncate(descriptor, 0)
-        _ = text.withCString { write(descriptor, $0, strlen($0)) }
+        _ = text.withCString { pwrite(descriptor, $0, strlen($0), 0) }
         return HostLock(descriptor: descriptor)
     }
 
-    /// The process holding the lock, from the file it wrote; nil when no host holds it or the file says nothing.
+    /// The process holding the lock, nil when no host holds it.
     static func runningProcessID() -> Int32? {
         let descriptor = open(LinuxHostPaths.lockFile(), O_RDONLY | O_CLOEXEC)
         guard descriptor >= 0 else { return nil }
         defer { close(descriptor) }
-        // A shared lock taken at once means no host holds it.
-        if flock(descriptor, LOCK_SH | LOCK_NB) == 0 {
-            _ = flock(descriptor, LOCK_UN)
-            return nil
-        }
-        return holderProcessID(descriptor)
+        return holder(of: descriptor)
     }
 
-    private static func holderProcessID(_ descriptor: Int32) -> Int32? {
-        var bytes = [UInt8](repeating: 0, count: 32)
-        let count = bytes.withUnsafeMutableBytes { pread(descriptor, $0.baseAddress, $0.count, 0) }
-        guard count > 0 else { return nil }
-        return Int32(String(decoding: bytes[..<count], as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
+    private static func holder(of descriptor: Int32) -> Int32? {
+        var lock = wholeFile(F_WRLCK)
+        guard fcntl(descriptor, F_GETLK, &lock) == 0, lock.l_type != Int16(F_UNLCK) else { return nil }
+        return lock.l_pid
+    }
+
+    private static func wholeFile(_ type: Int32) -> flock {
+        var lock = flock()
+        lock.l_type = Int16(type)
+        lock.l_whence = Int16(SEEK_SET)
+        lock.l_start = 0
+        lock.l_len = 0
+        return lock
     }
 }
 
