@@ -16,11 +16,12 @@ struct OutlookCalendarToolRunner {
     typealias Problem = ConnectorToolArguments.Problem
     private typealias Arguments = ConnectorToolArguments
     private typealias Catalog = OutlookCalendarToolCatalog
+    private typealias API = OutlookCalendarAPI
 
     static let bodyLimit = 20_000
-    private static let utc = TimeZone(identifier: "UTC")!
-    private static let fields = "id,subject,start,end,isAllDay,location,organizer,attendees,isOnlineMeeting,onlineMeeting,"
-        + "showAs,responseStatus,isOrganizer,isCancelled,webLink,bodyPreview,seriesMasterId,type,categories"
+
+    /// The requests the calendar shares.
+    private var calendar: OutlookCalendarAPI { OutlookCalendarAPI(graph: api) }
 
     func call(_ name: String, _ arguments: ToolJSON) async throws -> AgentToolResult {
         let arguments = arguments.objectValue ?? [:]
@@ -48,7 +49,7 @@ struct OutlookCalendarToolRunner {
     // MARK: Reading
 
     private func calendars() async throws -> ToolJSON {
-        let list = try await api.get(["me", "calendars"], [URLQueryItem(name: "$top", value: "100")])
+        let list = try await calendar.calendars()
         return GraphShape.page(list, key: "calendars") { calendar in
             var fields = Arguments.pick(calendar, ["id", "name", "isDefaultCalendar", "canEdit", "canShare", "color"])
             if let owner = GraphShape.person(.object(["emailAddress": calendar["owner"] ?? .null])) { fields["owner"] = owner }
@@ -60,23 +61,14 @@ struct OutlookCalendarToolRunner {
         let zone = try zone(arguments)
         let list: ToolJSON
         if let token = Arguments.string(arguments, "pageToken") {
-            list = try await api.get(page: token, headers: Self.prefer())
+            list = try await calendar.page(token)
         } else {
             let start = try Arguments.string(arguments, "startTime").map { try time($0, in: zone, name: "startTime") } ?? now()
             let end = try Arguments.string(arguments, "endTime").map { try time($0, in: zone, name: "endTime") }
                 ?? start.addingTimeInterval(7 * 86_400)
             guard end > start else { throw Problem.invalid("endTime is after startTime.") }
-            var path = ["me", "calendarView"]
-            if let calendar = Arguments.string(arguments, "calendarId") {
-                path = ["me", "calendars", try GraphAPI.segment(calendar), "calendarView"]
-            }
-            list = try await api.get(path, [
-                URLQueryItem(name: "startDateTime", value: CalendarTime.rfc3339(start, in: Self.utc)),
-                URLQueryItem(name: "endDateTime", value: CalendarTime.rfc3339(end, in: Self.utc)),
-                URLQueryItem(name: "$orderby", value: "start/dateTime"),
-                URLQueryItem(name: "$top", value: String(Arguments.pageSize(arguments, range: 1...250, fallback: 50))),
-                URLQueryItem(name: "$select", value: Self.fields)
-            ], headers: Self.prefer())
+            list = try await calendar.calendarView(calendarID: Arguments.string(arguments, "calendarId"), from: start, to: end,
+                                                   top: Arguments.pageSize(arguments, range: 1...250, fallback: 50))
         }
         var result = GraphShape.page(list, key: "events") { Self.event($0, zone: zone) }.objectValue ?? [:]
         result["timeZone"] = .string(zone.identifier)
@@ -86,8 +78,8 @@ struct OutlookCalendarToolRunner {
     private func event(_ arguments: [String: ToolJSON]) async throws -> ToolJSON {
         let zone = try zone(arguments)
         let id = try GraphAPI.segment(try Arguments.required(arguments, "eventId"))
-        let event = try await api.get(["me", "events", id], [URLQueryItem(name: "$select", value: Self.fields + ",body")],
-                                      headers: Self.prefer(body: true))
+        let event = try await api.get(["me", "events", id], [URLQueryItem(name: "$select", value: API.fields + ",body")],
+                                      headers: API.prefer(body: true))
         var fields = Self.event(event, zone: zone).objectValue ?? [:]
         fields["bodyPreview"] = nil
         let (body, cut) = GraphShape.cut(event["body"]?["content"]?.stringValue ?? "", Self.bodyLimit)
@@ -117,10 +109,10 @@ struct OutlookCalendarToolRunner {
             let schedules = ([account].compactMap { $0 } + attendees).map(ToolJSON.string)
             let answer = try await api.post(["me", "calendar", "getSchedule"], .object([
                 "schedules": .array(schedules),
-                "startTime": Self.utcTime(start),
-                "endTime": Self.utcTime(end),
+                "startTime": API.utcTime(start),
+                "endTime": API.utcTime(end),
                 "availabilityViewInterval": .integer(15)
-            ]), headers: Self.prefer())
+            ]), headers: API.prefer())
             for schedule in answer["value"]?.arrayValue ?? [] {
                 let id = schedule["scheduleId"]?.stringValue ?? ""
                 if let error = schedule["error"], error != .null {
@@ -128,7 +120,7 @@ struct OutlookCalendarToolRunner {
                     continue
                 }
                 for item in schedule["scheduleItems"]?.arrayValue ?? [] where item["status"]?.stringValue != "free" {
-                    guard let from = Self.instant(item["start"]), let to = Self.instant(item["end"]), to > from else { continue }
+                    guard let from = API.instant(item["start"]), let to = API.instant(item["end"]), to > from else { continue }
                     busy.append(DateInterval(start: from, end: to))
                 }
             }
@@ -158,18 +150,18 @@ struct OutlookCalendarToolRunner {
     private func ownBusyTimes(from start: Date, to end: Date) async throws -> [DateInterval] {
         var busy: [DateInterval] = []
         var list = try await api.get(["me", "calendarView"], [
-            URLQueryItem(name: "startDateTime", value: CalendarTime.rfc3339(start, in: Self.utc)),
-            URLQueryItem(name: "endDateTime", value: CalendarTime.rfc3339(end, in: Self.utc)),
+            URLQueryItem(name: "startDateTime", value: CalendarTime.rfc3339(start, in: API.utc)),
+            URLQueryItem(name: "endDateTime", value: CalendarTime.rfc3339(end, in: API.utc)),
             URLQueryItem(name: "$top", value: "250"),
             URLQueryItem(name: "$select", value: "start,end,showAs,isCancelled")
-        ], headers: Self.prefer())
+        ], headers: API.prefer())
         for _ in 0..<8 {
             for event in list["value"]?.arrayValue ?? [] where event["showAs"]?.stringValue != "free" && event["isCancelled"] != .bool(true) {
-                guard let from = Self.instant(event["start"]), let to = Self.instant(event["end"]), to > from else { continue }
+                guard let from = API.instant(event["start"]), let to = API.instant(event["end"]), to > from else { continue }
                 busy.append(DateInterval(start: from, end: to))
             }
             guard let next = list["@odata.nextLink"]?.stringValue else { break }
-            list = try await api.get(page: next, headers: Self.prefer())
+            list = try await api.get(page: next, headers: API.prefer())
         }
         return busy
     }
@@ -189,7 +181,7 @@ struct OutlookCalendarToolRunner {
         if !attendees.isEmpty { body["attendees"] = .array(attendees) }
         var path = ["me", "events"]
         if let calendar = Arguments.string(arguments, "calendarId") { path = ["me", "calendars", try GraphAPI.segment(calendar), "events"] }
-        return Self.event(try await api.post(path, .object(body), headers: Self.prefer()), zone: zone)
+        return Self.event(try await api.post(path, .object(body), headers: API.prefer()), zone: zone)
     }
 
     private func update(_ arguments: [String: ToolJSON]) async throws -> ToolJSON {
@@ -203,19 +195,19 @@ struct OutlookCalendarToolRunner {
         let allDayArgument = Arguments.bool(arguments["allDay"])
         if startText != nil || endText != nil || allDayArgument != nil || !added.isEmpty || !removed.isEmpty {
             let current = try await api.get(["me", "events", id], [URLQueryItem(name: "$select", value: "start,end,isAllDay,attendees")],
-                                            headers: Self.prefer())
+                                            headers: API.prefer())
             if startText != nil || endText != nil || allDayArgument != nil {
                 let allDay = allDayArgument ?? (current["isAllDay"] == .bool(true))
-                guard let oldStart = Self.instant(current["start"]), let oldEnd = Self.instant(current["end"]) else {
+                guard let oldStart = API.instant(current["start"]), let oldEnd = API.instant(current["end"]) else {
                     throw GraphAPI.Failure.unreadableAnswer
                 }
-                let start = try startText.map { try time($0, in: allDay ? Self.utc : zone, name: "startTime") } ?? oldStart
+                let start = try startText.map { try time($0, in: allDay ? API.utc : zone, name: "startTime") } ?? oldStart
                 // Moving only the start keeps the length.
-                var end = try endText.map { try time($0, in: allDay ? Self.utc : zone, name: "endTime") }
+                var end = try endText.map { try time($0, in: allDay ? API.utc : zone, name: "endTime") }
                     ?? start.addingTimeInterval(oldEnd.timeIntervalSince(oldStart))
-                if allDay, endText != nil { end = CalendarTime.nextDay(end, in: Self.utc) }
+                if allDay, endText != nil { end = CalendarTime.nextDay(end, in: API.utc) }
                 if allDay {
-                    body.merge(times: CalendarTime.day(start, in: Self.utc), max(end, CalendarTime.nextDay(start, in: Self.utc)), allDay: true)
+                    body.merge(times: CalendarTime.day(start, in: API.utc), max(end, CalendarTime.nextDay(start, in: API.utc)), allDay: true)
                 } else {
                     guard end > start else { throw Problem.invalid("endTime is after startTime.") }
                     body.merge(times: start, end, allDay: false)
@@ -231,7 +223,7 @@ struct OutlookCalendarToolRunner {
             }
         }
         guard !body.isEmpty else { throw Problem.invalid("Give at least one field to change.") }
-        return Self.event(try await api.patch(["me", "events", id], .object(body), headers: Self.prefer()), zone: zone)
+        return Self.event(try await api.patch(["me", "events", id], .object(body), headers: API.prefer()), zone: zone)
     }
 
     private func delete(_ arguments: [String: ToolJSON]) async throws -> ToolJSON {
@@ -242,15 +234,9 @@ struct OutlookCalendarToolRunner {
 
     private func respond(_ arguments: [String: ToolJSON]) async throws -> ToolJSON {
         let id = try Arguments.required(arguments, "eventId")
-        let action = switch try Arguments.required(arguments, "responseStatus") {
-        case "accepted": "accept"
-        case "declined": "decline"
-        case "tentative": "tentativelyAccept"
-        default: throw Problem.invalid("responseStatus is accepted, declined, or tentative.")
-        }
-        var body: [String: ToolJSON] = ["sendResponse": .bool(Arguments.bool(arguments["sendResponse"]) ?? true)]
-        if let comment = Arguments.string(arguments, "responseComment") { body["comment"] = .string(comment) }
-        _ = try await api.post(["me", "events", try GraphAPI.segment(id), action], .object(body))
+        try await calendar.respond(eventID: id, status: try Arguments.required(arguments, "responseStatus"),
+                                   comment: Arguments.string(arguments, "responseComment"),
+                                   sendResponse: Arguments.bool(arguments["sendResponse"]) ?? true)
         return .object(["eventId": .string(id), "responseStatus": arguments["responseStatus"] ?? .null])
     }
 
@@ -297,7 +283,7 @@ struct OutlookCalendarToolRunner {
             let from = Self.day(CalendarTime.dateString(first.date, in: zone))
             let through = Self.day(CalendarTime.dateString(last.date, in: zone))
             guard let from, let through, through >= from else { throw Problem.invalid("endTime is on or after startTime.") }
-            return (from, CalendarTime.nextDay(through, in: Self.utc))
+            return (from, CalendarTime.nextDay(through, in: API.utc))
         }
         let from = try time(start, in: zone, name: "startTime")
         let to = try time(end, in: zone, name: "endTime")
@@ -306,22 +292,7 @@ struct OutlookCalendarToolRunner {
     }
 
     private static func day(_ date: String) -> Date? {
-        CalendarTime.parse(date, in: utc).map(\.date)
-    }
-
-    static func prefer(body: Bool = false) -> [String: String] {
-        ["Prefer": "outlook.timezone=\"UTC\"" + (body ? ", outlook.body-content-type=\"text\"" : "")]
-    }
-
-    static func utcTime(_ date: Date) -> ToolJSON {
-        .object(["dateTime": .string(String(CalendarTime.rfc3339(date, in: utc).prefix(19))), "timeZone": .string("UTC")])
-    }
-
-    /// A Graph `dateTimeTimeZone` asked for in UTC: "2026-10-28T01:00:00.0000000".
-    static func instant(_ value: ToolJSON?) -> Date? {
-        guard let text = value?["dateTime"]?.stringValue, text.count >= 19 else { return nil }
-        let zone = value?["timeZone"]?.stringValue.flatMap(TimeZone.init(identifier:)) ?? utc
-        return CalendarTime.parse(String(text.prefix(19)), in: zone)?.date
+        CalendarTime.parse(date, in: API.utc).map(\.date)
     }
 
     static func event(_ event: ToolJSON, zone: TimeZone) -> ToolJSON {
@@ -329,12 +300,12 @@ struct OutlookCalendarToolRunner {
                                                          "bodyPreview", "seriesMasterId", "categories"])
         fields["summary"] = event["subject"] ?? .null
         let allDay = event["isAllDay"] == .bool(true)
-        if let start = instant(event["start"]) {
-            fields["start"] = .string(allDay ? CalendarTime.dateString(start, in: utc) : CalendarTime.rfc3339(start, in: zone))
+        if let start = API.instant(event["start"]) {
+            fields["start"] = .string(allDay ? CalendarTime.dateString(start, in: API.utc) : CalendarTime.rfc3339(start, in: zone))
         }
-        if let end = instant(event["end"]) {
+        if let end = API.instant(event["end"]) {
             // An all-day event's end is the day after its last; the answer gives the last, as create takes it.
-            fields["end"] = .string(allDay ? CalendarTime.dateString(end.addingTimeInterval(-86_400), in: utc)
+            fields["end"] = .string(allDay ? CalendarTime.dateString(end.addingTimeInterval(-86_400), in: API.utc)
                                            : CalendarTime.rfc3339(end, in: zone))
         }
         if let location = event["location"]?["displayName"]?.stringValue, !location.isEmpty { fields["location"] = .string(location) }
@@ -358,8 +329,8 @@ struct OutlookCalendarToolRunner {
 
 private extension Dictionary where Key == String, Value == ToolJSON {
     mutating func merge(times start: Date, _ end: Date, allDay: Bool) {
-        self["start"] = OutlookCalendarToolRunner.utcTime(start)
-        self["end"] = OutlookCalendarToolRunner.utcTime(end)
+        self["start"] = OutlookCalendarAPI.utcTime(start)
+        self["end"] = OutlookCalendarAPI.utcTime(end)
         self["isAllDay"] = .bool(allDay)
     }
 }

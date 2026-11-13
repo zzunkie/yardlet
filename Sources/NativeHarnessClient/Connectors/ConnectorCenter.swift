@@ -2295,6 +2295,35 @@ final class ConnectorCenter: ConnectorToolProviding {
         }
     }
 
+    /// The calendar's accounts: each connected Google Calendar and Outlook Calendar account, read with the sign-in
+    /// its connector uses, so tokens stay here and refresh one at a time with the connector's, and the Mac's
+    /// calendars while Apple Calendar is connected.
+    func calendarAccounts() -> [(CalendarAccount, any CalendarAccountTransport)] {
+        connectors.compactMap { record in
+            guard record.status == .connected, let service = record.localService else { return nil }
+            switch service {
+            case .googleCalendar:
+                guard let address = record.account else { return nil }
+                let account = CalendarAccount(id: record.credentialID, provider: .google, address: address,
+                                              connectorSlug: ConnectorToolNaming.accountToolPrefix(for: service, among: connectors))
+                let api = GoogleCalendarAPI(rest: GoogleREST(base: environment.google.calendarAPI, session: accountSession(for: record)))
+                return (account, GoogleCalendarTransport(api: api, account: account, timeZone: environment.timeZone()))
+            case .outlookCalendar:
+                guard let address = record.account else { return nil }
+                let account = CalendarAccount(id: record.credentialID, provider: .outlook, address: address,
+                                              connectorSlug: ConnectorToolNaming.accountToolPrefix(for: service, among: connectors))
+                let api = OutlookCalendarAPI(graph: GraphAPI(base: environment.microsoft.graph, session: accountSession(for: record)))
+                return (account, OutlookCalendarTransport(api: api, account: account, timeZone: environment.timeZone()))
+            case .appleCalendar:
+                guard let store = environment.macData else { return nil }
+                let account = CalendarAccount(id: record.id, provider: .apple, connectorSlug: record.slug)
+                return (account, MacCalendarTransport(store: store, account: account))
+            default:
+                return nil
+            }
+        }
+    }
+
     /// The draft a mail send (or a Gmail delete) names, read for its request card (`GmailToolApproval`);
     /// nil when the tool is not a connected mail account's or its server did not answer.
     func mailDraftPreview(tool name: String, arguments: [String: ToolJSON]) async -> MailDraftPreview? {

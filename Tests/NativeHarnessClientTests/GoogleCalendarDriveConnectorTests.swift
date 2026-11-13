@@ -390,6 +390,32 @@ final class GoogleCalendarDriveConnectorTests: XCTestCase {
         let missing = try await call(center, "calendar_get_event", ["eventId": .string("nope")])
         XCTAssertTrue(missing.isError)
         XCTAssertEqual(missing.text, "Google Calendar: Not Found (HTTP 404)")
+
+        // The calendar reads the same API through the same sign-in, every page: the primary first and shown, the
+        // others as Google's calendar shows them, each day's events with a cancelled one left out, and the
+        // account's own answer.
+        let (account, transport) = try XCTUnwrap(center.calendarAccounts().first)
+        XCTAssertEqual(account.provider, .google)
+        XCTAssertEqual(account.address, "person@example.test")
+        XCTAssertEqual(account.connectorSlug, "calendar")
+        let calendarList = try await transport.calendars()
+        XCTAssertEqual(calendarList.map(\.name), ["person@example.test", "Days off", "Team"])
+        XCTAssertEqual(calendarList[1].serviceName, "Holidays in South Korea")
+        XCTAssertEqual(calendarList.map(\.isShownByDefault), [true, false, true])
+        let from = try XCTUnwrap(CalendarTime.parse("2026-10-21", in: Self.seoul)?.date)
+        let read = try await transport.events(in: calendarList[0], from: from, to: from.addingTimeInterval(2 * 86_400))
+        XCTAssertEqual(google.calls("GET", "/calendar/v3/calendars/person%40example.test/events").last?.value("pageToken"), "events-2")
+        XCTAssertEqual(read.map(\.id.eventID), ["e1", "e2", "e3"])
+        XCTAssertEqual(read[0].start, CalendarTime.parse("2026-10-21T10:00:00", in: Self.seoul)?.date)
+        XCTAssertEqual(read[0].response, .needsAction)
+        XCTAssertEqual(read[0].conferenceURL?.absoluteString, "https://meet.google.com/abc-defg-hij")
+        XCTAssertEqual(read[0].webURL?.absoluteString, "https://calendar.google.com/event?eid=e1")
+        XCTAssertEqual(read[2].isAllDay, true)
+        XCTAssertEqual(read[2].end, CalendarTime.parse("2026-10-23", in: Self.seoul)?.date)
+        try await transport.respond(to: read[0], .declined)
+        let answer = try XCTUnwrap(google.calls("PATCH").last)
+        XCTAssertEqual(answer.path, "/calendar/v3/calendars/person%40example.test/events/e1")
+        XCTAssertEqual(answer.json?["attendees"]?.arrayValue?.last?["responseStatus"], .string("declined"))
     }
 
     // MARK: - Drive tools

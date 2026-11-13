@@ -14,6 +14,9 @@ struct GoogleCalendarToolRunner {
     typealias Problem = ConnectorToolArguments.Problem
     private typealias Arguments = ConnectorToolArguments
 
+    /// The requests the calendar shares.
+    private var calendar: GoogleCalendarAPI { GoogleCalendarAPI(rest: api) }
+
     func call(_ name: String, _ arguments: ToolJSON) async throws -> AgentToolResult {
         let arguments = arguments.objectValue ?? [:]
         do {
@@ -41,9 +44,8 @@ struct GoogleCalendarToolRunner {
     // MARK: Reading
 
     private func listCalendars(_ arguments: [String: ToolJSON]) async throws -> ToolJSON {
-        var query = [URLQueryItem(name: "maxResults", value: String(Arguments.pageSize(arguments, range: 1...250, fallback: 100)))]
-        if let token = Arguments.string(arguments, "pageToken") { query.append(URLQueryItem(name: "pageToken", value: token)) }
-        let list = try await api.get(["users", "me", "calendarList"], query)
+        let list = try await calendar.calendarList(maxResults: Arguments.pageSize(arguments, range: 1...250, fallback: 100),
+                                                   pageToken: Arguments.string(arguments, "pageToken"))
         var result: [String: ToolJSON] = ["calendars": .array((list["items"]?.arrayValue ?? []).map { item in
             var fields = Arguments.pick(item, ["id", "description", "timeZone", "accessRole", "primary"])
             fields["summary"] = item["summaryOverride"] ?? item["summary"] ?? .null
@@ -55,26 +57,20 @@ struct GoogleCalendarToolRunner {
 
     private func listEvents(_ arguments: [String: ToolJSON]) async throws -> ToolJSON {
         let zone = try zone(arguments)
-        let calendar = try GoogleREST.segment(Arguments.string(arguments, "calendarId") ?? "primary")
         let start = try Arguments.string(arguments, "startTime").map { try time($0, in: zone, name: "startTime") } ?? now()
         let end = try Arguments.string(arguments, "endTime").map { try time($0, in: zone, name: "endTime") }
             ?? start.addingTimeInterval(7 * 86_400)
         guard end > start else { throw Problem.invalid("endTime is after startTime.") }
         let order = Arguments.string(arguments, "orderBy") ?? "default"
-        var query = [
-            URLQueryItem(name: "timeMin", value: CalendarTime.rfc3339(start, in: zone)),
-            URLQueryItem(name: "timeMax", value: CalendarTime.rfc3339(end, in: zone)),
-            URLQueryItem(name: "singleEvents", value: "true"),
-            URLQueryItem(name: "maxResults", value: String(Arguments.pageSize(arguments, range: 1...250, fallback: 25))),
-            URLQueryItem(name: "timeZone", value: zone.identifier),
-            URLQueryItem(name: "orderBy", value: order == "lastModified" ? "updated" : "startTime")
-        ]
-        if let text = Arguments.string(arguments, "fullText") { query.append(URLQueryItem(name: "q", value: text)) }
+        var filters: [URLQueryItem] = []
+        if let text = Arguments.string(arguments, "fullText") { filters.append(URLQueryItem(name: "q", value: text)) }
         for type in try Arguments.strings(arguments, "eventType") where GoogleCalendarToolCatalog.eventTypes.contains(type) {
-            query.append(URLQueryItem(name: "eventTypes", value: Self.apiEventType(type)))
+            filters.append(URLQueryItem(name: "eventTypes", value: Self.apiEventType(type)))
         }
-        if let token = Arguments.string(arguments, "pageToken") { query.append(URLQueryItem(name: "pageToken", value: token)) }
-        let list = try await api.get(["calendars", calendar, "events"], query)
+        let list = try await calendar.events(calendar: Arguments.string(arguments, "calendarId") ?? "primary", from: start, to: end,
+                                             zone: zone, maxResults: Arguments.pageSize(arguments, range: 1...250, fallback: 25),
+                                             byUpdate: order == "lastModified", extra: filters,
+                                             pageToken: Arguments.string(arguments, "pageToken"))
         var events = (list["items"]?.arrayValue ?? []).map(Self.event)
         // Google orders by start ascending only; a descending page is that page turned round.
         if order == "startTimeDesc" { events.reverse() }
@@ -103,8 +99,8 @@ struct GoogleCalendarToolRunner {
     }
 
     private func getEvent(_ arguments: [String: ToolJSON]) async throws -> ToolJSON {
-        let (calendar, event) = try ids(arguments)
-        return Self.event(try await api.get(["calendars", calendar, "events", event]))
+        Self.event(try await calendar.event(calendar: Arguments.string(arguments, "calendarId") ?? "primary",
+                                            id: try Arguments.required(arguments, "eventId")))
     }
 
     /// Free times every attendee and the account share: free/busy for all of them, the busy times
@@ -247,22 +243,14 @@ struct GoogleCalendarToolRunner {
 
     /// The account's own attendee entry answers; an event it was not invited to has none.
     private func respondToEvent(_ arguments: [String: ToolJSON]) async throws -> ToolJSON {
-        let (calendar, event) = try ids(arguments)
+        let event = try Arguments.required(arguments, "eventId")
         let status = try Arguments.required(arguments, "responseStatus")
         guard ["accepted", "declined", "tentative"].contains(status) else {
             throw Problem.invalid("responseStatus is accepted, declined, or tentative.")
         }
-        let current = try await api.get(["calendars", calendar, "events", event])
-        var attendees = current["attendees"]?.arrayValue ?? []
-        guard let index = attendees.firstIndex(where: { $0["self"] == .bool(true) }),
-              var me = attendees[index].objectValue else {
-            throw Problem.invalid("The account is not among this event's attendees, so it has no invitation to answer.")
-        }
-        me["responseStatus"] = .string(status)
-        if let comment = Arguments.string(arguments, "responseComment") { me["comment"] = .string(comment) }
-        attendees[index] = .object(me)
-        return Self.event(try await api.patch(["calendars", calendar, "events", event],
-                                              .object(["attendees": .array(attendees)]), try notifications(arguments)))
+        return Self.event(try await calendar.respond(calendar: Arguments.string(arguments, "calendarId") ?? "primary", event: event,
+                                                     status: status, comment: Arguments.string(arguments, "responseComment"),
+                                                     notifications: try notifications(arguments)))
     }
 
     // MARK: Pieces
@@ -382,15 +370,10 @@ struct GoogleCalendarToolRunner {
     }
 
     private static func span(of event: ToolJSON, zone: TimeZone) throws -> (Date, Date) {
-        func moment(_ value: ToolJSON?) -> Date? {
-            if let text = value?["dateTime"]?.stringValue { return CalendarTime.absolute(text) }
-            if let text = value?["date"]?.stringValue { return CalendarTime.parse(text, in: zone)?.date }
-            return nil
-        }
-        guard let start = moment(event["start"]), let end = moment(event["end"]) else {
+        guard let span = GoogleCalendarAPI.span(of: event, zone: zone) else {
             throw Problem.invalid("The event has no start and end to keep its length from; give both startTime and endTime.")
         }
-        return (start, end)
+        return span
     }
 
     private static func apiEventType(_ type: String) -> String {
@@ -425,9 +408,7 @@ struct GoogleCalendarToolRunner {
                 return .object(item)
             })
         }
-        let video = event["conferenceData"]?["entryPoints"]?.arrayValue?
-            .first { $0["entryPointType"]?.stringValue == "video" }?["uri"]
-        if let link = event["hangoutLink"] ?? video { fields["conferenceUrl"] = link }
+        if let link = GoogleCalendarAPI.conferenceLink(event) { fields["conferenceUrl"] = link }
         if let attachments = event["attachments"]?.arrayValue {
             fields["attachments"] = .array(attachments.map { .object(ConnectorToolArguments.pick($0, ["title", "fileUrl"])) })
         }

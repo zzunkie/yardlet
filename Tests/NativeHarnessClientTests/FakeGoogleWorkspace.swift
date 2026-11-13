@@ -111,6 +111,13 @@ final class FakeGoogleWorkspace: ConnectorHTTPTransport, @unchecked Sendable {
         let path = call.path.replacingOccurrences(of: "/calendar/v3/", with: "")
         switch (call.method, path) {
         case ("GET", "users/me/calendarList"):
+            // A second page holds one more calendar and ends the list.
+            if call.value("pageToken") == "calendars-2" {
+                return reply(url, 200, ["items": .array([
+                    .object(["id": .string("team@group.calendar.google.com"), "summary": .string("Team"), "selected": .bool(true),
+                             "backgroundColor": .string("#9fe1e7"), "accessRole": .string("writer")])
+                ])])
+            }
             return reply(url, 200, ["items": .array([
                 .object(["id": .string(account), "summary": .string(account), "timeZone": .string("Asia/Seoul"),
                          "accessRole": .string("owner"), "primary": .bool(true), "etag": .string("\"1\"")]),
@@ -138,6 +145,14 @@ final class FakeGoogleWorkspace: ConnectorHTTPTransport, @unchecked Sendable {
         let calendar = parts[1].removingPercentEncoding ?? parts[1]
         switch (call.method, parts.count) {
         case ("GET", 3):
+            // The second page is the last: one all-day event, and one cancelled.
+            if call.value("pageToken") == "events-2" {
+                return reply(url, 200, ["items": .array([
+                    .object(["id": .string("e3"), "summary": .string("Offsite"), "status": .string("confirmed"),
+                             "start": .object(["date": .string("2026-10-22")]), "end": .object(["date": .string("2026-10-23")])]),
+                    .object(["id": .string("e4"), "status": .string("cancelled")])
+                ]), "timeZone": .string("Asia/Seoul")])
+            }
             return reply(url, 200, ["items": .array([.object(Self.event("e1", account: account)),
                                                      .object(Self.event("e2", account: account))]),
                                     "nextPageToken": .string("events-2"), "timeZone": .string("Asia/Seoul"),

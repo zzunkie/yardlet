@@ -3686,6 +3686,8 @@
 "Mail me" = "me";
 "%lld new messages" = "%lld new messages";
 "Sign in to this account again in Settings › Connectors." = "Sign in to this account again in Settings › Connectors.";
+"This account is no longer in the calendar." = "This account is no longer in the calendar.";
+"Answer this invitation in Calendar." = "Answer this invitation in Calendar.";
 "Mail quote %@ %@" = "On %1$@, %2$@ wrote:";
 "Forwarded message" = "Forwarded message";
 "Mail from %@" = "From: %@";

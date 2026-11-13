@@ -281,6 +281,37 @@ final class MicrosoftConnectorTests: XCTestCase {
         XCTAssertEqual(suggested["timeSlots"]?.arrayValue?[0]["startTime"], .string("2026-10-28T09:00:00+09:00"))
         XCTAssertEqual(suggested["timeSlots"]?.arrayValue?[1]["startTime"], .string("2026-10-28T11:00:00+09:00"), "10:00 to 11:00 is busy")
         XCTAssertEqual(suggested["unavailableCalendars"]?.arrayValue?.first?["calendar"], .string("bo@contoso.test"))
+
+        // The calendar reads the account through the same sign-in: its calendars with the default first, the days
+        // asked for, an all-day event on its dates in the Mac's zone, and no cancelled meeting. An invitation is
+        // answered in Outlook, which tells the organizer.
+        let (account, transport) = try XCTUnwrap(center.calendarAccounts().first)
+        XCTAssertEqual(center.calendarAccounts().count, 1)
+        XCTAssertEqual(account.provider, .outlook)
+        XCTAssertEqual(account.address, "person@contoso.test")
+        let calendars = try await transport.calendars()
+        XCTAssertEqual(calendars.map(\.name), ["Calendar", "Birthdays"])
+        XCTAssertEqual(calendars.first?.color, "#1F77B4")
+        XCTAssertNil(calendars.last?.color)
+        let seoul = TimeZone(identifier: "Asia/Seoul")!
+        let from = try XCTUnwrap(CalendarTime.parse("2026-10-28", in: seoul)?.date)
+        let events = try await transport.events(in: calendars[0], from: from, to: from.addingTimeInterval(3 * 86_400))
+        let view = try XCTUnwrap(microsoft.graphRequests.last?.url)
+        XCTAssertEqual(view.path(), "/v1.0/me/calendars/cal-1/calendarView")
+        XCTAssertEqual(URLComponents(url: view, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "startDateTime" }?.value,
+                       "2026-10-27T15:00:00Z")
+        XCTAssertEqual(events.map(\.title), ["Planning", "Offsite"])
+        XCTAssertEqual(events[0].start, CalendarTime.parse("2026-10-28T10:00:00", in: seoul)?.date)
+        XCTAssertEqual(events[0].response, .needsAction)
+        XCTAssertEqual(events[0].organizer?.displayName, "Bo")
+        XCTAssertEqual(events[0].conferenceURL?.absoluteString, "https://teams.microsoft.test/join/1")
+        XCTAssertEqual(events[1].start, CalendarTime.parse("2026-10-29", in: seoul)?.date)
+        XCTAssertEqual(events[1].end, CalendarTime.parse("2026-10-30", in: seoul)?.date)
+        XCTAssertTrue(events[1].isAllDay)
+        XCTAssertNil(events[1].response, "The organizer answers no invitation")
+        try await transport.respond(to: events[0], .accepted)
+        XCTAssertEqual(microsoft.posted.last?.path, "/v1.0/me/events/ev-1/accept")
+        XCTAssertEqual(microsoft.posted.last?.body["sendResponse"], .bool(true))
     }
 
     func testOneDriveNeverReplacesAFileAndDownloadsWithoutTheToken() async throws {
@@ -495,6 +526,29 @@ final class FakeMicrosoft: ConnectorHTTPTransport, @unchecked Sendable {
                                                                "message": .string("Not supported for personal accounts.")])])
             }
             return Self.reply(url, 200, ["value": .array([])])
+        case ("GET", "me/calendars"):
+            return Self.reply(url, 200, ["value": .array([
+                .object(["id": .string("birthdays"), "name": .string("Birthdays"), "isDefaultCalendar": .bool(false), "hexColor": .string("")]),
+                .object(["id": .string("cal-1"), "name": .string("Calendar"), "isDefaultCalendar": .bool(true),
+                         "hexColor": .string("#1F77B4")])
+            ])])
+        case ("GET", "me/calendars/cal-1/calendarView"):
+            func time(_ text: String) -> ToolJSON { .object(["dateTime": .string(text), "timeZone": .string("UTC")]) }
+            return Self.reply(url, 200, ["value": .array([
+                .object(["id": .string("ev-1"), "subject": .string("Planning"), "isAllDay": .bool(false),
+                         "start": time("2026-10-28T01:00:00.0000000"), "end": time("2026-10-28T02:00:00.0000000"),
+                         "isOrganizer": .bool(false), "responseStatus": .object(["response": .string("notResponded")]),
+                         "organizer": .object(["emailAddress": .object(["name": .string("Bo"), "address": .string("bo@contoso.test")])]),
+                         "onlineMeeting": .object(["joinUrl": .string("https://teams.microsoft.test/join/1")]),
+                         "webLink": .string("https://outlook.microsoft.test/calendar/item/ev-1")]),
+                .object(["id": .string("ev-2"), "subject": .string("Offsite"), "isAllDay": .bool(true),
+                         "start": time("2026-10-29T00:00:00.0000000"), "end": time("2026-10-30T00:00:00.0000000"),
+                         "isOrganizer": .bool(true), "responseStatus": .object(["response": .string("organizer")])]),
+                .object(["id": .string("ev-3"), "subject": .string("Canceled: Sync"), "isCancelled": .bool(true),
+                         "start": time("2026-10-28T05:00:00.0000000"), "end": time("2026-10-28T06:00:00.0000000")])
+            ])])
+        case ("POST", "me/events/ev-1/accept"):
+            return (Data(), Self.ok(url, status: 202))
         case ("GET", "me/calendarView"):
             return Self.reply(url, 200, ["value": .array([.object([
                 "start": .object(["dateTime": .string("2026-10-28T01:00:00.0000000"), "timeZone": .string("UTC")]),

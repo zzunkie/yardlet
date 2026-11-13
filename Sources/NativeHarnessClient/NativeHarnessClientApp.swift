@@ -641,6 +641,8 @@ struct NativeHarnessClientApp: App {
                         if !QABackground.isOn { model.startPersonalAgentWatch() }
                         // The mailbox follows its setting and the connected mail accounts.
                         if !QABackground.isOn { model.startMailbox() }
+                        // The calendar follows its setting and the connected calendar accounts.
+                        if !QABackground.isOn { model.startCalendar() }
                         // Token counting follows Settings › Usage; a visual fixture counts nothing of this Mac's.
                         if !QABackground.isOn, !model.usesVisualFixture {
                             model.startTokenUsage(defaults: model.preferences, watch: TokenUsageWatcher.watch)

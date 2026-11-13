@@ -391,6 +391,11 @@ final class AppModel {
     @ObservationIgnored var mailboxPreferenceObserver: (any NSObjectProtocol)?
     /// Whether a change to the connectors will have the mailbox follow them again.
     @ObservationIgnored var mailboxFollowsConnectors = false
+    /// The app's one calendar, while Settings › Calendar has it on.
+    @ObservationIgnored let calendar = CalendarCenter()
+    @ObservationIgnored var calendarPreferenceObserver: (any NSObjectProtocol)?
+    /// Whether a change to the connectors will have the calendar follow them again.
+    @ObservationIgnored var calendarFollowsConnectors = false
     /// The main windows that show Tasks rather than another sidebar section. With none, no task
     /// counts as seen, so its updates stay unread and are announced.
     private(set) var taskWindowIDs = Set<UUID>()

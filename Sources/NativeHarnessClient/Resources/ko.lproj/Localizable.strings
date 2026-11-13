@@ -3686,6 +3686,8 @@
 "Mail me" = "나";
 "%lld new messages" = "새 메일 %lld통";
 "Sign in to this account again in Settings › Connectors." = "설정 › 커넥터에서 이 계정에 다시 로그인하세요.";
+"This account is no longer in the calendar." = "이 계정은 이제 캘린더에 없습니다.";
+"Answer this invitation in Calendar." = "이 초대는 캘린더 앱에서 답하세요.";
 "Mail quote %@ %@" = "%1$@, %2$@ 님이 작성:";
 "Forwarded message" = "전달된 메일";
 "Mail from %@" = "보낸 사람: %@";
