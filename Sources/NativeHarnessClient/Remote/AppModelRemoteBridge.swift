@@ -112,6 +112,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         snapshot.followUp = model.followUpMode == .steer ? .steer : .queue
         snapshot.taskRail = true
         snapshot.reviewReading = true
+        snapshot.reviewWriting = RemoteFileReader.isSupported
         snapshot.bankedResets = true
         snapshot.browserTabs = browser.isAvailable
         snapshot.terminals = RemoteTerminalBridge.isAvailable
@@ -1403,6 +1404,16 @@ final class AppModelRemoteBridge: RemoteBridge {
         }
         guard case let .success(scope) = await fileScope(taskID: taskID) else { return .failure(RemoteError(.notFound)) }
         return await RemoteReviewReader.read(query, scope: scope)
+    }
+
+    /// The task's own folders only: a change never reaches an output the task wrote elsewhere.
+    func writeReview(taskID: String, change: RemoteReviewChange, confirmed: Bool,
+                     permit: RemoteFileWritePermit) async -> RemoteError? {
+        guard let session = session(taskID) else { return RemoteError(.notFound) }
+        let scope = RemoteFileScope(folder: session.workspaceURL, otherFolders: session.additionalRootURLs)
+        return await RemoteReviewWriter.write(change, confirmed: confirmed, scope: scope) {
+            guard permit.isValid else { throw RemoteError(.notAllowed, reason: .fileWrites) }
+        }
     }
 
     // MARK: - Files (§15.22)

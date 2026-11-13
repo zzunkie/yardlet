@@ -162,6 +162,9 @@ public protocol RemoteBridge: AnyObject, Sendable {
     func taskOutputs(taskID: String) async -> Result<[RemoteOutput], RemoteError>
     /// The task's folders and outputs, which a `readFile` of the task is checked against (§15.22).
     func readReview(taskID: String, query: RemoteReviewQuery) async -> Result<RemoteReviewResult, RemoteError>
+    /// Stage all, Unstage all or Discard through the Mac's own Review (§15.26), checking `permit` immediately before
+    /// Git writes. A bridge that answers it says so in its snapshot (`reviewWriting`).
+    func writeReview(taskID: String, change: RemoteReviewChange, confirmed: Bool, permit: RemoteFileWritePermit) async -> RemoteError?
     func projectFileScope(projectID: String) async -> Result<RemoteFileScope, RemoteError>
     func fileScope(taskID: String) async -> Result<RemoteFileScope, RemoteError>
     /// The controls the task's composer shows for its settings (§15.23); `prepare` reads the choices first, as opening
@@ -282,6 +285,10 @@ extension RemoteBridge {
 
     public func readReview(taskID: String, query: RemoteReviewQuery) async -> Result<RemoteReviewResult, RemoteError> {
         .failure(RemoteError(.unavailable))
+    }
+    public func writeReview(taskID: String, change: RemoteReviewChange, confirmed: Bool,
+                            permit: RemoteFileWritePermit) async -> RemoteError? {
+        RemoteError(.unavailable)
     }
     public func newTaskOptions(projectID: String?, harness: String?, settings: [String: String]) async -> Result<RemoteNewTaskOptions, RemoteError> {
         .failure(RemoteError(.unavailable))
@@ -1161,7 +1168,8 @@ public actor RemoteServer {
         guard permissionsLoaded, permissionRequestsEnabled, let connection = connections[id], connection.isProven,
               let deviceID = connection.deviceID, !revokedDeviceIDs.contains(deviceID),
               !removingDeviceIDs.contains(deviceID), effectivePermissions[deviceID]?[permission] == true else {
-            return RemoteError(.notAllowed, reason: permission == .terminal ? .terminal : nil)
+            return RemoteError(.notAllowed, reason: permission == .terminal ? .terminal
+                               : permission == .fileWrites ? .fileWrites : nil)
         }
         return nil
     }
@@ -1564,7 +1572,7 @@ public actor RemoteServer {
             let permit = action == .restore ? fileWritePermit(on: id, requestID: permitID) : nil
             defer { fileWritePermits[id]?[permitID] = nil; permit?.revoke() }
             let result: Result<RemoteFileRewind, RemoteError>
-            if action == .restore, permit == nil { result = .failure(RemoteError(.notAllowed)) }
+            if action == .restore, permit == nil { result = .failure(RemoteError(.notAllowed, reason: .fileWrites)) }
             else { result = await bridge.fileRewind(taskID: taskID, action: action, pointID: pointID, receipt: receipt,
                                                     confirmed: confirmed, permit: permit) }
             var response = RemoteResponse(re: envelope.id)
@@ -1710,6 +1718,18 @@ public actor RemoteServer {
                 }
             case let .failure(error): respond(.failure(envelope.id, error), to: id)
             }
+        case let .writeReview(taskID, change, confirmed):
+            let requestingDevice = connections[id]?.deviceID
+            let permitID = UUID()
+            let permit = fileWritePermit(on: id, requestID: permitID)
+            defer { fileWritePermits[id]?[permitID] = nil; permit?.revoke() }
+            let error: RemoteError? = if let permit {
+                await bridge.writeReview(taskID: taskID, change: change, confirmed: confirmed, permit: permit)
+            } else { RemoteError(.notAllowed, reason: .fileWrites) }
+            respond(error.map { .failure(envelope.id, $0) } ?? RemoteResponse(re: envelope.id), to: id)
+            // The action and the task only: never a path, diff or file content.
+            audit?.record(device: requestingDevice, type: request.type + "." + change.action.rawValue, task: taskID,
+                          result: error?.code.rawValue ?? "ok", reason: error?.reason?.rawValue, at: now())
         case let .projectWorkspaceFiles(projectID):
             switch await bridge.projectFileScope(projectID: projectID) {
             case let .success(scope):
@@ -2035,6 +2055,7 @@ public actor RemoteServer {
             response.bankedResets = published?.bankedResets == true ? true : nil
             response.fullConversation = published?.fullConversation == true ? true : nil
             response.reviewReading = published?.reviewReading == true ? true : nil
+            response.reviewWriting = published?.reviewWriting == true ? true : nil
             response.browserTabs = published?.browserTabs == true ? true : nil
             response.terminals = published?.terminals == true ? true : nil
             response.taskRail = published?.taskRail == true ? true : nil

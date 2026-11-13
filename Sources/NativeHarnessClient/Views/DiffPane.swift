@@ -23,6 +23,8 @@ struct DiffPane: View {
     @State private var repositories: [URL] = []
     @State private var commits: [GitCommitSummary] = []
     @State private var errorMessage: String?
+    /// Why Stage, Unstage or Discard did not happen, shown above the diff it was asked for.
+    @State private var mutationError: String?
     /// No repository holds the task's folder: the Codex app and the Claude app say so quietly, as
     /// they say there are no changes, rather than as a failure.
     @State private var isNotRepository = false
@@ -70,6 +72,14 @@ struct DiffPane: View {
 
             if !isNotRepository || effectiveLastTurn.isOffered { scopeBar }
             Divider()
+            if let mutationError {
+                Label(mutationError, systemImage: "exclamationmark.triangle")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .padding(.horizontal, 10).padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(ParityTheme.subtleFill)
+                Divider()
+            }
 
             if !codexChanges.isEmpty {
                 CodexChangeContext(changes: codexChanges)
@@ -168,13 +178,15 @@ struct DiffPane: View {
             }
             Spacer(minLength: 0)
             if review.scope == .unstaged, mutationIsAvailable {
-                Button(L10n.string("Stage all")) { perform(.stage) }.disabled(reading.isRemote)
+                Button(L10n.string("Stage all")) { perform(.stage) }
+                    .disabled(mutationUnavailableReason != nil).help(mutationUnavailableReason ?? "")
                 Button(L10n.string("Discard changes")) {
                     if let loadedRepository { discardRequest = .init(workspaceURL: loadedRepository, snapshot: snapshot) }
                 }
-                .disabled(reading.isRemote)
+                .disabled(mutationUnavailableReason != nil).help(mutationUnavailableReason ?? "")
             } else if review.scope == .staged, mutationIsAvailable {
-                Button(L10n.string("Unstage all")) { perform(.unstage) }.disabled(reading.isRemote)
+                Button(L10n.string("Unstage all")) { perform(.unstage) }
+                    .disabled(mutationUnavailableReason != nil).help(mutationUnavailableReason ?? "")
             }
         }
         .padding(.horizontal, 10)
@@ -370,22 +382,28 @@ struct DiffPane: View {
             && shownScope == review.scope && loadedRepository != nil
     }
 
+    private var mutationUnavailableReason: String? { reading.mutationUnavailableReason }
+
     private func perform(_ action: GitMutation, frozen: GitDiscardRequest? = nil) {
-        guard !reading.isRemote, !isMutating, let root = frozen?.workspaceURL ?? loadedRepository else { return }
+        guard mutationUnavailableReason == nil, !isMutating,
+              let root = frozen?.workspaceURL ?? loadedRepository else { return }
         let expected = frozen?.snapshot ?? snapshot
+        let reading = reading
         isMutating = true
+        mutationError = nil
         Task {
             defer { isMutating = false }
             do {
-                try await GitDiffService().mutate(action, workspaceURL: root, expected: expected)
+                try await reading.mutate(action, workspaceURL: root, expected: expected)
                 await reload()
-            } catch { errorMessage = error.localizedDescription }
+            } catch { mutationError = error.localizedDescription }
         }
     }
 
     private func reload() async {
         let ticket = UUID()
         requestID = ticket
+        mutationError = nil
         if reading.isRemote {
             isLoading = true
             do {

@@ -45,6 +45,8 @@ struct DiffSnapshot: Codable, Equatable, Sendable {
     var fileCount: Int { files.count }
     var additionCount: Int { lines.filter { $0.kind == .addition }.count }
     var deletionCount: Int { lines.filter { $0.kind == .deletion }.count }
+    /// The unified diff again, as the remote Review sends it and identifies it before a change (§15.26).
+    var text: String { lines.map(\.text).joined(separator: "\n") }
 }
 
 struct UnifiedDiffParser: Sendable {

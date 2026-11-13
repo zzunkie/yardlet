@@ -262,6 +262,13 @@ actor GitDiffService {
     }
 
     func mutate(_ action: GitMutation, workspaceURL: URL, expected: DiffSnapshot) async throws {
+        try await mutate(action, workspaceURL: workspaceURL, expected: expected, authorizing: {})
+    }
+
+    /// `authorize` runs immediately before each step that writes, after every read, so a permission withdrawn
+    /// meanwhile stops the change before Git or the file system is touched.
+    func mutate(_ action: GitMutation, workspaceURL: URL, expected: DiffSnapshot,
+                authorizing authorize: @Sendable () throws -> Void) async throws {
         guard !expected.isTruncated, !expected.isEmpty else { throw GitDiffServiceError.changedSinceReview }
         let target: GitDiffTarget = action == .unstage ? .staged : .unstaged
         let fresh = try await load(workspaceURL: workspaceURL, target: target)
@@ -283,10 +290,12 @@ actor GitDiffService {
         }
         switch action {
         case .stage:
+            try authorize()
             try check(try await read(workspaceURL: root, arguments: ["add", "--all", "--"] + paths, deadline: deadline), allowed: [0])
         case .unstage:
             let head = try await read(workspaceURL: root, arguments: ["rev-parse", "--verify", "HEAD"], deadline: deadline)
             let args = head.status == 0 ? ["reset", "--quiet", "HEAD", "--"] : ["rm", "--cached", "--force", "--quiet", "--ignore-unmatch", "--"]
+            try authorize()
             try check(try await read(workspaceURL: root, arguments: args + paths, deadline: deadline), allowed: [0])
         case .discard:
             let indexed = try await read(workspaceURL: root, arguments: ["ls-files", "--cached", "-z", "--"] + paths, deadline: deadline)
@@ -295,12 +304,14 @@ actor GitDiffService {
             let trackedPaths = paths.filter(tracked.contains)
             // No reset --hard or git clean: only the reviewed snapshot's exact paths change.
             if !trackedPaths.isEmpty {
+                try authorize()
                 try check(try await read(workspaceURL: root, arguments: ["restore", "--worktree", "--"] + trackedPaths, deadline: deadline), allowed: [0])
             }
             for path in paths where !tracked.contains(path) {
                 let file = root.appending(path: path)
                 let values = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
                 guard values.isRegularFile == true || values.isSymbolicLink == true else { throw GitDiffServiceError.changedSinceReview }
+                try authorize()
                 try FileManager.default.removeItem(at: file)
             }
         }

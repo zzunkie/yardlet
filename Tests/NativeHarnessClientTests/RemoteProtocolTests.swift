@@ -7,14 +7,32 @@ import XCTest
 /// public keys in a file only the person reads, Tailscale and LAN addresses are told apart, and a
 /// conversation window pages whole turns and describes updates as changes a client can apply.
 final class RemoteProtocolTests: XCTestCase {
-    func testFileRestoreRequiresDeviceWritesButReadingCheckpointsDoesNot() {
+    func testFileRestoreAndReviewChangesRequireDeviceWritesButReadingDoesNot() {
         for action in [RemoteFileRewindAction.points, .preview, .restore] {
             let request = RemoteRequest.fileRewind(taskID: "T", action: action, pointID: "P", receipt: "R", confirmed: true)
             XCTAssertEqual(request.requiredPermission, action == .restore ? .fileWrites : nil)
             XCTAssertEqual(request.taskID, "T")
             XCTAssertEqual(request.isCommand, action == .restore)
         }
+        XCTAssertNil(RemoteRequest.readReview(taskID: "T", query: .init(.diff, target: "unstaged")).requiredPermission)
+        for action in RemoteReviewChange.Action.allCases {
+            let request = RemoteRequest.writeReview(taskID: "T", change: .init(action, expected: Self.fingerprint),
+                                                    confirmed: action == .discard)
+            XCTAssertEqual(request.requiredPermission, .fileWrites)
+            XCTAssertEqual(request.taskID, "T")
+            XCTAssertTrue(request.isCommand)
+        }
+        // A change names no path or Git expression; what it expects is the hash of the diff the client read.
+        XCTAssertEqual(RemoteReviewChange.fingerprint(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        for json in [#"{"id":"1","type":"writeReview","taskId":"T","reviewChange":{"action":"stage","expected":"HEAD"}}"#,
+                     #"{"id":"2","type":"writeReview","taskId":"T","reviewChange":{"action":"reset","expected":"\#(Self.fingerprint)"}}"#,
+                     #"{"id":"3","type":"writeReview","taskId":"T"}"#] {
+            guard case let .failure(failure) = RemoteRequestEnvelope.decode(Data(json.utf8)) else { return XCTFail(json) }
+            XCTAssertEqual(failure.error.code, .badRequest, json)
+        }
     }
+
+    private static let fingerprint = String(repeating: "0f", count: 32)
 
     func testSubtaskStopAndAccountCancellationUseCommandRateLimits() {
         XCTAssertFalse(RemoteRequest.subtask(taskID: "T", activityID: "A", stop: false).isCommand)
@@ -151,6 +169,9 @@ final class RemoteProtocolTests: XCTestCase {
             .projectAction(projectID: "P", pinned: nil, archive: true),
             .readReview(taskID: "T1", query: RemoteReviewQuery(.diff, repository: "/tmp/repo", target: "staged",
                                                                path: "README.md")),
+            .writeReview(taskID: "T1", change: RemoteReviewChange(.stage, expected: Self.fingerprint), confirmed: false),
+            .writeReview(taskID: "T1", change: RemoteReviewChange(.discard, repository: "/tmp/repo", expected: Self.fingerprint),
+                         confirmed: true),
             .presence(active: true),
             .archivedTasks(cursor: nil),
             .archivedTasks(cursor: "40"),

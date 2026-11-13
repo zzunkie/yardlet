@@ -23,9 +23,11 @@ enum ReviewLastTurn: Equatable, Sendable {
     }
 }
 
-/// The Review pane's reads, independent of where its repository lives.
+/// The Review pane's reads and its Stage, Unstage and Discard, independent of where its repository lives.
 protocol GitDiffReading: Sendable {
     var isRemote: Bool { get }
+    /// Why Stage, Unstage and Discard cannot be offered here, in the person's words; nil when they are.
+    var mutationUnavailableReason: String? { get }
     func lastTurn() async throws -> ReviewLastTurn?
     func repositories(containing roots: [URL]) async throws -> [URL]
     func load(workspaceURL: URL, target: GitDiffTarget) async throws -> DiffSnapshot
@@ -34,6 +36,8 @@ protocol GitDiffReading: Sendable {
     func repositoryRoot(workspaceURL: URL) async throws -> URL
     func fileText(workspaceURL: URL, revision: String, path: String) async throws -> String?
     func workingText(_ url: URL) async throws -> String?
+    /// Applies `action` to the changes `expected` shows, refusing when they have changed since.
+    func mutate(_ action: GitMutation, workspaceURL: URL, expected: DiffSnapshot) async throws
 }
 
 extension GitDiffReading {
@@ -42,6 +46,7 @@ extension GitDiffReading {
 
 extension GitDiffService: GitDiffReading {
     nonisolated var isRemote: Bool { false }
+    nonisolated var mutationUnavailableReason: String? { nil }
     func workingText(_ url: URL) async throws -> String? {
         guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
               values.isRegularFile == true, (values.fileSize ?? 0) <= 2 * 1024 * 1024,

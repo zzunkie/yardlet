@@ -2090,6 +2090,7 @@
 "%@ doesn't offer this harness now." = "지금 %@에서는 이 하네스를 쓸 수 없습니다.";
 "That choice isn't offered on %@ now." = "지금 %@에서는 그 선택을 쓸 수 없습니다.";
 "To use this from here, allow Terminal for this device in Settings › Remote › Paired devices on %@." = "여기서 쓰려면 %@의 설정 › 원격 연결 › 연결된 기기에서 이 기기에 “터미널”을 허용하세요.";
+"To change files from here, allow Write files for this device in Settings › Remote › Paired devices on %@." = "여기서 파일을 바꾸려면 %@의 설정 › 원격 연결 › 연결된 기기에서 이 기기에 “파일 쓰기”를 허용하세요.";
 "That account can't be used on %@ now." = "지금 %@에서는 그 계정을 쓸 수 없습니다.";
 "This harness doesn't take these pictures or files." = "이 하네스는 이 그림이나 파일을 받지 않습니다.";
 "%@ didn't accept the connection." = "%@에서 연결을 받지 않았습니다.";

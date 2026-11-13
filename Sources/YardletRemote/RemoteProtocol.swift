@@ -126,6 +126,8 @@ public enum RemoteRefusal: String, Codable, Sendable, CaseIterable {
     /// lets an agent act without asking: a permission the host asks to confirm, and an answer that allows more than the
     /// one call it answers.
     case terminal
+    /// The device's Write files permission is off on the host (§15.28): a file restore or a Review change.
+    case fileWrites
     /// The account is not one the host can start this harness on now.
     case account
     /// A new worktree was asked for in a project that is not in a Git repository.
@@ -142,7 +144,8 @@ public enum RemoteRefusal: String, Codable, Sendable, CaseIterable {
     case otherApp
     /// A message of the task is being edited on the host.
     case editing
-    /// The task is changing on the host: moving to another account, or another change under way.
+    /// The task is changing on the host: moving to another account, or another change under way. For a Review change,
+    /// the changes differ from the ones the client read (§15.26).
     case changing
     /// Messages wait in the task's queue.
     case queue
@@ -313,6 +316,8 @@ public struct RemoteSnapshot: Equatable, Sendable {
     /// The bridge answers `taskOutputs` and `readFile` (§15.22).
     public var taskFiles: Bool
     public var reviewReading: Bool = false
+    /// The bridge answers `writeReview` (§15.26).
+    public var reviewWriting: Bool = false
     /// The bridge answers a task's settings, slash commands, edit and fork (§15.23).
     public var taskControls: Bool
     /// The bridge answers `subscribeTask` with `"detail": "full"` (§15.24).
@@ -1143,6 +1148,8 @@ public enum RemoteRequest: Equatable, Sendable {
     /// What a task made, and a part of one of its files (§15.22).
     case taskOutputs(taskID: String)
     case readReview(taskID: String, query: RemoteReviewQuery)
+    /// Stage all, Unstage all or Discard in a task's Review (§15.26); Discard takes `confirmed`.
+    case writeReview(taskID: String, change: RemoteReviewChange, confirmed: Bool)
     case readFile(taskID: String, path: String, offset: Int)
     case workspaceFiles(taskID: String)
     case projectWorkspaceFiles(projectID: String)
@@ -1249,6 +1256,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case .setScheduledTaskEnabled: "setScheduledTaskEnabled"
         case .taskOutputs: "taskOutputs"
         case .readReview: "readReview"
+        case .writeReview: "writeReview"
         case .readFile: "readFile"
         case .workspaceFiles: "workspaceFiles"
         case .projectWorkspaceFiles: "projectWorkspaceFiles"
@@ -1299,6 +1307,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case .scheduledTaskOptions, .saveScheduledTask, .deleteScheduledTasks: nil
         case .readReview, .workspaceFiles, .projectWorkspaceFiles, .composerState, .composerAction: nil
         case let .fileRewind(_, action, _, _, _): action == .restore ? .fileWrites : nil
+        case .writeReview: .fileWrites
         case .subtask, .cancelAccountMove: nil
         case .openTerminal, .terminalInput, .terminalResize, .terminalStatus, .terminalOutputAck, .closeTerminal: .terminal
         case .openTab, .closeTab, .answerTabPermission: nil
@@ -1331,7 +1340,7 @@ public enum RemoteRequest: Equatable, Sendable {
              let .suggestionOptions(id, _, _, _, _, _, _), let .setPinned(id, _),
              let .archiveTask(id), let .limitAccounts(id), let .continueWithAccount(id, _), let .setAutoContinue(id, _),
              let .actOnQueued(id, _, _), let .answerHandoff(id, _, _), let .chooseAnswer(id, _, _, _, _),
-             let .readReview(id, _), let .workspaceFiles(id), let .taskOutputs(id), let .readFile(id, _, _), let .taskSettings(id, _), let .setTaskSetting(id, _, _, _),
+             let .readReview(id, _), let .writeReview(id, _, _), let .workspaceFiles(id), let .taskOutputs(id), let .readFile(id, _, _), let .taskSettings(id, _), let .setTaskSetting(id, _, _, _),
              let .composerState(id), let .composerAction(id, _, _, _), let .composerCommands(id), let .runComposerCommand(id, _, _), let .editMessage(id, _, _), let .forkTask(id, _),
              let .watchTab(id, _, _, _, _, _), let .unwatchTab(id),
              let .tabFrameAck(id, _, _), let .tabInput(id, _, _), let .openTab(id, _, _), let .closeTab(id, _),
@@ -1392,6 +1401,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case .useUsageReset: true
         case let .subtask(_, _, stop): stop
         case let .fileRewind(_, action, _, _, _): action == .restore
+        case .writeReview: true
         case .cancelAccountMove: true
         case .openOriginalConversation, .projectAction, .taskAction: true
         case .saveScheduledTask, .deleteScheduledTasks: true
@@ -1486,6 +1496,7 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         var definition: Data?
         var completedOnly: Bool?
         var reviewQuery: RemoteReviewQuery?
+        var reviewChange: RemoteReviewChange?
         var path: String?
         var refresh: Bool?
         var prepare: Bool?
@@ -1808,6 +1819,11 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
                 return fail(.badRequest, "Missing or invalid review query")
             }
             request = .readReview(taskID: taskID, query: query)
+        case "writeReview":
+            guard let taskID = required(wire.taskId), let change = wire.reviewChange, change.isValid else {
+                return fail(.badRequest, "Missing or invalid review change")
+            }
+            request = .writeReview(taskID: taskID, change: change, confirmed: wire.confirmed == true)
         case "readFile":
             guard let taskID = required(wire.taskId), let path = required(wire.path) else {
                 return fail(.badRequest, "Missing taskId or path")
@@ -2169,6 +2185,8 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         case let .readReview(taskID, query):
             wire.taskId = taskID
             wire.reviewQuery = query
+        case let .writeReview(taskID, change, confirmed):
+            wire.taskId = taskID; wire.reviewChange = change; wire.confirmed = confirmed ? true : nil
         case let .readFile(taskID, path, offset):
             wire.taskId = taskID
             wire.path = path
@@ -2345,6 +2363,8 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     public var schedules: [RemoteSchedule]?
     /// `snapshot` on v2: the Mac answers `taskOutputs` and `readFile` (§15.22).
     public var reviewReading: Bool?
+    /// `snapshot` on v2: the Mac answers `writeReview` (§15.26).
+    public var reviewWriting: Bool?
     public var review: RemoteReviewResult?
     public var taskFiles: Bool?
     /// Workspace file names in the task folder (§15.27). Reads use `readFile`.

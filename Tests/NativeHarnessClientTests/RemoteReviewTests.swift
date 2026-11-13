@@ -100,6 +100,67 @@ extension RemoteBridgeTests {
         let unknown = RemoteReviewQuery(.diff, target: "discard")
         XCTAssertFalse(unknown.isValid)
     }
+
+    func testReviewChangesActOnlyOnTheReviewedChangesInTheTasksRepository() async throws {
+        let root = try ReviewFixture.repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let other = try ReviewFixture.repository()
+        defer { try? FileManager.default.removeItem(at: other) }
+        let scope = RemoteFileScope(folder: root)
+        let git = GitDiffService()
+        func reviewed(_ folder: URL, _ target: GitDiffTarget = .unstaged) async throws -> String {
+            RemoteReviewChange.fingerprint(try await git.load(workspaceURL: folder, target: target).text)
+        }
+        func write(_ change: RemoteReviewChange, confirmed: Bool = false, in scope: RemoteFileScope,
+                   authorize: @Sendable () throws -> Void = {}) async -> RemoteError? {
+            await RemoteReviewWriter.write(change, confirmed: confirmed, scope: scope, authorize: authorize)
+        }
+        func untouched() async throws {
+            let staged = try await git.load(workspaceURL: root, target: .staged)
+            XCTAssertTrue(staged.isEmpty)
+            let text = try String(contentsOf: root.appending(path: "README.md"), encoding: .utf8)
+            XCTAssertTrue(text.contains("Tuesday"))
+        }
+
+        // Changes other than the reviewed ones, a Discard not confirmed, and a permission withdrawn before Git writes.
+        let stale = await write(.init(.stage, expected: RemoteReviewChange.fingerprint("")), in: scope)
+        XCTAssertEqual(stale?.reason, .changing)
+        let unconfirmed = await write(.init(.discard, expected: try await reviewed(root)), in: scope)
+        XCTAssertEqual(unconfirmed?.reason, .confirmation)
+        let revoked = await write(.init(.discard, expected: try await reviewed(root)), confirmed: true, in: scope) {
+            throw RemoteError(.notAllowed, reason: .fileWrites)
+        }
+        XCTAssertEqual(revoked, RemoteError(.notAllowed, reason: .fileWrites))
+        try await untouched()
+
+        // Another repository, named directly or through a link in the task's folder, and a task below a larger
+        // checkout's root: none of them is changed.
+        let outside = await write(.init(.discard, repository: other.path, expected: try await reviewed(other)),
+                                  confirmed: true, in: scope)
+        XCTAssertEqual(outside?.code, .notFound)
+        let nested = root.appending(path: "Sources")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        let below = await write(.init(.discard, expected: try await reviewed(root)), confirmed: true,
+                                in: RemoteFileScope(folder: nested))
+        XCTAssertEqual(below, RemoteError(.notAllowed))
+        try await untouched()
+        try FileManager.default.createSymbolicLink(at: root.appending(path: "linked"), withDestinationURL: other)
+        let linked = await write(.init(.discard, repository: root.appending(path: "linked").path,
+                                       expected: try await reviewed(other)), confirmed: true, in: scope)
+        XCTAssertEqual(linked?.code, .notFound)
+        let otherText = try String(contentsOf: other.appending(path: "README.md"), encoding: .utf8)
+        XCTAssertTrue(otherText.contains("Tuesday"))
+        try FileManager.default.removeItem(at: root.appending(path: "linked"))
+
+        // The reviewed changes, staged and unstaged again.
+        let stagedNow = await write(.init(.stage, expected: try await reviewed(root)), in: scope)
+        XCTAssertNil(stagedNow)
+        let staged = try await git.load(workspaceURL: root, target: .staged)
+        XCTAssertEqual(staged.files.map(\.path), ["README.md"])
+        let unstagedNow = await write(.init(.unstage, expected: try await reviewed(root, .staged)), in: scope)
+        XCTAssertNil(unstagedNow)
+        try await untouched()
+    }
 }
 
 extension RemoteHostModelTests {
@@ -182,6 +243,118 @@ extension RemoteHostModelTests {
         }
         await host.shutdown()
     }
+
+    /// Also draws, into `.build/remote-review-qa`, the remote pane's Stage all and Discard, the refusal after Stage all
+    /// from a device without Write files, and the Discard sheet the pane asks with. `QA_LANGUAGE` names the files of a
+    /// run in another language (`-AppleLanguages '(ko)'`).
+    func testReviewChangesNeedTheDevicesWriteFilesPermissionThroughTwoYardlets() async throws {
+        let root = try ReviewFixture.repository()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "Draft\n".write(to: root.appending(path: "notes.txt"), atomically: true, encoding: .utf8)
+        let adapter = FakeHarnessAdapter(kind: .claudeCode)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteReviewChanges")))
+        let host = AppModel(store: SessionStore(repository: InMemorySessionRepository()),
+                            runtimeSelections: RuntimeSelectionStore(defaults: defaults),
+                            registry: HarnessRegistry { _, _ in adapter }, restoresIndexOnLaunch: false)
+        let created = await host.createSession(harness: .claudeCode, workspaceURL: root,
+                                               runtimeExecutableURL: URL(filePath: "/tmp/claude"), title: "Review")
+        let session = try XCTUnwrap(created)
+        let stack = try await LoopbackStack(bridge: AppModelRemoteBridge(model: host))
+        defer { stack.stop() }
+        let ticket = await stack.server.openPairing()
+        let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
+                                                        name: "Host", hosts: ["127.0.0.1:\(stack.port)"]).url)
+        let directory = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
+                                            hello: RemoteHandshakeHello(name: "Client", platform: "macos", appVersion: "test"))
+        let paired = try await directory.pair(link: link.absoluteString)
+        let client = try XCTUnwrap(directory.model(for: paired.id))
+        defer { client.stop() }
+        try await waitUntil { client.offersReview && client.offersReviewChanges }
+        let taskID = session.id.uuidString
+        let remote = RemoteGitDiffReading(model: client, taskID: taskID)
+        XCTAssertNil(remote.mutationUnavailableReason)
+        let context = try await remote.context()
+        let hostRoot = URL(filePath: try XCTUnwrap(context.workspace))
+        let git = GitDiffService()
+        let reviewed = try await remote.load(workspaceURL: hostRoot, target: .unstaged)
+        XCTAssertEqual(reviewed.files.map(\.path), ["README.md", "notes.txt"])
+
+        // A paired device has no Write files until the person at the host allows it.
+        let notAllowed = L10n.format("To change files from here, allow Write files for this device in Settings › Remote › Paired devices on %@.",
+                                     client.name)
+        do {
+            try await remote.mutate(.stage, workspaceURL: hostRoot, expected: reviewed)
+            XCTFail("Staged without Write files")
+        } catch { XCTAssertEqual(error.localizedDescription, notAllowed) }
+        let unchanged = try await git.load(workspaceURL: root, target: .staged)
+        XCTAssertTrue(unchanged.isEmpty)
+
+        let language = ProcessInfo.processInfo.environment["QA_LANGUAGE"] ?? "en"
+        let output = try WindowlessRender.directory("remote-review-qa")
+        for appearance in WindowlessRender.Appearance.allCases {
+            let size = NSSize(width: 900, height: 520)
+            let view = RemoteReviewOnly(client: client, taskID: taskID)
+                .environment(\.colorScheme, appearance.colorScheme)
+                .frame(width: size.width, height: size.height)
+                .background(ParityTheme.canvas)
+            let rendered = WindowlessRender.Host(view, size: size, appearance: appearance)
+            defer { rendered.close() }
+            let stage = L10n.string("Stage all")
+            await rendered.settle(until: { rendered.accessibilityElements().contains { $0.label == stage } })
+            rendered.settle(passes: 8)
+            XCTAssertTrue(rendered.accessibilityElements().contains { $0.label == L10n.string("Discard changes") })
+            try WindowlessRender.writePNG(rendered.capture().bitmap,
+                to: output.appending(path: "review-changes-\(language)-\(appearance.suffix).png"))
+            XCTAssertTrue(rendered.hosting.pressAccessibilityElement(labelled: stage))
+            await rendered.settle(until: {
+                rendered.accessibilityElements().contains { $0.description.contains(notAllowed) }
+            })
+            rendered.settle(passes: 4)
+            try WindowlessRender.writePNG(rendered.capture().bitmap,
+                to: output.appending(path: "review-changes-not-allowed-\(language)-\(appearance.suffix).png"))
+
+            let sheetSize = NSSize(width: 440, height: 300)
+            let sheet = GitDiscardReviewSheet(request: GitDiscardRequest(workspaceURL: hostRoot, snapshot: reviewed),
+                                              onCancel: {}, onDiscard: {})
+                .environment(\.colorScheme, appearance.colorScheme)
+                .frame(width: sheetSize.width, height: sheetSize.height)
+                .background(ParityTheme.canvas)
+            let drawnSheet = WindowlessRender.Host(sheet, size: sheetSize, appearance: appearance)
+            defer { drawnSheet.close() }
+            drawnSheet.settle(passes: 6)
+            try WindowlessRender.writePNG(drawnSheet.capture().bitmap,
+                to: output.appending(path: "review-discard-sheet-\(language)-\(appearance.suffix).png"))
+        }
+        let refusedFromThePane = try await git.load(workspaceURL: root, target: .staged)
+        XCTAssertTrue(refusedFromThePane.isEmpty)
+
+        // Allowed: Stage all, Unstage all and Discard change the host's repository as its own Review does.
+        try await stack.server.setPermission(.fileWrites, allowed: true, for: try XCTUnwrap(client.host.deviceID))
+        try await remote.mutate(.stage, workspaceURL: hostRoot, expected: reviewed)
+        let staged = try await git.load(workspaceURL: root, target: .staged)
+        XCTAssertEqual(staged.files.map(\.path), ["README.md", "notes.txt"])
+        let remoteStaged = try await remote.load(workspaceURL: hostRoot, target: .staged)
+        try await remote.mutate(.unstage, workspaceURL: hostRoot, expected: remoteStaged)
+        let unstaged = try await remote.load(workspaceURL: hostRoot, target: .unstaged)
+        XCTAssertEqual(unstaged, reviewed)
+        try await remote.mutate(.discard, workspaceURL: hostRoot, expected: unstaged)
+        let discarded = try await git.load(workspaceURL: root, target: .unstaged)
+        XCTAssertTrue(discarded.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appending(path: "notes.txt").path))
+        // A Review read before the discard no longer matches the host's changes.
+        do {
+            try await remote.mutate(.discard, workspaceURL: hostRoot, expected: unstaged)
+            XCTFail("Discarded changes that are no longer there")
+        } catch { XCTAssertEqual(error as? GitDiffServiceError, .changedSinceReview) }
+        await host.shutdown()
+    }
+}
+
+private struct RemoteReviewOnly: View {
+    let client: RemoteHostModel
+    let taskID: String
+    @State private var preferences = DiffReviewPreferences()
+    var body: some View { RemoteReviewPane(model: client, taskID: taskID, review: $preferences) }
 }
 
 private struct ReviewPair: View {

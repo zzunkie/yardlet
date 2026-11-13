@@ -4,11 +4,15 @@ import YardletRemote
 struct RemoteGitDiffReading: GitDiffReading {
     let isRemote = true
     let taskID: String
+    /// An older host reads its Review for this window but does not change it (§15.26).
+    let mutationUnavailableReason: String?
     private let hostName: String
     let read: @MainActor @Sendable (RemoteRequest) async -> RemoteResponse
 
     @MainActor init(model: RemoteHostModel, taskID: String) {
         self.taskID = taskID; hostName = model.name
+        mutationUnavailableReason = model.offersReviewChanges
+            ? nil : L10n.string("Update Yardlet on the host to use this panel.")
         read = { [weak model] request in
             guard let model else { return .failure("", RemoteError(.unavailable)) }
             return await model.response(to: request)
@@ -17,23 +21,42 @@ struct RemoteGitDiffReading: GitDiffReading {
 
     init(taskID: String,
          read: @escaping @MainActor @Sendable (RemoteRequest) async -> RemoteResponse) {
-        self.taskID = taskID; self.read = read; hostName = "Host"
+        self.taskID = taskID; self.read = read; hostName = "Host"; mutationUnavailableReason = nil
     }
 
     private struct ReadFailure: LocalizedError { let errorDescription: String? }
 
     private func request(_ query: RemoteReviewQuery) async throws -> RemoteReviewResult {
         let response = await read(.readReview(taskID: taskID, query: query))
-        guard response.ok, let review = response.review else {
-            if response.error?.code == .notFound { throw GitDiffServiceError.notARepository }
-            let message = await MainActor.run {
-                response.error?.code == .notAllowed
-                    ? L10n.string("This repository is outside the task's folders.")
-                    : RemoteHostModel.message(for: response.error, host: hostName)
-            }
-            throw ReadFailure(errorDescription: message)
-        }
+        guard response.ok, let review = response.review else { throw await failure(response.error) }
         return review
+    }
+
+    /// A refusal in the local Review's words where it has them: no repository, or changes that changed since.
+    private func failure(_ error: RemoteError?) async -> any Error {
+        if error?.code == .notFound { return GitDiffServiceError.notARepository }
+        if error?.code == .notAllowed, error?.reason == .changing { return GitDiffServiceError.changedSinceReview }
+        let message = await MainActor.run {
+            error?.code == .notAllowed && error?.reason == nil
+                ? L10n.string("This repository is outside the task's folders.")
+                : RemoteHostModel.message(for: error, host: hostName)
+        }
+        return ReadFailure(errorDescription: message)
+    }
+
+    /// Names no path: the host acts on its own diff when it is still the one `expected` shows (§15.26).
+    func mutate(_ action: GitMutation, workspaceURL: URL, expected: DiffSnapshot) async throws {
+        if let mutationUnavailableReason { throw ReadFailure(errorDescription: mutationUnavailableReason) }
+        let kind: RemoteReviewChange.Action = switch action {
+        case .stage: .stage
+        case .unstage: .unstage
+        case .discard: .discard
+        }
+        let change = RemoteReviewChange(kind, repository: workspaceURL.path,
+                                        expected: RemoteReviewChange.fingerprint(expected.text))
+        // Discard reaches here only from its confirmation sheet.
+        let response = await read(.writeReview(taskID: taskID, change: change, confirmed: action == .discard))
+        if !response.ok { throw await failure(response.error) }
     }
     func context() async throws -> RemoteReviewResult { try await request(.init(.context)) }
 

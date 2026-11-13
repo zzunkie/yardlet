@@ -55,6 +55,8 @@ final class RemoteHostModel: Identifiable {
     private(set) var offersWorkspaceFiles = false
     private(set) var offersTaskFiles = false
     private(set) var offersReview = false
+    /// The host's Review stages, unstages and discards for this window (§15.26).
+    private(set) var offersReviewChanges = false
     private(set) var offersTaskRail = false
     var taskRailFacts: [String: RemoteRailFacts] = [:]
     var runningRailActions: Set<String> = []
@@ -334,6 +336,7 @@ final class RemoteHostModel: Identifiable {
             offersSchedules = response.scheduledTasks == true
             offersTaskFiles = response.taskFiles == true
             offersReview = response.reviewReading == true
+            offersReviewChanges = response.reviewWriting == true
             offersTaskRail = response.taskRail == true
             if !offersTaskRail { taskRailFacts.removeAll() }
             if case let .task(taskID) = selection { Task { await readTaskRail(taskID) } }
@@ -663,6 +666,7 @@ final class RemoteHostModel: Identifiable {
         case .harness: L10n.format("%@ doesn't offer this harness now.", host)
         case .setting, .confirmation: L10n.format("That choice isn't offered on %@ now.", host)
         case .terminal: L10n.format("To use this from here, allow Terminal for this device in Settings › Remote › Paired devices on %@.", host)
+        case .fileWrites: L10n.format("To change files from here, allow Write files for this device in Settings › Remote › Paired devices on %@.", host)
         case .account: L10n.format("That account can't be used on %@ now.", host)
         case .worktree: L10n.string("The folder isn't in a Git repository, so it can't have a worktree.")
         case .attachments: L10n.string("This harness doesn't take these pictures or files.")

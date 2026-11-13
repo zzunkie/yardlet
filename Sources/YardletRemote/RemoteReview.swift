@@ -1,6 +1,7 @@
+import Crypto
 import Foundation
 
-/// Read-only Review operations. All paths are host paths, scoped to the named task.
+/// Review reads (`readReview`). All paths are host paths, scoped to the named task.
 public struct RemoteReviewQuery: Codable, Equatable, Sendable {
     public enum Operation: String, Codable, Sendable { case context, repositories, commits, baseBranch, root, diff, text, lastTurn }
     public var operation: Operation
@@ -46,4 +47,30 @@ public struct RemoteReviewResult: Codable, Equatable, Sendable {
     public var text: String?
     public var truncated: Bool?
     public init() {}
+}
+
+/// A Review change: Stage all, Unstage all or Discard, on the changes the client last read (§15.26). It names no
+/// path: the host acts on its own fresh diff of the repository, and only when that diff is still the one the client
+/// reviewed, which `expected` identifies.
+public struct RemoteReviewChange: Codable, Equatable, Sendable {
+    public enum Action: String, Codable, Sendable, CaseIterable { case stage, unstage, discard }
+    public var action: Action
+    /// A host repository as `readReview` names it; nil for the task's folder.
+    public var repository: String?
+    /// `fingerprint(_:)` of the `diff` text the client reviewed: unstaged changes for stage and discard, staged ones
+    /// for unstage.
+    public var expected: String
+    public init(_ action: Action, repository: String? = nil, expected: String) {
+        self.action = action; self.repository = repository; self.expected = expected
+    }
+
+    public var isValid: Bool {
+        (repository.map { $0.utf8.count <= 4096 && !$0.utf8.contains(0) } ?? true)
+            && expected.utf8.count == 64 && expected.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+    }
+
+    /// The lowercase hexadecimal SHA-256 of a review's unified diff text.
+    public static func fingerprint(_ text: String) -> String {
+        SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
 }

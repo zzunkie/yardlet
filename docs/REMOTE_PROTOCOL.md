@@ -556,6 +556,7 @@ reason words the refusal by its `code`.
 | `setting` | a setting, or a value of it, the Mac's menus do not offer now (§15.16) |
 | `confirmation` | a choice the Mac asks to confirm, sent without `confirmed` (§15.16) |
 | `terminal` | the device's Terminal permission is off: a terminal, or a choice that lets an agent act without asking (§15.28) |
+| `fileWrites` | the device's Write files permission is off: a file restore or a Review change (§15.26, §15.28) |
 | `account` | an account the Mac cannot start or move the task on now (§15.16, §15.33) |
 | `worktree` | a new worktree asked for outside a Git repository (§15.16, §15.35) |
 | `attachments` | pictures or files the harness or the task does not take (§4.4, §15.16) |
@@ -564,7 +565,7 @@ reason words the refusal by its `code`.
 | `notConnected` | the task is not connected to its harness on the Mac now |
 | `otherApp` | another app holds the task's conversation |
 | `editing` | a message of the task is being edited on the Mac |
-| `changing` | the task is changing on the Mac: moving to another account, another change under way, or the message is on its way |
+| `changing` | the task is changing on the Mac: moving to another account, another change under way, or the message is on its way; for a Review change, the changes differ from the ones reviewed (§15.26) |
 | `queue` | messages wait in the task's queue |
 | `running` | it waits for the running turn to end, or a run of the schedule is starting |
 | `hostOnly` | it is done on the Mac itself |
@@ -1874,7 +1875,7 @@ permission prompt in the watched tab (below); browsing outside a task stays on t
     a `permission` wait from a host without `tabPermissions`, say what waits on the Mac (§15.19's "Steps that are not
     requests").
 
-### 15.26 Read-only Review
+### 15.26 Review
 
 A snapshot may advertise `reviewReading: true`. Older hosts omit it; clients keep the panel unavailable.
 `readReview` takes `taskId` and `reviewQuery`, an object with `operation` and optional `repository`,
@@ -1897,8 +1898,8 @@ task snapshot, and clients never submit synthetic sidebar paths as host paths:
 Without `revision`, `text` reads the working file through §15.22's file reader, with the same absolute
 or task-relative path rules. An empty revision reads
 the index, `HEAD` reads the branch tip, and a full hexadecimal commit ID reads that commit. Branch diff
-uses the host's selected base branch, not a client-selected Git expression. Requests cannot mutate
-files or the index; Stage, Unstage and Discard remain disabled in the remote pane.
+uses the host's selected base branch, not a client-selected Git expression. `readReview` never changes
+files or the index.
 
 The task must still be listed. A repository is accepted only inside the task's authorized folders,
 with symbolic links resolved and the home-folder exclusions of §15.22. A task opened below a larger
@@ -1907,6 +1908,37 @@ a disallowed selection `notFound`, and a repository root outside those folders `
 answer `unavailable` without paths or command output. A response whose JSON encoding exceeds the server
 message limit answers `tooLarge`. Markdown renders on the client without resolving
 host-relative images or links against the client's filesystem. Last-turn provider changes use the host's existing projection after loading saved history without starting a model turn. Refresh reads them again; there is no new subscription.
+
+#### Stage, Unstage and Discard
+
+A snapshot may also advertise `reviewWriting: true`. It answers `writeReview`, which takes `taskId`, `reviewChange`
+and, for Discard, `confirmed: true`:
+
+```json
+{"id":"w-1","type":"writeReview","taskId":"T","reviewChange":{"action":"discard","repository":"/host/repo","expected":"<sha-256>"},"confirmed":true}
+```
+
+`action` is `stage` (Stage all), `unstage` (Unstage all) or `discard` (Discard changes), what the host's own Review
+offers on the Unstaged and Staged scopes. `repository` is optional and names a repository as `readReview` does.
+`expected` is the lowercase hexadecimal SHA-256 of the `diff` text the client reviewed: the `unstaged` diff for stage
+and discard, the `staged` diff for unstage. The request names no path, revision or Git argument. The host checks the
+repository against the same boundary as `readReview`, reads that diff again and acts only on its paths, and only when
+its hash is still `expected` and it is neither empty nor truncated; then it runs the same Git steps as its own Review,
+which refuse a path through a symbolic link and never reset or clean the repository. A success answers with no
+fields.
+
+`writeReview` needs the device's `fileWrites` permission (§15.28). The server registers a live permit in the same
+actor turn as that check, and the host checks it again immediately before each step that writes; a denial or a
+closed connection revokes it, and a step already run is not undone. Without the permission the answer is
+`notAllowed` with reason `fileWrites`. Invalid fields answer `badRequest`; a Discard without `confirmed`, `notAllowed`
+with reason `confirmation`; changes that differ from the reviewed ones, `notAllowed` with reason `changing`. Selection,
+boundary and Git failures answer as `readReview` does, without paths or command output. The audit log records the
+device, `writeReview.` and the action, the task and the result, never a path, diff or file content.
+
+The desktop's remote pane offers Stage all, Unstage all and Discard changes as the local pane does, asks the local
+Review's confirmation before Discard, and reads the Review again after a change. A refusal is shown above the diff;
+without the permission it says to allow Write files for this device in the host's Settings › Remote. Against a host
+without `reviewWriting` the actions stay dimmed and say to update Yardlet on the host. Phones ignore the flag.
 
 ### 15.27 Workspace files
 
@@ -1985,7 +2017,8 @@ refusals are coalesced per device, request type and result, independent of the u
 transition clears that device's refusal window so its first newly refused operation is recorded.
 
 These permissions reserve separate authorization for terminal sessions, direct file writes and host settings.
-They do not add file-writing or settings-changing requests by themselves. Credentials, vault entries, sign-in and
+They do not add file-writing or settings-changing requests by themselves. `fileWrites` guards a file restore
+(`fileRewind` with `restore`) and Review changes (`writeReview`, §15.26); its refusal carries reason `fileWrites`. Credentials, vault entries, sign-in and
 remote device management remain on the host.
 
 `terminal` also guards every choice that lets an agent act without asking, since such an agent can run what a shell

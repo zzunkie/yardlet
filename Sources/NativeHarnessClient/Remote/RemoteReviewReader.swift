@@ -14,12 +14,7 @@ enum RemoteReviewReader {
                 result.additionalRoots = scope.otherFolders.map(\.path)
                 return .success(result)
             }
-            // Check the spelling before resolving any client-supplied path or invoking Git there.
-            let selected = query.repository.map { URL(filePath: $0) } ?? scope.folder
-            guard folders.contains(where: { $0.standardizedFileURL == selected.standardizedFileURL })
-                    || RemoteFileReader.allowsPage(selected.path, in: scope) else {
-                return .failure(RemoteError(.notFound))
-            }
+            guard let selected = selection(query.repository, in: scope) else { return .failure(RemoteError(.notFound)) }
             if query.operation == .repositories {
                 result.repositories = try await service.repositories(containing: folders)
                     .filter { RemoteFileReader.allowsPage($0.path, in: scope) }.map(\.path)
@@ -34,9 +29,9 @@ enum RemoteReviewReader {
                 result.text = String(decoding: read.data, as: UTF8.self)
                 return .success(result)
             }
-            // A task rooted inside a larger checkout must not expose its siblings through Git.
-            let root = try await service.repositoryRoot(workspaceURL: selected)
-            guard RemoteFileReader.allowsPage(root.path, in: scope) else { return .failure(RemoteError(.notAllowed)) }
+            guard let root = try await allowedRoot(of: selected, in: scope, service: service) else {
+                return .failure(RemoteError(.notAllowed))
+            }
             switch query.operation {
             case .context, .repositories: break
             case .lastTurn: return .failure(RemoteError(.unavailable))
@@ -68,7 +63,7 @@ enum RemoteReviewReader {
                 default: return .failure(RemoteError(.badRequest))
                 }
                 let snapshot = try await service.load(workspaceURL: root, target: target)
-                result.text = snapshot.lines.map(\.text).joined(separator: "\n")
+                result.text = snapshot.text
                 result.truncated = snapshot.isTruncated
             case .text:
                 guard let path = query.path, PathRules.current.isRelative(path),
@@ -86,6 +81,22 @@ enum RemoteReviewReader {
         } catch GitDiffServiceError.notARepository { return .failure(RemoteError(.notFound)) }
         catch let error as RemoteError { return .failure(error) }
         catch { return .failure(RemoteError(.unavailable)) }
+    }
+
+    /// The folder a review request names: the task's folder when it names none. Its spelling is checked before any
+    /// client-supplied path is resolved or Git runs there; nil outside the task's folders.
+    static func selection(_ repository: String?, in scope: RemoteFileScope) -> URL? {
+        let selected = repository.map { URL(filePath: $0) } ?? scope.folder
+        guard ([scope.folder] + scope.otherFolders).contains(where: { $0.standardizedFileURL == selected.standardizedFileURL })
+                || RemoteFileReader.allowsPage(selected.path, in: scope) else { return nil }
+        return selected
+    }
+
+    /// The selected folder's repository top folder, or nil when it lies outside the task's folders: a task rooted
+    /// inside a larger checkout must not expose or change its siblings through Git.
+    static func allowedRoot(of selected: URL, in scope: RemoteFileScope, service: GitDiffService) async throws -> URL? {
+        let root = try await service.repositoryRoot(workspaceURL: selected)
+        return RemoteFileReader.allowsPage(root.path, in: scope) ? root : nil
     }
 
     private static func validHash(_ value: String) -> Bool {
