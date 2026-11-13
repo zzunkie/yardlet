@@ -65,6 +65,9 @@ jobs:
           persist-credentials: false
       - name: Show the toolchain
         run: swift --version
+      # The image has SQLite's library but not its header, which CSQLite builds against.
+      - name: Install SQLite's header
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends libsqlite3-dev
       # The compiler's errors also go to the run's summary and to the check run's annotations, which the API gives
       # without a sign-in.
       - name: Build
