@@ -92,6 +92,21 @@ grep -q 'connected through direct' "$logs/phone.log"
 "$yardlet" host status
 "$yardlet" host status --json | grep -q '"name":"Fixture phone"'
 
+echo '--- a sign-in in the terminal'
+# The harness's own sign-in runs here, with what is pasted reaching it; the stand-in's login reads signed out after.
+"$yardlet" host login | tee "$logs/logins.txt"
+grep -q '^kimi' "$logs/logins.txt"
+set +e
+printf 'CODE-1234\n' | "$yardlet" host login kimi | tee "$logs/login.txt"
+set -e
+grep -q 'paste the code' "$logs/login.txt"
+[[ $(cat "$home/stand-in/login.txt") == CODE-1234 ]] || { echo 'The pasted code did not reach the sign-in'; exit 1; }
+set +e
+"$yardlet" host login nothing-of-that-name 2> "$logs/login-unknown.txt"
+code=$?
+set -e
+[[ $code -ne 0 ]] && grep -q 'No harness is called' "$logs/login-unknown.txt"
+
 echo '--- stop'
 cli=$(cat "$home/stand-in/cli.pid")
 grandchild=$(cat "$home/stand-in/grandchild.pid")

@@ -70,6 +70,7 @@ yardlet host service install [--name NAME] [--every-address]
                                    # Run the host as a systemd user service, now and at every boot.
 yardlet host service uninstall     # Stop and remove the service, and list what stays.
 yardlet host update                # Install the latest release's host, as installing did.
+yardlet host login [HARNESS]       # Sign in to a harness from this terminal, or list the logins.
 yardlet --version
 ```
 
@@ -104,15 +105,47 @@ The data folder is `$XDG_DATA_HOME/yardlet`, else `~/.local/share/yardlet`, read
 
 - the task index, transcripts, drafts, projects and schedules, as the Mac keeps them in `~/.yardlet`;
 - `remote/`: the paired devices (`devices.json`), the audit log (`audit.log`) and the host's remote keys
-  (`identity.json`, 0600), in the Mac's formats;
+  (`identity.json`, 0600, or the marker of keys in the keyring, below), in the Mac's formats;
 - `host.lock` and `host.sock`, while a host runs.
 
 Its preferences are in `$XDG_CONFIG_HOME/yardlet.plist`, else `~/.config/yardlet.plist`, where Foundation on Linux keeps
 a program's: written when the host stops, and every half minute while it runs.
 
-The keys are in a file because a headless server usually has no keyring. The file is written whole through a
-temporary file the owner alone may read (`RemoteFileIdentityStore`), and a key file that others could read is narrowed
-to its owner before it is read.
+## Keys
+
+The host's remote keys (`Platform/Linux/LinuxSecretService.swift`) go in the desktop's keyring, the Secret Service
+through libsecret, when the host runs in a session that has one open, and otherwise in `remote/identity.json`, which
+only the person may read (0600). A headless server usually has no keyring, and a systemd service starts at boot
+before any keyring is unlocked, so a host started as a service keeps new keys in the file. libsecret is loaded when
+the system has it (`libsecret-1.so.0`); nothing links it.
+
+Where the keys are does not change once they exist. A key file is read first. Keys made in the keyring leave a marker
+beside it (`remote/identity.keyring`, which holds no secret), so a keyring that cannot be read yet, still locked after a
+reboot, makes the host wait for it, trying again every half minute and saying so in `status`, rather than make new
+keys, which would unpair every device. The file is written whole through a temporary file the owner alone may read
+(`RemoteFileIdentityStore`), and a key file that others could read is narrowed to its owner before it is read.
+
+## Signing in to the harnesses
+
+Each harness keeps its own login, as on the Mac. No browser opens on a server, so `yardlet host login HARNESS` (the
+harness's command, `claude` or `codex`, or its id) signs in from the person's terminal, through the running host,
+which knows the install its tasks start and the account folder they use (`Platform/Linux/LinuxHostSignIn.swift`).
+`yardlet host login` alone lists the harnesses found and how their logins read.
+
+- **Codex** signs in with its device code through its App Server (`account/login/start` with `chatgptDeviceCode`,
+  `CodexBrowserSignIn.runDeviceCode`): the command prints an address to open on any device and a code to enter there,
+  and ends when Codex says the sign-in finished. A Codex whose App Server offers no device code runs
+  `codex login --device-auth` in the terminal instead.
+- **Every other harness** runs its own sign-in command (`HarnessAccountBroker.loginCommand`, as the Mac's Account Center
+  does) in the terminal, which is handed to it until it ends. Claude Code's `claude auth login` prints an address to
+  open elsewhere and takes the code pasted back.
+- After a sign-in in the terminal, the host reads the login again and the command says whether it is signed in.
+
+**Antigravity CLI** keeps its Google login in the Secret Service on Linux (through go-keyring, over D-Bus), as on the
+Mac it uses the Keychain. A headless server has none by default, so before `yardlet host login agy` the computer needs
+a D-Bus session for the account (`dbus-user-session`), a Secret Service (`gnome-keyring`) and that keyring unlocked in
+the session the host runs in; without them agy cannot keep its login. Yardlet sets none of this up, and the host does
+not read Antigravity's login on Linux yet (it reads as unknown).
 
 ## Processes
 
@@ -161,20 +194,22 @@ distribution the host runs on.
 
 ## What it does not have yet
 
-Harness sign-in from the terminal is still to come. As on Windows, there is no Yardlet MCP server (so no connectors or session tools), terminal panel, browser panel or
+As on Windows, there is no Yardlet MCP server (so no connectors or session tools), terminal panel, browser panel or
 vault.
 
 ## Where it is built
 
 `.github/workflows/linux-host.yml` builds the host and its tests for x86_64 and aarch64 in swift.org's Ubuntu 22.04
 image, pinned by digest, for every pull request that changes more than documents and for `main`. It runs the Linux
-layer's tests (`Tests/YardletHostTests/`) in a home of their own, then `scripts/linux/check-host.sh`, which starts the
+layer's tests (`Tests/YardletHostTests/`) in a home of their own, the keyring's in a D-Bus session with gnome-keyring,
+then `scripts/linux/check-host.sh`, which starts the
 host as a person would, asks its status, adds a project, checks that a second host refuses to start and that SIGTERM
 ends it, and lists what it left in its home. `scripts/linux/check-remote.sh` then checks the direct path: the host
 listens on loopback and the runner's private address and not on every address, a browser's handshake gets 400, the
 pairing QR code reads back as its link (zbar), and the fixture's phone (`yardlet-remote-fixture --pair LINK --new-chat
 kimi-code`) pairs, starts a chat on the Windows checks' stand-in harness through the host, allows its request and gets
-its answer; stopping the host ends the stand-in and the process it detached, and with `--every-address` the host
+its answer; `yardlet host login kimi` runs the stand-in's own sign-in with a code piped to it, which reaches it;
+stopping the host ends the stand-in and the process it detached, and with `--every-address` the host
 listens on every address.
 
 The same workflow packs the release for both architectures as run artifacts (it makes no release and no tag) and

@@ -90,6 +90,13 @@ jobs:
       - name: Test the Linux layer
         shell: bash
         run: HOME="$(mktemp -d)" swift test --skip-build --force-resolved-versions --filter YardletHostTests
+      # In a session with a Secret Service, as a desktop has: gnome-keyring, unlocked with a password of the test's.
+      - name: Keep the keys in a keyring
+        shell: bash
+        run: |
+          apt-get install -y -qq --no-install-recommends gnome-keyring dbus libsecret-1-0 > /dev/null
+          HOME="$(mktemp -d)" dbus-run-session -- bash -c 'echo -n ci | gnome-keyring-daemon --unlock --components=secrets > /dev/null
+            YARDLET_TEST_SECRET_SERVICE=1 swift test --skip-build --force-resolved-versions --filter LinuxHostTests/testKeysInTheKeyring'
       - name: Start, ask and stop the host
         shell: bash
         run: scripts/linux/check-host.sh "$(swift build --show-bin-path)"

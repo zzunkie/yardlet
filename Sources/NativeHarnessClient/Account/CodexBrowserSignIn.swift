@@ -5,6 +5,10 @@ import Foundation
 /// says how that sign-in ended. Yardlet opens the address and waits; the credential stays between the browser and
 /// Codex. Cancelling sends `account/login/cancel`. The App Server runs only while the sign-in does. A Codex that
 /// does not start one (an older App Server, a start refused) is `unavailable`, and the caller runs `codex login`.
+///
+/// A computer with no browser of its own (the Linux host) signs in with Codex's device code instead
+/// (`runDeviceCode`): `type: "chatgptDeviceCode"` answers with an address to open on any device and a one-time code
+/// to enter there, and the sign-in ends on the same completion.
 actor CodexBrowserSignIn {
     enum Outcome: Equatable, Sendable {
         case signedIn
@@ -25,6 +29,27 @@ actor CodexBrowserSignIn {
 
     /// Starts the sign-in, hands its address to `open`, and returns once Codex says how it ended.
     func run(open: @escaping @Sendable (URL) async -> Void) async -> Outcome {
+        await run(type: "chatgpt") { result in
+            guard let address = result["authUrl"]?.stringValue.flatMap(URL.init(string:)), address.scheme == "https" else {
+                return nil
+            }
+            return { await open(address) }
+        }
+    }
+
+    /// Starts Codex's device-code sign-in, hands the address to open and the code to enter to `show`, and returns
+    /// once Codex says how it ended.
+    func runDeviceCode(show: @escaping @Sendable (URL, String) async -> Void) async -> Outcome {
+        await run(type: "chatgptDeviceCode") { result in
+            guard let address = result["verificationUrl"]?.stringValue.flatMap(URL.init(string:)), address.scheme == "https",
+                  let code = result["userCode"]?.stringValue, !code.isEmpty else { return nil }
+            return { await show(address, code) }
+        }
+    }
+
+    /// Starts a sign-in of `type`, hands what its start answered to the person through `present`'s action (nil when
+    /// the answer is not one to act on), and waits for its completion.
+    private func run(type: String, present: (JSONValue) -> (@Sendable () async -> Void)?) async -> Outcome {
         defer { loginID = nil }
         let notifications: AsyncStream<CodexRawFrame>
         let started: CodexRPCIncomingMessage
@@ -33,20 +58,19 @@ actor CodexBrowserSignIn {
             notifications = await transport.notifications()
             _ = try await transport.request(CodexProtocol.initialize(id: 1, clientVersion: "0.2"))
             started = try await transport.request(CodexRPCRequest(
-                id: 2, method: "account/login/start", params: .object(["type": .string("chatgpt")])
+                id: 2, method: "account/login/start", params: .object(["type": .string(type)])
             ))
         } catch {
             await transport.stop()
             return isCancelled ? .cancelled : .unavailable(error.localizedDescription)
         }
-        guard let result = started.result, let id = result["loginId"]?.stringValue,
-              let address = result["authUrl"]?.stringValue.flatMap(URL.init(string:)), address.scheme == "https" else {
+        guard let result = started.result, let id = result["loginId"]?.stringValue, let action = present(result) else {
             await transport.stop()
             return isCancelled ? .cancelled : .unavailable(started.error?["message"]?.stringValue)
         }
         loginID = id
         guard !isCancelled else { return await cancelled() }
-        await open(address)
+        await action()
         for await frame in notifications where frame.message.method == "account/login/completed" {
             guard let params = frame.message.params, params["loginId"]?.stringValue ?? id == id else { continue }
             await transport.stop()

@@ -899,7 +899,8 @@ final class AccountBoundaryTests: XCTestCase {
     }
 
     /// Codex's own browser sign-in: the address its App Server answers is opened, the sign-in ends on Codex's
-    /// completion of that login and no other, and cancelling cancels that login and ends the App Server.
+    /// completion of that login and no other, and cancelling cancels that login and ends the App Server. Its
+    /// device-code sign-in asks for `chatgptDeviceCode` and shows the address and code it answers.
     func testCodexBrowserSignInOpensCodexsAddressAndEndsOnThatLoginsCompletion() async throws {
         func transport() -> FakeCodexAccountTransport {
             FakeCodexAccountTransport(responses: [
@@ -939,6 +940,31 @@ final class AccountBoundaryTests: XCTestCase {
         XCTAssertEqual(cancelledOutcome, .cancelled)
         let cancel = await cancelled.requests.first { $0.method == "account/login/cancel" }
         XCTAssertEqual(cancel?.params, .object(["loginId": .string("login-1")]))
+
+        // A computer with no browser of its own: Codex's device code, shown with its address, ends the same way.
+        let device = FakeCodexAccountTransport(responses: [
+            "initialize": [.object([:])],
+            "account/login/start": [.object([
+                "type": .string("chatgptDeviceCode"), "loginId": .string("login-2"),
+                "verificationUrl": .string("https://auth.example.test/codex/device"), "userCode": .string("ABCD-1234")
+            ])]
+        ])
+        let shown = OpenedAddresses()
+        let deviceSignIn = CodexBrowserSignIn(executableURL: URL(filePath: "/tmp/codex"), transport: device)
+        let deviceRun = Task {
+            await deviceSignIn.runDeviceCode { address, code in
+                await shown.add(URL(string: address.absoluteString + "#" + code)!)
+            }
+        }
+        try await waitUntil { await shown.urls.count == 1 }
+        await device.emit(method: "account/login/completed",
+                          params: .object(["loginId": .string("login-2"), "success": .bool(true)]))
+        let deviceOutcome = await deviceRun.value
+        XCTAssertEqual(deviceOutcome, .signedIn)
+        let shownURLs = await shown.urls
+        XCTAssertEqual(shownURLs, [URL(string: "https://auth.example.test/codex/device#ABCD-1234")!])
+        let deviceStart = await device.requests.first { $0.method == "account/login/start" }
+        XCTAssertEqual(deviceStart?.params, .object(["type": .string("chatgptDeviceCode")]))
     }
 
     func testCodexAccountMonitorPublishesInitialSnapshotAndSparseUpdates() async throws {

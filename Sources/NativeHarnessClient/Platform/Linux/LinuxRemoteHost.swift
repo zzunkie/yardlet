@@ -27,9 +27,9 @@ extension RemoteHostPlatform {
 }
 
 extension RemoteControlService {
-    /// The remote for the Linux host: the paired devices, the audit log and the keys under the data folder's `remote/`
-    /// (`LinuxHostPaths`), in the Mac's format. Signing in to a relay account is not offered, so no account token is
-    /// kept.
+    /// The remote for the Linux host: the paired devices and the audit log under the data folder's `remote/`
+    /// (`LinuxHostPaths`), in the Mac's format, and the keys in a file there or in the session's keyring
+    /// (`LinuxRemoteIdentityStore`). Signing in to a relay account is not offered, so no account token is kept.
     static func live(model: AppModel, name: String? = nil,
                      reach: RemoteLinuxListener.Reach = .privateNetworks) -> RemoteControlService {
         let folder = LinuxHostPaths.remoteFolder()
@@ -37,7 +37,7 @@ extension RemoteControlService {
             bridge: AppModelRemoteBridge(model: model),
             deviceStore: RemoteDeviceStore(fileURL: folder.appending(path: "devices.json")),
             audit: RemoteAuditLog(fileURL: folder.appending(path: "audit.log")),
-            identityStore: RemoteFileIdentityStore(fileURL: folder.appending(path: "identity.json")),
+            identityStore: LinuxRemoteIdentityStore.live(folder: folder),
             platform: .linux(reach: reach),
             macName: name,
             appVersion: LinuxHostVersion.current)

@@ -73,6 +73,30 @@ final class LinuxHostTests: XCTestCase {
         XCTAssertEqual(second.noise.publicKey, first.noise.publicKey)
     }
 
+    /// Keys made where a keyring is open stay in the keyring, a keyring that cannot be read is waited for rather than
+    /// replaced with new keys (which would unpair every device), and a service keeps new keys in the file. Needs a
+    /// Secret Service in the session (linux-host.yml runs this in one with gnome-keyring).
+    func testKeysInTheKeyringStayThereAndAreWaitedFor() throws {
+        guard ProcessInfo.processInfo.environment["YARDLET_TEST_SECRET_SERVICE"] == "1" else {
+            throw XCTSkip("Needs a Secret Service; linux-host.yml provides one")
+        }
+        let keyring = try XCTUnwrap(LinuxSecretService.load())
+        func store(_ name: String, keyring: LinuxSecretService?, service: Bool = false) -> LinuxRemoteIdentityStore {
+            LinuxRemoteIdentityStore(file: RemoteFileIdentityStore(fileURL: folder.appending(path: "\(name)/identity.json")),
+                                     marker: folder.appending(path: "\(name)/identity.keyring"),
+                                     keyring: keyring, keepsNewKeysInKeyring: !service)
+        }
+        let made = try store("session", keyring: keyring).loadOrCreate()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appending(path: "session/identity.json").path))
+        XCTAssertEqual(store("session", keyring: keyring).place, "keyring")
+        XCTAssertEqual(try store("session", keyring: keyring).loadOrCreate().noise.publicKey, made.noise.publicKey)
+        XCTAssertThrowsError(try store("session", keyring: nil).loadOrCreate())
+
+        _ = try store("service", keyring: keyring, service: true).loadOrCreate()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: folder.appending(path: "service/identity.json").path))
+        XCTAssertEqual(store("service", keyring: keyring).place, "file")
+    }
+
     /// A systemd service has no login shell's PATH; the host reads it from the person's login shell.
     func testTheLoginShellsPathIsRead() async throws {
         let home = folder.appending(path: "home", directoryHint: .isDirectory)

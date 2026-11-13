@@ -19,6 +19,7 @@ final class LinuxHost {
     /// The first look for the harnesses' installs, on the login shell's `PATH`; `status` answers once it is done, so it
     /// never lists a harness as missing that the host is still looking for.
     private var harnessesFound: Task<Void, Never>?
+    private lazy var signIn = LinuxHostSignIn(model: model)
     private var isStopping = false
 
     private init(name: String, reach: RemoteLinuxListener.Reach) {
@@ -48,8 +49,11 @@ final class LinuxHost {
         RunLoop.main.add(Timer(timeInterval: 86_400, repeats: true) { _ in }, forMode: .default)
         // Foundation on Linux writes preferences to disk only when asked (to `~/.config/yardlet.plist`), and only
         // what changed, so a host that ends without stopping loses at most the last half minute of them.
-        RunLoop.main.add(Timer(timeInterval: 30, repeats: true) { _ in UserDefaults.yardlet.synchronize() },
-                         forMode: .default)
+        RunLoop.main.add(Timer(timeInterval: 30, repeats: true) { _ in
+            UserDefaults.yardlet.synchronize()
+            // Keys in a keyring that was still locked are read again once it may be open.
+            MainActor.assumeIsolated { host.remote.retryIfKeysUnread() }
+        }, forMode: .default)
         while true { RunLoop.main.run() }
     }
 
@@ -154,6 +158,19 @@ final class LinuxHost {
             return HostControlReply(projects: projects())
         case .projects:
             return HostControlReply(projects: projects())
+        case .login, .loginState, .cancelLogin, .checkAccount:
+            guard let name = request.harness, let descriptor = LinuxHostSignIn.harness(named: name) else {
+                return .failure("No harness is called \(request.harness ?? "that"). "
+                    + "Name one of: \(HarnessCatalog.builtIns.map(\.executableName).joined(separator: ", ")).")
+            }
+            switch request.command {
+            case .login: return await signIn.start(descriptor)
+            case .cancelLogin:
+                await signIn.cancel(descriptor)
+                return HostControlReply()
+            case .checkAccount: return await signIn.check(descriptor)
+            default: return signIn.state(descriptor)
+            }
         }
     }
 
@@ -198,13 +215,18 @@ final class LinuxHost {
                               path: remote.connectedPaths[device.id]?.rawValue, lastSeenAt: device.lastSeenAt)
         }
         let harnesses = HarnessCatalog.builtIns.map { descriptor in
-            HostStatus.Harness(id: descriptor.id.rawValue, name: descriptor.displayName,
-                               runtime: model.runtimeSelections.selectedURL(for: descriptor.id)?.path(percentEncoded: false))
+            let runtime = model.runtimeSelections.selectedURL(for: descriptor.id)
+            return HostStatus.Harness(id: descriptor.id.rawValue, name: descriptor.displayName,
+                                      runtime: runtime?.path(percentEncoded: false),
+                                      account: runtime == nil ? nil : signIn.account(descriptor.id)?.snapshot?.state.rawValue)
         }
         return HostStatus(
             version: LinuxHostVersion.current, processID: getpid(), name: name,
             dataFolder: LinuxHostPaths.dataRootLocation().path(percentEncoded: false),
-            remote: HostStatus.Remote(enabled: remote.isEnabled, listensOn: self.reach.rawValue, direct: direct, port: port,
+            remote: HostStatus.Remote(enabled: remote.isEnabled, listensOn: self.reach.rawValue,
+                                      keys: LinuxRemoteIdentityStore.live(folder: LinuxHostPaths.remoteFolder()).place,
+                                      keysUnread: remote.identity == nil,
+                                      direct: direct, port: port,
                                       directFailure: reach.directFailure,
                                       addresses: remote.directHosts, relay: relay, relayFailure: relayFailure),
             devices: devices, harnesses: harnesses, projects: projects(),

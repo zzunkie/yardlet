@@ -509,6 +509,13 @@ final class RemoteControlService {
         return loaded
     }
 
+    /// Reads this computer's keys again and serves, after a read that failed while the remote is on: a Linux host whose
+    /// keys are in a keyring not unlocked yet (docs/LINUX_HOST.md, "Keys").
+    func retryIfKeysUnread() {
+        guard started, isEnabled, identity == nil else { return }
+        activate()
+    }
+
     private func activate() {
         refreshAddresses()
         guard activation == nil else { return }

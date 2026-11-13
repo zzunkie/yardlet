@@ -15,11 +15,19 @@ struct HostControlRequest: Codable, Equatable {
         case cancelPairing
         case addProject
         case projects
+        /// Starts signing in to `harness` (`LinuxHostSignIn`).
+        case login
+        case loginState
+        case cancelLogin
+        /// Reads `harness`'s login again, once a sign-in in the terminal has ended.
+        case checkAccount
     }
 
     var command: Command
     /// The folder `addProject` adds.
     var path: String?
+    /// The harness a sign-in is for, by its id or its command.
+    var harness: String?
 }
 
 struct HostControlReply: Codable, Equatable {
@@ -27,6 +35,7 @@ struct HostControlReply: Codable, Equatable {
     var status: HostStatus?
     var pairing: HostStatus.Pairing?
     var projects: [HostStatus.Project]?
+    var signIn: HostSignIn?
 
     static func failure(_ message: String) -> HostControlReply { HostControlReply(error: message) }
 }
@@ -38,6 +47,10 @@ struct HostStatus: Codable, Equatable {
         /// Where the direct-path listener takes connections: `private` (loopback, private and Tailscale addresses) or
         /// `all`, which the person chose with `--every-address`.
         var listensOn: String
+        /// Where the remote's keys are: `file` or `keyring`.
+        var keys: String
+        /// The keys could not be read yet (a keyring still locked), so the remote does not serve.
+        var keysUnread: Bool
         /// The direct-path listener: `stopped`, `starting`, `ready` or `failed`.
         var direct: String
         var port: UInt16?
@@ -63,6 +76,8 @@ struct HostStatus: Codable, Equatable {
         var name: String
         /// The CLI new tasks start, nil when none was found.
         var runtime: String?
+        /// Its login as Yardlet last read it: `signedIn`, `signedOut`, `actionRequired`, `unavailable` or `unknown`.
+        var account: String?
     }
 
     struct Project: Codable, Equatable {

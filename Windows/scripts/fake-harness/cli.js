@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // A stand-in for an ACP harness installed with npm, for Windows/scripts/check-harness.ps1 and
-// check-local.ps1. It answers --version; under `acp` it starts a detached process of its own, which would
+// check-local.ps1, and for the Linux host's checks (scripts/linux/). It answers --version; under `acp` it starts a detached process of its own, which would
 // outlive it, writes both process IDs beside itself and serves ACP: initialize, a new session, loading a saved
 // one (whose turns it does not replay), and a prompt that reads a file, asks to edit it, and once allowed reports the
 // edit with its diff and streams its answer (or a short one once denied). A turn the client cancels ends as
@@ -16,6 +16,24 @@ fs.appendFileSync(path.join(__dirname, 'calls.log'), JSON.stringify(args) + '\n'
 if (args[0] === '--version') {
   console.log('kimi 1.0.0 (Yardlet stand-in)')
   process.exit(0)
+}
+// A sign-in as Claude Code's reads one: an address to open elsewhere and the code pasted back, which it keeps beside
+// itself (login.txt) for the Linux host's check of `yardlet host login`.
+if (args[0] === 'login') {
+  console.log('Open https://example.test/device on any device, then paste the code here:')
+  let pasted = ''
+  const done = () => {
+    fs.writeFileSync(path.join(__dirname, 'login.txt'), pasted.split('\n')[0].trim())
+    console.log('Signed in.')
+    process.exit(0)
+  }
+  process.stdin.setEncoding('utf8')
+  process.stdin.on('data', (chunk) => {
+    pasted += chunk
+    if (pasted.includes('\n')) done()
+  })
+  process.stdin.on('end', done)
+  return
 }
 if (args[0] !== 'acp') {
   console.error('unknown command: ' + JSON.stringify(args))
