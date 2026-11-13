@@ -25,7 +25,7 @@ final class LinuxHostSignIn {
     }
 
     /// The harness a person names: its id (`claude-code`), or its command (`claude`).
-    static func harness(named name: String) -> HarnessDescriptor? {
+    nonisolated static func harness(named name: String) -> HarnessDescriptor? {
         HarnessCatalog.builtIns.first { $0.id.rawValue == name }
             ?? HarnessCatalog.builtIns.first { $0.executableName == name }
     }
