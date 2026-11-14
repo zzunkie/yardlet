@@ -179,6 +179,49 @@ final class TranscriptAutoFollowTests: XCTestCase {
         try snapshot(hosting, to: "pending-approval-in-view.png")
     }
 
+    /// The keyboard scrolls the conversation as the reader's scroll does, from a message's text that has
+    /// it: Page Up moves a page and lets go of following, growth then leaves the reader where they are,
+    /// Home goes to the top and End back to the end, which follows again. The row list's: in the stack a
+    /// page key moves the conversation without letting go of following, and Home and End do not move it.
+    func checkTheKeyboardScrollsAsTheReaderDoes() throws {
+        try XCTSkipUnless(ConversationRowListSwitch.isOn, "the row list's keyboard scrolling")
+        try requireAwakeDisplay()
+        var entries = [TranscriptEntry(content: .user(text: "Fix the calc tests"))]
+        for index in 0..<8 {
+            entries.append(TranscriptEntry(content: .assistant(
+                text: String(repeating: "Earlier reasoning \(index). ", count: 20), isStreaming: false)))
+        }
+        let feed = Feed(entries)
+        let (hosting, window) = mount(Host(feed: feed))
+        defer { window.close() }
+        let scroll = try XCTUnwrap(scrollView(in: hosting))
+        XCTAssertLessThanOrEqual(distance(scroll), Self.pinned)
+        // As the key bindings hand a key's action to the text that has the keyboard: one in view.
+        func press(_ action: Selector) throws {
+            let text = try XCTUnwrap(TranscriptProseRenderingTests.proseTextViews(in: hosting).last { $0.window != nil })
+            text.doCommand(by: action)
+        }
+
+        try press(#selector(NSResponder.scrollPageUp(_:)))
+        pump(hosting)
+        XCTAssertGreaterThan(distance(scroll), scroll.contentView.bounds.height / 2, "a page up")
+        feed.entries.append(TranscriptEntry(content: .assistant(
+            text: String(repeating: "More reasoning. ", count: 30), isStreaming: false)))
+        pump(hosting)
+        XCTAssertGreaterThan(distance(scroll), Self.pinned, "following let go")
+
+        try press(#selector(NSResponder.scrollToBeginningOfDocument(_:)))
+        pump(hosting)
+        XCTAssertLessThanOrEqual(scroll.contentView.bounds.minY, 1, "Home")
+        try press(#selector(NSResponder.scrollToEndOfDocument(_:)))
+        pump(hosting)
+        XCTAssertLessThanOrEqual(distance(scroll), 1, "End")
+        feed.entries.append(TranscriptEntry(content: .assistant(
+            text: String(repeating: "The fix. ", count: 30), isStreaming: false)))
+        pump(hosting)
+        XCTAssertLessThanOrEqual(distance(scroll), Self.pinned, "following again")
+    }
+
     // MARK: - Fixtures
 
     fileprivate struct Host: View {
@@ -319,6 +362,10 @@ extension TranscriptAutoFollowTests {
 
     func testANewPendingApprovalIsBroughtIntoViewAfterScrollingAway() throws {
         try checkANewPendingApprovalIsBroughtIntoViewAfterScrollingAway()
+    }
+
+    func testTheKeyboardScrollsAsTheReaderDoes() throws {
+        try checkTheKeyboardScrollsAsTheReaderDoes()
     }
 
     // MARK: - The Codex timeline

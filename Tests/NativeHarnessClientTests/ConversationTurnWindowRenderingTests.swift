@@ -137,11 +137,47 @@ final class ConversationTurnWindowRenderingTests: XCTestCase {
     }
 
     /// The turns, or parts of turns, the conversation draws, top first.
+    /// The row list holds only the rows near the viewport, so the conversation is read from its top to
+    /// its end, a viewport at a time, and put back; a turn's view is the stack's turn host or the row
+    /// list's cell around the turn's hosting view. Frames are in the conversation's document.
     private func turnViews(_ host: WindowlessRender.Host<AnyView>) -> [CGRect] {
         func all(_ view: NSView) -> [NSView] {
-            (view is ConversationPressSurface && !view.subviews.isEmpty ? [view] : []) + view.subviews.flatMap(all)
+            let isTurn = view is ConversationRowCell
+                || (type(of: view) == ConversationPressSurface.self && !view.subviews.isEmpty)
+            return (isTurn ? [view] : []) + view.subviews.flatMap(all)
         }
-        return all(host.hosting).map { $0.convert($0.bounds, to: nil) }.sorted { $0.maxY > $1.maxY }
+        guard let scroll = conversationScrollView(host.hosting), let document = scroll.documentView else { return [] }
+        let clip = scroll.contentView
+        let start = clip.bounds.origin
+        let end = max(0, document.frame.height - clip.bounds.height)
+        var frames: [ObjectIdentifier: CGRect] = [:]
+        var y: CGFloat = 0
+        while true {
+            clip.scroll(to: NSPoint(x: 0, y: min(y, end)))
+            scroll.reflectScrolledClipView(clip)
+            host.settle(passes: 1, interval: 0.01)
+            // By the turn's hosting view: the row list hands a cell on to the next row coming into view.
+            for view in all(document) where view.window != nil {
+                frames[ObjectIdentifier(view.subviews.first ?? view)] = view.convert(view.bounds, to: document)
+            }
+            guard y < end else { break }
+            y += clip.bounds.height
+        }
+        clip.scroll(to: start)
+        scroll.reflectScrolledClipView(clip)
+        host.settle(passes: 1, interval: 0.01)
+        // Up from the document's bottom, as the window's coordinates go, and from the top down.
+        return frames.values
+            .map { document.isFlipped ? CGRect(x: $0.minX, y: -$0.maxY, width: $0.width, height: $0.height) : $0 }
+            .sorted { $0.maxY > $1.maxY }
+    }
+
+    /// The conversation's scroll view: the tallest document.
+    private func conversationScrollView(_ view: NSView) -> NSScrollView? {
+        func all(_ view: NSView) -> [NSScrollView] {
+            ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap(all)
+        }
+        return all(view).max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }
     }
 
     /// The space between each turn drawn, or part of one, and the next.

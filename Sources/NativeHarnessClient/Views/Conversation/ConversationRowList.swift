@@ -83,7 +83,10 @@ final class ConversationRowListScroller {
 final class ConversationRowListScrollView: NSScrollView {
     /// The reader started a new scroll.
     var onReaderBeganScrolling: () -> Void = {}
-    private var isLiveScrolling = false
+    /// The reader's gesture, or their drag of the scroller, ended with its momentum.
+    var onReaderEndedScrolling: () -> Void = {}
+    /// A trackpad's gesture or a drag of the scroller is under way, momentum included.
+    private(set) var isLiveScrolling = false
     private var lastReaderMovement: TimeInterval = 0
     private var wheelMonitor: Any?
     /// Whether the scroll gesture under way scrolls the conversation though it started over a code
@@ -156,6 +159,7 @@ final class ConversationRowListScrollView: NSScrollView {
     @objc private func liveScrollEnded() {
         isLiveScrolling = false
         readerMoved()
+        onReaderEndedScrolling()
     }
 
     private func readerMoved() {
@@ -171,142 +175,110 @@ final class ConversationRowListScrollView: NSScrollView {
         super.scrollWheel(with: event)
     }
 
-    // The keyboard's scrolling.
-    override func scrollPageUp(_ sender: Any?) { readerMoved(); super.scrollPageUp(sender) }
-    override func scrollPageDown(_ sender: Any?) { readerMoved(); super.scrollPageDown(sender) }
-    override func scrollLineUp(_ sender: Any?) { readerMoved(); super.scrollLineUp(sender) }
-    override func scrollLineDown(_ sender: Any?) { readerMoved(); super.scrollLineDown(sender) }
-    override func scrollToBeginningOfDocument(_ sender: Any?) { readerMoved(); super.scrollToBeginningOfDocument(sender) }
-    override func scrollToEndOfDocument(_ sender: Any?) { readerMoved(); super.scrollToEndOfDocument(sender) }
+    // The keyboard's scrolling, which a text in the conversation hands on (`TranscriptProseTextView`):
+    // the reader's own, as the wheel's is. NSScrollView answers only `pageUp:` and `pageDown:` itself.
+    override func scrollPageUp(_ sender: Any?) { readerScroll(by: -page) }
+    override func scrollPageDown(_ sender: Any?) { readerScroll(by: page) }
+    override func pageUp(_ sender: Any?) { readerScroll(by: -page) }
+    override func pageDown(_ sender: Any?) { readerScroll(by: page) }
+    override func scrollLineUp(_ sender: Any?) { readerScroll(by: -verticalLineScroll) }
+    override func scrollLineDown(_ sender: Any?) { readerScroll(by: verticalLineScroll) }
+    override func scrollToBeginningOfDocument(_ sender: Any?) { readerScroll(toY: 0) }
+    override func scrollToEndOfDocument(_ sender: Any?) { readerScroll(toY: .greatestFiniteMagnitude) }
+
+    /// A page, less what stays in view of the one before.
+    private var page: CGFloat { max(0, contentView.bounds.height - verticalPageScroll) }
+
+    private func readerScroll(by delta: CGFloat) {
+        readerScroll(toY: contentView.bounds.minY + delta)
+    }
+
+    private func readerScroll(toY y: CGFloat) {
+        guard let document = documentView else { return }
+        if !isReaderScrolling { onReaderBeganScrolling() }
+        readerMoved()
+        let target = min(max(0, y), max(0, document.frame.height - contentView.bounds.height))
+        contentView.scroll(to: NSPoint(x: contentView.bounds.minX, y: target))
+        reflectScrolledClipView(contentView)
+    }
 }
 
-/// A row's view: the turn's hosting view, placed in the conversation's column below the gap before it.
-/// It places the turn as its frame or gaps change, without asking the window for a layout pass.
-private final class ConversationRowCell: ConversationPressSurface {
+/// A row's view: the turn's hosting view, in the conversation's column, as tall as the turn. Presses the
+/// turn's content hands on go on to the list's document (`ConversationRowsView`), which takes them for
+/// the conversation's selection; the cell is not a press surface of its own, or the document would
+/// follow a press the cell had followed to its release, and wait for another.
+final class ConversationRowCell: NSView {
     private(set) var content: NSView?
-    /// The space above the turn, and below it (the conversation's end, under the last row).
-    var gap: CGFloat = 0 {
-        didSet { if gap != oldValue { placeContent() } }
-    }
-    var bottom: CGFloat = 0 {
-        didSet { if bottom != oldValue { placeContent() } }
-    }
+
+    override var isFlipped: Bool { true }
 
     func show(_ view: NSView) {
         guard content !== view else { return }
         detach()
         view.removeFromSuperview()
+        view.frame = bounds
+        view.autoresizingMask = [.width, .height]
         content = view
         addSubview(view)
-        placeContent()
     }
 
     func detach() {
         if let content, content.superview === self { content.removeFromSuperview() }
         content = nil
     }
-
-    override func setFrameSize(_ newSize: NSSize) {
-        super.setFrameSize(newSize)
-        placeContent()
-    }
-
-    private func placeContent() {
-        guard let content else { return }
-        let width = ConversationRowListController.columnWidth(in: bounds.width)
-        let frame = CGRect(x: ((bounds.width - width) / 2).rounded(.down), y: gap, width: width,
-                           height: max(0, bounds.height - gap - bottom))
-        if content.frame != frame { content.frame = frame }
-    }
 }
 
-/// The conversation's rows stacked by their heights, the scroll view's document. It finds the rows
-/// in a rect from their tops and holds only the views of the rows it is told to show. Scrolling asks
-/// nothing of it but that: a table view marked itself for layout at every frame of a scroll, to lay
-/// its rows out, and the window's SwiftUI laid the whole window out again with it.
-private final class ConversationRowsView: NSView {
-    /// Each row's top, and the end of the last row.
-    private(set) var tops: [CGFloat] = [0]
-
-    override var isFlipped: Bool { true }
+/// The scroll view's document: as tall as the conversation's rows, holding the views of the rows near
+/// the viewport. Its margins and the space between the rows take presses for the conversation's
+/// selection, as the stack's backdrop does. Scrolling asks nothing of it: a table view marked itself
+/// for layout at every frame of a scroll, to lay its rows out, and the window's SwiftUI laid the whole
+/// window out again with it.
+private final class ConversationRowsView: ConversationPressSurface {
     // It draws nothing: the conversation's canvas is behind it.
     override var wantsUpdateLayer: Bool { true }
     override func updateLayer() {}
-
-    var rowCount: Int { tops.count - 1 }
-
-    /// Stacks rows of these heights; the view is as tall as they are. Only the rows from `first` on
-    /// moved: a row's height places the rows below it, so a streaming last row restacks itself alone.
-    func setHeights(_ heights: [CGFloat], from first: Int = 0) {
-        let start = tops.count == heights.count + 1 ? min(max(0, first), heights.count) : 0
-        if tops.count != heights.count + 1 { tops = [CGFloat](repeating: 0, count: heights.count + 1) }
-        for index in start..<heights.count { tops[index + 1] = tops[index] + heights[index] }
-        let end = tops[heights.count]
-        if frame.height != end { setFrameSize(NSSize(width: frame.width, height: end)) }
-    }
-
-    func rect(ofRow row: Int) -> CGRect {
-        guard row >= 0, row < rowCount else { return .zero }
-        return CGRect(x: 0, y: tops[row], width: bounds.width, height: tops[row + 1] - tops[row])
-    }
-
-    /// The rows that cross `rect`.
-    func rows(in rect: CGRect) -> Range<Int> {
-        guard rowCount > 0, rect.height > 0 else { return 0..<0 }
-        // The first row whose end is below the rect's top, and the first whose top is at its bottom.
-        let first = firstIndex { tops[$0 + 1] > rect.minY }
-        let end = firstIndex { tops[$0] >= rect.maxY }
-        return first..<max(first, end)
-    }
-
-    /// The first row for which `isPast`, which turns from false to true down the rows, holds.
-    private func firstIndex(where isPast: (Int) -> Bool) -> Int {
-        var low = 0, high = rowCount
-        while low < high {
-            let middle = (low + high) / 2
-            if isPast(middle) { high = middle } else { low = middle + 1 }
-        }
-        return low
-    }
 }
 
+/// Keeps the list's rows where `ConversationRowGeometry` places them and the viewport at the place read
+/// (its anchor): every change to the rows goes through `change`, which reads the anchor first and puts
+/// the viewport back at it in the same turn of the run loop, before anything is drawn. What the reader
+/// sees moves only as they scroll or are taken somewhere.
 @MainActor
 final class ConversationRowListController: NSObject {
+    /// How far above and below the viewport, in viewports, rows keep their views in the window: a row
+    /// coming into view is laid out a little before it does.
+    static let overscan: CGFloat = 1
+
     let scrollView = ConversationRowListScrollView()
     private let rowsView = ConversationRowsView()
     private var parent: ConversationRowList?
     private var environment = EnvironmentValues()
     private var rows: [ConversationTurnHost] = []
-    private var ids: [String] = [] {
-        didSet { if ids != oldValue { rowIndex = Dictionary(ids.enumerated().map { ($1, $0) }) { first, _ in first } } }
-    }
-    /// Each row's place in `ids`: a streamed line finds its row without a pass over the list.
-    private var rowIndex: [String: Int] = [:]
+    private var geometry = ConversationRowGeometry()
     /// The turns' hostings this list shows, by row ID; the render state keeps them for the task.
     private var hostings: [String: ConversationTurnHosting] = [:]
-    /// The rows' heights, as the rows view stacks them.
-    private var heights: [CGFloat] = []
-    /// The views of the rows in view, by row ID, and the ones free for the next rows.
+    /// The views of the rows near the viewport, by row ID, and the ones free for the next rows.
     private var cells: [String: ConversationRowCell] = [:]
     private var freeCells: [ConversationRowCell] = []
+    /// Whether to follow the latest output, and how near the end the reader is: the conversation's
+    /// state as this list last wrote or read it. `written` is a write SwiftUI has not handed back yet.
+    private var followState = TranscriptScrollFollowState()
+    private var written: TranscriptScrollFollowState?
     private var lastLatestRequestID: String?
-    /// The timeline last handed over, whose rows the rows waiting to come in are taken from.
-    private var lastTimeline: ConversationRowList?
-    /// Rows that arrived before the first one, waiting to be measured, and those measured at
-    /// `measuredWidth`.
-    private var staged: [String] = []
-    private var measured: Set<String> = []
-    private var measuredWidth: CGFloat = 0
-    private var stagingScheduled = false
     private var lastPendingRequestIDs: Set<String> = []
     private var hasStarted = false
     private var topLoading = TranscriptTopLoading()
     /// The view is moving for this controller, not for the reader.
     private var adjusting = 0
-    private var lastWidth: CGFloat = 0
-    private var followScheduled = false
+    private var lastSize = CGSize.zero
+    /// The viewport and the rows' height when the view last moved.
+    private var lastSeen: (visible: CGRect, height: CGFloat)?
+    /// What arrived below the end of a followed conversation during the reader's gesture, which the
+    /// view does not move under: it is not the reader's distance from the end, and comes into view when
+    /// the gesture ends.
+    private var arrivedUnderGesture: CGFloat = 0
     /// SwiftUI is updating the list: what this controller writes to the conversation's state waits
-    /// for the update to end.
+    /// for the update to end, and a row resizing waits for the update, which measures every row.
     private var isUpdating = false
 
     /// The column the turns are drawn in, in a row `width` wide: the conversation's width, inset.
@@ -323,6 +295,7 @@ final class ConversationRowListController: NSObject {
         scrollView.autohidesScrollers = true
         scrollView.automaticallyAdjustsContentInsets = false
         scrollView.contentInsets = NSEdgeInsetsZero
+        rowsView.setAccessibilityElement(false)
         scrollView.contentView.postsBoundsChangedNotifications = true
         scrollView.contentView.postsFrameChangedNotifications = true
         let center = NotificationCenter.default
@@ -331,6 +304,7 @@ final class ConversationRowListController: NSObject {
         center.addObserver(self, selector: #selector(frameChanged), name: NSView.frameDidChangeNotification,
                            object: scrollView.contentView)
         scrollView.onReaderBeganScrolling = { [weak self] in self?.topLoading.readerBeganScrolling() }
+        scrollView.onReaderEndedScrolling = { [weak self] in self?.readerEndedScrolling() }
     }
 
     // MARK: - Updates
@@ -338,65 +312,50 @@ final class ConversationRowListController: NSObject {
     func update(_ timeline: ConversationRowList, environment: EnvironmentValues) {
         parent = timeline
         self.environment = environment
+        if let written, timeline.scrollState == written { self.written = nil }
+        if written == nil { followState = timeline.scrollState }
         isUpdating = true
         defer { isUpdating = false }
-        let allIDs = timeline.rows.map(\.turn.id)
-        let oldIDs = ids
-        let following = timeline.scrollState.isFollowing
-        lastTimeline = timeline
-        // Rows that arrived before the first one (earlier turns) wait out of the list until each is
-        // measured (`stageNext`), and then go in together.
-        let rowsShown = shownRows(of: timeline.rows, following: following)
-        let newIDs = rowsShown.map(\.turn.id)
-
-        // Read from the layout before the change: the rows in view now, and where the first one is.
-        let arrived = !following && TranscriptTopLoading.earlierItemsArrived(from: oldIDs, to: newIDs)
-        let place = arrived ? placeToKeep(in: Set(newIDs)) : nil
-
-        rows = rowsShown
-        ids = newIDs
-        let kept = Set(allIDs)
-        for id in hostings.keys where !kept.contains(id) {
-            hostings[id]?.onResize = {}
-            hostings[id] = nil
+        let ids = timeline.rows.map(\.turn.id)
+        if ids != geometry.ids {
+            let kept = Set(ids)
+            for (id, hosting) in hostings where !kept.contains(id) {
+                hosting.onResize = {}
+                hostings[id] = nil
+            }
         }
+        rows = timeline.rows
         // Each row's turn draws again only when it changed (`ConversationTurnHosting.show`).
         for (index, host) in rows.enumerated() {
-            hosting(at: index).show(host, environment: environment)
+            hosting(for: ids[index]).show(host, environment: environment)
         }
-        restack()
-
-        if let place, let row = rowIndex[place.id] {
-            scroll(toY: rowsView.rect(ofRow: row).minY - place.top)
-        }
+        change { geometry.setRows(ids, heights: ids.indices.map(rowHeight), leads: ids.indices.map(gap)) }
 
         if !hasStarted {
             hasStarted = true
             lastLatestRequestID = timeline.latestRequestID
             lastPendingRequestIDs = timeline.pendingRequestIDs
             afterUpdate { [weak self] in
-                timeline.readingTracker.start(record: nil, itemIDs: newIDs)
+                timeline.readingTracker.start(record: nil, itemIDs: ids)
                 self?.setFollowing(true)
             }
-            scrollToBottomSoon()
             return
         }
-        afterUpdate { timeline.readingTracker.updateItems(newIDs) }
+        afterUpdate { timeline.readingTracker.updateItems(ids) }
         if timeline.latestRequestID != lastLatestRequestID {
             lastLatestRequestID = timeline.latestRequestID
             followLatest()
         }
         if timeline.pendingRequestIDs != lastPendingRequestIDs {
-            var state = timeline.scrollState
+            var state = followState
             let moves = state.pendingRequestsChanged(from: lastPendingRequestIDs, to: timeline.pendingRequestIDs)
             lastPendingRequestIDs = timeline.pendingRequestIDs
             if moves {
                 writeState(state)
                 afterUpdate { timeline.readingTracker.followLatest() }
-                scrollToBottomSoon()
+                scrollToEnd()
             }
         }
-        if isFollowing { scrollToBottomSoon() }
     }
 
     func dismantle() {
@@ -410,50 +369,6 @@ final class ConversationRowListController: NSObject {
         hostings = [:]
         parent?.readingTracker.hide()
         parent = nil
-        lastTimeline = nil
-        staged = []
-    }
-
-    /// The rows to show of `all`. Rows that arrived before the first row shown come in only once each is
-    /// measured, one a display cycle out of sight, so they go in together: put in as each was measured,
-    /// the list grew a row at a time and the scroller's knob shrank in steps under the reader's scroll.
-    private func shownRows(of all: [ConversationTurnHost], following: Bool) -> [ConversationTurnHost] {
-        let allIDs = all.map(\.turn.id)
-        guard hasStarted, !following, !ids.isEmpty, allIDs.count > ids.count,
-              Array(allIDs.suffix(ids.count)) == ids else {
-            staged = []
-            return all
-        }
-        let arrived = all.prefix(allIDs.count - ids.count)
-        let width = Self.columnWidth(in: rowsView.bounds.width)
-        if width != measuredWidth { measured = []; measuredWidth = width }
-        staged = arrived.map(\.turn.id).filter { !measured.contains($0) }
-        guard staged.isEmpty || width < 80 else {
-            stageNext()
-            return Array(all.suffix(ids.count))
-        }
-        staged = []
-        return all
-    }
-
-    /// Measures the next row waiting to come in, out of sight, at the next display cycle; once none
-    /// is left, puts them all in.
-    private func stageNext() {
-        guard !stagingScheduled else { return }
-        stagingScheduled = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 60) { [weak self] in
-            guard let self else { return }
-            stagingScheduled = false
-            guard let timeline = lastTimeline, let id = staged.first else { return }
-            staged.removeFirst()
-            if let host = timeline.rows.first(where: { $0.turn.id == id }) {
-                let hosting = hosting(for: id)
-                hosting.show(host, environment: environment)
-                _ = hosting.size(forWidth: measuredWidth)
-                measured.insert(id)
-            }
-            if staged.isEmpty { update(timeline, environment: environment) } else { stageNext() }
-        }
     }
 
     /// Goes to the end and follows it: a new turn, "Latest response".
@@ -463,7 +378,10 @@ final class ConversationRowListController: NSObject {
             self?.parent?.readingTracker.followLatest()
             self?.setFollowing(true)
         }
-        scrollToBottomSoon()
+        var state = followState
+        state.isFollowing = true
+        followState = state
+        scrollToEnd()
     }
 
     /// Runs `body` now, or once SwiftUI's update of the list has ended when it is in one.
@@ -473,10 +391,6 @@ final class ConversationRowListController: NSObject {
     }
 
     // MARK: - Rows
-
-    private func hosting(at index: Int) -> ConversationTurnHosting {
-        hosting(for: ids[index])
-    }
 
     private func hosting(for id: String) -> ConversationTurnHosting {
         if let hosting = hostings[id] { return hosting }
@@ -494,189 +408,164 @@ final class ConversationRowListController: NSObject {
     }
 
     private func bottom(_ index: Int) -> CGFloat {
-        index == ids.count - 1 ? ConversationLayout.bottomPadding : 0
+        index == rows.count - 1 ? ConversationLayout.bottomPadding : 0
     }
 
     /// A row's height: its turn's at the column's width, which the turn's hosting keeps for each width
-    /// until the turn changes, with the gaps around it.
+    /// until the turn changes, with the space around it.
     private func rowHeight(_ index: Int) -> CGFloat {
         let width = Self.columnWidth(in: rowsView.bounds.width)
         guard width >= 80 else { return max(1, gap(index) + bottom(index)) }
-        return gap(index) + hosting(at: index).size(forWidth: width).height + bottom(index)
+        return gap(index) + hosting(for: rows[index].turn.id).size(forWidth: width).height + bottom(index)
     }
 
-    /// Stacks the rows at their heights again and shows the rows in view. Only a turn that changed
-    /// is measured again; the others' heights are kept by their hostings, and only the rows below the
-    /// first that changed move.
-    private func restack() {
-        let new = ids.indices.map(rowHeight)
-        let first = new.count == heights.count ? new.indices.first { new[$0] != heights[$0] } ?? new.count : 0
-        heights = new
-        rowsView.setHeights(heights, from: first)
+    /// Where row `index`'s turn is drawn: in the column, below the space before it.
+    private func contentFrame(ofRow index: Int) -> CGRect {
+        let width = Self.columnWidth(in: rowsView.bounds.width)
+        let top = geometry.top(ofRow: index) + gap(index)
+        return CGRect(x: ((rowsView.bounds.width - width) / 2).rounded(.down), y: top, width: width,
+                      height: max(0, geometry.bottom(ofRow: index) - bottom(index) - top))
+    }
+
+    /// Applies `body`'s change to the rows and puts the viewport back at the place read before it: the
+    /// end while following, or the row at the viewport's top, at the same point of it. With `scales`
+    /// (a new width), that point is the same share of the row's height.
+    private func change(scales: Bool = false, _ body: () -> Void) {
+        adjusting += 1
+        defer { adjusting -= 1 }
+        let clip = scrollView.contentView
+        let before = clip.bounds.minY
+        let endBefore = geometry.contentHeight
+        // The reader's gesture over a followed conversation: what arrives below waits for it to end.
+        let holdsForGesture = followState.isFollowing && scrollView.isLiveScrolling
+        let anchor = geometry.anchor(offset: before, following: followState.isFollowing && !holdsForGesture)
+        body()
+        let height = geometry.contentHeight
+        if rowsView.frame.height != height { rowsView.setFrameSize(NSSize(width: rowsView.frame.width, height: height)) }
+        if holdsForGesture { arrivedUnderGesture += max(0, height - endBefore) }
+        scroll(toY: geometry.offset(for: anchor, viewportHeight: clip.bounds.height, scales: scales, fallback: before))
         tile()
     }
 
-    /// Puts the views of the rows in view in their places, and takes out the views of the rows that
-    /// left it. A row out of view takes its turn out of the window: nothing it holds lays out, tracks
-    /// the pointer or answers hit tests until it comes back. It runs at every frame of a scroll, and
-    /// costs the rows that crossed the view's edges.
+    /// Puts the views of the rows near the viewport in their places, and takes out the views of the rows
+    /// that left it. A row away from the viewport takes its turn out of the window: nothing it holds
+    /// lays out, tracks the pointer or answers hit tests until it comes back. It runs at every frame of a
+    /// scroll, and costs the rows that crossed the edges.
     private func tile() {
-        let visible = visibleRows()
-        var shown = Set<String>()
-        for row in visible { shown.insert(ids[row]) }
-        for (id, cell) in cells where !shown.contains(id) {
+        let visible = scrollView.contentView.bounds
+        let margin = visible.height * Self.overscan
+        let near = geometry.rows(from: visible.minY - margin, to: visible.maxY + margin)
+        for (id, cell) in cells where !(geometry.index(of: id).map(near.contains) ?? false) {
             cell.detach()
             cell.removeFromSuperview()
             cells[id] = nil
             freeCells.append(cell)
         }
-        for row in visible {
-            let id = ids[row]
+        for row in near {
+            let id = geometry.ids[row]
             let cell = cells[id] ?? {
                 let cell = freeCells.popLast() ?? ConversationRowCell()
                 cells[id] = cell
                 return cell
             }()
-            cell.gap = gap(row)
-            cell.bottom = bottom(row)
-            let frame = rowsView.rect(ofRow: row)
+            let frame = contentFrame(ofRow: row)
             if cell.frame != frame { cell.frame = frame }
             if cell.content == nil {
-                cell.show(hosting(at: row).controller.view)
+                cell.show(hosting(for: id).controller.view)
                 rowsView.addSubview(cell)
             }
         }
     }
 
-    /// The rows in view.
-    private func visibleRows() -> Range<Int> {
-        let range = rowsView.rows(in: scrollView.contentView.bounds)
-        return range.clamped(to: 0..<ids.count)
-    }
-
-    /// A turn grew or shrank on its own: a fold opened, a line streamed.
+    /// A turn grew or shrank on its own: a fold opened, a line streamed. Only it and the rows below it move.
     private func rowResized(_ id: String) {
-        guard let index = rowIndex[id], index < heights.count else { return }
+        guard !isUpdating, let index = geometry.index(of: id), index < rows.count else { return }
         let height = rowHeight(index)
-        guard heights[index] != height else { return }
-        let first = isFollowing ? nil : placeToKeep()
-        heights[index] = height
-        rowsView.setHeights(heights, from: index)
-        tile()
-        if isFollowing {
-            scrollToBottomSoon()
-        } else if let first, let row = rowIndex[first.id], row > index {
-            // A row above the one being read changed: the one being read stays where it is.
-            scroll(toY: rowsView.rect(ofRow: row).minY - first.top)
-        }
+        guard geometry.heights[index] != height else { return }
+        change { geometry.setHeight(height, ofRow: index) }
     }
 
     // MARK: - Scrolling
 
-    private var isFollowing: Bool { parent?.scrollState.isFollowing ?? true }
-
     private func setFollowing(_ following: Bool) {
-        guard var state = parent?.scrollState, state.isFollowing != following else { return }
+        guard followState.isFollowing != following else { return }
+        var state = followState
         state.isFollowing = following
         writeState(state)
     }
 
     /// Writes the follow state only when it changed: each write draws the conversation's view again.
     private func writeState(_ state: TranscriptScrollFollowState) {
-        guard let parent, parent.scrollState != state else { return }
+        guard followState != state || written != nil else { return }
+        followState = state
+        written = state
+        guard let parent else { return }
         afterUpdate { parent.$scrollState.wrappedValue = state }
     }
 
-    private struct Metrics: Equatable {
-        var offset: CGFloat
-        var height: CGFloat
-        var viewport: CGSize
-        var distance: CGFloat { max(0, height - offset - viewport.height) }
-    }
-
-    private var metrics: Metrics {
-        let visible = scrollView.contentView.bounds
-        return Metrics(offset: visible.minY, height: rowsView.frame.height, viewport: visible.size)
-    }
-
-    private var lastMetrics: Metrics?
-
     @objc private func boundsChanged() {
-        let new = metrics
-        defer { lastMetrics = new }
         tile()
-        guard let parent, new.viewport.width >= 80, new.viewport.height >= 60 else { return }
+        let visible = scrollView.contentView.bounds
+        let height = geometry.contentHeight
+        let last = lastSeen
+        lastSeen = (visible, height)
+        guard let parent, visible.width >= 80, visible.height >= 60 else { return }
+        let distance = geometry.distanceFromEnd(offset: visible.minY, viewportHeight: visible.height)
+        if distance <= 1 { arrivedUnderGesture = 0 }
         let readerScrolled = adjusting == 0 && scrollView.isReaderScrolling
         // The view moved over rows that stayed as they were, and not for this list: the reader, or
         // something brought into view for them (find's match, an accessibility scroll). As for the
         // stack (`TranscriptScrollMetrics.isUserMovement`), that decides whether to follow the latest
         // output; otherwise the next row measured again took the view back to the end.
-        let moved = adjusting == 0 && lastMetrics.map {
-            $0.height == new.height && $0.viewport == new.viewport && abs($0.offset - new.offset) > 1
+        let moved = adjusting == 0 && last.map {
+            $0.height == height && $0.visible.size == visible.size && abs($0.visible.minY - visible.minY) > 1
         } ?? false
         let userDriven = readerScrolled || moved
-        var state = parent.scrollState
-        state.observe(distance: new.distance, userDriven: userDriven)
+        var state = followState
+        state.observe(distance: distance - arrivedUnderGesture, userDriven: userDriven)
+        if !state.isFollowing { arrivedUnderGesture = 0 }
         writeState(state)
-        parent.readingTracker.observe(offset: new.offset, height: new.height, viewport: new.viewport,
+        parent.readingTracker.observe(offset: visible.minY, height: height, viewport: visible.size,
                                       followsLatest: state.isFollowing, userDriven: userDriven)
-        // Earlier turns are asked for two screens before the top, so they are in place by the time the
-        // reader's scroll gets there instead of arriving once it has hit the top and bounced.
-        let ahead = 2 * new.viewport.height
+        // Only the reader's own scrolling up to the top brings earlier turns in, as for the stack
+        // (`TranscriptTopLoading`).
         if let loadEarlier = parent.loadEarlier,
-           topLoading.shouldLoad(offset: max(0, new.offset - ahead), userDriven: readerScrolled, key: parent.earlierKey) {
+           topLoading.shouldLoad(offset: visible.minY, userDriven: readerScrolled, key: parent.earlierKey) {
             // Not inside the scroll's own notification: the turns that arrive change the list.
             DispatchQueue.main.async { loadEarlier() }
         }
     }
 
+    /// The reader's gesture over a followed conversation ended: what arrived under it comes into view,
+    /// as following would have brought it.
+    private func readerEndedScrolling() {
+        defer { arrivedUnderGesture = 0 }
+        if followState.isFollowing, arrivedUnderGesture > 0 { scrollToEnd() }
+    }
+
     @objc private func frameChanged() {
-        let width = scrollView.contentView.bounds.width
-        guard width != lastWidth else {
-            if isFollowing { scrollToBottomSoon() }
-            return
+        let size = scrollView.contentView.bounds.size
+        guard size != lastSize else { return }
+        let widthChanged = size.width != lastSize.width
+        lastSize = size
+        if rowsView.frame.width != size.width {
+            rowsView.setFrameSize(NSSize(width: size.width, height: rowsView.frame.height))
         }
-        lastWidth = width
         // Every row's height is by width; a hosting keeps the heights it was measured at.
-        let place = isFollowing ? nil : placeToKeep()
-        rowsView.setFrameSize(NSSize(width: width, height: rowsView.frame.height))
-        restack()
-        if let place, let row = rowIndex[place.id] {
-            scroll(toY: rowsView.rect(ofRow: row).minY - place.top)
-        } else if isFollowing {
-            scrollToBottomSoon()
+        change(scales: widthChanged) {
+            if widthChanged {
+                geometry.setRows(geometry.ids, heights: geometry.ids.indices.map(rowHeight), leads: geometry.leads)
+            }
         }
     }
 
-    /// The first row in view that `kept` still holds (every row when nil), and how far its top is
-    /// below the view's top.
-    private func placeToKeep(in kept: Set<String>? = nil) -> (id: String, top: CGFloat)? {
-        let visible = scrollView.contentView.bounds
-        for row in visibleRows() where kept?.contains(ids[row]) ?? true {
-            return (ids[row], rowsView.rect(ofRow: row).minY - visible.minY)
-        }
-        return nil
-    }
-
-    /// Goes to the end once the list has laid out what this update changed.
-    private func scrollToBottomSoon() {
-        scrollToBottom()
-        guard !followScheduled else { return }
-        followScheduled = true
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            followScheduled = false
-            if isFollowing { scrollToBottom() }
-        }
-    }
-
-    private func scrollToBottom() {
-        scroll(toY: rowsView.frame.height - scrollView.contentView.bounds.height)
+    private func scrollToEnd() {
+        scroll(toY: geometry.maximumOffset(viewportHeight: scrollView.contentView.bounds.height))
     }
 
     private func scroll(toY y: CGFloat) {
         let clip = scrollView.contentView
-        let target = min(max(0, y), max(0, rowsView.frame.height - clip.bounds.height))
+        let target = min(max(0, y), geometry.maximumOffset(viewportHeight: clip.bounds.height))
         guard abs(clip.bounds.minY - target) >= 0.5 else { return }
         adjusting += 1
         clip.scroll(to: NSPoint(x: 0, y: target))

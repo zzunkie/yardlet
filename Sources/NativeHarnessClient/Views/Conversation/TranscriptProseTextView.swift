@@ -687,6 +687,22 @@ final class TranscriptProseFragments: NSObject, NSTextLayoutManagerDelegate {
 final class TranscriptProseTextView: NSTextView {
     var copyDetails: String?
 
+    // The keyboard's scrolling, from a text that has it: in the conversation's row list the list moves,
+    // as the reader's scroll (`ConversationRowListScrollView`); elsewhere the text scrolls its scroll view.
+    private var rowList: ConversationRowListScrollView? { enclosingScrollView as? ConversationRowListScrollView }
+    override func scrollPageUp(_ sender: Any?) {
+        if let rowList { rowList.scrollPageUp(sender) } else { super.scrollPageUp(sender) }
+    }
+    override func scrollPageDown(_ sender: Any?) {
+        if let rowList { rowList.scrollPageDown(sender) } else { super.scrollPageDown(sender) }
+    }
+    override func scrollToBeginningOfDocument(_ sender: Any?) {
+        if let rowList { rowList.scrollToBeginningOfDocument(sender) } else { super.scrollToBeginningOfDocument(sender) }
+    }
+    override func scrollToEndOfDocument(_ sender: Any?) {
+        if let rowList { rowList.scrollToEndOfDocument(sender) } else { super.scrollToEndOfDocument(sender) }
+    }
+
     /// A copy gives plain text: list markers as "1. " and lines as lines, without the frame's colours,
     /// which a rich copy of dark text would carry into a light document.
     override var writablePasteboardTypes: [NSPasteboard.PasteboardType] { [.string] }

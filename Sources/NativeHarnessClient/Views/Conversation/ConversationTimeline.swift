@@ -427,9 +427,7 @@ struct ConversationTimeline: View {
             actions.readEarlierHistory?()
         case .none: return
         }
-        // The row list measures the turns that arrive out of sight and puts them in together
-        // (`ConversationRowListController`), so it is handed them all at once.
-        if !ConversationRowListSwitch.isOn { reveal.begin(before: earliestDrawn) }
+        reveal.begin(before: earliestDrawn)
     }
 
     /// Draws the next of the turns that arrived once what this display cycle drew is laid out and
