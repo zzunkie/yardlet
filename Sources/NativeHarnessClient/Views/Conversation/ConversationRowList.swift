@@ -335,7 +335,8 @@ final class ConversationRowListController: NSObject {
     /// The view is moving for this controller, not for the reader.
     private var adjusting = 0
     private var lastSize = CGSize.zero
-    /// The viewport and the rows' height when the view last moved.
+    /// The viewport and the rows' height when the view last moved, or the list last changed them: a new
+    /// width or rows that grew below leave the view where it was, and tell nothing that it moved.
     private var lastSeen: (visible: CGRect, height: CGFloat)?
     /// What arrived below the end of a followed conversation during the reader's gesture, which the
     /// view does not move under: it is not the reader's distance from the end, and comes into view when
@@ -584,6 +585,7 @@ final class ConversationRowListController: NSObject {
         if holdsForGesture { arrivedUnderGesture += max(0, height - endBefore) }
         scroll(toY: geometry.offset(for: anchor, viewportHeight: clip.bounds.height, scales: scales, fallback: before))
         tile()
+        lastSeen = (clip.bounds, height)
         noteDistance()
         goToPendingPlace()
     }
