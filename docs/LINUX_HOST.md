@@ -194,7 +194,16 @@ swift build --product yardlet --force-resolved-versions
 
 ## Distributions
 
-What the checks above found, for the package built on Ubuntu 22.04:
+What the checks above found, for the x86_64 package built on Ubuntu 22.04 (the aarch64 one is checked in Ubuntu 22.04
+alone):
 
 | Distribution | glibc | libcurl | The host | The relay (ws) | The relay (wss) |
 | --- | --- | --- | --- | --- | --- |
+| Ubuntu 22.04 | 2.35 | 7.81.0 | runs | opens | opens |
+| Ubuntu 24.04 | 2.39 | 8.5.0 | runs | opens | opens |
+| Ubuntu 25.10 | 2.42 | 8.14.1 | runs | opens | opens |
+| Debian 12 | 2.36 | 7.88.1 | runs | opens | opens |
+| Debian 13 | 2.41 | 8.14.1 | runs | opens | opens |
+| Fedora 42 | 2.41 | 8.11.1 | runs | opens | opens |
+| Arch Linux | 2.44 | 8.23.0 | runs | opens | opens |
+| Rocky Linux 9 | 2.34 | | refused: needs glibc 2.35 | | |
