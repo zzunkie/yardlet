@@ -10,7 +10,7 @@
 #       [--memory-census] [--no-event-pulse] [--keep] [--app-arguments "<argument> ..."]
 #
 # Scenes: launch idle-running stream-claude stream-codex codex-history subagent sidebar browser-tabs codex-switch
-# memory-cycle composer-input home conversation-scroll (all by
+# memory-cycle composer-input home conversation-scroll conversation-jump (all by
 # default; `PerfBenchFixture` in Sources/NativeHarnessClient/Development says what each holds). Each runs
 # in a fresh launch of the QA copy: its own bundle identifier (com.zzunkie.yardletqa.perf), a temporary
 # home, windows off every screen, never the active app (`QABackground`). Tasks that stream talk to fake

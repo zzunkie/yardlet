@@ -47,6 +47,10 @@
     "conversation-scroll": [
       "scroll",
       "scroll-streaming"
+    ],
+    "conversation-jump": [
+      "drag",
+      "keys"
     ]
   },
   "micro": [

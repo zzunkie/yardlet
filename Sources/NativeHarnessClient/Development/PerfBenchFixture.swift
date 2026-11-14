@@ -54,6 +54,9 @@ enum PerfBenchFixture {
         /// scrolled up to its top and back down as a reader's trackpad does, then the same while its
         /// last turn streams.
         case conversationScroll = "conversation-scroll"
+        /// The same conversation moved as fast as a reader moves it: its scroller's knob dragged from
+        /// the end to the top and back, then the keyboard's Page Up, Page Down, Home and End.
+        case conversationJump = "conversation-jump"
     }
 
     static var isRequested: Bool { CommandLine.arguments.contains(argument) }
@@ -224,7 +227,7 @@ enum PerfBenchFixture {
         case .sidebar:
             shown = [codexTask(shownTaskID, title: "Fix the parser's empty input", threadID: codexThreadID,
                                turns: (0..<4).map { LongConversationFixture.codexTurn($0) })]
-        case .conversationScroll:
+        case .conversationScroll, .conversationJump:
             shown = [claudeTask(shownTaskID, title: "Fix the parser's empty input", runtime: claude,
                                 sessionID: claudeSessionID, turns: 60, links: true)]
         case .browserTabs:
@@ -424,6 +427,8 @@ private final class PerfBenchRunner {
             await homeViews()
         case .conversationScroll:
             await scrollConversation()
+        case .conversationJump:
+            await jumpConversation()
         }
         finish()
     }
@@ -529,12 +534,7 @@ private final class PerfBenchRunner {
             problems.append("no conversation scroll view")
             return
         }
-        func metrics() -> (top: CGFloat, bottom: CGFloat) {
-            let visible = scroll.documentVisibleRect
-            let height = scroll.documentView?.frame.height ?? 0
-            let flipped = scroll.documentView?.isFlipped ?? true
-            return flipped ? (visible.minY, height - visible.maxY) : (height - visible.maxY, visible.minY)
-        }
+        func metrics() -> (top: CGFloat, bottom: CGFloat) { Self.edges(of: scroll) }
         record["conversation"] = ["listHeight": scroll.documentView?.frame.height ?? 0,
                                   "visibleHeight": scroll.contentView.bounds.height]
         if metrics().top < 2_000 { problems.append("the conversation scrolls only \(Int(metrics().top)) pt") }
@@ -618,6 +618,232 @@ private final class PerfBenchRunner {
         }
         guard let wheel = NSEvent(cgEvent: event) else { return }
         scroll.scrollWheel(with: wheel)
+    }
+
+    /// How far `scroll`'s view is from its document's top and from its end.
+    private static func edges(of scroll: NSScrollView) -> (top: CGFloat, bottom: CGFloat) {
+        let visible = scroll.documentVisibleRect
+        let height = scroll.documentView?.frame.height ?? 0
+        let flipped = scroll.documentView?.isFlipped ?? true
+        return flipped ? (visible.minY, height - visible.maxY) : (height - visible.maxY, visible.minY)
+    }
+
+    /// A key that scrolls the conversation. Of the actions keys send, a scroll view answers only
+    /// `pageUp:` and `pageDown:`, which it animates. `scrollPageUp:`, `scrollToBeginningOfDocument:` and
+    /// the others that Page Up, Home and End send are answered by AppKit's text and table views, for
+    /// themselves; `NSScrollView` has none of them.
+    private enum ScrollKey: String {
+        case pageUp, pageDown, home, end
+
+        /// Whether it moves the view toward the conversation's top.
+        var isUpward: Bool { self == .home || self == .pageUp }
+    }
+
+    /// The conversation of `conversation-scroll` moved as fast as a reader moves it.
+    ///
+    /// `drag`: its scroller's knob dragged as AppKit tracks a drag of it. Each drag is a live scroll
+    /// (`willStartLiveScroll`, then `didLiveScroll` at every frame, then `didEndLiveScroll`) that moves
+    /// the clip view a screen a frame: a quick drag, the knob crossing its track down the whole 60 turns
+    /// in under a second. It goes from the end to the top, where earlier turns come in, and back down,
+    /// again and again; at each end the hand lets go and takes the knob again a quarter of a second
+    /// later.
+    ///
+    /// `keys`: the keyboard, from the end, a key every fifth frame (twelve a second, as a held key
+    /// repeats): ten of Page Up, Home, ten of Page Down, End, again and again. The page keys go up the
+    /// responder chain from the conversation's document to the scroll view that answers them
+    /// (`ScrollKey`), which animates each page; a press during the last one's animation starts from where
+    /// it got, so a held key moves about half a page a press and would take most of the phase to cross
+    /// the conversation once. Home and End scroll the document to its top and its end, as a text or table
+    /// view does for them. A key that does not move the view is a problem: the phase would otherwise
+    /// measure a conversation standing still.
+    private func jumpConversation() async {
+        guard let window, let scroll = conversationScrollView(in: window), let document = scroll.documentView else {
+            problems.append("no conversation scroll view")
+            return
+        }
+        let clip = scroll.contentView
+        func height() -> CGFloat { document.frame.height }
+        if Self.edges(of: scroll).top < 2_000 {
+            problems.append("the conversation scrolls only \(Int(Self.edges(of: scroll).top)) pt")
+        }
+        /// Moves the clip view toward the top or the end by `points`, as far as it goes.
+        func move(upward: Bool, by points: CGFloat) {
+            var bounds = clip.bounds
+            bounds.origin.y += upward == document.isFlipped ? -points : points
+            clip.scroll(to: clip.constrainBoundsRect(bounds).origin)
+            scroll.reflectScrolledClipView(clip)
+        }
+        // What the moves did, to see that the scene measured what it says: how far the view moved,
+        // how often the list grew (earlier turns arriving), how often a move turned at an end, and how
+        // near the top and the end it got.
+        var moved: CGFloat = 0
+        var arrivals = 0
+        var reversals = 0
+        var nearestToTop = CGFloat.greatestFiniteMagnitude
+        var nearestToEnd = CGFloat.greatestFiniteMagnitude
+        var lastHeight: CGFloat?
+        func observe(_ edges: (top: CGFloat, bottom: CGFloat)) {
+            nearestToTop = min(nearestToTop, edges.top)
+            nearestToEnd = min(nearestToEnd, edges.bottom)
+            let height = height()
+            if let lastHeight, lastHeight != height { arrivals += 1 }
+            lastHeight = height
+        }
+        func traveled(from start: CGFloat) -> [String: Any] {
+            // With no frame served (a display asleep stops its display link) nothing moved.
+            ["movedPoints": Int(moved), "arrivals": arrivals, "reversals": reversals,
+             "nearestToTopPoints": nearestToTop < 1e9 ? Int(nearestToTop) : -1,
+             "nearestToEndPoints": nearestToEnd < 1e9 ? Int(nearestToEnd) : -1,
+             "listHeightStart": Int(start), "listHeightEnd": Int(height())]
+        }
+        func restart() {
+            (moved, arrivals, reversals, lastHeight) = (0, 0, 0, nil)
+            (nearestToTop, nearestToEnd) = (.greatestFiniteMagnitude, .greatestFiniteMagnitude)
+        }
+        let center = NotificationCenter.default
+
+        // The knob, dragged a screen a frame.
+        let step = clip.bounds.height
+        let regrabFrames = 15
+        var upward = true
+        var dragging = false
+        var drags = 0
+        var jumps = 0
+        var waiting = 0
+        var placed: CGFloat?
+        let drag: (CADisplayLink) -> Void = { _ in
+            let before = Self.edges(of: scroll)
+            // The view is not where the last frame's move left it: something else moved it, as the
+            // place kept when earlier turns arrive above it does.
+            if let placed, abs(before.top - placed) > 0.5 { jumps += 1 }
+            placed = before.top
+            observe(before)
+            if waiting > 0 { waiting -= 1; return }
+            if dragging, upward ? before.top <= 0.5 : before.bottom <= 0.5 {
+                // The knob is at the end of its track: the hand lets go, to take it again the other way.
+                center.post(name: NSScrollView.didEndLiveScrollNotification, object: scroll)
+                dragging = false
+                upward.toggle()
+                reversals += 1
+                waiting = regrabFrames
+                return
+            }
+            if !dragging {
+                center.post(name: NSScrollView.willStartLiveScrollNotification, object: scroll)
+                dragging = true
+                drags += 1
+            }
+            move(upward: upward, by: step)
+            center.post(name: NSScrollView.didLiveScrollNotification, object: scroll)
+            let after = Self.edges(of: scroll)
+            moved += abs(after.top - before.top)
+            placed = after.top
+            observe(after)
+        }
+        let dragHeight = height()
+        await phase("drag", seconds: 10, frames: true, onFrame: drag)
+        if dragging { center.post(name: NSScrollView.didEndLiveScrollNotification, object: scroll) }
+        var dragged = traveled(from: dragHeight)
+        dragged["drags"] = drags
+        dragged["jumps"] = jumps
+        dragged["stepPoints"] = Int(step)
+        if moved < 2_000 { problems.append("the drag moved the conversation only \(Int(moved)) pt (is the display asleep?)") }
+        if nearestToTop > 1 || nearestToEnd > 1 {
+            problems.append("the drag got no nearer than \(Int(nearestToTop)) pt to the top and \(Int(nearestToEnd)) pt to the end")
+        }
+        if height() <= dragHeight { problems.append("no earlier turns came in as the knob reached the top") }
+
+        // The keys, from the end, one every fifth frame.
+        move(upward: false, by: height())
+        try? await Task.sleep(for: .seconds(1))
+        restart()
+        let keyFrames = 5
+        let pagesPerRun = 10
+        var key = ScrollKey.pageUp
+        var pagesLeft = pagesPerRun
+        var frame = 0
+        var unanswered = 0
+        var lastTop: CGFloat?
+        // The last key, where the view was then and whether it has moved the way the key goes.
+        var press: (key: ScrollKey, top: CGFloat, height: CGFloat, atEdge: Bool, moved: Bool)?
+        var presses: [ScrollKey: (calls: Int, moved: Int, atEdge: Int)] = [:]
+        func settle() {
+            guard let press else { return }
+            presses[press.key, default: (0, 0, 0)].calls += 1
+            if press.moved {
+                presses[press.key, default: (0, 0, 0)].moved += 1
+            } else if press.atEdge {
+                presses[press.key, default: (0, 0, 0)].atEdge += 1
+            }
+        }
+        func send(_ key: ScrollKey) -> Bool {
+            switch key {
+            case .pageUp: return document.tryToPerform(#selector(NSResponder.pageUp(_:)), with: nil)
+            case .pageDown: return document.tryToPerform(#selector(NSResponder.pageDown(_:)), with: nil)
+            case .home, .end:
+                move(upward: key == .home, by: height())
+                return true
+            }
+        }
+        let keys: (CADisplayLink) -> Void = { _ in
+            let edges = Self.edges(of: scroll)
+            let height = height()
+            if let lastTop, lastHeight == height { moved += abs(edges.top - lastTop) }
+            lastTop = edges.top
+            observe(edges)
+            if var current = press, !current.moved {
+                // Earlier turns that came in above since the key pushed the view down by their height.
+                let top = edges.top - (height - current.height)
+                if current.key.isUpward ? top < current.top - 1 : top > current.top + 1 {
+                    current.moved = true
+                    press = current
+                }
+            }
+            frame += 1
+            guard frame % keyFrames == 1 else { return }
+            // Home or End took the view to an end, and the page keys go back the other way.
+            if press?.key == .home, edges.top <= 0.5 { reversals += 1 }
+            if press?.key == .end, edges.bottom <= 0.5 { reversals += 1 }
+            settle()
+            press = (key, edges.top, height, key.isUpward ? edges.top <= 0.5 : edges.bottom <= 0.5, false)
+            if !send(key) { unanswered += 1 }
+            switch key {
+            case .pageUp, .pageDown:
+                pagesLeft -= 1
+                if pagesLeft == 0 { (key, pagesLeft) = (key == .pageUp ? .home : .end, pagesPerRun) }
+            case .home: key = .pageDown
+            case .end: key = .pageUp
+            }
+        }
+        // Which responder the page keys reach, from the conversation's document up.
+        var answering: NSResponder? = document
+        while let responder = answering, !responder.responds(to: #selector(NSResponder.pageUp(_:))) {
+            answering = responder.nextResponder
+        }
+        let keysHeight = height()
+        await phase("keys", seconds: 10, frames: true, onFrame: keys)
+        settle()
+        var pressed = traveled(from: keysHeight)
+        pressed["keyEveryFrames"] = keyFrames
+        pressed["pagesPerRun"] = pagesPerRun
+        pressed["pageKeysAnsweredBy"] = answering.map { NSStringFromClass(type(of: $0)) } ?? "nothing"
+        pressed["keys"] = Dictionary(uniqueKeysWithValues: presses.map { key, count in
+            (key.rawValue, ["calls": count.calls, "moved": count.moved, "atEdge": count.atEdge])
+        })
+        if unanswered > 0 {
+            problems.append("nothing from the conversation's document up the responder chain answered \(unanswered) page keys")
+        }
+        if moved < 2_000 { problems.append("the keys moved the conversation only \(Int(moved)) pt") }
+        if reversals < 2 { problems.append("the keys turned at the conversation's ends only \(reversals) times") }
+        for key in [ScrollKey.pageUp, .pageDown, .home, .end] {
+            let count = presses[key] ?? (0, 0, 0)
+            let couldMove = count.calls - count.atEdge
+            if count.calls == 0 || count.moved * 2 < couldMove {
+                problems.append("\(key.rawValue) moved the conversation for \(count.moved) of \(couldMove) presses away from its edge")
+            }
+        }
+        record["conversation"] = ["scrollView": NSStringFromClass(type(of: scroll)), "visibleHeight": clip.bounds.height,
+                                  "drag": dragged, "keys": pressed]
     }
 
     private func openBrowserTabs() async {
