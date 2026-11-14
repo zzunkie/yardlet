@@ -29,7 +29,7 @@ final class RemoteHostClientTests: XCTestCase {
             _ = try await RemoteHostConnection.pair(parsed, clientKey: .generate(), hello: hello)
             XCTFail("A spent link paired a second key")
         } catch let failure as RemoteClientSocket.Failure {
-            XCTAssertEqual(failure.error?.code, .pairingUnavailable)
+            XCTAssertEqual(failure.error?.code, .pairingUnavailable, "\(failure)")
         }
 
         var saved = RemoteSavedHost(name: link.name, hostKey: link.macKey, direct: link.hosts)

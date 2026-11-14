@@ -54,10 +54,15 @@ final class RemoteClientWebSocket: @unchecked Sendable {
             switch state {
             case .ready:
                 lock.withLock { isOpen = true }
-            case let .waiting(error), let .failed(error):
+            case let .waiting(error):
                 // Waiting is for the network to change; the caller's own retry decides when to try again.
                 end("\(error)")
                 connection.cancel()
+            case let .failed(error):
+                // The peer's last messages and its close stay readable: a host that refuses sends its answer and closes
+                // at once (§13.1), and the connection fails before the reader gets there. Reading the end cancels it.
+                end("\(error)")
+                queue.asyncAfter(deadline: .now() + Self.closeLimit) { [connection] in connection.cancel() }
             case .cancelled:
                 connection.stateUpdateHandler = nil
             default:
@@ -101,9 +106,13 @@ final class RemoteClientWebSocket: @unchecked Sendable {
     }
 
     func receive(completionHandler: @escaping @Sendable (Result<Message, Error>) -> Void) {
-        connection.receiveMessage { [self] data, context, _, error in
-            if let error { return completionHandler(.failure(failure(error))) }
+        connection.receiveMessage { [self] data, context, isComplete, error in
             let metadata = context?.protocolMetadata(definition: NWProtocolWebSocket.definition) as? NWProtocolWebSocket.Metadata
+            // A whole message or a close that came before the connection failed comes with the failure, and is read.
+            if let error, metadata?.opcode != .close, !(isComplete && [.binary, .text].contains(metadata?.opcode)) {
+                connection.cancel()
+                return completionHandler(.failure(failure(error)))
+            }
             switch metadata?.opcode {
             case .binary?:
                 completionHandler(.success(.data(data ?? Data())))
