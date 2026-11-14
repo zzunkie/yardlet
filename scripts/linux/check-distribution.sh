@@ -71,10 +71,12 @@ wait $host || { cat "$work/host.log"; echo 'The host did not stop cleanly'; exit
 relay_chat() {
   "$artifacts/yardlet-remote-fixture" --relay "$1" > "$work/fixture-$2.log" 2>&1 &
   fixture=$!
+  # The fixture prints its link before its room opens, and until then the relay answers a phone 404 ("no Mac holds
+  # this room"): the phone pairs once the room is open.
   link=
   for _ in $(seq 30); do
     link=$(sed -n 's/^Pairing URL[^:]*: //p' "$work/fixture-$2.log" | head -n 1)
-    [ -z "$link" ] || break
+    [ -n "$link" ] && grep -q '^Relay: connected' "$work/fixture-$2.log" && break
     sleep 1
   done
   works=no
