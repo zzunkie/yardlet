@@ -20,10 +20,11 @@ struct TranscriptReadingAnchors {
 /// Keeps the place being read: the first turn in view and how far into it the viewport's top is, so
 /// the place holds when the turns around it grow.
 ///
-/// Each turn tells its frame in the conversation's content (`transcriptReadingAnchor`), and the scroll
-/// view tells how far it has scrolled (`observe`). Scrolling changes only the second: the turns say
-/// nothing while the conversation moves under the reader, and where a turn is in the viewport is worked
-/// out from the two when a place is kept or restored.
+/// Each turn tells its frame in the conversation's content (`transcriptReadingAnchor`), or the row list
+/// that draws them says where every row is (`rowFrame`), and the scroll view tells how far it has
+/// scrolled (`observe`). Scrolling changes only the second: the turns say nothing while the conversation
+/// moves under the reader, and where a turn is in the viewport is worked out from the two when a place
+/// is kept or restored.
 @MainActor @Observable
 final class TranscriptReadingTracker {
     /// Names the conversation's content, inside its scroll view, which the turns' frames are read in.
@@ -36,6 +37,10 @@ final class TranscriptReadingTracker {
     private(set) var visibleAnchorID: String?
     /// The turns' frames in the conversation's content.
     @ObservationIgnored private var frames: [String: CGRect] = [:]
+    /// Where a row is in the conversation's content, from the row list that draws it
+    /// (`ConversationRowList`), which knows every row's place whether it is in the window or not; nil
+    /// while the turns tell their own frames.
+    @ObservationIgnored var rowFrame: ((String) -> CGRect?)?
     @ObservationIgnored private var visibleItemIDs: Set<String>?
     @ObservationIgnored private var itemIDs: [String] = []
     @ObservationIgnored private var record: TranscriptReadingPosition?
@@ -183,7 +188,8 @@ final class TranscriptReadingTracker {
 
     /// A turn's frame in the viewport, for a turn in view or within reach below it.
     private func frameInViewport(_ id: String) -> CGRect? {
-        guard let frame = frames[id]?.offsetBy(dx: 0, dy: -offset), frame.maxY >= 0, frame.minY <= Self.reach
+        guard let frame = (rowFrame?(id) ?? frames[id])?.offsetBy(dx: 0, dy: -offset), frame.maxY >= 0,
+              frame.minY <= Self.reach
         else { return nil }
         return frame
     }

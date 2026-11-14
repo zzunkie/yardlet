@@ -7,11 +7,11 @@ import SwiftUI
 /// and asked again only for the rows whose turn changed, and scrolling moves the clip view and puts the
 /// rows that crossed its edges in or out, without laying out or measuring anything in SwiftUI.
 ///
-/// What it does so far: scrolling, following the latest output (and letting go when the reader
-/// scrolls away from the end), bringing earlier turns in at the top as the reader scrolls up to it
-/// while the rows in view stay where they are, "Latest response", and going to the latest output
-/// on a new turn or a new request to answer. Find, saved reading places, the rail's turns, places
-/// another view asks for and history results do not move this view yet.
+/// It scrolls, follows the latest output (and lets go when the reader scrolls away from the end), brings
+/// earlier turns in at the top as the reader scrolls up to it while the rows in view stay where they are,
+/// offers "Latest response", goes to the latest output on a new turn or a new request to answer, and goes
+/// to the places the conversation is asked for (`ConversationRowTarget`) and the saved place being read
+/// (`TranscriptReadingTracker`), as soon as their row is in the list.
 enum ConversationRowListSwitch {
     /// Turns the row list on while it and the stack both exist: `defaults write com.zzunkie.yardlet
     /// YardletConversationRowList -bool true` (or the launch argument `-YardletConversationRowList YES`),
@@ -36,7 +36,10 @@ struct ConversationRowList: NSViewRepresentable {
     let loadEarlier: (() -> Void)?
     let earlierKey: String?
     let onReturnToLatest: () -> Void
-    /// "Latest response" asks for the end through it.
+    /// A place the conversation was asked to go to: the rail's turn, find's match, a history result,
+    /// another view's call.
+    let target: ConversationRowTarget?
+    /// "Latest response" and the reading tracker's restorations go through it.
     let scroller: ConversationRowListScroller
 
     func makeCoordinator() -> ConversationRowListController { ConversationRowListController() }
@@ -76,6 +79,25 @@ final class ConversationRowListScroller {
     func scrollToLatest() {
         controller?.followLatest()
     }
+
+    /// Goes to the place the reading tracker asks for (`TranscriptReadingTracker.request`).
+    func restore(_ request: TranscriptRestoreRequest?) {
+        controller?.restore(request)
+    }
+}
+
+/// A row the conversation was asked to bring into view, and where: the rail's turn, find's match and a
+/// history result in the middle, a call another view asked for at the top. A new `token` asks again.
+struct ConversationRowTarget: Equatable {
+    enum Placement: Equatable {
+        case center
+        case top
+    }
+
+    let rowID: String
+    let placement: Placement
+    var animated = false
+    let token: Int
 }
 
 /// The list's scroll view, which tells the reader's own scrolling (the wheel, a trackpad, the
@@ -260,12 +282,16 @@ final class ConversationRowListController: NSObject {
     /// The views of the rows near the viewport, by row ID, and the ones free for the next rows.
     private var cells: [String: ConversationRowCell] = [:]
     private var freeCells: [ConversationRowCell] = []
+    private var idsInView: [String] = []
     /// Whether to follow the latest output, and how near the end the reader is: the conversation's
     /// state as this list last wrote or read it. `written` is a write SwiftUI has not handed back yet.
     private var followState = TranscriptScrollFollowState()
     private var written: TranscriptScrollFollowState?
     private var lastLatestRequestID: String?
     private var lastPendingRequestIDs: Set<String> = []
+    /// A place asked for whose row is not in the list yet, which the change that brings it in goes to.
+    private var pendingPlace: Place?
+    private var lastTargetToken: Int?
     private var hasStarted = false
     private var topLoading = TranscriptTopLoading()
     /// The view is moving for this controller, not for the reader.
@@ -307,10 +333,18 @@ final class ConversationRowListController: NSObject {
         scrollView.onReaderEndedScrolling = { [weak self] in self?.readerEndedScrolling() }
     }
 
+    /// Where the viewport goes for something other than the reader's scroll.
+    private enum Place {
+        /// A row's content at the viewport's top or in its middle.
+        case row(String, ConversationRowTarget.Placement, animated: Bool)
+        case offset(CGFloat)
+    }
+
     // MARK: - Updates
 
     func update(_ timeline: ConversationRowList, environment: EnvironmentValues) {
         parent = timeline
+        timeline.readingTracker.rowFrame = { [weak self] id in self?.contentFrame(ofRowID: id) }
         self.environment = environment
         if let written, timeline.scrollState == written { self.written = nil }
         if written == nil { followState = timeline.scrollState }
@@ -330,18 +364,18 @@ final class ConversationRowListController: NSObject {
             hosting(for: ids[index]).show(host, environment: environment)
         }
         change { geometry.setRows(ids, heights: ids.indices.map(rowHeight), leads: ids.indices.map(gap)) }
+        if let target = timeline.target, target.token != lastTargetToken {
+            lastTargetToken = target.token
+            go(to: .row(target.rowID, target.placement, animated: target.animated))
+        }
 
         if !hasStarted {
+            // Reading starts where the conversation shows (`ConversationTimeline`).
             hasStarted = true
             lastLatestRequestID = timeline.latestRequestID
             lastPendingRequestIDs = timeline.pendingRequestIDs
-            afterUpdate { [weak self] in
-                timeline.readingTracker.start(record: nil, itemIDs: ids)
-                self?.setFollowing(true)
-            }
             return
         }
-        afterUpdate { timeline.readingTracker.updateItems(ids) }
         if timeline.latestRequestID != lastLatestRequestID {
             lastLatestRequestID = timeline.latestRequestID
             followLatest()
@@ -368,7 +402,47 @@ final class ConversationRowListController: NSObject {
         for hosting in hostings.values { hosting.onResize = {} }
         hostings = [:]
         parent?.readingTracker.hide()
+        parent?.readingTracker.rowFrame = nil
         parent = nil
+    }
+
+    /// Goes to the place the reading tracker asks for: a saved place's row, then the point in it, or the end.
+    func restore(_ request: TranscriptRestoreRequest?) {
+        switch request {
+        case let .anchor(id):
+            setFollowing(false)
+            go(to: .row(id, .top, animated: false))
+        case let .offset(y):
+            setFollowing(false)
+            go(to: .offset(y))
+        case .latest:
+            pendingPlace = nil
+            setFollowing(true)
+            scrollToEnd()
+        case nil:
+            break
+        }
+    }
+
+    /// Goes to `place` now, or once its row is in the list.
+    private func go(to place: Place) {
+        pendingPlace = place
+        goToPendingPlace()
+    }
+
+    private func goToPendingPlace() {
+        guard let place = pendingPlace, scrollView.contentView.bounds.width >= 80 else { return }
+        let viewport = scrollView.contentView.bounds.height
+        switch place {
+        case let .row(id, placement, animated):
+            guard let frame = contentFrame(ofRowID: id) else { return }
+            pendingPlace = nil
+            let y = placement == .center ? frame.midY - viewport / 2 : frame.minY
+            scroll(toY: y, animated: animated)
+        case let .offset(y):
+            pendingPlace = nil
+            scroll(toY: y)
+        }
     }
 
     /// Goes to the end and follows it: a new turn, "Latest response".
@@ -381,6 +455,7 @@ final class ConversationRowListController: NSObject {
         var state = followState
         state.isFollowing = true
         followState = state
+        pendingPlace = nil
         scrollToEnd()
     }
 
@@ -419,6 +494,12 @@ final class ConversationRowListController: NSObject {
         return gap(index) + hosting(for: rows[index].turn.id).size(forWidth: width).height + bottom(index)
     }
 
+    /// Where row `id`'s turn is drawn in the list's document, or nil while the row is not in the list.
+    private func contentFrame(ofRowID id: String) -> CGRect? {
+        guard let index = geometry.index(of: id), index < rows.count, rowsView.bounds.width >= 80 else { return nil }
+        return contentFrame(ofRow: index)
+    }
+
     /// Where row `index`'s turn is drawn: in the column, below the space before it.
     private func contentFrame(ofRow index: Int) -> CGRect {
         let width = Self.columnWidth(in: rowsView.bounds.width)
@@ -445,6 +526,7 @@ final class ConversationRowListController: NSObject {
         if holdsForGesture { arrivedUnderGesture += max(0, height - endBefore) }
         scroll(toY: geometry.offset(for: anchor, viewportHeight: clip.bounds.height, scales: scales, fallback: before))
         tile()
+        goToPendingPlace()
     }
 
     /// Puts the views of the rows near the viewport in their places, and takes out the views of the rows
@@ -474,6 +556,12 @@ final class ConversationRowListController: NSObject {
                 cell.show(hosting(for: id).controller.view)
                 rowsView.addSubview(cell)
             }
+        }
+        // The rows in view, which the reading place is read from, told as they change.
+        let inView = geometry.rows(from: visible.minY, to: visible.maxY).map { geometry.ids[$0] }
+        if inView != idsInView, visible.height >= 60 {
+            idsInView = inView
+            parent?.readingTracker.updateVisibleItems(inView)
         }
     }
 
@@ -521,6 +609,8 @@ final class ConversationRowListController: NSObject {
             $0.height == height && $0.visible.size == visible.size && abs($0.visible.minY - visible.minY) > 1
         } ?? false
         let userDriven = readerScrolled || moved
+        // A place asked for whose row has not come in yet is given up once the reader goes elsewhere.
+        if userDriven { pendingPlace = nil }
         var state = followState
         state.observe(distance: distance - arrivedUnderGesture, userDriven: userDriven)
         if !state.isFollowing { arrivedUnderGesture = 0 }
@@ -563,10 +653,29 @@ final class ConversationRowListController: NSObject {
         scroll(toY: geometry.maximumOffset(viewportHeight: scrollView.contentView.bounds.height))
     }
 
-    private func scroll(toY y: CGFloat) {
+    /// Moves the viewport's top to `y`, kept inside the list; `animated` eases there in ParityMotion's
+    /// time unless the person asked for reduced motion. A window not on a display goes there at once: its
+    /// animation would not run until it is shown, and the list would wait for it.
+    private func scroll(toY y: CGFloat, animated: Bool = false) {
         let clip = scrollView.contentView
         let target = min(max(0, y), geometry.maximumOffset(viewportHeight: clip.bounds.height))
         guard abs(clip.bounds.minY - target) >= 0.5 else { return }
+        if animated, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+           scrollView.window?.occlusionState.contains(.visible) == true {
+            adjusting += 1
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.16
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                clip.animator().setBoundsOrigin(NSPoint(x: 0, y: target))
+            } completionHandler: { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.scrollView.reflectScrolledClipView(clip)
+                    self.adjusting -= 1
+                }
+            }
+            return
+        }
         adjusting += 1
         clip.scroll(to: NSPoint(x: 0, y: target))
         scrollView.reflectScrolledClipView(clip)
