@@ -201,7 +201,7 @@ private struct HoverCopy: ViewModifier {
                     .padding(3)
                 }
             }
-            .onHover { hovering in
+            .pointerHover { hovering in
                 isHovering = hovering
                 if !hovering { copied = nil }
             }
