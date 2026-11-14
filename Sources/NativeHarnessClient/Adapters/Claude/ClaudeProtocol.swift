@@ -17,6 +17,9 @@ struct ClaudeLaunchConfiguration: Equatable, Sendable {
     /// The task's own context limit, passed in the CLI's environment. Nil leaves the environment
     /// as the account has it.
     var contextLimit: UInt64? = nil
+    /// The task's title, passed in the CLI's environment as the session's name. Nil leaves the CLI's
+    /// own name, made from the folder.
+    var sessionName: String? = nil
     /// The Yardlet MCP server's `--mcp-config` file. Nil leaves the launch arguments unchanged;
     /// the servers the user configured for Claude Code load as they always do.
     var agentToolConfigPath: String? = nil

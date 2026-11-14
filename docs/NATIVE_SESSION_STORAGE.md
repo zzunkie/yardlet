@@ -414,6 +414,16 @@ non-interactive way to run their small model without the person's tools, and the
   A failure, or a task with no conversation yet, leaves the name as it was and says why; a name the person gives the
   task meanwhile is kept.
 
+Claude Code's other sessions list and message a task by the name its CLI registers (`ListAgents`, `SendMessage`). Each
+start and resume passes the task's title of the moment, on one line, as `CLAUDE_CODE_SESSION_NAME` in the environment
+of that task's process, the variable Claude Code names its own background sessions with (`ClaudeLaunchOption.sessionName`).
+Unlike `--name`, it writes nothing into the conversation: no `custom-title`, which the Claude app, `/resume` and the
+title refresh above read as a name the person gave, and no `agent-name`. A name the person gave the session in the
+Claude app stays in its file as it was. The CLI reads the variable only when it starts and has no request that changes
+this name alone, so a task renamed while its CLI runs, or titled by Claude Code in its first turn, takes the new name at
+its next start; until then the other sessions see the title it started with. A task without a title keeps the CLI's
+own name, made from its folder.
+
 ## Archive and unarchive
 
 Archiving can be undone. **Archived tasks** at the bottom of the sidebar (also in the Task menu and the command palette)

@@ -92,6 +92,30 @@ final class ClaudeChromeIntegrationTests: XCTestCase {
         XCTAssertNil(ClaudeContextLimitPreference.tokens(in: context.defaults))
     }
 
+    /// The task's title is the name Claude Code's other sessions list and message it by. It goes in the
+    /// environment on one line and never as `--name`, which would also write it into the conversation
+    /// as a title the person gave. A task without a title keeps the CLI's own name.
+    func testTheTaskTitleIsTheSessionNameInTheEnvironmentOnly() async throws {
+        let variable = "CLAUDE_CODE_SESSION_NAME"
+        XCTAssertNil(ClaudeProcessTransport.environment(base: [:], overrides: [:])[variable])
+        let cases: [(title: String?, launched: String?)] = [("Fix the\nlogin  bug ", "Fix the login bug"), (" \n", nil), (nil, nil)]
+        for (title, launched) in cases {
+            let transport = FakeClaudeTransport()
+            let adapter = ClaudeAdapter(executableURL: URL(filePath: "/tmp/fake-claude"), transportFactory: { _ in transport },
+                                        asksForNextMessageSuggestions: { false }, defaultContextLimit: { nil })
+            let id = UUID()
+            await adapter.setLaunchOptions(title.map { [ClaudeLaunchOption.sessionName: $0] } ?? [:], for: id)
+            let handle = try await adapter.createSession(
+                CreateHarnessSessionRequest(localSessionID: id, workspaceURL: workspace, initialPrompt: nil))
+            let launch = await transport.configuration
+            let configuration = try XCTUnwrap(launch)
+            XCTAssertEqual(ClaudeProcessTransport.environment(base: [:], overrides: [:],
+                                                              sessionName: configuration.sessionName)[variable], launched)
+            XCTAssertFalse(ClaudeProcessTransport.arguments(for: configuration).contains { $0 == "-n" || $0.hasPrefix("--name") })
+            await adapter.close(handle)
+        }
+    }
+
     func testTheChromeOptionIsOneOffOrOnSelectorThatStartsOff() async throws {
         let transport = FakeClaudeTransport()
         let adapter = ClaudeAdapter(

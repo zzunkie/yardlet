@@ -6216,6 +6216,10 @@ final class AppModel {
             if let launchConfigurable = adapter as? any HarnessLaunchOptionConfiguring {
                 var options = session.providerOptions
                 if withoutSuggestions { options[ClaudeLaunchOption.nextMessageSuggestions] = ClaudeLaunchOption.off }
+                // Claude Code's other sessions list and message this one by the task's title of the moment.
+                if session.harness == .claudeCode {
+                    options[ClaudeLaunchOption.sessionName] = store.sessions.first { $0.id == session.id }?.title
+                }
                 await launchConfigurable.setLaunchOptions(options, for: session.id)
             }
             // The Yardlet MCP server goes in with the session request itself and nowhere else.

@@ -13,6 +13,9 @@ enum ClaudeLaunchOption {
     /// `off` for a session no one types into (a `run_agent` subagent), whose suggested next message
     /// would be a model request no one reads. Absent, Yardlet's "Next message suggestions" decides.
     static let nextMessageSuggestions = "nextMessageSuggestions"
+    /// The task's title when its CLI starts, the name its other sessions see (`launchSessionName`).
+    /// Never saved with the task: each launch takes the title of the moment.
+    static let sessionName = "sessionName"
     /// The task's own context limit, in tokens. Absent, the task takes the one in Settings
     /// (`ClaudeContextLimitPreference`) when its CLI starts, which is the CLI's own unless the person
     /// set one. It is the task's alone: `AppModel.inheritedOptions` leaves it behind.
@@ -31,6 +34,14 @@ enum ClaudeLaunchOption {
         guard let value, value != "default", !value.isEmpty, !value.hasPrefix("-"),
               value.allSatisfy({ !$0.isWhitespace && !$0.isNewline }) else { return nil }
         return value
+    }
+
+    /// The title on one line, or nil when nothing is left. The CLI drops control characters rather than
+    /// turning them into spaces, and keeps the first 200 characters itself.
+    static func launchSessionName(_ value: String?) -> String? {
+        guard let name = value?.split(whereSeparator: \.isWhitespace).joined(separator: " "),
+              !name.isEmpty else { return nil }
+        return name
     }
 
     /// The tokens a saved context limit stands for, or nil for anything the menu does not offer.
@@ -102,6 +113,8 @@ actor ClaudeAdapter:
     private var permissionModeByLocalSessionID: [UUID: String] = [:]
     /// The model a task chose, passed at launch so its first turn already runs on it.
     private var launchModelByLocalSessionID: [UUID: String] = [:]
+    /// The task's title at its next launch, the CLI's session name (`ClaudeLaunchOption.sessionName`).
+    private var sessionNameByLocalSessionID: [UUID: String] = [:]
     /// The model this session was last asked to run: the launch flag, then each `set_model`.
     /// Settings report the account's configured model as effective even while another runs.
     private var requestedModelByLocalSessionID: [UUID: String] = [:]
@@ -239,6 +252,7 @@ actor ClaudeAdapter:
             permissionModeByLocalSessionID.removeValue(forKey: localSessionID)
         }
         launchModelByLocalSessionID[localSessionID] = ClaudeLaunchOption.launchModel(options[ClaudeLaunchOption.model])
+        sessionNameByLocalSessionID[localSessionID] = ClaudeLaunchOption.launchSessionName(options[ClaudeLaunchOption.sessionName])
         if options[ClaudeLaunchOption.nextMessageSuggestions] == ClaudeLaunchOption.off {
             sessionsWithoutNextMessageSuggestions.insert(localSessionID)
         } else {
@@ -876,6 +890,7 @@ actor ClaudeAdapter:
         contextLimitByLocalSessionID.removeValue(forKey: session.localSessionID)
         permissionModeByLocalSessionID.removeValue(forKey: session.localSessionID)
         launchModelByLocalSessionID.removeValue(forKey: session.localSessionID)
+        sessionNameByLocalSessionID.removeValue(forKey: session.localSessionID)
         requestedModelByLocalSessionID.removeValue(forKey: session.localSessionID)
         unrestoredLaunchModels.remove(session.localSessionID)
         contextUsageRequestIDs.removeValue(forKey: session.localSessionID)
@@ -929,6 +944,7 @@ actor ClaudeAdapter:
                     additionalRoots: additionalRootsByLocalSessionID[handle.localSessionID] ?? [],
                     chromeIntegration: chromeIntegrationByLocalSessionID[handle.localSessionID] ?? false,
                     contextLimit: contextLimitByLocalSessionID[handle.localSessionID] ?? defaultContextLimit(),
+                    sessionName: sessionNameByLocalSessionID[handle.localSessionID],
                     agentToolConfigPath: agentToolConfigPath(for: handle.localSessionID),
                     forkSource: forkSources[handle.localSessionID],
                     permissionMode: permissionModeByLocalSessionID[handle.localSessionID],

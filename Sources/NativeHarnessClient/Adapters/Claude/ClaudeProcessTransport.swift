@@ -55,7 +55,8 @@ actor ClaudeProcessTransport: ClaudeTransport {
             .init(executableURL: executableURL,
                   arguments: Self.arguments(for: configuration),
                   currentDirectoryURL: configuration.workspaceURL.standardizedFileURL,
-                  environment: environment(contextLimit: configuration.contextLimit),
+                  environment: environment(contextLimit: configuration.contextLimit,
+                                           sessionName: configuration.sessionName),
                   resourceOwner: resourceOwner,
                   processRegistry: processRegistry),
             stderrLimit: 16 * 1024
@@ -174,9 +175,10 @@ actor ClaudeProcessTransport: ClaudeTransport {
         return arguments
     }
 
-    private func environment(contextLimit: UInt64?) -> [String: String] {
+    private func environment(contextLimit: UInt64?, sessionName: String?) -> [String: String] {
         Self.environment(base: RuntimeProcessEnvironment.app, overrides: environmentOverrides,
-                         claudeAIConnectors: ClaudeAIConnectorPreference.isEnabled(), contextLimit: contextLimit)
+                         claudeAIConnectors: ClaudeAIConnectorPreference.isEnabled(), contextLimit: contextLimit,
+                         sessionName: sessionName)
     }
 
     /// The longest a background Bash command may run, in milliseconds: the CLI's own ceiling
@@ -199,8 +201,16 @@ actor ClaudeProcessTransport: ClaudeTransport {
     /// `contextLimit` is the CLI's documented `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, which it reads when
     /// it starts and which outranks its own settings, so one task can compact earlier without a
     /// setting that reaches every task on the account.
+    ///
+    /// A `sessionName` is the name the CLI registers for its other sessions to list and message
+    /// (`ListAgents`, `SendMessage`), in `CLAUDE_CODE_SESSION_NAME`, the variable the CLI names its
+    /// own background sessions with. Unlike `--name`, it writes nothing into the conversation: no
+    /// `custom-title`, which the Claude app, `/resume` and Yardlet read as a name the person gave, and
+    /// no `agent-name`. The CLI keeps it from the processes it starts, and does not change it while it
+    /// runs, so a renamed task takes its new name at its next launch.
     static func environment(base: [String: String], overrides: [String: String],
-                            claudeAIConnectors: Bool = false, contextLimit: UInt64? = nil) -> [String: String] {
+                            claudeAIConnectors: Bool = false, contextLimit: UInt64? = nil,
+                            sessionName: String? = nil) -> [String: String] {
         var environment = base
         environment.removeValue(forKey: "CLAUDECODE")
         environment["CLAUDE_CODE_ENTRYPOINT"] = "native-harness-client"
@@ -215,6 +225,7 @@ actor ClaudeProcessTransport: ClaudeTransport {
             scoped[ClaudeAIConnectorPreference.environmentVariable] = "false"
         }
         if let contextLimit { scoped["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = String(contextLimit) }
+        if let sessionName { scoped["CLAUDE_CODE_SESSION_NAME"] = sessionName }
         return scoped
     }
 
