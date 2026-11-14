@@ -231,6 +231,8 @@ final class ConversationRowListScrollView: NSScrollView {
 /// follow a press the cell had followed to its release, and wait for another.
 final class ConversationRowCell: NSView {
     private(set) var content: NSView?
+    /// The row it draws.
+    var rowID: String?
 
     override var isFlipped: Bool { true }
 
@@ -261,6 +263,34 @@ private final class ConversationRowsView: ConversationPressSurface {
     override func updateLayer() {}
 }
 
+/// Whether an assistive app that reads the whole conversation is on: VoiceOver or Switch Control, which
+/// move through every element in the window and expect the conversation's turns in its accessibility
+/// tree. It is not `accessibilityEnabled`: a window manager or another app that reads the window through
+/// accessibility turns that on too, and the conversation would then lose the rows it leaves out.
+@MainActor
+enum ConversationAssistiveReading {
+    /// Posted on the main thread when either app is turned on or off.
+    static let didChange = Notification.Name("ConversationAssistiveReadingDidChange")
+    /// Reads it now; a test can stand in for the apps.
+    static var isOn: () -> Bool = {
+        NSWorkspace.shared.isVoiceOverEnabled || NSWorkspace.shared.isSwitchControlEnabled
+    }
+
+    private static var observations: [NSKeyValueObservation] = []
+
+    /// Posts `didChange` when either app is turned on or off, from the first call on.
+    static func watch() {
+        guard observations.isEmpty else { return }
+        let changed: @Sendable (NSWorkspace, NSKeyValueObservedChange<Bool>) -> Void = { _, _ in
+            DispatchQueue.main.async { NotificationCenter.default.post(name: didChange, object: nil) }
+        }
+        observations = [
+            NSWorkspace.shared.observe(\.isVoiceOverEnabled, changeHandler: changed),
+            NSWorkspace.shared.observe(\.isSwitchControlEnabled, changeHandler: changed)
+        ]
+    }
+}
+
 /// Keeps the list's rows where `ConversationRowGeometry` places them and the viewport at the place read
 /// (its anchor): every change to the rows goes through `change`, which reads the anchor first and puts
 /// the viewport back at it in the same turn of the run loop, before anything is drawn. What the reader
@@ -283,6 +313,8 @@ final class ConversationRowListController: NSObject {
     private var cells: [String: ConversationRowCell] = [:]
     private var freeCells: [ConversationRowCell] = []
     private var idsInView: [String] = []
+    /// VoiceOver or Switch Control is on (`ConversationAssistiveReading`).
+    private var readsEveryRow = false
     /// Whether to follow the latest output, and how near the end the reader is: the conversation's
     /// state as this list last wrote or read it. `written` is a write SwiftUI has not handed back yet.
     private var followState = TranscriptScrollFollowState()
@@ -331,6 +363,15 @@ final class ConversationRowListController: NSObject {
                            object: scrollView.contentView)
         scrollView.onReaderBeganScrolling = { [weak self] in self?.topLoading.readerBeganScrolling() }
         scrollView.onReaderEndedScrolling = { [weak self] in self?.readerEndedScrolling() }
+        ConversationAssistiveReading.watch()
+        readsEveryRow = ConversationAssistiveReading.isOn()
+        center.addObserver(self, selector: #selector(assistiveReadingChanged), name: ConversationAssistiveReading.didChange,
+                           object: nil)
+    }
+
+    @objc private func assistiveReadingChanged() {
+        readsEveryRow = ConversationAssistiveReading.isOn()
+        tile()
     }
 
     /// Where the viewport goes for something other than the reader's scroll.
@@ -354,7 +395,7 @@ final class ConversationRowListController: NSObject {
         if ids != geometry.ids {
             let kept = Set(ids)
             for (id, hosting) in hostings where !kept.contains(id) {
-                hosting.onResize = {}
+                release(hosting)
                 hostings[id] = nil
             }
         }
@@ -399,7 +440,7 @@ final class ConversationRowListController: NSObject {
         }
         cells = [:]
         freeCells = []
-        for hosting in hostings.values { hosting.onResize = {} }
+        for hosting in hostings.values { release(hosting) }
         hostings = [:]
         parent?.readingTracker.hide()
         parent?.readingTracker.rowFrame = nil
@@ -467,9 +508,15 @@ final class ConversationRowListController: NSObject {
 
     // MARK: - Rows
 
+    /// Lets go of a row's hosting, which the next view of its turn may take.
+    private func release(_ hosting: ConversationTurnHosting) {
+        hosting.onResize = {}
+        if hosting.holder === self { hosting.holder = nil }
+    }
+
     private func hosting(for id: String) -> ConversationTurnHosting {
         if let hosting = hostings[id] { return hosting }
-        let hosting = parent?.renderState.hosting(for: id) ?? ConversationTurnHosting(turnID: id)
+        let hosting = parent?.renderState.hosting(for: id, holder: self) ?? ConversationTurnHosting(turnID: id)
         hosting.onResize = { [weak self] in self?.rowResized(id) }
         hostings[id] = hosting
         return hosting
@@ -533,13 +580,19 @@ final class ConversationRowListController: NSObject {
     /// that left it. A row away from the viewport takes its turn out of the window: nothing it holds
     /// lays out, tracks the pointer or answers hit tests until it comes back. It runs at every frame of a
     /// scroll, and costs the rows that crossed the edges.
+    ///
+    /// Some rows keep their views wherever the viewport is (`heldRows`), and with VoiceOver or Switch
+    /// Control on every row does, so the conversation reads to them as it did drawn whole.
     private func tile() {
         let visible = scrollView.contentView.bounds
         let margin = visible.height * Self.overscan
-        let near = geometry.rows(from: visible.minY - margin, to: visible.maxY + margin)
-        for (id, cell) in cells where !(geometry.index(of: id).map(near.contains) ?? false) {
+        let near = readsEveryRow ? 0..<geometry.count
+            : geometry.rows(from: visible.minY - margin, to: visible.maxY + margin)
+        let held = heldRows(besides: near)
+        for (id, cell) in cells where !(geometry.index(of: id).map { near.contains($0) || held.contains($0) } ?? false) {
             cell.detach()
             cell.removeFromSuperview()
+            cell.rowID = nil
             cells[id] = nil
             freeCells.append(cell)
         }
@@ -553,9 +606,15 @@ final class ConversationRowListController: NSObject {
             let frame = contentFrame(ofRow: row)
             if cell.frame != frame { cell.frame = frame }
             if cell.content == nil {
+                cell.rowID = id
                 cell.show(hosting(for: id).controller.view)
                 rowsView.addSubview(cell)
             }
+        }
+        for row in held {
+            guard let cell = cells[geometry.ids[row]] else { continue }
+            let frame = contentFrame(ofRow: row)
+            if cell.frame != frame { cell.frame = frame }
         }
         // The rows in view, which the reading place is read from, told as they change.
         let inView = geometry.rows(from: visible.minY, to: visible.maxY).map { geometry.ids[$0] }
@@ -563,6 +622,33 @@ final class ConversationRowListController: NSObject {
             idsInView = inView
             parent?.readingTracker.updateVisibleItems(inView)
         }
+    }
+
+    /// The rows out of `near` whose views stay in the window: the last row, where the running turn and
+    /// the requests to answer are; the row the window's first responder is in (a field being typed in,
+    /// with its marked text); and every row from the first to the last a selection holds, so a drag
+    /// that goes on past the viewport keeps where it started (`ConversationSelection.heldViews`). A row
+    /// already out of the window is not brought back for them.
+    private func heldRows(besides near: Range<Int>) -> IndexSet {
+        var held = IndexSet()
+        if !geometry.isEmpty { held.insert(geometry.count - 1) }
+        if let responder = scrollView.window?.firstResponder as? NSView, let row = row(holding: responder) {
+            held.insert(row)
+        }
+        let selected = ConversationSelection.heldViews.compactMap(row(holding:))
+        if let first = selected.min(), let last = selected.max() { held.insert(integersIn: first...last) }
+        held.remove(integersIn: near)
+        return held
+    }
+
+    /// The row whose view holds `view`, while it is in the list's window.
+    private func row(holding view: NSView) -> Int? {
+        var current: NSView? = view
+        while let candidate = current, candidate !== rowsView {
+            if let cell = candidate as? ConversationRowCell { return cell.rowID.flatMap(geometry.index(of:)) }
+            current = candidate.superview
+        }
+        return nil
     }
 
     /// A turn grew or shrank on its own: a fold opened, a line streamed. Only it and the rows below it move.

@@ -458,6 +458,30 @@ final class ConversationSelectionTests: XCTestCase {
         XCTAssertNotNil(Self.painted(question))
     }
 
+    /// A selection keeps the turns it holds in the window when the conversation scrolls far from them,
+    /// so it is there to copy and to extend; the row list otherwise keeps only the turns near its view.
+    func testASelectionKeepsItsTurnsInTheWindowWhenTheConversationScrollsAway() throws {
+        let host = makeHost(LongConversationFixture.claude(turns: 9), status: .ready)
+        defer { host.close() }
+        let scroll = try XCTUnwrap(BlankFrameProbe.conversationScrollView(in: host.hosting))
+        // To the conversation's top or its end, whichever way its document counts.
+        func go(toTop top: Bool) {
+            guard let document = scroll.documentView else { return }
+            let end = max(0, document.frame.height - scroll.contentView.bounds.height)
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: top == document.isFlipped ? 0 : end))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            host.settle(passes: 3)
+        }
+        go(toTop: true)
+        let request = try text(LongConversationFixture.request(0), in: host)
+        press(at: try point("look", in: request), dragTo: try point("module", in: request, atEnd: true), in: host.window)
+        XCTAssertTrue(ConversationSelection.spans(request))
+        go(toTop: false)
+        XCTAssertNotNil(request.window, "The selected turn is still in the window")
+        XCTAssertTrue(ConversationSelection.spans(request))
+        XCTAssertEqual(try copied(from: request), "look at the parser module")
+    }
+
     // MARK: - Renders
 
     func testASelectionDrawsInBothAppearances() throws {
