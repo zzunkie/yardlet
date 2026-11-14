@@ -606,7 +606,15 @@ final class ConversationRowListController: NSObject {
         defer { lastMetrics = new }
         tile()
         guard let parent, new.viewport.width >= 80, new.viewport.height >= 60 else { return }
-        let userDriven = adjusting == 0 && scrollView.isReaderScrolling
+        let readerScrolled = adjusting == 0 && scrollView.isReaderScrolling
+        // The view moved over rows that stayed as they were, and not for this list: the reader, or
+        // something brought into view for them (find's match, an accessibility scroll). As for the
+        // stack (`TranscriptScrollMetrics.isUserMovement`), that decides whether to follow the latest
+        // output; otherwise the next row measured again took the view back to the end.
+        let moved = adjusting == 0 && lastMetrics.map {
+            $0.height == new.height && $0.viewport == new.viewport && abs($0.offset - new.offset) > 1
+        } ?? false
+        let userDriven = readerScrolled || moved
         var state = parent.scrollState
         state.observe(distance: new.distance, userDriven: userDriven)
         writeState(state)
@@ -616,7 +624,7 @@ final class ConversationRowListController: NSObject {
         // reader's scroll gets there instead of arriving once it has hit the top and bounced.
         let ahead = 2 * new.viewport.height
         if let loadEarlier = parent.loadEarlier,
-           topLoading.shouldLoad(offset: max(0, new.offset - ahead), userDriven: userDriven, key: parent.earlierKey) {
+           topLoading.shouldLoad(offset: max(0, new.offset - ahead), userDriven: readerScrolled, key: parent.earlierKey) {
             // Not inside the scroll's own notification: the turns that arrive change the list.
             DispatchQueue.main.async { loadEarlier() }
         }

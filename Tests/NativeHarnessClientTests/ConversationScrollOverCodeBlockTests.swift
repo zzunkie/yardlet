@@ -69,6 +69,10 @@ final class ConversationScrollOverCodeBlockTests: XCTestCase {
 
         // Go up until an inner scroll view (a code block's or a table's) is in the middle of the view. A
         // row that comes into view is laid out over the next passes, slower on CI, so each step waits a few.
+        // The steps are not the reader's scroll, which has ended: they stand for a move made for the
+        // reader (find's match, an accessibility scroll), which stops following the latest output as the
+        // reader's own does, so the rows laid out on the way do not take the view back to the end.
+        host.settle(passes: 10, interval: 0.05)
         var inner: NSScrollView?
         for _ in 0..<160 {
             let visible = conversation.convert(conversation.bounds, to: nil)
