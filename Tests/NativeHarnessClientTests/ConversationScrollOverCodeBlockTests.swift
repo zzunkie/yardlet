@@ -67,9 +67,10 @@ final class ConversationScrollOverCodeBlockTests: XCTestCase {
             throw XCTSkip("the window takes no scroll here (no display frames)")
         }
 
-        // Go up until an inner scroll view (a code block's or a table's) is in the middle of the view.
+        // Go up until an inner scroll view (a code block's or a table's) is in the middle of the view. A
+        // row that comes into view is laid out over the next passes, slower on CI, so each step waits a few.
         var inner: NSScrollView?
-        for _ in 0..<80 {
+        for _ in 0..<160 {
             let visible = conversation.convert(conversation.bounds, to: nil)
             inner = Self.scrollViews(in: conversation.documentView ?? conversation).first { candidate in
                 guard candidate !== conversation, candidate.window != nil else { return false }
@@ -78,9 +79,10 @@ final class ConversationScrollOverCodeBlockTests: XCTestCase {
             }
             if inner != nil { break }
             let clip = conversation.contentView
-            clip.scroll(to: NSPoint(x: 0, y: max(0, clip.bounds.minY - 150)))
+            guard clip.bounds.minY > 0 else { break }
+            clip.scroll(to: NSPoint(x: 0, y: max(0, clip.bounds.minY - 100)))
             conversation.reflectScrolledClipView(clip)
-            host.settle(passes: 1, interval: 0.02)
+            host.settle(passes: 3, interval: 0.03)
         }
         let target = try XCTUnwrap(inner, "a code block or table is in view")
         let point = target.convert(NSPoint(x: target.bounds.midX, y: target.bounds.midY), to: nil)

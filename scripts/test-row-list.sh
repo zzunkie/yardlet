@@ -10,7 +10,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 arguments=("$@")
-suites='\.(ConversationBlankFrame|ConversationFind|ConversationSelection|TranscriptReading|TranscriptAutoFollow|ConversationTopLoading|ConversationSendJump|ConversationSwitchFrame|ConversationTurnWindowRendering|ConversationTurnHost|ConversationReopenGap|CodexTimelineReading|CodexTimelineNavigation|ConversationAnchorMigration|StreamingWindowRedraw|ConversationFollowUpPlacement|TaskWorkspaceRestoration|TranscriptProseRendering|ConversationScrollOverCodeBlock)Tests/'
+# The classes that draw conversations, and of the prose's rendering tests the one that does: the rest
+# draw a message alone, the same with either renderer.
+suites='\.(ConversationBlankFrame|ConversationFind|ConversationSelection|TranscriptReading|TranscriptAutoFollow|ConversationTopLoading|ConversationSendJump|ConversationSwitchFrame|ConversationTurnWindowRendering|ConversationTurnHost|ConversationReopenGap|CodexTimelineReading|CodexTimelineNavigation|ConversationAnchorMigration|StreamingWindowRedraw|ConversationFollowUpPlacement|TaskWorkspaceRestoration|ConversationScrollOverCodeBlock)Tests/|\.TranscriptProseRenderingTests/testGoingToAMatchInATextOrATableBringsItToTheMiddle$'
 pending=(
   ConversationAnchorMigrationTests/testASavedClaudeWorkspaceReadsItsRowPlaceAsTheTurnThatHoldsIt
   ConversationAnchorMigrationTests/testASavedPlaceInATurnTheWindowLeavesOutWidensTheWindow
