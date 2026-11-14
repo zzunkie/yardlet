@@ -88,7 +88,7 @@ printed=$(grep -o 'yardlet-remote://[^[:space:]]*' "$logs/pair-tty.txt" | tail -
 echo '--- a phone'
 link=$("$yardlet" host pair --no-wait --json | sed -E 's/.*"link":"([^"]*)".*/\1/' | sed 's#\\/#/#g')
 "$bin/yardlet-remote-fixture" --pair "$link" --new-chat kimi-code --send 'Add the install steps' | tee "$logs/phone.log"
-grep -q 'connected through local\|connected through loopback' "$logs/phone.log"
+grep -q 'connected through direct' "$logs/phone.log"
 "$yardlet" host status
 "$yardlet" host status --json | grep -q '"name":"Fixture phone"'
 
