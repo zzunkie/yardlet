@@ -1669,8 +1669,21 @@ final class RemoteServerTests: XCTestCase {
         XCTAssertEqual(audit.map(\.type), ["watchTab", "tabInput", "tabInput", "tabInput"])
         XCTAssertEqual(audit.map(\.input), [nil, "click", "click", "text"])
         XCTAssertEqual(audit.map(\.result), ["ok", "notAllowed", "badRequest", "ok"])
+        // What the page copies after that input goes to this connection's clipboard alone; the audit log says a copy
+        // went, never what it was.
+        let inputPermits = await harness.bridge.inputPermits
+        let permit = try XCTUnwrap(inputPermits.last)
+        await harness.bridge.signal(.tabCopied(taskID: "A", tabID: "T1", text: "sk-live-copied", permit: UUID()))
+        await harness.bridge.signal(.tabCopied(taskID: "A", tabID: "T1", text: "sk-live-copied", permit: permit))
+        let copied = try await phone.event(.tabCopied)
+        XCTAssertEqual([copied.taskId, copied.tabId, copied.text], ["A", "T1", "sk-live-copied"])
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(phone.events(.tabCopied).count, 1, "another watch's copy does not come here")
+        XCTAssertEqual(harness.audit.entries().filter { $0.type == "tabCopied" }.map(\.result), ["ok"])
+
         let log = try String(contentsOf: harness.auditURL, encoding: .utf8)
         XCTAssertFalse(log.contains("hunter2"), "what was typed is never logged")
+        XCTAssertFalse(log.contains("sk-live-copied"), "nor what was copied")
 
         // The list follows the task's tabs; a tab that closed has no more frames.
         await harness.bridge.setTabs([RemoteBrowserTab(tabId: "T2", title: "Docs", active: true)])
@@ -2330,6 +2343,8 @@ actor FakeBridge: RemoteBridge {
     private(set) var captureStarts: [Date] = []
     var captureDelay: Duration = .zero
     private(set) var tabInputs: [RemoteTabInput] = []
+    /// The watch each input came under (`RemoteTabPermit.id`).
+    private(set) var inputPermits: [UUID] = []
     /// How long an input takes, and whether its permit still held when it was done.
     var inputDelay: Duration = .zero
     private(set) var permitsAtEnd: [Bool] = []
@@ -2431,6 +2446,7 @@ actor FakeBridge: RemoteBridge {
     }
     func tabInput(taskID: String, tabID: String, input: RemoteTabInput, permit: RemoteTabPermit) async -> RemoteError? {
         tabInputs.append(input)
+        inputPermits.append(permit.id)
         if inputDelay > .zero { try? await Task.sleep(for: inputDelay) }
         permitsAtEnd.append(permit.isValid)
         return nil

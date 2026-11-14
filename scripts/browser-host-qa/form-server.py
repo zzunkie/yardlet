@@ -121,6 +121,51 @@ gl.clearColor(0.1, 0.85, 0.3, 1);
 gl.clear(gl.COLOR_BUFFER_BIT);
 </script></html>'''
 
+# What a remote device copies from a page (BrowserHostRemoteCopyQA): a Copy button that writes the clipboard with the
+# async Clipboard API, one that copies a selected textarea with execCommand, a word to select, a plain field, a
+# password field, and a link to a page that writes the clipboard as it loads (REMOTE_COPY_NEXT). window.qa records what
+# the page's copies reported.
+REMOTE_COPY = '''<!doctype html>
+<html><meta charset="utf-8"><title>Remote copy</title>
+<style>
+body { margin: 0; padding: 32px; font: 22px sans-serif; }
+button, input, p { display: block; margin: 0 0 20px; font: inherit; }
+input { width: 360px; }
+</style>
+<p>sk-qa-0123456789abcdef</p>
+<button id="copy">Copy key</button>
+<button id="legacy">Copy with execCommand</button>
+<p id="words">Pomegranate orchard</p>
+<input id="field" value="plain field text">
+<input id="pass" type="password" autocomplete="off">
+<p id="status">idle</p>
+<a id="next" href="/remote-copy-next">Next page</a>
+<script>
+window.qa = {copied: [], failed: []};
+const status = document.getElementById('status');
+document.getElementById('copy').onclick = () => navigator.clipboard.writeText('sk-qa-0123456789abcdef').then(
+  () => { qa.copied.push('copy'); status.textContent = 'Copied'; },
+  error => { qa.failed.push(String(error)); status.textContent = 'Failed'; });
+document.getElementById('legacy').onclick = () => {
+  const area = document.createElement('textarea');
+  area.value = 'legacy-copied-text';
+  document.body.appendChild(area);
+  area.select();
+  qa.copied.push('legacy:' + document.execCommand('copy'));
+  area.remove();
+};
+</script></html>'''
+
+REMOTE_COPY_NEXT = '''<!doctype html>
+<html><meta charset="utf-8"><title>Remote copy next</title>
+<p id="status">loading</p>
+<script>
+window.qa = {copied: [], failed: []};
+navigator.clipboard.writeText('loaded-page-text').then(
+  () => { qa.copied.push('load'); document.getElementById('status').textContent = 'Copied'; },
+  error => { qa.failed.push(String(error)); document.getElementById('status').textContent = 'Failed'; });
+</script></html>'''
+
 TALL = '''<!doctype html>
 <html><meta charset="utf-8"><title>Tall</title>
 <script>window.qa = {resizes: 0}; addEventListener('resize', () => window.qa.resizes++)</script>
@@ -1708,6 +1753,10 @@ class Handler(BaseHTTPRequestHandler):
             payload = large_page().encode()
         elif self.path.startswith('/remote-frames'):
             payload = REMOTE_FRAMES.encode()
+        elif self.path.startswith('/remote-copy-next'):
+            payload = REMOTE_COPY_NEXT.encode()
+        elif self.path.startswith('/remote-copy'):
+            payload = REMOTE_COPY.encode()
         elif self.path.startswith('/tall'):
             payload = TALL.encode()
         elif self.path.startswith('/viewport'):

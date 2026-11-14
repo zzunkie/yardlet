@@ -719,11 +719,15 @@ final class RemoteHostModelTests: XCTestCase {
                                                         name: "Mac Studio", hosts: ["127.0.0.1:\(stack.port)"]).url)
         let directory = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
                                             hello: RemoteHandshakeHello(name: "MacBook Air", platform: "macos", appVersion: "test"))
+        // This Mac's clipboard, kept here.
+        var clipboard: [String] = []
+        directory.copyText = { clipboard.append($0) }
         let paired = try await directory.pair(link: link.absoluteString)
         let model = try XCTUnwrap(directory.model(for: paired.id))
         defer { directory.close(paired.id) }
         try await waitUntil { model.hasSnapshot }
         XCTAssertTrue(model.offersBrowser)
+        XCTAssertTrue(model.browser.copiesFromPage)
 
         model.select(.task(ID.handoff))
         let conversation = try XCTUnwrap(model.conversations[ID.handoff])
@@ -753,6 +757,9 @@ final class RemoteHostModelTests: XCTestCase {
         browser.input(.click(x: field.x, y: field.y))
         browser.input(.text("octo"))
         browser.input(.text("cat"))
+        // ⌘C copies the field's text onto this Mac's clipboard, through the host's page.
+        browser.copy()
+        try await waitUntil { clipboard == ["octocat"] }
         browser.input(.key("Tab"))
         try await waitUntil { browser.watchedTab?.passwordField == true }
         // Each frame follows the one the window took.
@@ -764,9 +771,12 @@ final class RemoteHostModelTests: XCTestCase {
         XCTAssertNil(browser.refusal)
         for _ in 0..<5 { browser.scroll(x: 10, y: 10, deltaX: 0, deltaY: 30) }
         browser.input(.text("hunter2"))
+        // The password field copies nothing.
+        browser.copy()
         browser.input(.key("Enter"))
         try await waitUntil { browser.watchedTab?.title == "New release · acme/web" }
         XCTAssertNil(browser.refusal)
+        XCTAssertEqual(clipboard, ["octocat"])
 
         // The bar's I'm done answers the handoff on the host.
         model.send(.answerHandoff(taskID: ID.handoff, requestID: request.id, answer: .done))

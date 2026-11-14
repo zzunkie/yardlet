@@ -226,6 +226,7 @@ public actor RemoteFixtureBridge: RemoteBridge {
                               scheduledTasks: true, taskFiles: true, taskControls: true, browserTabs: true)
         snapshot.scheduleEditing = true
         snapshot.tabPermissions = true
+        snapshot.tabCopy = true
         snapshot.hostAccounts = true
         snapshot.suggestionOptions = true
         return snapshot
@@ -710,6 +711,11 @@ public actor RemoteFixtureBridge: RemoteBridge {
         guard permit.isValid else { return RemoteError(.notAllowed, "The watch ended") }
         guard taskID == ID.handoff, [RemoteFixtureTabs.signInTab, RemoteFixtureTabs.docsTab].contains(tabID) else {
             return RemoteError(.notFound)
+        }
+        if let copied = browser.copy(input, on: tabID) {
+            if input.key == "Meta+x" { browserChanged(picture: true, list: false) }
+            handler?(.tabCopied(taskID: taskID, tabID: tabID, text: copied, permit: permit.id))
+            return nil
         }
         let change = browser.input(input, on: tabID)
         if !change.isEmpty { browserChanged(picture: change.contains(.picture), list: change.contains(.list)) }

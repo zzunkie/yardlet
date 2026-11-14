@@ -5,8 +5,9 @@ import YardletRemote
 /// takes clicks, typing and keys as a page would (the username shows, the password as dots, Sign in checks that both
 /// are there), and a second tab of the same task holds a static page whose site asks for the camera and microphone, as
 /// a permission prompt the phone answers (its number past 2^53, as Chromium's media prompts have). A phone that asks for
-/// its own size (`viewport`) gets the pages laid out at it. Nothing typed is kept but the username and the password's
-/// length.
+/// its own size (`viewport`) gets the pages laid out at it. ⌘C (`Meta+c`) in the username field copies it for the phone
+/// (`tabCopied`) and ⌘X cuts it; in the password field neither copies anything. Nothing typed is kept but the username
+/// and the password's length.
 struct RemoteFixtureTabs {
     enum Field: Equatable {
         case username
@@ -114,6 +115,15 @@ struct RemoteFixtureTabs {
         var change: Change = .picture
         if before.0 != focus || before.1 != signedIn { change.insert(.list) }
         return change
+    }
+
+    /// What ⌘C or ⌘X copies for the phone: the username field's text, never the password's.
+    mutating func copy(_ input: RemoteTabInput, on tabID: String) -> String? {
+        guard tabID == Self.signInTab, input.kind == .key, ["Meta+c", "Meta+x"].contains(input.key ?? ""),
+              !signedIn, focus == .username, !username.isEmpty else { return nil }
+        let copied = username
+        if input.key == "Meta+x" { username = "" }
+        return copied
     }
 
     private mutating func submit() {

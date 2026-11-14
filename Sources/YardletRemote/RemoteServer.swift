@@ -30,6 +30,8 @@ public enum RemoteBridgeChange: Equatable, Sendable {
     case browserTabs(String)
     /// A watched tab drew its page again (§15.25).
     case tabPainted(taskID: String, tabID: String)
+    /// The watched tab's page copied text after the input of the watch whose permit `permit` names (§15.25).
+    case tabCopied(taskID: String, tabID: String, text: String, permit: UUID)
     /// The host's Settings sheet values changed (§15.36).
     case hostSettings
     /// The host's Account Center, harness runtimes or connectors changed (§15.37).
@@ -2107,6 +2109,7 @@ public actor RemoteServer {
             response.taskActions = published?.taskActions == true ? true : nil
             response.tabControls = published?.tabControls == true ? true : nil
             response.tabPermissions = published?.tabPermissions == true ? true : nil
+            response.tabCopy = published?.tabCopy == true ? true : nil
             response.tabLists = published?.tabLists == true ? true : nil
             response.hostSettings = published?.hostSettings == true ? true : nil
             response.hostAccounts = published?.hostAccounts == true ? true : nil
@@ -2465,6 +2468,8 @@ public actor RemoteServer {
             browserTabsChanged(taskID)
         case let .tabPainted(taskID, tabID):
             tabPainted(taskID: taskID, tabID: tabID)
+        case let .tabCopied(taskID, tabID, text, permit):
+            tabCopied(taskID: taskID, tabID: tabID, text: text, permit: permit)
         case .schedules:
             guard connections.values.contains(where: \.receivesScheduleEvents) else {
                 // Nobody follows them: the next `scheduledTasks` starts over.

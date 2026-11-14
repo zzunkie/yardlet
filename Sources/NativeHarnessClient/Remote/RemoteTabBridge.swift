@@ -15,12 +15,15 @@ import YardletRemote
 /// typed in the panel does (refused when that cannot be marked). A tab paints, and takes a phone's size, while it is
 /// watched, and goes back to how it was when no one watches it.
 ///
+/// What the page copies because of a device's input (its ⌘C and ⌘X, or the page's Copy button it clicked) goes to that
+/// device instead of this Mac's clipboard (`RemoteTabCopies`).
+///
 /// What it does not do: answer for another task's tabs or tabs outside any task; show or drive a `file:` page outside
 /// the task's files (`RemoteFileReader.allowsPage`, as `readFile`); send anything while a Chromium window (a passkey, a
 /// site's sign-in, one whose tab is not known) or a page's dialog is up, checked again before each step it sends; paste
-/// or copy through the Mac's clipboard or press keys outside characters and the editing and moving keys; open another
-/// app on this Mac from a remote click without someone here choosing it (`BrowserTab.isDrivenByRemote`); or go on with
-/// input whose watch ended (`RemoteTabPermit`).
+/// or copy through the Mac's clipboard or press keys outside characters, the editing and moving keys, and ⌘C and ⌘X;
+/// open another app on this Mac from a remote click without someone here choosing it (`BrowserTab.isDrivenByRemote`); or
+/// go on with input whose watch ended (`RemoteTabPermit`).
 @MainActor
 final class RemoteTabBridge {
     /// What the Mac lends the bridge.
@@ -56,10 +59,31 @@ final class RemoteTabBridge {
     private var observesWaits = false
     /// The phone size each tab is drawn at now.
     private var sized: [BrowserTabID: (tab: BrowserTab, viewport: RemoteTabViewport)] = [:]
+    /// What the watched tabs' pages copy for the devices whose input led to it.
+    let copies = RemoteTabCopies()
 
     init(model: AppModel, environment: Environment) {
         self.model = model
         self.environment = environment
+        copies.isWatched = { [weak self] tab in self?.isWatched(tab) == true }
+        copies.carriesFilledValue = { [weak self] text in self?.environment.client()?.carriesFilledValue(text) ?? true }
+        copies.showsPage = { [weak self] tab in
+            guard let self, let session = self.session(of: tab) else { return false }
+            return await PageScope(taskID: session.uuidString).check(tab, bridge: self) == nil
+        }
+        copies.deliver = { [weak self] tab, text, permit in
+            guard let self, let session = self.session(of: tab) else { return }
+            self.changeHandler?(.tabCopied(taskID: session.uuidString, tabID: tab.key.uuidString, text: text, permit: permit.id))
+        }
+    }
+
+    /// A device watches the tab for frames now (not its list alone).
+    private func isWatched(_ tab: BrowserTab) -> Bool {
+        followed.values.contains { $0.watched[tab.key] != nil && $0.tabTokens[tab.id]?.tab === tab }
+    }
+
+    private func session(of tab: BrowserTab) -> UUID? {
+        followed.first { $0.value.tabTokens[tab.id]?.tab === tab }?.key
     }
 
     var isAvailable: Bool { environment.client() != nil }
@@ -196,6 +220,7 @@ final class RemoteTabBridge {
         for (tab, token) in entry.tabTokens.values {
             tab.removeEventObserver(token)
             client.setRemotelyWatched(false, tab: tab)
+            copies.setWatched(false, tab: tab)
             size(tab, to: nil)
         }
         listTold.remove(session)
@@ -211,6 +236,7 @@ final class RemoteTabBridge {
             observed.tab.removeEventObserver(observed.token)
             entry.tabTokens[id] = nil
             sized[id] = nil
+            copies.forget(observed.tab)
         }
         for tab in open {
             if entry.tabTokens[tab.id] == nil {
@@ -223,6 +249,7 @@ final class RemoteTabBridge {
             size(tab, to: watched ? entry.watched[tab.key] ?? nil : nil)
         }
         followed[session] = entry
+        for tab in open { copies.setWatched(entry.watched.keys.contains(tab.key), tab: tab) }
     }
 
     /// Draws the tab at a phone's size, as `browser_resize` does, or takes it back to how it was: in the tab's order of
@@ -243,6 +270,12 @@ final class RemoteTabBridge {
     }
 
     private func tabEvent(_ event: BrowserHostEvent, key: UUID, session: UUID) {
+        // A page that finished loading takes copies too when it began before the script went in (a restored tab's first
+        // page, a navigation under way as the watch began).
+        if case .loading(_, false, _, _) = event, followed[session]?.watched[key] != nil,
+           let tab = followed[session]?.tabTokens.values.first(where: { $0.tab.key == key })?.tab {
+            copies.pageLoaded(tab)
+        }
         switch event {
         case .frame:
             guard followed[session]?.watched[key] != nil, paintTold.insert(key).inserted else { return }
@@ -452,6 +485,7 @@ final class RemoteTabBridge {
             switch input.kind {
             case .click:
                 tab.notePersonInput(remote: true)
+                copies.noteInput(on: tab, permit: permit)
                 try await send(tab, "Input.dispatchMouseEvent", point.merging(["type": .string("mouseMoved")]) { $1 }, permit, scope)
                 let press = point.merging(["button": .string(button), "clickCount": .integer(Int64(input.clickCount ?? 1))]) { $1 }
                 try await send(tab, "Input.dispatchMouseEvent",
@@ -460,6 +494,7 @@ final class RemoteTabBridge {
                                press.merging(["type": .string("mouseReleased"), "buttons": .integer(0)]) { $1 }, permit, scope)
             case .mouse:
                 tab.notePersonInput(remote: true)
+                if input.action != "move" { copies.noteInput(on: tab, permit: permit) }
                 let type = switch input.action {
                 case "down": "mousePressed"
                 case "up": "mouseReleased"
@@ -479,17 +514,26 @@ final class RemoteTabBridge {
                 ]) { $1 }, permit, scope)
             case .text:
                 tab.notePersonInput(edits: true, remote: true)
+                copies.noteInput(on: tab, permit: permit)
                 if let refusal = await protectPassword(tab) { return refusal }
                 try await send(tab, "Input.insertText", ["text": .string(input.text ?? "")], permit, scope)
             case .key:
                 guard let press = BrowserAgentKeyPress.parse(input.key ?? "") else {
                     return RemoteError(.badRequest, "Unknown key \(input.key ?? "")")
                 }
+                if let cut = Self.copyKey(press) {
+                    // The page's copy of its selection, for the device's clipboard: never through this Mac's.
+                    if let refusal = await stepRefusal(tab, permit, scope) { return refusal }
+                    tab.notePersonInput(edits: cut, remote: true)
+                    try await copies.copy(on: tab, cut: cut, permit: permit)
+                    return nil
+                }
                 guard Self.allows(press) else {
-                    return RemoteError(.notAllowed, "Only characters and the editing and moving keys; never the clipboard's")
+                    return RemoteError(.notAllowed, "Only characters, the editing and moving keys, and ⌘C and ⌘X; never paste")
                 }
                 let types = press.key.text != nil
                 tab.notePersonInput(edits: types || ["Backspace", "Delete"].contains(press.key.key), remote: true)
+                copies.noteInput(on: tab, permit: permit)
                 if types, let refusal = await protectPassword(tab) { return refusal }
                 for event in press.keyEvents(macEditingCommands: environment.usesMacEditingCommands) {
                     try await send(tab, "Input.dispatchKeyEvent", event, permit, scope)
@@ -623,11 +667,18 @@ final class RemoteTabBridge {
         return marked ? nil : RemoteError(.unavailable, "The password field could not be protected")
     }
 
+    /// ⌘C (false) or ⌘X (true), which copy the page's selection for the device (`RemoteTabCopies.copy`); nil for any
+    /// other key.
+    static func copyKey(_ press: BrowserAgentKeyPress) -> Bool? {
+        guard press.modifiers == [.meta], ["c", "x"].contains(press.key.key.lowercased()) else { return nil }
+        return press.key.key.lowercased() == "x"
+    }
+
     /// Keys a remote device presses (§15.25), what editing text takes and no more: one character, alone or with Shift;
     /// Return, Tab and Escape, alone or with Shift; Backspace, Delete, the arrows, Home, End, Page Up and Page Down,
-    /// alone or with Shift, Option or ⌘ (words, lines, selection); and ⌘A, ⌘Z and ⇧⌘Z. Every other ⌘ or Control
-    /// combination (the clipboard's in any spelling, the browser's own keys, the developer tools'), Insert and the
-    /// function keys are not taken: the Mac's clipboard and windows are not the person's there.
+    /// alone or with Shift, Option or ⌘ (words, lines, selection); and ⌘A, ⌘Z and ⇧⌘Z. ⌘C and ⌘X go another way
+    /// (`copyKey`). Every other ⌘ or Control combination (paste in any spelling, the browser's own keys, the developer
+    /// tools'), Insert and the function keys are not taken: the Mac's clipboard and windows are not the person's there.
     static func allows(_ press: BrowserAgentKeyPress) -> Bool {
         let key = press.key.key
         let modifiers = Set(press.modifiers)

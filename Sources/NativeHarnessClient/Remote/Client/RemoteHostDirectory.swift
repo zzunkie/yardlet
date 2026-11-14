@@ -63,6 +63,8 @@ final class RemoteHostDirectory {
     @ObservationIgnored var onAttention: ((RemoteHostModel, RemoteEvent) -> Void)?
     /// Each host's withdrawn task notifications (hostID, taskID).
     @ObservationIgnored var onWithdrawTaskNotification: ((String, String) -> Void)?
+    /// Puts what a host's page copied for this computer on its clipboard (§15.25); the app sets it.
+    @ObservationIgnored var copyText: (String) -> Void = { _ in }
 
     init(store: RemoteHostStore, keys: any RemoteClientKeyStoring, hello: RemoteHandshakeHello,
          timing: RemoteHostConnection.Timing = .init(), cacheRoot: URL? = nil,
@@ -111,6 +113,7 @@ final class RemoteHostDirectory {
         model.onWithdrawTaskNotification = { [weak self] taskID in
             self?.onWithdrawTaskNotification?(hostID, taskID)
         }
+        model.browser.copyText = { [weak self] text in self?.copyText(text) }
         models[hostID] = model
         openHostIDs.insert(hostID)
         model.start()

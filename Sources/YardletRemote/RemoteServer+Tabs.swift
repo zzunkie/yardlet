@@ -296,6 +296,28 @@ extension RemoteServer {
         scheduleTabFrame(on: id)
     }
 
+    // MARK: - Copies
+
+    /// The watched tab's page copied text after a connection's own input (the bridge checked that): it goes to that
+    /// connection alone, while that very watch holds, so the client puts it on its own clipboard. A longer copy than
+    /// `maxTabCopyBytes` goes nowhere rather than cut.
+    func tabCopied(taskID: String, tabID: String, text: String, permit: UUID) {
+        guard !text.isEmpty, let (id, watch) = tabs.watches.first(where: {
+            $0.value.permit.id == permit && $0.value.permit.isValid && $0.value.taskID == taskID && $0.value.tabID == tabID
+        }) else { return }
+        let device = connections[id]?.deviceID
+        guard text.utf8.count <= RemoteProtocol.maxTabCopyBytes else {
+            auditInput(device: device, task: watch.taskID, kind: nil, result: RemoteErrorCode.tooLarge.rawValue, type: "tabCopied")
+            return
+        }
+        var event = RemoteEvent(.tabCopied)
+        event.taskId = taskID
+        event.tabId = tabID
+        event.text = text
+        send(event, to: id)
+        auditInput(device: device, task: watch.taskID, kind: nil, result: "ok", type: "tabCopied")
+    }
+
     // MARK: - The list
 
     /// A watched task's tabs may have changed: read again shortly, batched, and tell the connections that watch it.
@@ -351,13 +373,14 @@ extension RemoteServer {
         audit?.record(device: device, type: "watchTab", task: task, result: result, at: time)
     }
 
-    /// The audit log gets the kind of input and its task, never what was typed, the same line at most once a minute.
-    private func auditInput(device: String?, task: String, kind: String, result: String) {
+    /// The audit log gets the kind of input and its task, never what was typed, the same line at most once a minute; a
+    /// copy sent to the device (`tabCopied`) likewise, never what was copied.
+    private func auditInput(device: String?, task: String, kind: String?, result: String, type: String = "tabInput") {
         let time = now()
         tabs.auditedInputs = tabs.auditedInputs.filter { time.timeIntervalSince($0.value) < Self.inputAuditWindow }
-        let key = [device ?? "", task, kind, result].joined(separator: "\u{0}")
+        let key = [device ?? "", task, type, kind ?? "", result].joined(separator: "\u{0}")
         guard tabs.auditedInputs[key] == nil else { return }
         tabs.auditedInputs[key] = time
-        audit?.record(device: device, type: "tabInput", task: task, input: kind, result: result, at: time)
+        audit?.record(device: device, type: type, task: task, input: kind, result: result, at: time)
     }
 }

@@ -318,7 +318,7 @@ final class RemoteHostModel: Identifiable {
             if schedules.isFollowing { schedules.load() }
         case .hostAccountsChanged:
             if watchingHostAccountsCount > 0 { Task { await loadHostAccounts() } }
-        case .tabFrame, .browserTabsChanged:
+        case .tabFrame, .browserTabsChanged, .tabCopied:
             browser.receive(event)
         case .terminalOutput, .terminalClosed:
             terminals.receive(event)
@@ -374,6 +374,7 @@ final class RemoteHostModel: Identifiable {
             offersBrowser = response.browserTabs == true
             browser.canControlTabs = response.tabControls == true
             browser.answersPermissions = response.tabPermissions == true
+            browser.copiesFromPage = response.browserTabs == true && response.tabCopy == true
             browser.listsTabs = response.browserTabs == true && response.tabLists == true
             offersHostAccounts = response.hostAccounts == true
             hasSnapshot = true

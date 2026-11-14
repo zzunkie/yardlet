@@ -23,6 +23,12 @@ extension RemoteProtocol {
     public static let tabFrameAckTimeout: TimeInterval = 10
     /// A connection's input that waits for the input before it: more is refused (`rateLimited`).
     public static let maxPendingTabInputs = 32
+    /// The longest text a page's copy brings to the client (`tabCopied`), in UTF-8 bytes: a quarter of the largest
+    /// frame, far past a key or a page of code, and a longer copy does not come at all rather than come cut.
+    public static let maxTabCopyBytes = 1_048_576
+    /// How long after a connection's click or key a page's own copy still counts as that input's, as Chromium's
+    /// transient user activation lasts.
+    public static let tabCopyWindow: TimeInterval = 5
 }
 
 /// The size a client asks a watched tab to be drawn at while it watches (a phone's screen, another computer's panel), in
@@ -49,6 +55,8 @@ public struct RemoteTabViewport: Codable, Hashable, Sendable {
 public final class RemoteTabPermit: @unchecked Sendable {
     private let lock = NSLock()
     private var valid = true
+    /// Names the watch's connection to the bridge: a page's copy goes to the connection whose input it follows.
+    public let id = UUID()
 
     public init() {}
 

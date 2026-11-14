@@ -244,10 +244,12 @@ private struct RemoteBrowserPage: NSViewRepresentable {
 /// Draws the host's picture of the page and turns this Mac's mouse, trackpad and keyboard into the page's input:
 /// a click is a click at the same point of the page, a drag presses, moves and releases, the trackpad scrolls, keys
 /// go as keys, and an input method's committed text (Korean, Japanese, dictation) goes as text; what it is still
-/// composing shows here until committed. ⌘V types this Mac's clipboard. While the page's focused field is a password
-/// field, secure keyboard entry is on and only Roman input sources compose, as in the Mac's own browser panel.
+/// composing shows here until committed. ⌘V types this Mac's clipboard, and ⌘C and ⌘X (and Edit › Copy and Cut) copy
+/// the page's selection onto it, where the host takes them; what the page copies after a click here lands on it too.
+/// While the page's focused field is a password field, secure keyboard entry is on and only Roman input sources compose,
+/// as in the Mac's own browser panel.
 @MainActor
-final class RemoteBrowserPageView: NSView, @preconcurrency NSTextInputClient {
+final class RemoteBrowserPageView: NSView, @preconcurrency NSTextInputClient, NSMenuItemValidation {
     weak var browser: RemoteBrowserModel?
     var hostName = ""
     var passwordField = false {
@@ -414,12 +416,36 @@ final class RemoteBrowserPageView: NSView, @preconcurrency NSTextInputClient {
                 }
             case "a", "z":
                 browser?.input(.key((event.modifierFlags.contains(.shift) ? "Shift+Meta+" : "Meta+") + key))
+            case "c", "x":
+                // ⌘C and ⌘X alone: ⌥⌘C and the others are the browser's own keys.
+                guard browser?.copiesFromPage == true, event.modifierFlags.isDisjoint(with: [.shift, .option, .control]) else {
+                    return super.keyDown(with: event)
+                }
+                browser?.copy(cut: key == "x")
             default:
                 super.keyDown(with: event)
             }
             return
         }
         if inputContext?.handleEvent(event) != true { interpretKeyEvents([event]) }
+    }
+
+    // MARK: Copy
+
+    /// Edit › Copy and Cut, and ⌘C and ⌘X through them: the host copies the page's selection for this Mac.
+    @objc func copy(_ sender: Any?) {
+        browser?.copy()
+    }
+
+    @objc func cut(_ sender: Any?) {
+        browser?.copy(cut: true)
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(copy(_:)), #selector(cut(_:)): browser?.copiesFromPage == true && browser?.tabID != nil
+        default: true
+        }
     }
 
     override func doCommand(by selector: Selector) {

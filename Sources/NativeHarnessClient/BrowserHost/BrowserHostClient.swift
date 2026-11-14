@@ -1702,6 +1702,13 @@ final class BrowserTab {
         return remoteOpener && lastPersonInput == nil
     }
 
+    /// The last input to the page is a remote device's: no one used the page here, nor did the agent act on it, since.
+    /// What the page copies now follows that input (docs/REMOTE_PROTOCOL.md §15.25).
+    var remoteInputIsLast: Bool {
+        guard let remote = lastRemoteInput, remote == lastPersonInput else { return false }
+        return lastAgentInput.map { $0 < remote } ?? true
+    }
+
     /// The agent's `browser_navigate` opens `address` in this tab (`agentOpenedFile`).
     func noteAgentOpened(_ address: String) {
         agentOpenedFile = BrowserAgentWorkspaceFile.realPath(ofFileAddress: address)

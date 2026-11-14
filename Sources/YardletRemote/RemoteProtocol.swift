@@ -340,6 +340,9 @@ public struct RemoteSnapshot: Equatable, Sendable {
     public var tabControls: Bool = false
     /// The bridge answers `answerTabPermission` for a site's permission prompt in a watched tab (§15.25).
     public var tabPermissions: Bool = false
+    /// The bridge sends what a watched tab's page copies after the connection's input (`tabCopied`) and takes ⌘C and
+    /// ⌘X (`Meta+c`, `Meta+x`) (§15.25).
+    public var tabCopy: Bool = false
     /// The bridge follows a task's tab list without watching a tab (`watchTab`'s `listOnly`, §15.25).
     public var tabLists: Bool = false
     public var subtasks: Bool = false
@@ -2455,6 +2458,7 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     public var taskActions: Bool?
     public var tabControls: Bool?
     public var tabPermissions: Bool?
+    public var tabCopy: Bool?
     public var tabLists: Bool?
     public var browserTabs: Bool?
     /// `watchTab` (§15.25): the task's tabs, and the one watched.
@@ -2806,6 +2810,7 @@ public struct RemoteEvent: Codable, Equatable, Sendable {
         case taskSettingsChanged
         case tabFrame
         case browserTabsChanged
+        case tabCopied
         case terminalOutput
         case terminalClosed
         // §15.36
@@ -2879,6 +2884,8 @@ public struct RemoteEvent: Codable, Equatable, Sendable {
     public var height: Int?
     public var viewportWidth: Double?
     public var viewportHeight: Double?
+    /// `tabCopied`: the text the page copied.
+    public var text: String?
 
     public init(_ event: Name) {
         self.event = event

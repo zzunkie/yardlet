@@ -615,10 +615,11 @@ swift run --build-system native yardlet-remote-fixture --secure-port 47700 --sin
   - "Publish the release notes" (§15.18, §15.25) waits on a sign-in page it handed to the person, one of its two
     browser tabs. The page draws as PNG and takes clicks, typing and keys: tap the username field and type, Tab or
     tap to the password field (the list marks it `passwordField`), then Sign in; with both filled the page says it is
-    signed in, and I'm done answers the handoff. Thirty seconds after an answer the page signs out and the handoff
-    comes back. Its other tab, a static page, has a camera and microphone permission prompt numbered past 2^53
-    (`permission`, `waiting` `permission`); `answerTabPermission` takes it while that tab is watched, and thirty
-    seconds later the page asks again under the next number.
+    signed in, and I'm done answers the handoff. `Meta+c` in the username field sends its text as `tabCopied` (`Meta+x`
+    also empties it); in the password field it sends nothing. Thirty seconds after an answer the page signs out and the
+    handoff comes back. Its other tab, a static page, has a camera and microphone permission prompt numbered past 2^53
+    (`permission`, `waiting` `permission`); `answerTabPermission` takes it while that tab is watched, and thirty seconds
+    later the page asks again under the next number.
 
 ## 10. Revisions
 
@@ -1708,8 +1709,9 @@ tab closes within the watched task (§15.30), and hosts advertising `tabPermissi
 permission prompt in the watched tab (below); browsing outside a task stays on the Mac.
 
 - The snapshot carries `browserTabs: true` when the Mac answers the requests below (it has a browser engine). A phone
-  offers a task's browser only then. It also carries `tabLists: true` when `watchTab` takes `listOnly` (below), and
-  `tabPermissions: true` when the Mac answers `answerTabPermission` (below).
+  offers a task's browser only then. It also carries `tabLists: true` when `watchTab` takes `listOnly` (below),
+  `tabPermissions: true` when the Mac answers `answerTabPermission` (below), and `tabCopy: true` when it sends what the
+  watched page copies (`tabCopied`) and takes ⌘C and ⌘X (below).
 - ```json
   {"id": "40", "type": "watchTab", "taskId": "4C1F…", "maxWidth": 1080, "maxHeight": 2000,
    "viewport": {"width": 390, "height": 844, "mobile": true}}
@@ -1784,18 +1786,19 @@ permission prompt in the watched tab (below); browsing outside a task stays on t
   `text` on a `click`) is `badRequest`. A `key` is what editing text takes: one character, alone or with Shift; `Enter`,
   `Tab` or `Escape`, alone or with Shift; `Backspace`, `Delete`, an arrow, `Home`, `End`, `PageUp` or `PageDown`, alone or
   with Shift, Alt or Meta (words, lines, selection; not `Shift+Delete`, which cuts); and `Meta+a`, `Meta+z`, `Shift+Meta+z`.
-  Every other Meta or Control combination (the clipboard's in any spelling, the browser's own keys, the developer
-  tools'), Insert and the function keys are `notAllowed`: the Mac's clipboard and windows are not the person's, so their
-  own text comes as `text`. A connection's input goes to the page in the order sent, apart from its other requests
-  (`unwatchTab` does not wait for it); at most 32 of its inputs wait at once (more is `rateLimited`); input whose watch
-  ended meanwhile sends nothing more, and each step is checked again just before it goes: an input's steps go to the
-  page its first step was checked on, and none after the page moved, even away and back to the same address. Not a
-  command. Errors: `badRequest` (a field missing, out of range or not the kind's, an unknown key or one past its bytes),
-  `tooLarge` (text), `notFound` (the tab closed), `notAllowed` (not the watched tab, or its watch ended; a passkey or
-  site sign-in window, one whose tab Chromium does not name, or a page's dialog is up, which the person answers on the
-  Mac; a key or button that is not taken; a `file:` page outside the task's files, in the page or any of its frames;
-  the page or one of its frames moved while the input went), `rateLimited`,
-  `unavailable` (the page did not answer, or a password field could not be protected, below).
+  A host advertising `tabCopy` also takes `Meta+c` and `Meta+x`, which copy and cut the page's selection for the device
+  (`tabCopied`, below) and never reach the page as keys; an older host refuses them. Every other Meta or Control
+  combination (paste in any spelling, the browser's own keys, the developer tools'), Insert and the function keys are
+  `notAllowed`: the Mac's clipboard and windows are not the person's, so their own text comes as `text`. A connection's
+  input goes to the page in the order sent, apart from its other requests (`unwatchTab` does not wait for it); at most
+  32 of its inputs wait at once (more is `rateLimited`); input whose watch ended meanwhile sends nothing more, and each
+  step is checked again just before it goes: an input's steps go to the page its first step was checked on, and none
+  after the page moved, even away and back to the same address. Not a command. Errors: `badRequest` (a field missing,
+  out of range or not the kind's, an unknown key or one past its bytes), `tooLarge` (text), `notFound` (the tab closed),
+  `notAllowed` (not the watched tab, or its watch ended; a passkey or site sign-in window, one whose tab Chromium does
+  not name, or a page's dialog is up, which the person answers on the Mac; a key or button that is not taken; a `file:`
+  page outside the task's files, in the page or any of its frames; the page or one of its frames moved while the input
+  went), `rateLimited`, `unavailable` (the page did not answer, or a password field could not be protected, below).
 - A site's permission prompt, as the Mac's panel shows it in its permission bar, is listed on its tab while it is up:
 
   ```json
@@ -1830,6 +1833,17 @@ permission prompt in the watched tab (below); browsing outside a task stays on t
   The audit log (§4.4) records each answer with the answer, the device, the task and the result, and for one taken
   the prompt's `origin` and `permissions`; nothing else of the page. A refusal is recorded at most once a minute per
   device, task and result.
+- `{"event": "tabCopied", "seq": 53, "taskId": "4C1F…", "tabId": "9B21…", "text": "sk-proj-…"}`: text the watched
+  tab's page copied because of this connection's own input, for the device's clipboard (hosts advertising `tabCopy`):
+  the device's `Meta+c` or `Meta+x` on the page's selection, or the page's own copy (a Copy button's
+  `navigator.clipboard.writeText` or `write`, or `document.execCommand('copy')`) when the connection's click, press, key
+  or text was the last input to the page, at most 5 s before (as long as Chromium's user activation lasts), with
+  nothing done to the page on the Mac or by the agent since. It goes to that connection alone while its watch of the tab
+  holds, and never to the Mac's clipboard. Text only (a copy's formatting and pictures stay behind), at most 1 MiB as
+  UTF-8: a quarter of the largest frame and far past a key or a page of code; a longer copy is not sent rather than cut.
+  Nothing comes from a password field or a field drawn as dots (Chromium does not copy those either), nor text carrying
+  a value the password manager filled; a copy of nothing sends nothing, as a local copy then changes nothing. The client
+  puts `text` on its own clipboard, as a copy made there. A client that does not know it ignores it.
 - `{"type": "unwatchTab", "taskId": "4C1F…"}`: stops the watch. Closing the connection, removing the device, the remote
   turning off and the tab closing stop it too, input under way included. Not a command.
 - **What the Mac does:** only the listed task's own tabs, as its side panel and the agent's browser tools see them;
@@ -1864,10 +1878,21 @@ permission prompt in the watched tab (below); browsing outside a task stays on t
   to the same address, or a frame showed a file outside the task's, even one that went again, is not sent. Another is listed as `file://`, without its title, and the page the tab moves to
   next shows no title until it names itself. Pictures show the page as it draws itself (a password field as dots) and
   are made only while watched; the Mac keeps none. The audit log (§4.4) records each `watchTab` and, at most once a
-  minute per device, task, kind and result, a `tabInput`'s kind (`click`, `text`, …), never what was typed. Chromium's
-  own windows (a passkey, a site's sign-in), macOS prompts and a page's dialogs stay on the Mac; while one is up, the
-  tab's `waiting` says so. A site's permission prompt is the page's own question, answered from a client with
-  `answerTabPermission`; macOS's own prompt for Yardlet's camera, microphone or location stays on the Mac.
+  minute per device, task, kind and result, a `tabInput`'s kind (`click`, `text`, …), never what was typed, and likewise
+  a `tabCopied` sent, never what was copied. Chromium's own windows (a passkey, a site's sign-in), macOS prompts and a
+  page's dialogs stay on the Mac; while one is up, the tab's `waiting` says so. A site's permission prompt is the page's
+  own question, answered from a client with `answerTabPermission`; macOS's own prompt for Yardlet's camera, microphone
+  or location stays on the Mac. Copies (`tabCopied`): while a client watches a tab, a script in the page's own world
+  (each new document, and the one shown when the watch began; a frame from another site is not reached) takes the page's
+  `navigator.clipboard.writeText`, `write` and `document.execCommand('copy')` and `('cut')` first and asks the Mac about
+  each (`Runtime.addBinding`). One that follows the watching connection's input, as above, goes to that connection and
+  nowhere else, and the page's call succeeds; any other (the person at the Mac, the agent) goes on to the Mac's
+  clipboard as the page asked, an `execCommand` copy then as plain text through `navigator.clipboard.writeText`. A
+  device's `Meta+c` and `Meta+x` run the page's copy from Yardlet's own world, which the page cannot change: a `copy` or
+  `cut` event at the focused frame's selection (same-site frames and open shadow roots included), the page's own data
+  when it takes the event over, else the selected text, and a cut deletes the selection where it can be edited. No key
+  reaches the page, so Chromium writes nothing to the Mac's clipboard. Once no client watches the tab, the script lets
+  every copy go as the page asks and the page's next documents have none.
 - **What a phone needs:**
   - Draw the frame fitted to the screen, keeping its shape, and let the person zoom and pan the picture. A tap at a
     point of the picture is `click` at that point times `viewportWidth / width` (the same factor both ways); a double tap
@@ -1895,6 +1920,8 @@ permission prompt in the watched tab (below); browsing outside a task stays on t
     Take the bar down once answered; on `notFound`, nothing waits for that answer any more. With another `waiting`, or
     a `permission` wait from a host without `tabPermissions`, say what waits on the Mac (§15.19's "Steps that are not
     requests").
+  - From a host advertising `tabCopy`, put each `tabCopied`'s `text` on the phone's own clipboard, as a copy made there,
+    and send a Copy (or Cut) on the page's selection as `key` `Meta+c` (`Meta+x`).
 
 ### 15.26 Review
 
@@ -2786,7 +2813,9 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   Back, Forward and Reload, the handoff's bar, with `tabPermissions` the permission bar of the Mac's panel (its
   words naming the host, the two bars one above the other when both are up), and the watched tab's page, which takes clicks, drags, the trackpad,
   keys and the input method's committed text (what it is still composing shows on the client until committed; ⌘V
-  types the client's own clipboard; secure keyboard entry is on while the page's password field has the keyboard). The
+  types the client's own clipboard; with `tabCopy`, ⌘C and ⌘X, and Edit › Copy and Cut, copy the page's selection onto
+  it, and what the page copies after the panel's click or key lands there too; secure keyboard entry is on while the
+  page's password field has the keyboard). The
   page lays out at the panel's size (`viewport`, never as a phone), and follows the panel once it rests 200 ms at a new
   size. From a host advertising `tabLists`, the window follows the list of the
   task it shows (`listOnly`) whenever its panel shows none of the task's tabs, so the host's tabs are the panel's tabs

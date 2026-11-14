@@ -96,6 +96,12 @@ enum BrowserHostQAFixture {
             Task { @MainActor in await BrowserHostRemoteFramesQA(output: output, base: base, panelSession: session).run() }
             return
         }
+        // `--ui-fixture-browser-check-only=remote-copy` runs what a remote device copies from a task's tab alone
+        // (BrowserHostRemoteCopyQA).
+        if argument("ui-fixture-browser-check-only") == "remote-copy" {
+            Task { @MainActor in await BrowserHostRemoteCopyQA(output: output, base: base, panelSession: session).run() }
+            return
+        }
         Task { @MainActor in await BrowserHostQARunner(output: output, base: base, session: session).run() }
     }
 }

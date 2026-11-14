@@ -54,6 +54,10 @@ final class RemoteBrowserModel {
     var canControlTabs = false
     /// The host takes the answer to a site's permission prompt from here (`tabPermissions`).
     var answersPermissions = false
+    /// The host takes ⌘C and ⌘X and sends what the page copies after this window's input (`tabCopy`).
+    var copiesFromPage = false
+    /// Puts what the host's page copied on this computer's clipboard; the app sets it.
+    @ObservationIgnored var copyText: (String) -> Void = { _ in }
     /// The prompt answered from here: its bar stays down while the host's list still has it.
     private(set) var answeredPrompt: Int?
     /// The host follows a task's list without a watched tab (`listOnly`).
@@ -208,6 +212,12 @@ final class RemoteBrowserModel {
             send(.tabFrameAck(taskID: event.taskId ?? "", tabID: event.tabId ?? "", frame: number), nil)
         }
         if event.event == .browserTabsChanged, let taskID = event.taskId { remember(event.tabs ?? [], for: taskID) }
+        // The host sends a page's copy only to the connection whose own input led to it: it is this window's copy, as
+        // one made on this computer, wherever the panel is now.
+        if event.event == .tabCopied, let text = event.text, !text.isEmpty {
+            copyText(text)
+            return
+        }
         guard let taskID, event.taskId == taskID else { return }
         switch event.event {
         case .tabFrame:
@@ -306,6 +316,13 @@ final class RemoteBrowserModel {
         guard let frame, drawnWidth > 0, frame.viewportWidth > 0 else { return nil }
         let factor = frame.viewportWidth / drawnWidth
         return (x * factor, y * factor)
+    }
+
+    /// ⌘C or ⌘X on the page: the host copies the page's selection, and the text comes back for this computer's
+    /// clipboard (`tabCopied`).
+    func copy(cut: Bool = false) {
+        guard copiesFromPage else { return }
+        input(.key(cut ? "Meta+x" : "Meta+c"))
     }
 
     func input(_ input: RemoteTabInput) {
