@@ -473,7 +473,15 @@ final class ConversationSelectionTests: XCTestCase {
             host.settle(passes: 3)
         }
         go(toTop: true)
-        let request = try text(LongConversationFixture.request(0), in: host)
+        // The turn at the top is laid out over the next passes, slower on CI.
+        var found: TranscriptProseTextView?
+        host.settle {
+            found = TranscriptProseRenderingTests.proseTextViews(in: host.hosting)
+                .first { $0.string.hasPrefix(LongConversationFixture.request(0)) }
+            guard let found, let container = found.superview as? TranscriptProseContainerView else { return false }
+            return container.rect(of: (found.string as NSString).range(of: "module")) != nil
+        }
+        let request = try XCTUnwrap(found)
         press(at: try point("look", in: request), dragTo: try point("module", in: request, atEnd: true), in: host.window)
         XCTAssertTrue(ConversationSelection.spans(request))
         go(toTop: false)

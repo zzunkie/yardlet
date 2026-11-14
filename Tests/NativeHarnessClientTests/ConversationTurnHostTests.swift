@@ -182,8 +182,13 @@ final class ConversationTurnHostTests: XCTestCase {
             host.settle(passes: 3)
         }
         go(toTop: true)
-        let first = try XCTUnwrap(TranscriptProseRenderingTests.proseTextViews(in: host.hosting)
-            .first { $0.string.hasPrefix(LongConversationFixture.request(0)) })
+        var found: TranscriptProseTextView?
+        host.settle {
+            found = TranscriptProseRenderingTests.proseTextViews(in: host.hosting)
+                .first { $0.string.hasPrefix(LongConversationFixture.request(0)) }
+            return found != nil
+        }
+        let first = try XCTUnwrap(found)
         XCTAssertTrue(host.window.makeFirstResponder(first))
         go(toTop: false)
         XCTAssertNotNil(first.window, "The turn is still in the window")
