@@ -183,7 +183,12 @@ final class NotificationRoutingTests: XCTestCase {
             "type": .string("result"), "subtype": .string("success"), "is_error": .bool(false),
             "session_id": .string(try XCTUnwrap(model.store.sessions.first { $0.id == session.id }?.providerSessionID))
         ])
-        func completed() -> Bool { model.store.sessions.first { $0.id == session.id }?.completionState == .completed }
+        // Over once the task is ready again: Claude Code's result marks the turn completed before the status follows, and
+        // a message sent in between joins the turn that is ending.
+        func completed() -> Bool {
+            let task = model.store.sessions.first { $0.id == session.id }
+            return task?.completionState == .completed && task?.status == .ready
+        }
 
         let delivery = await model.deliverTaskMessage(
             TaskMessage(senderID: UUID().uuidString, senderName: "Parent", body: "Report when the build passes."), to: session)
@@ -220,7 +225,11 @@ final class NotificationRoutingTests: XCTestCase {
             await model.send("Summarize what changed.", to: session)
             try await waitUntil { model.store.sessions.first { $0.id == session.id }?.status == .running }
             await transport.emit(result)
-            try await waitUntil { model.store.sessions.first { $0.id == session.id }?.completionState == .completed }
+            // Over once the task is ready again, as above: the next message then starts a turn of its own.
+            try await waitUntil {
+                let task = model.store.sessions.first { $0.id == session.id }
+                return task?.completionState == .completed && task?.status == .ready
+            }
         }
 
         try await finishTurn()
