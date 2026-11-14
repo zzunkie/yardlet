@@ -404,19 +404,53 @@ final class BrowserAgentTools {
             return .text("\(dialog) It opened during \(tool). The page is paused until you answer it with "
                 + "browser_handle_dialog.")
         } catch let error as BrowserAgentToolError {
-            return failure(error, after: tool, on: page, sessionID: sessionID)
+            return await failure(error, after: tool, on: page, sessionID: sessionID)
         } catch {
-            return failure(BrowserAgentToolError(Self.describe(error)), after: tool, on: page, sessionID: sessionID)
+            return await failure(BrowserAgentToolError(Self.describe(error)), after: tool, on: page, sessionID: sessionID)
         }
     }
 
     /// A page tool's failure, with what is known of the tab. A tab the host could not open failed for that
-    /// alone: its calls are refused, which would otherwise read as a browser that is not running.
+    /// alone: its calls are refused, which would otherwise read as a browser that is not running. A call to the tab
+    /// that ran out of time (`late`) also says where the tab stands (`whereTheTabIs`).
     private func failure(_ error: BrowserAgentToolError, after tool: String, on page: BrowserAgentPage,
-                         sessionID: UUID?) -> AgentToolResult {
+                         sessionID: UUID?) async -> AgentToolResult {
         if page.openFailure() != nil, let note = unresponsiveNote(page) { return .error(note) }
-        return error.result(error.message + browserDialogNote(after: tool, sessionID: sessionID)
+        let ranOut = error.failure.map { $0.details["method"] != nil && [.timedOut, .outcomeUnknown].contains($0.kind) }
+            ?? false
+        let tabState = ranOut ? await whereTheTabIs(page) : []
+        return error.result(error.message + tabState.map { "\n" + $0 }.joined()
+            + browserDialogNote(after: tool, sessionID: sessionID)
             + waits(after: tool, on: page).map { "\n" + $0 }.joined() + (unresponsiveNote(page).map { "\n" + $0 } ?? ""))
+    }
+
+    /// How long reading where a tab stands may take after one of its calls ran out of time.
+    private static let tabStateTimeout: Duration = .seconds(3)
+
+    /// Where a tab stands after one of its calls ran out of time: the page it shows, from the browser's own history
+    /// (`Page.getNavigationHistory`, which the browser answers itself, also while it holds calls to the page), whether
+    /// that page has loaded (a `Page.loadEventFired` after its commit in the log), and a navigation Chromium started there
+    /// that has neither shown its page nor ended (`BrowserAgentPage.pendingNavigation`).
+    private func whereTheTabIs(_ page: BrowserAgentPage) async -> [String] {
+        var lines: [String] = []
+        if let history = try? await page.cdp.send("Page.getNavigationHistory", [:],
+                                                  timeout: min(commandTimeout, Self.tabStateTimeout)),
+           let index = history["currentIndex"]?.integerValue, let entries = history["entries"]?.arrayValue,
+           entries.indices.contains(Int(index)), let url = entries[Int(index)]["url"]?.stringValue {
+            let title = entries[Int(index)]["title"]?.stringValue ?? ""
+            let log = page.cdp.eventLog
+            let loaded = log.lastIndex { $0.method == "Page.frameNavigated" && $0.params["frame"]?["parentId"] == nil }
+                .map { commit in log[commit...].contains { $0.method == "Page.loadEventFired" } }
+            lines.append("The tab shows \(url)" + (title.isEmpty ? "" : " (“\(title)”)")
+                + (loaded.map { $0 ? ", loaded." : ", still loading." } ?? "."))
+        }
+        if let pending = page.pendingNavigation() {
+            lines.append("Chromium is still navigating the tab to \(pending), and shows that page if its response comes. "
+                + "From the moment the request goes out until the navigation ends, it holds calls to the page, so tools "
+                + "that read the page wait for it too. browser_navigate starts another navigation in its place; "
+                + "browser_tab_new opens a tab of your own.")
+        }
+        return lines
     }
 
     /// What is known when the tab's page does not respond, its renderer ended, or the host could not open
@@ -727,7 +761,21 @@ final class BrowserAgentTools {
         page.agentOpens(url)
         let mark = page.cdp.eventLog.count
         let blockedMark = page.blockedNavigations.count
-        let result = try await send(page, "Page.navigate", ["url": .string(url)], timeout: loadTimeout)
+        let result: JSONValue
+        do {
+            result = try await send(page, "Page.navigate", ["url": .string(url)], timeout: loadTimeout)
+        } catch var late as BrowserAgentToolError where late.failure?.kind == .timedOut {
+            // Chromium answers once the navigation is ready to commit or has ended (`PageHandler::Navigate`). With
+            // DevTools attached, as it is on every tab the tools use, it does not stop waiting for a beforeunload handler
+            // that does not return (`ShouldIgnoreUnresponsiveRenderer`), where Chrome goes on after half a second. What
+            // the tab shows and whether the navigation still goes on follow (`failure`).
+            late.message = "The browser did not answer Page.navigate to \(url) within "
+                + "\(Self.format(Double(loadTimeout.components.seconds))) seconds. Chromium answers once the response is in "
+                + "and the tab can begin to show the page, or once the navigation fails or another replaces it. Until then "
+                + "it waits for the server, and before the request goes out, for the beforeunload handlers of the page's "
+                + "frames, however long either takes."
+            throw late
+        }
         page.clearRefs()
         if let failure = result["errorText"]?.stringValue, !failure.isEmpty {
             // The host refuses in its own navigation hook, which Chromium reports as an abort.

@@ -1551,9 +1551,10 @@ final class BrowserTab {
     }()
 
     /// DevTools calls the page's renderer answers (its main thread): all but the moves, which the
-    /// browser answers once the new page commits and a slow server keeps waiting.
+    /// browser answers once the new page commits and a slow server keeps waiting, and the history, which
+    /// the browser answers itself.
     static func needsRenderer(_ method: String) -> Bool {
-        !["Page.navigate", "Page.reload", "Page.navigateToHistoryEntry"].contains(method)
+        !["Page.navigate", "Page.reload", "Page.navigateToHistoryEntry", "Page.getNavigationHistory"].contains(method)
             && !method.hasPrefix("Target.") && !method.hasPrefix("Browser.")
     }
 

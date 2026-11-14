@@ -131,7 +131,10 @@ final class BrowserUnresponsiveTests: XCTestCase {
             result.content.compactMap { if case .text(let text) = $0 { text } else { nil } }.joined(separator: "\n")
         }
 
-        // The page's main thread is busy: nothing it runs answers.
+        // The page's main thread is busy: nothing it runs answers, while the browser still answers what it answers
+        // itself (the tab's history, which a late call's error reads).
+        connection.answers = true
+        connection.withholds = { !$0.contains("Page.getNavigationHistory") }
         let busy = await tools.run(tool: AgentToolCatalog.evaluate, arguments: .object(["function": .string("() => 1")]),
                                    sessionID: task)
         let tab = try XCTUnwrap(client.tab(forSession: task))
@@ -146,7 +149,7 @@ final class BrowserUnresponsiveTests: XCTestCase {
         XCTAssertTrue(listing.contains("Not responding: tab \(tab.id)"), listing)
 
         // browser_navigate opens the page again in the stuck one's place.
-        connection.answers = true
+        connection.withholds = { _ in false }
         let moved = await tools.run(tool: AgentToolCatalog.navigate, arguments: .object(["url": .string("https://app.test/")]),
                                     sessionID: task)
         let replacement = try XCTUnwrap(client.tab(forSession: task))

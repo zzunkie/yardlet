@@ -150,6 +150,7 @@ final class BrowserAgentToolsTests: XCTestCase {
     }
 
     func testNavigateReportsAFailedLoadAndRefusesAddressesOutsideThePolicy() async {
+        cdp.responders["Page.getFrameTree"] = { _ in .object(["frameTree": .object(["frame": .object(["id": .string("F")])])]) }
         cdp.responders["Page.navigate"] = { _ in .object(["frameId": .string("F"), "errorText": .string("net::ERR_NAME_NOT_RESOLVED")]) }
         let failed = await run(AgentToolCatalog.navigate, ["url": .string("https://nowhere.invalid")])
         XCTAssertTrue(failed.isError)
@@ -164,6 +165,35 @@ final class BrowserAgentToolsTests: XCTestCase {
         cdp.responders["Page.navigate"] = { _ in .object(["frameId": .string("F")]) }
         _ = await run(AgentToolCatalog.navigate, ["url": .string("localhost:3000/app")])
         XCTAssertEqual(cdp.params(of: "Page.navigate").last?["url"], .string("http://localhost:3000/app"))
+
+        // Chromium answers only once the navigation can commit or has ended. Without an answer, the error says what
+        // the tab shows, from the browser's own history, and that the navigation Chromium started there goes on.
+        cdp.eventLog += [("Page.frameNavigated", .object(["frame": .object(["id": .string("F"), "url": .string("https://example.com/")])])),
+                         ("Page.loadEventFired", .object([:]))]
+        cdp.responders["Page.getNavigationHistory"] = { _ in
+            .object(["currentIndex": .integer(1), "entries": .array([
+                .object(["url": .string("about:blank"), "title": .string("")]),
+                .object(["url": .string("https://example.com/"), "title": .string("Example Domain")])
+            ])])
+        }
+        cdp.responders["Page.navigate"] = { _ in throw BrowserDevToolsError.timedOut("Page.navigate") }
+        cdp.eventsAfter["Page.navigate"] = [
+            ("Page.frameStartedNavigating", .object(["frameId": .string("F"), "url": .string("https://example.com/next"),
+                                                     "navigationType": .string("differentDocument")])),
+            ("Page.frameStartedLoading", .object(["frameId": .string("F")]))
+        ]
+        let late = await run(AgentToolCatalog.navigate, ["url": .string("https://example.com/next")])
+        XCTAssertEqual(late.failure?.kind, .timedOut)
+        XCTAssertTrue(late.text.hasPrefix("The browser did not answer Page.navigate to https://example.com/next within 30 "
+            + "seconds. Chromium answers once the response is in"), late.text)
+        XCTAssertTrue(late.text.contains("\nThe tab shows https://example.com/ (“Example Domain”), loaded.\nChromium is still "
+            + "navigating the tab to https://example.com/next, and shows that page if its response comes. From the moment "
+            + "the request goes out until the navigation ends, it holds calls to the page"), late.text)
+        // A frame's own navigation is not the tab's, and one that stopped without a commit goes on no longer.
+        cdp.eventLog.append(("Page.frameStartedNavigating", .object(["frameId": .string("child"), "url": .string("https://ads.test/")])))
+        XCTAssertEqual(page.pendingNavigation(), "https://example.com/next")
+        cdp.eventLog.append(("Page.frameStoppedLoading", .object(["frameId": .string("F")])))
+        XCTAssertNil(page.pendingNavigation())
     }
 
     /// A file outside the task's folders, read after `..`, escapes and symbolic links, opens only when the app

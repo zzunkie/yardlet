@@ -190,6 +190,32 @@ final class BrowserAgentPage {
             .map { $0.params["frame"]?["url"]?.stringValue ?? "" }
     }
 
+    /// The address of a navigation of the main frame to another document that Chromium started and that has neither
+    /// committed nor ended. The browser logs the start when it takes the navigation (`Page.frameStartedNavigating`),
+    /// before the page's beforeunload handlers run and the request goes out, then a commit (`Page.frameNavigated`) or an
+    /// end without one (`Page.frameStoppedLoading`); a navigation that replaces it logs a start of its own. The main
+    /// frame keeps its id, which its latest commit in the log names, or the tree `seedFrames` started from. Read from the
+    /// end of the log, back to that commit at most.
+    func pendingNavigation() -> String? {
+        let log = cdp.eventLog
+        guard let main = log.last(where: { $0.method == "Page.frameNavigated" && $0.params["frame"]?["parentId"] == nil })?
+            .params["frame"]?["id"]?.stringValue ?? seededMainFrame else { return nil }
+        for event in log.reversed() {
+            switch event.method {
+            case "Page.frameNavigated" where event.params["frame"]?["id"]?.stringValue == main,
+                 "Page.frameStoppedLoading" where event.params["frameId"]?.stringValue == main:
+                return nil
+            case "Page.frameStartedNavigating" where event.params["frameId"]?.stringValue == main:
+                // A move within the document commits in the renderer and waits for nothing.
+                if ["sameDocument", "historySameDocument"].contains(event.params["navigationType"]?.stringValue) { continue }
+                return event.params["url"]?.stringValue
+            default:
+                continue
+            }
+        }
+        return nil
+    }
+
     /// True when the main frame navigated since the latest snapshot.
     var navigatedSinceSnapshot: Bool {
         let log = cdp.eventLog
@@ -204,10 +230,13 @@ final class BrowserAgentPage {
     /// The `file:` address each frame shows, by frame id, as of `fileFrameMark` in the event log.
     private var fileFrames: [String: String] = [:]
     private var fileFrameMark = 0
+    /// The main frame's id in the tree `seedFrames` started from.
+    private var seededMainFrame: String?
 
     /// Starts from the page's frames as `Page.getFrameTree` gave them, then follows the frame navigations
     /// logged from `eventMark` on, where the Page domain was enabled.
     func seedFrames(_ tree: JSONValue, eventMark: Int) {
+        seededMainFrame = tree["frameTree"]?["frame"]?["id"]?.stringValue
         fileFrames = [:]
         func visit(_ node: JSONValue) {
             if let frame = node["frame"], let id = frame["id"]?.stringValue, let url = frame["url"]?.stringValue,

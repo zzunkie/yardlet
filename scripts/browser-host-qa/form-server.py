@@ -1441,6 +1441,15 @@ FRAMES_CROSS = '''<!doctype html><meta charset="utf-8"><title>Card frame</title>
 <iframe title="Nested frame" src="MERCHANT/frames/nested" style="display:block;width:300px;height:70px;margin-top:10px"></iframe>
 <script>top.postMessage({loaded: 'cross'}, '*')</script></body>'''
 
+# A page whose frame from another site has a beforeunload handler and then never lets its main thread go: a
+# navigation of the page waits for that frame's beforeunload, which Chromium does not give up on while DevTools is
+# attached, as Yardlet always is.
+STUCK_UNLOAD = '''<!doctype html><meta charset="utf-8"><title>Stuck unload</title><h1>Stuck unload</h1>
+<iframe title="Stuck frame" src="ISSUER/navigate/stuck-frame" style="width:300px;height:80px"></iframe>'''
+
+STUCK_FRAME = '''<!doctype html><meta charset="utf-8"><title>Stuck frame</title><body>Stuck frame
+<script>addEventListener('beforeunload', () => {}); setTimeout(() => { for (;;) {} }, 300);</script></body>'''
+
 FRAMES_NESTED = '''<!doctype html><meta charset="utf-8"><title>Nested frame</title>
 <body style="margin:8px;font:16px -apple-system,sans-serif">
 <button onclick="top.postMessage({clicked: 'nested'}, '*')">Nested button</button>
@@ -1763,6 +1772,10 @@ class Handler(BaseHTTPRequestHandler):
             payload = VIEWPORT.encode()
         elif self.path.startswith('/responsive'):
             payload = RESPONSIVE.encode()
+        elif self.path.startswith('/navigate/stuck-unload'):
+            payload = sites(STUCK_UNLOAD).encode()
+        elif self.path.startswith('/navigate/stuck-frame'):
+            payload = STUCK_FRAME.encode()
         elif self.path.startswith('/frames/inner'):
             payload = FRAMES_INNER.encode()
         elif self.path.startswith('/frames/cross'):
