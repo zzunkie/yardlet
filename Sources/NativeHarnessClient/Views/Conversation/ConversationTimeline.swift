@@ -97,6 +97,8 @@ struct ConversationTimeline: View {
     @State private var scrollState = TranscriptScrollFollowState()
     @State private var showsFileRewind = false
     @State private var rowListScroller = ConversationRowListScroller()
+    /// Where the row list was last asked to go, and how many times it has been.
+    @State private var rowTarget: ConversationRowTarget?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.conversationFind) private var find
@@ -169,7 +171,7 @@ struct ConversationTimeline: View {
                                          before: windowed.turns.first?.id, revealing: revealed.progress, asksForMore: false)
                     },
                     earlierKey: presentation.earlier == .none ? nil : "\(presentation.earlier)|\(turns.first?.id ?? "")",
-                    onReturnToLatest: returnToLatestTurns, scroller: rowListScroller
+                    onReturnToLatest: returnToLatestTurns, target: rowTarget, scroller: rowListScroller
                 )
                 .environment(\.pauseTranscriptFollowing, {
                     readingTracker.cancelRestoration()
@@ -184,6 +186,60 @@ struct ConversationTimeline: View {
                     if let find, find.isPresented {
                         ConversationFindFeeder(find: find, source: .conversation(loaded.whole))
                     }
+                }
+                // Reading starts from the saved place, or goes on in views kept to show again
+                // (`TaskSurfaceHost`), as the stack's following does.
+                .onAppear {
+                    guard !readingTracker.resumes(record: readingPosition) else { return }
+                    let anchors = readingAnchors(loaded, window: window)
+                    scrollState.isFollowing = readingPosition?.bookmark.followsLatest ?? true
+                    readingTracker.start(record: readingPosition, itemIDs: turns.map(\.id),
+                                         startingAt: anchors.start(), resolve: anchors.resolve)
+                    rowListScroller.restore(readingTracker.request)
+                }
+                .onDisappear { readingTracker.hide() }
+                .onChange(of: turns.map(\.id)) { _, ids in
+                    readingTracker.updateItems(ids, resolve: readingAnchors(loaded, window: window).resolve)
+                }
+                .onChange(of: readingTracker.request) { _, request in rowListScroller.restore(request) }
+                .onChange(of: readingTracker.anchorRevision) { _, _ in rowListScroller.restore(readingTracker.request) }
+                // A match in a turn the window leaves out widens the window to it first (plan A5.2); the list
+                // goes to its row once the row is in it, and the match brings itself to the middle.
+                .onChange(of: find?.scrollRequest) { _, request in
+                    guard let request else { return }
+                    reveal.end()
+                    readingTracker.cancelRestoration()
+                    if scrollState.isFollowing { scrollState.isFollowing = false }
+                    if let window, window.hides(request.scrollID, in: loaded.whole) { earliestReadTurnID = request.scrollID }
+                    goTo(request.scrollID, .center)
+                }
+                .onChange(of: turnFocusRequest) { _, _ in
+                    if let focusedTurnID = focus.turnID { goTo(focusedTurnID, .center) }
+                }
+                .task(id: historySelection) {
+                    let restoresReading = !handledInitialSearch && readingPosition?.bookmark.followsLatest == false
+                    handledInitialSearch = true
+                    guard !restoresReading else { return }
+                    guard historySelection != nil, let targetTurnID = Self.firstHistoryMatch(in: loaded.whole)
+                    else { return }
+                    reveal.end()
+                    if let window, window.hides(targetTurnID, in: loaded.whole) { earliestReadTurnID = targetTurnID }
+                    readingTracker.cancelRestoration()
+                    scrollState.isFollowing = false
+                    focus.turnID = targetTurnID
+                    goTo(targetTurnID, .center, animated: true)
+                }
+                // A call another view asked for (a file's related task): the turn holding it, at its top.
+                .task(id: place?.request.id) {
+                    guard placement == .task, let place else { return }
+                    defer { place.done() }
+                    guard let targetTurnID = Self.turn(holding: place.request.callID, in: loaded.whole) else { return }
+                    reveal.end()
+                    readingTracker.cancelRestoration()
+                    scrollState.isFollowing = false
+                    focus.turnID = targetTurnID
+                    if let window, window.hides(targetTurnID, in: loaded.whole) { earliestReadTurnID = targetTurnID }
+                    goTo(targetTurnID, .top)
                 }
                 .takesOfferedSize()
             } else {
@@ -373,6 +429,12 @@ struct ConversationTimeline: View {
             },
             resolve: { loaded.anchors.resolve($0) }
         )
+    }
+
+    /// Asks the row list to bring `rowID` into view, now or once its row is in the list.
+    private func goTo(_ rowID: String, _ placement: ConversationRowTarget.Placement, animated: Bool = false) {
+        rowTarget = ConversationRowTarget(rowID: rowID, placement: placement, animated: animated,
+                                          token: (rowTarget?.token ?? 0) + 1)
     }
 
     // MARK: - Turn window
