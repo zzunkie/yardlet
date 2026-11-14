@@ -9,6 +9,7 @@ import XCTest
 final class ScriptedCDP: BrowserAgentCDP {
     var sent: [(method: String, params: [String: JSONValue])] = []
     var eventLog: [(method: String, params: JSONValue)] = []
+    var mainFrameID: String?
     var responders: [String: @MainActor ([String: JSONValue]) throws -> JSONValue] = [:]
     /// Events that arrive once a method has been sent.
     var eventsAfter: [String: [(method: String, params: JSONValue)]] = [:]
@@ -188,7 +189,16 @@ final class BrowserAgentToolsTests: XCTestCase {
             + "seconds. Chromium answers once the response is in"), late.text)
         XCTAssertTrue(late.text.contains("\nThe tab shows https://example.com/ (“Example Domain”), loaded.\nChromium is still "
             + "navigating the tab to https://example.com/next, and shows that page if its response comes. From the moment "
-            + "the request goes out until the navigation ends, it holds calls to the page"), late.text)
+            + "the request goes out until the navigation ends, Chromium holds calls to the page"), late.text)
+        // Where the host says whether the request went out, the error says which Chromium waits on.
+        page.requestSent = { true }
+        let sent = await run(AgentToolCatalog.navigate, ["url": .string("https://example.com/next")])
+        XCTAssertTrue(sent.text.contains("https://example.com/next, and shows that page if its response comes. Its request "
+            + "went out and no response has come."), sent.text)
+        page.requestSent = { false }
+        let unloading = await run(AgentToolCatalog.navigate, ["url": .string("https://example.com/next")])
+        XCTAssertTrue(unloading.text.contains("It has not sent the request yet: the beforeunload handlers of the page's "
+            + "frames have not all returned"), unloading.text)
         // A frame's own navigation is not the tab's, and one that stopped without a commit goes on no longer.
         cdp.eventLog.append(("Page.frameStartedNavigating", .object(["frameId": .string("child"), "url": .string("https://ads.test/")])))
         XCTAssertEqual(page.pendingNavigation(), "https://example.com/next")

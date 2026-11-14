@@ -270,6 +270,7 @@ final class BrowserAgentTabs: BrowserAgentTabDirectory {
             return await tab.rendererAnswered(after: method)
         }
         page.crash = { [weak tab] in tab?.crash }
+        page.requestSent = { [weak tab] in tab?.navigationRequestSent }
         page.agentActs = { [weak tab] in tab?.noteAgentInput() }
         page.agentOpens = { [weak tab] in tab?.noteAgentOpened($0) }
         page.agentActFailed = { [weak tab] in tab?.undoAgentInput() }

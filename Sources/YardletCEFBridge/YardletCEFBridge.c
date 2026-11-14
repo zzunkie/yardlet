@@ -1422,6 +1422,9 @@ static int CEF_CALLBACK request_on_before_browse(cef_request_handler_t *self, ce
         else emit(tab_of(browser), YardletCEFEventNavigationBlocked, url, NULL, 0);
         cancel = 1;
     }
+    // Chromium asks here as the request starts (WillStartRequest, WillRedirectRequest), after the page's beforeunload
+    // handlers returned and the navigation started (DidStartNavigation, where DevTools holds calls to the page).
+    if (!cancel && inMainFrame) emit(tab_of(browser), YardletCEFEventNavigationRequest, NULL, NULL, 0);
     if (url) p_cef_string_userfree_utf16_free(url);
     YARDLET_RELEASE(request);
     YARDLET_RELEASE(frame);

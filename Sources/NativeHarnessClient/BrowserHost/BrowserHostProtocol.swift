@@ -540,6 +540,9 @@ enum BrowserHostEvent: Codable, Equatable, Sendable {
     case newDocument(tab: BrowserTabID, url: String)
     /// A navigation the URL policy refused (`BrowserURLPolicy`).
     case navigationBlocked(tab: BrowserTabID, url: String)
+    /// The main frame's navigation sent its request (also for a redirect): its page's beforeunload handlers returned,
+    /// and Chromium holds DevTools calls to the page until the navigation ends (`BrowserTab.navigationHoldsCalls`).
+    case navigationRequest(tab: BrowserTabID)
     /// A navigation whose address carried a password the vault filled into the page (`guardFilledValues`), which
     /// the host refused before it was sent. The address is not given: it holds the password.
     case filledValueBlocked(tab: BrowserTabID)
@@ -606,7 +609,7 @@ enum BrowserHostEvent: Codable, Equatable, Sendable {
              .blockedPopup(let tab, _, _), .blockedPopupRemoved(let tab, _), .blockedPopupRetry(let tab, _), .popupPermission(let tab, _),
              .openedTab(let tab, _, _), .externalApp(let tab, _), .externalAppHandled(let tab, _, _, _), .newDocument(let tab, _),
              .remoteDownloadStopped(let tab, _),
-             .navigationBlocked(let tab, _), .filledValueBlocked(let tab), .tooltip(let tab, _), .javaScriptDialog(let tab, _),
+             .navigationBlocked(let tab, _), .navigationRequest(let tab), .filledValueBlocked(let tab), .tooltip(let tab, _), .javaScriptDialog(let tab, _),
              .javaScriptDialogReset(let tab), .fileDialog(let tab, _), .dialogClosed(let tab, _), .permissionPrompt(let tab, _),
              .permissionPromptDismissed(let tab, _), .download(let tab, _),
              .findResult(let tab, _), .dragOperation(let tab, _), .passwordField(let tab, _), .pageCrashed(let tab, _, _, _), .responsiveness(let tab, _),

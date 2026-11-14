@@ -620,6 +620,8 @@ final class BrowserHost {
             send(["tooltip": fields])
         case YardletCEFEventNavigationBlocked.rawValue:
             send(["navigationBlocked": ["tab": tab, "url": text ?? ""]])
+        case YardletCEFEventNavigationRequest.rawValue:
+            send(["navigationRequest": ["tab": tab]])
         case YardletCEFEventFilledValueBlocked.rawValue:
             // One line per refusal, for reading a person's host.log: never the address, which holds the value.
             HostLog.write("filled value kept out of an address tab=\(tab) mainFrame=\(value)")

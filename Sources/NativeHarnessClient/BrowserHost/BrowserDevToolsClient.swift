@@ -41,6 +41,9 @@ final class BrowserDevToolsClient {
     private(set) var events: [(method: String, params: JSONValue)] = []
     /// The frames from other sites attached now, in the order they attached (`attachFrames()`).
     private(set) var frameSessions: [BrowserFrameSession] = []
+    /// The page's main frame, which keeps its id for the tab's life: from the tree a caller read (`Page.getFrameTree`),
+    /// and from each main-frame commit after.
+    var mainFrameID: String?
     /// Whether each frame session attaches the frames it holds in turn.
     private var attachesFrames = false
     /// Called when a call times out, and when one is answered, with its method: whether the page
@@ -133,6 +136,8 @@ final class BrowserDevToolsClient {
             guard session == nil else { return }
             // A binding's payload is for its observer alone: the vault's carries what the person typed into a sign-in.
             if method != "Runtime.bindingCalled" { events.append((method, params)) }
+            if method == "Page.frameNavigated", params["frame"]?["parentId"] == nil,
+               let id = params["frame"]?["id"]?.stringValue { mainFrameID = id }
             eventObservers.values.forEach { $0(method, params) }
             let matching = eventWaiters.filter { $0.method == method }
             eventWaiters.removeAll { $0.method == method }
@@ -162,6 +167,34 @@ final class BrowserDevToolsClient {
         default:
             break
         }
+    }
+
+    /// A navigation of the main frame to another document that Chromium started and that has neither committed nor
+    /// ended, read from a tab's event log: where its start is in the log, and its address. The browser logs the start
+    /// when it takes the navigation (`Page.frameStartedNavigating`), before the page's beforeunload handlers run and the
+    /// request goes out, then a commit (`Page.frameNavigated`) or an end without one (`Page.frameStoppedLoading`); a
+    /// navigation that replaces it logs a start of its own. The main frame is `mainFrame`, else the frame its latest
+    /// commit in the log names. Read from the end of the log, back to that commit at most.
+    static func pendingNavigation(in log: [(method: String, params: JSONValue)], mainFrame: String?)
+        -> (index: Int, url: String)? {
+        guard let main = mainFrame ?? log.last(where: {
+            $0.method == "Page.frameNavigated" && $0.params["frame"]?["parentId"] == nil
+        })?.params["frame"]?["id"]?.stringValue else { return nil }
+        for index in log.indices.reversed() {
+            let event = log[index]
+            switch event.method {
+            case "Page.frameNavigated" where event.params["frame"]?["id"]?.stringValue == main,
+                 "Page.frameStoppedLoading" where event.params["frameId"]?.stringValue == main:
+                return nil
+            case "Page.frameStartedNavigating" where event.params["frameId"]?.stringValue == main:
+                // A move within the document commits in the renderer and waits for nothing.
+                if ["sameDocument", "historySameDocument"].contains(event.params["navigationType"]?.stringValue) { continue }
+                return (index, event.params["url"]?.stringValue ?? "")
+            default:
+                continue
+            }
+        }
+        return nil
     }
 
     func failPending() {

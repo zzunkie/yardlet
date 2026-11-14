@@ -633,9 +633,12 @@ private final class BrowserHostQARunner {
 
         // Navigations Chromium does not answer while the page does: a server slow to answer, and a frame from another
         // site whose beforeunload handler does not return, which Chromium waits for without limit while DevTools is
-        // attached. The error says what the tab shows and that Chromium is still navigating it; the slow one arrives.
+        // attached. The error says what the tab shows, that Chromium is still navigating it, and whether the request
+        // went out; a read while the request is out, which Chromium holds, does not take the page as not responding
+        // (it outlasts the check that would), and the slow one arrives.
         let navigating = BrowserAgentTools(usesMacEditingCommands: true, tabs: BrowserAgentTabs { MacBrowserHost.shared.client })
         navigating.loadTimeout = .seconds(5)
+        navigating.commandTimeout = .seconds(2)
         func go(_ address: String, _ tab: String) async -> String {
             text(await navigating.run(tool: AgentToolCatalog.navigate, arguments: .object([
                 "url": .string(address), "tabId": .string(tab)]), sessionID: session))
@@ -644,28 +647,36 @@ private final class BrowserHostQARunner {
         let slowTab = blank.range(of: #""tabId":"(\d+)""#, options: .regularExpression)
             .map { String(blank[$0]).filter(\.isNumber) } ?? ""
         _ = await go(base + "second", slowTab)
-        let slowResult = await go(base + "slow?ms=9000", slowTab)
-        let arrived = await waitUntil(.seconds(15)) {
+        let slowResult = await go(base + "slow?ms=16000", slowTab)
+        let heldRead = text(await navigating.run(tool: AgentToolCatalog.evaluate, arguments: .object([
+            "function": .string("() => location.href"), "tabId": .string(slowTab)]), sessionID: session))
+        let slowTabNow = client.tabs(forSession: session).first { String($0.id) == slowTab }
+        let notTakenAsStuck = slowTabNow != nil && slowTabNow?.unresponsive == nil && !heldRead.contains("not responding")
+        let arrived = await waitUntil(.seconds(20)) {
             self.client.tabs(forSession: self.session).first { String($0.id) == slowTab }?.lastPageURL?.contains("/slow") == true
         }
         check("unresponsive: a navigation the server is slow to answer says where the tab stands, then arrives",
-              slowResult.contains("The browser did not answer Page.navigate to \(base)slow?ms=9000 within 5 seconds.")
+              slowResult.contains("The browser did not answer Page.navigate to \(base)slow?ms=16000 within 5 seconds.")
                 && slowResult.contains("The tab shows \(base)second (“Second”), loaded.")
-                && slowResult.contains("Chromium is still navigating the tab to \(base)slow?ms=9000,") && arrived,
-              "\(slowResult.prefix(700)); arrived \(arrived)")
+                && slowResult.contains("Chromium is still navigating the tab to \(base)slow?ms=16000, and shows that page if "
+                    + "its response comes. Its request went out and no response has come.") && arrived,
+              "\(slowResult.prefix(900)); arrived \(arrived)")
+        check("unresponsive: a read while the navigation's request is out does not take the page as not responding",
+              notTakenAsStuck, "unresponsive \(String(describing: slowTabNow?.unresponsive)); \(heldRead.prefix(500))")
         _ = await go(base + "navigate/stuck-unload", slowTab)
         try? await Task.sleep(for: .seconds(1))
         let heldResult = await go(base + "second", slowTab)
         check("unresponsive: a navigation a frame's beforeunload holds says the page the tab stays on",
               heldResult.contains("The browser did not answer Page.navigate to \(base)second within 5 seconds.")
                 && heldResult.contains("The tab shows \(base)navigate/stuck-unload (“Stuck unload”), loaded.")
-                && heldResult.contains("Chromium is still navigating the tab to \(base)second,"),
+                && heldResult.contains("Chromium is still navigating the tab to \(base)second, and shows that page if its "
+                    + "response comes. It has not sent the request yet: the beforeunload handlers"),
               String(heldResult.prefix(700)))
         _ = await navigating.run(tool: AgentToolCatalog.tabClose, arguments: .object(["tabId": .string(slowTab)]),
                                  sessionID: session)
         let frameGone = await waitUntil(.seconds(15)) { !self.rendererLoad().contains { $0.cpu > 50 } }
         check("unresponsive: closing that tab ends the frame that held it", frameGone, describeLoad(rendererLoad()))
-        results["navigate"] = .object(["slow": .string(slowResult), "held": .string(heldResult)])
+        results["navigate"] = .object(["slow": .string(slowResult), "heldRead": .string(heldRead), "held": .string(heldResult)])
 
         // The person's tab: a click starts a long script, the next input waits, and the hang monitor says so.
         func hold(_ milliseconds: Int) async -> Bool {

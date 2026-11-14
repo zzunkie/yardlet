@@ -163,8 +163,9 @@ batch's, with its `action` number and `tool`; a batch that holds a picture keeps
   results too) gets "This tab's page is not responding: …" with which signal it was, that the host and the tab are open
   and that tabs the panel does not show answer too, and that `browser_navigate` opens a page again in its place and
   `browser_tab_close` closes the tab (facts and tool names only, no instructions). A call can be late while the renderer
-  answers that check (a promise `browser_evaluate` awaits, a request it waits on): then the page is not taken as not
-  responding (no "Page Unresponsive" bar, and `browser_navigate` keeps the tab), and the error says the call did not
+  answers that check (a promise `browser_evaluate` awaits, a request it waits on), or while the tab's navigation has
+  sent its request, which holds the calls to the page (below, "Calls that run out of time"): then the page is not taken
+  as not responding (no "Page Unresponsive" bar, and `browser_navigate` keeps the tab), and the error says the call did not
   finish within its time with that fact. A call to a frame from another site that runs out says only that.
   `browser_navigate` to a tab that does
   not respond opens the tab again as the same panel tab and gives the new tabId on the first line of the result
@@ -175,11 +176,17 @@ batch's, with its `action` number and `tool`; a batch that holds a picture keeps
   most). When Chromium started a navigation of the main frame to another document that has neither committed nor stopped
   (`Page.frameStartedNavigating` with no `Page.frameNavigated` or `Page.frameStoppedLoading` of that frame after it;
   `BrowserAgentPage.pendingNavigation`), it adds "Chromium is still navigating the tab to ‹address›, and shows that page
-  if its response comes. From the moment the request goes out until the navigation ends, it holds calls to the page, so
-  tools that read the page wait for it too. browser_navigate starts another navigation in its place; browser_tab_new
-  opens a tab of your own." Chromium holds them in `RenderFrameDevToolsAgentHost` from `DidStartNavigation`, which comes
-  after the beforeunload handlers, so while those run the page still answers. A `browser_navigate` that ran out of time
-  leaves its navigation going, as Playwright's and Puppeteer's do.
+  if its response comes." and which side it waits on: when the host said the request went out (BROWSER_HOST section 3,
+  "Not responding"), "Its request went out and no response has come. Until the navigation ends, Chromium holds calls to
+  the page, so tools that read the page wait for it too."; when it has not, "It has not sent the request yet: the
+  beforeunload handlers of the page's frames have not all returned, and Chromium waits for them without limit while
+  DevTools is attached."; with a host that does not say, "From the moment the request goes out until the navigation
+  ends, Chromium holds calls to the page, so tools that read the page wait for it too." Then "browser_navigate starts
+  another navigation in its place; browser_tab_new opens a tab of your own." Chromium holds them in
+  `RenderFrameDevToolsAgentHost` from `DidStartNavigation`, which comes after the beforeunload handlers, so while those
+  run the page still answers, and while it holds them, a call the page leaves unanswered does not make the tab read as
+  not responding. A `browser_navigate` that ran out of time leaves its navigation going, as Playwright's and Puppeteer's
+  do.
 - **Pages whose renderer ended:** The end of the result of a tool that used that tab gets only facts and
   tool names, such as "This tab's page crashed: its renderer ended (error code SIGTRAP). The browser host and the tab
   are open. browser_navigate opens a page again in its place; browser_tab_close closes the tab." It clears when the next

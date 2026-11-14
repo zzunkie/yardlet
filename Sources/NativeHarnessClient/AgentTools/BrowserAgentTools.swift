@@ -445,10 +445,17 @@ final class BrowserAgentTools {
                 + (loaded.map { $0 ? ", loaded." : ", still loading." } ?? "."))
         }
         if let pending = page.pendingNavigation() {
+            let waitsOn = switch page.requestSent() {
+            case true?: "Its request went out and no response has come. Until the navigation ends, Chromium holds calls "
+                + "to the page, so tools that read the page wait for it too."
+            case false?: "It has not sent the request yet: the beforeunload handlers of the page's frames have not all "
+                + "returned, and Chromium waits for them without limit while DevTools is attached."
+            case nil: "From the moment the request goes out until the navigation ends, Chromium holds calls to the page, "
+                + "so tools that read the page wait for it too."
+            }
             lines.append("Chromium is still navigating the tab to \(pending), and shows that page if its response comes. "
-                + "From the moment the request goes out until the navigation ends, it holds calls to the page, so tools "
-                + "that read the page wait for it too. browser_navigate starts another navigation in its place; "
-                + "browser_tab_new opens a tab of your own.")
+                + waitsOn + " browser_navigate starts another navigation in its place; browser_tab_new opens a tab of "
+                + "your own.")
         }
         return lines
     }

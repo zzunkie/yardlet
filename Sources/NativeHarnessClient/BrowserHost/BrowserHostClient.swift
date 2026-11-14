@@ -92,6 +92,9 @@ final class BrowserHostClient {
     var onPersonWaitsChange: (() -> Void)?
     /// Called with every event a tab receives, after the tab and its panel have it.
     var onTabEvent: ((BrowserTab, BrowserHostEvent) -> Void)?
+    /// The host says when a tab's navigation sends its request (`navigationRequest`); a host that never did, such as
+    /// one without that hook, leaves it unknown (`BrowserTab.navigationRequestSent`).
+    fileprivate(set) var reportsNavigationRequests = false
 
     init(
         idleGrace: Duration = .seconds(60),
@@ -1569,8 +1572,32 @@ final class BrowserTab {
     /// or a frame to draw can be late while the renderer answers everything else. A call the renderer answers at once
     /// tells, and the page reads as not responding only when that one goes unanswered too. While it runs, it decides.
     private func devToolsTimedOut(_ method: String) {
-        guard !isClosed, unanswered == nil, rendererCheck == nil, Self.needsRenderer(method) else { return }
+        guard !isClosed, unanswered == nil, rendererCheck == nil, Self.needsRenderer(method), !navigationHoldsCalls else {
+            return
+        }
         checkRenderer(after: method)
+    }
+
+    /// Where the DevTools event log stood when the host said the main frame's navigation sent its request
+    /// (`navigationRequest`).
+    private var requestMark: Int?
+
+    /// Whether Chromium holds DevTools calls to the page now: from the moment a navigation's request goes out until the
+    /// navigation ends (`RenderFrameDevToolsAgentHost::DidStartNavigation`), so a call the page leaves unanswered then,
+    /// and the check after it, say nothing of its renderer. That is when the main frame's latest navigation is under way
+    /// (`BrowserDevToolsClient.pendingNavigation`) and its request went out after it started. Before that, while its
+    /// beforeunload handlers run, the page answers as ever.
+    var navigationHoldsCalls: Bool {
+        guard let requestMark,
+              let pending = BrowserDevToolsClient.pendingNavigation(in: devTools.events, mainFrame: devTools.mainFrameID)
+        else { return false }
+        return requestMark > pending.index
+    }
+
+    /// Whether the main frame's navigation under way sent its request (`navigationHoldsCalls`); nil when the host does
+    /// not say (`BrowserHostClient.reportsNavigationRequests`).
+    var navigationRequestSent: Bool? {
+        client?.reportsNavigationRequests == true ? navigationHoldsCalls : nil
     }
 
     /// The check under way, or a new one: whether the renderer answers a call it answers at once. When it does not, the
@@ -1605,9 +1632,9 @@ final class BrowserTab {
     /// After `method` to the tab timed out: whether the renderer answered the check after it (`devToolsTimedOut`), once
     /// that ends, or a check of its own when an earlier late call's check ended meanwhile; false when the page was
     /// already not responding, nil when nothing is checked (a call the renderer does not answer, such as
-    /// `Page.navigate`, or a closed tab).
+    /// `Page.navigate`, a closed tab, or a navigation that holds the calls to the page, `navigationHoldsCalls`).
     func rendererAnswered(after method: String) async -> Bool? {
-        guard !isClosed, Self.needsRenderer(method) else { return nil }
+        guard !isClosed, Self.needsRenderer(method), !navigationHoldsCalls else { return nil }
         if rendererCheck == nil, unanswered != nil { return false }
         return await checkRenderer(after: method).value
     }
@@ -2176,6 +2203,9 @@ final class BrowserTab {
         switch event {
         case .devTools(_, let message):
             devTools.receive(message)
+        case .navigationRequest:
+            requestMark = devTools.events.count
+            client?.reportsNavigationRequests = true
         case .address(_, let url):
             currentURL = url
             navigations += 1

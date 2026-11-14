@@ -93,7 +93,11 @@ typedef enum {
     /// tab: opener, number: removed retained request ID.
     YardletCEFEventPopupRemoved = 30,
     /// tab: opener, number: request kept for retry when capacity becomes available.
-    YardletCEFEventPopupRetry = 31
+    YardletCEFEventPopupRetry = 31,
+    /// The main frame's navigation sends its request (on_before_browse let it through, also for a redirect): the
+    /// page's beforeunload handlers have returned, and Chromium holds DevTools calls to the page until the
+    /// navigation ends. No text: the address may carry what the page filled in.
+    YardletCEFEventNavigationRequest = 32
 } YardletCEFEvent;
 
 /// What a frame's renderer says of its page (YardletCEFHelper's PageState.c names the same flags).

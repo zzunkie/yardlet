@@ -79,6 +79,28 @@ final class BrowserUnresponsiveTests: XCTestCase {
         XCTAssertNil(stuck.unresponsive, "a late promise is no page that does not respond")
         connection.withholds = { _ in false }
         connection.answers = false
+        // While a navigation's request is out, Chromium holds the calls to the page: one left unanswered then says
+        // nothing of the renderer. While the page's beforeunload handlers run, before the request, the check tells.
+        func event(_ json: String) { connection.eventHandler?(.devTools(tab: stuck.id, message: json)) }
+        event(#"{"method":"Page.frameNavigated","params":{"frame":{"id":"M","url":"https://b.test/"}}}"#)
+        event(#"{"method":"Page.frameStartedNavigating","params":{"frameId":"M","url":"https://b.test/slow"}}"#)
+        connection.eventHandler?(.navigationRequest(tab: stuck.id))
+        _ = try? await stuck.devTools.send("Runtime.evaluate", ["expression": .string("1")], timeout: .milliseconds(30))
+        let held = await stuck.rendererAnswered(after: "Runtime.evaluate")
+        XCTAssertNil(held, "nothing was checked")
+        XCTAssertNil(stuck.unresponsive, "a page its navigation holds is no page that does not respond")
+        XCTAssertEqual(stuck.navigationRequestSent, true)
+        event(#"{"method":"Page.frameStartedNavigating","params":{"frameId":"M","url":"https://b.test/other"}}"#)
+        XCTAssertEqual(stuck.navigationRequestSent, false, "the navigation that replaced it has not sent its own")
+        _ = try? await stuck.devTools.send("Runtime.evaluate", ["expression": .string("1")], timeout: .milliseconds(30))
+        let unloading = await stuck.rendererAnswered(after: "Runtime.evaluate")
+        XCTAssertEqual(unloading, false)
+        XCTAssertEqual(stuck.unresponsive, .unanswered(method: "Runtime.evaluate"))
+        event(#"{"method":"Page.frameNavigated","params":{"frame":{"id":"M","url":"https://b.test/other"}}}"#)
+        connection.answers = true
+        _ = try await stuck.devTools.send("DOM.getDocument", [:], timeout: .seconds(2))
+        connection.answers = false
+        XCTAssertNil(stuck.unresponsive)
 
         // A renderer that ended crashed (a failed CHECK traps); it is no longer a page that does not
         // respond, and a load starts another renderer.
