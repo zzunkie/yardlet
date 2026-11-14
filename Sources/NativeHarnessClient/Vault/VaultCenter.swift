@@ -236,6 +236,8 @@ struct VaultFillGrant {
     var item: VaultItem
     var username: String?
     var password: String?
+    /// The sign-in's other secrets beside its password (`VaultSecret.fields`), which fill with it.
+    var secretFields: [VaultFormField]?
     var code: String?
     var passkey: VaultPasskey?
     var confirmedBy: VaultUse.Confirmation
@@ -507,6 +509,7 @@ final class VaultCenter: ObservableObject {
         case .login:
             grant.username = item.username.isEmpty ? nil : item.username
             grant.password = secret?.password
+            grant.secretFields = secret?.fields
         case .oneTimeCode:
             guard let code = secret?.oneTimeCode else {
                 return refuse(request, item: item, "“\(item.name)” has no one-time code set up.")
@@ -864,7 +867,7 @@ final class VaultCenter: ObservableObject {
     /// agent policy does not apply. The code is the one current now, the item's or, when it has none, that of the
     /// page's one other item of the same account (design §14.3). An item chosen for a page that is not one of its
     /// sites gives its password only once the person confirms with Touch ID, as Chrome confirms and Bitwarden warns
-    /// first: filling it hands it to that page. Its code needs nothing, as copying it from Settings →
+    /// first: filling it hands it to that page, as it does the sign-in's other secrets. Its code needs nothing, as copying it from Settings →
     /// Passwords does not (design §16). `codeOnly` leaves the password out. Nil when the person did not confirm.
     func valuesForPerson(_ item: VaultItem, origin: String, codeOnly: Bool = false) async -> VaultFillGrant? {
         // The item as saved now: a list or bar drawn before a site was saved in it holds it as it was.
@@ -873,10 +876,11 @@ final class VaultCenter: ObservableObject {
         var grant = VaultFillGrant(item: item, confirmedBy: .person)
         grant.username = item.username.isEmpty ? nil : item.username
         grant.password = codeOnly ? nil : secret.password
+        grant.secretFields = codeOnly ? nil : secret.fields
         let codeSecret = secret.oneTimeCode
             ?? accountItem(of: item, having: .oneTimeCode, on: origin).flatMap { try? trustedSecret(of: $0) }?.oneTimeCode
         grant.code = codeSecret.map { code(for: $0) }
-        if grant.password != nil, !item.sites.contains(where: { VaultSite.matches($0, origin: origin) }) {
+        if grant.password != nil || grant.secretFields != nil, !item.sites.contains(where: { VaultSite.matches($0, origin: origin) }) {
             guard await environment.confirm(L10n.format("fill “%@” on %@, which is not one of its sites",
                                                         item.name, VaultSite.host(of: origin))) else { return nil }
             grant.confirmedBy = .touchID
@@ -1013,6 +1017,8 @@ final class VaultCenter: ObservableObject {
             secret.previousPasswords = Array(([VaultPreviousPassword(password: old, replacedAt: environment.now())] + earlier)
                 .prefix(Self.previousPasswordsKept))
         }
+        let fields = (secret.fields ?? []).filter { !$0.value.isEmpty }
+        secret.fields = fields.isEmpty ? nil : fields
         item.hasPassword = !(secret.password ?? "").isEmpty
         item.hasOneTimeCode = secret.oneTimeCode != nil
         item.hasPasskey = secret.passkey != nil

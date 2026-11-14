@@ -958,8 +958,10 @@ final class BrowserAgentToolsTests: XCTestCase {
         let item = VaultItem(name: "Example", sites: ["example.com"], username: "ada", policy: .always)
         var confirms = true
         var asked: [String] = []
+        // A sign-in that asks for an organization's ID in a masked field beside the password.
+        let organization = VaultFormField(id: "orgId", name: "orgId", label: "Organization ID", value: "org-id-4821")
         tools.vault = VaultCenter(environment: VaultCenter.Environment(
-            secrets: InMemoryVaultSecretStore([item.id: VaultSecret(password: "correct-horse-battery")]),
+            secrets: InMemoryVaultSecretStore([item.id: VaultSecret(password: "correct-horse-battery", fields: [organization])]),
             repository: InMemoryVaultRepository(items: [item]), hmac: MacVault.hmac, isAllowedBuild: true,
             confirm: { asked.append($0); return confirms }, defaults: .vaultTests()))
         _ = await loadSnapshot()
@@ -1014,6 +1016,10 @@ final class BrowserAgentToolsTests: XCTestCase {
         XCTAssertTrue(fill?["arguments"]?.arrayValue?.contains(.object(["value": .string("correct-horse-battery")])) == true)
         XCTAssertTrue(fill?["arguments"]?.arrayValue?.contains(.object(["value": .string("https://www.example.com")])) == true,
                       "The fill checks the document's origin as it fills")
+        XCTAssertEqual(fill?["arguments"]?.arrayValue?.last?["value"]?.arrayValue?.first?["value"], .string("org-id-4821"),
+                       "The sign-in's other secret fills with the password")
+        let organizationEcho = await run(AgentToolCatalog.waitFor, ["text": .string("org-id-4821"), "timeout": .number(0.01)])
+        XCTAssertFalse(organizationEcho.text.contains("org-id-4821"), organizationEcho.text)
         // A failure's structured content, which a harness shows in place of the text, is scrubbed too.
         let waited = await run(AgentToolCatalog.waitFor, ["text": .string("correct-horse-battery"), "timeout": .number(0.01)])
         XCTAssertEqual(waited.failure?.kind, .timedOut)

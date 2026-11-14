@@ -2900,6 +2900,9 @@
 "Password" = "Password";
 "Show a saved password" = "Show";
 "show the saved password" = "show the saved password";
+"Add Secret Field" = "Add Secret Field";
+"Field name" = "Field name";
+"show a saved secret field" = "show a saved secret field";
 "Two-factor setup key" = "Two-factor setup key";
 "Setup key or otpauth:// address" = "Setup key or otpauth:// address";
 "Unchanged" = "Unchanged";

@@ -71,7 +71,7 @@ model, site binding and field kinds.
 
 | Kind | Handled | Reason |
 |---|---|---|
-| Site usernames and passwords | Yes | The most common place work stops. A username is not a secret but lives in the same item, with the form's other fields beside it (section 17) |
+| Site usernames and passwords | Yes | The most common place work stops. A username is not a secret but lives in the same item, with the form's other fields beside it; a sign-in's other masked fields (an organization's ID and password before the person's own) are secrets kept with the password (section 17) |
 | TOTP secrets (RFC 6238, 30 seconds and 6 digits by default, SHA-1/256/512) | Yes | Yardlet generates each code when needed and fills it. Keeping passwords and TOTP in one vault has a cost: within that vault, two factors shrink to one (the same trade-off as 1Password and Bitwarden; section 14.5). Accepted, since the goal is use without the person |
 | Passkeys used without the person (Yardlet keeps the private key) | Yes | Registered and used through the CDP `WebAuthn` virtual authenticator (section 5.2). It is a software key, weaker than a device-bound Touch ID passkey, so the person registers it on the site as a separate passkey named "Yardlet" that can be deleted on the site on its own |
 | API keys and tokens | No | Put into the agent's shell, they end up in the conversation history through `echo`, and there is no way to scrub them from tool output the harness records (provider history is not edited). A proxy that attaches them to outgoing requests (the Infisical Agent Vault approach) needs TLS interception and an installed certificate, which leave traces after removal. These are left to connector OAuth and the user's existing tools (`op run` and others) |
@@ -93,7 +93,8 @@ protocol.
 ### 4.3 Keychain layout
 
 - Secrets: a generic password item in the login keychain, service `<bundle ID>.vault`, account set to the item UUID,
-  value in JSON (username, password, the last five passwords it replaced with when each was replaced, TOTP parameters,
+  value in JSON (password, a sign-in's other secret fields with what tells each on a page (section 17), the last five
+  passwords it replaced with when each was replaced, TOTP parameters,
   and for passkeys the credential ID, RP ID, user handle, PKCS#8 private key and signature count). The label is
   "Yardlet vault item" without the site name (so sites do not show in the Keychain Access list).
 - Access: items Yardlet creates trust the designated requirement of the app that created them. The installed app is
@@ -107,7 +108,7 @@ protocol.
 - The person's addresses and cards are one more item of the same service, account `wallet` (section 18). Whether the
   person turned off "Hide keys and tokens" is an item of its own service (`<bundle ID>.vault.settings`), which emptying
   the vault leaves ([AGENT_BROWSER_TOOLS](AGENT_BROWSER_TOOLS.md)).
-- What is not secret (name, sites, username and the form's other fields, step, creation date, last use) goes in
+- What is not secret (name, sites, username and the form's plain fields, step, creation date, last use) goes in
   `~/.yardlet/vault/items.json`, like Yardlet's other storage (folder 0700, files 0600). Drawing the settings list does
   not open the keychain. An `items.json` this build cannot read (damaged, or written by a later Yardlet) is not an
   empty vault: it is copied to `items-unreadable-<time>.json` beside it before a save replaces it, and the main window
@@ -154,7 +155,8 @@ new snapshot and call again; the steps below run on the next call. With "Shared 
    change; no URL from the model is used.
 2. **Step check:** the step from section 6.1, the vault's lock state, and Touch ID if needed. A fill on a page where
    the agent ran its own scripts asks the person whatever the step (section 5.3).
-3. **Field kind check:** a password goes only into `input[type=password]`. A username goes only into a text or email
+3. **Field kind check:** a password goes only into `input[type=password]`, and so does each of a sign-in's other secrets
+   (section 17), into the one of the same `id`, `name` or label. A username goes only into a text or email
    field of the same form (`autocomplete=username` first), and TOTP only into a text, number or tel field that has
    `autocomplete=one-time-code`, or that nothing marks as another field and that has a name or label meaning a code, a
    maximum length of 10 or less, numeric input, or a page asking for a code around it (section 14.3). A code split into
@@ -348,7 +350,8 @@ Passwords
 
 ### 8.2 Item sheet
 
-Name, sites, username, password, previous passwords (when a password was replaced; shown after Touch ID, section 15),
+Name, sites, username, password, the sign-in's other secrets as masked rows like the password's (section 17), previous
+passwords (when a password was replaced; shown after Touch ID, section 15),
 two-factor setup key (`otpauth://` or the key), current code (seconds left and copy, section 14), agent use (three
 steps), the form's other fields kept with the sign-in (section 17), recent use and delete. An item with only a two-factor
 key is saved without a site or password (an authenticator app's entry, section 14). The password is a hidden field, and
@@ -606,7 +609,8 @@ space), `ascii-printable`, `unicode` and custom ones in brackets, where `-` come
   placeholder or label), the form's other one or two; else both of a form's two password fields or the last two of three;
   else a lone field named new. Chrome offers automatically only with its server's predictions or the attribute, and
   Yardlet has no server, so its basic heuristics stand in, with the current password told apart by name. A lone password
-  field is a sign-in's, so it gets no bar. The bar shows once per page.
+  field is a sign-in's, so it gets no bar, and so are password fields with a field to type in between them, one
+  sign-in's several secrets (section 17). The bar shows once per page.
 - **The other path:** on any password field, right-click "Use Strong Password" (Chrome's "Generate password"). The
   person's click is the choice, so it fills at once.
 - **The password:** Chrome's generator (15 characters, its three classes without look-alikes, at least one of each,
@@ -789,6 +793,11 @@ Apple), and some forms hold an account beside the username (AWS's IAM user sign-
 password). The vault keeps the earlier step's username and the form's other fields, so such sign-ins save with their
 account and one IAM user name in two accounts stays two items.
 
+Some ask for more than one secret. A business app's company sign-in can ask for an organization ID typed into a masked
+field, the organization's password, then the person's user ID and password. Chrome and Safari keep one password a
+sign-in and save the wrong one there; 1Password and Bitwarden keep every field of the item, the masked ones as secrets.
+The vault keeps such a sign-in's other masked fields as secrets beside its password.
+
 ### 17.2 Rules
 
 - **A username-first sign-in:** the watch tells Yardlet when the person sends a step that asks for the username alone
@@ -824,7 +833,38 @@ account and one IAM user name in two accounts stays two items.
   is not offered on the other. The person can list both `signin.aws.amazon.com` and `signin.aws` in an item's sites.
   Joining the two domains would need a list of Yardlet's own, since no public list (Apple's password-manager-resources
   included) joins them, and the vault keeps no such list.
-- **The item sheet:** each kept field shows under the page's own label as a text field, and emptying it removes it.
+- **Several secrets in one sign-in:** when the form sent holds two or more password fields with values, the watch tells
+  a sign-in that asks for several secrets from a change or sign-up form as Chromium's form parser does
+  (`LocateSpecificPasswords` trusts the `autocomplete` marks, then which fields hold the same value), with what Yardlet
+  sees without Chrome's server: a field marked `new-password` makes it a change or sign-up; else password fields with a
+  field to type in between them (the user ID between the organization's password and the person's) are one sign-in's;
+  else a field named as a change's (current, old, new, confirm, again, retype and the like, in English or Korean) or two
+  holding the same value (a new password and its confirmation) make it a change, and anything else is a sign-in with
+  several secrets. A change form keeps the rules of section 15, and the strong password bar stays off password fields
+  with a field to type in between them.
+- **Which is the password:** the field marked `current-password` when only one is; else the first password field after
+  the username (a filled text field since the password field before it); else the last, since a sign-in names its
+  account first. That is the person's own password: the one a change replaces, the one previous passwords keep (section
+  15) and the one the save bar asks about. The others, at most three, are the item's secret fields, each with its `id`,
+  `name` and label and its value; a masked field with none of the three is left out, since no fill could find it again.
+- **Where they are kept:** only in the item's keychain secret, beside the password (section 4.3). `items.json` holds
+  nothing of them, not their labels either: nothing needs them before the keychain is read, and the item sheet reads it
+  as it opens, as it does for the code. A secret saved before secret fields existed reads as it was.
+- **Saving and updating:** the bar is the one for a single password. The account is still the username and the plain
+  fields: a secret field is no account's name (it may be a password the organization changes), so a sign-in of the same
+  username with other secrets updates the item ("Update the saved password of …"), each changed field in its place, and
+  one with the same password and secrets asks nothing. Only the password keeps previous values.
+- **Filling:** the person's fill and an agent's put each secret field into the form's password field of the same `id`,
+  `name` or label, as Bitwarden's custom fields match, and the password into the password field none of them takes: the
+  field the fill started from when it is one, else the form's first. The username then goes into the text field before
+  the password, as before. One confirmation covers the whole fill: the item's agent policy (section 6.1) asks once, and
+  the person's fill of an item on another site asks for Touch ID once, for the password and the secrets together. The
+  agent's result says "the username, password and other secrets" and no value.
+- **The item sheet:** each kept plain field shows under the page's own label as a text field, and emptying it removes
+  it. Each secret field is a masked row under the page's label, like the password's: left blank it stays as saved, Show
+  reveals it after Touch ID, and a copy of it is marked concealed and cleared. The minus at a row's end removes it on
+  Save, and the plus at the end of the password row adds one by hand, named as the page names its field (its label, id
+  or name: the fill tries the name against all three, as Bitwarden's custom fields do).
 - **Closing the bar:** the save bar closes with an X at its end, as Chrome's save bubble and the panel's permission bar
   do; closing remembers nothing, while "Not for This Site" stops offers for the site. Nothing in Settings.
 
@@ -837,6 +877,10 @@ account and one IAM user name in two accounts stays two items.
 - Turning the vault off stops all of it; the fields live in the item and go with it.
 - A field the vault filled counts as the person's once they type another password into it, so correcting a filled
   password that a site no longer takes offers to update the item, as typing one in any other field does.
+- Secret fields are vault values as the password is: the watch sends them only with a sign-in the person typed into;
+  they go onto the scrubbing list, the tab's record of filled documents and the address guard before they go in
+  (section 5.3); they go only into password fields of a form that sends them to the item's sites (section 5.2); and no
+  tool result, log or `items.json` holds one.
 
 ## 18. Addresses and payment cards for the person
 

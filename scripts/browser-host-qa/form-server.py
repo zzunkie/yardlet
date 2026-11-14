@@ -26,7 +26,9 @@ sign-up form whose new password and confirmation fields carry passwordrules; ?sl
 goes in), /vault/change (a password change form for person@example.test: current, new and confirmation fields, none
 marked, the current one told apart by its label), /vault/change-dialog (VAULT_CHANGE_DIALOG below), /vault/recover (a
 recovery's new password form with no username), /vault/reset-dialog (VAULT_RESET_DIALOG below), /vault/first and /vault/second (a sign-in in two steps, VAULT_FIRST
-below), /vault/iam (an account, username and password, VAULT_IAM below), /vault/address and /vault/card (a checkout's
+below), /vault/iam (an account, username and password, VAULT_IAM below), /vault/org and /vault/plain-change (a sign-in
+with an organization's secrets beside the person's, and a change form that says nothing, VAULT_ORG and VAULT_PLAIN_CHANGE
+below), /vault/address and /vault/card (a checkout's
 address and card forms, VAULT_ADDRESS and VAULT_CARD below) and /vault/webauthn (a blank
 page for WebAuthn on localhost), /passkey (a sign-in form with passkey autofill and the passkey requests sites
 make, started by window.passkey(kind)), for what ordinary sites ask of a browser /compat (window.compat(kind)
@@ -843,6 +845,30 @@ window.qa = {submitted: null, values: () => [account.value, username.value]};
 document.getElementById('form').addEventListener('submit', e => { e.preventDefault(); window.qa.submitted = password.value !== ''; });
 </script>'''
 
+# A business app's sign-in that asks for an organization's ID in a masked field and the organization's password, then
+# the person's user ID and password. window.qa.values() gives the four fields' values.
+VAULT_ORG = '''<!doctype html><meta charset="utf-8"><title>Vault organization sign-in</title>
+<form id="form" method="post">
+<label>Organization ID <input id="orgId" name="orgId" type="password"></label>
+<label>Organization password <input id="orgPw" name="orgPw" type="password"></label>
+<label>User ID <input id="userId" name="userId"></label>
+<label>Password <input id="userPw" name="userPw" type="password"></label><button id="go">Sign in</button></form>
+<script>
+window.qa = {submitted: null, values: () => [orgId, orgPw, userId, userPw].map(e => e.value).join('|')};
+document.getElementById('form').addEventListener('submit', e => { e.preventDefault(); window.qa.submitted = true; });
+</script>'''
+
+# A password change form for person@example.test whose three password fields say nothing of what they are: no labels,
+# names or marks. Only their values tell the new password and its confirmation.
+VAULT_PLAIN_CHANGE = '''<!doctype html><meta charset="utf-8"><title>Vault plain change</title>
+<form id="form" method="post"><input id="user" value="person@example.test">
+<input id="p1" type="password"> <input id="p2" type="password"> <input id="p3" type="password">
+<button id="go">Save</button></form>
+<script>
+window.qa = {submitted: null};
+document.getElementById('form').addEventListener('submit', e => { e.preventDefault(); window.qa.submitted = true; });
+</script>'''
+
 # A checkout's shipping address, marked with the HTML autocomplete names: name, two street lines, city, postal code, a
 # country select and a phone. window.qa.values() gives the fields' values.
 VAULT_ADDRESS = '''<!doctype html><meta charset="utf-8"><title>Vault address</title>
@@ -1618,6 +1644,10 @@ class Handler(BaseHTTPRequestHandler):
             payload = VAULT_SECOND.encode()
         elif self.path.startswith('/vault/iam'):
             payload = VAULT_IAM.encode()
+        elif self.path.startswith('/vault/org'):
+            payload = VAULT_ORG.encode()
+        elif self.path.startswith('/vault/plain-change'):
+            payload = VAULT_PLAIN_CHANGE.encode()
         elif self.path.startswith('/vault/address'):
             payload = VAULT_ADDRESS.encode()
         elif self.path.startswith('/vault/card'):

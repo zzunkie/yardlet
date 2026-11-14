@@ -14,7 +14,9 @@ struct BrowserVaultSaveOffer: Equatable {
     var presaved: UUID?
     /// The form's other fields the person filled, such as an account ID (design §17), which the item keeps.
     var fields: [VaultFormField] = []
-    /// `updates` has this password already: the bar adds the username or the other fields to it.
+    /// The sign-in's other secrets beside the password (design §17), which the item's keychain secret keeps.
+    var secretFields: [VaultFormField] = []
+    /// `updates` has this password and these secrets already: the bar adds the username or the other fields to it.
     var addsAccount = false
     /// A password sent with no username: the site's items the bar's menu offers to update instead of `updates`
     /// (`VaultCenter.update(forUnnamed:origin:fields:excluding:)`).
@@ -219,7 +221,8 @@ extension BrowserHostPaneController {
         guard made || !(fields["password"] ?? "").isEmpty else { return }
         // A form sent in the address carries what the person typed there too: no tool result does. A made
         // password is on that list since it was filled.
-        if let password = fields["password"] { MacAgentToolService.shared.broker.noteVaultValues([password]) }
+        let secrets = made ? [] : fields["secrets"].flatMap { try? JSONDecoder().decode([VaultFormField].self, from: Data($0.utf8)) } ?? []
+        MacAgentToolService.shared.broker.noteVaultValues([fields["password"]] + secrets.map(\.value))
         let typedUsername = (fields["username"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let others = fields["fields"].flatMap { try? JSONDecoder().decode([VaultFormField].self, from: Data($0.utf8)) } ?? []
         Task { @MainActor [weak self] in
@@ -238,39 +241,43 @@ extension BrowserHostPaneController {
             guard !never.contains(site) else { return }
             // A password sent with no username (a reset or change dialog, a password-only step) updates the item Chrome
             // would, and the bar's menu offers the site's other items; an item that holds it already only takes new fields.
+            // Whether the item holds this password and these secrets already.
+            @MainActor func holds(_ item: VaultItem) -> Bool {
+                guard let secret = self.vault.secret(of: item.id), secret.password == password else { return false }
+                return Set(secret.fields?.merging(secrets) ?? secrets) == Set(secret.fields ?? [])
+            }
             if username.isEmpty {
                 let update = self.vault.update(forUnnamed: password, origin: frame.origin, fields: others)
-                if update.holdsIt, let item = update.item {
+                if update.holdsIt, let item = update.item, holds(item) {
                     guard Set(item.merging(others) ?? []) != Set(item.fields ?? []) else { return }
                     self.vaultOffer = BrowserVaultSaveOffer(origin: frame.origin, site: site, username: username, password: password,
-                                                            updates: item, fields: others, addsAccount: true)
+                                                            updates: item, fields: others, secretFields: secrets, addsAccount: true)
                     return
                 }
                 self.vaultOffer = BrowserVaultSaveOffer(origin: frame.origin, site: site, username: username, password: password,
-                                                        updates: update.item, fields: others, choices: update.choices)
+                                                        updates: update.item, fields: others, secretFields: secrets,
+                                                        choices: update.choices)
                 return
             }
             let here = self.vault.items(for: frame.origin)
             // The item of this account: the same username, and no other value in a field the form had (one IAM user
-            // name in two AWS accounts is two items).
+            // name in two AWS accounts is two items). Its secrets are no account's name: new ones update it.
             if let same = here.first(where: { $0.username == username && $0.admits(others) }) {
-                let samePassword = self.vault.secret(of: same.id)?.password == password
-                guard !samePassword || Set(same.merging(others) ?? []) != Set(same.fields ?? []) else { return }
+                let held = holds(same)
+                guard !held || Set(same.merging(others) ?? []) != Set(same.fields ?? []) else { return }
                 self.vaultOffer = BrowserVaultSaveOffer(origin: frame.origin, site: site, username: username, password: password,
-                                                        updates: same, fields: others, addsAccount: samePassword)
+                                                        updates: same, fields: others, secretFields: secrets, addsAccount: held)
                 return
             }
             // An item saved without a username (a password step's before Yardlet kept the first step's) takes it once
             // its password signs in; it is not changed until the person says so.
-            if let blank = here.first(where: {
-                $0.username.isEmpty && $0.admits(others) && self.vault.secret(of: $0.id)?.password == password
-            }) {
+            if let blank = here.first(where: { $0.username.isEmpty && $0.admits(others) && holds($0) }) {
                 self.vaultOffer = BrowserVaultSaveOffer(origin: frame.origin, site: site, username: username, password: password,
-                                                        updates: blank, fields: others, addsAccount: true)
+                                                        updates: blank, fields: others, secretFields: secrets, addsAccount: true)
                 return
             }
             self.vaultOffer = BrowserVaultSaveOffer(origin: frame.origin, site: site, username: username,
-                                                    password: password, updates: nil, fields: others)
+                                                    password: password, updates: nil, fields: others, secretFields: secrets)
         }
     }
 
@@ -325,6 +332,7 @@ extension BrowserHostPaneController {
                 var item = item
                 var secret = vault.secret(of: item.id) ?? VaultSecret()
                 secret.password = offer.password
+                secret.fields = (secret.fields ?? []).merging(offer.secretFields)
                 // An item saved without a username takes the sign-in's, and the form's other fields.
                 if item.username.isEmpty { item.username = offer.username }
                 item.fields = item.merging(offer.fields)
@@ -340,7 +348,8 @@ extension BrowserHostPaneController {
             } else {
                 let item = VaultItem(name: VaultSite.host(of: offer.origin), sites: [offer.site], username: offer.username,
                                      fields: offer.fields.isEmpty ? nil : offer.fields)
-                try vault.save(item, secret: VaultSecret(password: offer.password))
+                try vault.save(item, secret: VaultSecret(password: offer.password,
+                                                         fields: offer.secretFields.isEmpty ? nil : offer.secretFields))
             }
         } catch {
             showVaultNotice(error.localizedDescription)
@@ -627,13 +636,16 @@ extension BrowserHostPaneController {
             if let site, VaultSite.matches(site, origin: frame.origin) { item = self.vault.link(item.id, to: site) ?? item }
             // An item for another site asks for Touch ID here before its password goes in.
             guard let grant = await self.vault.valuesForPerson(item, origin: frame.origin, codeOnly: codeOnly) else { return }
-            MacAgentToolService.shared.broker.noteVaultValues([grant.password, grant.code])
-            if let password = grant.password, password.count >= VaultScrubList.shortest {
-                tab.send(.guardFilledValues(tab: tab.id, values: VaultScrubList.spellings(of: password)))
+            let secrets = [grant.password] + (grant.secretFields ?? []).map(\.value)
+            MacAgentToolService.shared.broker.noteVaultValues(secrets + [grant.code])
+            let guarded = secrets.compactMap { $0 }.filter { $0.count >= VaultScrubList.shortest }
+            if !guarded.isEmpty {
+                tab.send(.guardFilledValues(tab: tab.id, values: guarded.flatMap(VaultScrubList.spellings(of:))))
             }
             let filled = await VaultPageScripts.fillForPerson(tab.devTools, frame: frame, fills: tab.vaultFills,
                                                               username: grant.username, password: grant.password,
-                                                              code: grant.code, fields: grant.item.fields, codeOnly: codeOnly)
+                                                              code: grant.code, fields: grant.item.fields,
+                                                              secretFields: grant.secretFields, codeOnly: codeOnly)
             guard filled else {
                 if codeOnly, let code = grant.code {
                     // As Settings → Passwords copies a code: marked concealed and cleared after 90 seconds.

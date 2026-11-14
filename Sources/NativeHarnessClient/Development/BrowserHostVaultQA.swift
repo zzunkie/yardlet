@@ -625,6 +625,7 @@ final class BrowserHostVaultQA {
         await exercisePanelMadePasswordsKept(controller)
         await exercisePanelFormlessReset(controller)
         await exercisePanelSignInSteps(controller)
+        await exercisePanelSeveralSecrets(controller)
         await exercisePanelWallet(controller)
         await exercisePanelPicks(controller)
     }
@@ -1515,6 +1516,134 @@ final class BrowserHostVaultQA {
         check("panel: a new password for one of two accounts updates that one, and the bar names it",
               named && controller.vaultOffer?.account == "dev · 444455556666", controller.vaultOffer?.account ?? "none")
         controller.vaultOffer = nil
+    }
+
+    /// A sign-in that asks for an organization's ID in a masked field and its password before the person's own ID and
+    /// password (design §17): its password fields get no strong password bar; sending it offers the person's ID and
+    /// password with the organization's two beside them as secrets, which the keychain secret keeps and the item's file
+    /// does not; the key button's fill from the organization's field puts all four back, and so does an agent's, whose
+    /// result names no value. A change form is still a change, labelled or not. Values are made up and never written to
+    /// `result.json`: it gets which field took which kind.
+    private func exercisePanelSeveralSecrets(_ controller: BrowserHostPaneController) async {
+        func open(_ path: String) async -> BrowserTab? {
+            controller.addressInput = base + path
+            controller.submitAddress()
+            guard await waitUntilAsync(.seconds(20), {
+                controller.tab?.currentURL?.hasSuffix(path) == true && controller.tab?.isLoading == false
+            }), let tab = controller.tab else {
+                check("panel: \(path) loads", false, controller.tab?.currentURL ?? "no tab")
+                return nil
+            }
+            try? await Task.sleep(for: .seconds(1))
+            return tab
+        }
+        func page(_ tab: BrowserTab, _ expression: String) async -> JSONValue? {
+            let result = try? await tab.devTools.send("Runtime.evaluate", ["expression": .string(expression), "returnByValue": .bool(true)],
+                                                      timeout: .seconds(10))
+            return result?["result"]?["value"]
+        }
+        func type(_ tab: BrowserTab, _ field: String, _ text: String) async {
+            _ = await page(tab, "document.getElementById('\(field)').focus()")
+            _ = try? await tab.devTools.send("Input.insertText", ["text": .string(text)], timeout: .seconds(10))
+        }
+        let ids = ["orgId", "orgPw", "userId", "userPw"]
+        let values = ["qa-org-id-4821-not-real", "qa-org-pw-not-real", "org-user", "qa-user-pw-not-real"]
+        let filledAll = "window.qa.values() === '\(values.joined(separator: "|"))'"
+        // Which field of the page a value was typed into, for the record: never the value itself.
+        func which(_ value: String?) -> String {
+            guard let value else { return "none" }
+            return values.firstIndex(of: value).map { ids[$0] } ?? "other"
+        }
+        func describe(_ fields: [VaultFormField]?) -> JSONValue {
+            .array((fields ?? []).map { field -> JSONValue in
+                .object(["id": .string(field.id), "name": .string(field.name), "label": .string(field.label),
+                         "value": .string(which(field.value))])
+            })
+        }
+
+        guard let form = await open("vault/org") else { return }
+        controller.vaultOffer = nil
+        controller.vaultPasswordOffer = nil
+        for field in ["orgPw", "userPw"] { _ = await page(form, "document.getElementById('\(field)').focus()") }
+        try? await Task.sleep(for: .seconds(1))
+        check("panel: a sign-in's several password fields get no strong password bar", controller.vaultPasswordOffer == nil,
+              "\(String(describing: controller.vaultPasswordOffer))")
+        for (id, value) in zip(ids, values) { await type(form, id, value) }
+        _ = await page(form, "document.getElementById('go').click()")
+        let offered = await waitUntilAsync(.seconds(5)) { controller.vaultOffer != nil }
+        let offer = controller.vaultOffer
+        record["severalSecretsOffer"] = .object([
+            "username": .string(which(offer?.username)), "password": .string(which(offer?.password)),
+            "plainFields": describe(offer?.fields), "secretFields": describe(offer?.secretFields)
+        ])
+        try? await Task.sleep(for: .milliseconds(300))
+        capture(controller, named: "vault-panel-several-secrets.png")
+        check("panel: a sign-in with an organization's ID and password in masked fields offers the person's ID and password, "
+                + "the organization's two beside them as secrets",
+              offered && offer?.updates == nil && offer?.username == values[2] && offer?.password == values[3]
+                && offer?.fields.isEmpty == true && offer?.secretFields.map(\.id) == ["orgId", "orgPw"]
+                && offer?.secretFields.map(\.value) == [values[0], values[1]],
+              "\(record["severalSecretsOffer"].map { String(describing: $0) } ?? "none")")
+        controller.acceptVaultOffer()
+        guard let item = vault.items.first(where: { $0.username == values[2] }), let secret = vault.secret(of: item.id) else {
+            return check("panel: the sign-in with several secrets was saved", false, "none")
+        }
+        let file = String(decoding: (try? JSONEncoder().encode(item)) ?? Data(), as: UTF8.self)
+        record["severalSecretsSaved"] = .object([
+            "itemFile": .object(["username": .string(which(item.username)), "fields": describe(item.fields)]),
+            "keychain": .object(["password": .string(which(secret.password)), "fields": describe(secret.fields)])
+        ])
+        check("panel: saving keeps the organization's secrets beside the password in the keychain secret and none in the item's file",
+              secret.password == values[3] && secret.fields?.map(\.value) == [values[0], values[1]] && item.fields == nil
+                && !file.contains("qa-") && !file.contains("Organization"),
+              "\(record["severalSecretsSaved"].map { String(describing: $0) } ?? "")")
+
+        // The key button's fill from the organization's ID field.
+        guard let again = await open("vault/org") else { return }
+        _ = await page(again, "document.getElementById('orgId').focus()")
+        controller.fillForPerson(item)
+        let personFilled = await waitUntilAsync(.seconds(5)) { await page(again, filledAll) == .bool(true) }
+        check("panel: the key button's fill from the organization's ID field puts all four fields back", personFilled,
+              "\(String(describing: await page(again, "window.qa.values().split('|').map(v => v.length)")))")
+
+        // An agent's fill, by the item's username, from the organization's ID field.
+        await navigate("vault/org")
+        let snapshot = await call(AgentToolCatalog.snapshot)
+        guard let ref = Self.ref(in: snapshot.text, role: "textbox", name: "Organization ID") else {
+            return check("the organization sign-in's snapshot names its fields", false, snapshot.text)
+        }
+        let agent = await call(VaultToolCatalog.fillCredential, ["ref": .string(ref), "item": .string(values[2]), "submit": .bool(false)])
+        let agentFilled = await pageValue(filledAll) == .bool(true)
+        check("an agent's fill puts the organization's secrets and the person's ID and password into all four fields, and its "
+                + "result names no value",
+              !agent.isError && agentFilled && agent.text.contains("other secrets")
+                && !values.filter { $0.hasPrefix("qa-") }.contains(where: agent.text.contains),
+              agent.text)
+        let after = await call(AgentToolCatalog.snapshot)
+        check("a snapshot after the fill shows none of the secrets",
+              !values.filter { $0.hasPrefix("qa-") }.contains(where: after.text.contains), String(after.text.prefix(600)))
+
+        // A change form is still a change: labelled, and one whose fields say nothing, where the new password and its
+        // confirmation hold the same value.
+        for (path, fields) in [("vault/change", ["current", "fresh", "again"]), ("vault/plain-change", ["p1", "p2", "p3"])] {
+            guard let person = vault.items.first(where: { $0.username == "person@example.test" }),
+                  let old = vault.secret(of: person.id)?.password, let change = await open(path) else {
+                return check("panel: \(path) loads for the person's saved item", false, "no item")
+            }
+            controller.vaultOffer = nil
+            let typed = "qa-typed-change-not-real"
+            for (field, value) in zip(fields, [old, typed, typed]) { await type(change, field, value) }
+            controller.vaultPasswordOffer = nil
+            _ = await page(change, "document.getElementById('go').click()")
+            let asked = await waitUntilAsync(.seconds(5)) { controller.vaultOffer != nil }
+            let offer = controller.vaultOffer
+            check("panel: a password typed into \(path) is still a change: the bar updates the saved item with the new password "
+                    + "and keeps no secret beside it",
+                  asked && offer?.updates?.id == person.id && offer?.password == typed && offer?.secretFields.isEmpty == true,
+                  "asked \(asked), updates \(offer?.updates?.username ?? "none"), new \(offer?.password == typed), "
+                    + "secrets \(offer?.secretFields.count ?? -1)")
+            controller.vaultOffer = nil
+        }
     }
 
     /// Addresses and cards (design §18): an address sent in a form is offered for saving and fills an empty form back;

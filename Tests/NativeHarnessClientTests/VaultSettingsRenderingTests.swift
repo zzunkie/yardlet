@@ -15,6 +15,8 @@ import XCTest
 /// - `settings-vault-unlinked-*`: codes with no site, with the sites suggested for them and one left to type.
 /// - `settings-vault-search-*`: the lists narrowed by a search.
 /// - `settings-vault-accounts-*`, `vault-item-account-*`: two accounts of one username, and one's item sheet.
+/// - `vault-item-secret-fields-*`, `vault-item-secret-field-added-*`: a sign-in with an organization's ID and password
+///   in masked fields beside its own, and the same sheet with a secret field being added by hand.
 /// - `vault-save-bar-*`: the browser panel's save, update and add-username bars.
 /// - `vault-setup-bar-*`: the browser panel's two-factor setup bars, the page's and the ones the agent asks with.
 /// - `settings-vault-wallet-*`, `vault-card-*`, `vault-address-*`, `vault-wallet-bars-*`: addresses and cards.
@@ -427,6 +429,39 @@ final class VaultSettingsRenderingTests: XCTestCase {
         try WindowlessRender.hostedInBothAppearances("vault-item-account", in: directory, size: sheetSize) { appearance in
             sheet.environment(\.colorScheme, appearance.colorScheme).background(ParityTheme.canvas)
         }
+
+        // A sign-in that asks for an organization's ID and password in masked fields before the person's own: each is a
+        // masked row under the page's label, like the password's, and one left blank keeps its value on Save.
+        let business = VaultItem(name: "erp.example.test", sites: ["example.test"], username: "ada", hasPassword: true)
+        try vault.save(business, secret: VaultSecret(password: "not-a-real-password", fields: [
+            VaultFormField(id: "orgId", name: "orgId", label: "Organization ID", value: "org-id-not-real"),
+            VaultFormField(id: "orgPw", name: "orgPw", label: "Organization password", value: "org-pw-not-real")]))
+        let secretSize = NSSize(width: 520, height: 470)
+        let secretSheet = VaultItemSheet(vault: vault, item: business, onDone: {})
+            .frame(width: secretSize.width, height: secretSize.height, alignment: .top)
+        try WindowlessRender.hostedInBothAppearances("vault-item-secret-fields", in: directory, size: secretSize) { appearance in
+            secretSheet.environment(\.colorScheme, appearance.colorScheme).background(ParityTheme.canvas)
+        }
+        let secretHost = WindowlessRender.Host(secretSheet.environment(\.colorScheme, .light).background(ParityTheme.canvas),
+                                               size: secretSize)
+        defer { secretHost.close() }
+        secretHost.settle()
+        let shown = secretHost.accessibilityElements().map { "\($0.label) \($0.value)" }
+        for text in ["Organization ID", "Organization password"] {
+            XCTAssertTrue(shown.contains { $0.contains(text) }, "No \(text): \(shown)")
+        }
+        XCTAssertEqual(shown.filter { $0.contains(L10n.string("Show a saved password")) }.count, 3, "\(shown)")
+        XCTAssertFalse(shown.contains { $0.contains("not-real") }, "A secret showed unasked: \(shown)")
+        XCTAssertTrue(secretHost.hosting.pressAccessibilityElement(labelled: L10n.string("Add Secret Field")))
+        secretHost.settle()
+        try WindowlessRender.writePNG(secretHost.capture().bitmap,
+                                      to: directory.appending(path: "vault-item-secret-field-added-light.png"))
+        let added = secretHost.accessibilityElements().map { "\($0.label) \($0.value)" }
+        XCTAssertEqual(added.count, shown.count + 3, "The added row's name, value and minus: \(added)")
+        XCTAssertTrue(secretHost.hosting.pressAccessibilityElement(labelled: L10n.string("Save")))
+        XCTAssertEqual(vault.secret(of: business.id)?.fields?.map(\.value), ["org-id-not-real", "org-pw-not-real"],
+                       "Save without a change lost a secret field")
+        XCTAssertEqual(vault.secret(of: business.id)?.password, "not-a-real-password")
     }
 
     /// The browser panel's save bar (design §15, §17): saving a sign-in, updating one of two accounts of one username (the

@@ -9,7 +9,9 @@ import SwiftUI
 /// item may hold a two-factor code alone, without a site or password, as an authenticator app's
 /// entry (§14); its current code shows here to copy, and Remove takes the code out when the sheet saves, as Apple's
 /// Passwords app deletes an entry's verification code. The passwords a saved one replaced are kept and show the same way
-/// (§15), so a change a site did not take loses nothing.
+/// (§15), so a change a site did not take loses nothing. A sign-in's other secrets (§17) are rows like the password's,
+/// under the page's own labels: one left blank stays as saved, its minus removes it, and the plus beside the password
+/// adds one by hand, named as the page names its field.
 struct VaultItemSheet: View {
     let vault: VaultCenter
     private let original: VaultItem?
@@ -21,6 +23,9 @@ struct VaultItemSheet: View {
     /// The sign-in form's other fields the item keeps (design §17), each under the page's own label; one emptied goes.
     @State private var formFields: [VaultFormField]
     @State private var password = ""
+    /// The sign-in's other secrets beside the password (design §17), as the keychain keeps them, with no value until the
+    /// person shows or types one.
+    @State private var secretFields: [SecretFieldRow] = []
     @State private var setupKey = ""
     @State private var policy: VaultItem.Policy
     @State private var showsPassword = false
@@ -74,16 +79,18 @@ struct VaultItemSheet: View {
         .frame(width: 520)
         .background(ParityTheme.canvas)
         .task {
-            guard let original, original.hasOneTimeCode || original.hasPassword, let secret = vault.secret(of: original.id) else { return }
+            guard let original, let secret = vault.secret(of: original.id) else { return }
             savedCode = secret.oneTimeCode
             previousCount = secret.previousPasswords?.count ?? 0
+            secretFields = (secret.fields ?? []).enumerated().map { SecretFieldRow(saved: $0.offset, field: $0.element) }
         }
         // A password, a previous one or a setup key the person copies out of the sheet goes on the clipboard as the
         // vault's own copies do.
         .onReceive(NotificationCenter.default.publisher(for: NSMenu.didSendActionNotification)) { note in
             let action = (note.userInfo?["MenuItem"] as? NSMenuItem)?.action
             guard action == #selector(NSText.copy(_:)) || action == #selector(NSText.cut(_:)) else { return }
-            VaultClipboard.conceal(ifPartOf: [password, setupKey] + (previousPasswords ?? []).map(\.password))
+            VaultClipboard.conceal(ifPartOf: [password, setupKey] + secretFields.map(\.field.value)
+                + (previousPasswords ?? []).map(\.password))
         }
         .alert(L10n.format("Delete “%@”?", original?.name ?? ""), isPresented: $confirmsDeleting) {
             Button(L10n.string("Delete"), role: .destructive, action: delete)
@@ -147,6 +154,40 @@ struct VaultItemSheet: View {
                     if original?.hasPassword == true {
                         Button(showsPassword ? L10n.string("Hide") : L10n.string("Show a saved password"),
                                action: togglePassword)
+                    }
+                    rowButton("plus", L10n.string("Add Secret Field")) {
+                        secretFields.append(SecretFieldRow(saved: nil, field: VaultFormField(id: "", name: "", label: "", value: "")))
+                    }
+                }
+            }
+            ForEach($secretFields) { $row in
+                GridRow {
+                    if row.saved == nil {
+                        // Named as the page names its field: its label, id or name.
+                        TextField(L10n.string("Field name"), text: $row.field.label, prompt: Text(L10n.string("Field name")))
+                            .frame(width: 150)
+                            .gridColumnAlignment(.trailing)
+                    } else {
+                        label(row.field.title)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.trailing)
+                            .frame(maxWidth: 150, alignment: .trailing)
+                    }
+                    HStack(spacing: 6) {
+                        Group {
+                            if row.shows {
+                                TextField(row.field.title, text: $row.field.value)
+                            } else {
+                                SecureField(row.field.title, text: $row.field.value,
+                                            prompt: unchangedPrompt(row.saved != nil) ?? Text(verbatim: ""))
+                            }
+                        }
+                        if row.saved != nil {
+                            Button(row.shows ? L10n.string("Hide") : L10n.string("Show a saved password")) { toggle(row.id) }
+                        }
+                        rowButton("minus", L10n.string("Remove")) {
+                            secretFields.removeAll { $0.id == row.id }
+                        }
                     }
                 }
             }
@@ -230,6 +271,16 @@ struct VaultItemSheet: View {
                 Button(L10n.string("Show a saved password"), action: showPreviousPasswords)
             }
         }
+    }
+
+    /// A row's plus or minus, as small as the row's own controls.
+    private func rowButton(_ systemName: String, _ help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName).frame(width: 16)
+        }
+        .buttonStyle(.borderless)
+        .help(help)
+        .accessibilityLabel(help)
     }
 
     private func label(_ text: String) -> some View {
@@ -340,6 +391,9 @@ struct VaultItemSheet: View {
     /// and copied in Settings but filled nowhere). An item that held only the code it loses is deleted, not saved empty.
     private var canSave: Bool {
         guard !trimmedName.isEmpty, let sites, let code = oneTimeCode else { return false }
+        // A secret field typed here goes to the page's field of its name.
+        guard !secretFields.contains(where: { $0.saved == nil && !$0.field.value.isEmpty
+            && $0.field.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { return false }
         let keepsCode = code != nil || (original?.hasOneTimeCode == true && !removesCode)
         guard keepsCode || !removesCode || holdsMoreThanCode else { return false }
         return !sites.isEmpty || keepsCode
@@ -358,6 +412,43 @@ struct VaultItemSheet: View {
         }
     }
 
+    /// Shows a saved secret field's value once the person confirmed, or hides it again.
+    private func toggle(_ row: UUID) {
+        guard let index = secretFields.firstIndex(where: { $0.id == row }) else { return }
+        if secretFields[index].shows {
+            secretFields[index].shows = false
+            return
+        }
+        guard let id = original?.id, let saved = secretFields[index].saved else { return }
+        Task { @MainActor in
+            guard await vault.confirmPerson(L10n.string("show a saved secret field")),
+                  let index = secretFields.firstIndex(where: { $0.id == row }) else { return }
+            if secretFields[index].field.value.isEmpty, let fields = vault.secret(of: id)?.fields, fields.indices.contains(saved) {
+                secretFields[index].field.value = fields[saved].value
+            }
+            secretFields[index].shows = true
+        }
+    }
+
+    /// The secret fields as Save keeps them: a saved one left blank keeps its value, and one added here needs a name and
+    /// a value.
+    private func keptSecretFields(from saved: [VaultFormField]) -> [VaultFormField]? {
+        let kept = secretFields.compactMap { row -> VaultFormField? in
+            let value = row.field.value
+            if let index = row.saved, saved.indices.contains(index) {
+                guard !value.isEmpty else { return saved[index] }
+                var field = saved[index]
+                field.value = value
+                return field
+            }
+            let name = row.field.label.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty, !value.isEmpty else { return nil }
+            // As Bitwarden's custom fields: the name finds the page's field by its label, id or name.
+            return VaultFormField(id: name, name: name, label: name, value: value)
+        }
+        return kept.isEmpty ? nil : kept
+    }
+
     private func showPreviousPasswords() {
         guard let id = original?.id else { return }
         Task { @MainActor in
@@ -369,16 +460,18 @@ struct VaultItemSheet: View {
     private func save() {
         guard canSave, let sites, let code = oneTimeCode else { return }
         var secret = VaultSecret()
-        if let original, original.hasPassword || original.hasOneTimeCode || original.hasPasskey {
+        if let original {
             // The values left blank are kept, so they are read first; one the keychain will not give
             // back is not overwritten.
-            guard let saved = vault.secret(of: original.id) else {
+            if let saved = vault.secret(of: original.id) {
+                secret = saved
+            } else if original.hasPassword || original.hasOneTimeCode || original.hasPasskey || secretFields.contains(where: { $0.saved != nil }) {
                 failure = L10n.string("Yardlet could not read this sign-in from the keychain.")
                 return
             }
-            secret = saved
         }
         if !password.isEmpty { secret.password = password }
+        secret.fields = keptSecretFields(from: secret.fields ?? [])
         if let code {
             secret.oneTimeCode = code
         } else if removesCode {
@@ -414,6 +507,21 @@ struct VaultItemSheet: View {
         guard original.hasPasskey, !original.sites.isEmpty else { return onDone() }
         // The confirmation closes first; the sites to clean up are a second alert, then the sheet closes.
         Task { @MainActor in deletedPasskeySites = original.sites }
+    }
+}
+
+/// One of a sign-in's other secrets in the item sheet: the saved one at `saved` in `VaultSecret.fields`, or one added here.
+private struct SecretFieldRow: Identifiable {
+    let id = UUID()
+    var saved: Int?
+    var field: VaultFormField
+    var shows = false
+
+    init(saved: Int?, field: VaultFormField) {
+        self.saved = saved
+        self.field = field
+        // A saved value stays in the keychain until the person shows it.
+        self.field.value = ""
     }
 }
 

@@ -2900,6 +2900,9 @@
 "Password" = "비밀번호";
 "Show a saved password" = "보기";
 "show the saved password" = "저장한 비밀번호 보기";
+"Add Secret Field" = "비밀 칸 추가";
+"Field name" = "칸 이름";
+"show a saved secret field" = "저장한 비밀 칸 보기";
 "Two-factor setup key" = "2단계 인증 설정 키";
 "Setup key or otpauth:// address" = "설정 키 또는 otpauth:// 주소";
 "Unchanged" = "바꾸지 않음";

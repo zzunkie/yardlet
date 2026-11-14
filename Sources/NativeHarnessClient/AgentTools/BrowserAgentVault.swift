@@ -188,7 +188,8 @@ enum VaultFillNotice {
 enum VaultPageScripts {
     /// The binding the watch calls with a JSON object of strings whose `kind` says what it saw:
     /// - `signIn`, with `username` and `password`: the person submitted a sign-in. With `made` set instead of
-    ///   `password`, the form held a password the vault made, which Yardlet already has.
+    ///   `password`, the form held a password the vault made, which Yardlet already has. `fields` and `secrets` hold the
+    ///   form's other fields as JSON, the plain ones and the masked ones a sign-in asks for beside its password.
     /// - `typedSecret`: someone typed into a password field (trusted input), told once a document.
     /// - `passwordFocus`, with `page`, and `isNew` set for a new-password field still empty; `passwordBlur`:
     ///   a password field took or lost the focus.
@@ -356,7 +357,9 @@ enum VaultPageScripts {
     /// into when `e` is one of them (design §15). The form's fields marked `new-password`; else, past the
     /// current password (marked so, or named so in its name, id, placeholder or label), the form's other one
     /// or two (a change's new password and its confirmation); else both of a form's two (a sign-up's password
-    /// and confirmation) or the last two of three; else a lone field named new. A sign-in's field has none.
+    /// and confirmation) or the last two of three; else a lone field named new. A sign-in's field has none, and nor do
+    /// password fields with a field to type in between them (`standApart`): those are one sign-in's several secrets,
+    /// such as an organization's ID and password in masked fields before the person's own ID and password.
     /// `madePasswords()` holds the fields that took a password the vault made, until the person types in one.
     static let newPasswordTests = """
         const wasPassword = () => window.__yardletWasPassword || (window.__yardletWasPassword = new WeakSet());
@@ -370,11 +373,20 @@ enum VaultPageScripts {
           || (!autocompleteOf(e).includes('new-password') && /current|old|existing|기존|현재/i.test(fieldWords(e)));
         const passwordFieldsWith = e => passwordFieldsIn(e.form || e.closest('form') || document)
           .filter(f => f === e || (!f.disabled && !f.readOnly && f.getBoundingClientRect().width > 0));
+        // Whether a field to type in (shown or holding a value) stands between the first and the last of the password fields.
+        const standApart = passwords => {
+          if (passwords.length < 2) return false;
+          const inputs = Array.from((passwords[0].form || passwords[0].closest('form') || document).querySelectorAll('input'));
+          const first = inputs.indexOf(passwords[0]), last = inputs.indexOf(passwords[passwords.length - 1]);
+          return inputs.slice(first + 1, Math.max(first + 1, last)).some(f => !isPasswordField(f) && !f.disabled && !f.readOnly
+            && ['text', 'email', 'tel', 'number', ''].includes(f.type) && (f.value || f.getBoundingClientRect().width > 0));
+        };
         const newPasswordFields = e => {
           if (!isPasswordField(e)) return [];
           const fields = passwordFieldsWith(e);
           const marked = fields.filter(f => autocompleteOf(f).includes('new-password'));
           if (marked.length) return marked.includes(e) ? marked : [];
+          if (standApart(fields)) return [];
           const rest = fields.filter(f => !isCurrentPassword(f));
           if (!rest.includes(e)) return [];
           if (rest.length < fields.length) return rest.length <= 2 ? rest : [];
@@ -430,6 +442,23 @@ enum VaultPageScripts {
             last = payload;
             send(message);
           };
+          // A sign-in that asks for several secrets (an organization's ID in a masked field and its password before the
+          // person's own ID and password), told from a change or sign-up form as Chromium's form parser tells them: no
+          // field marked new-password, and the password fields stand apart (`standApart`), or none is named as a change's
+          // and no two hold the same value (a new password and its confirmation). Its password, the one a change replaces,
+          // is the one marked current-password when only one is, else the first after the username, else the last: a
+          // sign-in names its account first. The others are kept beside it as secrets.
+          const changeNames = /current|old|existing|new|confirm|again|repeat|retype|re-?enter|verify|기존|현재|새|신규|확인|재입력|다시/i;
+          const severalSecrets = (fields, passwords) => {
+            if (passwords.length < 2 || passwords.some(f => autocompleteOf(f).includes('new-password'))) return null;
+            if (!standApart(passwords) && (passwords.some(f => changeNames.test(fieldWords(f)))
+                || new Set(passwords.map(f => f.value)).size < passwords.length)) return null;
+            const marked = passwords.filter(f => autocompleteOf(f).includes('current-password'));
+            const afterUser = passwords.find((f, i) => fields.slice(i ? fields.indexOf(passwords[i - 1]) + 1 : 0, fields.indexOf(f))
+              .some(e => textTypes.includes(e.type) && e.value && !isPasswordField(e)));
+            const main = marked.length === 1 ? marked[0] : afterUser || passwords[passwords.length - 1];
+            return { main, others: passwords.filter(f => f !== main) };
+          };
           // What submitting the scope tells: the password field it is about, and the message.
           const reading = scope => {
             const fields = Array.from((scope || document).querySelectorAll('input'));
@@ -437,8 +466,11 @@ enum VaultPageScripts {
             // A field the vault filled counts once the person typed another password into it.
             const own = fields.filter(e => isPasswordField(e) && e.value && typed.has(e)
               && !((window.__yardletVault || []).includes(e) && (window.__yardletVaultSecrets || []).includes(e.value)));
+            // A sign-in's several secrets, the vault's fills among them once the person typed into one.
+            const secrets = !made && own.length
+              ? severalSecrets(fields, fields.filter(e => isPasswordField(e) && e.value && (typed.has(e) || shown(e)))) : null;
             // A change form's new password, not the current one typed above it.
-            const pass = made || own.find(e => newPasswordFields(e).length) || own[0];
+            const pass = made || (secrets && secrets.main) || own.find(e => newPasswordFields(e).length) || own[0];
             if (!pass) return null;
             // A field marked as the username, also one the page hides (a password step's), else the text before the password.
             const user = fields.find(e => (textTypes.includes(e.type) || e.type === 'hidden') && autocompleteOf(e).includes('username') && e.value)
@@ -447,6 +479,9 @@ enum VaultPageScripts {
               : { kind: 'signIn', username: user ? user.value : '', password: pass.value };
             const others = otherFields(pass, user);
             if (others.length) message.fields = JSON.stringify(others);
+            // At most three, each with what tells it on a page.
+            const kept = (secrets ? secrets.others : []).map(describeField).filter(f => f.id || f.name || f.label).slice(0, 3);
+            if (kept.length) message.secrets = JSON.stringify(kept);
             return { pass, message };
           };
           // The sign-in form's other fields, such as an account ID beside the username, as the person typed them or the
@@ -454,6 +489,7 @@ enum VaultPageScripts {
           // password, in the password's form, else in the nearest region holding the password and the username.
           const fieldLabel = e => (Array.from(e.labels || []).map(l => l.textContent).join(' ') || e.getAttribute('aria-label')
             || e.placeholder || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
+          const describeField = e => ({ id: e.id || '', name: e.getAttribute('name') || '', label: fieldLabel(e), value: e.value });
           const otherFields = (pass, user) => {
             let region = pass.form || pass.closest('form');
             for (let area = pass.parentElement; !region && user && user.type !== 'hidden' && area; area = area.parentElement) {
@@ -466,7 +502,7 @@ enum VaultPageScripts {
                 && e.value.length <= 200 && (textTypes.includes(e.type) || e.type === 'number') && !isCodeField(e)
                 && !otherCodeNames.test(codeFieldWords(e)) && !codeCardNames.test(codeFieldWords(e))
                 && !autocompleteOf(e).some(t => /^(cc-|one-time-code|username|email|new-password|current-password)/.test(t)))
-              .slice(0, 3).map(e => ({ id: e.id || '', name: e.getAttribute('name') || '', label: fieldLabel(e), value: e.value }));
+              .slice(0, 3).map(describeField);
           };
           // A first step that asks for the username alone (Chrome's username-first flow): Yardlet keeps it for the
           // password step that follows in the tab.
@@ -661,20 +697,22 @@ enum VaultPageScripts {
     /// The person's fill with the target field as `this`: the code into a code field when the item has
     /// one, else the sign-in into the field's form.
     static let personFillFunction = """
-        function(username, password, code, origin, fields) {
+        function(username, password, code, origin, fields, secrets) {
           \(codeFieldTests)
           const kind = typeof code === 'string' && (looksLikeCodeField(this) || (isCodeField(this) && typeof password !== 'string'))
             ? 'one_time_code' : 'login';
-          return (\(BrowserAgentTools.fillFunction)).call(this, kind, username, password, code, origin, fields);
+          return (\(BrowserAgentTools.fillFunction)).call(this, kind, username, password, code, origin, fields, secrets);
         }
         """
 
-    /// The value the person typed in the page's username field, for "Add to Password Manager…".
+    /// The value the person typed in the page's username field, for "Add to Password Manager…": the field marked so,
+    /// else the text before the last password field (a sign-in may ask for an organization's secrets before the
+    /// person's own ID).
     static let typedUsername = """
         (() => {
           const textTypes = ['text', 'email', 'tel', ''];
           const fields = Array.from(document.querySelectorAll('input'));
-          const pass = fields.find(e => e.type === 'password');
+          const pass = fields.filter(e => e.type === 'password').pop();
           const user = fields.find(e => textTypes.includes(e.type) && (e.autocomplete || '').includes('username') && e.value)
             || (pass ? fields.slice(0, fields.indexOf(pass)).reverse().find(e => textTypes.includes(e.type) && e.value) : null);
           return user ? user.value : '';
@@ -760,6 +798,9 @@ enum VaultPageScripts {
         }
         return .filled
     }
+
+    /// What a fill put in that is secret (`fillFunction`'s kinds): a password, a sign-in's other secret, a code.
+    static let secretKinds: Set<String> = ["password", "secret_field", "one_time_code"]
 
     /// An item's other fields as the fill function takes them.
     static func json(_ fields: [VaultFormField]?) -> JSONValue {
@@ -900,7 +941,7 @@ enum VaultPageScripts {
     @discardableResult
     static func fillForPerson(_ cdp: any BrowserAgentCDP, frame: (id: String, loaderID: String, origin: String),
                               fills: BrowserVaultFills, username: String?, password: String?, code: String?,
-                              fields: [VaultFormField]? = nil, codeOnly: Bool = false,
+                              fields: [VaultFormField]? = nil, secretFields: [VaultFormField]? = nil, codeOnly: Bool = false,
                               timeout: Duration = .seconds(10)) async -> Bool {
         guard let context = try? await vaultWorld(cdp, frame: frame.id, timeout: timeout),
               let target = try? await cdp.send("Runtime.evaluate", [
@@ -909,18 +950,20 @@ enum VaultPageScripts {
               let objectID = target["result"]?["objectId"]?.stringValue,
               (try? await mainFrame(cdp, timeout: timeout))?.loaderID == frame.loaderID else { return false }
         let values: [String?] = codeOnly ? [nil, nil, code] : [username, password, code]
-        let secret = values[1] != nil || values[2] != nil
+        let secretFields = codeOnly ? nil : secretFields
+        let secret = values[1] != nil || values[2] != nil || secretFields != nil
         let record = BrowserAgentVaultFill(loaderID: frame.loaderID, eventMark: cdp.eventLog.count)
         if secret { fills.record(record) }
         let filled = try? await cdp.send("Runtime.callFunctionOn", [
             "functionDeclaration": .string(personFillFunction), "objectId": .string(objectID),
             "arguments": .array((values + [frame.origin]).map { .object(["value": $0.map(JSONValue.string) ?? .null]) }
-                + [.object(["value": codeOnly ? .null : VaultPageScripts.json(fields)])]),
+                + [.object(["value": codeOnly ? .null : VaultPageScripts.json(fields)]),
+                   .object(["value": VaultPageScripts.json(secretFields)])]),
             "returnByValue": .bool(true)
         ], timeout: timeout)
         let kinds = filled?["result"]?["value"]?["kinds"]?.arrayValue?.compactMap(\.stringValue)
         guard secret else { return kinds != nil }
-        if let kinds, !kinds.contains("password"), !kinds.contains("one_time_code") {
+        if let kinds, !kinds.contains(where: VaultPageScripts.secretKinds.contains) {
             fills.withdraw(record)
         } else if let now = try? await mainFrame(cdp, timeout: timeout), now.loaderID != frame.loaderID {
             // The page went on to another document of its own as the fill went in; it may hold the values too.
@@ -1130,7 +1173,8 @@ extension BrowserAgentTools {
             guard let action = target["action"]?.stringValue, let method = target["method"]?.stringValue else { return nil }
             return FormTarget(action: action, method: method)
         }
-        if grant.password != nil || grant.code != nil,
+        let secretValues = ([grant.password, grant.code] + (grant.secretFields ?? []).map(\.value)).compactMap { $0 }
+        if !secretValues.isEmpty,
            let elsewhere = targets.first(where: { !Self.isItemDestination($0.action, of: grant.item) }) {
             let message = "Yardlet did not fill “\(grant.item.name)”: the form sends its fields to "
                 + "\(VaultSite.origin(of: elsewhere.action) ?? "another address"), which is not one of the item's sites over https."
@@ -1140,24 +1184,23 @@ extension BrowserAgentTools {
         // Before the values go in: the page can open a dialog, navigate or submit as they do, and the call that fills
         // may then fail without saying what went in; its address must not carry them either. A fill that put nothing in
         // takes its record back.
-        vaultScrub.add(grant.password)
-        vaultScrub.add(grant.code)
-        let record = grant.password != nil || grant.code != nil
+        secretValues.forEach { vaultScrub.add($0) }
+        let record = !secretValues.isEmpty
             ? BrowserAgentVaultFill(loaderID: frame.loaderID, eventMark: page.cdp.eventLog.count) : nil
         if let record { page.vaultFills.record(record) }
-        if let password = grant.password, password.count >= VaultScrubList.shortest {
-            page.guardFilledValues(VaultScrubList.spellings(of: password))
-        }
+        page.guardFilledValues(([grant.password] + (grant.secretFields ?? []).map(\.value)).compactMap { $0 }
+            .filter { $0.count >= VaultScrubList.shortest }.flatMap(VaultScrubList.spellings(of:)))
         let filled = try await callInVaultWorld(page, objectID, Self.fillFunction, arguments: [
             .string(kind.rawValue),
             grant.username.map(JSONValue.string) ?? .null,
             grant.password.map(JSONValue.string) ?? .null,
             grant.code.map(JSONValue.string) ?? .null,
             .string(frame.origin),
-            kind == .login ? VaultPageScripts.json(grant.item.fields) : .null
+            kind == .login ? VaultPageScripts.json(grant.item.fields) : .null,
+            kind == .login ? VaultPageScripts.json(grant.secretFields) : .null
         ])
         let kinds = filled["kinds"]?.arrayValue?.compactMap(\.stringValue) ?? []
-        if let record, filled["error"] != nil || !(kinds.contains("password") || kinds.contains("one_time_code")) {
+        if let record, filled["error"] != nil || !kinds.contains(where: VaultPageScripts.secretKinds.contains) {
             page.vaultFills.withdraw(record)
         }
         if let failure = filled["error"]?.stringValue {
@@ -1172,9 +1215,10 @@ extension BrowserAgentTools {
         // another is left unsent whatever the agent asked. A field in no form is submitted with Enter only when asked.
         let asked = arguments["submit"]?.boolValue
         var submitted = false
-        let secret = kinds.contains("password") || kinds.contains("one_time_code")
+        let secret = kinds.contains(where: VaultPageScripts.secretKinds.contains)
         var unsent = submission["form"]?.boolValue == true && secret
-            ? Self.submissionRisk(targets, pageOrigin: frame.origin, password: kinds.contains("password")) : nil
+            ? Self.submissionRisk(targets, pageOrigin: frame.origin,
+                                  password: kinds.contains("password") || kinds.contains("secret_field")) : nil
         if asked != false, unsent == nil {
             switch try await callInVaultWorld(page, objectID, Self.submitFunction).stringValue {
             case "submitted":
@@ -1188,13 +1232,10 @@ extension BrowserAgentTools {
                 }
             }
         }
-        let what: String
-        switch (kinds.contains("username"), kinds.contains("password"), kinds.contains("one_time_code")) {
-        case (true, true, _): what = "the username and password"
-        case (false, true, _): what = "the password"
-        case (true, false, _): what = "the username"
-        default: what = "the one-time code"
-        }
+        let named = [("username", "username"), ("password", "password"), ("secret_field", "other secrets")]
+            .filter { kinds.contains($0.0) }.map(\.1)
+        let what = named.isEmpty ? "the one-time code"
+            : "the " + (named.count > 1 ? named.dropLast().joined(separator: ", ") + " and " + named[named.count - 1] : named[0])
         let host = VaultSite.host(of: frame.origin)
         let chosen = Self.chosenNote(grant, host: host)
         if let unsent, asked != false {
@@ -1568,13 +1609,14 @@ extension BrowserAgentTools {
     }
 
     /// Runs in the vault's isolated world with the field as `this`. A password goes only into a
-    /// password field, a username into a text field of the same form, a code into a code field
+    /// password field, a sign-in's other secrets each into the password field of the same id, name or label (§17), a
+    /// username into a text field of the same form, a code into a code field
     /// (design §5.2 step 3), and a password the vault made into a password field and its confirmation (§15);
     /// nothing goes into a document of another origin than the one the values were given for (the page may have
     /// moved on since). The fields that took a secret (a password, a code; not the username) and the secrets
     /// themselves are kept in this world, which the page's scripts cannot reach, for `secretElements`.
     static let fillFunction = """
-        function(kind, username, password, code, origin, fields) {
+        function(kind, username, password, code, origin, fields, secrets) {
           const target = this;
           if (typeof origin === 'string' && location.origin !== origin) return { error: 'moved' };
           const visible = e => { const r = e.getBoundingClientRect(); const s = getComputedStyle(e);
@@ -1592,7 +1634,20 @@ extension BrowserAgentTools {
           if (kind === 'login') {
             const scope = (isInput(target) && target.form) || target.closest('form') || document;
             const inputs = Array.from(scope.querySelectorAll('input')).filter(e => !e.disabled && !e.readOnly && visible(e));
-            const passwordField = isInput(target) && target.type === 'password' ? target : inputs.find(e => e.type === 'password');
+            const same = (a, b) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
+            const labelOf = e => (Array.from(e.labels || []).map(l => l.textContent).join(' ') || e.getAttribute('aria-label')
+              || e.placeholder || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
+            const isField = (e, f) => same(e.id, f.id) || same(e.getAttribute('name'), f.name) || same(labelOf(e), f.label);
+            // The sign-in's other secrets (an organization's ID and password in masked fields), each into the password
+            // field of the same id, name or label; the password goes into one none of them takes.
+            const secretFields = [];
+            for (const f of Array.isArray(secrets) ? secrets : []) {
+              const field = f && typeof f.value === 'string' && f.value
+                && inputs.find(e => e.type === 'password' && !secretFields.some(x => x.field === e) && isField(e, f));
+              if (field) secretFields.push({ field, value: f.value });
+            }
+            const free = e => isInput(e) && e.type === 'password' && !secretFields.some(x => x.field === e);
+            const passwordField = free(target) ? target : inputs.find(free);
             let userField = null;
             if (isInput(target) && target.type !== 'password' && textTypes.includes(target.type)) {
               userField = target;
@@ -1600,16 +1655,14 @@ extension BrowserAgentTools {
               userField = inputs.find(e => textTypes.includes(e.type) && (e.autocomplete || '').split(/\\s+/).includes('username'))
                 || (passwordField ? inputs.slice(0, inputs.indexOf(passwordField)).reverse().find(e => textTypes.includes(e.type)) : null);
             }
-            if (!passwordField && !userField) return { error: 'no sign-in field' };
+            if (!passwordField && !userField && !secretFields.length) return { error: 'no sign-in field' };
             if (typeof password === 'string' && passwordField) { put(passwordField, password); secret.push(passwordField); values.push(password); kinds.push('password'); }
+            for (const x of secretFields) { put(x.field, x.value); secret.push(x.field); values.push(x.value); kinds.push('secret_field'); }
             if (typeof username === 'string' && userField) { put(userField, username); kinds.push('username'); }
             // The item's other fields (an account ID), each into the empty field of the same id, name or label.
-            const same = (a, b) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
-            const labelOf = e => (Array.from(e.labels || []).map(l => l.textContent).join(' ') || e.getAttribute('aria-label')
-              || e.placeholder || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
             for (const f of Array.isArray(fields) ? fields : []) {
               const field = inputs.find(e => e !== userField && (textTypes.includes(e.type) || e.type === 'number') && !e.value
-                && (same(e.id, f.id) || same(e.getAttribute('name'), f.name) || same(labelOf(e), f.label)));
+                && isField(e, f));
               if (field && typeof f.value === 'string') { put(field, f.value); kinds.push('field'); }
             }
             if (!kinds.length) return { error: 'nothing to fill' };

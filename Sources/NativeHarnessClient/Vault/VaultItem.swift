@@ -73,18 +73,14 @@ struct VaultItem: Codable, Identifiable, Equatable, Sendable {
 
     /// The item's fields with these put in, each in place of the saved one of the same field.
     func merging(_ submitted: [VaultFormField]) -> [VaultFormField]? {
-        var merged = fields ?? []
-        for field in submitted where !field.value.isEmpty {
-            merged.removeAll { $0.isSameField(as: field) }
-            merged.append(field)
-        }
-        return merged.isEmpty ? nil : merged
+        (fields ?? []).merging(submitted)
     }
 }
 
 /// A sign-in form's field other than the username and password, as the person filled it (design §17): what tells the
 /// field on a page (its `id`, `name` and label, as Bitwarden's custom fields and 1Password's form details match it)
-/// and its value.
+/// and its value. The item keeps the plain ones (`VaultItem.fields`), the keychain the masked ones beside the password
+/// (`VaultSecret.fields`).
 struct VaultFormField: Codable, Equatable, Hashable, Sendable {
     var id: String
     var name: String
@@ -102,9 +98,28 @@ struct VaultFormField: Codable, Equatable, Hashable, Sendable {
     var title: String { [label, name, id].first { !$0.isEmpty } ?? "" }
 }
 
+extension Array where Element == VaultFormField {
+    /// These fields with `submitted` put in, each in the place of the one of the same field; nil for none.
+    func merging(_ submitted: [VaultFormField]) -> [VaultFormField]? {
+        var merged = self
+        for field in submitted where !field.value.isEmpty {
+            if let index = merged.firstIndex(where: { $0.isSameField(as: field) }) {
+                merged[index] = field
+                merged.removeAll { $0 != field && $0.isSameField(as: field) }
+            } else {
+                merged.append(field)
+            }
+        }
+        return merged.isEmpty ? nil : merged
+    }
+}
+
 /// The secrets of one item, as the keychain keeps them.
 struct VaultSecret: Codable, Equatable, Sendable {
     var password: String?
+    /// A sign-in's other secrets beside its password (design §17), such as an organization's ID and password asked for
+    /// in masked fields before the person's own: what tells each field on a page, and its value. Nil for none.
+    var fields: [VaultFormField]?
     var oneTimeCode: OneTimeCodeSecret?
     var passkey: VaultPasskey?
     /// The item's sites and agent policy as Yardlet last saved them (`VaultCenter.save`). `items.json` is a plain file
@@ -116,9 +131,10 @@ struct VaultSecret: Codable, Equatable, Sendable {
     /// nothing. Nil in items saved before they were kept.
     var previousPasswords: [VaultPreviousPassword]?
 
-    init(password: String? = nil, oneTimeCode: OneTimeCodeSecret? = nil, passkey: VaultPasskey? = nil,
-         previousPasswords: [VaultPreviousPassword]? = nil) {
+    init(password: String? = nil, fields: [VaultFormField]? = nil, oneTimeCode: OneTimeCodeSecret? = nil,
+         passkey: VaultPasskey? = nil, previousPasswords: [VaultPreviousPassword]? = nil) {
         self.password = password
+        self.fields = fields
         self.oneTimeCode = oneTimeCode
         self.passkey = passkey
         self.previousPasswords = previousPasswords

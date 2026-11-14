@@ -418,6 +418,9 @@ final class VaultTests: XCTestCase {
     /// the account, which an agent can name and a refusal lists; a sign-in admits an item whose fields it does not
     /// contradict; the key button's list puts the item filled on a sign-in's earlier step first; and a password sent
     /// with no username (design §15, a reset or change dialog) updates the item Chrome would, the site's others offered.
+    /// A sign-in's masked fields beside its password stay in the keychain secret (a secret saved before them reads as
+    /// before) and fill with the password, an agent's under one confirmation and the person's on another site only after
+    /// Touch ID.
     func testOtherFieldsTellAccountsOfOneUsernameApart() async throws {
         let account = { (value: String) in VaultFormField(id: "account", name: "account", label: "Account ID", value: value) }
         let one = VaultItem(name: "AWS", sites: ["signin.aws"], username: "dev", fields: [account("111122223333")])
@@ -471,6 +474,38 @@ final class VaultTests: XCTestCase {
         try unnamed.save(blank, secret: VaultSecret(password: "blank"))
         XCTAssertEqual(unnamed.update(forUnnamed: "new", origin: page).item?.id, blank.id)
         XCTAssertEqual(unnamed.update(forUnnamed: "new", origin: page, excluding: blank.id).item?.id, used.id)
+
+        // An organization's ID and password in masked fields before the person's own: secrets beside the password.
+        let organization = [VaultFormField(id: "orgId", name: "orgId", label: "Organization ID", value: "org-id-4821"),
+                            VaultFormField(id: "orgPw", name: "orgPw", label: "Organization password", value: "org-pw-9035"),
+                            VaultFormField(id: "blank", name: "", label: "", value: "")]
+        let business = VaultItem(name: "erp.example.test", sites: ["example.test"], username: "ada", policy: .everyTime)
+        var reasons: [String] = []
+        let repository = InMemoryVaultRepository()
+        let secrets = InMemoryVaultSecretStore()
+        let several = VaultCenter(environment: VaultCenter.Environment(
+            secrets: secrets, repository: repository, hmac: MacVault.hmac, isAllowedBuild: true,
+            confirm: { reasons.append($0); return true }, defaults: .vaultTests()))
+        try several.save(business, secret: VaultSecret(password: "user-pw-7712", fields: organization))
+        XCTAssertEqual(several.secret(of: business.id)?.fields?.map(\.id), ["orgId", "orgPw"], "an empty field was kept")
+        let file = String(decoding: try JSONEncoder().encode(repository.loadItems()), as: UTF8.self)
+        XCTAssertFalse(file.contains("org-") || file.contains("Organization"), file)
+        XCTAssertNil(try JSONDecoder().decode(VaultSecret.self, from: Data(#"{"password":"before"}"#.utf8)).fields)
+        // A changed one keeps its place among them.
+        XCTAssertEqual(organization.merging([VaultFormField(id: "", name: "ORGID", label: "", value: "org-id-1")])?.map(\.value),
+                       ["org-id-1", "org-pw-9035", ""])
+        guard case .success(let filled) = await several.authorize(
+            VaultFillRequest(sessionID: UUID(), itemName: nil, kind: .login, origin: "https://erp.example.test")) else {
+            return XCTFail("a sign-in with several secrets did not fill")
+        }
+        XCTAssertEqual(filled.password, "user-pw-7712")
+        XCTAssertEqual(filled.secretFields?.map(\.value), ["org-id-4821", "org-pw-9035"])
+        XCTAssertEqual(reasons.count, 1, "the fill asked once for each field")
+        let elsewhere = await several.valuesForPerson(business, origin: "https://other.test")
+        XCTAssertEqual(elsewhere?.secretFields?.count, 2)
+        XCTAssertEqual(reasons.count, 2, "another site's page took the secrets without Touch ID")
+        let code = await several.valuesForPerson(business, origin: "https://erp.example.test", codeOnly: true)
+        XCTAssertNil(code?.secretFields)
     }
 
     /// Addresses and cards (design §18): a card is told by its number's checksum, named by its network and last four
