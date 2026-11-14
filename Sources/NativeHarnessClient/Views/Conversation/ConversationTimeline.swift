@@ -175,7 +175,7 @@ struct ConversationTimeline: View {
                 )
                 .environment(\.pauseTranscriptFollowing, {
                     readingTracker.cancelRestoration()
-                    scrollState.isFollowing = false
+                    rowListScroller.pauseFollowing()
                 })
                 .overlay(alignment: .top) { if turns.isEmpty { emptyState } }
                 .overlay(alignment: .bottomTrailing) {

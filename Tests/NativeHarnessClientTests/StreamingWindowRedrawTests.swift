@@ -321,11 +321,14 @@ final class StreamingWindowRedrawTests: XCTestCase {
         let streamTime = clock.now - streamStart
         let publications = model.publicationCounts.transcripts - published
         print("[redraw] \(fragments) answer fragments in \(streamTime): \(publications) publications")
-        let answers = (model.transcriptBySessionID[shown.id] ?? []).compactMap { entry -> String? in
-            if case let .assistant(text, _) = entry.content { return text }
-            return nil
-        }
-        XCTAssertTrue(answers.contains(text), "The whole answer arrived")
+        // The whole answer is published once the last interval comes due, which can be after the stream
+        // ended: the test holds the main actor while it settles, so it awaits the publication here.
+        await window.host.settle(until: {
+            (model.transcriptBySessionID[shown.id] ?? []).contains { entry in
+                if case let .assistant(answer, _) = entry.content { return answer == text }
+                return false
+            }
+        })
         XCTAssertLessThanOrEqual(streaming[.mainWindow], 2, "Streaming redrew the window")
         // Ten publications a second for the fragments, and the finished message's frames. The bound tells
         // the cadence from a publication per fragment only while it is under one per fragment.

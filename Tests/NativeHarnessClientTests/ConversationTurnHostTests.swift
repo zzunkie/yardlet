@@ -138,14 +138,61 @@ final class ConversationTurnHostTests: XCTestCase {
 
     func testAConversationShownAgainFindsItsTurnsKept() {
         let (feed, host, _) = makeHost(finishedTurns: 9)
+        // The turns in the window: all the stack draws, or the row list's near its end.
+        func texts() -> Set<String> { Set(TranscriptProseRenderingTests.proseTextViews(in: host.hosting).map(\.string)) }
+        let drawn = texts()
+        XCTAssertFalse(drawn.isEmpty)
         feed.isShown = false
         host.settle(passes: 4)
         feed.isShown = true
         host.settle(passes: 6)
         XCTAssertEqual(ViewBodyCensus[.conversationTurnHosting], 0, "No turn view was made again")
         XCTAssertEqual(ViewBodyCensus[.conversationTurn], 0, "No kept turn was drawn again")
+        XCTAssertTrue(drawn.isSubset(of: texts()), "The kept turns are in the window again")
+    }
+
+    // MARK: - Turns out of view
+
+    /// With VoiceOver or Switch Control on, every turn the conversation draws is in the window, and so
+    /// in its accessibility tree, wherever the view is, as when the conversation was drawn whole; the row
+    /// list otherwise keeps only the turns near its view.
+    func testAnAssistiveAppFindsEveryTurnInTheWindow() {
+        let isOn = ConversationAssistiveReading.isOn
+        ConversationAssistiveReading.isOn = { true }
+        defer { ConversationAssistiveReading.isOn = isOn }
+        let (_, host, _) = makeHost(finishedTurns: 9)
         let texts = TranscriptProseRenderingTests.proseTextViews(in: host.hosting)
-        XCTAssertTrue(texts.contains { $0.string.contains("Done in turn 3") }, "The kept turns are in the window again")
+        for turn in 0..<9 {
+            XCTAssertTrue(texts.contains { $0.string.hasPrefix(LongConversationFixture.request(turn)) }, "turn \(turn)")
+        }
+    }
+
+    /// The turn that holds the window's first responder keeps its views in the window when the
+    /// conversation scrolls far from it, so what it holds (a field being typed in, with its marked text)
+    /// stays as it was.
+    func testATurnHoldingTheFirstResponderStaysInTheWindowOutOfView() throws {
+        let (_, host, _) = makeHost(finishedTurns: 9)
+        let scroll = try XCTUnwrap(BlankFrameProbe.conversationScrollView(in: host.hosting))
+        // To the conversation's top or its end, whichever way its document counts.
+        func go(toTop top: Bool) {
+            guard let document = scroll.documentView else { return }
+            let end = max(0, document.frame.height - scroll.contentView.bounds.height)
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: top == document.isFlipped ? 0 : end))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            host.settle(passes: 3)
+        }
+        go(toTop: true)
+        var found: TranscriptProseTextView?
+        host.settle {
+            found = TranscriptProseRenderingTests.proseTextViews(in: host.hosting)
+                .first { $0.string.hasPrefix(LongConversationFixture.request(0)) }
+            return found != nil
+        }
+        let first = try XCTUnwrap(found)
+        XCTAssertTrue(host.window.makeFirstResponder(first))
+        go(toTop: false)
+        XCTAssertNotNil(first.window, "The turn is still in the window")
+        XCTAssertTrue(host.window.firstResponder === first, "It is still the first responder")
     }
 
     @Observable
@@ -190,9 +237,8 @@ final class ConversationTurnHostTests: XCTestCase {
             size: NSSize(width: 900, height: 700), appearance: .light)
         defer { host.close() }
         host.settle(passes: 20)
-        func texts() -> Int {
-            TranscriptProseRenderingTests.proseTextViews(in: host.hosting).filter { $0.string.contains("Done in turn") }.count
-        }
+        // The turns in the window: all the stack draws, or the row list's near its end.
+        func texts() -> Int { TranscriptProseRenderingTests.proseTextViews(in: host.hosting).count }
         let drawn = texts()
         XCTAssertGreaterThan(drawn, 0)
 
