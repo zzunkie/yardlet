@@ -349,7 +349,9 @@ final class RemoteHostModelTests: XCTestCase {
             to: output.appending(path: "terminal-exit-local-remote-dark.png"))
         exitRender.close()
         try await waitUntil { local.hasEnded && remote.hasEnded }
-        // Repeated ordinary host-side closes must release server slots even without backpressure.
+        // Repeated ordinary host-side closes must release server slots even without backpressure. A tab no panel shows
+        // ends after its shell exits, in a turn of its own, and until then the workspace still hands it out: each new
+        // remote waits for the last to have ended.
         for _ in 0..<5 {
             remote = newRemote(); remote.start()
             try await waitUntil { remote.isRunning || remote.hasEnded }
@@ -357,14 +359,14 @@ final class RemoteHostModelTests: XCTestCase {
             let closing = try XCTUnwrap(bridge.terminals.sessions.values.first?.session)
             closing.end()
             remote.send("x")
-            try await waitUntil { !remote.isRunning && bridge.terminals.sessions.isEmpty }
+            try await waitUntil { remote.hasEnded && bridge.terminals.sessions.isEmpty }
             XCTAssertEqual((remote.hosting as? RemoteTerminalHosting)?.stream.closeReason, "closed")
         }
         remote = newRemote(); remote.start()
         try await waitUntil { remote.isRunning && bridge.terminals.sessions.count == 1 }
         let revokedLocal = try XCTUnwrap(host.taskWorkspaces.loadedState(for: task.id)?.terminals.first)
         try await stack.server.setPermission(.terminal, allowed: false, for: try XCTUnwrap(client.host.deviceID))
-        try await waitUntil { !remote.isRunning && revokedLocal.hasEnded && bridge.terminals.sessions.isEmpty }
+        try await waitUntil { remote.hasEnded && revokedLocal.hasEnded && bridge.terminals.sessions.isEmpty }
         XCTAssertTrue(host.taskWorkspaces.loadedState(for: task.id)?.terminals.isEmpty == true)
         // Re-enabling requires an explicit new open.
         try await stack.server.setPermission(.terminal, allowed: true, for: try XCTUnwrap(client.host.deviceID))
