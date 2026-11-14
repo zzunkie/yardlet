@@ -386,12 +386,15 @@ final class RemoteTabBridge {
         catch { return .failure(RemoteError(.unavailable)) }
     }
 
+    /// Asks the tab to close as the panel's close button does (§15.30). A close shows and drives nothing of the page, so
+    /// a `file:` page outside the task's files, which a device sees only as `file://`, closes too; what is over the page
+    /// (a dialog, one of Chromium's windows) still waits on the Mac.
     func close(taskID: String, tabID: String, permit: RemoteTabPermit) async -> RemoteError? {
         guard permit.isValid else { return RemoteError(.notAllowed) }
         let tab: BrowserTab
         do { tab = try watchedTab(taskID: taskID, tabID: tabID).get() }
         catch { return error }
-        if let refusal = await stepRefusal(tab, permit, PageScope(taskID: taskID)) { return refusal }
+        if let refusal = blocked(tab) { return refusal }
         guard let (_, client) = resolve(taskID), permit.isValid else { return RemoteError(.notAllowed) }
         tab.notePersonInput(remote: true)
         client.requestClose(tab)

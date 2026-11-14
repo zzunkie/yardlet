@@ -2223,8 +2223,9 @@ to another task's tabs.
 Both requests require a current browser watch for the same task. They share the bounded, ordered input queue
 and revocable watch permit with `tabInput`, as `answerTabPermission` (§15.25) does, which also requires the watch to
 be of that very tab. Ending the watch, changing tasks, removing the device or disconnecting
-invalidates queued actions. The host rechecks the task, target tab, page boundary and blocking dialogs immediately
-before acting. Audits record the request type, task, device and outcome, never the address or page contents; a
+invalidates queued actions. The host rechecks the task, target tab and blocking dialogs immediately before acting,
+and the page boundary too before an address goes to a tab or a permission answer is given. A close shows and drives nothing of the page, so a tab on a `file:` page
+outside the task's files (listed as `file://`) closes as any other. Audits record the request type, task, device and outcome, never the address or page contents; a
 refusal is recorded at most once a minute per device, request, task and result.
 
 The desktop client provides `openHostBrowserLink` for window and terminal link handlers to route `localhost`,

@@ -2118,7 +2118,8 @@ final class RemoteBridgeTests: XCTestCase {
     /// A file outside the task's files shows to a remote device only as the page the task's agent opened in that tab
     /// (`browser_navigate`, `BrowserTab.noteAgentOpened`): listed by its address and title, pictured and driven there.
     /// The remote's own opening of it, the page moving to another file (and a frame showing one), and the tab after the
-    /// agent opened another address stay refused; a tab opened again after Yardlet restarted knows of no such page.
+    /// agent opened another address stay refused, though the tab closes from there; a tab opened again after Yardlet
+    /// restarted knows of no such page.
     func testTheFileTheAgentOpenedInATabShowsToARemoteDeviceAndNoOtherFile() async throws {
         let base = FileManager.default.temporaryDirectory.appending(path: "remote-agent-file-\(UUID().uuidString)")
         let work = base.appending(path: "work"), scratch = base.appending(path: "scratch")
@@ -2212,6 +2213,10 @@ final class RemoteBridgeTests: XCTestCase {
         show(other)
         let afterSite = await pictured()
         XCTAssertEqual(afterSite, .notAllowed)
+        // Listed only as `file://`, it still closes from there: a close shows and drives nothing of the page.
+        let closed = await bridge.closeTab(taskID: taskID, tabID: tabID, permit: RemoteTabPermit())
+        XCTAssertNil(closed)
+        XCTAssertTrue(connection.sent.contains(.requestClose(tab: tab.id)))
 
         // A tab opened again after Yardlet restarted does not know who opened its file: it stays the host's.
         client.rememberTabs(BrowserRememberedTabs(addresses: [queue], keys: [UUID()], titles: ["Posting queue"], favicons: [nil],
