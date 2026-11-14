@@ -92,10 +92,12 @@ final class ClaudeChromeIntegrationTests: XCTestCase {
         XCTAssertNil(ClaudeContextLimitPreference.tokens(in: context.defaults))
     }
 
-    /// The task's title is the name Claude Code's other sessions list and message it by. It goes in the
-    /// environment on one line and never as `--name`, which would also write it into the conversation
-    /// as a title the person gave. A task without a title keeps the CLI's own name.
-    func testTheTaskTitleIsTheSessionNameInTheEnvironmentOnly() async throws {
+    /// The task's title is the name Claude Code's other sessions list and message it by. At launch it
+    /// goes in the environment on one line and never as `--name`, which would also write it into the
+    /// conversation as a title the person gave. A task without a title keeps the CLI's own name. A
+    /// rename the person makes while the CLI runs reaches it at once, through the route the app ships,
+    /// as the person's own: `rename_session` from the host, for this session only.
+    func testTheTaskTitleNamesTheSessionAtLaunchAndThePersonsRenameReachesTheRunningCLI() async throws {
         let variable = "CLAUDE_CODE_SESSION_NAME"
         XCTAssertNil(ClaudeProcessTransport.environment(base: [:], overrides: [:])[variable])
         let cases: [(title: String?, launched: String?)] = [("Fix the\nlogin  bug ", "Fix the login bug"), (" \n", nil), (nil, nil)]
@@ -114,6 +116,19 @@ final class ClaudeChromeIntegrationTests: XCTestCase {
             XCTAssertFalse(ClaudeProcessTransport.arguments(for: configuration).contains { $0 == "-n" || $0.hasPrefix("--name") })
             await adapter.close(handle)
         }
+
+        let transport = FakeClaudeTransport()
+        let routed = YHPProviderCompatibilityAdapter(
+            adapter: ClaudeAdapter(executableURL: URL(filePath: "/tmp/fake-claude"), transportFactory: { _ in transport },
+                                   asksForNextMessageSuggestions: { false }, defaultContextLimit: { nil }),
+            manifest: HarnessProtocolCompatibilityManifest.claude())
+        let handle = try await routed.createSession(
+            CreateHarnessSessionRequest(localSessionID: UUID(), workspaceURL: workspace, initialPrompt: nil))
+        try await routed.renameRunningSession(handle, to: "Fix the\nlogin bug")
+        let rename = await transport.requestedValues.last?["request"]
+        XCTAssertEqual(rename, .object(["subtype": .string("rename_session"), "title": .string("Fix the login bug"),
+                                        "source": .string("host"), "session_id": .string(handle.providerSessionID)]))
+        await routed.close(handle)
     }
 
     func testTheChromeOptionIsOneOffOrOnSelectorThatStartsOff() async throws {

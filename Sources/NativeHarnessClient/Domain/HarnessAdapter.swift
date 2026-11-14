@@ -137,6 +137,12 @@ protocol HarnessSessionLifecycleProviding: Actor {
     func renameProviderSession(_ session: HarnessSessionHandle, to title: String) async throws
 }
 
+/// A provider whose running session takes the name the person gave its task without a turn (Claude
+/// Code's `rename_session`). It goes after Yardlet's own rename and never holds it up or undoes it.
+protocol HarnessRunningSessionRenaming: Actor {
+    func renameRunningSession(_ session: HarnessSessionHandle, to title: String) async throws
+}
+
 /// Adapters whose runtime names a task from its recent conversation with a side call of its own,
 /// attached or not (`RecentConversationTitle`).
 protocol HarnessTaskTitleSuggesting: Actor {

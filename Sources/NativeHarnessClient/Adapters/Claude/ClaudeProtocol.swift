@@ -622,6 +622,20 @@ enum ClaudeProtocol {
         "ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN", "ENETUNREACH", "EHOSTUNREACH",
     ]
 
+    /// A rename from the application hosting the CLI: `source` `host` makes it the person's own, as an
+    /// IDE's, and the CLI refuses it for any session but its current one.
+    static func renameSession(id: String, title: String, sessionID: String) -> JSONValue {
+        controlRequest(
+            id: id,
+            request: .object([
+                "subtype": .string("rename_session"),
+                "title": .string(title),
+                "source": .string("host"),
+                "session_id": .string(sessionID)
+            ])
+        )
+    }
+
     static func setModel(id: String, model: String) -> JSONValue {
         controlRequest(
             id: id,

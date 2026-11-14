@@ -410,7 +410,8 @@ non-interactive way to run their small model without the person's tools, and the
   AGENTS.md and its built-in tools there, as on its first-request title thread; no setting leaves them out. Neither
   call is written to the task's history, and no turn starts in the task.
 - **Result:** applied through Rename, so the title becomes the person's (`manual`), an attached Codex thread gets the
-  name with `thread/name/set`, and the previous name stays searchable. The row shows a spinner while the call runs.
+  name with `thread/name/set`, a running Claude Code session with `rename_session` (below), and the previous name stays
+  searchable. The row shows a spinner while the call runs.
   A failure, or a task with no conversation yet, leaves the name as it was and says why; a name the person gives the
   task meanwhile is kept.
 
@@ -419,10 +420,17 @@ start and resume passes the task's title of the moment, on one line, as `CLAUDE_
 of that task's process, the variable Claude Code names its own background sessions with (`ClaudeLaunchOption.sessionName`).
 Unlike `--name`, it writes nothing into the conversation: no `custom-title`, which the Claude app, `/resume` and the
 title refresh above read as a name the person gave, and no `agent-name`. A name the person gave the session in the
-Claude app stays in its file as it was. The CLI reads the variable only when it starts and has no request that changes
-this name alone, so a task renamed while its CLI runs, or titled by Claude Code in its first turn, takes the new name at
-its next start; until then the other sessions see the title it started with. A task without a title keeps the CLI's
-own name, made from its folder.
+Claude app stays in its file as it was. A task without a title keeps the CLI's own name, made from its folder.
+
+- **The person's rename:** Rename, **Rename from Recent Conversation** and a rename from the phone also reach a running
+  CLI, after Yardlet's own rename (`HarnessRunningSessionRenaming`), as the stream-json `rename_session` request with
+  `source` `host`, the way an IDE hosting Claude Code renames a session, and the session's ID, so the CLI refuses it for
+  any other conversation. No turn starts. The other sessions see the new name at once, and the CLI keeps it as the
+  person's own (`custom-title`), which the Claude app and `/resume` show and the title refresh reads back unchanged. A
+  CLI that refuses or does not answer leaves Yardlet's rename as it is.
+- **Automatic titles and detached tasks:** the CLI has no request that changes the name alone, so a title Claude Code
+  or Yardlet makes, and a rename while the task has no CLI, reach the other sessions at the task's next start and are
+  not written into the conversation; until then the other sessions see the title it started with.
 
 ## Archive and unarchive
 
@@ -443,7 +451,8 @@ harness, opens one's conversation read-only, and restores them with **Unarchive*
   and scope, then restores the index. There is no `thread/resume` or `turn/start`. If it fails, the task stays archived
   and can be tried again. Tasks archived while not attached, or without a record like older rows, leave the native
   thread alone. Native-side archive, unarchive, delete and rename go only to adapters that implement
-  `HarnessSessionLifecycleProviding` (Codex and its YHP wrapper).
+  `HarnessSessionLifecycleProviding` (Codex and its YHP wrapper). The Claude Code CLI takes no archive or delete
+  request; only the person's rename reaches its running session ("Provider titles").
 - **Reading an archived task:** choosing a row shows the task's conversation in the window's task area, as the Codex
   app previews an archived chat and the Claude app opens an archived session, with the archived note and **Unarchive**
   in the composer's place (`ArchivedTaskConversation`). It is read as opening a detached task reads it, with the stored

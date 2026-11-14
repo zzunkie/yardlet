@@ -363,11 +363,14 @@ final class TaskArchiveTests: XCTestCase {
     // MARK: - Lifecycle capability
 
     /// The provider side follows the adapter's `HarnessSessionLifecycleProviding`, not the
-    /// harness name: the same harness reaches the provider with it and stays local without it.
+    /// harness name: the same harness reaches the provider with it and stays local without it. A
+    /// running session that only takes the person's name (`HarnessRunningSessionRenaming`, Claude
+    /// Code's) gets the rename after Yardlet's own, and refusing it changes nothing in Yardlet.
     func testAttachedTaskReachesTheProviderLifecycleOnlyWhenItsAdapterProvidesOne() async throws {
-        for providesLifecycle in [true, false] {
-            let adapter: any HarnessAdapter = providesLifecycle
-                ? LifecycleStubAdapter(kind: .openCode) : SessionStubAdapter(kind: .openCode)
+        for (providesLifecycle, renamesRunningSession) in [(true, false), (false, false), (false, true)] {
+            let adapter: any HarnessAdapter = if providesLifecycle { LifecycleStubAdapter(kind: .openCode) }
+                else if renamesRunningSession { RefusingRenameStubAdapter(kind: .openCode) }
+                else { SessionStubAdapter(kind: .openCode) }
             let model = AppModel(
                 store: SessionStore(repository: InMemorySessionRepository()),
                 runtimeSelections: RuntimeSelectionStore(
@@ -407,8 +410,45 @@ final class TaskArchiveTests: XCTestCase {
                 "archive \(kept.id)",
                 "unarchive stub-\(kept.id)"
             ] : [])
+            let refusedRenames = await (adapter as? RefusingRenameStubAdapter)?.renames ?? []
+            XCTAssertEqual(refusedRenames, renamesRunningSession ? ["Renamed"] : [])
             await model.shutdown()
         }
+    }
+}
+
+/// The same session, whose running provider is sent the person's rename and refuses it.
+private actor RefusingRenameStubAdapter: HarnessAdapter, HarnessRunningSessionRenaming {
+    nonisolated let kind: HarnessKind
+    private let session: SessionStubAdapter
+    private(set) var renames: [String] = []
+
+    init(kind: HarnessKind) {
+        self.kind = kind
+        session = SessionStubAdapter(kind: kind)
+    }
+
+    func probeRuntime() async throws -> HarnessRuntimeDescriptor { try await session.probeRuntime() }
+    func createSession(_ request: CreateHarnessSessionRequest) async throws -> HarnessSessionHandle {
+        try await session.createSession(request)
+    }
+    func resumeSession(providerSessionID: String, localSessionID: UUID,
+                       workspaceURL: URL) async throws -> HarnessSessionHandle {
+        try await session.resumeSession(providerSessionID: providerSessionID,
+            localSessionID: localSessionID, workspaceURL: workspaceURL)
+    }
+    func send(_ prompt: String, to handle: HarnessSessionHandle) async throws {}
+    func interrupt(_ handle: HarnessSessionHandle) async throws {}
+    func respond(to permissionRequestID: String, decision: PermissionDecision,
+                 in handle: HarnessSessionHandle) async throws {}
+    func events(for handle: HarnessSessionHandle) async -> AsyncStream<HarnessEventEnvelope> {
+        await session.events(for: handle)
+    }
+    func close(_ handle: HarnessSessionHandle) async { await session.close(handle) }
+
+    func renameRunningSession(_ handle: HarnessSessionHandle, to title: String) async throws {
+        renames.append(title)
+        throw HarnessAdapterError.invalidProviderEvent("rename_session is not supported")
     }
 }
 

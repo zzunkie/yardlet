@@ -3123,6 +3123,12 @@ final class AppModel {
             }
             guard store.sessions.contains(where: { $0.id == session.id }) else { return }
             try await store.renameSession(id: session.id, title: trimmed, titleOrigin: .manual)
+            // A running Claude Code session takes the person's name as well, without a turn. Refusing it
+            // leaves this rename as it is; the session is named by it at its next start.
+            if !isVisualFixture, let renaming = adaptersBySessionID[session.id] as? any HarnessRunningSessionRenaming,
+               let handle = handlesBySessionID[session.id] {
+                try? await renaming.renameRunningSession(handle, to: trimmed)
+            }
         } catch {
             guard store.sessions.contains(where: { $0.id == session.id }) else { return }
             bootstrapError = error.localizedDescription

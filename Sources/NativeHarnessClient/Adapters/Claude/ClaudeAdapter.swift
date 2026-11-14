@@ -1568,6 +1568,20 @@ actor ClaudeAdapter:
     }
 }
 
+extension ClaudeAdapter: HarnessRunningSessionRenaming {
+    /// The name the person gave the task, sent as an IDE hosting Claude Code sends one. No turn starts;
+    /// the CLI keeps it as the person's own name (`custom-title`), which the Claude app and `/resume`
+    /// show, and registers it for its other sessions (`ListAgents`) at once.
+    func renameRunningSession(_ session: HarnessSessionHandle, to title: String) async throws {
+        guard let name = ClaudeLaunchOption.launchSessionName(title) else { return }
+        let transport = try transport(for: session)
+        let requestID = takeRequestID(prefix: "rename-session")
+        _ = try await transport.request(
+            ClaudeProtocol.renameSession(id: requestID, title: name, sessionID: session.providerSessionID),
+            id: requestID)
+    }
+}
+
 extension ClaudeAdapter: HarnessTaskSightReceiving {
     /// Pauses a CLI that asks for suggestions while its task is off screen, as Claude Code's terminal
     /// suggests only while it has focus, and resumes it when the task is back. A CLI with the pause not

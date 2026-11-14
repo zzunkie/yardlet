@@ -723,7 +723,8 @@ actor YHPProviderCompatibilityAdapter:
     HarnessSessionBranching,
     HarnessMCPServerStatusReading,
     HarnessInterruptedTurnContinuing,
-    HarnessIdleCompacting
+    HarnessIdleCompacting,
+    HarnessRunningSessionRenaming
 {
     nonisolated let kind: HarnessKind
     nonisolated let protocolManifest: HarnessAdapterManifest
@@ -758,6 +759,9 @@ actor YHPProviderCompatibilityAdapter:
     /// What the prompt cache holds and the provider's compaction settings have no place in YHP; they
     /// are read from the wrapped adapter, and the compaction itself is sent as any message.
     private let idleCompacting: (any HarnessIdleCompacting)?
+    /// YHP has no request that renames a running session, so the person's rename goes to the
+    /// wrapped adapter directly.
+    private let runningSessionRenaming: (any HarnessRunningSessionRenaming)?
 
     init(
         adapter: any HarnessAdapter,
@@ -780,6 +784,7 @@ actor YHPProviderCompatibilityAdapter:
         self.mcpStatusReading = adapter as? any HarnessMCPServerStatusReading
         self.interruptedTurnContinuing = adapter as? any HarnessInterruptedTurnContinuing
         self.idleCompacting = adapter as? any HarnessIdleCompacting
+        self.runningSessionRenaming = adapter as? any HarnessRunningSessionRenaming
         self.core = YHPCompatibilityAdapter(
             adapter: adapter,
             manifest: manifest,
@@ -813,6 +818,10 @@ actor YHPProviderCompatibilityAdapter:
 
     func idleCompactionFacts(for localSessionID: UUID) async -> IdleCompactionFacts {
         await idleCompacting?.idleCompactionFacts(for: localSessionID) ?? IdleCompactionFacts()
+    }
+
+    func renameRunningSession(_ session: HarnessSessionHandle, to title: String) async throws {
+        try await runningSessionRenaming?.renameRunningSession(session, to: title)
     }
 
     func stopSubtask(activityID: String, in session: HarnessSessionHandle) async throws {
