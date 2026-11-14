@@ -23,6 +23,11 @@ the package to install when one is missing), downloads `yardlet-host-linux-ARCH.
 latest release, checks the package against it, and puts the program in place of one installed before it in one
 rename. `YARDLET_HOST_DOWNLOAD` names another place to download from.
 
+No release carries the Linux host yet, so the address above does not answer until one does. Until then the packages
+and the installer are the artifacts of a `linux-host.yml` run (`yardlet-host-linux-x86_64` and
+`yardlet-host-linux-aarch64`), and `YARDLET_HOST_DOWNLOAD=file:///path/to/that/folder sh yardlet-host-install.sh`
+installs from the folder they were unpacked in; `yardlet host update` waits for a release too.
+
 The package (`scripts/linux/package-host.sh`) is `yardlet` with the Swift runtime linked in (`--static-swift-stdlib`),
 built on Ubuntu 22.04 so it runs on that glibc or a later one, with its resources, its version (`YardletVersion`) and the
 relay a public build carries (`YardletRelayURL`) beside it. It needs glibc, libcurl and SQLite from the system. The
@@ -229,8 +234,8 @@ swift build --product yardlet --force-resolved-versions
 
 ## Distributions
 
-What the checks above found, for the x86_64 package built on Ubuntu 22.04 (the aarch64 one is checked in Ubuntu 22.04
-alone):
+What the checks above found, for the x86_64 package built on Ubuntu 22.04. On aarch64 the host is built, tested and
+checked in Ubuntu 22.04 and its package is built, but no distribution runs that package yet:
 
 | Distribution | glibc | libcurl | The host | The relay (ws) | The relay (wss) |
 | --- | --- | --- | --- | --- | --- |
