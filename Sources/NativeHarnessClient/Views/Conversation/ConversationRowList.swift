@@ -80,6 +80,12 @@ final class ConversationRowListScroller {
         controller?.followLatest()
     }
 
+    /// Stops following the latest output at once, before the change that asked for it (more of a long
+    /// answer opened) reaches the list: the view stays where it is as the change grows the conversation.
+    func pauseFollowing() {
+        controller?.pauseFollowing()
+    }
+
     /// Goes to the place the reading tracker asks for (`TranscriptReadingTracker.request`).
     func restore(_ request: TranscriptRestoreRequest?) {
         controller?.restore(request)
@@ -486,6 +492,11 @@ final class ConversationRowListController: NSObject {
         }
     }
 
+    func pauseFollowing() {
+        pendingPlace = nil
+        setFollowing(false)
+    }
+
     /// Goes to the end and follows it: a new turn, "Latest response".
     func followLatest() {
         afterUpdate { [weak self] in
@@ -573,7 +584,20 @@ final class ConversationRowListController: NSObject {
         if holdsForGesture { arrivedUnderGesture += max(0, height - endBefore) }
         scroll(toY: geometry.offset(for: anchor, viewportHeight: clip.bounds.height, scales: scales, fallback: before))
         tile()
+        noteDistance()
         goToPendingPlace()
+    }
+
+    /// How near the end the view is after the rows changed under it, which a view kept at its place does
+    /// not scroll to report: "Latest response" shows once what grew below takes the end out of view, as
+    /// the stack's scroll geometry reports it. Only the reader's own moves change whether it follows.
+    private func noteDistance() {
+        let visible = scrollView.contentView.bounds
+        guard visible.width >= 80, visible.height >= 60 else { return }
+        var state = followState
+        state.observe(distance: geometry.distanceFromEnd(offset: visible.minY, viewportHeight: visible.height)
+            - arrivedUnderGesture, userDriven: false)
+        writeState(state)
     }
 
     /// Puts the views of the rows near the viewport in their places, and takes out the views of the rows
