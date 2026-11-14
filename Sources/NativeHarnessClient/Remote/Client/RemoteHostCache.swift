@@ -211,10 +211,11 @@ final class RemoteHostCache {
         if let list { put(try? encoder.encode(list), at: folder.appending(path: listName)) }
     }
 
-    /// Removes a host's folder, after whatever was asked of the disk before, and the folder of all hosts
-    /// with its last host.
+    /// Removes a host's folder, after whatever was asked of the disk before (the window's unsaved Files edits included,
+    /// handed to `StateFileWriter`), and the folder of all hosts with its last host.
     nonisolated static func remove(_ folder: URL) {
         disk.async {
+            StateFileWriter.shared.flush()
             try? FileManager.default.removeItem(at: folder)
             removeIfEmpty(folder.deletingLastPathComponent())
         }

@@ -146,6 +146,11 @@ final class RemoteHostDirectory {
         hosts = store.all()
     }
 
+    /// Hands what the open windows keep on this Mac to the state file writer now, as Yardlet quits.
+    func persistNow() {
+        for model in models.values { model.files.savePanels() }
+    }
+
     /// Pairs with the host a link names (§12), or pairs again with one saved before. The host as saved.
     func pair(link text: String) async throws -> RemoteSavedHost {
         guard let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),

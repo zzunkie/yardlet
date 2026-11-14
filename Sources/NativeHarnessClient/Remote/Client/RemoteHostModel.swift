@@ -157,7 +157,7 @@ final class RemoteHostModel: Identifiable {
         self.store = store
         self.cache = cache
         self.discovery = discovery
-        files = RemoteHostFiles(hostID: host.id)
+        files = RemoteHostFiles(hostID: host.id, hostFolder: cache?.folder)
         connector = RemoteHostConnection(target: host.target ?? RemoteHostTarget(hostKey: Data(), direct: []),
                                          clientKey: clientKey, hello: hello, timing: timing)
         schedules.model = self
@@ -219,6 +219,7 @@ final class RemoteHostModel: Identifiable {
         failPending()
         clearAttentionTasks()
         connection = .stopped
+        files.savePanels()
         files.removeAll()
     }
 

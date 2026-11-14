@@ -15,13 +15,7 @@ struct RemoteFilesPane: View {
         self.taskID = taskID
         self.workspaceURL = workspaceURL
         self.onClose = onClose
-        let state = WorkspaceFilesState(preferences: model.files.panels[taskID] ?? .init(),
-                                        provider: RemoteWorkspaceFiles(model: model, taskID: taskID))
-        state.onChange = { [weak model, weak state] in
-            guard let model, let state else { return }
-            model.files.panels[taskID] = state.preferences
-        }
-        _state = State(initialValue: state)
+        _state = State(initialValue: model.filesPanel(for: taskID))
     }
 
     var body: some View {
@@ -43,5 +37,19 @@ struct RemoteFilesPane: View {
             await state.loadIndex(in: workspaceURL ?? context)
             hasLoaded = true
         }
+    }
+}
+
+extension RemoteHostModel {
+    /// The task's Files panel as it was left, with the local panel's reader, editor and drafts, whose changes the window
+    /// keeps (`RemoteHostFiles.keep`).
+    func filesPanel(for taskID: String) -> WorkspaceFilesState {
+        let state = WorkspaceFilesState(preferences: files.panel(for: taskID),
+                                        provider: RemoteWorkspaceFiles(model: self, taskID: taskID))
+        state.onChange = { [weak files = self.files, weak state] in
+            guard let files, let state else { return }
+            files.keep(state.preferences, for: taskID)
+        }
+        return state
     }
 }

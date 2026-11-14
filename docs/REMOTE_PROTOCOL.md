@@ -1968,8 +1968,10 @@ client's filesystem, and a save writes nothing on the client: the copy stays a c
 those copies; text preserves its host-relative path. Small source files keep the same syntax colors and layout, and
 what the local panel edits is editable: a whole text file of at most 2 MiB that decodes, named by a path relative to
 the task's folder. The remote panel offers no client Finder or local-app actions for a host path. Copies are removed
-when the host window closes, as in §18; the panel's open file, reading place and unsaved edits stay with the window,
-in memory, per task.
+when the host window closes, as in §18; the panel's open file and reading place stay with the window, in memory, per
+task. A task's panel that holds unsaved edits is also kept on the client, in the host's folder (§18), until each edit
+is saved or discarded, so closing the window or quitting loses none: reopened, the panel shows the edits over the
+host's file and, as the local panel does, says when the host's file changed since the edit began.
 
 A snapshot can also carry `workspaceFileWrites: true`, only beside `workspaceFiles`. The host then answers
 `writeFile`, the panel's Save:
@@ -2792,9 +2794,11 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   drafts (`drafts.json`, kept a moment after typing stops and when the window closes). Reopening the window shows
   them at once, before it connects; the snapshot and subscriptions replace them once it does. The cache is written a
   moment after changes stop (at least every 10 s while they go on) and when the window closes, a conversation only
-  when it changed. Nothing listens and nothing runs while no host window is open. Removing a host sends
-  `forgetDevice` (§15.6) when the host can be reached and deletes all three; a cache folder whose host is no longer
-  saved is removed when Yardlet starts.
+  when it changed. The same folder keeps the Files panel of each task with unsaved edits (`files.json`: each edit,
+  the text and digest it began from, the file open and where it was read; written a moment after typing stops, when
+  the window closes and when Yardlet quits, and removed with the last edit, §15.27). Nothing listens and nothing runs
+  while no host window is open. Removing a host sends `forgetDevice` (§15.6) when the host can be reached and deletes
+  all three; a cache folder whose host is no longer saved is removed when Yardlet starts.
 - **Notifications, Dock badge and menu bar:** while a host's window is open and connected, its tasks that need the person
   count in this Mac's Dock badge alongside this Mac's own tasks and appear in this Mac's menu bar item under Running
   (while waiting) and Unread, labeled with the host's name; choosing one brings that host's window forward with the task

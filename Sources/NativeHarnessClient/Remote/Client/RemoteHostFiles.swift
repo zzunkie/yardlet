@@ -21,17 +21,63 @@ final class RemoteHostFiles {
     private(set) var outputs: [String: [RemoteOutput]] = [:]
     /// The file being read now, by its name, for the window's line.
     private(set) var reading: String?
-    /// Each task's Files panel as it was left: the file open, where it was read and edits not saved yet, kept in memory
-    /// only, so they outlast the panel while this window shows another task or tab.
-    @ObservationIgnored var panels: [String: WorkspaceFilePreferences] = [:]
+    /// Each task's Files panel as it was left: the file open, where it was read and edits not saved yet, so they outlast
+    /// the panel while this window shows another task or tab. A task's panel that holds edits not saved yet is also kept
+    /// in the host's folder (`files.json`, 0600), as a task's panel on this Mac keeps its own, so closing the window
+    /// loses none; the folder goes with the host. Read from there when a panel is first asked for.
+    @ObservationIgnored private var panels: [String: WorkspaceFilePreferences]?
     @ObservationIgnored weak var model: RemoteHostModel?
     @ObservationIgnored private let folder: URL
+    /// Where panels with unsaved edits are kept; nil keeps them in memory only (tests).
+    @ObservationIgnored private let panelsFile: URL?
+    @ObservationIgnored private var panelsChanged = false
+    @ObservationIgnored private var pendingSave: Task<Void, Never>?
     /// A read that waited this many times for the host's budget gives up.
     @ObservationIgnored static let rateLimitedRetries = 30
 
-    init(hostID: String, temporaryFolder: URL = FileManager.default.temporaryDirectory) {
+    /// - Parameter hostFolder: the host's own folder on this Mac (`RemoteHostCache`), where edits not saved yet are kept.
+    init(hostID: String, temporaryFolder: URL = FileManager.default.temporaryDirectory, hostFolder: URL? = nil) {
         folder = temporaryFolder.appending(path: "Yardlet remote files", directoryHint: .isDirectory)
             .appending(path: hostID, directoryHint: .isDirectory)
+        panelsFile = hostFolder?.appending(path: "files.json")
+    }
+
+    /// The task's Files panel as it was left, or a new one.
+    func panel(for taskID: String) -> WorkspaceFilePreferences {
+        loadedPanels()[taskID] ?? .init()
+    }
+
+    /// The task's panel changed: kept, and saved a moment later when it holds edits not saved yet or held them.
+    func keep(_ panel: WorkspaceFilePreferences, for taskID: String) {
+        let isKept = loadedPanels()[taskID]?.drafts != nil || panel.drafts != nil
+        panels?[taskID] = panel
+        guard isKept, panelsFile != nil else { return }
+        panelsChanged = true
+        pendingSave?.cancel()
+        pendingSave = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
+            self?.savePanels()
+        }
+    }
+
+    /// Hands the panels with edits not saved yet to the state file writer now, when they changed since.
+    func savePanels() {
+        pendingSave?.cancel()
+        pendingSave = nil
+        guard panelsChanged, let file = panelsFile else { return }
+        panelsChanged = false
+        let kept = (panels ?? [:]).filter { $0.value.drafts != nil }
+        StateFile.save(file, isPrivate: true) { kept.isEmpty ? nil : try JSONEncoder().encode(kept) }
+    }
+
+    private func loadedPanels() -> [String: WorkspaceFilePreferences] {
+        if let panels { return panels }
+        let read = panelsFile.flatMap { file in
+            try? StateFile.read(file) { try JSONDecoder().decode([String: WorkspaceFilePreferences].self, from: $0) }
+        }
+        panels = read ?? [:]
+        return panels ?? [:]
     }
 
     /// Reads the task's outputs again.

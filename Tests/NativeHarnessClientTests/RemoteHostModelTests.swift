@@ -409,8 +409,9 @@ final class RemoteHostModelTests: XCTestCase {
         let ticket = await stack.server.openPairing()
         let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
             name: "Mac Studio", hosts: ["127.0.0.1:\(stack.port)"]).url)
+        let caches = base.appending(path: "caches")
         let directory = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
-            hello: RemoteHandshakeHello(name: "Client", platform: "macos", appVersion: "test"))
+            hello: RemoteHandshakeHello(name: "Client", platform: "macos", appVersion: "test"), cacheRoot: caches)
         let paired = try await directory.pair(link: link.absoluteString)
         let client = try XCTUnwrap(directory.model(for: paired.id))
         defer { directory.close(paired.id) }
@@ -418,7 +419,7 @@ final class RemoteHostModelTests: XCTestCase {
         XCTAssertTrue(client.offersWorkspaceFiles)
         XCTAssertTrue(client.offersWorkspaceFileWrites)
         let deviceID = try XCTUnwrap(client.host.deviceID)
-        let remote = WorkspaceFilesState(provider: RemoteWorkspaceFiles(model: client, taskID: session.id.uuidString))
+        var remote = client.filesPanel(for: session.id.uuidString)
         let clientWorkspace = URL(filePath: "/remote-host/Workspace")
         let local = WorkspaceFilesState()
         await remote.loadIndex(in: clientWorkspace)
@@ -541,6 +542,43 @@ final class RemoteHostModelTests: XCTestCase {
         } catch {
             XCTAssertEqual(error.localizedDescription, L10n.string("Update Yardlet on the host to use this panel."))
         }
+
+        // The edit not saved outlasts the window, in the host's own folder on this Mac and readable only by the person.
+        // The window opened again shows it over the host's file, and says so once that file changed, as the local panel
+        // does; no other task's panel shows it.
+        directory.close(paired.id)
+        StateFileWriter.shared.flush()
+        let hostFolder = try XCTUnwrap(RemoteHostCache.folder(in: caches, hostID: paired.id))
+        let kept = hostFolder.appending(path: "files.json")
+        let keptAttributes = try manager.attributesOfItem(atPath: kept.path(percentEncoded: false))
+        XCTAssertEqual((keptAttributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+        let reopened = try XCTUnwrap(directory.model(for: paired.id))
+        try await waitUntil { reopened.hasSnapshot }
+        XCTAssertNil(reopened.files.panel(for: UUID().uuidString).drafts)
+        remote = reopened.filesPanel(for: session.id.uuidString)
+        await remote.loadIndex(in: clientWorkspace)
+        remote.restore(in: clientWorkspace)
+        try await waitUntil { !remote.isLoading && remote.document != nil }
+        XCTAssertEqual(remote.document?.text, "after the permission went\n")
+        XCTAssertTrue(remote.isDirty)
+        XCTAssertNil(remote.saveError)
+        try render("restored")
+        try Data("changed on the host again\n".utf8).write(to: file)
+        remote.open(.init(relativePath: "Greeting.swift"), in: clientWorkspace, refresh: true)
+        try await waitUntil { !remote.isLoading }
+        XCTAssertEqual(remote.document?.text, "after the permission went\n")
+        XCTAssertEqual(remote.saveError, WorkspaceFileError.changedOnDisk.localizedDescription)
+        // Discarded, the edit is kept no more; removing the host removes its folder.
+        remote.discard(in: clientWorkspace)
+        reopened.files.savePanels()
+        StateFileWriter.shared.flush()
+        XCTAssertFalse(manager.fileExists(atPath: kept.path(percentEncoded: false)))
+        try await waitUntil { !remote.isLoading }
+        remote.edit("kept until the host goes\n")
+        XCTAssertTrue(remote.isDirty)
+        await directory.forget(paired.id)
+        RemoteHostCache.disk.sync {}
+        XCTAssertFalse(manager.fileExists(atPath: hostFolder.path(percentEncoded: false)))
         await host.shutdown()
     }
 
