@@ -128,7 +128,13 @@ final class ConversationTurnWindowRenderingTests: XCTestCase {
             host.settle(passes: 2)
         }
         await host.settle { !self.listed(host).contains(L10n.string("Load more history")) }
-        await host.settle { self.drawnRequests(host) == [1] }
+        // The turn before is drawn at the conversation's top, which the row list draws once it is in view.
+        await host.settle {
+            guard let scroll = self.conversationScrollView(host.hosting) else { return false }
+            scroll.contentView.scroll(to: .zero)
+            scroll.reflectScrolledClipView(scroll.contentView)
+            return self.drawnRequests(host) == [1]
+        }
         let gaps = gaps(host)
         XCTAssertGreaterThan(gaps.count, 20)
         XCTAssertEqual(gaps.filter { $0 == ConversationLayout.turnSpacing }.count, 1, "only between the two turns")

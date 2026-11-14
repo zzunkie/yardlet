@@ -13,11 +13,7 @@ arguments=("$@")
 # The classes that draw conversations, and of the prose's rendering tests the one that does: the rest
 # draw a message alone, the same with either renderer.
 suites='\.(ConversationBlankFrame|ConversationFind|ConversationSelection|TranscriptReading|TranscriptAutoFollow|ConversationTopLoading|ConversationSendJump|ConversationSwitchFrame|ConversationTurnWindowRendering|ConversationTurnHost|ConversationReopenGap|CodexTimelineReading|CodexTimelineNavigation|ConversationAnchorMigration|StreamingWindowRedraw|ConversationFollowUpPlacement|TaskWorkspaceRestoration|ConversationScrollOverCodeBlock)Tests/|\.TranscriptProseRenderingTests/testGoingToAMatchInATextOrATableBringsItToTheMiddle$'
-pending=(
-  ConversationTurnHostTests/testAConversationShownAgainFindsItsTurnsKept
-  ConversationTurnHostTests/testAConversationShownElsewhereLeavesTheKeptViewsTheirTurns
-  ConversationTurnWindowRenderingTests/testALongRunningTurnIsDrawnInPartsThatReadAsOneTurn
-)
+pending=()
 selection=()
 verbose=()
 while (( $# )); do

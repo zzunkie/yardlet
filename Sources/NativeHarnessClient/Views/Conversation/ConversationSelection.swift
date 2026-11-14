@@ -75,6 +75,8 @@ enum ConversationSelection {
 
     /// The selection's pieces, while there is one.
     private(set) static var parts: [Part] = []
+    /// The pieces of the selection a press is making, until the button comes up.
+    private static var making: [Part] = []
     private static var anchor: Anchor?
     private static var clickMonitor: Any?
     private static var keyObservers: [NSObjectProtocol] = []
@@ -90,6 +92,15 @@ enum ConversationSelection {
     /// link that macOS 15 does not have, and an app linking it does not start there.
     static let logHandle = OSLog(subsystem: Bundle.main.bundleIdentifier ?? "com.zzunkie.yardlet",
                                  category: "conversation-selection")
+
+    /// The views the selection holds, while there is one or a press is making one: its pieces and the
+    /// one it started in, which a drag goes on from. A conversation that draws only the rows near its
+    /// view keeps the rows that hold them (`ConversationRowListController`).
+    static var heldViews: [NSView] {
+        let pieces = making.isEmpty ? parts : making
+        guard !pieces.isEmpty else { return [] }
+        return pieces.compactMap(\.view) + [anchor?.view].compactMap { $0 }
+    }
 
     /// Whether `view` holds part of the selection, whose copy is the selection's.
     static func spans(_ view: NSView) -> Bool {
@@ -173,6 +184,7 @@ enum ConversationSelection {
         func show(focus: (piece: Int, range: NSRange)) {
             guard let anchorPiece = pieces.firstIndex(where: { $0.view === start.view }) else { return }
             shown = select(anchor: (anchorPiece, start.range), focus: focus, in: pieces, replacing: shown)
+            making = shown
         }
         show(focus: press)
         var lastDrag: NSEvent?
@@ -197,6 +209,7 @@ enum ConversationSelection {
             show(focus: focus(at: document.convert(drag.locationInWindow, from: nil), in: pieces, document: document,
                               by: start.granularity))
         }
+        making = []
         parts = shown
         let place = origin == nil ? "beside the words" : "in a text"
         guard !parts.isEmpty else {

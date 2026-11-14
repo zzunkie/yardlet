@@ -41,9 +41,9 @@ struct ConversationTurnHost: NSViewRepresentable, Equatable {
     /// another conversation view showing the same turn makes its own, also while a task's views the
     /// window keeps out of it (`TaskSurfaceHost`) hold the kept one.
     func makeNSView(context: Context) -> NSView {
-        let hosting = renderState?.hosting(for: turn.id) ?? ConversationTurnHosting(turnID: turn.id)
-        context.coordinator.hosting = hosting
         let view = ConversationPressSurface()
+        let hosting = renderState?.hosting(for: turn.id, holder: view) ?? ConversationTurnHosting(turnID: turn.id)
+        context.coordinator.hosting = hosting
         let content = hosting.controller.view
 #if DEBUG
         PerfMemoryCensus.track(content, .conversationTurnView)
@@ -69,6 +69,7 @@ struct ConversationTurnHost: NSViewRepresentable, Equatable {
 
     static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
         coordinator.hosting?.onResize = {}
+        if coordinator.hosting?.holder === view { coordinator.hosting?.holder = nil }
         // The turn view is gone: its hosting is free for the next view of the turn.
         if let content = coordinator.hosting?.controller.view, content.superview === view {
             content.removeFromSuperview()
@@ -89,6 +90,10 @@ final class ConversationTurnHosting {
     private var reportedHeight: CGFloat?
     /// The turn view grew or shrank on its own, or with a new turn.
     var onResize: () -> Void = {}
+    /// The view that draws the turn with this hosting now: a turn view of the stack, or a row list, which
+    /// keeps a row's hosting while the row is out of the window. Another view of the conversation makes
+    /// its own while it is held.
+    weak var holder: AnyObject?
 
     init(turnID: String) {
         self.turnID = turnID
@@ -354,13 +359,16 @@ final class ConversationRenderState {
 
     init() {}
 
-    /// The turn's hosting, kept unless another turn view holds it now.
-    func hosting(for turnID: String) -> ConversationTurnHosting {
+    /// The turn's hosting for `holder` (`ConversationTurnHosting.holder`), kept unless another view
+    /// holds it now.
+    func hosting(for turnID: String, holder: AnyObject) -> ConversationTurnHosting {
         Self.touch(self)
-        if let hosting = hostings[turnID], hosting.controller.view.superview == nil {
+        if let hosting = hostings[turnID], hosting.holder == nil || hosting.holder === holder {
+            hosting.holder = holder
             return hosting
         }
         let hosting = ConversationTurnHosting(turnID: turnID)
+        hosting.holder = holder
         if hostings[turnID] == nil { hostings[turnID] = hosting }
         return hosting
     }
@@ -374,7 +382,7 @@ final class ConversationRenderState {
     }
 
     private func releaseHostings() {
-        hostings = hostings.filter { $0.value.controller.view.superview != nil }
+        hostings = hostings.filter { $0.value.holder != nil }
     }
 
     private static func touch(_ state: ConversationRenderState) {
