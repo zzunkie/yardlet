@@ -79,7 +79,9 @@ final class HarnessModelCatalogStore {
         self.fileURL = fileURL
         self.locations = locations
         self.environment = environment
-        guard let fileURL, let data = try? Data(contentsOf: fileURL),
+        guard let fileURL else { return }
+        StateFileWriter.shared.flush()
+        guard let data = try? Data(contentsOf: fileURL),
               let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data), snapshot.version == 1 else { return }
         claude = snapshot.claude
         codex = snapshot.codex
@@ -227,18 +229,18 @@ final class HarnessModelCatalogStore {
         return lists.keys.sorted().first.flatMap { lists[$0] } ?? []
     }
 
+    /// Encoded and written on `StateFileWriter`'s queue: a task's runtime reports its models as it starts, and the
+    /// main thread must not wait for the disk. A list that cannot be kept is read again from the runtime next time.
     private func save() {
         guard let fileURL else { return }
         let snapshot = Snapshot(claude: claude, codex: codex, codexThreads: codexThreads.isEmpty ? nil : codexThreads,
                                 antigravity: antigravity.isEmpty ? nil : antigravity,
                                 antigravityModes: antigravityModes.isEmpty ? nil : antigravityModes,
                                 claudeContextWindows: claudeContextWindows.isEmpty ? nil : claudeContextWindows)
-        do {
+        StateFileWriter.shared.write(fileURL) {
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             try JSONEncoder().encode(snapshot).write(to: fileURL, options: .atomic)
-        } catch {
-            // A list that cannot be kept is read again from the runtime next time.
         }
     }
 }

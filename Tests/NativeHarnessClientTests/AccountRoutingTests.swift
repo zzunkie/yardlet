@@ -54,6 +54,18 @@ import XCTest
         XCTAssertEqual(assignment.freesUpAt, now.addingTimeInterval(3 * 3600))
         XCTAssertEqual(assignment.usedFraction, 0.95, "The reason names the window that is nearly spent")
 
+        // The reason outlives the app, and an agent starts its task without the main thread waiting for the disk.
+        let root = FileManager.default.temporaryDirectory.appending(path: "AccountRoutingTests-\(UUID().uuidString)")
+        roots.append(root)
+        let file = root.appending(path: AccountAssignmentLog.fileName)
+        let log = AccountAssignmentLog(fileURL: file), task = UUID()
+        let disk = DispatchSemaphore(value: 0)
+        StateFileWriter.shared.write(root.appending(path: "busy")) { _ = disk.wait(timeout: .now() + 10) }
+        log.record(assignment, for: task)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path), "The line is written on the writer's queue")
+        disk.signal()
+        XCTAssertEqual(AccountAssignmentLog(fileURL: file).assignment(for: task), assignment)
+
         let usedUp = choice("used-up", windows: [session(used: 0), weekly(used: 1, resetsIn: 1)])
         let usedUpLater = choice("used-up-later", windows: [weekly(used: 1, resetsIn: 3)])
         XCTAssertEqual(AccountRouting.pick([candidate(usedUp), candidate(usedUpLater), candidate(spentLong)],

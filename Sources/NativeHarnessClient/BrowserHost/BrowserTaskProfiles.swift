@@ -64,6 +64,7 @@ final class BrowserTaskProfiles {
     init(root: URL, defaults: UserDefaults = .yardlet) {
         self.root = root
         self.defaults = defaults
+        StateFileWriter.shared.flush()
         saved = (try? Data(contentsOf: root.appending(path: Self.savedFile)))
             .flatMap { try? JSONDecoder().decode(Saved.self, from: $0) } ?? Saved()
     }
@@ -266,9 +267,10 @@ final class BrowserTaskProfiles {
         try? output.write(to: file, options: .atomic)
     }
 
+    /// Encoded and written on `StateFileWriter`'s queue: a child task's first tab saves, and an agent opens tabs
+    /// while the main thread must not wait for the disk.
     private func save() {
-        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        guard let data = try? JSONEncoder().encode(saved) else { return }
-        try? data.write(to: root.appending(path: Self.savedFile), options: .atomic)
+        let saved = saved, file = root.appending(path: Self.savedFile)
+        StateFileWriter.shared.write(file) { try StateFile.write(JSONEncoder().encode(saved), to: file) }
     }
 }

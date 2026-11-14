@@ -82,8 +82,14 @@ final class ComposerModelVisibilityTests: XCTestCase {
         let account = ProviderConnection(id: "work", name: "work@example.test", harness: .claudeCode,
                                          providerID: nil, homePath: root.path, credentialSelector: nil)
         let store = HarnessModelCatalogStore(fileURL: file, locations: locations(root))
+        // A write that holds the writer stands for a disk that takes a second to sync a file.
+        let disk = DispatchSemaphore(value: 0)
+        StateFileWriter.shared.write(root.appending(path: "busy")) { _ = disk.wait(timeout: .now() + 10) }
         store.recordClaude(ModelVisibilityFixtures.claudeModels, for: nil)
         store.recordCodex([ModelVisibilityFixtures.codexModel("gpt-test", efforts: ["low", "high"], isDefault: true)], for: nil)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path),
+                       "A task's runtime reports its models without the main thread waiting for the disk")
+        disk.signal()
         let reopened = HarnessModelCatalogStore(fileURL: file, locations: locations(root))
         XCTAssertEqual(reopened.claudeModels(for: nil), ModelVisibilityFixtures.claudeModels)
         XCTAssertEqual(reopened.claudeModels(for: account), ModelVisibilityFixtures.claudeModels, "Another account's list stands in")

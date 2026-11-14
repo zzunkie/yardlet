@@ -30,6 +30,9 @@ final class BrowserTaskProfilesTests: XCTestCase {
         let profiles = BrowserTaskProfiles(root: folder, defaults: defaults)
         // Said here rather than left to the default, which another domain in the preferences search list could answer.
         profiles.storage = .perTask
+        // A write that holds the writer stands for a disk that takes a second to sync a file.
+        let disk = DispatchSemaphore(value: 0)
+        StateFileWriter.shared.write(folder.appending(path: "busy")) { _ = disk.wait(timeout: .now() + 10) }
         XCTAssertNotNil(profiles.shareEarlierProfiles(setAside: folder.appending(path: "Trash/Aside")) { _ in
             XCTFail("no earlier profile to empty")
             return []
@@ -46,6 +49,9 @@ final class BrowserTaskProfilesTests: XCTestCase {
 
         // Before its agent signs in itself, a task takes a profile of its own, once, which starts from the default one.
         XCTAssertTrue(profiles.takeOwnProfile(for: signer))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appending(path: "TaskProfiles.json").path),
+                       "an agent's tab opens without the main thread waiting for the disk: the file is written on the writer's queue")
+        disk.signal()
         XCTAssertFalse(profiles.takeOwnProfile(for: signer))
         XCTAssertEqual(profiles.profile(for: signer), BrowserTabProfile(key: signer.uuidString, seedFrom: nil))
         // Chromium opens a profile on disk only in a direct child of its root cache.
@@ -66,6 +72,7 @@ final class BrowserTaskProfilesTests: XCTestCase {
         XCTAssertNotEqual(staleKey, stale.uuidString)
         XCTAssertEqual(profiles.profile(for: stale), BrowserTabProfile(key: staleKey, seedFrom: nil))
 
+        // Opened again, the profiles read the file once the saves handed over before are written.
         let reread = BrowserTaskProfiles(root: folder, defaults: defaults)
         reread.parentOf = profiles.parentOf
         for task in [signer, child, plain, stale] {

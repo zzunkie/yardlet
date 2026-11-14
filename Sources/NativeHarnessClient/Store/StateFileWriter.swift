@@ -1,7 +1,8 @@
 import Foundation
 
-/// Writes Yardlet's small state files (composer drafts, split views, remembered account readings, the
-/// browser's address history) and the preferences a store sets on every change (the follow-up queues)
+/// Writes Yardlet's small state files (composer drafts, split views, remembered account readings and
+/// assignments, the runtimes' model lists, the browser's address history and which task uses which
+/// profile) and the preferences a store sets on every change (the follow-up queues)
 /// off the main thread. A store hands over a file's next contents as a write that encodes and saves a
 /// snapshot it took, and returns at once: an atomic write syncs the file to disk, which takes a second or
 /// more while the disk is busy, and setting a preference can wait as long for cfprefsd to write the whole

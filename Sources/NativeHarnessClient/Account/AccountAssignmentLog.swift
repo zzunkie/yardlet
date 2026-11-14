@@ -6,7 +6,8 @@ import Observation
 /// itself is the task's own connection; this
 /// keeps only the reason line's facts, for the latest `capacity` tasks, in one small file
 /// (`~/.yardlet/account-assignments.json`; per-task records stay out of the preferences). A deleted
-/// task takes its line along.
+/// task takes its line along. The file is encoded and written on `StateFileWriter`'s queue: a line is
+/// recorded as an agent starts a task, and the main thread must not wait for the disk.
 @MainActor @Observable
 final class AccountAssignmentLog {
     static let capacity = 500
@@ -18,7 +19,9 @@ final class AccountAssignmentLog {
     /// Nil keeps the lines in memory only.
     init(fileURL: URL? = nil) {
         self.fileURL = fileURL
-        guard let fileURL, let data = try? Data(contentsOf: fileURL),
+        guard let fileURL else { return }
+        StateFileWriter.shared.flush()
+        guard let data = try? Data(contentsOf: fileURL),
               let saved = try? Self.decoder.decode([String: AccountAssignment].self, from: data) else { return }
         assignments = Dictionary(uniqueKeysWithValues: saved.compactMap { key, value in
             UUID(uuidString: key).map { ($0, value) }
@@ -45,18 +48,13 @@ final class AccountAssignmentLog {
     private func save() {
         guard let fileURL else { return }
         let values = Dictionary(uniqueKeysWithValues: assignments.map { ($0.key.uuidString, $0.value) })
-        guard let data = try? Self.encoder.encode(values) else { return }
-        try? FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(),
-                                                 withIntermediateDirectories: true)
-        try? data.write(to: fileURL, options: .atomic)
+        StateFileWriter.shared.write(fileURL) {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = [.sortedKeys]
+            try StateFile.write(encoder.encode(values), to: fileURL)
+        }
     }
-
-    private static let encoder: JSONEncoder = {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.sortedKeys]
-        return encoder
-    }()
 
     private static let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
