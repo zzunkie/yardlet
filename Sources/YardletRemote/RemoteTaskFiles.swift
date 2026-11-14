@@ -328,9 +328,11 @@ public enum RemoteFileReader {
         var info = stat()
         guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { return .failure(refused()) }
         if let home {
-            var opened = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+            var opened = [UInt8](repeating: 0, count: Int(MAXPATHLEN))
             let found = opened.withUnsafeMutableBytes { fcntl(descriptor, F_GETPATH, $0.baseAddress!) }
-            guard found != -1, !isWithheld(String(cString: opened), home: home) else { return .failure(refused()) }
+            guard found != -1, !isWithheld(String(decoding: opened.prefix { $0 != 0 }, as: UTF8.self), home: home) else {
+                return .failure(refused())
+            }
         }
         let size = Int(info.st_size)
         guard size <= RemoteProtocol.maxReadFileBytes else { return .failure(RemoteError(.tooLarge, "A file is at most 100 MiB")) }

@@ -767,9 +767,8 @@ public actor RemoteFixtureBridge: RemoteBridge {
     /// The files the crash task's last answer names beyond its outputs: its timeline, in a folder beside its own.
     private func named(of taskID: String, in folder: URL) -> RemoteNamedFiles {
         guard taskID == ID.history else { return RemoteNamedFiles() }
-        let home = FileManager.default.homeDirectoryForCurrentUser.path(percentEncoded: false)
         return RemoteNamedFiles([Self.crashTimeline].compactMap {
-            RemoteNamedFiles.path($0, folder: folder.path(percentEncoded: false), home: home)
+            RemoteNamedFiles.path($0, folder: folder.path(percentEncoded: false), home: NSHomeDirectory())
         })
     }
 
