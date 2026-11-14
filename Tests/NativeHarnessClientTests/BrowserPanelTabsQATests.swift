@@ -690,6 +690,32 @@ final class BrowserPanelTabsQATests: XCTestCase {
             XCTAssertFalse(window.accessibilityElements().flatMap { [$0.label, $0.value] }.contains(notice))
             try draw(window, "remote-agent-file-page", appearance)
 
+            // A page the task's conversation names outside its folders (the report its answer links): it shows here as
+            // one of the task's files, opened from the host's strip or from this Mac's address field alike.
+            let reports = FileManager.default.temporaryDirectory.appending(path: "yardlet-named-page-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: reports, withIntermediateDirectories: true)
+            addTeardownBlock { try? FileManager.default.removeItem(at: reports) }
+            let reportPath = try XCTUnwrap(RemoteFileReader.realPath(reports.path(percentEncoded: false))) + "/report.html"
+            try Data("<h1>Weekly report</h1>".utf8).write(to: URL(filePath: reportPath))
+            let reportAddress = URL(filePath: reportPath).absoluteString
+            fixture.model.transcripts[task.id] = [
+                TranscriptEntry(content: .user(text: "Write the weekly report")),
+                TranscriptEntry(content: .assistant(text: "The report is in [report.html](\(reportPath)).", isStreaming: false))]
+            let report = try client.newTab(forSession: task.id, url: reportAddress, viewport: .offscreenDefault, select: false)
+            standIn.picture = { width, height in Self.queuePicture(size: NSSize(width: width, height: height), title: "Weekly report") }
+            standIn.load(report.id, reportAddress, title: "Weekly report")
+            try await waitUntilAsync { remote.browser.tabs(for: task.id.uuidString).contains { $0.url == reportAddress } }
+            try await settle(window) { strip(in: window).contains { $0.label == "Weekly report" } }
+            XCTAssertTrue(press("Weekly report", in: window, among: strip(in: window)))
+            try await waitUntilAsync { remote.browser.watchedTab?.url == reportAddress && remote.browser.frame != nil }
+            try await settle(window) { false }
+            XCTAssertFalse(window.accessibilityElements().flatMap { [$0.label, $0.value] }.contains(notice))
+            try draw(window, "remote-named-file-page", appearance)
+            let open = client.tabs(forSession: task.id).count
+            remote.browser.openAddress(reportAddress, inNewTab: true)
+            try await waitUntilAsync { client.tabs(forSession: task.id).count == open + 1 }
+            XCTAssertNil(remote.browser.refusal)
+
             // Back on the task with saved tabs, the panel's button opens its front tab on the host and shows it.
             remote.select(.task(legacy.id.uuidString))
             try await settle(window) { remote.browser.taskID == legacy.id.uuidString }
@@ -782,7 +808,7 @@ final class BrowserPanelTabsQATests: XCTestCase {
     }
 
     /// A page the agent wrote for the person, as Chromium pictures it: a heading and a few rows.
-    private static func queuePicture(size: NSSize, scale: CGFloat = 2) -> Data? {
+    private static func queuePicture(size: NSSize, scale: CGFloat = 2, title: String = "Posting queue") -> Data? {
         let width = Int(size.width * scale), height = Int(size.height * scale)
         guard width > 0, height > 0, let context = CGContext(
             data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
@@ -798,7 +824,7 @@ final class BrowserPanelTabsQATests: XCTestCase {
             NSAttributedString(string: string, attributes: [.font: NSFont.systemFont(ofSize: size, weight: weight),
                                                             .foregroundColor: NSColor.black]).draw(at: point)
         }
-        text("Posting queue", NSPoint(x: 32, y: 32), size: 24, weight: .semibold)
+        text(title, NSPoint(x: 32, y: 32), size: 24, weight: .semibold)
         for (index, row) in ["Fri 12:00  682 carousel", "Fri 21:00  087 reel", "Sat 12:00  087 carousel"].enumerated() {
             let y = 88 + CGFloat(index) * 40
             NSColor(white: 0.93, alpha: 1).setFill()

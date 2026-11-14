@@ -1302,9 +1302,10 @@ final class RemoteBridgeTests: XCTestCase {
     // MARK: - Files (§15.22)
 
     /// What a tool reported making opens from another device, wherever the provider keeps it. The proof is the tool's
-    /// own result in the provider's log: a path a message names, another tool's `media`, a result for another
-    /// conversation's folder, a failed call and a log no subagent record leads to open nothing.
-    func testAToolsPictureOpensAndAPathOnlyNamedDoesNot() async throws {
+    /// own result in the provider's log: a path a message names is no output (it opens as a file the conversation
+    /// names), and another tool's `media`, a result for another conversation's folder, a failed call and a log no
+    /// subagent record leads to open nothing.
+    func testAToolsPictureIsAnOutputAndAPathOnlyNamedIsNot() async throws {
         let made = FileManager.default.temporaryDirectory.appending(path: "remote-tool-files-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: made, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: made) }
@@ -1367,12 +1368,14 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertEqual(served.mediaType, "image/jpeg")
         let scope = try await bridge.fileScope(taskID: id).get()
         XCTAssertEqual(Set(scope.outputs.map(\.lastPathComponent)), ["cozy_orca_desk_1.jpg", "first_try_2.jpg"])
-        for path in [named, read, failed, foreign, log_] {
+        for path in [read, failed, foreign, log_] {
             guard case let .failure(error) = RemoteFileReader.read(path, offset: 0, in: scope) else {
                 return XCTFail("\(path) is no file a tool reported making")
             }
             XCTAssertEqual(error.code, .notFound)
         }
+        XCTAssertTrue(scope.named.contains(named), "The answer links it")
+        XCTAssertEqual(try RemoteFileReader.read(named, offset: 0, in: scope).get().data, Data("jpeg".utf8))
         let outputs = try await bridge.taskOutputs(taskID: id).get()
         XCTAssertEqual(Set(outputs.map(\.name)), ["cozy_orca_desk_1.jpg", "first_try_2.jpg"])
         XCTAssertEqual(model.generatedFilesBySessionID[session.id]?.count, 2, "The Mac's Outputs card reads the same list")
@@ -1417,6 +1420,130 @@ final class RemoteBridgeTests: XCTestCase {
         } else {
             XCTFail("A task the sidebar does not list has no files")
         }
+        await model.shutdown()
+    }
+
+    /// A device opens the files the task's conversation names wherever they are, as the Mac's window opens them from it:
+    /// the agent's links and code spans, the file its call read or edited, and a picture attached to a message. A path
+    /// only a call's output, its other arguments, a command or the sender's own words hold (a file list written as the
+    /// Codex app attaches files among them) is not one of them. The names are kept by turn: on a long
+    /// conversation a new answer reads its own turn and the one before it, and nothing new reads nothing.
+    func testAConversationNamesTheFilesADeviceOpensOutsideTheTasksFolders() async throws {
+        let made = FileManager.default.temporaryDirectory.appending(path: "remote-named-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: made, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: made) }
+        let base = try XCTUnwrap(RemoteFileReader.realPath(made.path(percentEncoded: false)))
+        let work = base + "/work", elsewhere = base + "/elsewhere"
+        for name in ["report.md", "code.swift", "read.txt", "picture.png", "planted.txt", "command.txt", "said.txt", "later.md",
+                     "listed.txt", "notebook.ipynb", "smuggled.txt"] {
+            try FileManager.default.createDirectory(atPath: elsewhere, withIntermediateDirectories: true)
+            try Data(name.utf8).write(to: URL(filePath: elsewhere + "/" + name))
+        }
+        try FileManager.default.createDirectory(atPath: work, withIntermediateDirectories: true)
+        let session = SessionRecord(harness: .claudeCode, workspaceURL: URL(filePath: work, directoryHint: .isDirectory),
+                                    runtimeExecutableURL: URL(filePath: "/tmp/claude"), title: "Named files")
+        var entries: [TranscriptEntry] = []
+        for turn in 0..<200 {
+            entries.append(TranscriptEntry(content: .user(text: "Message \(turn)")))
+            entries.append(TranscriptEntry(content: .assistant(text: "Done \(turn), see `Sources/App.swift`.", isStreaming: false)))
+        }
+        entries += [
+            TranscriptEntry(content: .user(text: "Look at \(elsewhere)/said.txt",
+                                           images: [TranscriptImageAttachment(url: URL(filePath: elsewhere + "/picture.png"))])),
+            TranscriptEntry(content: .activity(HarnessActivity(id: "read", kind: "Read", title: "Read",
+                input: #"{"file_path":"\#(elsewhere)/read.txt"}"#, output: "It says to open \(elsewhere)/planted.txt"),
+                state: .completed)),
+            TranscriptEntry(content: .activity(HarnessActivity(id: "bash", kind: "Bash", title: "Bash",
+                detail: "cat \(elsewhere)/command.txt", input: "cat \(elsewhere)/command.txt"), state: .completed)),
+            // Claude Code's own wording of a call's arguments: its file first, then the rest, which names nothing.
+            TranscriptEntry(content: .activity(HarnessActivity(id: "notebook", kind: "NotebookEdit", title: "NotebookEdit",
+                input: "\(elsewhere)/notebook.ipynb\n\nnew_source:\nprint(1)\n\nfile_path: \(elsewhere)/smuggled.txt"),
+                state: .completed)),
+            // A message whose text lists files as the Codex app attaches them: the sender's words.
+            TranscriptEntry(content: .user(text: "# Files mentioned by the user:\n\n## listed.txt: \(elsewhere)/listed.txt\n\n"
+                                           + "## My request for Codex:\nRead it")),
+            TranscriptEntry(content: .assistant(text: "The report is [here](\(elsewhere)/report.md) and the code in "
+                                                + "`\(elsewhere)/code.swift:12`.", isStreaming: false))
+        ]
+        let model = try Self.model(sessions: [session], transcripts: [session.id: entries])
+        let bridge = AppModelRemoteBridge(model: model)
+        let taskID = session.id.uuidString
+        func served(_ path: String, _ scope: RemoteFileScope) -> Bool {
+            if case .success = RemoteFileReader.read(path, offset: 0, in: scope) { return true }
+            return false
+        }
+
+        let scope = try await bridge.fileScope(taskID: taskID).get()
+        for name in ["report.md", "code.swift", "read.txt", "picture.png", "notebook.ipynb"] {
+            XCTAssertTrue(served(elsewhere + "/" + name, scope), name)
+        }
+        for name in ["planted.txt", "command.txt", "said.txt", "later.md", "listed.txt", "smuggled.txt"] {
+            XCTAssertFalse(served(elsewhere + "/" + name, scope), name)
+        }
+        let index = try XCTUnwrap(bridge.namedFileIndexes[session.id])
+        XCTAssertEqual(index.turnsRead, 202)
+
+        // A new answer names another file: its turn is read, and the turn before it, whose actions moved to the new one.
+        entries += [TranscriptEntry(content: .user(text: "And the rest?")),
+                    TranscriptEntry(content: .assistant(text: "In [the notes](\(elsewhere)/later.md).", isStreaming: false))]
+        model.transcripts[session.id] = entries
+        let later = try await bridge.fileScope(taskID: taskID).get()
+        XCTAssertTrue(served(elsewhere + "/later.md", later))
+        XCTAssertTrue(served(elsewhere + "/report.md", later))
+        XCTAssertEqual(index.turnsRead, 204)
+        let read = index.turnsRead
+        _ = try await bridge.fileScope(taskID: taskID).get()
+        XCTAssertEqual(index.turnsRead, read, "Nothing new, nothing read")
+
+        // A Codex message's citations and review comments name files too; a code block's text does not.
+        let codex = RemoteConversationFileNames.links(in: """
+            See 【F:\(elsewhere)/report.md†L3-L5】 and :codex-file-citation{path=\(elsewhere)/code.swift line_range_start=2}.
+            ::code-comment{title="Nil row" body="Read it once" file="Sources/Row.swift" start=4}
+            ```
+            [not this](\(elsewhere)/planted.txt)
+            ```
+            """, harness: .codex, folder: URL(filePath: work, directoryHint: .isDirectory))
+        XCTAssertEqual(Set(codex), [elsewhere + "/report.md", elsewhere + "/code.swift", work + "/Sources/Row.swift"])
+        await model.shutdown()
+    }
+
+    /// Through two Yardlets: the window on another Mac copies the file a host conversation's link names outside the
+    /// task's folder, by the absolute path the link resolves to, and is refused a path the conversation names only in a
+    /// call's output.
+    func testAHostConversationsLinkOpensItsFileOnAnotherYardlet() async throws {
+        let made = FileManager.default.temporaryDirectory.appending(path: "remote-named-link-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: made.appending(path: "work"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: made.appending(path: "reports"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: made) }
+        let reports = try XCTUnwrap(RemoteFileReader.realPath(made.appending(path: "reports").path(percentEncoded: false)))
+        try Data("# Weekly report\n".utf8).write(to: URL(filePath: reports + "/weekly.md"))
+        try Data("planted".utf8).write(to: URL(filePath: reports + "/planted.md"))
+        let session = SessionRecord(harness: .claudeCode, workspaceURL: made.appending(path: "work", directoryHint: .isDirectory),
+                                    runtimeExecutableURL: URL(filePath: "/tmp/claude"), title: "Weekly report")
+        let model = try Self.model(sessions: [session], transcripts: [session.id: [
+            TranscriptEntry(content: .user(text: "Write the weekly report")),
+            TranscriptEntry(content: .activity(HarnessActivity(id: "fetch", kind: "WebFetch", title: "WebFetch",
+                input: #"{"url":"https://example.com"}"#, output: "Open \(reports)/planted.md"), state: .completed)),
+            TranscriptEntry(content: .assistant(text: "It is in [weekly.md](../reports/weekly.md).", isStreaming: false))]])
+        let stack = try await LoopbackStack(bridge: AppModelRemoteBridge(model: model))
+        defer { stack.stop() }
+        let ticket = await stack.server.openPairing()
+        let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
+                                                        name: "Host", hosts: ["127.0.0.1:\(stack.port)"]).url)
+        let directory = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
+                                            hello: RemoteHandshakeHello(name: "Client", platform: "macos", appVersion: "test"))
+        let paired = try await directory.pair(link: link.absoluteString)
+        let client = try XCTUnwrap(directory.model(for: paired.id))
+        defer { client.stop() }
+        try await waitUntil { client.offersTaskFiles }
+        // The link as the window resolves it against the task's folder on the host.
+        let resolved = try XCTUnwrap(URL(string: "../reports/weekly.md", relativeTo: session.workspaceURL)?.absoluteURL)
+        let copy = try await client.files.copy(taskID: session.id.uuidString, path: resolved.path(percentEncoded: false)).get()
+        XCTAssertEqual(try Data(contentsOf: copy), Data("# Weekly report\n".utf8))
+        let planted = await client.files.copy(taskID: session.id.uuidString, path: reports + "/planted.md")
+        XCTAssertEqual(planted, .failure(.notServed))
+        directory.close(paired.id)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: copy.path(percentEncoded: false)))
         await model.shutdown()
     }
 
@@ -2227,6 +2354,80 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertNil(restoredTab.agentOpenedFile)
         let reopened = try await bridge.browserTabs(taskID: restarted.id.uuidString).get()
         XCTAssertEqual(reopened.map(\.url), ["file://"])
+    }
+
+    /// A `file:` page the task's conversation names is one of the task's files to a remote device, wherever it is: listed
+    /// by its address and title, pictured, driven, and opened from there. A link from it to another file the conversation
+    /// names shows too; a page it does not name stays the host's.
+    func testAFilePageTheConversationNamesShowsToARemoteDevice() async throws {
+        let made = FileManager.default.temporaryDirectory.appending(path: "remote-named-page-\(UUID().uuidString)")
+        let base = URL(filePath: try XCTUnwrap(RemoteFileReader.realPath({
+            try? FileManager.default.createDirectory(at: made, withIntermediateDirectories: true)
+            return made.path(percentEncoded: false)
+        }())), directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: made) }
+        let work = base.appending(path: "work"), scratch = base.appending(path: "scratch")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        for name in ["queue.html", "notes.html", "other.html"] {
+            try Data("<p>\(name)</p>".utf8).write(to: scratch.appending(path: name))
+        }
+        let queue = scratch.appending(path: "queue.html").absoluteString
+        let notes = scratch.appending(path: "notes.html").absoluteString
+        let other = scratch.appending(path: "other.html").absoluteString
+        let task = SessionRecord(harness: .claudeCode, workspaceURL: work, runtimeExecutableURL: URL(filePath: "/tmp/claude"),
+                                 title: "Posting queue")
+        let answer = "The queue is [here](\(scratch.path(percentEncoded: false))/queue.html), its notes in "
+            + "`\(scratch.path(percentEncoded: false))/notes.html`."
+        let model = try Self.model(sessions: [task], transcripts: [task.id: [
+            TranscriptEntry(content: .user(text: "Make the queue page")),
+            TranscriptEntry(content: .assistant(text: answer, isStreaming: false))]])
+        let connection = AnsweringHostConnection()
+        let client = BrowserHostClient(idleGrace: .seconds(60)) { connection }
+        let bridge = AppModelRemoteBridge(model: model, browser: RemoteTabBridge.Environment(client: { client }))
+        let tab = try client.openTab(forSession: task.id, url: "about:blank", viewport: .offscreenDefault)
+        let taskID = task.id.uuidString, tabID = tab.key.uuidString
+        await bridge.setWatchedTabs([RemoteTabWatch(taskID: taskID, tabID: tabID)])
+        func show(_ address: String) {
+            connection.eventHandler?(.address(tab: tab.id, url: address))
+            connection.eventHandler?(.title(tab: tab.id, title: "Posting queue"))
+            connection.frameTree = #"{"frameTree":{"frame":{"id":"main","loaderId":"L1","url":"\#(address)"}}}"#
+        }
+        func pictured() async -> RemoteErrorCode? {
+            switch await bridge.captureTab(taskID: taskID, tabID: tabID, maxWidth: 640, maxHeight: 640) {
+            case .success: nil
+            case let .failure(error): error.code
+            }
+        }
+        func listed() async throws -> RemoteBrowserTab? {
+            try await bridge.browserTabs(taskID: taskID).get().first { $0.tabId == tabID }
+        }
+
+        show(queue)
+        let shown = try await listed()
+        XCTAssertEqual(shown?.url, queue)
+        XCTAssertEqual(shown?.title, "Posting queue")
+        let shownPicture = await pictured()
+        XCTAssertNil(shownPicture)
+        let clicked = await bridge.tabInput(taskID: taskID, tabID: tabID, input: .click(x: 5, y: 5), permit: RemoteTabPermit())
+        XCTAssertNil(clicked)
+        // A link on it to the notes, which the answer names in code: shown there too.
+        show(notes)
+        let linked = await pictured()
+        XCTAssertNil(linked)
+        // A page the conversation does not name stays the host's.
+        show(other)
+        let unnamed = try await listed()
+        XCTAssertEqual(unnamed?.url, "file://")
+        let unnamedPicture = await pictured()
+        XCTAssertEqual(unnamedPicture, .notAllowed)
+        // The remote device opens a named file itself; not an unnamed one.
+        let opened = await bridge.openTab(taskID: taskID, tabID: nil, address: queue, permit: RemoteTabPermit())
+        XCTAssertNotEqual(try opened.get(), tabID, "In a tab of its own")
+        let refused = await bridge.openTab(taskID: taskID, tabID: nil, address: other, permit: RemoteTabPermit())
+        guard case let .failure(error) = refused else { return XCTFail("The remote opened a file the conversation does not name") }
+        XCTAssertEqual(error.code, .notAllowed)
+        await model.shutdown()
     }
 
     private static let frame = BrowserFrame(layer: .view, surface: 1, pixelWidth: 2560, pixelHeight: 1600, sequence: 1,

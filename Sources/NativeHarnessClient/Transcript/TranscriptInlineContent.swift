@@ -108,7 +108,9 @@ private extension Strikethrough {
 /// task's folder, absolute, or under the home folder. Only a file or folder that is there links (a
 /// folder opens in Finder); a word that merely looks like a path stays code.
 enum TranscriptFileReference {
-    static func url(for code: String, in workspace: URL) -> URL? {
+    /// The path a code span names and the line it names, if any, by the span's text alone: what `url(for:in:)` looks
+    /// for on disk.
+    static func path(in code: String) -> (path: String, line: Substring?)? {
         let text = code.trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty, text.count <= 1_024, !text.contains("\n"), !text.contains("://"),
               let match = text.wholeMatch(of: /^(.+?)(?::([0-9]+)(?::[0-9]+)?|#L([0-9]+)(?:-L?[0-9]+)?)?$/)
@@ -116,6 +118,11 @@ enum TranscriptFileReference {
         let path = String(match.1)
         // A path, not a word: it has a folder or an extension.
         guard path.contains("/") || path.contains(".") else { return nil }
+        return (path, match.2 ?? match.3)
+    }
+
+    static func url(for code: String, in workspace: URL) -> URL? {
+        guard let (path, line) = path(in: code) else { return nil }
         let file: URL
         if PathRules.current.isAbsolute(path) {
             file = URL(filePath: path)
@@ -130,9 +137,9 @@ enum TranscriptFileReference {
         else { return nil }
         if isDirectory.boolValue {
             // `/` alone is a slash, not the disk.
-            return path.count > 1 && match.2 == nil && match.3 == nil ? standardized : nil
+            return path.count > 1 && line == nil ? standardized : nil
         }
-        guard let line = (match.2 ?? match.3).map(String.init) else { return standardized }
+        guard let line = line.map(String.init) else { return standardized }
         var components = URLComponents(url: standardized, resolvingAgainstBaseURL: false)
         components?.fragment = "L" + line
         return components?.url ?? standardized

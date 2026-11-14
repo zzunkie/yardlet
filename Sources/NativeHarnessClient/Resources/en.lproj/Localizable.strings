@@ -2161,7 +2161,7 @@
 "Reading %@ from %@…" = "Reading %@ from %@…";
 "It starts with the choices set on %@." = "It starts with the choices set on %@.";
 "%@ couldn't start this task." = "%@ couldn't start this task.";
-"%@ opens only what the task made and the files in its folders." = "%@ opens only what the task made and the files in its folders.";
+"This file opens only on %@." = "This file opens only on %@.";
 "The file is too large to open from %@." = "The file is too large to open from %@.";
 "Create scheduled tasks on %@." = "Create scheduled tasks on %@.";
 "See its instructions and runs, or edit or delete it, on %@." = "See its instructions and runs, or edit or delete it, on %@.";

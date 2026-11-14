@@ -1195,6 +1195,9 @@ final class RemoteHostModelTests: XCTestCase {
         XCTAssertEqual(notes.lastPathComponent, "crash-notes.txt")
         let outside = await model.files.copy(taskID: ID.history, path: "../Desktop/private-notes.txt")
         XCTAssertEqual(outside, .failure(.notServed))
+        // A file beside the task's folder that its answer links.
+        let timeline = try await model.files.copy(taskID: ID.history, path: RemoteFixtureBridge.crashTimeline).get()
+        XCTAssertEqual(timeline.lastPathComponent, "crash-timeline.md")
         directory.close(host.id)
         XCTAssertFalse(FileManager.default.fileExists(atPath: copy.path(percentEncoded: false)))
         XCTAssertFalse(FileManager.default.fileExists(atPath: notes.path(percentEncoded: false)))

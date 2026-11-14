@@ -2161,7 +2161,7 @@
 "Reading %@ from %@…" = "%2$@에서 %1$@ 파일을 읽는 중…";
 "It starts with the choices set on %@." = "%@에 정해 둔 선택으로 시작합니다.";
 "%@ couldn't start this task." = "%@에서 이 작업을 시작하지 못했습니다.";
-"%@ opens only what the task made and the files in its folders." = "%@에서는 작업이 만든 파일과 작업 폴더 안의 파일만 열 수 있습니다.";
+"This file opens only on %@." = "이 파일은 %@에서만 열 수 있습니다.";
 "The file is too large to open from %@." = "파일이 너무 커서 %@에서 가져와 열 수 없습니다.";
 "Create scheduled tasks on %@." = "예약된 작업은 %@에서 만드세요.";
 "See its instructions and runs, or edit or delete it, on %@." = "지시와 실행 기록 보기, 편집, 삭제는 %@에서 할 수 있습니다.";

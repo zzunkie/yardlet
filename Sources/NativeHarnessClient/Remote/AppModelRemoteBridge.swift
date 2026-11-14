@@ -46,6 +46,8 @@ final class AppModelRemoteBridge: RemoteBridge {
     private(set) var scheduleMaskings = 0
     private var homeCommandCache: [String: (Date, [RemoteComposerCommand])] = [:]
     private var cachedOutputs: [UUID: [SessionRailContent.Output]] = [:]
+    /// The files each task's conversation names (§15.22), kept by turn while a device reads its files or follows it.
+    private(set) var namedFileIndexes: [UUID: RemoteNamedFileIndex] = [:]
     /// A read of the schedules is watched until they change; one watch at a time, since every read
     /// reads the same properties.
     private var watchesSchedules = false
@@ -499,6 +501,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         watched = Set(taskIDs.compactMap(UUID.init(uuidString:)))
         model?.remoteWatchedTaskIDs = watched
         model?.noteMemorySaverScreen()
+        for id in Array(namedFileIndexes.keys) where !watched.contains(id) { namedFileIndexes[id] = nil }
         for id in Array(projectionCaches.keys) where !watched.contains(id) {
             projectionCaches[id] = nil
             for detail in [RemoteConversationDetail.basic, .full] {
@@ -1478,11 +1481,24 @@ final class AppModelRemoteBridge: RemoteBridge {
         }
     }
 
+    /// The task's own folders, its outputs and the files its conversation names.
     func fileScope(taskID: String) async -> Result<RemoteFileScope, RemoteError> {
         guard let model, let session = session(taskID) else { return .failure(RemoteError(.notFound)) }
         await refreshGeneratedFiles(of: session, in: model)
+        let named = await namedFiles(of: session, in: model)
         return .success(RemoteFileScope(folder: session.workspaceURL, otherFolders: session.additionalRootURLs,
-                                        outputs: outputs(of: session, in: model).map(\.url)))
+                                        outputs: outputs(of: session, in: model).map(\.url), named: named))
+    }
+
+    /// The files the task's conversation names, as the window draws it now (`presentation(of:in:)`). The conversation
+    /// is projected through a cache of its own task's, kept until the watched tasks change, so a device opening one
+    /// file after another, or watching a tab that shows one, projects again only the turns that changed.
+    private func namedFiles(of session: SessionRecord, in model: AppModel) async -> RemoteNamedFiles {
+        if projectionCaches[session.id] == nil { projectionCaches[session.id] = ConversationProjectionCache() }
+        let index = namedFileIndexes[session.id] ?? RemoteNamedFileIndex()
+        namedFileIndexes[session.id] = index
+        return await index.files(of: presentation(of: session, in: model), folder: session.workspaceURL,
+                                 home: NSHomeDirectory())
     }
 
     /// A subagent can finish between turns, with nothing to say so: what a device asks for is read from the provider's

@@ -1385,6 +1385,78 @@ final class RemoteServerTests: XCTestCase {
         XCTAssertFalse(RemoteFileReader.allowsPage(swapped, in: scope))
     }
 
+    /// A file the task's conversation names is read wherever it is, by the spelling the conversation wrote or the
+    /// `/private` one, in its own place as an output is, but never where keys, sign-ins and apps' data are kept, even
+    /// through a link; an unnamed file beside it stays refused, the same as one that is not there.
+    func testANamedFileIsReadWhereverItIsButNeverWhereKeysAreKept() throws {
+        let files = try TaskFiles()
+        defer { files.remove() }
+        let manager = FileManager.default
+        let home = files.root + "/home"
+        for (path, text) in [("home/.ssh/id_ed25519", "key"), ("home/Library/Keychains/login.keychain-db", "keychain"),
+                             ("home/.config/gh/hosts.yml", "token"), ("home/Documents/report.md", "# Report"),
+                             ("elsewhere/plan.md", "# Plan"), ("elsewhere/unnamed.md", "# Unnamed")] {
+            let url = URL(filePath: files.root + "/" + path)
+            try manager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(text.utf8).write(to: url)
+        }
+        // A named file whose place holds a link into the keys, and a folder that is a link to the home folder.
+        try manager.createSymbolicLink(atPath: files.root + "/elsewhere/key.md", withDestinationPath: home + "/.ssh/id_ed25519")
+        try manager.createSymbolicLink(atPath: files.root + "/viahome", withDestinationPath: home)
+        let written = ["~/Documents/report.md", "../elsewhere/plan.md", "~/.ssh/id_ed25519", "~/Library/Keychains/login.keychain-db",
+                       "~/.config/gh/hosts.yml", files.root + "/elsewhere/key.md", files.root + "/viahome/.ssh/id_ed25519",
+                       files.root + "/viahome/Documents/report.md"]
+        let named = RemoteNamedFiles(written.compactMap { RemoteNamedFiles.path($0, folder: files.folder, home: home) })
+        let scope = RemoteFileScope(folder: URL(filePath: files.folder, directoryHint: .isDirectory), named: named)
+        func read(_ path: String, in scope: RemoteFileScope = scope) -> Result<RemoteFilePart, RemoteError> {
+            RemoteFileReader.read(path, offset: 0, in: scope, home: home)
+        }
+
+        XCTAssertEqual(try read("~/Documents/report.md").get().data, Data("# Report".utf8))
+        XCTAssertEqual(try read(home + "/Documents/report.md").get().path, home + "/Documents/report.md")
+        XCTAssertEqual(try read("../elsewhere/plan.md").get().path, files.root + "/elsewhere/plan.md", "As written, relative")
+        XCTAssertEqual(try read(files.root + "/elsewhere/plan.md").get().data, Data("# Plan".utf8))
+        // `/private/var/…` named, `/var/…` asked for: the same file.
+        XCTAssertTrue(files.root.hasPrefix("/private/var/"))
+        XCTAssertEqual(try read(String(files.root.dropFirst("/private".count)) + "/elsewhere/plan.md").get().data, Data("# Plan".utf8))
+        XCTAssertEqual(try read(files.root + "/viahome/Documents/report.md").get().path, home + "/Documents/report.md",
+                       "Through a folder that is a link, read where it leads")
+        XCTAssertTrue(RemoteFileReader.allowsPage(files.root + "/elsewhere/plan.md", in: scope, home: home))
+        for refused in ["~/.ssh/id_ed25519", "~/Library/Keychains/login.keychain-db", "~/.config/gh/hosts.yml",
+                        files.root + "/elsewhere/key.md", files.root + "/viahome/.ssh/id_ed25519",
+                        files.root + "/elsewhere/unnamed.md", files.root + "/outside/secret.txt", "~/Documents/missing.md"] {
+            guard case let .failure(error) = read(refused) else { XCTFail("Served \(refused)"); continue }
+            XCTAssertEqual(error.code, .notFound, refused)
+            XCTAssertFalse(RemoteFileReader.allowsPage(RemoteFileReader.lexical(refused.replacing("~", with: home, maxReplacements: 1)),
+                                                       in: scope, home: home), refused)
+        }
+        // A descriptor's path reads as the file it is open on: never, whatever that file is.
+        let key = try FileHandle(forReadingFrom: URL(filePath: home + "/.ssh/id_ed25519"))
+        defer { try? key.close() }
+        let byDescriptor = RemoteFileScope(folder: URL(filePath: files.folder, directoryHint: .isDirectory),
+                                           named: RemoteNamedFiles(["/dev/fd/\(key.fileDescriptor)"]))
+        guard case .failure = read("/dev/fd/\(key.fileDescriptor)", in: byDescriptor) else { return XCTFail("Read through /dev/fd") }
+
+        // A task in the home folder gives no files of its own, but what its conversation names is still read.
+        let atHome = RemoteFileScope(folder: URL(filePath: home, directoryHint: .isDirectory), named: named)
+        XCTAssertEqual(try read("Documents/report.md", in: atHome).get().data, Data("# Report".utf8))
+        guard case .failure = read(files.root + "/elsewhere/unnamed.md", in: atHome) else { return XCTFail("Not named") }
+
+        // Where keys, sign-ins and apps' data are kept, by the text of a path whose folders' links are resolved.
+        for withheld in ["/Users/me/.ssh/id_rsa", "/Users/me/.netrc", "/Users/me/.yardlet/remote/devices.json",
+                         "/Users/me/Library/Application Support/Google/Chrome/Default/Cookies",
+                         "/System/Volumes/Data/Users/me/.aws/credentials", "/private/var/folders/ab/cd1234/C/com.example/x",
+                         "/private/var/folders/ab/cd1234/0/com.apple.notificationcenter/db", "/private/var/folders/ab/x",
+                         "/Library/Keychains/System.keychain"] {
+            XCTAssertTrue(RemoteFileReader.isWithheld(withheld, home: "/Users/me"), withheld)
+        }
+        for open in ["/Users/me/Documents/.notes/today.md", "/Users/me/work/app/.env.example", "/Users/me/Downloads/a.pdf",
+                     "/private/var/folders/ab/cd1234/T/report.md", "/private/tmp/claude-501/scratchpad/report.md",
+                     "/Users/other/Library-notes.md", "/Users/me"] {
+            XCTAssertFalse(RemoteFileReader.isWithheld(open, home: "/Users/me"), open)
+        }
+    }
+
     /// `relativePath` keeps what names, previews or writes back a task's file to `read`'s boundary: a file that is not
     /// there is judged by where it would land, and a folder that holds the home folder has none.
     func testARelativePathStaysInsideTheTasksFolder() throws {

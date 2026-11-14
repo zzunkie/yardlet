@@ -760,8 +760,17 @@ public actor RemoteFixtureBridge: RemoteBridge {
         guard let entry = tasks[taskID] else { return .failure(RemoteError(.notFound)) }
         makeFiles()
         let project = projects.first { $0.id == entry.task.projectId }?.name ?? "Chats"
-        return .success(RemoteFileScope(folder: filesFolder.appending(path: project, directoryHint: .isDirectory),
-                                        outputs: outputs(of: taskID)))
+        let folder = filesFolder.appending(path: project, directoryHint: .isDirectory)
+        return .success(RemoteFileScope(folder: folder, outputs: outputs(of: taskID), named: named(of: taskID, in: folder)))
+    }
+
+    /// The files the crash task's last answer names beyond its outputs: its timeline, in a folder beside its own.
+    private func named(of taskID: String, in folder: URL) -> RemoteNamedFiles {
+        guard taskID == ID.history else { return RemoteNamedFiles() }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path(percentEncoded: false)
+        return RemoteNamedFiles([Self.crashTimeline].compactMap {
+            RemoteNamedFiles.path($0, folder: folder.path(percentEncoded: false), home: home)
+        })
     }
 
     /// Newest first: the summary it saved on the "Desktop", beside its folder, and the chart inside it.
@@ -771,12 +780,13 @@ public actor RemoteFixtureBridge: RemoteBridge {
         return [filesFolder.appending(path: "Desktop/crash-summary.pdf"), filesFolder.appending(path: "Website/reports/crash-chart.png")]
     }
 
-    /// Each project's folder, the crash task's files, and a file beside them a phone may not open.
+    /// Each project's folder, the crash task's files (one beside its folder that its answer names), and a file beside
+    /// them a phone may not open.
     private func makeFiles() {
         guard !madeFiles else { return }
         madeFiles = true
         let manager = FileManager.default
-        for folder in ["Yardlet", "Website/reports", "Chats", "Desktop"] {
+        for folder in ["Yardlet", "Website/reports", "Chats", "Desktop", "Notes"] {
             try? manager.createDirectory(at: filesFolder.appending(path: folder, directoryHint: .isDirectory),
                                          withIntermediateDirectories: true)
         }
@@ -785,6 +795,7 @@ public actor RemoteFixtureBridge: RemoteBridge {
                                                     "reads a task the archive already removed."])),
             ("Website/reports/crash-chart.png", Data(base64Encoded: Self.chartPNG) ?? Data()),
             ("Website/reports/crash-notes.txt", Data(Self.crashNotes.utf8)),
+            ("Notes/crash-timeline.md", Data(Self.crashTimelineText.utf8)),
             ("Desktop/private-notes.txt", Data("Not one of the task's files.\n".utf8))
         ]
         for (path, data) in files {
@@ -823,6 +834,17 @@ public actor RemoteFixtureBridge: RemoteBridge {
 
     /// A small bar chart.
     private static let chartPNG = "iVBORw0KGgoAAAANSUhEUgAAADAAAAAgCAIAAADbtmxLAAAATElEQVR42u3YMQ0AIAxE0bpiJ4jCAI5wUxvdwUHZ4BL+zwl489kSywC9A8W0ZIAA/QyqI5IBAgQIkAbIW0kGCBAgQIAA3QR1sTgbTm2R8Ia3mL5g4AAAAABJRU5ErkJggg=="
+
+    /// Where the crash task's answer says its timeline is: outside the task's folder, as a conversation writes it.
+    public static let crashTimeline = "../Notes/crash-timeline.md"
+
+    private static let crashTimelineText = """
+    # Crash timeline
+
+    - 09:12 The first report: TaskSidebar.row(for:) during an archive.
+    - 09:40 30 reports, one cause.
+
+    """
 
     private static let crashNotes = """
     Crash notes
@@ -2179,7 +2201,8 @@ public actor RemoteFixtureBridge: RemoteBridge {
             user(turnID, "Summarize crash report \(number)"), header, command,
             answer(turnID, "Crash \(number): a nil dereference in `TaskSidebar.row(for:)` while a task was being archived."
                    + (number == 30 ? " I put the summary in crash-summary.pdf on the Desktop, the chart in "
-                      + "`reports/crash-chart.png` and my notes in `reports/crash-notes.txt`." : ""))
+                      + "`reports/crash-chart.png`, my notes in `reports/crash-notes.txt` and the timeline in "
+                      + "[crash-timeline.md](\(crashTimeline))." : ""))
         ])
     }
 

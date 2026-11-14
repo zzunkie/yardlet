@@ -66,7 +66,7 @@ enum RemoteFileOpening {
     /// Why a file could not be opened, in the person's words.
     static func message(_ failure: RemoteHostFiles.Failure, host: String) -> String {
         switch failure {
-        case .notServed: L10n.format("%@ opens only what the task made and the files in its folders.", host)
+        case .notServed: L10n.format("This file opens only on %@.", host)
         case .tooLarge: L10n.format("The file is too large to open from %@.", host)
         case let .unavailable(error): RemoteHostModel.message(for: error, host: host)
         }

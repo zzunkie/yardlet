@@ -3,8 +3,9 @@ import Foundation
 import Darwin
 #endif
 
-/// What a phone may open of a task's files (docs/REMOTE_PROTOCOL.md §15.22): the files in the task's own folders and
-/// the files its Outputs card lists, wherever those are. The bridge says what they are; `RemoteFileReader` decides.
+/// What a phone may open of a task's files (docs/REMOTE_PROTOCOL.md §15.22): the files in the task's own folders, the
+/// files its Outputs card lists and the files its conversation names, wherever those are. The bridge says what they
+/// are; `RemoteFileReader` decides.
 public struct RemoteFileScope: Equatable, Sendable {
     /// The task's working folder or worktree. A relative path is read from here.
     public var folder: URL
@@ -12,11 +13,71 @@ public struct RemoteFileScope: Equatable, Sendable {
     public var otherFolders: [URL]
     /// The files of the task's Outputs card (`taskOutputs`).
     public var outputs: [URL]
+    /// The files the task's conversation names, which are read unless they lie where keys, sign-ins and apps' data are
+    /// kept (`RemoteFileReader.isWithheld`).
+    public var named: RemoteNamedFiles
 
-    public init(folder: URL, otherFolders: [URL] = [], outputs: [URL] = []) {
+    public init(folder: URL, otherFolders: [URL] = [], outputs: [URL] = [], named: RemoteNamedFiles = RemoteNamedFiles()) {
         self.folder = folder
         self.otherFolders = otherFolders
         self.outputs = outputs
+        self.named = named
+    }
+}
+
+/// The files a task's conversation names (§15.22), by path: absolute, with `.` and `..` taken out and `/tmp`, `/var` and
+/// `/etc` written as the `/private` folders they are, all by the text alone, and compared byte for byte. Each path counts
+/// the turns that name it, so a turn that changes takes out what it named before and nothing another turn names.
+public struct RemoteNamedFiles: Equatable, Sendable {
+    private var counts: [[UInt8]: Int] = [:]
+
+    public init() {}
+
+    public init(_ paths: some Sequence<String>) {
+        for path in paths { insert(path) }
+    }
+
+    public var isEmpty: Bool { counts.isEmpty }
+    public var count: Int { counts.count }
+
+    /// Whether the conversation names the file at `path`, an absolute path compared by its text.
+    public func contains(_ path: String) -> Bool {
+        counts[Array(Self.key(RemoteFileReader.lexical(path)).utf8)] != nil
+    }
+
+    /// A path `path(_:folder:home:)` gave, named once more.
+    public mutating func insert(_ path: String) {
+        counts[Array(path.utf8), default: 0] += 1
+    }
+
+    /// A path `insert` named, named once less.
+    public mutating func remove(_ path: String) {
+        let key = Array(path.utf8)
+        guard let count = counts[key] else { return }
+        counts[key] = count > 1 ? count - 1 : nil
+    }
+
+    /// `text`, a path as a conversation writes it (absolute, from the home folder as `~`, or relative to `folder`, the
+    /// task's working folder), as this set keeps it; nil when no file has it (empty, too long, or holding a NUL).
+    /// Nothing is looked up.
+    public static func path(_ text: String, folder: String, home: String) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.utf8.count <= RemoteFileReader.maxPathBytes, !trimmed.utf8.contains(0) else {
+            return nil
+        }
+        let absolute = trimmed == "~" || trimmed.hasPrefix("~/") ? home + trimmed.dropFirst()
+            : trimmed.hasPrefix("/") ? trimmed : folder + "/" + trimmed
+        return key(RemoteFileReader.lexical(absolute))
+    }
+
+    /// A lexical path with macOS's links at the top of the disk (`/tmp`, `/var`, `/etc`) written as what they lead to,
+    /// so a file a conversation names by one spelling is the file a request names by the other. Elsewhere those are
+    /// folders of their own, and both sides are written the same way, so nothing changes there.
+    static func key(_ path: String) -> String {
+        for top in ["/tmp", "/var", "/etc"] where path == top || path.hasPrefix(top + "/") {
+            return "/private" + path
+        }
+        return path
     }
 }
 
@@ -51,14 +112,16 @@ public struct RemoteFileWriteTarget: Equatable, Sendable {
 }
 
 /// Reads a part of a task's file for a phone (§15.22). A paired phone steers tasks, but this must not become a way to
-/// read any file on the Mac. A path is served only when it names a regular file that is one of the task's outputs or,
-/// with every symbolic link resolved, lies inside one of the task's folders (whole path components, compared byte for
-/// byte). An output is matched by its folder with links resolved and its own name, never through a link in its place.
-/// Nothing a request names is looked up before its path, by its text alone, is one of those files or under one of
-/// those folders, so a request elsewhere learns nothing, raises no privacy prompt and waits on no network folder. A
-/// folder that is the person's home folder or holds it (`/`, `/Users`, in any form) gives no files of its own: a task
-/// there serves only its outputs. Whatever is refused answers `notFound`, as a file that is not there does, and no
-/// answer or log line carries a path. Reading blocks: callers run it with `perform`, off their actor.
+/// read any file on the Mac. A path is served only when it names a regular file that is one of the task's outputs, one
+/// its conversation names, or, with every symbolic link resolved, lies inside one of the task's folders (whole path
+/// components, compared byte for byte). An output or a named file is matched by its folder with links resolved and its
+/// own name, never through a link in its place, and a named file is never one kept where keys, sign-ins and apps' data
+/// are (`isWithheld`). Nothing a request names is looked up before its path, by its text alone, is one of those files
+/// or under one of those folders, so a request elsewhere learns nothing, raises no privacy prompt and waits on no
+/// network folder. A folder that is the person's home folder or holds it (`/`, `/Users`, in any form) gives no files of
+/// its own: a task there serves only its outputs and the files its conversation names. Whatever is refused answers
+/// `notFound`, as a file that is not there does, and no answer or log line carries a path. Reading blocks: callers run
+/// it with `perform`, off their actor.
 public enum RemoteFileReader {
     /// This platform reads files for phones; elsewhere a snapshot does not offer it.
     public static var isSupported: Bool {
@@ -113,19 +176,25 @@ public enum RemoteFileReader {
             written.append(raw)
             roots.append(real)
         }
-        let (named, placedOutputs) = outputNames(scope.outputs)
-        let isOutput = named.contains(Array(requested.utf8))
+        let (outputs, placedOutputs) = outputNames(scope.outputs)
+        let isOutput = outputs.contains(Array(requested.utf8))
         let isUnderRoot = (written + roots).contains { isInside(requested, $0) }
-        guard isOutput || isUnderRoot else { return .failure(refused()) }
-        var candidates: [String] = []
-        if isOutput, let placed = placed(requested), placedOutputs.contains(Array(placed.utf8)) { candidates.append(placed) }
-        if isUnderRoot, let real = realPath(requested), roots.contains(where: { isInside(real, $0) }) { candidates.append(real) }
-        // Only a regular file is opened: a link, a FIFO, a device or a socket is never touched.
+        let isNamed = scope.named.contains(requested)
+        guard isOutput || isUnderRoot || isNamed else { return .failure(refused()) }
+        var candidates: [(path: String, isNamed: Bool)] = []
+        if isOutput, let placed = placed(requested), placedOutputs.contains(Array(placed.utf8)) { candidates.append((placed, false)) }
+        if isUnderRoot, let real = realPath(requested), roots.contains(where: { isInside(real, $0) }) { candidates.append((real, false)) }
+        if isNamed, let placed = placed(requested), !isWithheld(placed, home: realHome) { candidates.append((placed, true)) }
+        // Only a regular file is opened: a link, a FIFO, a device or a socket is never touched, and nothing in `/dev`
+        // (a descriptor there reads as the file it is open on, whatever that is) or `/.vol` (a file by its volume and
+        // number, under no folder of its own).
         guard let target = candidates.first(where: { candidate in
             var info = stat()
-            return lstat(candidate, &info) == 0 && info.st_mode & S_IFMT == S_IFREG
+            return !isInside(candidate.path, "/dev") && !isInside(candidate.path, "/.vol")
+                && lstat(candidate.path, &info) == 0 && info.st_mode & S_IFMT == S_IFREG
         }) else { return .failure(refused()) }
-        return serve(target, from: offset)
+        // A named file is judged again by where the file opened is, whatever path led to it.
+        return serve(target.path, from: offset, withheldFrom: target.isNamed ? realHome : nil)
         #else
         return .failure(RemoteError(.unavailable))
         #endif
@@ -147,10 +216,13 @@ public enum RemoteFileReader {
             written.append(raw)
             roots.append(real)
         }
-        // As `read`: nothing is looked up before the path, by its text, is under one of the folders or is an output.
+        // As `read`: nothing is looked up before the path, by its text, is under one of the folders, is an output or is
+        // named.
         if (written + roots).contains(where: { isInside(requested, $0) }),
            let real = realPath(requested), roots.contains(where: { isInside(real, $0) }) { return true }
-        guard outputNames(scope.outputs).named.contains(Array(requested.utf8)) else { return false }
+        guard outputNames(scope.outputs).named.contains(Array(requested.utf8)) || scope.named.contains(requested) else {
+            return false
+        }
         if case .success = read(requested, offset: max(0, (fileSize(requested) ?? 1) - 1), in: scope, home: home) { return true }
         return false
         #else
@@ -248,12 +320,18 @@ public enum RemoteFileReader {
 
     /// `target` holds no link but in its folders, which are resolved, so a link put into any part of it since is
     /// refused (O_NOFOLLOW_ANY), and the descriptor is checked again: what is read is what was checked.
-    private static func serve(_ target: String, from offset: Int) -> Result<RemoteFilePart, RemoteError> {
+    /// With `home`, the file is refused when the descriptor's own path (`F_GETPATH`) is withheld (`isWithheld`).
+    private static func serve(_ target: String, from offset: Int, withheldFrom home: String? = nil) -> Result<RemoteFilePart, RemoteError> {
         let descriptor = open(target, O_RDONLY | O_NOFOLLOW_ANY | O_NONBLOCK | O_CLOEXEC)
         guard descriptor >= 0 else { return .failure(refused()) }
         defer { close(descriptor) }
         var info = stat()
         guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { return .failure(refused()) }
+        if let home {
+            var opened = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+            let found = opened.withUnsafeMutableBytes { fcntl(descriptor, F_GETPATH, $0.baseAddress!) }
+            guard found != -1, !isWithheld(String(cString: opened), home: home) else { return .failure(refused()) }
+        }
         let size = Int(info.st_size)
         guard size <= RemoteProtocol.maxReadFileBytes else { return .failure(RemoteError(.tooLarge, "A file is at most 100 MiB")) }
         guard offset <= size else { return .failure(RemoteError(.badRequest, "The offset is past the end of the file")) }
@@ -312,6 +390,27 @@ public enum RemoteFileReader {
             parts.append(part)
         }
         return "/" + parts.joined(separator: "/")
+    }
+
+    /// Whether `path`, a file with its folders' links resolved (`placed`), lies where a conversation naming it never
+    /// opens it from another device (§15.22): what keeps keys, sign-ins and apps' data, which a task's agent may well
+    /// name in passing. That is every hidden entry directly in the home folder (`.ssh`, `.aws`, `.gnupg`, `.netrc`,
+    /// `.config`, `.docker`, `.kube`, the shells' histories, and the agents' and Yardlet's own homes such as `.claude`,
+    /// `.codex`, `.gemini` and `.yardlet`), the home folder's `Library` (keychains, browsers' profiles and cookies, Mail,
+    /// Messages, apps' data and settings), what macOS keeps for each user beside the temporary folder in
+    /// `/private/var/folders` (its caches and data; the temporary folder itself, `…/T`, is not), and the system's
+    /// keychains in `/Library/Keychains`. `home` is the home folder with its links resolved. By the text alone: a
+    /// resolved folder's name is as the disk has it, in its own case, and a path by the data volume
+    /// (`/System/Volumes/Data/…`) counts as the same place.
+    static func isWithheld(_ path: String, home: String) -> Bool {
+        let dataVolume = "/System/Volumes/Data"
+        let path = isInside(path, dataVolume) && path != dataVolume ? String(path.dropFirst(dataVolume.count)) : path
+        let home = isInside(home, dataVolume) && home != dataVolume ? String(home.dropFirst(dataVolume.count)) : home
+        let names = path.split(separator: "/")
+        let depth = home.split(separator: "/").count
+        if isInside(path, home), names.count > depth, names[depth].hasPrefix(".") || names[depth] == "Library" { return true }
+        if names.starts(with: ["private", "var", "folders"]), names.count > 5 ? names[5] != "T" : true { return true }
+        return isInside(path, "/Library/Keychains")
     }
 
     #if canImport(Darwin)

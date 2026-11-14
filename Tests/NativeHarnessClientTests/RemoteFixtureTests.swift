@@ -288,6 +288,12 @@ final class RemoteFixtureTests: XCTestCase {
 
         let beside = try await read("../Desktop/private-notes.txt")
         XCTAssertEqual(beside.error?.code, .notFound)
+        // Beside the task's folder too, but its answer names it.
+        let timeline = try await read(RemoteFixtureBridge.crashTimeline)
+        XCTAssertEqual(timeline.mediaType, "text/markdown")
+        XCTAssertEqual(timeline.data.map { String(decoding: $0, as: UTF8.self) }?.hasPrefix("# Crash timeline"), true)
+        let otherTasks = try await read(RemoteFixtureBridge.crashTimeline, task: ID.idle)
+        XCTAssertEqual(otherTasks.error?.code, .notFound, "Named in another task's conversation")
         let elsewhere = try await read(outputs[0].path, task: ID.idle)
         XCTAssertEqual(elsewhere.error?.code, .notFound, "Another task's output")
         let none = try await ask("taskOutputs", #","taskId":"\#(ID.idle)""#)

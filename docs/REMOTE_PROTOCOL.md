@@ -1443,8 +1443,9 @@ and deleting schedules stay on the Mac unless it advertises §15.35.
 
 ### 15.22 Files from the Mac
 
-The phone opens what a task made: the files the Mac's Outputs card lists, and a file in the
-task's own folders that the conversation names. Files the other way, from the phone to the Mac, are §15.20.
+The phone opens what a task made and what its conversation names: the files the Mac's Outputs card lists, a file in
+the task's own folders, and a file elsewhere that the task's conversation names, as the Mac's window opens it from
+that conversation. Together these are the task's files. Files the other way, from the phone to the Mac, are §15.20.
 
 - The snapshot carries `taskFiles: true` when the Mac answers the requests below. A phone offers them only then.
 - ```json
@@ -1461,8 +1462,9 @@ task's own folders that the conversation names. Files the other way, from the ph
   its patch was applied, not while it waits or when it was declined or failed; and pictures a tool reported saving:
   a Codex `imageGeneration` item's `savedPath` once it completed, and the file an Antigravity `generate_image` result
   names, in the log of the conversation or of a subagent it started, when that file lies directly in the
-  conversation's own folder (`brain/<id>/`). A path a message or another tool's result names is none of these, and
-  the rest of that folder is not served. `size` is absent for a file that is
+  conversation's own folder (`brain/<id>/`). A path a message or another tool's result names is none of these (a
+  message's path is read as a named file, below), and the rest of that folder is not served. `size` is absent for a
+  file that is
   gone or whose place now holds a symbolic link; `writtenAt` (milliseconds since 1970) when the Mac knows it. Not a
   command. Errors: `notFound` (no such task).
 - ```json
@@ -1480,14 +1482,30 @@ task's own folders that the conversation names. Files the other way, from the ph
   `size` carries no bytes. `path` is absolute, starts with `~/` for the home folder, or is relative to the task's folder as a conversation writes it, and
   `.` and `..` are taken out by its text; the answer gives the absolute path the Mac read, with its folders'
   symbolic links resolved, and `name` is that path's last part. The Mac serves a regular file only, at most 100 MiB,
-  and only when it is one of the task's outputs (above) or, once symbolic links are resolved, lies inside one of the
-  task's own folders (its working folder or worktree and the project's other folders, as the task was given them),
-  by whole path components compared byte for byte, by the app's own path rules (`PathRules` with `comparingBytes`;
-  docs/PLATFORM_PORTABILITY.md, "Paths and executable lookup"). An output is the file in its own place: its folder's links are
-  followed, but a symbolic link put where it was is not. Nothing a request names is looked up before its path, by
-  its text, is one of the outputs or under one of the folders. A folder that is the Mac's home folder or holds it
-  (`/`, `/Users`, by any path, `/System/Volumes/Data/Users` too) gives no files of its own: a task there serves
-  only its outputs. Anything else is refused, the same for a file that does not exist, so the phone learns nothing
+  and only when it is one of the task's outputs (above), a file the task's conversation names (below) or, once
+  symbolic links are resolved, lies inside one of the task's own folders (its working folder or worktree and the
+  project's other folders, as the task was given them), by whole path components compared byte for byte, by the app's
+  own path rules (`PathRules` with `comparingBytes`; docs/PLATFORM_PORTABILITY.md, "Paths and executable lookup"). A
+  file the conversation names is one the Mac's window opens from that conversation: a file link or a path in code in
+  the agent's own messages (a Codex message's file citations and review comments too), the file a call of the agent's
+  read, wrote, edited or looked at (its `file_path` and the like, a picture it viewed or made) and the files a change
+  touched, a picture a message carries as its own input, and the file an MCP result's `resource_link` names. Text that
+  is only in a call's output (a command's output, a page's content), in a call's other arguments, in a command line, or
+  in the sender's own words (a file list written as the Codex app attaches files among them) names none: what a page
+  says, or what a device writes, cannot make a file readable. It is matched by the path the conversation wrote (absolute,
+  from `~`, or relative to the task's folder; `.` and `..` taken out, `/tmp`, `/var` and `/etc` read as their
+  `/private` folders) against the request's, by their text, and read, as an output is, in its own place. A named
+  file is never served from where keys, sign-ins and apps' data are kept, wherever its folders' links lead: a hidden
+  entry directly in the home folder (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc`, `~/.config`, the agents' and Yardlet's
+  own homes such as `~/.claude`, `~/.codex`, `~/.gemini` and `~/.yardlet`, and the rest), `~/Library`, what macOS keeps
+  for each user in `/private/var/folders` other than the temporary folder (`…/T`), and `/Library/Keychains`; the file
+  opened is judged again by the path the system gives its descriptor. Nothing in `/dev` (a descriptor there reads as
+  the file it is open on) or `/.vol` is served, of any kind. An output
+  is the file in its own place: its folder's links are followed, but a symbolic link put where it was is not. Nothing a
+  request names is looked up before its path, by its text, is one of the outputs or the named files or under one of
+  the folders. A folder that is the Mac's home folder or holds it (`/`, `/Users`, by any path,
+  `/System/Volumes/Data/Users` too) gives no files of its own: a task there serves only its outputs and the files its
+  conversation names. Anything else is refused, the same for a file that does not exist, so the phone learns nothing
   about folders it may not read; no error names a path. `mediaType` is the Mac's guess from the file's extension,
   else `text/plain` for a file that starts as UTF-8 text and `application/octet-stream` for anything else. A
   device's reads carry at most 32 MiB of parts at once and then 32 MiB per 10 s, over all its connections; past
@@ -1834,7 +1852,8 @@ permission prompt in the watched tab (below); browsing outside a task stays on t
   it (a click, typing, a navigation that reaches the page; not a read), whose downloads are its own. The Mac's panel says so, and an empty tab
   the page opened only for that download closes; the person downloads it on the Mac to keep it. A `file:` page, in the
   tab or in any of its frames (an iframe, an embed, a frame a link moved), is shown and driven only when `readFile`
-  would serve it, or it is a folder inside the task's folders (§15.22), as the agent's tools hold them, or it is the
+  would serve it (a file the task's conversation names among them, so a link from one such page to another shows
+  too), or it is a folder inside the task's folders (§15.22), as the agent's tools hold them, or it is the
   file the task's agent last opened in that very tab with `browser_navigate` (by its real path, symbolic links
   resolved; the person allowed it first where it lies outside the task's folders). That allowance belongs to the tab
   and lasts until the agent opens another address there: the page moving to another file by a link, a script, Back or
@@ -2215,7 +2234,7 @@ to another task's tabs.
   the task's existing file boundary (§15.22), also when it names the file the task's agent opened in that tab
   (§15.25): that file shows there, but only the agent opens it. App schemes and browser-internal schemes remain
   refused. Yardlet on another computer says that a file outside the task's folders opens only on the host when such an
-  address is refused.
+  address is refused; a file the task's conversation names opens from there.
 - `closeTab`: `{id, type: "closeTab", taskId, tabId}`. Ask that task's page to close through the host's normal
   close path. A page's confirmation remains on the host. Success acknowledges the close request; the tab list
   event reports whether the tab actually closed.
@@ -2269,8 +2288,9 @@ apply to tool lines. `body` can contain `output`, `hasOutput`, `reasoning`, `com
 `background`, `files` and `mcp`. File rows carry relative `path`, `kind`, `state`, `preview`, line counts,
 `lines`, `hidden` and `firstChangedLine`; MCP blocks carry `kind`, `text`, `image`, `name`, `title`, `uri`
 and `mimeType`. No host file URL is handed to the client's filesystem. A tool's file picture or `resource_link`
-is carried only when its file lies inside the task's working folder as §15.22 holds it, a link's path relative to
-that folder. File rows open through the
+is carried only when its file lies inside the task's working folder as §15.22 holds that folder, a link's path
+relative to that folder; one elsewhere is not carried, though `readFile` serves its file as one the conversation
+names (§15.22). File rows open through the
 host's existing scoped `readFile` path. Open in Changes selects that file in the existing remote
 Review panel using its host repository metadata; it adds no mutation request. Output is capped at 64,000 characters (the provider's already bounded live head/tail buffer is kept intact), reasoning and commands
 at 200,000; at most 50 files share 100,000 preview characters, and at most 50 MCP blocks share 64,000
@@ -2755,7 +2775,8 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   shows. An older host's chip starts with the host's own choices and keeps Options dimmed. When the snapshot says so, the sidebar lists the
   host's scheduled tasks with Run now, Pause and Resume (§15.21), and with `scheduleEditing` the local list,
   editor and full detail, New, Edit, confirmed Delete and Delete All, and Claude Code session schedules (§15.35), and a task's session rail shows its Outputs card
-  (§15.22). An output, or a file a conversation's link names, is read with `readFile` into a folder of its own in
+  (§15.22). An output, or a file a conversation's link names (wherever it is, outside the task's folders too, unless
+  the host keeps it back), is read with `readFile` into a folder of its own in
   this Mac's temporary folder, readable only by the person, and opened there in Quick Look (from the output's
   menu, in its own app or Finder); the copies go when the window closes. A file link never opens the same path on
   this Mac. From a host that offers them (§15.23), the task's model, effort and permission mode show in the
@@ -2770,7 +2791,8 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   size. From a host advertising `tabLists`, the window follows the list of the
   task it shows (`listOnly`) whenever its panel shows none of the task's tabs, so the host's tabs are the panel's tabs
   from the start, as the local task's engine tabs are its panel's: the title bar's side-panel button and ⌘4 reopen
-  them as they reopen the local task's tabs, the host's front tab first. A tab listed as `file://`
+  them as they reopen the local task's tabs, the host's front tab first. A file page the task's conversation names
+  shows there as any page does. A tab listed as `file://`
   (a file outside the task's files, which the host does not picture) says that it shows only on the host rather than
   waiting for a picture. A handoff's card has Show Tab, which opens it there. With `tabControls`,
   the address field, new-tab button and tab close buttons act on the host (§15.30), and a hook routes loopback links
