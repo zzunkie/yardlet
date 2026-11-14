@@ -330,23 +330,12 @@ struct TranscriptScrollFollowing<RequestID: Hashable>: ViewModifier {
             }
             .overlay(alignment: .bottomTrailing) {
                 if state.showsLatest {
-                    Button {
+                    LatestResponseButton {
                         blankMonitor?.note("latest response")
                         readingTracker?.followLatest()
                         state.isFollowing = true
                         moveToLatest(wasFollowing: false, animation: ParityMotion.easeOut(reduceMotion: reduceMotion))
-                    } label: {
-                        Label(L10n.string("Latest response"), systemImage: "arrow.down")
-                            .font(.caption.weight(.medium))
-                            .padding(.horizontal, 11)
-                            .padding(.vertical, 7)
-                            .background(ParityTheme.elevated, in: Capsule())
-                            .overlay { Capsule().stroke(ParityTheme.strongSeparator) }
                     }
-                    .buttonStyle(.borderless)
-                    .parityPointer()
-                    .help(L10n.string("Return to the latest response and follow new messages"))
-                    .padding(12)
                 }
             }
     }
@@ -394,5 +383,25 @@ struct TranscriptScrollFollowing<RequestID: Hashable>: ViewModifier {
             // A completed point/ID command must not be reapplied by the next lazy layout pass.
             if !state.isFollowing { position.isPositionedByUser = true }
         }
+    }
+}
+
+/// "Latest response", over a conversation the reader scrolled away from its end.
+struct LatestResponseButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label(L10n.string("Latest response"), systemImage: "arrow.down")
+                .font(.caption.weight(.medium))
+                .padding(.horizontal, 11)
+                .padding(.vertical, 7)
+                .background(ParityTheme.elevated, in: Capsule())
+                .overlay { Capsule().stroke(ParityTheme.strongSeparator) }
+        }
+        .buttonStyle(.borderless)
+        .parityPointer()
+        .help(L10n.string("Return to the latest response and follow new messages"))
+        .padding(12)
     }
 }
