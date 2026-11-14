@@ -80,14 +80,15 @@ jobs:
           mkdir -p .build/ci
           ./scripts/test-fast.sh -v 2>&1 | python3 -I scripts/test-report.py --log .build/ci/test-output.log \
             --times .build/ci/test-times.tsv --summary "$GITHUB_STEP_SUMMARY"
-      # While the conversation's row list and the eager stack both draw conversations (the row list
-      # behind ConversationRowListSwitch), the conversation's tests run again with the row list on, so
-      # a change that breaks only the row list shows here. It goes away with the switch.
-      - name: Test the conversation's row list
+      # While the eager stack can still be turned back on in place of the conversation's row list
+      # (ConversationRowListSwitch), the conversation's tests run again with the stack, so a change that
+      # breaks only the stack shows here. It goes away with the stack.
+      - name: Test the conversation's stack
         run: |
           set -o pipefail
-          ./scripts/test-row-list.sh -v 2>&1 | python3 -I scripts/test-report.py --log .build/ci/row-list-output.log \
-            --times .build/ci/row-list-times.tsv --summary "$GITHUB_STEP_SUMMARY"
+          ./scripts/test-conversation-stack.sh -v 2>&1 | python3 -I scripts/test-report.py \
+            --log .build/ci/conversation-stack-output.log --times .build/ci/conversation-stack-times.tsv \
+            --summary "$GITHUB_STEP_SUMMARY"
       - name: Keep the test output and times
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -96,8 +97,8 @@ jobs:
           path: |
             .build/ci/test-output.log
             .build/ci/test-times.tsv
-            .build/ci/row-list-output.log
-            .build/ci/row-list-times.tsv
+            .build/ci/conversation-stack-output.log
+            .build/ci/conversation-stack-times.tsv
           retention-days: 14
           if-no-files-found: ignore
       - name: Keep the images the tests drew

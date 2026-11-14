@@ -13,14 +13,19 @@ import SwiftUI
 /// to the places the conversation is asked for (`ConversationRowTarget`) and the saved place being read
 /// (`TranscriptReadingTracker`), as soon as their row is in the list.
 enum ConversationRowListSwitch {
-    /// Turns the row list on while it and the stack both exist: `defaults write com.zzunkie.yardlet
-    /// YardletConversationRowList -bool true` (or the launch argument `-YardletConversationRowList YES`),
-    /// or `YARDLET_CONVERSATION_ROW_LIST=1` in the environment, as tests and the bench do. Read once, at
+    /// The row list draws every conversation unless it is turned off, which brings the stack back while
+    /// both exist: `defaults write com.zzunkie.yardlet YardletConversationRowList -bool false` (or the
+    /// launch argument `-YardletConversationRowList NO`), or `YARDLET_CONVERSATION_ROW_LIST=0` in the
+    /// environment, as tests and the bench do; `1` turns it on whatever the defaults say. Read once, at
     /// launch. It is not a setting: no Settings pane or settings tool shows it, and it goes away with
-    /// the stack once the row list draws every conversation.
+    /// the stack.
     static let defaultsKey = "YardletConversationRowList"
-    static let isOn = UserDefaults.standard.bool(forKey: defaultsKey)
-        || ProcessInfo.processInfo.environment["YARDLET_CONVERSATION_ROW_LIST"] == "1"
+    static let isOn: Bool = {
+        if let value = ProcessInfo.processInfo.environment["YARDLET_CONVERSATION_ROW_LIST"] { return value != "0" }
+        // A launch argument's value is text ("NO"), which `bool(forKey:)` reads as it reads a Boolean.
+        let defaults = UserDefaults.standard
+        return defaults.object(forKey: defaultsKey) == nil || defaults.bool(forKey: defaultsKey)
+    }()
 }
 
 /// The list drawing a conversation's rows, while `ConversationRowListSwitch` is on.
