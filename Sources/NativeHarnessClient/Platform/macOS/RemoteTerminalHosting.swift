@@ -6,6 +6,8 @@ final class RemoteTerminalHosting: TerminalHosting {
     var onOutput: ((ArraySlice<UInt8>) -> Void)?
     var onExit: ((Int32?) -> Void)?
     var onReady: (() -> Void)?
+    /// The shell's size the host took, before the output written at it.
+    var onResize: ((TerminalGrid) -> Void)?
     var workspaceURL: URL? { stream.workspaceURL }
     var processID: Int32? { nil }
     var foregroundProcessGroup: Int32? { nil }
@@ -23,6 +25,7 @@ final class RemoteTerminalHosting: TerminalHosting {
     init(stream: RemoteTerminalStream) {
         self.stream = stream
         stream.onOutput = { [weak self] data in self?.onOutput?(Array(data)[...]) }
+        stream.onResize = { [weak self] columns, rows in self?.onResize?(TerminalGrid(columns: columns, rows: rows)) }
         stream.onReady = { [weak self] in self?.onReady?() }
         stream.onExit = { [weak self] in self?.onExit?($0) }
     }

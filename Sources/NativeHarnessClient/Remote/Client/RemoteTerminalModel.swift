@@ -103,6 +103,8 @@ final class RemoteTerminalStream {
     private(set) var closeReason: String?
     @ObservationIgnored weak var owner: RemoteTerminalModel?
     @ObservationIgnored var onOutput: ((Data) -> Void)?
+    /// The shell's size the host took, told before the output written at it (§15.29).
+    @ObservationIgnored var onResize: ((_ columns: Int, _ rows: Int) -> Void)?
     @ObservationIgnored var onReady: (() -> Void)?
     @ObservationIgnored var onExit: ((Int32?) -> Void)?
     /// Its first open takes back a shell this device left in the task, if the host kept one.
@@ -299,6 +301,10 @@ final class RemoteTerminalStream {
                 stop(); fail(RemoteError(.unavailable)); return
             }
             sequence = next
+            if let columns = event.columns, let rows = event.rows, RemoteProtocol.terminalColumns.contains(columns),
+               RemoteProtocol.terminalRows.contains(rows) {
+                onResize?(columns, rows)
+            }
             onOutput?(data)
             acknowledge(next, terminalID: terminalID)
         case .terminalClosed where event.reason == "outputTimeout" && keepsRunning:

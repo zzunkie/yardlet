@@ -2852,6 +2852,7 @@ private actor PausedTerminalSink {
                 isPaused = true
                 await withCheckedContinuation { continuation = $0 }
             }
+        case .resized: break
         case let .exited(status): exitCode = status; hasExited = true
         }
     }

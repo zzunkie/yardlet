@@ -473,6 +473,18 @@ enum TerminalAppearance {
     }
 }
 
+/// What shows a shell: the host's panel, or a remote window by the terminal ID its host gave it.
+enum TerminalViewer: Hashable {
+    case panel
+    case remote(String)
+}
+
+/// A shell's size in character cells.
+struct TerminalGrid: Equatable {
+    var columns: Int
+    var rows: Int
+}
+
 @MainActor
 @Observable
 final class NativeTerminalSession: NSObject, @MainActor TerminalViewDelegate, NativeSurfaceResource {
@@ -531,6 +543,16 @@ final class NativeTerminalSession: NSObject, @MainActor TerminalViewDelegate, Na
     @ObservationIgnored private var mirror: TerminalBufferMirror?
     @ObservationIgnored private var columns = 80
     @ObservationIgnored private var rows = 24
+    /// One shell has one size, however many renderers show it, as tmux's `window-size latest` has it: the shell takes
+    /// the size its renderer typed in or attached last asks for, and every renderer reads the output at that size,
+    /// drawn from its top left (docs/REMOTE_PROTOCOL.md §15.29). The size each renderer asks for, and the renderers
+    /// the least recently used first.
+    @ObservationIgnored private var viewerSizes: [TerminalViewer: TerminalGrid] = [:]
+    @ObservationIgnored private var recentViewers: [TerminalViewer] = []
+    /// The shell's size as its host last said, for a remote shell whose host says it (§15.29).
+    @ObservationIgnored private var hostSize: TerminalGrid?
+    /// Told the shell's new size, for the remote window showing it.
+    @ObservationIgnored var onResize: ((TerminalGrid) -> Void)?
     /// When the shell last printed, while its view reports it (`NativeTerminalView`).
     @ObservationIgnored private var lastOutputAt: ContinuousClock.Instant?
     /// Panels showing a shell the task's workspace keeps.
@@ -560,6 +582,7 @@ final class NativeTerminalSession: NSObject, @MainActor TerminalViewDelegate, Na
             self.isRunning = true
             self.registerShell()
         }
+        (self.hosting as? RemoteTerminalHosting)?.onResize = { [weak self] in self?.hostResized($0) }
         NativeSurfaceResourceRegistry.shared.register(self)
     }
 
@@ -596,7 +619,10 @@ final class NativeTerminalSession: NSObject, @MainActor TerminalViewDelegate, Na
     func panelDisappeared() {
         shownPanels = max(0, shownPanels - 1)
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.shownPanels == 0, !self.hasEnded, !self.isRunning else { return }
+            guard let self, self.shownPanels == 0 else { return }
+            // Out of sight, the panel no longer holds the shell's size.
+            self.removeViewer(.panel)
+            guard !self.hasEnded, !self.isRunning else { return }
             self.end()
         }
     }
@@ -670,19 +696,96 @@ final class NativeTerminalSession: NSObject, @MainActor TerminalViewDelegate, Na
         lastOutputAt = .now
         if let terminalView {
             terminalView.feed(byteArray: slice)
+            (terminalView.superview as? TerminalViewHost)?.outputArrived()
         } else {
             mirror?.terminal.feed(buffer: slice)
         }
         onOutput?(slice)
     }
 
+    /// The panel's renderer fits `columns` × `rows`.
     func resize(columns: Int, rows: Int) {
-        self.columns = max(2, min(columns, 500))
-        self.rows = max(2, min(rows, 300))
-        mirror?.terminal.resize(cols: self.columns, rows: self.rows)
-        hosting.resize(columns: columns, rows: rows)
+        request(.panel, columns: columns, rows: rows)
     }
-    func send(source: TerminalView, data: ArraySlice<UInt8>) { send(data) }
+
+    /// `viewer` fits `columns` × `rows`: the shell takes it when `viewer` was used last. A remote shell asks its host,
+    /// which says the size it took with the output.
+    func request(_ viewer: TerminalViewer, columns: Int, rows: Int) {
+        let size = TerminalGrid(columns: max(2, min(columns, 500)), rows: max(2, min(rows, 300)))
+        guard hosting is LocalTerminalHosting else {
+            self.columns = size.columns
+            self.rows = size.rows
+            hosting.resize(columns: size.columns, rows: size.rows)
+            fitEmulator()
+            return
+        }
+        viewerSizes[viewer] = size
+        if !recentViewers.contains(viewer) { recentViewers.insert(viewer, at: 0) }
+        applyViewerSize()
+    }
+
+    /// The person typed in, or attached, `viewer`'s renderer: the shell takes the size it asked for.
+    func use(_ viewer: TerminalViewer) {
+        guard recentViewers.last != viewer else { return }
+        recentViewers.removeAll { $0 == viewer }
+        recentViewers.append(viewer)
+        applyViewerSize()
+    }
+
+    /// `viewer` no longer shows the shell: the one used before it sets the size.
+    func removeViewer(_ viewer: TerminalViewer) {
+        guard recentViewers.contains(viewer) else { return }
+        viewerSizes[viewer] = nil
+        recentViewers.removeAll { $0 == viewer }
+        applyViewerSize()
+    }
+
+    /// The shell's size now.
+    var size: TerminalGrid { TerminalGrid(columns: columns, rows: rows) }
+
+    private func applyViewerSize() {
+        guard hosting is LocalTerminalHosting,
+              let viewer = recentViewers.last(where: { viewerSizes[$0] != nil }), let size = viewerSizes[viewer] else { return }
+        if size != self.size {
+            columns = size.columns
+            rows = size.rows
+            hosting.resize(columns: size.columns, rows: size.rows)
+            onResize?(size)
+        }
+        fitEmulator()
+    }
+
+    /// The host's shell takes this size from the output that comes next on (§15.29).
+    private func hostResized(_ size: TerminalGrid) {
+        hostSize = size
+        fitEmulator()
+    }
+
+    /// The size the emulator reads the output at: the shell's. A remote shell whose host does not say its size takes
+    /// the size asked for.
+    var emulatorSize: TerminalGrid {
+        hosting is LocalTerminalHosting ? size : hostSize ?? size
+    }
+
+    /// Brings the emulator to `emulatorSize` now, before any more output: through its panel, which shows a shell of
+    /// another size from its top left (`TerminalViewHost`), or directly while no panel lays it out.
+    private func fitEmulator() {
+        if let host = terminalView?.superview as? TerminalViewHost, host.placesTerminal {
+            host.frameTerminal()
+            return
+        }
+        let size = emulatorSize
+        guard let emulator = terminalView?.getTerminal() ?? mirror?.terminal,
+              emulator.cols != size.columns || emulator.rows != size.rows else { return }
+        emulator.resize(cols: size.columns, rows: size.rows)
+        terminalView?.needsDisplay = true
+    }
+
+    /// The person typed, pasted or clicked in the panel; an answer the host's emulator gives the shell is not them.
+    func send(source: TerminalView, data: ArraySlice<UInt8>) {
+        if (source as? NativeTerminalView)?.isAnswering != true { use(.panel) }
+        send(data)
+    }
     func send(_ data: ArraySlice<UInt8>) {
         guard isRunning else { return }
         actionError = nil
@@ -835,6 +938,12 @@ final class NativeTerminalSession: NSObject, @MainActor TerminalViewDelegate, Na
     }
 
     func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
+        // A panel that lays its terminal out asks for the size it fits itself; SwiftTerm resized for another reason (a
+        // new font), and the panel lays it out again.
+        if let host = source.superview as? TerminalViewHost, host.placesTerminal {
+            host.terminalResizedItself()
+            return
+        }
         resize(columns: newCols, rows: newRows)
     }
 
@@ -928,20 +1037,97 @@ private struct SwiftTermHost: NSViewRepresentable {
 
 /// A fresh host for each panel, as `BrowserWebViewHost` is for a page: the shell's view moves into
 /// the next panel's host, and the teardown of the panel it left, which SwiftUI may run after, cannot
-/// take it out of its new place.
+/// take it out of its new place. It lays the view out at its shell's size (`frameTerminal`).
 final class TerminalViewHost: NSView {
     let terminal: TerminalView
+    /// The shell is taller than the panel: the panel shows the rows around its cursor.
+    private var followsCursor = false
+    /// The panel lays its terminal out at its shell's size (`TerminalCellMetrics` could be read); otherwise the terminal
+    /// fills it and SwiftTerm sizes the shell, as before.
+    private(set) var placesTerminal = false
+    private var isPlacing = false
 
     init(terminal: TerminalView) {
         self.terminal = terminal
         super.init(frame: terminal.frame)
         terminal.removeFromSuperview()
-        terminal.autoresizingMask = [.width, .height]
+        terminal.autoresizingMask = []
+        // A shell larger than the panel stays inside it.
+        wantsLayer = true
+        clipsToBounds = true
         addSubview(terminal)
         terminal.frame = bounds
     }
 
     required init?(coder: NSCoder) { nil }
+
+    override func resizeSubviews(withOldSize oldSize: NSSize) {
+        place()
+    }
+
+    override func layout() {
+        super.layout()
+        place()
+    }
+
+    /// The panel asks its shell for the size it fits, then lays the terminal out at the shell's size (`frameTerminal`).
+    private func place() {
+        guard !isPlacing else { return }
+        guard bounds.width > 0, bounds.height > 0, let session = (terminal as? NativeTerminalView)?.session,
+              let metrics = TerminalCellMetrics(terminal) else {
+            placesTerminal = false
+            followsCursor = false
+            if terminal.frame != bounds { terminal.frame = bounds }
+            return
+        }
+        placesTerminal = true
+        let fit = metrics.grid(fitting: bounds.size)
+        session.request(.panel, columns: fit.columns, rows: fit.rows)
+        frameTerminal(metrics)
+    }
+
+    /// Lays the terminal out at its shell's size (`NativeTerminalSession.emulatorSize`), which SwiftTerm then gives its
+    /// emulator: the whole panel when that is the size the panel fits, else that size from the panel's top left, where a
+    /// renderer used later chose it (`NativeTerminalSession.use`), clipped where the panel is smaller and with the rows
+    /// around the cursor in view, rather than reflowing the screen to the panel.
+    func frameTerminal(_ known: TerminalCellMetrics? = nil) {
+        guard !isPlacing, let session = (terminal as? NativeTerminalView)?.session,
+              let metrics = known ?? TerminalCellMetrics(terminal) else { return }
+        isPlacing = true
+        defer { isPlacing = false }
+        let target = session.emulatorSize
+        guard target != metrics.grid(fitting: bounds.size) else {
+            followsCursor = false
+            if terminal.frame != bounds { terminal.frame = bounds }
+            // SwiftTerm counts the panel's cells itself; should it count otherwise, its count is what the panel fits.
+            let emulator = terminal.getTerminal()
+            if emulator.cols != target.columns || emulator.rows != target.rows {
+                session.request(.panel, columns: emulator.cols, rows: emulator.rows)
+            }
+            return
+        }
+        let size = metrics.frameSize(for: target)
+        let visibleRows = max(1, Int(bounds.height / metrics.cell.height))
+        followsCursor = target.rows > visibleRows
+        // Laid out first at its size from the top, so the cursor is read at that size.
+        let top = NSRect(x: 0, y: bounds.height - size.height, width: size.width, height: size.height)
+        if terminal.frame.size != top.size { terminal.frame = top }
+        let firstRow = followsCursor
+            ? min(max(0, terminal.getTerminal().getCursorLocation().y - visibleRows + 1), target.rows - visibleRows) : 0
+        let frame = top.offsetBy(dx: 0, dy: CGFloat(firstRow) * metrics.cell.height)
+        if terminal.frame != frame { terminal.frame = frame }
+    }
+
+    /// SwiftTerm resized the terminal for a reason of its own (a new font): laid out again.
+    func terminalResizedItself() {
+        guard !isPlacing else { return }
+        place()
+    }
+
+    /// The shell printed: a panel showing part of a taller shell keeps its cursor in view.
+    func outputArrived() {
+        if followsCursor { frameTerminal() }
+    }
 
     func unmount() {
         guard terminal.superview === self else { return }
@@ -949,6 +1135,47 @@ final class TerminalViewHost: NSView {
             window.makeFirstResponder(nil)
         }
         terminal.removeFromSuperview()
+    }
+}
+
+/// The cell size SwiftTerm lays a view's terminal out with, which it does not publish: its rows' height from the frame
+/// it asks for, and its columns' width from its font as it measures one, checked against that frame. Nil when they do
+/// not agree, and the panel then lets the terminal fill it as before.
+struct TerminalCellMetrics {
+    let cell: CGSize
+    /// The width beside the columns kept for the scroller.
+    let reserved: CGFloat
+
+    @MainActor
+    init?(_ view: TerminalView) {
+        let terminal = view.getTerminal()
+        let optimal = view.getOptimalFrameSize().size
+        guard terminal.cols > 0, terminal.rows > 0, optimal.height > 0 else { return nil }
+        let font = view.font
+        let advance = font.advancement(forGlyph: font.glyph(withName: "W")).width
+        let scroller = NSScroller.scrollerWidth(for: .regular, scrollerStyle: view.scrollerStyle)
+        let scales = [view.window?.backingScaleFactor, NSScreen.main?.backingScaleFactor, 2, 1].compactMap { $0 }
+        for scale in scales {
+            let width = max(1, (advance * scale).rounded() / scale)
+            let reserved = optimal.width - width * CGFloat(terminal.cols)
+            if abs(reserved) < 0.25 || abs(reserved - scroller) < 0.25 {
+                cell = CGSize(width: width, height: optimal.height / CGFloat(terminal.rows))
+                self.reserved = max(0, reserved)
+                return
+            }
+        }
+        return nil
+    }
+
+    /// The grid a frame of `size` holds, as SwiftTerm counts it.
+    func grid(fitting size: CGSize) -> TerminalGrid {
+        TerminalGrid(columns: max(2, Int((size.width - reserved) / cell.width)), rows: max(2, Int(size.height / cell.height)))
+    }
+
+    /// A frame that holds `grid` exactly, with less than a cell to spare so SwiftTerm counts the same grid.
+    func frameSize(for grid: TerminalGrid) -> CGSize {
+        CGSize(width: cell.width * CGFloat(grid.columns) + reserved + cell.width / 2,
+               height: cell.height * CGFloat(grid.rows) + cell.height / 2)
     }
 }
 
@@ -971,9 +1198,14 @@ extension EnvironmentValues {
 /// "Attach selection as context" key, attach the selection to the person's message; otherwise it has
 /// no menu, as SwiftTerm's own view has none.
 final class NativeTerminalView: TerminalView {
+    /// The host's emulator is answering the shell (a cursor position, its colors), not the person typing.
+    private(set) var isAnswering = false
+
     /// Parser-generated replies come only from the host's emulator. Key input still uses the view delegate.
     override func send(source: Terminal, data: ArraySlice<UInt8>) {
         guard session?.hosting is LocalTerminalHosting else { return }
+        isAnswering = true
+        defer { isAnswering = false }
         super.send(source: source, data: data)
     }
 

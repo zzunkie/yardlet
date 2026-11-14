@@ -27,7 +27,10 @@ struct RemoteServerTerminal {
     var opened = false
     /// The bridge started its shell; it stays started while kept and while attaching again.
     var hasShell = false
-    var output: [Data] = []
+    /// Output not sent yet, each part with the shell's size when it changed just before that part.
+    var output: [(data: Data, size: (columns: Int, rows: Int)?)] = []
+    /// A size the bridge gave that goes with the next output.
+    var nextSize: (columns: Int, rows: Int)?
     var sentBytes: Int?
     var sequence = 0
     var exited = false
@@ -219,6 +222,7 @@ extension RemoteServer {
         session.permit = permit
         session.opened = false
         session.output = []
+        session.nextSize = nil
         session.sentBytes = nil
         session.sequence = 0
         session.exited = false
@@ -267,6 +271,7 @@ extension RemoteServer {
         session.connection = nil
         session.timeout = nil
         session.output = []
+        session.nextSize = nil
         session.sentBytes = nil
         terminals[terminalID] = session
         auditTerminal("detachTerminal", device: session.deviceID, task: session.taskID, result: "ok")
@@ -286,7 +291,11 @@ extension RemoteServer {
         guard session.permit.isValid else { endTerminal(terminalID, reason: "closed", permit: permit); return }
         for update in session.permit.takeUpdates() {
             switch update {
-            case let .output(data): terminals[terminalID]?.output.append(data)
+            case let .output(data):
+                let size = terminals[terminalID]?.nextSize
+                terminals[terminalID]?.output.append((data, size))
+                terminals[terminalID]?.nextSize = nil
+            case let .resized(columns, rows): terminals[terminalID]?.nextSize = (columns, rows)
             case let .exited(code):
                 terminals[terminalID]?.exited = true
                 terminals[terminalID]?.exitCode = code
@@ -302,7 +311,7 @@ extension RemoteServer {
             if session.exited { endTerminal(terminalID, reason: "exited", exitCode: session.exitCode) }
             return
         }
-        let data = session.output.removeFirst()
+        let (data, size) = session.output.removeFirst()
         session.sequence += 1
         session.sentBytes = data.count
         let sequence = session.sequence
@@ -317,6 +326,8 @@ extension RemoteServer {
         event.terminalId = terminalID
         event.data = data
         event.sequence = sequence
+        event.columns = size?.columns
+        event.rows = size?.rows
         send(event, to: connection)
     }
 

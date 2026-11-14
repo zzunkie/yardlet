@@ -2,6 +2,8 @@ import Foundation
 
 public enum RemoteTerminalUpdate: Sendable {
     case output(Data)
+    /// The shell's size from the next output on (§15.29).
+    case resized(columns: Int, rows: Int)
     case exited(Int32?)
 }
 
@@ -76,6 +78,9 @@ public final class RemoteTerminalPermit: @unchecked Sendable {
     private func append(_ update: RemoteTerminalUpdate) -> EnqueueResult {
         switch update {
         case let .output(data): bytes += data.count; chunks += 1
+        case .resized:
+            // Only the latest size before the next output matters, so these take no room.
+            if case .resized = pending.last { pending.removeLast() }
         case .exited:
             guard !exited else { return .ended }
             exited = true

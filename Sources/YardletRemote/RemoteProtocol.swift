@@ -2865,6 +2865,9 @@ public struct RemoteEvent: Codable, Equatable, Sendable {
     public var data: Data?
     public var sequence: Int?
     public var exitCode: Int32?
+    /// The shell's size when this output was written, on the first `terminalOutput` after it changed.
+    public var columns: Int?
+    public var rows: Int?
 
     // browser tabs (§15.25)
     public var tabId: String?

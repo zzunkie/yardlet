@@ -2107,7 +2107,8 @@ the protocol does not separately expose environment variables, credentials or va
 - `terminalOutputAck`: `taskId`, `terminalId`, `sequence` of the last output delivered to the terminal view.
 
 `terminalOutput` events carry `taskId`, `terminalId`, `data` (base64, at most 16,384 bytes) and `sequence`, starting
-at one per session. Output bytes stay in order. Each chunk waits for acknowledgement before the next; at most
+at one per session, and, on the first output after an open, an attach or a change of the shell's size, `columns` and
+`rows`: the shell's size from that output on (see "One size" below). Output bytes stay in order. Each chunk waits for acknowledgement before the next; at most
 64 chunks and 256 KiB are reserved from the bridge callback through acknowledgement. The bridge's single output
 producer awaits room before reading more from the PTY, with at most one additional 16 KiB chunk waiting. This
 backpressure preserves ordinary bursts larger than the buffer without blocking the main actor or creating an
@@ -2150,6 +2151,17 @@ The desktop client uses the local Terminal panel through a byte-stream provider.
 and refusal states, acknowledges output after feeding its emulator, and never repeats input on reconnect. Against a
 host without `terminalReattach` it never reopens a shell on reconnect, and the panel states that closing the window or
 losing the connection ends its terminals. A hidden panel retains its shell until the connection or task ends.
+
+**One size.** A shell shown by the host's panel and a remote window at once has one size, as tmux's `window-size
+latest` has it: the PTY takes the size asked for by the renderer the person used last, a window by its `openTerminal`,
+attach or `terminalInput`, the host's panel by a key typed, pasted or clicked in it. `terminalResize` says the size a
+window fits; the host applies it while that window was used last and keeps it for when it is. A renderer that stops
+showing the shell (the window closes or loses the connection, the panel hides) gives the size back to the one used
+before it. Every renderer reads the output at the shell's size: one whose panel fits another size shows the shell from
+its top left, with blank space where the panel is larger, clipped where it is smaller, and with the rows around the
+cursor in view when the shell is taller, rather than reflowing the screen to the panel. The client sizes its emulator by
+`columns` and `rows` before feeding the output that carries them; a client that ignores them keeps its own size, as
+before, and a host that does not send them leaves the client its own size.
 
 **Kept terminals.** A host with `terminalReattach` keeps a shell opened with `keepRunning` when its connection ends,
 whether the window closed, the network dropped, or a relay path moved to a direct one. Output meanwhile reaches only

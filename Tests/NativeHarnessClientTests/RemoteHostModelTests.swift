@@ -271,6 +271,54 @@ final class RemoteHostModelTests: XCTestCase {
                 to: output.appending(path: "terminal-local-remote-\(appearance.suffix).png"))
             rendered.close()
         }
+        // One shell has one size (§15.29): the renderer typed in last sets it, and the other reads the output at that
+        // size from its top left rather than at its own, so neither screen loses a line when the two panels differ.
+        func grid(_ session: NativeTerminalSession) -> TerminalGrid {
+            let emulator = session.view { TerminalView(frame: .zero) }.getTerminal()
+            return TerminalGrid(columns: emulator.cols, rows: emulator.rows)
+        }
+        func sharedRender(_ appearance: WindowlessRender.Appearance) -> WindowlessRender.Host<some View> {
+            WindowlessRender.Host(HStack(spacing: 1) {
+                TerminalPane(session: local, tabs: TerminalTabsContext(workspace: host.taskWorkspaces.state(for: task.id),
+                    folder: folder, launch: .isolatedZsh(in: folder), taskID: task.id),
+                    isInSidePanel: true, onClose: {}).frame(width: 520)
+                pane.frame(width: 880)
+            }.environment(\.colorScheme, appearance.colorScheme), size: NSSize(width: 1401, height: 400), appearance: appearance)
+        }
+        let shared = sharedRender(.light)
+        shared.settle(passes: 4)
+        local.send(source: local.view { TerminalView(frame: .zero) }, data: Array("echo HOST_SIZED\r".utf8)[...])
+        try await waitUntil {
+            shared.settle(passes: 1)
+            return remote.bufferText.components(separatedBy: "HOST_SIZED").count == 3 && grid(remote) == local.size
+        }
+        let hostSized = local.size
+        XCTAssertEqual(grid(local), hostSized)
+        let typed = await remote.runWhenReady("echo REMOTE_SIZED")
+        XCTAssertTrue(typed)
+        try await waitUntil {
+            shared.settle(passes: 1)
+            return remote.bufferText.components(separatedBy: "REMOTE_SIZED").count == 3 && grid(remote) == local.size
+        }
+        XCTAssertNotEqual(local.size, hostSized, "The wider remote panel took the shell")
+        XCTAssertEqual(grid(local), local.size)
+        for marker in ["HOST_SIZED", "REMOTE_SIZED"] {
+            XCTAssertEqual(local.bufferText.components(separatedBy: marker).count, 3, marker)
+            XCTAssertEqual(remote.bufferText.components(separatedBy: marker).count, 3, marker)
+        }
+        try await waitUntil {
+            shared.settle(passes: 1)
+            return remote.bufferText.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("%")
+        }
+        try WindowlessRender.writePNG(TerminalCommandHandoffTests.asShown(shared, appearance: .light),
+            to: output.appending(path: "terminal-shared-size-light.png"))
+        shared.close()
+        let sharedDark = sharedRender(.dark)
+        sharedDark.settle(passes: 4)
+        XCTAssertEqual(grid(remote), local.size, "Laid out again, neither panel takes the shell")
+        try WindowlessRender.writePNG(TerminalCommandHandoffTests.asShown(sharedDark, appearance: .dark),
+            to: output.appending(path: "terminal-shared-size-dark.png"))
+        sharedDark.close()
         // Below the conversation both use only the terminal-tab strip, without the side-panel header.
         let belowPane = RemoteTerminalPane(model: client, taskID: task.id.uuidString, onClose: {})
         for appearance in WindowlessRender.Appearance.allCases {

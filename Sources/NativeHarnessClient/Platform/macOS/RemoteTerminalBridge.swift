@@ -3,7 +3,8 @@ import YardletRemote
 
 /// Remote shells are the host task's ordinary terminal tabs, visible to its local panel and tools. A shell's output goes
 /// to the one connection attached to it; one kept after its connection ended (§15.29) goes on with the host's screen
-/// alone until its device attaches again, and the attach starts with a repaint of that screen.
+/// alone until its device attaches again, and the attach starts with a repaint of that screen. Each connection is one of
+/// the shell's renderers for its size (`NativeTerminalSession.use`), and the size goes out with the output after it.
 @MainActor
 final class RemoteTerminalBridge {
     static let isAvailable = true
@@ -51,10 +52,17 @@ final class RemoteTerminalBridge {
             guard let entry, entry.output != nil else { return }
             entry.pending.append(.output(Data(bytes)))
         }
+        // The size goes with the output after it, which the shell writes for that size.
+        session.onResize = { [weak entry] size in
+            guard let entry, entry.output != nil else { return }
+            entry.pending.append(.resized(columns: size.columns, rows: size.rows))
+        }
         hosting.outputConsumer = { [weak self] update in
             await self?.consume(update, terminalID: terminalID)
         }
-        session.resize(columns: columns, rows: rows)
+        session.request(.remote(terminalID), columns: columns, rows: rows)
+        session.use(.remote(terminalID))
+        entry.pending = [.resized(columns: session.size.columns, rows: session.size.rows)]
         guard permit.isValid else { close(taskID: task.id.uuidString, terminalID: terminalID); return RemoteError(.notAllowed) }
         session.start()
         guard session.isRunning else { close(taskID: task.id.uuidString, terminalID: terminalID); return RemoteError(.unavailable) }
@@ -68,11 +76,12 @@ final class RemoteTerminalBridge {
         guard permit.isValid else { return RemoteError(.notAllowed) }
         guard let entry = sessions[terminalID], entry.taskID == taskID, entry.session.isRunning else { return RemoteError(.notFound) }
         entry.permit?.revoke()
-        entry.session.resize(columns: columns, rows: rows)
+        entry.session.request(.remote(terminalID), columns: columns, rows: rows)
+        entry.session.use(.remote(terminalID))
         guard let repaint = entry.session.screenRepaint else { return RemoteError(.notFound) }
         entry.permit = permit
         entry.output = output
-        entry.pending = [.output(repaint)]
+        entry.pending = [.resized(columns: entry.session.size.columns, rows: entry.session.size.rows), .output(repaint)]
         Task { await deliver(terminalID) }
         return nil
     }
@@ -88,6 +97,7 @@ final class RemoteTerminalBridge {
         entry.permit = nil
         entry.output = nil
         entry.pending.removeAll()
+        entry.session.removeViewer(.remote(terminalID))
     }
 
     private func consume(_ update: TerminalStreamUpdate, terminalID: String) async {
@@ -132,6 +142,7 @@ final class RemoteTerminalBridge {
     /// The host closed or restarted the tab, or its task ended.
     private func stopped(_ terminalID: String) {
         guard let entry = sessions.removeValue(forKey: terminalID) else { return }
+        entry.session.removeViewer(.remote(terminalID))
         entry.permit?.revoke()
         // Notify even if the process delegate already finished or its queued exit was discarded by revocation.
         if let output = entry.output { Task { await output(.exited(nil)) } }
@@ -143,6 +154,7 @@ final class RemoteTerminalBridge {
         guard let entry = sessions[terminalID], entry.taskID == taskID, entry.permit === permit,
               permit.isValid else { return RemoteError(.notAllowed) }
         guard entry.session.isRunning else { return RemoteError(.unavailable) }
+        entry.session.use(.remote(terminalID))
         entry.session.send(Array(data)[...])
         return nil
     }
@@ -150,7 +162,7 @@ final class RemoteTerminalBridge {
     func resize(taskID: String, terminalID: String, columns: Int, rows: Int, permit: RemoteTerminalPermit) -> RemoteError? {
         guard let entry = sessions[terminalID], entry.taskID == taskID, entry.permit === permit,
               permit.isValid else { return RemoteError(.notAllowed) }
-        entry.session.resize(columns: columns, rows: rows)
+        entry.session.request(.remote(terminalID), columns: columns, rows: rows)
         return nil
     }
 
@@ -163,6 +175,7 @@ final class RemoteTerminalBridge {
     func close(taskID: String, terminalID: String) {
         guard let entry = sessions[terminalID], entry.taskID == taskID else { return }
         sessions[terminalID] = nil
+        entry.session.removeViewer(.remote(terminalID))
         entry.permit?.revoke()
         release(entry)
         // A naturally exited tab already visible on the host keeps its screen, as local tabs do.
@@ -176,6 +189,7 @@ final class RemoteTerminalBridge {
         entry.session.onOutput = nil
         entry.session.onExit = nil
         entry.session.onStop = nil
+        entry.session.onResize = nil
         (entry.session.hosting as? LocalTerminalHosting)?.outputConsumer = nil
     }
 }

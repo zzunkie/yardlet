@@ -568,12 +568,18 @@ final class TerminalCommandHandoffTests: XCTestCase {
         for terminal in host.hosting.terminalViews {
             let alone = try XCTUnwrap(WindowlessRender.capture(terminal).cgImage)
             let scale = CGFloat(image.width) / host.hosting.bounds.width
-            let frame = host.hosting.convert(terminal.bounds, from: terminal)
-            let bottom = host.hosting.isFlipped ? host.hosting.bounds.height - frame.maxY : frame.minY
-            let place = CGRect(x: frame.minX * scale, y: bottom * scale,
-                               width: frame.width * scale, height: frame.height * scale)
+            func placed(_ rect: CGRect) -> CGRect {
+                let bottom = host.hosting.isFlipped ? host.hosting.bounds.height - rect.maxY : rect.minY
+                return CGRect(x: rect.minX * scale, y: bottom * scale, width: rect.width * scale, height: rect.height * scale)
+            }
+            let place = placed(host.hosting.convert(terminal.bounds, from: terminal))
+            // A terminal laid out larger than its panel shows only what the panel's bounds hold.
+            let panel = terminal.superview.map { placed(host.hosting.convert($0.bounds, from: $0)) } ?? place
+            context.saveGState()
+            context.clip(to: panel)
             context.fill(place)
             context.draw(alone, in: place)
+            context.restoreGState()
         }
         let shown = NSBitmapImageRep(cgImage: try XCTUnwrap(context.makeImage()))
         shown.size = window.size
