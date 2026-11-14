@@ -136,7 +136,7 @@ struct ConversationTimeline: View {
         HStack(spacing: 0) {
             if railTurns.count > 1 || hasEarlierTurns {
                 ConversationReadingRail(
-                    turns: railTurns, isFollowing: scrollState.isFollowing, focus: focus, tracker: readingTracker,
+                    marks: CodexTurnRail.marks(for: railTurns), isFollowing: scrollState.isFollowing, focus: focus, tracker: readingTracker,
                     turnID: { loaded.rows.turnID(of: $0) },
                     onFocus: { turnID in
                         readingTracker.cancelRestoration()
@@ -686,7 +686,9 @@ private final class ConversationTurnFocus {
 /// The rail beside the conversation with the turn being read marked. It reads the place being read
 /// (`TranscriptReadingTracker.visibleAnchorID`) in a view of its own for the same reason.
 private struct ConversationReadingRail: View {
-    let turns: [ConversationTurn]
+    /// The turns' marks, made when the conversation's view is: a new place read makes the rail again
+    /// with the same marks, which compare at once.
+    let marks: [CodexTurnRail.Turn]
     let isFollowing: Bool
     let focus: ConversationTurnFocus
     let tracker: TranscriptReadingTracker
@@ -698,7 +700,7 @@ private struct ConversationReadingRail: View {
     let onLoadMore: () -> Void
 
     var body: some View {
-        CodexTurnRail(turns: turns, focusedTurnID: isFollowing ? turns.last?.id : focus.turnID, onFocus: onFocus,
+        CodexTurnRail(marks: marks, focusedTurnID: isFollowing ? marks.last?.id : focus.turnID, onFocus: onFocus,
                       hasMoreTurns: hasMoreTurns, moreTurns: moreTurns, onLoadMore: onLoadMore)
             .equatable()
             .onChange(of: tracker.visibleAnchorID) { _, id in
