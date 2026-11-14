@@ -265,7 +265,7 @@ struct RemoteNewTaskView: View {
         case .chooseChat:
             projectID = RemoteTaskProjection.chatsProjectID
             isFocused = true
-        case .openSchedule:
+        case .openSchedule, .openEvent:
             break
         }
     }

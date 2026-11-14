@@ -56,6 +56,8 @@ struct NewTaskHomeActivity {
     var onMarkRead: ([UUID]) -> Void = { _ in }
     /// Opens a schedule in Scheduled tasks.
     var onOpenSchedule: (UUID) -> Void = { _ in }
+    /// Shows a calendar event on the calendar, chosen.
+    var onOpenEvent: (CalendarEvent) -> Void = { _ in }
     /// Sets a project left alone for a while aside until it is active after the date
     /// (`ProjectStore.setAside`).
     var onSetAside: (UUID, Date) -> Void = { _, _ in }
@@ -430,6 +432,8 @@ struct NewTaskHome: View {
             returnToComposer()
         case let .openSchedule(id):
             activity.onOpenSchedule(id)
+        case let .openEvent(event):
+            activity.onOpenEvent(event)
         }
     }
 }

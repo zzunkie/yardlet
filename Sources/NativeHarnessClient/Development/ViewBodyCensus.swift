@@ -54,6 +54,8 @@ enum ViewBodyCensus {
         case desk
         /// A line of the desk, drawn again only when what it shows changed.
         case deskRow
+        /// The desk's time axis of today (`DeskTimeAxis`), drawn again only when what it shows changed, to the minute.
+        case deskAxis
     }
 
     static var isEnabled = false

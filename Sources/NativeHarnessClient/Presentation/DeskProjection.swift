@@ -95,6 +95,44 @@ struct DeskScheduledRun: Equatable, Identifiable, Sendable {
     var id: String { "\(schedule.id):\(at.timeIntervalSinceReferenceDate)" }
 }
 
+/// A line of today: a scheduled run, or an event of the calendar's.
+enum DeskTodayItem: Equatable, Identifiable, Sendable {
+    case run(DeskScheduledRun)
+    case event(CalendarEvent)
+
+    var id: String {
+        switch self {
+        case let .run(run): run.id
+        case let .event(event): Self.eventID(event.id)
+        }
+    }
+
+    var isAllDay: Bool {
+        if case let .event(event) = self { event.isAllDay } else { false }
+    }
+
+    /// When it starts, and ends: a run, which has no end, is drawn `CalendarScheduleSlot.drawnLength` long.
+    var start: Date {
+        switch self {
+        case let .run(run): run.at
+        case let .event(event): event.start
+        }
+    }
+
+    var end: Date {
+        switch self {
+        case let .run(run): run.at.addingTimeInterval(CalendarScheduleSlot.drawnLength)
+        case let .event(event): event.end
+        }
+    }
+
+    /// An event's line, told from a run's (`schedule:time`) by its prefix.
+    static func eventID(_ key: CalendarEventKey) -> String {
+        "event " + [key.calendar.accountID.uuidString, key.calendar.calendarID, key.eventID,
+                    key.occurrence.map { "\($0.timeIntervalSinceReferenceDate)" } ?? ""].joined(separator: " ")
+    }
+}
+
 /// What the desk ("Now", the home's first view) shows: what waits on the person, what runs and what
 /// just finished, and today. Nothing here is new state: it is `TaskAttentionProjection`'s attention,
 /// the pull request lookup's checks, the schedules' runs and the mailbox's inboxes, arranged.
@@ -105,11 +143,32 @@ struct Desk: Equatable, Sendable {
     var finished: [SessionRecord] = []
     /// Today's scheduled runs, in time order.
     var today: [DeskScheduledRun] = []
+    /// Today's events while the calendar is on, as `CalendarCenter` gives them: by start, all-day ones first.
+    var events: [CalendarEvent] = []
+    /// How many of today's timed events have not ended.
+    var eventsLeft = 0
+    /// The calendar is on: what is left today counts events too.
+    var showsEvents = false
     /// How many tasks run now, the header's count: every family's running tasks.
     var running = 0
 
-    /// How many of today's runs are still to come.
-    var remainingToday: Int { today.filter { $0.kind == .upcoming }.count }
+    /// How many of today's runs are still to come, and of its timed events have not ended.
+    var remainingToday: Int { today.filter { $0.kind == .upcoming }.count + eventsLeft }
+
+    /// Today's lines: the all-day events, then the runs and the timed events by when they start.
+    var todayItems: [DeskTodayItem] {
+        let timed = today.map { (at: $0.at, item: DeskTodayItem.run($0)) }
+            + events.filter { !$0.isAllDay }.map { (at: $0.start, item: DeskTodayItem.event($0)) }
+        return events.filter(\.isAllDay).map(DeskTodayItem.event)
+            + timed.sorted { $0.at != $1.at ? $0.at < $1.at : $0.item.id < $1.item.id }.map(\.item)
+    }
+
+    /// Puts today's events on the desk.
+    mutating func setEvents(_ events: [CalendarEvent], now: Date) {
+        self.events = events
+        showsEvents = true
+        eventsLeft = events.filter { !$0.isAllDay && $0.end > now }.count
+    }
 
     /// Nothing waits on the person, nothing runs and no result is unread: the desk keeps today alone.
     var isQuiet: Bool { waiting.isEmpty && families.isEmpty && finished.isEmpty }
@@ -256,6 +315,12 @@ enum DeskProjection {
             }
         }
         return runs.sorted { $0.at != $1.at ? $0.at < $1.at : $0.schedule.name < $1.schedule.name }
+    }
+
+    /// The day `now` falls on, which the desk asks the calendar to read.
+    static func today(of now: Date, calendar: Calendar = .current) -> DateInterval {
+        let start = calendar.startOfDay(for: now)
+        return DateInterval(start: start, end: calendar.date(byAdding: .day, value: 1, to: start) ?? start.addingTimeInterval(86_400))
     }
 
     /// The inboxes' unread threads, newest first: the rule is only that, an inbox and unread.

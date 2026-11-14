@@ -4029,6 +4029,11 @@
 "Calendar event time %@" = "시간: %@";
 "Calendar handoff %@ %@ %@ %@" = "계정: %1$@ · 캘린더 %2$@ · 일정 %3$@ (%4$@ 도구로 읽기)";
 "Calendar handoff Mac %@ %@" = "이 Mac의 캘린더 · 일정 %1$@ (%2$@ 도구로 읽기)";
+"Event ended" = "끝남";
+"Event under way" = "진행 중";
+"Time axis now %@" = "지금 %@";
+"%lld left today with the calendar" = "오늘 남은 일정 %lld";
+"%lld left with the calendar" = "남은 일정 %lld";
 "Accept invitation" = "수락";
 "Decline invitation" = "거절";
 "%lld projects" = "프로젝트 %lld개";

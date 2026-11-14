@@ -90,12 +90,12 @@ struct NewTaskHomeViewSwitch: View {
 /// task, a scheduled run its schedule. The lines keep their places while the desk shows, and a new one
 /// joins the end of its zone. The layout follows the home's own width (`DeskLayout.choose`) and changes
 /// only with it. The keyboard goes through the zones as it goes through the projects
-/// (`NewTaskHomeListKeyboard`).
+/// (`NewTaskHomeListKeyboard`). While the calendar is on, the desk asks it to read today as long as the desk
+/// shows (`CalendarCenter.show`), lists today's events with the runs, and with room lays today on a time axis.
 struct DeskHome<Switch: View, Bottom: View>: View {
     let activity: NewTaskHomeActivity
     /// The home's own size.
     let size: CGSize
-    var calendarOn = false
     /// The task the composer answers now, whose line stays marked.
     var replyTaskID: UUID?
     let onAction: (NewTaskHomeAction) -> Void
@@ -110,6 +110,9 @@ struct DeskHome<Switch: View, Bottom: View>: View {
     @ViewBuilder let bottom: () -> Bottom
 
     @Environment(TaskPullRequestMonitor.self) private var pullRequests: TaskPullRequestMonitor?
+    @Environment(\.calendarCenter) private var calendarCenter
+    /// This desk's reading of today in the calendar.
+    @State private var calendarViewer = UUID()
     /// Each zone's lines in the places they had since the desk appeared.
     @State private var places: [DeskZone: [String]] = [:]
     /// This screen's own set of tasks in the pull request lookup.
@@ -121,11 +124,8 @@ struct DeskHome<Switch: View, Bottom: View>: View {
 #if DEBUG
         let _ = ViewBodyCensus.note(.desk)
 #endif
-        let desk = kept(DeskProjection.desk(
-            sessions: activity.sessions, details: activity.details, shellBusy: activity.shellBusy,
-            archivedParents: activity.archivedParents, agents: activity.agents,
-            pullRequest: activity.pullRequest ?? { pullRequests?.pullRequest(for: $0) }, schedules: activity.schedules,
-            now: activity.now))
+        let today = DeskProjection.today(of: activity.now)
+        let desk = projected(today: today)
         let layout = DeskLayout.choose(width: size.width, calendarOn: calendarOn)
         let entries = entries(desk)
         Group {
@@ -134,16 +134,36 @@ struct DeskHome<Switch: View, Bottom: View>: View {
             } else {
                 switch layout {
                 case .one: one(desk)
-                case .two, .zones: two(desk)
+                case .two: two(desk)
+                case .zones: zones(desk)
                 }
             }
         }
         .onChange(of: entries, initial: true) { _, entries in onListed(entries) }
+        .onChange(of: calendarOn ? today : nil, initial: true) { _, today in
+            if let today { calendarCenter?.show(today, for: calendarViewer) } else { calendarCenter?.stopShowing(for: calendarViewer) }
+        }
         .onChange(of: DeskPlaces(desk), initial: true) { _, listed in
             for (zone, ids) in listed.zones { places[zone] = NewTaskHomeListsProjection.places(places[zone] ?? [], listing: ids) }
         }
         .task(id: pullRequestTargets) { pullRequests?.showHome(pullRequestTargets, screen: screenID) }
-        .onDisappear { pullRequests?.showHome([], screen: screenID) }
+        .onDisappear {
+            pullRequests?.showHome([], screen: screenID)
+            calendarCenter?.stopShowing(for: calendarViewer)
+        }
+    }
+
+    private var calendarOn: Bool { calendarCenter?.isEnabled == true }
+
+    /// The desk as it stands, its lines in their places, with today's events while the calendar is on.
+    private func projected(today: DateInterval) -> Desk {
+        var desk = kept(DeskProjection.desk(
+            sessions: activity.sessions, details: activity.details, shellBusy: activity.shellBusy,
+            archivedParents: activity.archivedParents, agents: activity.agents,
+            pullRequest: activity.pullRequest ?? { pullRequests?.pullRequest(for: $0) }, schedules: activity.schedules,
+            now: activity.now))
+        if calendarOn, let calendarCenter { desk.setEvents(calendarCenter.events(in: today), now: activity.now) }
+        return desk
     }
 
     // MARK: - Layouts
@@ -173,6 +193,28 @@ struct DeskHome<Switch: View, Bottom: View>: View {
                 .frame(width: max(300, (size.width * 0.27).rounded()))
             }
             .padding(.horizontal, 30)
+        }
+    }
+
+    /// Three zones over the composer, with the calendar on and the room for them: what waits, what runs and
+    /// what finished, and today on a time axis.
+    private func zones(_ desk: Desk) -> some View {
+        VStack(spacing: 0) {
+            header(desk)
+                .padding(.horizontal, 30)
+                .padding(.top, 14)
+                .padding(.bottom, 10)
+            HStack(alignment: .top, spacing: 28) {
+                DeskScroll { keyboardZones(desk) { waitingZone(desk, detailLines: 3) }.padding(.bottom, 16) }
+                    .frame(maxWidth: .infinity)
+                DeskScroll { runningZone(desk, showsMembers: true).padding(.bottom, 16) }
+                    .frame(width: max(280, (size.width * 0.26).rounded()))
+                todayZone(desk, onAxis: true)
+                    .frame(width: max(210, (size.width * 0.18).rounded()))
+                    .frame(maxHeight: .infinity, alignment: .top)
+            }
+            .padding(.horizontal, 30)
+            bottomPane
         }
     }
 
@@ -232,10 +274,10 @@ struct DeskHome<Switch: View, Bottom: View>: View {
             .focusable(!entries(desk).isEmpty, interactions: .edit)
             .focused(focus, equals: .desk)
             .focusEffectDisabled()
-            .onKeyPress(.upArrow) { handle(.up) }
-            .onKeyPress(.downArrow) { handle(.down) }
-            .onKeyPress(.return) { handle(.return) }
-            .onKeyPress(keys: [.tab, KeyEquivalent(Character(UnicodeScalar(NSBackTabCharacter)!))]) { _ in handle(.tab) }
+            .onKeyPress(.upArrow) { handle(.up, in: desk) }
+            .onKeyPress(.downArrow) { handle(.down, in: desk) }
+            .onKeyPress(.return) { handle(.return, in: desk) }
+            .onKeyPress(keys: [.tab, KeyEquivalent(Character(UnicodeScalar(NSBackTabCharacter)!))]) { _ in handle(.tab, in: desk) }
     }
 
     // MARK: - Zones
@@ -313,10 +355,11 @@ struct DeskHome<Switch: View, Bottom: View>: View {
         }
     }
 
-    private func todayZone(_ desk: Desk) -> some View {
-        DeskTodayZone(runs: desk.today, now: activity.now,
+    private func todayZone(_ desk: Desk, onAxis: Bool = false) -> some View {
+        DeskTodayZone(items: desk.todayItems, left: desk.remainingToday, countsEvents: desk.showsEvents, now: activity.now,
+                      onAxis: onAxis,
                       highlighted: focus.wrappedValue == .desk ? keyboard.highlightedEntry : nil,
-                      onOpenSchedule: activity.onOpenSchedule)
+                      onOpenSchedule: activity.onOpenSchedule, onOpenEvent: { onAction(.openEvent($0)) })
     }
 
     // MARK: - Lines and keyboard
@@ -337,20 +380,20 @@ struct DeskHome<Switch: View, Bottom: View>: View {
         showsAllFinished ? desk.finished : Array(desk.finished.prefix(DeskLines.finished))
     }
 
-    /// The desk's lines in the keyboard's order: the zones as they stand, today's runs last.
+    /// The desk's lines in the keyboard's order: the zones as they stand, today's lines last.
     private func entries(_ desk: Desk) -> [NewTaskHomeListKeyboard.Entry] {
         desk.waiting.map { .row(.desk(.waiting), $0.id.uuidString) }
             + desk.families.map { .row(.desk(.running), $0.id.uuidString) }
             + shownFinished(desk).map { .row(.desk(.finished), $0.id.uuidString) }
             + (desk.finished.count > DeskLines.finished ? [.toggle(.desk(.finished))] : [])
-            + desk.today.map { .row(.desk(.today), $0.id) }
+            + desk.todayItems.map { .row(.desk(.today), $0.id) }
     }
 
     private func isHighlighted(_ entry: NewTaskHomeListKeyboard.Entry) -> Bool {
         focus.wrappedValue == .desk && keyboard.highlightedEntry == entry
     }
 
-    private func handle(_ key: NewTaskHomeListKeyboard.Key) -> KeyPress.Result {
+    private func handle(_ key: NewTaskHomeListKeyboard.Key, in desk: Desk) -> KeyPress.Result {
         switch keyboard.press(key) {
         case .handled:
             if let entry = keyboard.highlightedEntry, entry.part != .desk { focus.wrappedValue = entry.part }
@@ -373,10 +416,11 @@ struct DeskHome<Switch: View, Bottom: View>: View {
                 guard let taskID = UUID(uuidString: id) else { return .ignored }
                 onAction(.openTask(taskID))
             case .today:
-                guard let scheduleID = id.split(separator: ":").first.flatMap({ UUID(uuidString: String($0)) }) else {
-                    return .ignored
+                switch desk.todayItems.first(where: { $0.id == id }) {
+                case let .run(run): onAction(.openSchedule(run.schedule.id))
+                case let .event(event): onAction(.openEvent(event))
+                case nil: return .ignored
                 }
-                onAction(.openSchedule(scheduleID))
             }
             return .handled
         }
@@ -403,7 +447,10 @@ struct DeskHome<Switch: View, Bottom: View>: View {
     static func summary(_ desk: Desk) -> String {
         var parts = [desk.waiting.isEmpty ? L10n.string("Nothing waiting") : L10n.format("%lld waiting", desk.waiting.count)]
         if desk.running > 0 { parts.append(L10n.format("%lld running now", desk.running)) }
-        if desk.remainingToday > 0 { parts.append(L10n.format("%lld left today", desk.remainingToday)) }
+        if desk.remainingToday > 0 {
+            parts.append(desk.showsEvents ? L10n.format("%lld left today with the calendar", desk.remainingToday)
+                         : L10n.format("%lld left today", desk.remainingToday))
+        }
         return parts.joined(separator: " · ")
     }
 }
@@ -752,45 +799,78 @@ struct DeskFinishedRow: View, @MainActor Equatable {
     }
 }
 
-/// "Today": today's scheduled runs in time order, then the inboxes' unread threads while the mailbox is
-/// on. It reads the mailbox in its own body, so new mail redraws this zone alone. Empty, it is not there.
+/// "Today": today's scheduled runs and, while the calendar is on, its events, in time order, then the inboxes'
+/// unread threads while the mailbox is on. It reads the mailbox and the calendars' colors in its own body, so new
+/// mail redraws this zone alone. Empty, it is not there. On the time axis (`onAxis`, the three zones) the mail
+/// folds to one line, all-day events stay lines, and the runs and timed events stand at their times.
 struct DeskTodayZone: View {
-    let runs: [DeskScheduledRun]
+    let items: [DeskTodayItem]
+    /// The title's "N left": runs still to come and timed events not ended.
+    let left: Int
+    /// The calendar is on, so `left` counts events too.
+    var countsEvents = false
     let now: Date
+    var onAxis = false
     var highlighted: NewTaskHomeListKeyboard.Entry?
     let onOpenSchedule: (UUID) -> Void
+    let onOpenEvent: (CalendarEvent) -> Void
     @Environment(\.mailbox) private var mailbox
+    @Environment(\.calendarCenter) private var calendarCenter
 
     var body: some View {
         let mail = mailbox?.isEnabled == true ? DeskProjection.unreadMail(mailbox?.threads ?? []) : []
-        if !runs.isEmpty || !mail.isEmpty {
+        let colors = calendarCenter.map(CalendarColors.byCalendar) ?? [:]
+        if onAxis {
+            let day = DeskProjection.today(of: now)
             VStack(alignment: .leading, spacing: 0) {
-                DeskSectionTitle(title: L10n.string("Today"),
-                                 count: runs.contains { $0.kind == .upcoming }
-                                     ? L10n.format("%lld left", runs.filter { $0.kind == .upcoming }.count) : nil)
-                ForEach(runs) { run in runLine(run) }
-                if !mail.isEmpty { mailBlock(mail).padding(.top, runs.isEmpty ? 0 : 8) }
+                title
+                if !mail.isEmpty { mailBlock(mail, compact: true) }
+                ForEach(items.filter(\.isAllDay)) { line($0, colors: colors) }
+                DeskTimeAxis(items: items.filter { !$0.isAllDay }, colors: colors, minute: Calendar.current.startOfMinute(now),
+                             day: day, highlighted: highlightedID, onOpenEvent: onOpenEvent, onOpenSchedule: onOpenSchedule)
+                    .equatable()
+                    .padding(.leading, 10)
+                    .padding(.top, 10)
+                    .padding(.bottom, 16)
             }
+        } else if !items.isEmpty || !mail.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                title
+                ForEach(items) { line($0, colors: colors) }
+                if !mail.isEmpty { mailBlock(mail, compact: false).padding(.top, items.isEmpty ? 0 : 8) }
+            }
+        }
+    }
+
+    private var title: some View {
+        DeskSectionTitle(title: L10n.string("Today"), count: left == 0 ? nil
+                         : countsEvents ? L10n.format("%lld left with the calendar", left) : L10n.format("%lld left", left))
+    }
+
+    /// The line the keyboard is on, when it is one of today's.
+    private var highlightedID: String? {
+        guard case let .row(.desk(.today), id) = highlighted else { return nil }
+        return id
+    }
+
+    @ViewBuilder
+    private func line(_ item: DeskTodayItem, colors: [CalendarKey: Color]) -> some View {
+        switch item {
+        case let .run(run): runLine(run)
+        case let .event(event): eventLine(event, color: colors[event.id.calendar] ?? ParityTheme.accent)
         }
     }
 
     private func runLine(_ run: DeskScheduledRun) -> some View {
         let isPast = run.kind != .upcoming
-        return NewTaskHomeRow(isHighlighted: highlighted == .row(.desk(.today), run.id), showsChevron: false,
+        return NewTaskHomeRow(isHighlighted: highlightedID == run.id, showsChevron: false,
                               action: { onOpenSchedule(run.schedule.id) }) {
-            Text(Self.time(run.at))
-                .font(.system(size: 12).monospacedDigit())
-                .foregroundStyle(isPast ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.secondary))
-                .frame(width: 40, alignment: .leading)
+            timeText(Self.time(run.at), isPast: isPast)
             Image(systemName: "clock")
                 .font(.system(size: 10.5, weight: .medium))
                 .foregroundStyle(.secondary)
                 .frame(width: 14)
-            Text(run.schedule.name)
-                .font(.system(size: 13))
-                .foregroundStyle(isPast ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
-                .lineLimit(1)
-                .layoutPriority(1)
+            titleText(run.schedule.name, isPast: isPast)
             Spacer(minLength: 6)
             Text(Self.note(run.kind))
                 .font(.system(size: 12))
@@ -799,7 +879,53 @@ struct DeskTodayZone: View {
         }
     }
 
-    private func mailBlock(_ mail: [MailThreadSummary]) -> some View {
+    /// An event: its time (or All day), its calendar's color, its title, and whether it ended, is under way or
+    /// starts soon, after "Not replied" for an invitation not answered.
+    private func eventLine(_ event: CalendarEvent, color: Color) -> some View {
+        let isPast = event.end <= now
+        let start = max(event.start, DeskProjection.today(of: now).start)
+        return NewTaskHomeRow(isHighlighted: highlightedID == DeskTodayItem.eventID(event.id), showsChevron: false,
+                              action: { onOpenEvent(event) }) {
+            timeText(event.isAllDay ? L10n.string("All day") : Self.time(start), isPast: isPast)
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(color.opacity(isPast ? 0.45 : 1))
+                .frame(width: 3, height: 14)
+                .frame(width: 14)
+            titleText(CalendarText.title(event), isPast: isPast)
+            Spacer(minLength: 6)
+            // The title goes first; an invitation's note is cut to "Not replied" where it would cut the title.
+            ViewThatFits(in: .horizontal) {
+                noteText(Self.note(event, now: now), isPast: isPast)
+                if event.awaitsAnswer, !isPast { noteText(L10n.string("Not replied"), isPast: isPast) }
+            }
+        }
+    }
+
+    private func noteText(_ note: String, isPast: Bool) -> some View {
+        Text(note)
+            .font(.system(size: 12))
+            .foregroundStyle(isPast ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.secondary))
+            .fixedSize()
+    }
+
+    private func timeText(_ time: String, isPast: Bool) -> some View {
+        Text(time)
+            .font(.system(size: 12).monospacedDigit())
+            .foregroundStyle(isPast ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.secondary))
+            .lineLimit(1)
+            .frame(width: 44, alignment: .leading)
+    }
+
+    private func titleText(_ title: String, isPast: Bool) -> some View {
+        Text(title)
+            .font(.system(size: 13))
+            .foregroundStyle(isPast ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+            .lineLimit(1)
+            .layoutPriority(1)
+    }
+
+    /// The inboxes' unread threads: their count, and the first few senders and subjects unless `compact`.
+    private func mailBlock(_ mail: [MailThreadSummary], compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
                 Image(systemName: "envelope")
@@ -813,22 +939,24 @@ struct DeskTodayZone: View {
             .padding(.horizontal, 10)
             .frame(height: 28)
             .accessibilityElement(children: .combine)
-            ForEach(mail.prefix(DeskLines.mail)) { thread in
-                HStack(spacing: 8) {
-                    Text(thread.senders.first.map { $0.name ?? $0.address } ?? "")
-                        .font(.system(size: 12, weight: .medium))
-                        .lineLimit(1)
-                        .fixedSize()
-                    Text(thread.subject)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
+            if !compact {
+                ForEach(mail.prefix(DeskLines.mail)) { thread in
+                    HStack(spacing: 8) {
+                        Text(thread.senders.first.map { $0.name ?? $0.address } ?? "")
+                            .font(.system(size: 12, weight: .medium))
+                            .lineLimit(1)
+                            .fixedSize()
+                        Text(thread.subject)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.leading, 30)
+                    .padding(.trailing, 10)
+                    .frame(height: 24)
+                    .accessibilityElement(children: .combine)
                 }
-                .padding(.leading, 30)
-                .padding(.trailing, 10)
-                .frame(height: 24)
-                .accessibilityElement(children: .combine)
             }
         }
     }
@@ -846,4 +974,22 @@ struct DeskTodayZone: View {
         case .upcoming: L10n.string("Scheduled")
         }
     }
+
+    /// "Ended", "Under way" or "in 1 hour", after "Not replied" for an invitation not answered that has not ended.
+    static func note(_ event: CalendarEvent, now: Date) -> String {
+        let when: String? = if event.end <= now {
+            L10n.string("Event ended")
+        } else if event.isAllDay {
+            nil
+        } else if event.start <= now {
+            L10n.string("Event under way")
+        } else {
+            soon.localizedString(for: event.start, relativeTo: now)
+        }
+        guard event.awaitsAnswer, event.end > now else { return when ?? "" }
+        return [L10n.string("Not replied"), when].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// "in 1 hour".
+    private static let soon = RelativeDateTimeFormatter()
 }

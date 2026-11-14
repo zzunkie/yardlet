@@ -11,8 +11,10 @@ final class MacEventKitStore: MacDataStoring, @unchecked Sendable {
     static let shared = MacEventKitStore()
 
     private let lock = NSLock()
-    private var eventStore = EKEventStore()
-    private let contactStore = CNContactStore()
+    /// Made when first used, not with this store: making one reaches the Mac's calendar or contacts service, which
+    /// nothing should do until a connector of theirs, or the calendar reading Apple Calendar, uses it.
+    private var eventStore: EKEventStore?
+    private var contactStore: CNContactStore?
     private let info: [String: Any]
 
     init(info: [String: Any] = Bundle.main.infoDictionary ?? [:]) {
@@ -48,10 +50,10 @@ final class MacEventKitStore: MacDataStoring, @unchecked Sendable {
         let granted: Bool = switch kind {
         case .calendars: try await currentEventStore().requestFullAccessToEvents()
         case .reminders: try await currentEventStore().requestFullAccessToReminders()
-        case .contacts: try await contactStore.requestAccess(for: .contacts)
+        case .contacts: try await currentContactStore().requestAccess(for: .contacts)
         }
-        // A store made before the grant may not see the data yet.
-        if granted, kind != .contacts { lock.withLock { eventStore = EKEventStore() } }
+        // A store made before the grant may not see the data yet: the next use makes another.
+        if granted, kind != .contacts { lock.withLock { eventStore = nil } }
         return granted
     }
 
@@ -77,14 +79,31 @@ final class MacEventKitStore: MacDataStoring, @unchecked Sendable {
     }
 
     private func currentEventStore() -> EKEventStore {
-        lock.withLock { eventStore }
+        lock.withLock { madeEventStore() }
+    }
+
+    /// The event store, made now if it was not; called with `lock` held.
+    private func madeEventStore() -> EKEventStore {
+        if let eventStore { return eventStore }
+        let store = EKEventStore()
+        eventStore = store
+        return store
+    }
+
+    private func currentContactStore() -> CNContactStore {
+        lock.withLock {
+            if let contactStore { return contactStore }
+            let store = CNContactStore()
+            contactStore = store
+            return store
+        }
     }
 
     /// Runs `body` on the store once macOS lets Yardlet reach the kind.
     private func withStore<T>(_ kind: MacDataKind, _ body: (EKEventStore) throws -> T) throws -> T {
         let access = access(kind)
         guard access == .granted else { throw MacDataError.notAllowed(kind, access) }
-        return try lock.withLock { try body(eventStore) }
+        return try lock.withLock { try body(madeEventStore()) }
     }
 
     // MARK: Calendars
@@ -311,7 +330,7 @@ final class MacEventKitStore: MacDataStoring, @unchecked Sendable {
             predicate = CNContact.predicateForContacts(matchingName: value)
         }
         do {
-            return try contactStore.unifiedContacts(matching: predicate, keysToFetch: Self.contactKeys).prefix(limit).map(Self.contact)
+            return try currentContactStore().unifiedContacts(matching: predicate, keysToFetch: Self.contactKeys).prefix(limit).map(Self.contact)
         } catch {
             throw MacDataError.failed(error.localizedDescription)
         }
@@ -321,7 +340,7 @@ final class MacEventKitStore: MacDataStoring, @unchecked Sendable {
         let access = access(.contacts)
         guard access == .granted else { throw MacDataError.notAllowed(.contacts, access) }
         do {
-            return Self.contact(try contactStore.unifiedContact(withIdentifier: id, keysToFetch: Self.contactKeys))
+            return Self.contact(try currentContactStore().unifiedContact(withIdentifier: id, keysToFetch: Self.contactKeys))
         } catch let error as CNError where error.code == .recordDoesNotExist {
             return nil
         } catch {

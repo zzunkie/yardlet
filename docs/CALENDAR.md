@@ -46,8 +46,8 @@ through Apple Calendar. It is shown once, from its connector, which can answer i
 ## What is read, and when
 
 - A window showing the calendar reads two ranges: the days shown, and the upcoming days the sidebar lists (today and
-  the six days after it), as one range when they meet (`CalendarWindowState.readRanges`). Nothing is read while no
-  window shows the calendar, and nothing before a window first shows it.
+  the six days after it), as one range when they meet (`CalendarWindowState.readRanges`). The home's desk reads today
+  while it shows (see "On the desk"). Nothing is read while neither shows, and nothing before one first shows.
 - Each shown calendar's events in the range are read from its account, each account's at the same time. Calendars
   hidden in the sidebar are not read.
 - What was read stands for five minutes (`CalendarCenter.refreshInterval`): showing the same days again within it reads
@@ -109,9 +109,32 @@ Choosing an event shows it beside the days:
 - **Open in Google Calendar** or **Open in Outlook** opens the event on the service's web app in the Mac's browser
   outside Yardlet; a Mac event offers **Open in Calendar**.
 
+## On the desk
+
+The home's desk (its Now view, shown while the development switch `YardletDeskPreview` is on) takes today from the
+calendar while the calendar is on.
+
+- While the desk shows, it asks the calendar to read today (`DeskProjection.today`), under the same rules as a window
+  showing the calendar: the day held by a range already read is not read again, and nothing is read once the desk goes,
+  for the Projects view, another screen or a closed window.
+- **Today** lists today's events with the scheduled runs in time order: all-day events first, then each event's time,
+  its calendar's color, its title, and whether it ended, is under way or starts soon ("in 1 hour"). An invitation not
+  answered yet says "Not replied", kept when the line is too narrow for the rest. The header's and the zone's count of
+  what is left today counts the runs to come and the timed events that have not ended.
+- With the calendar on and the home at least 1,200 points wide (`DeskLayout.zones`), the desk stands as three zones:
+  what waits, what runs and just finished, and today on a time axis (`DeskTimeAxis`). Unread mail folds to one line
+  above it and all-day events stay lines. The axis spans 9:00 to 23:00, widened to today's earliest and latest items;
+  events sit at their times in their calendars' colors, side by side where they overlap; an invitation not answered
+  yet is outlined dashed; runs are dashed with a clock; a red line marks the time now. A column too short for it
+  scrolls, opening at the time now.
+- Choosing an event shows it on the calendar, chosen; choosing a run opens its scheduled task. The keyboard goes
+  through today's lines after the desk's other lines.
+- The axis is drawn again only when what it shows changes, to the minute, so the time line moving draws no other part
+  of the desk.
+
 ## Not included
 
-- Creating, moving or editing events on the screen. Agents do these with the calendar connectors' tools
+- Creating, moving or editing events on the screen or the desk. Agents do these with the calendar connectors' tools
   (docs/CONNECTORS.md, "Tools").
 - A month view, search, and notifications of events.
 - Answering invitations of Apple Calendar events.
@@ -127,6 +150,7 @@ Choosing an event shows it beside the days:
 | `Presentation/CalendarCenter.swift` | The app's calendar: accounts, what is read and kept, the Mac's copies, choices and answers |
 | `Presentation/CalendarWindowState.swift` | A window's days and chosen event, scheduled runs on the days, laying out events that overlap, and dates and the hand-off text (`CalendarText`) |
 | `AppModel+Calendar.swift` | Following the setting and the connectors |
+| `Presentation/DeskProjection.swift`, `Views/AppShell/DeskHome.swift`, `Views/AppShell/DeskTimeAxis.swift` | The desk's today: its events, what is left, the three zones and the time axis |
 | `Views/Calendar/` | The sidebar (`CalendarSidebar`), the days (`CalendarWorkspace`, `CalendarDaysView`) and an event (`CalendarEventDetail`) |
 
 Tests: `GoogleConnectorTests` and `MicrosoftConnectorTests` (the transports against a fake Google and a fake Graph),
@@ -134,4 +158,6 @@ Tests: `GoogleConnectorTests` and `MicrosoftConnectorTests` (the transports agai
 again within five minutes, forgetting when turned off, answering an invitation on its own service) and
 `CalendarRenderingTests` (the sidebar's words, the week, an event, an answer, the hand-off and the day, with nothing
 read before the calendar shows or after it goes, drawn under `.build/calendar-qa/` in both appearances at 1280×820 and
-1800×1125).
+1800×1125), and `NewTaskHomeRenderingTests` (the desk's three zones, two columns with the calendar off and in a
+narrower home, reading today only while the desk shows, and the time axis alone drawn again as the minute changes,
+drawn under `.build/desk-qa/`).

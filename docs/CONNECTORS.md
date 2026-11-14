@@ -1120,7 +1120,9 @@ server, and the per-task switch and tool row labels work as for other connectors
     `complete_reminder` (undo with `completed: false`). The last two ask first.
   - Apple Contacts: `search_contacts` (name, email or phone number; with `@` it is an email, with 4 or more digits a
     phone number), `get_contact`. Read only. Contact notes are not read (that needs a separate entitlement).
-- EventKit calls run off the main thread, and the store handles one at a time under a single lock.
+- EventKit calls run off the main thread, and the store handles one at a time under a single lock. The EventKit and
+  Contacts stores are made when a tool or the calendar first uses them, not when Yardlet starts, so nothing reaches
+  the Mac's calendar or contacts service before then.
 - The calendar (docs/CALENDAR.md) shows Apple Calendar's calendars through the same store
   (`MacCalendarTransport`) and never asks for permission; a Google or Outlook calendar the Mac also syncs is shown
   once, from its own connector (docs/CALENDAR.md, "One calendar reached two ways").

@@ -18,6 +18,8 @@ enum NewTaskHomeAction: Equatable, Sendable {
     case chooseChat
     /// Opens the schedule in Scheduled tasks.
     case openSchedule(UUID)
+    /// Shows the event on the calendar, chosen.
+    case openEvent(CalendarEvent)
 }
 
 /// The chosen folder's Git checkout, as the "In this folder" rows need it. The branch is read from

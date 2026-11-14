@@ -518,6 +518,13 @@ struct MainWindow: View {
         }
     }
 
+    /// The calendar at the event's day, the event chosen beside the days.
+    private func showEvent(_ event: CalendarEvent) {
+        if !calendarWindow.range.contains(event.start) { calendarWindow.show(event.start, as: calendarWindow.span) }
+        calendarWindow.selection = event.id
+        showCalendar()
+    }
+
     // MARK: - Mail
 
     /// The mailbox in the task list's place, the chosen thread beside it. The tasks keep what they showed.
@@ -1879,6 +1886,7 @@ struct MainWindow: View {
                 windowHeight: windowSize.height > 0 ? windowSize.height : nil,
                 onMarkRead: { ids in Task { await model.store.markRead(ids: ids) } },
                 onOpenSchedule: showSchedule,
+                onOpenEvent: showEvent,
                 onSetAside: { projects.setAside($0, through: $1) },
                 answerLine: { model.answerLineBySessionID[$0] },
                 latestTurn: { model.latestTurnBySessionID[$0] },
@@ -2040,12 +2048,7 @@ struct MainWindow: View {
                             CalendarSidebar(center: model.calendar, window: calendarWindow, schedules: model.scheduledTasks.schedules,
                                             accountMenu: accountMenu, onHome: showNewTask, onShowSchedules: showSchedules,
                                             onSelectSection: selectSection,
-                                            onSelectEvent: { event in
-                                                if !calendarWindow.range.contains(event.start) {
-                                                    calendarWindow.show(event.start, as: calendarWindow.span)
-                                                }
-                                                calendarWindow.selection = event.id
-                                            },
+                                            onSelectEvent: showEvent,
                                             onOpenSchedule: showSchedule,
                                             onOpenConnectors: { presentSettings(.connectors) })
                         }

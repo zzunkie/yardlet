@@ -641,6 +641,142 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         XCTAssertFalse(shows("first-run-1040", L10n.string("Now")), report["first-run-1040"]!)
     }
 
+    /// The day of the desk's fixture in a calendar: a meeting that ended, an invitation not answered yet that
+    /// starts in an hour, and an all-day release target, read through a fake Google account.
+    private func deskCalendar() throws -> (center: CalendarCenter, service: FakeCalendarService) {
+        let w = Self.words
+        let day = DeskProjection.today(of: Calendar.current.date(from: DateComponents(year: 2026, month: 11, day: 9, hour: 15, minute: 25))!)
+        let account = CalendarAccount(id: UUID(), provider: .google, address: "dana@acme.example", connectorSlug: "calendar")
+        let service = FakeCalendarService(account: account)
+        let work = service.add("dana@acme.example", isPrimary: true, color: "#4A7BD0")
+        let team = service.add(w("팀 일정", "Team"), color: "#3E9B6F")
+        service.add(event: w("팀 주간 회의", "Weekly team meeting"), hour: 14, to: team, day: day)
+        service.add(event: w("투자사 통화", "Investor call"), hour: 16.5, minutes: 30, to: work, day: day, response: .needsAction)
+        service.add(event: w("0.12 출시 목표", "0.12 release target"), hour: 0, to: work, day: day, allDay: true)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("DeskCalendar")))
+        let center = CalendarCenter(defaults: defaults)
+        center.refreshInterval = .milliseconds(150)
+        center.setEnabled(true)
+        center.setAccounts([(account, service)])
+        return (center, service)
+    }
+
+    /// The desk with the calendar on: three zones with today on a time axis in a wide window (1,800 × 1,125 less
+    /// 351 pt), two columns in the same window with the calendar off, and two columns whose today lists the events
+    /// with the runs at 1,280 × 820 less 240 pt, in both appearances, into `.build/desk-qa/<language>/calendar-*`.
+    /// The calendar is read for today while the desk shows, and not before or once the Projects view replaces it.
+    func testTheDeskLaysTodayOnATimeAxisWithTheCalendarOn() async throws {
+        let language = (Locale.preferredLanguages.first ?? "en").hasPrefix("ko") ? "ko" : "en"
+        let directory = try WindowlessRender.directory("desk-qa/\(language)")
+        let runtimes = try runtimes()
+        let mailbox = try await deskMailbox()
+        let (center, service) = try deskCalendar()
+        let off = CalendarCenter(defaults: try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("DeskCalendarOff"))))
+        DeskPreview.show()
+        defer { DeskPreview.hide() }
+        XCTAssertEqual(service.reads, 0, "Nothing is read before a screen shows the calendar")
+        let w = Self.words
+        let meeting = w("투자사 통화", "Investor call")
+        let wide = NSSize(width: 1_449, height: 1_125), regular = NSSize(width: 1_040, height: 820)
+        let scenes: [(name: String, calendar: CalendarCenter, size: NSSize)] = [
+            ("calendar-zones-1449", center, wide), ("calendar-off-1449", off, wide), ("calendar-two-1040", center, regular),
+        ]
+        for scene in scenes {
+            for appearance in WindowlessRender.Appearance.allCases {
+                let host = WindowlessRender.Host(
+                    home(fixture: deskFixture(.busy).fixture, size: scene.size, scheme: appearance.colorScheme, runtimes: runtimes)
+                        .environment(\.mailbox, mailbox)
+                        .environment(\.calendarCenter, scene.calendar),
+                    size: scene.size, appearance: appearance)
+                defer { host.close() }
+                if scene.calendar.isEnabled {
+                    await host.settle(until: { host.accessibilityElements().contains { $0.label.contains(meeting) } })
+                } else {
+                    host.settle(passes: 10)
+                }
+                try WindowlessRender.writePNG(try host.capture().bitmap,
+                                              to: directory.appending(path: "\(scene.name)-\(appearance.suffix).png"))
+                guard appearance == .light else { continue }
+                let elements = host.accessibilityElements()
+                let report = elements.map(\.description).joined(separator: "\n")
+                func shows(_ text: String) -> Bool { elements.contains { $0.label.contains(text) || $0.value.contains(text) } }
+                let axis = elements.contains { $0.label == L10n.format("Time axis now %@", "15:25") }
+                switch scene.name {
+                case "calendar-zones-1449":
+                    // Two runs to come and the invitation; the meeting ended.
+                    XCTAssertTrue(shows(L10n.format("%lld left today with the calendar", 3)), report)
+                    XCTAssertTrue(axis, "Today on a time axis: \(report)")
+                    XCTAssertTrue(elements.contains { $0.label.hasPrefix(meeting) && $0.value == L10n.string("Not replied") },
+                                  "The invitation not answered: \(report)")
+                    XCTAssertTrue(shows(w("0.12 출시 목표", "0.12 release target")), "The all-day event as a line")
+                    XCTAssertTrue(shows(L10n.string("Unread mail")))
+                    XCTAssertFalse(shows("Google Play Console"), "The mail folds to one line beside the axis")
+                case "calendar-off-1449":
+                    XCTAssertFalse(axis, report)
+                    XCTAssertFalse(shows(meeting), "No events with the calendar off")
+                    XCTAssertTrue(shows(L10n.format("%lld left today", 2)), report)
+                default:
+                    XCTAssertFalse(axis, "Two columns at this width: \(report)")
+                    XCTAssertTrue(shows(L10n.format("%lld left today with the calendar", 3)), report)
+                    XCTAssertTrue(elements.contains { $0.label.contains(meeting) && $0.label.contains(L10n.string("Not replied")) },
+                                  "The invitation's line: \(report)")
+                    XCTAssertTrue(shows(L10n.string("Event ended")), "The meeting that ended")
+                    XCTAssertTrue(shows("Google Play Console"), "The mail lists its threads in two columns")
+                }
+                if scene.name == "calendar-two-1040" {
+                    // The Projects view replaces the desk: nothing more is read, though what was read goes stale.
+                    placeOffscreen(host)
+                    let projects = try XCTUnwrap(controls(in: host, role: .radioButton).first { $0.label == L10n.string("Projects") })
+                    try click(projects, in: host)
+                    await host.settle(until: { !host.accessibilityElements().contains { $0.label.contains(meeting) } })
+                    let reads = service.reads
+                    try await Task.sleep(for: .milliseconds(450))
+                    host.settle(passes: 5)
+                    XCTAssertEqual(service.reads, reads, "Nothing is read while the desk is not shown")
+                    // The home keeps the view chosen; the next scene opens on the desk again.
+                    DeskPreview.show()
+                }
+            }
+        }
+        XCTAssertGreaterThan(service.reads, 0)
+    }
+
+    /// The home's clock moving on draws the time axis again once its minute changes, and no line of the desk.
+    func testTheTimeAxisAloneIsDrawnAgainAsTheMinuteChanges() async throws {
+        let runtimes = try runtimes()
+        let mailbox = try await deskMailbox()
+        let (center, _) = try deskCalendar()
+        DeskPreview.show()
+        defer { DeskPreview.hide() }
+        let size = NSSize(width: 1_449, height: 1_125)
+        let fixture = deskFixture(.busy).fixture
+        let clock = DeskClock(now: fixture.activity.now)
+        let host = WindowlessRender.Host(DeskClockHome(clock: clock) { now in
+            var fixture = fixture
+            fixture.activity.now = now
+            return AnyView(self.home(fixture: fixture, size: size, scheme: .light, runtimes: runtimes)
+                .environment(\.mailbox, mailbox)
+                .environment(\.calendarCenter, center))
+        }, size: size)
+        defer { host.close() }
+        await host.settle(until: { host.accessibilityElements().contains { $0.label.hasPrefix(Self.words("투자사 통화", "Investor call")) } })
+        ViewBodyCensus.isEnabled = true
+        defer { ViewBodyCensus.isEnabled = false }
+
+        ViewBodyCensus.reset()
+        clock.now = fixture.activity.now.addingTimeInterval(20)
+        host.settle(passes: 10)
+        XCTAssertEqual(ViewBodyCensus[.deskAxis], 0, "The same minute draws nothing again")
+        XCTAssertEqual(ViewBodyCensus[.deskRow], 0)
+
+        ViewBodyCensus.reset()
+        clock.now = fixture.activity.now.addingTimeInterval(60)
+        host.settle(passes: 10)
+        XCTAssertEqual(ViewBodyCensus[.deskAxis], 1, "The next minute moves the time line")
+        XCTAssertEqual(ViewBodyCensus[.deskRow], 0, "No line of the desk is drawn again")
+        XCTAssertTrue(host.accessibilityElements().contains { $0.label == L10n.format("Time axis now %@", "15:26") })
+    }
+
     /// Choosing the approval's line answers it in the composer's place: its card shows the whole command
     /// the line cut short. Then the Projects view, with the header over today's project columns.
     func testTheDeskAnswersALineInTheComposersPlaceAndSwitchesToTheProjects() async throws {
@@ -1187,4 +1323,19 @@ extension DeskPreview {
         UserDefaults.yardlet.removeObject(forKey: key)
         UserDefaults.yardlet.removeObject(forKey: NewTaskHomeView.key)
     }
+}
+
+/// The home's clock in `testTheTimeAxisAloneIsDrawnAgainAsTheMinuteChanges`.
+@MainActor @Observable
+private final class DeskClock {
+    var now: Date
+    init(now: Date) { self.now = now }
+}
+
+/// The home as of the clock's time.
+private struct DeskClockHome: View {
+    let clock: DeskClock
+    let make: (Date) -> AnyView
+
+    var body: some View { make(clock.now) }
 }
