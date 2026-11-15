@@ -262,7 +262,11 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   main actor runs on the window's thread and an idle window uses no processor time. The wait returns for any message
   left in the queue (`MWMO_INPUTAVAILABLE`): Foundation's main run loop on Windows dispatches one Windows message in
   each pass and leaves the rest marked as seen, and a wait for new messages alone slept through them (seen as a UI
-  Automation request unanswered for a minute).
+  Automation request unanswered for a minute). Once the loop ends, the application lets go of its window and updater
+  (`shutDown(exitCode:)`) and `main()` runs the dispatcher queue down, as the Windows App SDK asks of a thread that
+  runs its own loop. XAML lets go of the application only as the process ends and XAML's DLL is unloaded, after the
+  windowing layer's, and the window the application still held then ended the process in an abort each time the
+  window was closed; the install check fails when the app quits with any exit code but 0.
 - **The WinUI bindings.** [swift-winrt](https://github.com/thebrowsercompany/swift-winrt) generates them from the
   metadata (.winmd) in Microsoft's NuGet packages (the Windows App SDK 2.6.5's Foundation, InteractiveExperiences and
   WinUI, the Windows SDK contracts and WebView2), whose versions and SHA-512 hashes `Windows/Bindings/projections.json`

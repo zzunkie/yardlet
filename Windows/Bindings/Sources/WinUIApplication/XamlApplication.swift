@@ -29,7 +29,10 @@ open class XamlApplication: Application, IXamlMetadataProvider {
     /// Makes the first window; XAML elements can be made from here on.
     open func launched() {}
 
-    /// Called once the message loop has ended, with its exit code.
+    /// Called once the message loop has ended, with its exit code, before the dispatcher queue is run down. The
+    /// application lets go of its windows and every other XAML object it holds here: XAML lets go of the application
+    /// itself only as the process ends and XAML's DLL is unloaded, after the windowing layer's DLL, and a window let
+    /// go of then ends the process in an abort.
     open func shutDown(exitCode: Int32) {}
 
     override public func onLaunched(_ args: WinUI.LaunchActivatedEventArgs!) throws {
@@ -48,8 +51,13 @@ open class XamlApplication: Application, IXamlMetadataProvider {
             let application = Self()
             let xaml = try WindowsXamlManager.initializeForCurrentThread()
             application.dispatcherShutdownMode = .onLastWindowClose
-            let exitCode = withExtendedLifetime((queue, xaml)) { runMessageLoop() }
-            application.shutDown(exitCode: exitCode)
+            withExtendedLifetime((queue, xaml)) {
+                application.shutDown(exitCode: runMessageLoop())
+                // A thread that runs its own message loop runs its dispatcher queue down once the loop has ended,
+                // which tears down its windows and XAML while the process still runs (the Windows App SDK's
+                // DispatcherQueue documentation, "Run-down"). The process ends next either way.
+                try? queue?.shutdownQueue()
+            }
         } catch {
             fatalError("The application did not start: \(error)")
         }

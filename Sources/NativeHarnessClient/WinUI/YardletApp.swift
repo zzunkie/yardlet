@@ -26,10 +26,13 @@ final class YardletApp: XamlApplication {
         MainActor.assumeIsolated { QAEventLog.shared.write(note) }
     }
 
-    /// An update downloaded meanwhile goes in once the process has ended.
+    /// An update downloaded meanwhile goes in once the process has ended. The window and the updater go now, while
+    /// XAML still runs, not when XAML lets go of the application as the process ends (`XamlApplication.shutDown`).
     override func shutDown(exitCode: Int32) {
         let updater = updater
         MainActor.assumeIsolated { updater?.applyOnExit() }
+        self.updater = nil
+        mainWindow = nil
     }
 
     override func launched() {
