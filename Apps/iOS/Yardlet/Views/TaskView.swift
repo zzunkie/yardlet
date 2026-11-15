@@ -26,7 +26,10 @@ struct TaskView: View {
     @Environment(\.openTask) private var openTask
     /// The title last read from the list, kept while the list is read again after a reconnection.
     @State private var knownTitle = ""
+    /// The task's browser tab screen, while it shows (§15.25).
+    @State private var browserTarget: BrowserTarget?
     @Environment(\.dismiss) private var dismiss
+    @Environment(PhoneModel.self) private var model
 
     private var task: RemoteTask? { session.task(taskID) }
     private var title: String { task.map { $0.title.isEmpty ? String(localized: "Untitled task") : $0.title } ?? knownTitle }
@@ -56,12 +59,36 @@ struct TaskView: View {
                     .accessibilityLabel("Outputs")
                 }
             }
+            // §15.25: the task's browser, when it has tabs to show.
+            if showsBrowser {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        openBrowser(nil)
+                    } label: {
+                        Image(systemName: "globe")
+                    }
+                    .accessibilityLabel("Browser")
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) { menu }
         }
-        .onAppear { conversation = session.open(taskID) }
+        .onAppear {
+            conversation = session.open(taskID)
+            session.browser.follow(taskID)
+        }
+        .onDisappear { session.browser.unfollow(taskID) }
         // What the task made: read when it opens, on each connection and when a turn starts or ends.
         .task(id: OutputsReading(offered: session.taskFiles && session.isConnected, running: task?.running == true)) {
             await session.loadOutputs(taskID)
+        }
+        // A notification of a tab handed to the person opens it over the conversation.
+        .onChange(of: model.browserToOpen, initial: true) { _, opened in
+            guard opened == taskID else { return }
+            model.browserToOpen = nil
+            if !session.hasSnapshot || session.browser.isOffered { openBrowser(nil) }
+        }
+        .fullScreenCover(item: $browserTarget) { target in
+            BrowserView(session: session, taskID: taskID, tabID: target.tabID)
         }
         .onChange(of: task?.title, initial: true) { _, title in
             if let title, !title.isEmpty { knownTitle = title }
@@ -111,6 +138,16 @@ struct TaskView: View {
         } message: {
             Text("It leaves the list on \(session.name) too. You can find it there under archived tasks.")
         }
+    }
+
+    /// The Mac shows the task's tabs to the phone and the task has some, or one waits on the person.
+    private var showsBrowser: Bool {
+        session.browser.isOffered
+            && (!session.browser.tabs(for: taskID).isEmpty || task?.pendingKind == "browserHandoff")
+    }
+
+    private func openBrowser(_ tabID: String?) {
+        browserTarget = BrowserTarget(tabID: tabID)
     }
 
     private var subtitle: String {
@@ -184,6 +221,7 @@ struct TaskView: View {
             .overlay {
                 if !conversation.isLoaded { ProgressView() }
             }
+            .environment(\.openBrowserTab, session.browser.isOffered ? OpenBrowserTab { openBrowser($0) } : nil)
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 8) {
                     if let reading, reading.isShown, reading.file == nil {

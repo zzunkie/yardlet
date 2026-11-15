@@ -21,6 +21,8 @@ final class PhoneModel {
     var linkToConfirm: RemoteSecurePairingURL?
     /// A task a notification asked to open.
     var taskToOpen: String?
+    /// A task whose browser tab a notification asked to open, over its conversation (§15.18, §15.25).
+    var browserToOpen: String?
     let lock = AppLock()
 
     @ObservationIgnored private let store: RemoteHostStore
@@ -67,6 +69,8 @@ final class PhoneModel {
             Task {
                 await startDemo()
                 taskToOpen = UserDefaults.standard.string(forKey: "openTask")
+                // `-sheet browser`: the task's browser tab over it, as a notification of a handed tab opens it.
+                if UserDefaults.standard.string(forKey: "sheet") == "browser" { browserToOpen = taskToOpen }
             }
         }
         #endif
@@ -290,12 +294,15 @@ final class PhoneModel {
         session?.pushRegistration = registration
     }
 
-    /// A notification opened: its Mac shown, then its task. A Mac removed since, or the demo's after it ended, opens
-    /// nothing.
-    func openNotification(taskID: String?, hostID: String?) {
+    /// A notification opened: its Mac shown, then its task, and the tab a browser notice is about over it. A Mac
+    /// removed since, or the demo's after it ended, opens nothing.
+    func openNotification(taskID: String?, hostID: String?, browser: Bool = false) {
         if let hostID, hostID != session?.id { select(hostID) }
         guard hostID == nil || hostID == session?.id else { return }
-        if let taskID { taskToOpen = taskID }
+        if let taskID {
+            taskToOpen = taskID
+            browserToOpen = browser ? taskID : nil
+        }
     }
 
     /// A notification's Allow Once (§4.4): its Mac and task shown as a tap shows them, then, once App Lock is open and

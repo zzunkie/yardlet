@@ -69,7 +69,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, @preconcurrency UNUser
            let requestID = info[PushNotice.requestKey] as? String {
             PhoneModel.shared.allowOnceFromNotification(taskID: taskID, hostID: hostID, requestID: requestID)
         } else {
-            PhoneModel.shared.openNotification(taskID: taskID, hostID: hostID)
+            // A tab handed to the person opens over its task (§15.18).
+            let browser = response.notification.request.content.categoryIdentifier == PushNotice.Kind.browser.rawValue
+            PhoneModel.shared.openNotification(taskID: taskID, hostID: hostID, browser: browser)
         }
         completionHandler()
     }

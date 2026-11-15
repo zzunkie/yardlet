@@ -180,6 +180,31 @@ final class DemoBridge: RemoteBridge {
         await fixture.composerAction(taskID: taskID, action: action, itemID: itemID, value: value)
     }
 
+    // MARK: - Browser tabs (§15.25)
+
+    func browserTabs(taskID: String) async -> Result<[RemoteBrowserTab], RemoteError> {
+        await fixture.browserTabs(taskID: taskID)
+    }
+
+    func browserTabList(taskID: String) async -> Result<[RemoteBrowserTab], RemoteError> {
+        await fixture.browserTabList(taskID: taskID)
+    }
+
+    func setWatchedTabs(_ watches: Set<RemoteTabWatch>) async { await fixture.setWatchedTabs(watches) }
+
+    func captureTab(taskID: String, tabID: String, maxWidth: Int, maxHeight: Int) async -> Result<RemoteTabFrame, RemoteError> {
+        await fixture.captureTab(taskID: taskID, tabID: tabID, maxWidth: maxWidth, maxHeight: maxHeight)
+    }
+
+    func tabInput(taskID: String, tabID: String, input: RemoteTabInput, permit: RemoteTabPermit) async -> RemoteError? {
+        await fixture.tabInput(taskID: taskID, tabID: tabID, input: input, permit: permit)
+    }
+
+    func answerTabPermission(taskID: String, tabID: String, prompt: Int, answer: RemoteTabPermissionAnswer,
+                             permit: RemoteTabPermit) async -> Result<RemoteTabPermission, RemoteError> {
+        await fixture.answerTabPermission(taskID: taskID, tabID: tabID, prompt: prompt, answer: answer, permit: permit)
+    }
+
     // MARK: - The Mac's words
 
     static func local(_ setting: RemoteSetting) -> RemoteSetting {

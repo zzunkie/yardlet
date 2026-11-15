@@ -4,7 +4,8 @@ The phone remote for iOS: it follows the tasks Yardlet runs on your Mac and answ
 remote protocol ([docs/REMOTE_PROTOCOL.md](../../docs/REMOTE_PROTOCOL.md)). The Mac keeps every agent, sign-in and
 session; the phone lists the tasks with the sidebar's marks, reads a task's conversation as it streams, sends
 messages (into a running turn or queued after it), answers approvals, questions, plan reviews, MCP forms and browser
-handoffs with the Mac card's own choices, stops a turn, starts a task with the Mac's choices, starts a task the agent
+handoffs with the Mac card's own choices, sees and uses a task's browser tabs (taps, scrolling, typing, a site's
+permission prompt), stops a turn, starts a task with the Mac's choices, starts a task the agent
 suggests as offered or with its Options, changes a task's model, effort and permission mode, runs the slash commands
 the Mac lets another device run, edits the message that opened a turn or forks from it, answers the questions a
 Codex turn ended on or implements its plan, and pins or archives tasks. It shows what the Mac's window shows above a
@@ -47,8 +48,8 @@ Paste the pairing URL it prints into "Paste a Pairing Link", or open it in the S
 **Screens without touching them:** a debug build reads launch arguments for screenshots and checks: `-demo YES` starts
 the demo (without asking for notification permission, as "Try Without a Mac" does), `-openTask <task ID>` opens a
 task, and `-sheet newTask`, `-sheet settings` or `-sheet taskSettings` opens that sheet (`-sheet suggestionOptions`
-opens the Options of a suggested task and `-sheet outputs` its Outputs in the open task, `-sheet schedules` the
-scheduled tasks), and
+opens the Options of a suggested task, `-sheet outputs` its Outputs and `-sheet browser` its browser tab in the open
+task, `-sheet schedules` the scheduled tasks), and
 `-openLink '<pairing link>'` opens a link as another app would, for example:
 
 ```bash

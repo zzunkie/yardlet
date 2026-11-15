@@ -11,12 +11,62 @@
         }
       }
     },
+    "%@ asks for a passkey": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 패스키를 요청합니다"
+          }
+        }
+      }
+    },
+    "%@ asks for a permission": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 권한을 요청합니다"
+          }
+        }
+      }
+    },
+    "%@ asks to open another app": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 다른 앱을 열려고 합니다"
+          }
+        }
+      }
+    },
+    "%@ asks you to sign in": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 로그인을 요청합니다"
+          }
+        }
+      }
+    },
     "%@ can't move this task to that account now.": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "%@에서 지금 이 작업을 그 계정으로 옮길 수 없습니다."
+          }
+        }
+      }
+    },
+    "%@ can't open its browser right now.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 지금 브라우저를 열 수 없습니다."
           }
         }
       }
@@ -91,6 +141,36 @@
         }
       }
     },
+    "%@ is waiting for an answer to its dialog": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@의 대화상자가 답을 기다립니다"
+          }
+        }
+      }
+    },
+    "%@ is waiting for you": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 답을 기다립니다"
+          }
+        }
+      }
+    },
+    "%@ is waiting for you to choose a file": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 파일 선택을 기다립니다"
+          }
+        }
+      }
+    },
     "%@ no longer has this scheduled task.": {
       "localizations": {
         "ko": {
@@ -147,6 +227,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@에서 이 휴대폰을 지웠습니다. 다시 연결하려면 새로 짝지으세요."
+          }
+        }
+      }
+    },
+    "%@. Answer it on %@.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@. %2$@에서 답하세요."
           }
         }
       }
@@ -313,6 +403,16 @@
         }
       }
     },
+    "A window or dialog over this page waits on %@.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 페이지 위의 창이나 대화상자가 %@에서 답을 기다립니다."
+          }
+        }
+      }
+    },
     "Add Photos": {
       "localizations": {
         "ko": {
@@ -399,6 +499,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "허용함: %@"
+          }
+        }
+      }
+    },
+    "Allowing it uses %@'s %@, not this phone's.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "허용하면 이 휴대폰이 아니라 %1$@의 %2$@를 씁니다."
           }
         }
       }
@@ -578,7 +688,7 @@
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "이전"
+            "value": "뒤로"
           }
         }
       }
@@ -589,6 +699,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "백그라운드 작업"
+          }
+        }
+      }
+    },
+    "Block": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "차단"
+          }
+        }
+      }
+    },
+    "Browser": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "브라우저"
+          }
+        }
+      }
+    },
+    "Browser page on %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@의 브라우저 페이지"
           }
         }
       }
@@ -673,6 +813,26 @@
         }
       }
     },
+    "Close": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "닫기"
+          }
+        }
+      }
+    },
+    "Close Tab": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "탭 닫기"
+          }
+        }
+      }
+    },
     "Confirm this choice on %@.": {
       "localizations": {
         "ko": {
@@ -689,6 +849,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "연결"
+          }
+        }
+      }
+    },
+    "Connect to apps running on it": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "실행 중인 앱에 연결"
+          }
+        }
+      }
+    },
+    "Connect to devices on your local network": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "로컬 네트워크의 기기에 연결"
           }
         }
       }
@@ -779,6 +959,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "다른 계정으로 이어서 하기…"
+          }
+        }
+      }
+    },
+    "Control and reprogram your MIDI devices": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MIDI 기기 제어 및 재프로그래밍"
           }
         }
       }
@@ -943,12 +1133,42 @@
         }
       }
     },
+    "Download multiple files": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "여러 파일 다운로드"
+          }
+        }
+      }
+    },
+    "Drag": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "끌기"
+          }
+        }
+      }
+    },
     "Edit Message": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "메시지 편집"
+          }
+        }
+      }
+    },
+    "Edit its files": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "파일 수정"
           }
         }
       }
@@ -983,12 +1203,42 @@
         }
       }
     },
+    "Files outside this task's folders open only on %@.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "작업 폴더 밖의 파일은 %@에서만 열 수 있습니다."
+          }
+        }
+      }
+    },
     "Fork from Here": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "여기서 분기"
+          }
+        }
+      }
+    },
+    "Forward": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "앞으로"
+          }
+        }
+      }
+    },
+    "Hide Keyboard": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "키보드 내리기"
           }
         }
       }
@@ -1033,6 +1283,16 @@
         }
       }
     },
+    "It is a file outside this task's folders.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 작업의 폴더 밖에 있는 파일입니다."
+          }
+        }
+      }
+    },
     "It leaves the list on %@ too. You can find it there under archived tasks.": {
       "localizations": {
         "ko": {
@@ -1069,6 +1329,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "계속 계획하기…"
+          }
+        }
+      }
+    },
+    "Know when it is in use": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "사용 중인지 알기"
+          }
+        }
+      }
+    },
+    "Know your location": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "내 위치 정보 알기"
           }
         }
       }
@@ -1119,6 +1399,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Mac과 설정"
+          }
+        }
+      }
+    },
+    "Manage windows on all your displays": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "모든 디스플레이에서 창 관리"
           }
         }
       }
@@ -1273,6 +1563,16 @@
         }
       }
     },
+    "No browser tabs": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "브라우저 탭 없음"
+          }
+        }
+      }
+    },
     "No messages yet.": {
       "localizations": {
         "ko": {
@@ -1393,6 +1693,16 @@
         }
       }
     },
+    "On %@, %@ wants to: %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%2$@에서 %1$@의 다음 권한을 요청합니다: %3$@"
+          }
+        }
+      }
+    },
     "On your Mac, choose Copy link under the pairing code, then paste the link here.": {
       "localizations": {
         "ko": {
@@ -1413,6 +1723,16 @@
         }
       }
     },
+    "One finger drags on the page instead of scrolling it": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "한 손가락으로 끌면 페이지를 스크롤하지 않고 페이지 위에서 끕니다"
+          }
+        }
+      }
+    },
     "Open Settings": {
       "localizations": {
         "ko": {
@@ -1423,12 +1743,32 @@
         }
       }
     },
+    "Open Tab": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "탭 열기"
+          }
+        }
+      }
+    },
     "Open Task": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "작업 열기"
+          }
+        }
+      }
+    },
+    "Opens an address in this tab": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 탭에서 주소를 엽니다"
           }
         }
       }
@@ -1557,6 +1897,16 @@
         }
       }
     },
+    "Password (hidden)": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "비밀번호 입력(가려짐)"
+          }
+        }
+      }
+    },
     "Paste a Pairing Link": {
       "localizations": {
         "ko": {
@@ -1633,6 +1983,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "카메라를 Mac 화면의 코드에 맞추세요."
+          }
+        }
+      }
+    },
+    "Previous": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이전"
           }
         }
       }
@@ -1783,6 +2143,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "거절"
+          }
+        }
+      }
+    },
+    "Reload": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "새로고침"
           }
         }
       }
@@ -1967,12 +2337,32 @@
         }
       }
     },
+    "Search or enter address": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "검색어 또는 주소 입력"
+          }
+        }
+      }
+    },
     "Search tasks": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "작업 검색"
+          }
+        }
+      }
+    },
+    "See text and images copied to the clipboard": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "클립보드에 복사한 텍스트와 이미지 보기"
           }
         }
       }
@@ -2123,6 +2513,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "더 보기"
+          }
+        }
+      }
+    },
+    "Show notifications": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "알림 표시"
           }
         }
       }
@@ -2317,6 +2717,16 @@
         }
       }
     },
+    "Tabs": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "탭"
+          }
+        }
+      }
+    },
     "Take Photo": {
       "localizations": {
         "ko": {
@@ -2343,6 +2753,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "지금 이 작업에서는 할 수 없습니다."
+          }
+        }
+      }
+    },
+    "The agent handed this tab to you": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "에이전트가 이 탭을 넘겼습니다"
           }
         }
       }
@@ -2403,6 +2823,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "메시지가 너무 깁니다."
+          }
+        }
+      }
+    },
+    "The page didn't take that.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "페이지가 이 입력을 받지 않았습니다."
           }
         }
       }
@@ -2547,6 +2977,36 @@
         }
       }
     },
+    "This page": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 페이지"
+          }
+        }
+      }
+    },
+    "This page shows only on %@.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 페이지는 %@에서만 볼 수 있습니다."
+          }
+        }
+      }
+    },
+    "This permission request is no longer open.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 권한 요청은 이미 닫혔습니다."
+          }
+        }
+      }
+    },
     "This phone stops following its tasks, and the Mac forgets this phone. Pair again to connect.": {
       "localizations": {
         "ko": {
@@ -2583,6 +3043,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "이 예약된 작업은 다시 켤 수 없습니다. %@에서 편집하세요."
+          }
+        }
+      }
+    },
+    "This tab is closed.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 탭은 닫혔습니다."
           }
         }
       }
@@ -2633,6 +3103,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@에서 이 작업이 하네스에 연결되어 있지 않습니다."
+          }
+        }
+      }
+    },
+    "This task's browser tabs on %@ show here.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 이 작업이 연 브라우저 탭이 여기에 보입니다."
           }
         }
       }
@@ -2787,6 +3267,16 @@
         }
       }
     },
+    "Type into the page": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 페이지에 입력"
+          }
+        }
+      }
+    },
     "Unavailable": {
       "localizations": {
         "ko": {
@@ -2837,6 +3327,16 @@
         }
       }
     },
+    "Untitled tab": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "제목 없는 탭"
+          }
+        }
+      }
+    },
     "Untitled task": {
       "localizations": {
         "ko": {
@@ -2863,6 +3363,46 @@
           "stringUnit": {
             "state": "translated",
             "value": "사용 한도에 도달했습니다"
+          }
+        }
+      }
+    },
+    "Use cookies and site data from another site": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다른 사이트의 쿠키와 사이트 데이터 사용"
+          }
+        }
+      }
+    },
+    "Use its fonts": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "설치된 글꼴 사용"
+          }
+        }
+      }
+    },
+    "Use your camera": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "카메라 사용"
+          }
+        }
+      }
+    },
+    "Use your microphone": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "마이크 사용"
           }
         }
       }
@@ -3103,6 +3643,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "내 메시지 · %@"
+          }
+        }
+      }
+    },
+    "camera": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "카메라"
+          }
+        }
+      }
+    },
+    "location": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "위치"
+          }
+        }
+      }
+    },
+    "microphone": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "마이크"
           }
         }
       }

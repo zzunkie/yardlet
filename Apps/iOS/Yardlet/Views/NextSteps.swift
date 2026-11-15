@@ -87,7 +87,7 @@ private struct CodexQuestionsDock: View {
                 .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             HStack(spacing: 8) {
                 if index > 0 {
-                    Button("Back") { index -= 1 }
+                    Button("Previous") { index -= 1 }
                         .buttonStyle(.borderless)
                 }
                 Button("Skip") { skip() }

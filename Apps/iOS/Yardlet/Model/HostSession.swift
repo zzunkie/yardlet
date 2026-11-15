@@ -62,6 +62,8 @@ final class HostSession: Identifiable {
     private(set) var clockOffset: TimeInterval = 0
     /// The last command the Mac refused, in a line for the screen.
     var commandError: String?
+    /// A task's browser tabs on this connection (§15.25): the tab screen's watch, and the open conversation's list.
+    let browser = TaskBrowser()
 
     /// How this phone asks for pushes, once the system gave it a token.
     @ObservationIgnored var pushRegistration: (provider: String, token: String)? {
@@ -92,6 +94,8 @@ final class HostSession: Identifiable {
         self.hello = hello
         self.store = store
         self.isDemo = isDemo
+        browser.transport = { [weak self] request, onResponse in self?.request(request, onResponse: onResponse) }
+        browser.isConnected = { [weak self] in self?.isConnected == true }
     }
 
     var name: String { host.name }
@@ -229,9 +233,10 @@ final class HostSession: Identifiable {
             if let taskID = event.taskId, PushNotice.outdates(event) { withdrawNotices { $0 == taskID } }
         case .schedulesChanged:
             schedulesChanges += 1
-        case .linked, .linkRefused, .tabFrame, .browserTabsChanged, .tabCopied,
-             .terminalOutput, .terminalClosed, .hostSettingsChanged, .hostAccountsChanged:
-            // Not shown on the phone yet: browser tabs and their copies, terminals, host settings and accounts (§15.25, §15.29, §15.36, §15.37).
+        case .tabFrame, .browserTabsChanged, .tabCopied:
+            browser.receive(event)
+        case .linked, .linkRefused, .terminalOutput, .terminalClosed, .hostSettingsChanged, .hostAccountsChanged:
+            // Not shown on the phone yet: terminals, host settings and accounts (§15.29, §15.36, §15.37).
             // `linked` and `linkRefused` go only to the connection that asked (§12.1).
             break
         }
@@ -253,6 +258,8 @@ final class HostSession: Identifiable {
             }
             hasSnapshot = true
             withdrawSettledNotices()
+            // Watched again once the snapshot says how (§15.25).
+            browser.rewatch()
         }
         for taskID in subscribed { subscribe(taskID) }
     }
@@ -281,6 +288,7 @@ final class HostSession: Identifiable {
         scheduledTasks = snapshot.scheduledTasks == true
         taskFiles = snapshot.taskFiles == true
         nextSteps = snapshot.nextSteps == true
+        browser.apply(snapshot)
     }
 
     private func applyTasks(changed: [RemoteTask], removed: [String]) {
@@ -692,6 +700,7 @@ final class HostSession: Identifiable {
     /// longer counts as read on this connection (`connectionNumber`).
     private func failPending() {
         connectionNumber += 1
+        browser.connectionEnded()
         let waiting = pending
         pending = [:]
         for (id, handler) in waiting { handler(.failure(id, RemoteError(.unavailable, "Not connected"))) }

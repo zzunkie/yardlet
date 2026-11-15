@@ -619,7 +619,8 @@ swift run --build-system native yardlet-remote-fixture --secure-port 47700 --sin
     also empties it); in the password field it sends nothing. Thirty seconds after an answer the page signs out and the
     handoff comes back. Its other tab, a static page, has a camera and microphone permission prompt numbered past 2^53
     (`permission`, `waiting` `permission`); `answerTabPermission` takes it while that tab is watched, and thirty seconds
-    later the page asks again under the next number.
+    later the page asks again under the next number. Both pages lay out at a watch's `viewport`, and the list can be
+    followed alone (`tabLists`).
 
 ## 10. Revisions
 

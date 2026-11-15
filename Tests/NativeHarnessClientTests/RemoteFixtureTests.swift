@@ -378,10 +378,13 @@ final class RemoteFixtureTests: XCTestCase {
         let docs = try await ask("tabInput", #","taskId":"\#(ID.handoff)","tabId":"\#(RemoteFixtureTabs.docsTab)","input":{"kind":"click","x":1,"y":1}"#)
         XCTAssertEqual(docs.error?.code, .notAllowed, "input goes to the watched tab")
 
-        // A phone's own size: the page is laid out at it while the phone watches.
+        // A phone's own size: the page is laid out at it while the phone watches, and draws again after its input.
         _ = try await ask("watchTab", #","taskId":"\#(ID.handoff)","viewport":{"width":390,"height":844,"mobile":true}"#)
         try await waitFor { phone.events(.tabFrame).last?.viewportWidth == 390 }
         XCTAssertEqual(phone.events(.tabFrame).last?.width, 390)
+        let phoneSized = phone.events(.tabFrame).count
+        _ = try await input(#"{"kind":"navigate","action":"reload"}"#)
+        try await waitFor { phone.events(.tabFrame).count > phoneSized }
 
         // The static page's site asks for the camera and microphone, under a number past 2^53: answered on that tab once
         // it is watched, and only once.

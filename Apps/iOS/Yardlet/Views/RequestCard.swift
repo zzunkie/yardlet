@@ -458,9 +458,13 @@ private struct PlanReview: View {
 
 // MARK: - Browser tab
 
+/// A browser tab the agent handed to the person (§15.18): the site, the agent's reason, Decline and I'm Done, and where
+/// the Mac shows its tabs to the phone (§15.25), Open Tab to finish the step there. Without it the tab is only on the
+/// Mac, which a line says, so I'm Done is not read as "show me the tab".
 private struct HandoffAnswer: View {
     let item: RemoteItem
     let context: ItemContext
+    @Environment(\.openBrowserTab) private var openTab
     @State private var isSending = false
 
     var body: some View {
@@ -471,9 +475,18 @@ private struct HandoffAnswer: View {
             if let reason = item.detail, !reason.isEmpty {
                 Text(reason).font(.subheadline).foregroundStyle(.secondary)
             }
-            Text("The tab is open on your Mac. Choose I'm Done once you finished the step there or elsewhere.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+            if let openTab {
+                Button {
+                    openTab(item.tabId)
+                } label: {
+                    Label("Open Tab", systemImage: "globe").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(CardButtonStyle(role: "secondary"))
+            } else {
+                Text("The tab is open on your Mac. Choose I'm Done once you finished the step there or elsewhere.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
             HStack(spacing: 10) {
                 Button {
                     answer(.decline)

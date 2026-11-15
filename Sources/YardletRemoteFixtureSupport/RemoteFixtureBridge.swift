@@ -228,6 +228,7 @@ public actor RemoteFixtureBridge: RemoteBridge {
         snapshot.scheduleEditing = true
         snapshot.tabPermissions = true
         snapshot.tabCopy = true
+        snapshot.tabLists = true
         snapshot.hostAccounts = true
         snapshot.suggestionOptions = true
         return snapshot
@@ -689,10 +690,12 @@ public actor RemoteFixtureBridge: RemoteBridge {
         return .success(browser.listed(handoff: pendingHandoff))
     }
 
-    public func setWatchedTabs(_ watches: Set<RemoteTabWatch>) {
+    /// Async as the requirement is, so a bridge that forwards to the fixture reaches this rather than the protocol's
+    /// default.
+    public func setWatchedTabs(_ watches: Set<RemoteTabWatch>) async {
         watchedTabs = watches
-        // A phone's own size while it watches the sign-in tab, the default again once none asks.
-        let asked = watches.compactMap { $0.taskID == ID.handoff && $0.tabID == RemoteFixtureTabs.signInTab ? $0.viewport : nil }
+        // A phone's own size while it watches one of the task's tabs, the default again once none asks.
+        let asked = watches.compactMap { $0.taskID == ID.handoff && $0.tabID != nil ? $0.viewport : nil }
             .min { ($0.width, $0.height) < ($1.width, $1.height) }
         let size = asked.map { (width: $0.width, height: $0.height) } ?? RemoteFixtureTabs.viewport
         if size != browser.size {
@@ -758,7 +761,8 @@ public actor RemoteFixtureBridge: RemoteBridge {
     private func browserChanged(picture: Bool = false, list: Bool = true) {
         guard watchedTabs.contains(where: { $0.taskID == ID.handoff }) else { return }
         if list { handler?(.browserTabs(ID.handoff)) }
-        if picture, watchedTabs.contains(RemoteTabWatch(taskID: ID.handoff, tabID: RemoteFixtureTabs.signInTab)) {
+        // Whatever size the watch asked the tab to be drawn at.
+        if picture, watchedTabs.contains(where: { $0.taskID == ID.handoff && $0.tabID == RemoteFixtureTabs.signInTab }) {
             handler?(.tabPainted(taskID: ID.handoff, tabID: RemoteFixtureTabs.signInTab))
         }
     }
