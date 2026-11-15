@@ -111,9 +111,9 @@ jobs:
             -Executable "$env:APP_BIN\NativeHarnessClient.exe" -Fixture "$env:APP_BIN\yardlet-remote-fixture.exe" `
             -OutDirectory window-check
           exit $LASTEXITCODE
-      # The app with the Swift runtime beside it, to run on a PC that has the Windows App Runtime 2.6 but no
-      # Swift: its executable, libraries and resource folder, as report.ps1 counts them, without the fixture host
-      # the build made beside it.
+      # The app with the Swift runtime beside it, to run on a PC that has no Swift: its executable, libraries,
+      # resource folder and the Windows App Runtime's packages it puts in place when the PC lacks them, as report.ps1
+      # counts them, without the fixture host the build made beside it.
       - name: Gather the app
         shell: pwsh
         # The relay a public build carries (scripts/release.sh), for the PC the gathered app is opened on.
@@ -124,7 +124,7 @@ jobs:
           Get-ChildItem $env:APP_BIN -File |
             Where-Object { $_.Name -eq 'NativeHarnessClient.exe' -or $_.Extension -in '.dll', '.pri', '.winmd' } |
             Copy-Item -Destination $out
-          Get-ChildItem $env:APP_BIN -Directory | Where-Object Name -match 'resources|bundle' |
+          Get-ChildItem $env:APP_BIN -Directory | Where-Object Name -match 'resources|bundle|^WindowsAppRuntime$' |
             Copy-Item -Destination $out -Recurse
           $runtime = Get-ChildItem "$env:LOCALAPPDATA\Programs\Swift\Runtimes\*\usr\bin" -Directory | Select-Object -First 1
           Copy-Item "$runtime\*.dll" $out

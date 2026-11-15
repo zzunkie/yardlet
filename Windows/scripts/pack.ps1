@@ -1,7 +1,7 @@
 # Packs the Windows app with Velopack (docs/PLATFORM_PORTABILITY.md, "Installing and updating the Windows app").
 # It gathers what the app runs with into one folder: its executable with Yardlet's icon (set-app-icon.ps1), the
-# libraries and resource folder the build made beside it, the Windows App SDK's bootstrapper (place-bootstrapper.ps1
-# put it there), the Swift runtime, the relay the build carries (place-relay.ps1), Velopack's library, the update
+# libraries and resource folder the build made beside it, the Windows App SDK's bootstrapper and the Windows App
+# Runtime's packages in WindowsAppRuntime (place-bootstrapper.ps1 put them there), the Swift runtime, the relay the build carries (place-relay.ps1), Velopack's library, the update
 # feed, and the license and third-party notices. No other executable goes in, so a test program the build made,
 # such as yardlet-remote-fixture.exe, stays out.
 # `vpk pack` then writes to -OutDirectory the installer (YardletApp-win-Setup.exe), the portable zip, the package
@@ -63,9 +63,11 @@ New-Item -ItemType Directory $stage | Out-Null
 $main = 'NativeHarnessClient.exe'
 Copy-Item (Join-Path $Binaries $main) $stage
 Get-ChildItem $Binaries -File | Where-Object { $_.Extension -in '.dll', '.pri', '.winmd' } | Copy-Item -Destination $stage
-Get-ChildItem $Binaries -Directory | Where-Object Name -match 'resources|bundle' | Copy-Item -Destination $stage -Recurse
-if (-not (Test-Path (Join-Path $stage 'Microsoft.WindowsAppRuntime.Bootstrap.dll'))) {
-    throw "No Windows App SDK bootstrapper in $Binaries; run place-bootstrapper.ps1 first"
+Get-ChildItem $Binaries -Directory | Where-Object Name -match 'resources|bundle|^WindowsAppRuntime$' |
+    Copy-Item -Destination $stage -Recurse
+if (-not (Test-Path (Join-Path $stage 'Microsoft.WindowsAppRuntime.Bootstrap.dll')) -or
+    -not (Test-Path (Join-Path $stage 'WindowsAppRuntime\MSIX.identities'))) {
+    throw "No Windows App SDK bootstrapper or runtime packages in $Binaries; run place-bootstrapper.ps1 first"
 }
 $runtime = Get-ChildItem "$env:LOCALAPPDATA\Programs\Swift\Runtimes\*\usr\bin" -Directory | Select-Object -First 1
 if (-not $runtime) { throw 'No Swift runtime under %LOCALAPPDATA%\Programs\Swift\Runtimes' }

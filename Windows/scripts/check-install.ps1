@@ -1,8 +1,10 @@
 # Installs, updates and removes the packed Windows app as a person would, with a feed in a folder on the runner
 # (docs/PLATFORM_PORTABILITY.md, "Installing and updating the Windows app"). pack.ps1 packs the build twice, as
-# -FirstVersion and -NextVersion, both reading the folder -Feed for updates. The first's Setup.exe installs it
-# without a window; the installed app must answer Velopack's install hook at once, have Yardlet's icon and a Start
-# menu shortcut, and find no update. The next version's files then replace the feed's: the app opened again must
+# -FirstVersion and -NextVersion, both reading the folder -Feed for updates. The Windows App Runtime's packages are
+# first taken from this Windows user where Windows lets them go (on the runner the framework stays, as on a PC that
+# has the framework alone, the case a PC showed), and the first's Setup.exe installs the app
+# without a window; its install hook must put the runtime's packages the app carries in place and end in time, and
+# the installed app must have Yardlet's icon and a Start menu shortcut, and find no update. The next version's files then replace the feed's: the app opened again must
 # download it and, once its window is closed, hand it to Velopack's updater, which puts it in place; opened once
 # more it must be that version. Removing it must take the installed folder, the shortcut and the entry in
 # Settings > Apps, and leave %LOCALAPPDATA%\Yardlet, the app's own data, as it was. It writes the event logs,
@@ -121,13 +123,41 @@ foreach ($folder in @($Feed, $first, $next)) {
 & (Join-Path $PSScriptRoot 'pack.ps1') -Binaries $Binaries -OutDirectory $next -Version $NextVersion -UpdateFeed $Feed
 Copy-Item "$first\*" $Feed
 $before = Data-Listing
+
+# The Windows App Runtime's packages for x64 the app carries, by the names MSIX.identities gives, taken from this user:
+# the packages that depend on the framework first. The runner's installer added them for every user earlier; Windows
+# keeps the framework for the user, and the rest go.
+$runtimePackages = @(Get-Content (Join-Path $Binaries 'WindowsAppRuntime\MSIX.identities') | ForEach-Object {
+    (($_ -split '=', 2)[1] -split '_')[0]
+} | Sort-Object { if ($_ -like '*.Singleton*') { 0 } elseif ($_ -like '*.Main*') { 1 } elseif ($_ -like '*.DDLM*') { 2 } else { 3 } })
+$summary.runtimePackages = $runtimePackages -join ', '
+function Runtime-Listing {
+    @($runtimePackages | ForEach-Object { Get-AppxPackage -Name $_ } | Where-Object Architecture -eq 'X64' |
+        ForEach-Object { "$($_.Name) $($_.Version)" }) -join ', '
+}
+foreach ($package in $runtimePackages) {
+    Get-AppxPackage -Name $package | Where-Object Architecture -eq 'X64' | ForEach-Object {
+        try { Remove-AppxPackage -Package $_.PackageFullName -ErrorAction Stop } catch { $summary["remove $package"] = "$_" }
+    }
+}
+$summary.runtimeBefore = Runtime-Listing
+
+# The install hook writes what it put in place to the event log the installer's environment names.
+$hookLog = Join-Path $OutDirectory "$Name-hooks-events.log"
+New-Item -ItemType File -Force $hookLog | Out-Null
+$env:YARDLET_QA_EVENT_LOG = $hookLog
 $setup = Join-Path $Feed 'YardletApp-win-Setup.exe'
 $started = Get-Date
 $installer = Start-Process -FilePath $setup -ArgumentList '--silent', '--log', (Join-Path $OutDirectory "$Name-setup.log") -Wait -PassThru
 $summary.setupSeconds = [math]::Round(((Get-Date) - $started).TotalSeconds, 1)
 if ($installer.ExitCode -ne 0) { Finish "Setup ended with $($installer.ExitCode)" }
 $summary.installHook = [bool](Select-String -Path (Join-Path $OutDirectory "$Name-setup.log") -Pattern 'Hook executed successfully' -Quiet)
-if (-not $summary.installHook) { Finish 'the install hook did not end at once' }
+$summary.runtimeHook = (Get-Content $hookLog -ErrorAction SilentlyContinue | Where-Object { $_ -like 'runtime: *' }) -join ' | '
+$summary.runtimeAfter = Runtime-Listing
+if (-not $summary.installHook) { Finish 'the install hook did not end in time' }
+if ($summary.runtimeHook -notlike 'runtime: added *') { Finish "the install hook did not put the runtime in place: $($summary.runtimeHook)" }
+$absent = @($runtimePackages | Where-Object { -not (Get-AppxPackage -Name $_ | Where-Object Architecture -eq 'X64') })
+if ($absent.Count) { Finish "not in place after Setup: $($absent -join ', ')" }
 if (-not (Test-Path $executable)) { Finish 'not installed' }
 $summary.executables = @(Get-ChildItem (Join-Path $installRoot 'current') -Recurse -File -Filter '*.exe' | ForEach-Object Name) -join ', '
 if ($summary.executables -ne 'NativeHarnessClient.exe') { Finish "other executables installed: $($summary.executables)" }
@@ -141,9 +171,11 @@ $summary.version = Installed-Version
 if ($summary.version -ne $FirstVersion) { Finish "installed $($summary.version), not $FirstVersion" }
 if ((Data-Listing) -ne $before) { Finish 'installing changed the data folder' }
 
-# Nothing newer in the feed yet.
+# Nothing newer in the feed yet, and nothing of the runtime missing.
 $looked = Open-Installed 'first'
 if ("$looked" -ne 'update: none') { Finish "first: $looked" }
+$summary.runtimeAtStart = (Get-Content (Join-Path $OutDirectory "$Name-first-events.log") | Where-Object { $_ -like 'runtime: *' }) -join ' | '
+if ($summary.runtimeAtStart -notlike 'runtime: in place*') { Finish "first: $($summary.runtimeAtStart)" }
 Close-Installed 'first'
 
 # The next version in the feed: downloaded while the app runs, put in place once it quits.

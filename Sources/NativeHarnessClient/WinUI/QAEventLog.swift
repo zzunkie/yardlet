@@ -22,4 +22,14 @@ final class QAEventLog {
     func write(_ line: String) {
         handle?.write(Data((line + "\n").utf8))
     }
+
+    /// A line added to a log that is already there, from a process that must not start it afresh: an installer's
+    /// hook, which runs with the environment of the app or the check that started the installer.
+    nonisolated static func append(_ line: String) {
+        guard let path = ProcessInfo.processInfo.environment["YARDLET_QA_EVENT_LOG"], !path.isEmpty,
+              let handle = FileHandle(forWritingAtPath: path) else { return }
+        defer { try? handle.close() }
+        _ = try? handle.seekToEnd()
+        handle.write(Data((line + "\n").utf8))
+    }
 }

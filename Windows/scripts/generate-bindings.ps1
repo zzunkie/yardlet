@@ -8,7 +8,7 @@
 # Windows App SDK's components (Foundation, InteractiveExperiences, WinUI), the Windows SDK's and
 # WebView2's metadata (.winmd); from Foundation, the x64 bootstrapper with its import library and header,
 # and from the Windows App SDK's Runtime package the header with the release's version, which
-# Bindings/Package.swift links as CWindowsAppSDK. Building swift-winrt needs Visual Studio's C++ tools.
+# Bindings/Package.swift links as CWindowsAppSDK, and the runtime's x64 packages, which the app carries. Building swift-winrt needs Visual Studio's C++ tools.
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 
@@ -129,13 +129,40 @@ foreach ($module in Get-ChildItem (Join-Path $output 'Sources') -Directory) {
 Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $generated 'CWinRT\Package.swift')
 
 # The bootstrapper: its header, its x64 import library and DLL from Foundation, and the release's
-# version from the Runtime package.
+# version from the Runtime package. Beside them, the Runtime package's x64 packages of the Windows App Runtime
+# (its framework, Main, Singleton and DDLM) with Microsoft's inventory of them, which place-bootstrapper.ps1 puts
+# beside the executable.
 $bootstrap = Join-Path $generated 'CWindowsAppSDK'
-New-Item -ItemType Directory -Force "$bootstrap\include", "$bootstrap\lib", "$bootstrap\bin" | Out-Null
+New-Item -ItemType Directory -Force "$bootstrap\include", "$bootstrap\lib", "$bootstrap\bin", "$bootstrap\runtime" | Out-Null
 Copy-Item (Join-Path $foundation 'include\MddBootstrap.h') "$bootstrap\include"
 Copy-Item (Join-Path (Get-Package 'Microsoft.WindowsAppSDK.Runtime') 'include\WindowsAppSDK-VersionInfo.h') "$bootstrap\include"
 Copy-Item (Join-Path $foundation 'lib\native\x64\Microsoft.WindowsAppRuntime.Bootstrap.lib') "$bootstrap\lib"
 Copy-Item (Join-Path $foundation 'runtimes\win-x64\native\Microsoft.WindowsAppRuntime.Bootstrap.dll') "$bootstrap\bin"
+Copy-Item (Join-Path (Get-Package 'Microsoft.WindowsAppSDK.Runtime') 'tools\MSIX\win10-x64\*') "$bootstrap\runtime"
+# Each package's identity as it installs, read from its own manifest into MSIX.identities, in MSIX.inventory's form
+# (<file>=<package full name>): the inventory names the DDLM and the Singleton by a pattern rather than as they install
+# (Microsoft.WinAppRuntime.DDLM.2.6.5.0-x6, and the Singleton at 8002.6.5.0 for 2.6.5). The publisher ID, one hash of
+# Microsoft's name for every package, is the inventory's.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$publisherIDs = @{}
+foreach ($line in Get-Content "$bootstrap\runtime\MSIX.inventory") {
+    $file, $fullName = $line -split '=', 2
+    if ($fullName) { $publisherIDs[$file.Trim()] = ($fullName.Trim() -split '_')[-1] }
+}
+$identities = foreach ($msix in Get-ChildItem "$bootstrap\runtime" -Filter '*.msix' | Sort-Object Name) {
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($msix.FullName)
+    try {
+        $reader = New-Object System.IO.StreamReader($zip.GetEntry('AppxManifest.xml').Open())
+        $identity = ([xml]$reader.ReadToEnd()).Package.Identity
+        $reader.Dispose()
+    } finally {
+        $zip.Dispose()
+    }
+    if (-not $publisherIDs[$msix.Name]) { throw "MSIX.inventory does not name $($msix.Name)" }
+    "$($msix.Name)=$($identity.Name)_$($identity.Version)_$($identity.ProcessorArchitecture)__$($publisherIDs[$msix.Name])"
+}
+Set-Content "$bootstrap\runtime\MSIX.identities" $identities -Encoding ascii
+$identities
 @'
 #pragma once
 #include <windows.h>

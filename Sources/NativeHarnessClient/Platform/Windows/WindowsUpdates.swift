@@ -69,13 +69,24 @@ final class WindowsUpdater {
 }
 
 /// Velopack's start, before the Windows App Runtime starts (`XamlApplication.willStart()`). An installer's hook
-/// (installed, updated, about to be removed) is answered and the process exits at once, as Velopack's Setup and
-/// Update.exe wait for it to; a downloaded update not yet in place goes in, and the app opens again in it; and an
-/// installed app takes its shortcut's AppUserModelID, so the taskbar and notifications know it as that shortcut.
-/// Nothing happens without Velopack's library beside the executable.
+/// (installed, updated, about to be removed) is answered and the process exits, as Velopack's Setup and Update.exe
+/// wait for it to; a downloaded update not yet in place goes in, and the app opens again in it; and an installed app
+/// takes its shortcut's AppUserModelID, so the taskbar and notifications know it as that shortcut. Nothing happens
+/// without Velopack's library beside the executable.
+///
+/// The install and update hooks put the Windows App Runtime's packages the app carries in place
+/// (`WindowsAppRuntimeDeployment`) while Setup shows its progress, inside the time Velopack gives a hook: 30 seconds
+/// for the install hook, and less for the update hook, which its documentation gives 15.
 enum VelopackStart {
     static func run() {
-        VelopackLibrary.shared?.appRun(nil)
+        guard let library = VelopackLibrary.shared else { return }
+        library.setHookAfterInstall { _, _ in VelopackStart.deployRuntime(within: 25) }
+        library.setHookAfterUpdate { _, _ in VelopackStart.deployRuntime(within: 12) }
+        library.appRun(nil)
+    }
+
+    private static func deployRuntime(within seconds: Int) {
+        QAEventLog.append(WindowsAppRuntimeDeployment.ensure(within: seconds))
     }
 }
 
@@ -187,8 +198,13 @@ final class VelopackLibrary: @unchecked Sendable {
     typealias WaitExitThenApply = @convention(c) (Pointer?, Pointer?, Bool, Bool,
                                                   UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?, Int) -> Bool
     typealias LastError = @convention(c) (UnsafeMutablePointer<CChar>?, Int) -> Int
+    /// The user data `vpkc_app_run` was given and the app's version.
+    typealias Hook = @convention(c) (Pointer?, UnsafePointer<CChar>?) -> Void
+    typealias SetHook = @convention(c) (Hook?) -> Void
 
     let appRun: Free
+    let setHookAfterInstall: SetHook
+    let setHookAfterUpdate: SetHook
     let newSourceGitHub: NewSourceGitHub
     let freeSource: Free
     let newUpdateManager: NewUpdateManager
@@ -216,6 +232,8 @@ final class VelopackLibrary: @unchecked Sendable {
             GetProcAddress(module, name).map { unsafeBitCast($0, to: F.self) }
         }
         guard let appRun = load("vpkc_app_run", as: Free.self),
+              let setHookAfterInstall = load("vpkc_app_set_hook_after_install", as: SetHook.self),
+              let setHookAfterUpdate = load("vpkc_app_set_hook_after_update", as: SetHook.self),
               let newSourceGitHub = load("vpkc_new_source_github", as: NewSourceGitHub.self),
               let freeSource = load("vpkc_free_source", as: Free.self),
               let newUpdateManager = load("vpkc_new_update_manager", as: NewUpdateManager.self),
@@ -232,6 +250,8 @@ final class VelopackLibrary: @unchecked Sendable {
               let getLastError = load("vpkc_get_last_error", as: LastError.self)
         else { return nil }
         self.appRun = appRun
+        self.setHookAfterInstall = setHookAfterInstall
+        self.setHookAfterUpdate = setHookAfterUpdate
         self.newSourceGitHub = newSourceGitHub
         self.freeSource = freeSource
         self.newUpdateManager = newUpdateManager
