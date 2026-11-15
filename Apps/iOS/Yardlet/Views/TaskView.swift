@@ -178,7 +178,9 @@ struct TaskView: View {
     private func content(_ conversation: ConversationState) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 18) {
+                // Each line of a turn is a row of its own: a turn of hundreds of lines drawn as one row is too tall for
+                // the stack to place, and the conversation shows blank while it runs or after it folds.
+                LazyVStack(alignment: .leading, spacing: 12) {
                     if conversation.hasOlder {
                         Button {
                             session.loadOlder(taskID)
@@ -219,6 +221,7 @@ struct TaskView: View {
                 .padding(.bottom, 12)
             }
             .defaultScrollAnchor(.bottom)
+            .modifier(ShowsEndAfterShrinking(proxy: proxy, end: Self.latestID))
             .overlay(alignment: .bottomTrailing) {
                 if !isAtLatest && conversation.isLoaded {
                     Button {
@@ -401,8 +404,10 @@ struct TurnView: View, @MainActor Equatable {
         let retryItem = turn.header?.options?.contains(RemoteNextStep.retry.rawValue) == true
             ? turn.items.last { $0.kind == .error }?.id : nil
         let offer = context.offersTurnActions ? TurnOffer(turn.items) : nil
-        VStack(alignment: .leading, spacing: 12) {
-            ForEach(RemoteTurnFold.rows(turn.items, folds: folds, opened: openedStretches), id: \.id) { row in
+        let rows = RemoteTurnFold.rows(turn.items, folds: folds, opened: openedStretches)
+        // The rows themselves, not a stack of them, so the conversation's lazy stack places each line on its own.
+        ForEach(rows, id: \.id) { row in
+            Group {
                 switch row {
                 case let .item(item):
                     ItemView(item: item, context: context, isWorkOpen: isWorkOpen, toggleWork: toggleWork,
@@ -418,6 +423,30 @@ struct TurnView: View, @MainActor Equatable {
                     }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // Turns stand further apart than the lines within one.
+            .padding(.top, row.id == rows.first?.id ? 6 : 0)
+        }
+    }
+}
+
+/// A conversation left scrolled far past its end, as when a long turn folds as it finishes, shows its end again:
+/// the scroll view keeps its offset when the content above it shrinks, and the screen would stay blank until a swipe.
+private struct ShowsEndAfterShrinking: ViewModifier {
+    let proxy: ScrollViewProxy
+    let end: String
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18, *) {
+            content.onScrollGeometryChange(for: Bool.self) { geometry in
+                // Further past the end than a pull at the bottom goes.
+                geometry.contentOffset.y + geometry.containerSize.height
+                    > geometry.contentSize.height + geometry.contentInsets.bottom + geometry.containerSize.height / 2
+            } action: { _, isPastEnd in
+                if isPastEnd { proxy.scrollTo(end, anchor: .bottom) }
+            }
+        } else {
+            content
         }
     }
 }
