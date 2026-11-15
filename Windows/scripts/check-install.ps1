@@ -95,7 +95,9 @@ function Open-Installed([string] $label) {
     $script:process = Start-Process -FilePath $executable -WorkingDirectory (Split-Path $executable) -PassThru `
         -RedirectStandardError (Join-Path $OutDirectory "$Name-$label-stderr.txt") `
         -RedirectStandardOutput (Join-Path $OutDirectory "$Name-$label-stdout.txt")
-    $shown = Wait-For { $script:process.Refresh(); $script:process.HasExited -or $script:process.MainWindowHandle -ne [IntPtr]::Zero } 90
+    # Its handle, taken while it runs, keeps the exit code readable once it has quit.
+    [void]$script:process.Handle
+    $shown =Wait-For { $script:process.Refresh(); $script:process.HasExited -or $script:process.MainWindowHandle -ne [IntPtr]::Zero } 90
     if ($script:process.HasExited -or -not $shown) {
         $summary["$label-exit"] = if ($script:process.HasExited) { $script:process.ExitCode } else { 'running' }
         Finish "$label`: no window"
@@ -109,10 +111,13 @@ function Open-Installed([string] $label) {
     return $looked
 }
 
-# Closes the app's window as a person would, so it quits through its own end, and waits for it to exit.
+# Closes the app's window as a person would, so it quits through its own end, and waits for it to exit. It must
+# end cleanly: a crash as the process ends shows only in its exit code, such as 0xC0000409 for an abort.
 function Close-Installed([string] $label) {
     [void]$script:process.CloseMainWindow()
     if (-not (Wait-For { $script:process.HasExited } 30)) { Finish "$label`: did not quit when its window closed" }
+    $code = $script:process.ExitCode
+    if ($code -ne 0) { Finish ("$label`: quit with exit code 0x{0:X8}" -f $code) }
 }
 
 # The first version, installed.
