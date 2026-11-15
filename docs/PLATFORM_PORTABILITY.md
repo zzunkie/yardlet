@@ -393,10 +393,20 @@ made for the Mac alone in between does no harm. Velopack checks a download again
 else vouches for it until the files are signed, where the Mac's updates also carry an EdDSA signature that Sparkle
 checks.
 
-Signing has a place but no certificate: `-SignTemplate`, or `YARDLET_WINDOWS_SIGN_TEMPLATE`, gives `vpk` a command
-that signs one file, with `{{file}}` for its path, which it runs on every executable and library it packs and on
-Setup.exe. Without one nothing is signed. Publishing these files with a release is not part of `scripts/release.sh`
-yet.
+Signing takes a certificate and nothing more. `-SignParameters`, or `YARDLET_WINDOWS_SIGN_PARAMETERS`, hands the
+signtool `vpk` carries the arguments for a certificate in the Windows user's store, as a smart card's or a cloud
+signing service's own tool puts one there (`/sha1 <thumbprint> /fd sha256 /tr <timestamp URL> /td sha256`);
+`-SignTemplate`, or `YARDLET_WINDOWS_SIGN_TEMPLATE`, instead gives it a command that signs one file, with `{{file}}`
+for its path. `vpk` signs every executable and library it packs that no one Windows trusts has signed, so Microsoft's
+keep their signatures, and then Setup.exe. Without either nothing is signed.
+
+A release is packed where its certificate is. `windows-app.yml`, run on the release's tag, gathers the app
+(`windows-app-bin`: the executable, its libraries and resource folder, the Swift runtime, the relay it was built with
+and the Windows App Runtime's packages). On a Windows computer that holds the certificate, with this repository
+checked out at that tag and the .NET SDK for `vpk`, but no Swift, `pack.ps1 -Binaries <that folder> -OutDirectory
+<folder> -UpdateFeed https://github.com/zzunkie/yardlet -SignParameters '…'` writes the signed installer, the portable
+zip, the package and `releases.win.json`, which go on the release beside the Mac's disk images. `scripts/release.sh`,
+which prepares the Mac's, does not do this part.
 
 Removing the app leaves `%LOCALAPPDATA%\Yardlet`, its keys in Credential Manager, the firewall's permission and the
 notifications' registration under `HKCU\Software\Classes`, as moving the Mac app to the Trash leaves its data. The
@@ -415,7 +425,10 @@ folder must hold no other executable, the
 executable must carry an icon, and the shortcut, the Apps entry and the version must be there, with the data folder
 unchanged. Opened, the app must find nothing newer. With the second version's files in the feed, the app opened again
 must download it and, once its window is closed, hand it to the updater, after which the installed version must be the
-second; opened once more it must say so and find nothing newer. Removing it must answer the uninstall hook and take
+second; opened once more it must say so and find nothing newer. It packs what the run gathered (`windows-app-bin`), as
+a computer that holds the certificate does, and signs the second version with a certificate made for the check and
+taken out of the store again: its Setup.exe and the executable the update puts in place must carry that signature,
+and the Windows App SDK's bootstrapper must keep Microsoft's. Removing it must answer the uninstall hook and take
 the installed app, the shortcut and the Apps entry, and leave the data folder as it was.
 
 ## The check that blocks new violations

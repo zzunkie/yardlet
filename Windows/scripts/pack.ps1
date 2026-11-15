@@ -13,14 +13,24 @@
 # -UpdateFeed: where the installed app looks for updates, written to YardletUpdateFeed beside the executable: a
 #   GitHub repository whose releases carry these files (https://github.com/<owner>/<repo>), or another Velopack
 #   feed's address or folder. Without it the app has no updater.
-# -SignTemplate: the command that signs one file, with {{file}} where its path goes, which vpk runs on every
-#   executable and library it packs before it builds the installer; YARDLET_WINDOWS_SIGN_TEMPLATE by default.
-#   Without it nothing is signed.
+# -SignParameters: signtool's arguments for a certificate this Windows user's store holds, as a smart card's or a
+#   cloud signing service's own tool puts one there, such as '/sha1 <thumbprint> /fd sha256 /tr <timestamp URL>
+#   /td sha256', which vpk passes to the signtool it carries; YARDLET_WINDOWS_SIGN_PARAMETERS by default.
+# -SignTemplate: instead, the command that signs one file, with {{file}} where its path goes;
+#   YARDLET_WINDOWS_SIGN_TEMPLATE by default.
+#   Either way vpk signs every executable and library it packs that is not already signed by someone Windows trusts
+#   (Microsoft's stay as they are), then Setup.exe. Without either nothing is signed.
+#
+# -Binaries is a build folder once place-bootstrapper.ps1 has run, or the app windows-app.yml gathers
+# (windows-app-bin), which carries the Swift runtime and the relay it was built with, so a Windows computer that holds
+# the signing certificate can pack it with no Swift installed: it needs this checkout at the release's version and the
+# .NET SDK, for vpk.
 param(
     [Parameter(Mandatory)] [string] $Binaries,
     [Parameter(Mandatory)] [string] $OutDirectory,
     [string] $Version,
     [string] $UpdateFeed,
+    [string] $SignParameters = $env:YARDLET_WINDOWS_SIGN_PARAMETERS,
     [string] $SignTemplate = $env:YARDLET_WINDOWS_SIGN_TEMPLATE
 )
 $ErrorActionPreference = 'Stop'
@@ -69,10 +79,21 @@ if (-not (Test-Path (Join-Path $stage 'Microsoft.WindowsAppRuntime.Bootstrap.dll
     -not (Test-Path (Join-Path $stage 'WindowsAppRuntime\MSIX.identities'))) {
     throw "No Windows App SDK bootstrapper or runtime packages in $Binaries; run place-bootstrapper.ps1 first"
 }
-$runtime = Get-ChildItem "$env:LOCALAPPDATA\Programs\Swift\Runtimes\*\usr\bin" -Directory | Select-Object -First 1
-if (-not $runtime) { throw 'No Swift runtime under %LOCALAPPDATA%\Programs\Swift\Runtimes' }
-Copy-Item "$runtime\*.dll" $stage
-& (Join-Path $PSScriptRoot 'place-relay.ps1') -Destination $stage
+# The Swift runtime: beside the app when it was gathered, else from the installed toolchain.
+if (Test-Path (Join-Path $stage 'swiftCore.dll')) {
+    'Swift runtime: the one beside the app'
+} else {
+    $runtime = Get-ChildItem "$env:LOCALAPPDATA\Programs\Swift\Runtimes\*\usr\bin" -Directory | Select-Object -First 1
+    if (-not $runtime) { throw 'No Swift runtime beside the app or under %LOCALAPPDATA%\Programs\Swift\Runtimes' }
+    Copy-Item "$runtime\*.dll" $stage
+}
+# The relay: the one YARDLET_RELAY_URL or Packaging/RelayURL names, else the one a gathered app was built with.
+if ($env:YARDLET_RELAY_URL -or (Test-Path (Join-Path $root 'Packaging/RelayURL'))) {
+    & (Join-Path $PSScriptRoot 'place-relay.ps1') -Destination $stage
+} else {
+    Get-ChildItem $Binaries -File | Where-Object Name -in 'YardletRelayURL', 'YardletRelayAlternateURL' | Copy-Item -Destination $stage
+    if (Test-Path (Join-Path $stage 'YardletRelayURL')) { 'Relay: the one beside the app' } else { 'Relay: none built in' }
+}
 Copy-Item (Join-Path $library 'lib/velopack_libc_win_x64_msvc.dll') $stage
 # The notices for what the app carries, as the Mac's bundle has them.
 Copy-Item (Join-Path $root 'LICENSE'), (Join-Path $root 'THIRD_PARTY_NOTICES.md') $stage
@@ -97,6 +118,9 @@ $arguments = @(
 if ($SignTemplate) {
     $arguments += @('--signTemplate', $SignTemplate)
     'Signing: with the template given'
+} elseif ($SignParameters) {
+    $arguments += @('--signParams', $SignParameters)
+    "Signing: with signtool's arguments given"
 } else {
     'Signing: none'
 }

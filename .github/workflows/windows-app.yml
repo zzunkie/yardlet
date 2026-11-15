@@ -147,13 +147,13 @@ jobs:
             Rename-Item .build-hidden .build
           }
           exit $code
-      # The app packed with Velopack, installed without a window, updated from a feed in a folder on the runner
-      # and removed (docs/PLATFORM_PORTABILITY.md, "Installing and updating the Windows app").
+      # The app gathered above packed with Velopack, as a computer that holds the signing certificate packs it,
+      # installed without a window, updated from a feed in a folder on the runner to a version signed with a
+      # certificate made for the check, and removed (docs/PLATFORM_PORTABILITY.md, "Installing and updating the
+      # Windows app").
       - name: Install, update and remove the packed app
         shell: pwsh
-        env:
-          YARDLET_RELAY_URL: https://relay.yardlet.app
-        run: Windows/scripts/check-install.ps1 -Binaries $env:APP_BIN -OutDirectory window-check
+        run: Windows/scripts/check-install.ps1 -Binaries windows-app-bin -OutDirectory window-check
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-app-setup

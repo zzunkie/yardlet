@@ -6,7 +6,9 @@
 # without a window; its install hook must put the runtime's packages the app carries in place and end in time, and
 # the installed app must have Yardlet's icon and a Start menu shortcut, and find no update. The next version's files then replace the feed's: the app opened again must
 # download it and, once its window is closed, hand it to Velopack's updater, which puts it in place; opened once
-# more it must be that version. Removing it must take the installed folder, the shortcut and the entry in
+# more it must be that version. The next version is signed with a certificate made for the check, as a release is
+# signed with Yardlet's (vpk's signtool with a certificate in this user's store): its Setup.exe and the executable it
+# installs must carry that signature, and the Windows App SDK's bootstrapper keeps Microsoft's. Removing it must take the installed folder, the shortcut and the entry in
 # Settings > Apps, and leave %LOCALAPPDATA%\Yardlet, the app's own data, as it was. It writes the event logs,
 # Velopack's logs, screenshots and a summary to -OutDirectory.
 param(
@@ -17,6 +19,7 @@ param(
     [string] $NextVersion = '0.0.1-ci.2'
 )
 $ErrorActionPreference = 'Stop'
+$Binaries = (Resolve-Path $Binaries).Path
 New-Item -ItemType Directory -Force $OutDirectory | Out-Null
 $OutDirectory = (Resolve-Path $OutDirectory).Path
 $Name = 'install'
@@ -120,7 +123,19 @@ foreach ($folder in @($Feed, $first, $next)) {
     New-Item -ItemType Directory $folder | Out-Null
 }
 & (Join-Path $PSScriptRoot 'pack.ps1') -Binaries $Binaries -OutDirectory $first -Version $FirstVersion -UpdateFeed $Feed
-& (Join-Path $PSScriptRoot 'pack.ps1') -Binaries $Binaries -OutDirectory $next -Version $NextVersion -UpdateFeed $Feed
+# Windows PowerShell's PKI module makes the certificate, in this user's store, where signtool finds it by thumbprint.
+$thumbprint = (powershell.exe -NoProfile -Command ("(New-SelfSignedCertificate -Type CodeSigningCert -Subject " +
+    "'CN=Yardlet install check' -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddDays(1)).Thumbprint")).Trim()
+if ($thumbprint -notmatch '^[0-9A-F]{40}$') { Finish "no certificate for the check: $thumbprint" }
+try {
+    & (Join-Path $PSScriptRoot 'pack.ps1') -Binaries $Binaries -OutDirectory $next -Version $NextVersion -UpdateFeed $Feed `
+        -SignParameters "/sha1 $thumbprint /fd sha256"
+} finally {
+    Remove-Item "Cert:\CurrentUser\My\$thumbprint" -ErrorAction SilentlyContinue
+}
+function Signer([string] $file) { "$((Get-AuthenticodeSignature $file).SignerCertificate.Thumbprint)" }
+$summary.nextSetupSigned = (Signer (Join-Path $next 'YardletApp-win-Setup.exe')) -eq $thumbprint
+if (-not $summary.nextSetupSigned) { Finish "the next version's Setup.exe is not signed with the certificate given" }
 Copy-Item "$first\*" $Feed
 $before = Data-Listing
 
@@ -161,6 +176,8 @@ if ($absent.Count) { Finish "not in place after Setup: $($absent -join ', ')" }
 if (-not (Test-Path $executable)) { Finish 'not installed' }
 $summary.executables = @(Get-ChildItem (Join-Path $installRoot 'current') -Recurse -File -Filter '*.exe' | ForEach-Object Name) -join ', '
 if ($summary.executables -ne 'NativeHarnessClient.exe') { Finish "other executables installed: $($summary.executables)" }
+$summary.relay = Test-Path (Join-Path $installRoot 'current\YardletRelayURL')
+if (-not $summary.relay) { Finish 'the relay the app was built with is not installed' }
 $summary.icons = [InstalledFile]::Icons($executable)
 if ($summary.icons -lt 1) { Finish 'the executable has no icon' }
 if (-not (Test-Path $shortcut)) { Finish 'no Start menu shortcut' }
@@ -194,6 +211,13 @@ if (-not (Wait-For { -not (Get-Process -ErrorAction SilentlyContinue | Where-Obj
     Finish 'the updater did not finish'
 }
 $summary.updatedVersion = Installed-Version
+$summary.updatedSigner = (Get-AuthenticodeSignature $executable).SignerCertificate.Subject
+if ((Signer $executable) -ne $thumbprint) { Finish "the updated executable is signed by $($summary.updatedSigner)" }
+$bootstrapper = Get-AuthenticodeSignature (Join-Path $installRoot 'current\Microsoft.WindowsAppRuntime.Bootstrap.dll')
+$summary.bootstrapperSigner = "$($bootstrapper.SignerCertificate.Subject) ($($bootstrapper.Status))"
+if ($bootstrapper.Status -ne 'Valid' -or $bootstrapper.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {
+    Finish "the bootstrapper's signature changed: $($summary.bootstrapperSigner)"
+}
 $looked = Open-Installed 'updated'
 if ("$looked" -ne 'update: none') { Finish "updated: $looked" }
 if (-not (Get-Content (Join-Path $OutDirectory "$Name-updated-events.log") | Where-Object { $_ -eq "update: current $NextVersion" })) {
