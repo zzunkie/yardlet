@@ -1,5 +1,5 @@
 # Starts a task in the Windows app with the stand-in harness check-harness.ps1 installed (fake-harness/, an
-# ACP harness the app knows as Kimi Code): New task, the harness, a message and Enter; then the stand-in's
+# ACP harness the app knows as Kimi Code): New task, the harness, a message and Send beside it; then the stand-in's
 # request is allowed from its card and its answer streams in, with no console window opened for the stand-in's
 # node, and its edit's line opens to the diff. The app is then opened again, and the task's conversation must show
 # the same answer from its saved history. A second message's turn is then stopped with Stop while it waits on its
@@ -184,16 +184,12 @@ if (-not (Wait-For { Select-Named $main $Harness } 10)) { Finish "$Harness canno
 $prompt = Wait-For { Find-Typed $main $Types::Edit } 10
 if (-not $prompt) { Finish 'no message field' }
 $prompt.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Message)
+# Send turns on once the message is there.
+$send = Wait-For { $button = Find-Named $main 'Send' $Types::Button; if ($button -and $button.Current.IsEnabled) { $button } } 10
+if (-not $send) { Finish 'no Send beside the message' }
 Save-Screen 'new-task'
-[void][LocalDesktop]::BringForward($process.MainWindowHandle)
-$prompt.SetFocus()
-[LocalDesktop]::Press(0x0D)
-if (-not (Wait-For { (Read-Events) -contains 'new task started' } 20)) {
-    # The runner now and then drops an injected key; once more.
-    [void][LocalDesktop]::BringForward($process.MainWindowHandle)
-    $prompt.SetFocus()
-    [LocalDesktop]::Press(0x0D)
-}
+$send.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+[void](Wait-For { (Read-Events) -contains 'new task started' } 60)
 $started = Wait-For { Read-Events | Where-Object { $_ -eq 'new task started' -or $_ -like 'new task: *' } | Select-Object -Last 1 } 30
 if (-not ((Read-Events) -contains 'new task started')) { Finish 'the task did not start' }
 $summary.showing = "$(Wait-For { Read-Events | Where-Object { $_ -like 'showing: *' } | Select-Object -Last 1 } 20)"

@@ -31,6 +31,8 @@ final class NewTaskPane {
     /// XAML holds.
     private var settingBoxes: [ComboBox] = []
     private let prompt = TextBox()
+    /// Starts the task with the message, as Enter does.
+    private var sendButton: Button?
     private let status = TextBlock()
     /// The chosen harness's sign-in, while its account reads signed out.
     private let signInRow: SignInRow
@@ -121,13 +123,23 @@ final class NewTaskPane {
         }
         view.children.append(settingsGrid)
 
-        prompt.textWrapping = .wrap
-        prompt.keyDown.addHandler { [weak self] _, args in
-            guard let self, let args, args.key == .enter else { return }
-            args.handled = true
-            self.startTask()
-        }
-        view.children.append(prompt)
+        // The message with Send beside it, as the Mac's new task has them.
+        let promptRow = Grid()
+        promptRow.columnSpacing = 8
+        let promptColumn = ColumnDefinition()
+        promptColumn.width = GridLength(value: 1, gridUnitType: .star)
+        let buttonColumn = ColumnDefinition()
+        buttonColumn.width = GridLength(value: 0, gridUnitType: .auto)
+        promptRow.columnDefinitions.append(promptColumn)
+        promptRow.columnDefinitions.append(buttonColumn)
+        ComposerKeys.prepare(prompt) { [weak self] in self?.startTask() }
+        prompt.textChanged.addHandler { [weak self] _, _ in self?.showSendable() }
+        promptRow.children.append(prompt)
+        let sendButton = ComposerKeys.sendButton(L10n.string("Send")) { [weak self] in self?.startTask() }
+        try? Grid.setColumn(sendButton, 1)
+        promptRow.children.append(sendButton)
+        self.sendButton = sendButton
+        view.children.append(promptRow)
         status.textWrapping = .wrap
         status.opacity = 0.7
         view.children.append(status)
@@ -185,6 +197,12 @@ final class NewTaskPane {
     private func showPrompt() {
         signInRow.show(chosenHarness)
         prompt.placeholderText = chosenHarness.map { L10n.format("What should %@ work on?", $0.displayName) } ?? ""
+        showSendable()
+    }
+
+    /// Send is on while there is a harness and a message, and no task is starting.
+    private func showSendable() {
+        sendButton?.isEnabled = chosenHarness != nil && prompt.isEnabled && ComposerKeys.canSend(prompt.text)
     }
 
     // MARK: Where the task works
@@ -378,10 +396,14 @@ final class NewTaskPane {
                                                      connection: model.connections.selected(for: harness)) else { return }
         status.text = ""
         prompt.isEnabled = false
+        showSendable()
         log.write("new task: \(harness.displayName)\(submission.workspaceURL.map { " in \($0.lastPathComponent)" } ?? "")")
         let previousError = model.bootstrapError
         Task {
-            defer { prompt.isEnabled = true }
+            defer {
+                prompt.isEnabled = true
+                showSendable()
+            }
             do {
                 let created = try await model.createTask(submission)
                 let failure = created == nil

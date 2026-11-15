@@ -11,7 +11,7 @@ What the Windows app is built from besides its sources in `Sources/NativeHarness
 | `scripts/generate-bindings.ps1` | Builds swift-winrt, restores the packages and generates the bindings into `Bindings/Generated/`, which git ignores |
 | `scripts/place-bootstrapper.ps1` | Puts the Windows App SDK's bootstrapper beside the app's executable |
 | `scripts/test-swift-winrt.ps1` | Builds swift-winrt with the patches and runs its own tests, as its CI does (`.github/workflows/swift-winrt-tests.yml`) |
-| `scripts/check-window.ps1` | Opens a build, measures its memory, idle processor time and what it loads, and types Korean into its composer through the Microsoft Korean IME |
+| `scripts/check-window.ps1` | Opens a build, measures its memory, idle processor time and what it loads, types Korean into its composer through the Microsoft Korean IME, and checks that Shift+Enter starts a new line |
 | `scripts/start-remote-host.ps1`, `scripts/check-remote.ps1` | Start the relay and, when given one, the fixture host on it, and pair a build with that host, open a task, send a message and wait for the answer to stream in |
 | `scripts/place-relay.ps1` | Puts the relay a build carries beside its executable, from `YARDLET_RELAY_URL` or Packaging/RelayURL, as `scripts/build-app.sh` puts the Mac's in Info.plist |
 | `scripts/check-remote-host.ps1` | Turns on Settings › Remote in a build, pairs the fixture as a phone over the build's direct listener and as another through the relay with the links it copies, has each phone's message answered, checks that the listener refuses a browser's handshake and a text frame, and checks the device list and that turning the remote off closes the listener and the relay room |

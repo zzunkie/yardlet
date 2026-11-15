@@ -136,8 +136,10 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
 - **Assembly.** `Platform/Windows/AppModel+Live.swift` makes the model with its stores in `%LOCALAPPDATA%\Yardlet`
   and no browser host. `WinUI/YardletApp.swift` makes it once WinUI has started and opens `WinUI/MainWindow.swift`:
   the store's tasks in the sidebar, followed through Observation, with their titles and harness marks as the Mac's
-  rows show them, and a composer that sends through the model, with Stop beside it while the task's turn runs, which
-  stops it through the harness's own cancel (`AppModel.interrupt`). New task at the top (`WinUI/NewTaskPane.swift`)
+  rows show them, and a composer that sends through the model with Send beside it, and Stop in Send's place while the
+  task's turn runs, which stops it through the harness's own cancel (`AppModel.interrupt`). As in the Mac's composer
+  and the harnesses' own apps, Enter sends and Shift+Enter starts a new line (`WinUI/ComposerKeys.swift`); New task
+  and a host's window have the same field and Send. New task at the top (`WinUI/NewTaskPane.swift`)
   starts a task as the Mac's new-task screen does, from the Mac's home draft: a harness whose CLI Yardlet found,
   where it works (a project, a folder chosen in Windows' own folder dialog, `Platform/Windows/WindowsFolderPicker.swift`,
   or a chat with no project), and the model, effort and permission the harness takes before its task exists, from
@@ -263,8 +265,8 @@ Windows/scripts/place-bootstrapper.ps1 -Binaries (swift build --show-bin-path)
 
 `windows-engine.yml` builds the Windows app for the same pull requests and branches, beside the
 engine, as a check to read. `windows-app.yml`, for `windows-*` branches only, builds a release, opens it on the
-runner, measures it and types Korean into its composer through the Microsoft Korean IME
-(`Windows/scripts/check-window.ps1`). It then starts the relay (`relay/`) and the fixture host on it
+runner, measures it, types Korean into its composer through the Microsoft Korean IME, and checks that Shift+Enter
+starts a new line and sends nothing (`Windows/scripts/check-window.ps1`). It then starts the relay (`relay/`) and the fixture host on it
 (`Windows/scripts/start-remote-host.ps1`) and, in the same step, since a Windows runner ends the programs a step
 started when the step ends, pairs the app with the host through Connect to a Mac, opens a task, sends a message and
 waits for the answer to stream in, then removes the host with Remove… and its question, which closes its window and
@@ -275,7 +277,7 @@ variable like `YARDLET_QA_EVENT_LOG`): the app finds the shim as a new task woul
 probe on it, which starts it through Node.js for `--version` and the ACP handshake and stops it. The stand-in starts
 a detached process of its own, which outlives a stop of the stand-in alone, as the check shows first without the
 app; the check passes when that process ended with the app's stop (`Windows/scripts/check-harness.ps1`). With that
-stand-in, which serves one ACP turn that asks to edit a file, the app then starts a task from New task, allows the
+stand-in, which serves one ACP turn that asks to edit a file, the app then starts a task from New task with its Send, allows the
 request from its card, opens the edit's line to its diff, waits for the answer to stream in, and opens again to find
 the answer kept; a second turn is then stopped with Stop while it waits on its request, which must reach the stand-in
 as ACP's `session/cancel`, end the turn and leave the stand-in running (`Windows/scripts/check-local.ps1`); while the stand-in runs, no console window opens beside the ones already there,

@@ -1,4 +1,5 @@
-# Opens a window build, measures it and types Korean through the Microsoft Korean IME into its composer.
+# Opens a window build, measures it and types Korean through the Microsoft Korean IME into its composer, then
+# checks that Shift+Enter starts a new line there and sends nothing.
 # It writes screenshots, the window's own event log (YARDLET_QA_EVENT_LOG) and a summary to -OutDirectory.
 # Runs in Windows PowerShell 5.1, which has System.Drawing and the International module; the file stays
 # ASCII because 5.1 reads a script without a byte order mark in the system code page.
@@ -228,6 +229,32 @@ $summary.sentCodePoints = ($sent | ForEach-Object { ($_.ToCharArray() | ForEach-
 $summary.tasks = @($events | Where-Object { $_ -like 'tasks:*' }) -join ' / '
 $summary.compositionEvents = @($events | Where-Object { $_ -like 'composition*' }).Count
 $summary.korean = if ($sent -contains $expected) { 'sent as typed' } elseif ($sent.Count) { 'sent, but not as typed' } else { 'nothing sent' }
+
+# Shift+Enter starts a new line in the composer and sends nothing; Send stands beside it.
+try {
+    $automation = [System.Windows.Automation.AutomationElement]::FromHandle($window)
+    $type = [System.Windows.Automation.AutomationElement]::ControlTypeProperty
+    $edit = $automation.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+        (New-Object System.Windows.Automation.PropertyCondition($type, [System.Windows.Automation.ControlType]::Edit)))
+    $send = $automation.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition(
+        (New-Object System.Windows.Automation.PropertyCondition($type, [System.Windows.Automation.ControlType]::Button)),
+        (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, 'Send')))))
+    $summary.sendButton = [bool]$send
+    $value = $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+    $value.SetValue('first line')
+    $edit.SetFocus()
+    $sentBefore = @(Read-Events | Where-Object { $_ -like 'sent: *' }).Count
+    [Desktop]::keybd_event(0x10, 0, 0, [UIntPtr]::Zero)
+    [Desktop]::Press(0x0D)
+    [Desktop]::keybd_event(0x10, 0, 2, [UIntPtr]::Zero)
+    Start-Sleep -Seconds 1
+    $summary.shiftEnter = if ($value.Current.Value -match "[`r`n]") { 'new line' } else { "no new line: $($value.Current.Value)" }
+    $summary.shiftEnterSent = @(Read-Events | Where-Object { $_ -like 'sent: *' }).Count - $sentBefore
+    Save-Screen 'new-line'
+    $value.SetValue('')
+} catch {
+    $summary.shiftEnterError = "$_"
+}
 $summary.result = 'window shown'
 
 $process.Refresh()

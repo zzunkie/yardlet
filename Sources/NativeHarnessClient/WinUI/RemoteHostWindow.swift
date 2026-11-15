@@ -18,6 +18,8 @@ final class RemoteHostWindow {
     private let status = TextBlock()
     private let timeline = ConversationTimeline()
     private let composer = TextBox()
+    /// Sends what the composer holds to the host, as Enter does.
+    private var sendButton: Button?
     private var items: [(item: NavigationViewItem, taskID: String)] = []
     /// What the sidebar draws, by section: its name, then each task's ID, title and harness.
     private var shownRows: [String]?
@@ -58,15 +60,25 @@ final class RemoteHostWindow {
         grid.children.append(status)
         try? Grid.setRow(timeline.view, 1)
         grid.children.append(timeline.view)
-        composer.textWrapping = .wrap
-        composer.margin = Thickness(left: 28, top: 8, right: 28, bottom: 20)
-        try? Grid.setRow(composer, 2)
-        grid.children.append(composer)
-        composer.keyDown.addHandler { [weak self] _, args in
-            guard let self, let args, args.key == .enter else { return }
-            args.handled = true
-            self.send()
-        }
+        // The composer with Send beside it, as in the main window.
+        let composerRow = Grid()
+        composerRow.margin = Thickness(left: 28, top: 8, right: 28, bottom: 20)
+        composerRow.columnSpacing = 8
+        let composerColumn = ColumnDefinition()
+        composerColumn.width = GridLength(value: 1, gridUnitType: .star)
+        let buttonColumn = ColumnDefinition()
+        buttonColumn.width = GridLength(value: 0, gridUnitType: .auto)
+        composerRow.columnDefinitions.append(composerColumn)
+        composerRow.columnDefinitions.append(buttonColumn)
+        ComposerKeys.prepare(composer) { [weak self] in self?.send() }
+        composer.textChanged.addHandler { [weak self] _, _ in self?.showSendable() }
+        composerRow.children.append(composer)
+        let sendButton = ComposerKeys.sendButton(L10n.string("Send")) { [weak self] in self?.send() }
+        try? Grid.setColumn(sendButton, 1)
+        composerRow.children.append(sendButton)
+        self.sendButton = sendButton
+        try? Grid.setRow(composerRow, 2)
+        grid.children.append(composerRow)
         navigation.content = grid
         window.content = navigation
         try? window.activate()
@@ -182,6 +194,12 @@ final class RemoteHostWindow {
             composer.placeholderText = L10n.string("Choose a task")
         }
         shownTaskID = taskID
+        showSendable()
+    }
+
+    /// Send is on while the composer holds something and a task is chosen to send it to.
+    private func showSendable() {
+        sendButton?.isEnabled = selectedTaskID != nil && ComposerKeys.canSend(composer.text)
     }
 
     private func send() {

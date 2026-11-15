@@ -22,6 +22,8 @@ final class MainWindow {
     private let navigation = NavigationView()
     private let timeline = ConversationTimeline()
     private let composer = TextBox()
+    /// Sends what the composer holds, as the Mac composer's Send does; Stop takes its place while the task's turn runs.
+    private var sendButton: Button?
     /// Stops the shown task's turn while it runs, as the Mac composer's Stop does.
     private let stopButton = Button()
     private var items: [(item: NavigationViewItem, id: SessionRecord.ID)] = []
@@ -219,6 +221,8 @@ final class MainWindow {
         }
         let isRunning = session.map { $0.status == .running || $0.status == .waitingForApproval } ?? false
         stopButton.visibility = isRunning ? .visible : .collapsed
+        sendButton?.visibility = isRunning ? .collapsed : .visible
+        showSendable()
         let placeholder = session != nil ? error : hasTasks ? L10n.string("Choose a task") : L10n.string("No tasks")
         timeline.workspaceURL = session?.workspaceURL
         timeline.show(presentation, conversationID: session?.id.uuidString, placeholder: placeholder)
@@ -256,19 +260,22 @@ final class MainWindow {
                                 latestTurnWasCutOff: session.completionState == .interrupted)
     }
 
-    /// The composer and, while the task's turn runs, Stop beside it.
+    /// The composer with Send beside it, and Stop in Send's place while the task's turn runs, as on the Mac.
     private func makeComposerRow() -> Grid {
         let row = Grid()
         row.margin = Thickness(left: 28, top: 8, right: 28, bottom: 20)
         row.columnSpacing = 8
         let composerColumn = ColumnDefinition()
         composerColumn.width = GridLength(value: 1, gridUnitType: .star)
-        let stopColumn = ColumnDefinition()
-        stopColumn.width = GridLength(value: 0, gridUnitType: .auto)
+        let buttonColumn = ColumnDefinition()
+        buttonColumn.width = GridLength(value: 0, gridUnitType: .auto)
         row.columnDefinitions.append(composerColumn)
-        row.columnDefinitions.append(stopColumn)
-        composer.textWrapping = .wrap
+        row.columnDefinitions.append(buttonColumn)
         row.children.append(composer)
+        let sendButton = ComposerKeys.sendButton(L10n.string("Send")) { [weak self] in self?.send() }
+        try? Grid.setColumn(sendButton, 1)
+        row.children.append(sendButton)
+        self.sendButton = sendButton
         stopButton.content = L10n.string("Stop")
         stopButton.verticalAlignment = .bottom
         stopButton.visibility = .collapsed
@@ -279,6 +286,11 @@ final class MainWindow {
         return row
     }
 
+    /// Send is on while the composer holds something and a task is chosen to send it to.
+    private func showSendable() {
+        sendButton?.isEnabled = selectedSession != nil && ComposerKeys.canSend(composer.text)
+    }
+
     /// The harness's own cancel stops the turn (`AppModel.interrupt`), as the Mac's Stop does.
     private func stop() {
         guard let session = selectedSession, session.status == .running || session.status == .waitingForApproval
@@ -287,9 +299,8 @@ final class MainWindow {
         Task { await model.interrupt(session) }
     }
 
-    // Enter sends what the composer shows, the syllable being composed included: with the Microsoft
-    // Korean IME the composer's text already holds it when Enter comes in, and no composition end
-    // follows (Windows/scripts/check-window.ps1 types through the IME to check this).
+    // Enter sends what the composer shows, the syllable being composed included, and Shift+Enter starts a new line
+    // (`ComposerKeys`).
     private func observeComposer() {
         composer.loaded.addHandler { [weak self] _, _ in
             guard let self else { return }
@@ -307,11 +318,8 @@ final class MainWindow {
             guard let self else { return }
             self.log.write("composition ended: \(self.composer.text)")
         }
-        composer.keyDown.addHandler { [weak self] _, args in
-            guard let self, let args, args.key == .enter else { return }
-            args.handled = true
-            self.send()
-        }
+        composer.textChanged.addHandler { [weak self] _, _ in self?.showSendable() }
+        ComposerKeys.prepare(composer) { [weak self] in self?.send() }
     }
 
     private func send() {
