@@ -47,6 +47,10 @@ struct WelcomeView: View {
                 }
                 .font(.callout)
                 .padding(.top, 8)
+                Link("Privacy Policy", destination: URL(string: "https://yardlet.app/privacy.html")!)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 4)
             }
             .disabled(model.isPairing)
             .padding(.horizontal, 24)

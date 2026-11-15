@@ -11,19 +11,17 @@ struct RequestCard: View {
         VStack(alignment: .leading, spacing: 12) {
             Label(heading, systemImage: symbol)
                 .font(.subheadline.weight(.semibold))
-            switch item.requestKind {
-            case "question" where item.questionSteps?.isEmpty == false && answers:
-                QuestionForm(item: item, context: context)
-            case "form" where item.formFields?.isEmpty == false && item.choices?.isEmpty == false:
-                FieldsForm(item: item, context: context)
-            case "form" where item.questionSteps?.isEmpty == false && answers:
-                QuestionForm(item: item, context: context)
-            case "planReview":
-                PlanReview(item: item, context: context)
-            case "browserHandoff":
-                HandoffAnswer(item: item, context: context)
-            default:
-                ApprovalAnswer(item: item, context: context)
+            // The provider's own words the Mac's card shows above its form or answers (§6.5); an approval shows them
+            // under what it asks to run.
+            if form != .approval, let message = item.message, !message.isEmpty {
+                Text(message).font(.subheadline).textSelection(.enabled)
+            }
+            switch form {
+            case .questions: QuestionForm(item: item, context: context)
+            case .fields: FieldsForm(item: item, context: context)
+            case .plan: PlanReview(item: item, context: context)
+            case .handoff: HandoffAnswer(item: item, context: context)
+            case .approval: ApprovalAnswer(item: item, context: context)
             }
             if item.moreOnMac == true, let note = macNote {
                 Label(note, systemImage: "desktopcomputer")
@@ -34,6 +32,20 @@ struct RequestCard: View {
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    private enum Form { case questions, fields, plan, handoff, approval }
+
+    /// How the card answers: its questions, its fields, a plan review, a handed-over tab, or the approval's choices.
+    private var form: Form {
+        switch item.requestKind {
+        case "question" where item.questionSteps?.isEmpty == false && answers: .questions
+        case "form" where item.formFields?.isEmpty == false && item.choices?.isEmpty == false: .fields
+        case "form" where item.questionSteps?.isEmpty == false && answers: .questions
+        case "planReview": .plan
+        case "browserHandoff": .handoff
+        default: .approval
+        }
     }
 
     /// The phone may answer the questions itself (§15.2, §15.19).
@@ -98,6 +110,9 @@ private struct ApprovalAnswer: View {
             }
             if let detail = item.detail, !detail.isEmpty {
                 Text(detail).font(.subheadline).foregroundStyle(.secondary).textSelection(.enabled)
+            }
+            if let message = item.message, !message.isEmpty {
+                Text(message).font(.subheadline).textSelection(.enabled)
             }
             // The answers only: the command stays readable while the phone reconnects.
             Group {

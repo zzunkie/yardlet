@@ -1,6 +1,26 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "%@ can't move this task to that account now.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 지금 이 작업을 그 계정으로 옮길 수 없습니다."
+          }
+        }
+      }
+    },
+    "%@ can't use this harness now.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 지금 이 하네스를 쓸 수 없습니다."
+          }
+        }
+      }
+    },
     "%@ couldn't do that.": {
       "localizations": {
         "ko": {
@@ -37,6 +57,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "%1$@에서 지금 이 %2$@ 선택지를 받지 않습니다. 다시 고르세요."
+          }
+        }
+      }
+    },
+    "%@ doesn't take this setting now.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 지금 이 설정을 받지 않습니다."
           }
         }
       }
@@ -229,6 +259,36 @@
         }
       }
     },
+    "A message of this task is being edited on %@.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 이 작업의 메시지를 고치는 중입니다."
+          }
+        }
+      }
+    },
+    "A new device": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "새 기기"
+          }
+        }
+      }
+    },
+    "A new device wants to connect": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "새 기기가 연결하려 합니다"
+          }
+        }
+      }
+    },
     "Add Photos": {
       "localizations": {
         "ko": {
@@ -255,6 +315,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "에이전트"
+          }
+        }
+      }
+    },
+    "Allow": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "허용"
           }
         }
       }
@@ -289,12 +359,32 @@
         }
       }
     },
+    "Allow it only if %@ shows the same number. Refuse a device you don't know.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에도 같은 숫자가 보이면 허용하세요. 모르는 기기면 거절하세요."
+          }
+        }
+      }
+    },
     "Allowed: %@": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "허용함: %@"
+          }
+        }
+      }
+    },
+    "Another app is using this task's conversation.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다른 앱이 이 작업의 대화를 쓰고 있습니다."
           }
         }
       }
@@ -325,6 +415,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "앱 잠금"
+          }
+        }
+      }
+    },
+    "Approaching your session limit": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "세션 한도에 가까워졌습니다"
+          }
+        }
+      }
+    },
+    "Approaching your usage limit": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "사용 한도에 가까워졌습니다"
+          }
+        }
+      }
+    },
+    "Approaching your weekly limit": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "주간 한도에 가까워졌습니다"
           }
         }
       }
@@ -499,6 +619,16 @@
         }
       }
     },
+    "Confirm this choice on %@.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 선택은 %@에서 확인해야 합니다."
+          }
+        }
+      }
+    },
     "Connect": {
       "localizations": {
         "ko": {
@@ -565,16 +695,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "연결하는 중…"
-          }
-        }
-      }
-    },
-    "Continue": {
-      "localizations": {
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "계속"
           }
         }
       }
@@ -709,6 +829,16 @@
         }
       }
     },
+    "Do this on %@.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 일은 %@에서 하세요."
+          }
+        }
+      }
+    },
     "Done": {
       "localizations": {
         "ko": {
@@ -725,6 +855,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "여기서 함"
+          }
+        }
+      }
+    },
+    "Edit Message": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "메시지 편집"
           }
         }
       }
@@ -775,6 +915,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@의 목록에서도 빠집니다. 그곳의 보관된 작업에서 다시 찾을 수 있습니다."
+          }
+        }
+      }
+    },
+    "Jump to Latest": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "최신 메시지로 이동"
           }
         }
       }
@@ -859,6 +1009,16 @@
         }
       }
     },
+    "Messages are waiting in the queue, so this can't be done now.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "대기 중인 메시지가 있어 지금은 할 수 없습니다."
+          }
+        }
+      }
+    },
     "Model and Permissions": {
       "localizations": {
         "ko": {
@@ -885,6 +1045,46 @@
           "stringUnit": {
             "state": "translated",
             "value": "다른 답은 Mac에서 할 수 있습니다."
+          }
+        }
+      }
+    },
+    "Move Down": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "아래로 이동"
+          }
+        }
+      }
+    },
+    "Move Up": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "위로 이동"
+          }
+        }
+      }
+    },
+    "Moving to %@ after this turn": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 턴이 끝나면 %@ 계정으로 옮깁니다"
+          }
+        }
+      }
+    },
+    "Moving to %@ when its background work ends": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "백그라운드 작업이 끝나면 %@ 계정으로 옮깁니다"
           }
         }
       }
@@ -985,6 +1185,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "알림"
+          }
+        }
+      }
+    },
+    "Number %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "확인 숫자 %@"
           }
         }
       }
@@ -1253,6 +1463,26 @@
         }
       }
     },
+    "Queue paused because you interrupted": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "중단해서 대기열이 일시 중지되었습니다"
+          }
+        }
+      }
+    },
+    "Queued message actions": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "대기 중인 메시지 동작"
+          }
+        }
+      }
+    },
     "Reading what %@ offers…": {
       "localizations": {
         "ko": {
@@ -1263,12 +1493,32 @@
         }
       }
     },
+    "Reconnecting": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다시 연결 중"
+          }
+        }
+      }
+    },
     "Reconnecting…": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "다시 연결하는 중…"
+          }
+        }
+      }
+    },
+    "Refuse": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "거절"
           }
         }
       }
@@ -1343,6 +1593,16 @@
         }
       }
     },
+    "Resume": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "재개"
+          }
+        }
+      }
+    },
     "Retry": {
       "localizations": {
         "ko": {
@@ -1369,6 +1629,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "실행 중"
+          }
+        }
+      }
+    },
+    "Save": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "저장"
           }
         }
       }
@@ -1573,6 +1843,16 @@
         }
       }
     },
+    "Sign in to the harness on %@ first.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 하네스에 먼저 로그인하세요."
+          }
+        }
+      }
+    },
     "Skip this question": {
       "localizations": {
         "ko": {
@@ -1743,6 +2023,16 @@
         }
       }
     },
+    "The file changed on %@. Open it again.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 파일이 바뀌었습니다. 다시 여세요."
+          }
+        }
+      }
+    },
     "The file is too large to send.": {
       "localizations": {
         "ko": {
@@ -1783,6 +2073,16 @@
         }
       }
     },
+    "The task has changed, so this can't be done now.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "작업 상태가 바뀌어 지금은 할 수 없습니다."
+          }
+        }
+      }
+    },
     "Thinking…": {
       "localizations": {
         "ko": {
@@ -1799,6 +2099,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "이 답은 이 작업 밖에도 남는 규칙을 Mac에 만듭니다."
+          }
+        }
+      }
+    },
+    "This can be done once the turn ends.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "턴이 끝난 뒤에 할 수 있습니다."
           }
         }
       }
@@ -1873,12 +2183,82 @@
         }
       }
     },
+    "This task doesn't take pictures or files.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 작업은 사진이나 파일을 받지 않습니다."
+          }
+        }
+      }
+    },
+    "This task is changing on %@. Try again in a moment.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 이 작업이 바뀌는 중입니다. 잠시 후 다시 시도하세요."
+          }
+        }
+      }
+    },
     "This task is gone": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "없어진 작업입니다"
+          }
+        }
+      }
+    },
+    "This task isn't connected to its harness on %@.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 이 작업이 하네스에 연결되어 있지 않습니다."
+          }
+        }
+      }
+    },
+    "This task's folder %@ no longer exists.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 작업의 폴더(%@)가 더 이상 없습니다."
+          }
+        }
+      }
+    },
+    "This task's folder is no longer on %@.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에 이 작업의 폴더가 더 이상 없습니다."
+          }
+        }
+      }
+    },
+    "This task's worktree %@ was removed. Its branch %@ is still there.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 작업의 작업 트리 폴더(%1$@)가 지워졌습니다. %2$@ 브랜치는 남아 있습니다."
+          }
+        }
+      }
+    },
+    "To change files from here, allow Write files for this device in Settings › Remote › Paired devices on %@.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "여기서 파일을 바꾸려면 %@의 설정 › 원격 연결 › 연결된 기기에서 이 기기에 “파일 쓰기”를 허용하세요."
           }
         }
       }
@@ -1909,6 +2289,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "요청이 너무 많습니다. 잠시 뒤 다시 시도하세요."
+          }
+        }
+      }
+    },
+    "Try Again": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다시 시도"
           }
         }
       }
@@ -2153,12 +2543,62 @@
         }
       }
     },
+    "Yardlet restarted while this task was working, so it picked up where it left off.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "작업 중에 Yardlet이 다시 시작되어 멈춘 곳부터 이어서 진행했습니다."
+          }
+        }
+      }
+    },
     "You're looking at a demo Mac.": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "둘러보기용 Mac을 보고 있습니다."
+          }
+        }
+      }
+    },
+    "You've used %lld%% of your %@ limit": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%2$@ 한도의 %1$lld%%를 사용했습니다"
+          }
+        }
+      }
+    },
+    "You've used %lld%% of your session limit": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "세션 한도의 %lld%%를 사용했습니다"
+          }
+        }
+      }
+    },
+    "You've used %lld%% of your usage limit": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "사용 한도의 %lld%%를 사용했습니다"
+          }
+        }
+      }
+    },
+    "You've used %lld%% of your weekly limit": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "주간 한도의 %lld%%를 사용했습니다"
           }
         }
       }

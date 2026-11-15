@@ -37,7 +37,21 @@ struct RootView: View {
         } message: {
             Text(model.pairingError ?? "")
         }
+        // Another device asks the Mac to let it in from the account they share (§12.1, §15.11); any of the Mac's
+        // devices may answer, and the first answer wins.
+        .alert("A new device wants to connect", isPresented: Binding(get: { linkRequest != nil && !isCovered },
+                                                                     set: { _ in }),
+               presenting: linkRequest) { request in
+            Button("Allow") { model.session?.answerLink(request.id, approve: true) }
+            Button("Refuse", role: .cancel) { model.session?.answerLink(request.id, approve: false) }
+        } message: { request in
+            let device = request.name.flatMap { $0.isEmpty ? nil : $0 } ?? String(localized: "A new device")
+            Text("Number \(PushNotice.spaced(request.code))") + Text(verbatim: "\n\n")
+                + Text("Allow it only if \(device) shows the same number. Refuse a device you don't know.")
+        }
     }
+
+    private var linkRequest: HostSession.LinkRequest? { model.session?.linkRequests.first }
 }
 
 /// What a locked app shows until the owner unlocks it.

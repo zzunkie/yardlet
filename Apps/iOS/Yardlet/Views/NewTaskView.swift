@@ -57,7 +57,7 @@ struct NewTaskView: View {
                     ForEach(settings, id: \.id) { setting in
                         Picker(setting.name, selection: Binding(get: { picks[setting.id] ?? setting.value },
                                                                 set: { pick(setting.id, $0) })) {
-                            ForEach(setting.choices, id: \.value) { Text($0.name).tag($0.value) }
+                            ForEach(TaskSettingsView.offered(setting), id: \.value) { Text($0.name).tag($0.value) }
                         }
                     }
                     if let worktree {
@@ -143,7 +143,7 @@ struct NewTaskView: View {
                 onStarted(taskID)
             } else {
                 error = message(for: response.error)
-                if response.error?.code == .notAllowed { await readOptions() }
+                if response.error?.code == .notAllowed, response.error?.reason != .terminal { await readOptions() }
             }
         }
     }
@@ -170,8 +170,11 @@ struct NewTaskView: View {
                 return String(localized: "\(host) doesn't take this \(name) choice now. Pick again.")
             }
             return String(localized: "\(host) doesn't offer that choice now. Pick again.")
-        default:
+        case nil, .harness?, .account?:
             return String(localized: "\(host) doesn't offer that choice now. Pick again.")
+        default:
+            // Not about the choices: the Terminal permission, the project's folder, a failure in the Mac's words.
+            return HostSession.message(for: refusal, host: host)
         }
     }
 }

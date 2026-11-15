@@ -122,7 +122,8 @@ struct CommandErrorBanner: View {
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .padding(.horizontal, 12)
             .task(id: message) {
-                try? await Task.sleep(for: .seconds(6))
+                // Gone after a while; not when the banner is merely drawn again, which cancels this.
+                do { try await Task.sleep(for: .seconds(6)) } catch { return }
                 if session.commandError == message { session.commandError = nil }
             }
         }

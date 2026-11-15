@@ -144,6 +144,15 @@ final class DemoBridge: RemoteBridge {
         await fixture.forkTask(taskID: taskID, turnID: turnID)
     }
 
+    func composerState(taskID: String) async -> Result<RemoteComposerState, RemoteError> {
+        await fixture.composerState(taskID: taskID)
+    }
+
+    func composerAction(taskID: String, action: String, itemID: String?,
+                        value: String?) async -> Result<RemoteComposerState, RemoteError> {
+        await fixture.composerAction(taskID: taskID, action: action, itemID: itemID, value: value)
+    }
+
     // MARK: - The Mac's words
 
     static func local(_ setting: RemoteSetting) -> RemoteSetting {

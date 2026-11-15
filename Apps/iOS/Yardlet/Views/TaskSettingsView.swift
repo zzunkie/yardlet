@@ -2,14 +2,15 @@ import SwiftUI
 import YardletRemote
 
 /// A task's model, effort and permission mode as its composer on the Mac shows them (docs/REMOTE_PROTOCOL.md
-/// §15.23), changed through the Mac's own controls. A choice the Mac asks about first is asked about here too, in
-/// the Mac's words.
+/// §15.23), changed through the Mac's own controls. A choice the Mac asks to confirm first, such as Bypass permissions
+/// or Full access, lets an agent act without asking: it is chosen on the Mac, so the phone does not offer it, and shows
+/// it only while the task already uses it. Why the Mac refused a change shows in the sheet.
 struct TaskSettingsView: View {
     let session: HostSession
     let taskID: String
     @Environment(\.dismiss) private var dismiss
-    @State private var confirming: (setting: RemoteSetting, choice: RemoteSetting.Choice)?
     @State private var isApplying = false
+    @State private var refusal: String?
 
     static let shownRoles: Set<String> = ["mode", "plan", "permission", "model", "effort", "speed"]
 
@@ -26,6 +27,11 @@ struct TaskSettingsView: View {
                 if settings.isEmpty {
                     Text("\(session.name) offers no settings for this task now.").foregroundStyle(.secondary)
                 }
+                if let refusal {
+                    Section {
+                        Text(refusal).font(.footnote).foregroundStyle(.red)
+                    }
+                }
             }
             .disabled(isApplying || !session.isConnected)
             .navigationTitle("Model and Permissions")
@@ -39,16 +45,6 @@ struct TaskSettingsView: View {
                 if (session.taskSettings[taskID] ?? []).contains(where: { $0.prepare == true }) {
                     await session.readTaskSettings(taskID, prepare: true)
                 }
-            }
-            .alert(confirming?.choice.confirm?.title ?? "", isPresented: Binding(get: { confirming != nil },
-                                                                                 set: { if !$0 { confirming = nil } }),
-                   presenting: confirming) { pending in
-                Button(pending.choice.confirm?.button ?? String(localized: "Continue"), role: .destructive) {
-                    apply(pending.setting, pending.choice, confirmed: true)
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: { pending in
-                Text(pending.choice.confirm?.message ?? "")
             }
         }
         .presentationDetents([.medium, .large])
@@ -64,13 +60,9 @@ struct TaskSettingsView: View {
         } else {
             Picker(selection: Binding(get: { setting.value }, set: { value in
                 guard let choice = setting.choices.first(where: { $0.value == value }) else { return }
-                if choice.confirm != nil {
-                    confirming = (setting, choice)
-                } else {
-                    apply(setting, choice, confirmed: false)
-                }
+                apply(setting, choice)
             })) {
-                ForEach(setting.choices, id: \.value) { choice in
+                ForEach(Self.offered(setting), id: \.value) { choice in
                     VStack(alignment: .leading) {
                         Text(choice.name)
                         if let description = choice.description { Text(description).font(.footnote) }
@@ -85,12 +77,18 @@ struct TaskSettingsView: View {
         }
     }
 
-    private func apply(_ setting: RemoteSetting, _ choice: RemoteSetting.Choice, confirmed: Bool) {
+    private func apply(_ setting: RemoteSetting, _ choice: RemoteSetting.Choice) {
         isApplying = true
+        refusal = nil
         Task {
-            await session.setTaskSetting(taskID, setting: setting.id, value: choice.value, confirmed: confirmed)
+            refusal = await session.setTaskSetting(taskID, setting: setting.id, value: choice.value)
             isApplying = false
         }
+    }
+
+    /// The choices the phone offers: those the Mac does not ask to confirm, and the one the task uses now.
+    static func offered(_ setting: RemoteSetting) -> [RemoteSetting.Choice] {
+        setting.choices.filter { $0.confirm == nil || $0.value == setting.value }
     }
 
     /// "Opus 5.5 · High · Manual": the row's values in its order.

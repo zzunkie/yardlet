@@ -10,6 +10,8 @@ struct TaskView: View {
     @State private var detailItem: RemoteItem?
     @State private var isShowingSettings = false
     @State private var isConfirmingArchive = false
+    /// The end of the conversation is in view; otherwise a button takes the person back to it.
+    @State private var isAtLatest = true
     /// The title last read from the list, kept while the list is read again after a reconnection.
     @State private var knownTitle = ""
     @Environment(\.dismiss) private var dismiss
@@ -72,53 +74,80 @@ struct TaskView: View {
     }
 
     private func content(_ conversation: ConversationState) -> some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 18) {
-                if conversation.hasOlder {
-                    Button {
-                        session.loadOlder(taskID)
-                    } label: {
-                        if conversation.isLoadingOlder {
-                            ProgressView()
-                        } else {
-                            Text("Show Earlier Messages").font(.footnote.weight(.semibold))
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 18) {
+                    if conversation.hasOlder {
+                        Button {
+                            session.loadOlder(taskID)
+                        } label: {
+                            if conversation.isLoadingOlder {
+                                ProgressView()
+                            } else {
+                                Text("Show Earlier Messages").font(.footnote.weight(.semibold))
+                            }
                         }
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 8)
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 8)
+                    if conversation.isGone {
+                        ContentUnavailableView("This task is gone", systemImage: "tray",
+                                               description: Text("\(session.name) no longer lists it."))
+                    } else if conversation.isLoaded && conversation.turns.isEmpty {
+                        Text("No messages yet.").font(.callout).foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity).padding(.top, 40)
+                    }
+                    ForEach(conversation.turns) { turn in
+                        TurnView(turn: turn, isWorkOpen: conversation.openedWork.contains(turn.turnID),
+                                 context: ItemContext(session: session, taskID: taskID, task: task),
+                                 toggleWork: { toggleWork(turn.turnID, in: conversation) },
+                                 openDetail: { detailItem = $0 })
+                            .equatable()
+                    }
+                    Color.clear
+                        .frame(height: 1)
+                        .id(Self.latestID)
+                        .onAppear { isAtLatest = true }
+                        .onDisappear { isAtLatest = false }
                 }
-                if conversation.isGone {
-                    ContentUnavailableView("This task is gone", systemImage: "tray",
-                                           description: Text("\(session.name) no longer lists it."))
-                } else if conversation.isLoaded && conversation.turns.isEmpty {
-                    Text("No messages yet.").font(.callout).foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity).padding(.top, 40)
-                }
-                ForEach(conversation.turns) { turn in
-                    TurnView(turn: turn, isWorkOpen: conversation.openedWork.contains(turn.turnID),
-                             context: ItemContext(session: session, taskID: taskID, task: task),
-                             toggleWork: { toggleWork(turn.turnID, in: conversation) },
-                             openDetail: { detailItem = $0 })
-                        .equatable()
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
+            }
+            .defaultScrollAnchor(.bottom)
+            .overlay(alignment: .bottomTrailing) {
+                if !isAtLatest && conversation.isLoaded {
+                    Button {
+                        withAnimation { proxy.scrollTo(Self.latestID, anchor: .bottom) }
+                    } label: {
+                        Image(systemName: "arrow.down")
+                            .font(.body.weight(.semibold))
+                            .frame(width: 40, height: 40)
+                            .background(.regularMaterial, in: Circle())
+                            .overlay(Circle().strokeBorder(Color(.separator), lineWidth: 0.5))
+                    }
+                    .foregroundStyle(.primary)
+                    .accessibilityLabel("Jump to Latest")
+                    .padding(16)
+                    .transition(.opacity)
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 12)
-        }
-        .defaultScrollAnchor(.bottom)
-        .scrollDismissesKeyboard(.interactively)
-        .overlay {
-            if !conversation.isLoaded { ProgressView() }
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 8) {
-                CommandErrorBanner(session: session)
-                ConnectionBanner(session: session)
-                ComposerView(session: session, taskID: taskID, conversation: conversation,
-                             openSettings: { isShowingSettings = true })
+            .scrollDismissesKeyboard(.interactively)
+            .overlay {
+                if !conversation.isLoaded { ProgressView() }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 8) {
+                    CommandErrorBanner(session: session)
+                    ConnectionBanner(session: session)
+                    TaskNoticesView(session: session, taskID: taskID)
+                    ComposerView(session: session, taskID: taskID, conversation: conversation,
+                                 openSettings: { isShowingSettings = true })
+                }
             }
         }
     }
+
+    private static let latestID = "latest"
 
     private func toggleWork(_ turnID: String, in conversation: ConversationState) {
         if conversation.openedWork.contains(turnID) {
@@ -189,12 +218,15 @@ struct TurnView: View, @MainActor Equatable {
 
     var body: some View {
         let folds = turn.header?.foldsWork == true && !isWorkOpen
+        // Retry goes on the turn's last error, where the Mac's card offers it (§15.31).
+        let retryItem = turn.header?.options?.contains(RemoteNextStep.retry.rawValue) == true
+            ? turn.items.last { $0.kind == .error }?.id : nil
         VStack(alignment: .leading, spacing: 12) {
             ForEach(RemoteTurnFold.rows(turn.items, folds: folds, opened: openedStretches), id: \.id) { row in
                 switch row {
                 case let .item(item):
                     ItemView(item: item, context: context, isWorkOpen: isWorkOpen, toggleWork: toggleWork,
-                             openDetail: openDetail)
+                             openDetail: openDetail, retryTurnID: item.id == retryItem ? turn.turnID : nil)
                 case let .fold(message):
                     StretchFoldView(isOpen: openedStretches.contains(message)) {
                         if openedStretches.contains(message) {
@@ -233,6 +265,8 @@ struct ItemView: View {
     let isWorkOpen: Bool
     let toggleWork: () -> Void
     let openDetail: (RemoteItem) -> Void
+    /// The turn whose error this is, when its header offers Retry.
+    var retryTurnID: String?
 
     var body: some View {
         switch item.kind {
@@ -262,7 +296,7 @@ struct ItemView: View {
         case .plan:
             PlanStepsView(item: item)
         case .error:
-            ErrorView(item: item, context: context)
+            ErrorView(item: item, context: context, retryTurnID: retryTurnID)
         case .notice:
             NoticeLine(text: item.text ?? item.title ?? "")
         }

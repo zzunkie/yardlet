@@ -50,7 +50,7 @@ struct SuggestionOptionsView: View {
                         ForEach(settings.filter { !$0.choices.isEmpty }, id: \.id) { setting in
                             Picker(setting.name, selection: Binding(get: { picks[setting.id] ?? setting.value },
                                                                     set: { pick(setting.id, $0) })) {
-                                ForEach(setting.choices, id: \.value) { Text($0.name).tag($0.value) }
+                                ForEach(TaskSettingsView.offered(setting), id: \.value) { Text($0.name).tag($0.value) }
                             }
                         }
                         if let offered = answer.worktree {
@@ -162,7 +162,7 @@ struct SuggestionOptionsView: View {
             error = NewTaskView.message(for: response.error, host: session.name, harnessName: harnessName,
                                         settings: settings)
             // A choice the Mac does not take now: read what it offers again.
-            if response.error?.code == .notAllowed { await read() }
+            if response.error?.code == .notAllowed, response.error?.reason != .terminal { await read() }
         }
     }
 }

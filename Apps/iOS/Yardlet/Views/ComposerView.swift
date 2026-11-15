@@ -22,6 +22,9 @@ struct ComposerView: View {
     @State private var isPickingPhotos = false
     @State private var isTakingPhoto = false
     @State private var isPickingFiles = false
+    /// A queued message whose words are being changed (§15.33 `edit`), and its new words.
+    @State private var editingQueued: RemoteItem?
+    @State private var queuedText = ""
 
     private var task: RemoteTask? { session.task(taskID) }
     private var isRunning: Bool { task?.running == true }
@@ -160,38 +163,109 @@ struct ComposerView: View {
         .padding(.bottom, 9)
     }
 
+    /// The messages queued behind the running turn, with the actions the Mac offers for each (§15.15, §15.33), and the
+    /// Mac's line when the person paused the queue by stopping a turn.
     private var queue: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(conversation.queued, id: \.id) { item in
-                    Menu {
-                        ForEach(item.options ?? [], id: \.self) { option in
-                            if let action = RemoteQueuedAction(rawValue: option) {
-                                Button(role: action == .remove ? .destructive : nil) {
-                                    session.send(.actOnQueued(taskID: taskID, itemID: item.id, action: action))
-                                } label: {
-                                    switch action {
-                                    case .sendNow: Label("Send Now", systemImage: "arrow.up")
-                                    case .stopAndSend: Label("Stop and Send", systemImage: "stop")
-                                    case .remove: Label("Remove", systemImage: "trash")
-                                    }
-                                }
-                            }
-                        }
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: item.queueFailed == true ? "exclamationmark.circle" : "clock")
-                                .foregroundStyle(item.queueFailed == true ? Color.red : Color.secondary)
-                            Text(item.text ?? "").lineLimit(1)
-                        }
+        VStack(alignment: .leading, spacing: 6) {
+            if session.composerStates[taskID]?.queuePaused == true {
+                HStack(alignment: .firstTextBaseline) {
+                    Label("Queue paused because you interrupted", systemImage: "pause.circle")
                         .font(.footnote)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .frame(maxWidth: 240)
-                        .background(Color(.secondarySystemBackground), in: Capsule())
-                    }
-                    .foregroundStyle(.primary)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+                    Button("Resume") { Task { await session.composerAction(taskID, action: "resume") } }
+                        .font(.footnote.weight(.semibold))
+                        .disabled(!session.isConnected)
                 }
+                .padding(.horizontal, 4)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(conversation.queued, id: \.id) { item in
+                        Menu {
+                            queueActions(item)
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: item.queueFailed == true ? "exclamationmark.circle" : "clock")
+                                    .foregroundStyle(item.queueFailed == true ? Color.red : Color.secondary)
+                                Text(item.text ?? "").lineLimit(1)
+                            }
+                            .font(.footnote)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .frame(maxWidth: 240)
+                            .background(Color(.secondarySystemBackground), in: Capsule())
+                        }
+                        .foregroundStyle(.primary)
+                        .accessibilityHint(Text("Queued message actions"))
+                    }
+                }
+            }
+        }
+        .alert("Edit Message", isPresented: Binding(get: { editingQueued != nil }, set: { if !$0 { editingQueued = nil } }),
+               presenting: editingQueued) { item in
+            TextField("Message", text: $queuedText)
+            Button("Save") {
+                let text = queuedText.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else { return }
+                Task { await session.composerAction(taskID, action: "edit", itemID: item.id, value: text) }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    /// The Mac's queue chip in its order: Retry (a message that failed to send) or Send Now, Stop and Send, Edit
+    /// Message, Move Up, Move Down, Remove. Retry, the moves and editing go through `composerAction` (§15.33).
+    @ViewBuilder
+    private func queueActions(_ item: RemoteItem) -> some View {
+        let options = Set(item.options ?? [])
+        if options.contains("retry") {
+            Button {
+                Task { await session.composerAction(taskID, action: "retry", itemID: item.id) }
+            } label: {
+                Label("Retry", systemImage: "arrow.clockwise")
+            }
+        } else if options.contains(RemoteQueuedAction.sendNow.rawValue) {
+            Button {
+                session.send(.actOnQueued(taskID: taskID, itemID: item.id, action: .sendNow))
+            } label: {
+                Label("Send Now", systemImage: "arrow.up")
+            }
+        }
+        if options.contains(RemoteQueuedAction.stopAndSend.rawValue) {
+            Button {
+                session.send(.actOnQueued(taskID: taskID, itemID: item.id, action: .stopAndSend))
+            } label: {
+                Label("Stop and Send", systemImage: "stop")
+            }
+        }
+        if options.contains("edit") {
+            Button {
+                queuedText = item.text ?? ""
+                editingQueued = item
+            } label: {
+                Label("Edit Message", systemImage: "pencil")
+            }
+        }
+        if options.contains("moveUp") {
+            Button {
+                Task { await session.composerAction(taskID, action: "moveUp", itemID: item.id) }
+            } label: {
+                Label("Move Up", systemImage: "arrow.up.to.line")
+            }
+        }
+        if options.contains("moveDown") {
+            Button {
+                Task { await session.composerAction(taskID, action: "moveDown", itemID: item.id) }
+            } label: {
+                Label("Move Down", systemImage: "arrow.down.to.line")
+            }
+        }
+        if options.contains(RemoteQueuedAction.remove.rawValue) {
+            Button(role: .destructive) {
+                session.send(.actOnQueued(taskID: taskID, itemID: item.id, action: .remove))
+            } label: {
+                Label("Remove", systemImage: "trash")
             }
         }
     }

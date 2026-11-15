@@ -39,6 +39,12 @@ final class HostSession: Identifiable {
     private(set) var taskControls = false
     /// The Mac reads a suggested task's choices for the phone and starts it with the phone's (§15.9).
     private(set) var suggestionOptions = false
+    /// The Mac answers `composerState` and `composerAction` for a task's queue (§15.33).
+    private(set) var composerExtensions = false
+    /// What each open task's composer on the Mac says: whether its queue is paused, and its notice (§15.33).
+    private(set) var composerStates: [String: RemoteComposerState] = [:]
+    /// Link requests (§12.1) waiting for an answer from any of the Mac's devices, the oldest first (§15.11).
+    private(set) var linkRequests: [LinkRequest] = []
     private(set) var conversations: [String: ConversationState] = [:]
     /// Each open task's composer settings as the Mac last answered them (§15.23).
     private(set) var taskSettings: [String: [RemoteSetting]] = [:]
@@ -183,26 +189,41 @@ final class HostSession: Identifiable {
             guard let taskID = event.taskId else { return }
             conversations[taskID] = nil
             taskSettings[taskID] = nil
+            composerStates[taskID] = nil
             subscribed.removeAll { $0 == taskID }
             applyTasks(changed: [], removed: [taskID])
         case .taskRailChanged:
             break
         case .taskSettingsChanged:
             guard let taskID = event.taskId, conversations[taskID] != nil else { return }
-            Task { await readTaskSettings(taskID) }
+            // `composerChanged` invalidates only the composer's state, not the task's settings (§15.33).
+            if event.composerChanged == true {
+                Task { await readComposerState(taskID) }
+            } else {
+                Task { await readTaskSettings(taskID) }
+            }
         case .closing:
             closingReason = event.reason
         case .revoked:
             connection = .removed
-        case .attention, .schedulesChanged, .linked, .linkRefused, .linkRequest, .linkResolved, .tabFrame,
-             .browserTabsChanged, .tabCopied, .terminalOutput, .terminalClosed, .hostSettingsChanged, .hostAccountsChanged:
-            // Not shown on the phone yet: schedules, link requests, browser tabs and their copies, terminals, host settings and accounts (§15.21, §15.11, §15.25, §15.29, §15.36, §15.37).
+        case .linkRequest:
+            guard let requestID = event.requestId, let code = event.code else { return }
+            linkRequests.removeAll { $0.id == requestID }
+            linkRequests.append(LinkRequest(id: requestID, name: event.name, code: code))
+        case .linkResolved:
+            linkRequests.removeAll { $0.id == event.requestId }
+        case .attention, .schedulesChanged, .linked, .linkRefused, .tabFrame, .browserTabsChanged, .tabCopied,
+             .terminalOutput, .terminalClosed, .hostSettingsChanged, .hostAccountsChanged:
+            // Not shown on the phone yet: schedules, browser tabs and their copies, terminals, host settings and accounts (§15.21, §15.25, §15.29, §15.36, §15.37).
+            // `linked` and `linkRefused` go only to the connection that asked (§12.1).
             break
         }
     }
 
     /// The list again, then each open conversation's latest page: what changed while away.
     private func resync() {
+        // A request still waiting is told again on the new connection (§12.1).
+        linkRequests = []
         request(.snapshot) { [weak self] response in
             guard let self, response.ok else { return }
             projects = response.projects ?? []
@@ -211,6 +232,7 @@ final class HostSession: Identifiable {
             followUp = response.followUp
             taskControls = response.taskControls == true
             suggestionOptions = response.suggestionOptions == true
+            composerExtensions = response.composerExtensions == true
             if let serverTime = response.serverTime {
                 clockOffset = Double(serverTime) / 1000 - Date().timeIntervalSince1970
             }
@@ -233,6 +255,7 @@ final class HostSession: Identifiable {
         followUp = response.followUp
         taskControls = response.taskControls == true
         suggestionOptions = response.suggestionOptions == true
+        composerExtensions = response.composerExtensions == true
     }
 
     private func applyTasks(changed: [RemoteTask], removed: [String]) {
@@ -298,6 +321,7 @@ final class HostSession: Identifiable {
             let dropped = subscribed.removeFirst()
             conversations[dropped] = nil
             taskSettings[dropped] = nil
+            composerStates[dropped] = nil
             send(.unsubscribeTask(taskID: dropped))
         }
         guard isConnected else { return }
@@ -306,7 +330,10 @@ final class HostSession: Identifiable {
             if response.ok {
                 conversation.load(response.items ?? [], cursor: response.cursor, hasOlder: response.hasOlder == true)
                 // Read once subscribed, so the Mac tells of their changes from now on.
-                Task { await self?.readTaskSettings(taskID) }
+                Task {
+                    await self?.readTaskSettings(taskID)
+                    await self?.readComposerState(taskID)
+                }
             } else if response.error?.code == .notFound {
                 conversation.markGone()
             }
@@ -353,14 +380,60 @@ final class HostSession: Identifiable {
         if response.ok, let settings = response.settings { taskSettings[taskID] = settings }
     }
 
-    func setTaskSetting(_ taskID: String, setting: String, value: String, confirmed: Bool) async {
+    /// Changes a setting through the Mac's control; why the Mac refused it, for the sheet that asked, or nil.
+    func setTaskSetting(_ taskID: String, setting: String, value: String) async -> String? {
         let response = await response(to: .setTaskSetting(taskID: taskID, setting: setting, value: value,
-                                                           confirmed: confirmed))
+                                                           confirmed: false))
+        guard response.ok else { return Self.message(for: response.error, host: name) }
+        if let settings = response.settings { taskSettings[taskID] = settings }
+        return nil
+    }
+
+    // MARK: - The composer's state and the turn's next steps (§15.33, §15.31)
+
+    private func readComposerState(_ taskID: String) async {
+        guard composerExtensions else { return }
+        let response = await response(to: .composerState(taskID: taskID))
+        if response.ok, let state = response.composerState, conversations[taskID] != nil { composerStates[taskID] = state }
+    }
+
+    /// A queued message's Retry, Move Up, Move Down or new words (`edit` with `value`), or `resume` for a queue the
+    /// person paused by stopping a turn. The answer carries the composer's state after it.
+    @discardableResult
+    func composerAction(_ taskID: String, action: String, itemID: String? = nil, value: String? = nil) async -> Bool {
+        let response = await response(to: .composerAction(taskID: taskID, action: action, itemID: itemID, value: value))
         if response.ok {
-            if let settings = response.settings { taskSettings[taskID] = settings }
+            if let state = response.composerState, conversations[taskID] != nil { composerStates[taskID] = state }
         } else {
             commandError = Self.message(for: response.error, host: name)
         }
+        return response.ok
+    }
+
+    /// What a turn offers next, as the Mac's card does: Retry its error, or Resume once its limit reset (§15.31).
+    func nextStep(_ taskID: String, turnID: String, action: RemoteNextStep) {
+        request(.nextStep(taskID: taskID, turnID: turnID, action: action)) { [weak self] response in
+            guard let self, !response.ok else { return }
+            switch response.error?.code {
+            case .notFound?, .notAllowed? where response.error?.reason == nil:
+                commandError = String(localized: "The task has changed, so this can't be done now.")
+            default:
+                commandError = Self.message(for: response.error, host: name)
+            }
+        }
+    }
+
+    // MARK: - Link requests (§12.1, §15.11)
+
+    struct LinkRequest: Identifiable, Equatable {
+        let id: String
+        let name: String?
+        let code: String
+    }
+
+    func answerLink(_ requestID: String, approve: Bool) {
+        linkRequests.removeAll { $0.id == requestID }
+        send(.answerLink(requestID: requestID, approve: approve))
     }
 
     // MARK: - Files (§15.20)
@@ -434,23 +507,53 @@ final class HostSession: Identifiable {
         for (id, handler) in waiting { handler(.failure(id, RemoteError(.unavailable, "Not connected"))) }
     }
 
-    /// A refusal in the person's words.
+    /// A refusal in the person's words. The Mac's own words are shown only where they are meant for the person, with
+    /// the reasons `failed` and `form`; otherwise `message` is an English diagnostic for logs (§2, §8).
     static func message(for error: RemoteError?, host: String) -> String {
+        if let error, error.reason == .failed || error.reason == .form,
+           !error.message.isEmpty, error.message != error.code.rawValue {
+            return error.message
+        }
+        if let reason = error?.reason, let words = words(for: reason, host: host) { return words }
         switch error?.code {
-        case .unavailable?: String(localized: "Can't reach \(host) right now.")
-        case .busy?: String(localized: "\(host) is changing this task. Try again in a moment.")
-        case .requestNotFound?: String(localized: "This request was already answered.")
-        case .notAllowed? where error?.reason == .terminal:
+        case .unavailable?: return String(localized: "Can't reach \(host) right now.")
+        case .busy?: return String(localized: "\(host) is changing this task. Try again in a moment.")
+        case .requestNotFound?: return String(localized: "This request was already answered.")
+        case .notAllowed?: return String(localized: "That isn't offered for this task now.")
+        case .unsupportedCommand?: return String(localized: "Slash commands run on \(host).")
+        case .tooLarge?: return String(localized: "The message is too long.")
+        case .emptyMessage?: return String(localized: "Write a message first.")
+        case .rateLimited?: return String(localized: "Too many requests. Try again in a moment.")
+        case .notRunning?: return String(localized: "Nothing is running.")
+        case .notFound?: return String(localized: "\(host) no longer lists this task.")
+        default: return String(localized: "\(host) couldn't do that.")
+        }
+    }
+
+    /// What a refusal's reason says, whatever its code (§8); nil for the reasons that carry the Mac's own words.
+    static func words(for reason: RemoteRefusal, host: String) -> String? {
+        switch reason {
+        case .harness: String(localized: "\(host) can't use this harness now.")
+        case .setting: String(localized: "\(host) doesn't take this setting now.")
+        case .confirmation: String(localized: "Confirm this choice on \(host).")
+        case .terminal:
             String(localized: "To use this from here, allow Terminal for this device in Settings › Remote › Paired devices on \(host).")
-        case .notAllowed?:
-            error.flatMap { $0.message.isEmpty ? nil : $0.message } ?? String(localized: "That isn't offered for this task now.")
-        case .unsupportedCommand?: String(localized: "Slash commands run on \(host).")
-        case .tooLarge?: String(localized: "The message is too long.")
-        case .emptyMessage?: String(localized: "Write a message first.")
-        case .rateLimited?: String(localized: "Too many requests. Try again in a moment.")
-        case .notRunning?: String(localized: "Nothing is running.")
-        case .notFound?: String(localized: "\(host) no longer lists this task.")
-        default: String(localized: "\(host) couldn't do that.")
+        case .fileWrites:
+            String(localized: "To change files from here, allow Write files for this device in Settings › Remote › Paired devices on \(host).")
+        case .fileChanged: String(localized: "The file changed on \(host). Open it again.")
+        case .account: String(localized: "\(host) can't move this task to that account now.")
+        case .worktree: String(localized: "This project isn't in a Git repository, so it can't start in a new worktree.")
+        case .attachments: String(localized: "This task doesn't take pictures or files.")
+        case .signIn: String(localized: "Sign in to the harness on \(host) first.")
+        case .folderMissing: String(localized: "This task's folder is no longer on \(host).")
+        case .notConnected: String(localized: "This task isn't connected to its harness on \(host).")
+        case .otherApp: String(localized: "Another app is using this task's conversation.")
+        case .editing: String(localized: "A message of this task is being edited on \(host).")
+        case .changing: String(localized: "This task is changing on \(host). Try again in a moment.")
+        case .queue: String(localized: "Messages are waiting in the queue, so this can't be done now.")
+        case .running: String(localized: "This can be done once the turn ends.")
+        case .hostOnly: String(localized: "Do this on \(host).")
+        case .failed, .form: nil
         }
     }
 }

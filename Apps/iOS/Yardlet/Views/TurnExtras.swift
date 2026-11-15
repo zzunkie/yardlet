@@ -3,10 +3,12 @@ import YardletRemote
 
 extension RemoteItem: @retroactive Identifiable {}
 
-/// The error a turn ended on, or the plan limit that stopped it with what its card offers (§6.7, §15.17).
+/// The error a turn ended on, or the plan limit that stopped it with what its card offers (§6.7, §15.17), and the next
+/// step the Mac's card gives (§15.31): Try Again on an error, Resume on a limit card once the limit reset.
 struct ErrorView: View {
     let item: RemoteItem
     let context: ItemContext
+    let retryTurnID: String?
     @State private var isChoosingAccount = false
 
     var body: some View {
@@ -23,15 +25,31 @@ struct ErrorView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
+            if let retryTurnID {
+                Button("Try Again") {
+                    context.session.nextStep(context.taskID, turnID: retryTurnID, action: .retry)
+                }
+                .buttonStyle(.bordered)
+                .disabled(!context.session.isConnected)
+            }
             if (item.options ?? []).contains("continueWithAccount") {
                 Button("Continue with Another Account…") { isChoosingAccount = true }
                     .buttonStyle(.bordered)
             }
-            if (item.options ?? []).contains("autoContinue") {
-                Toggle("Continue when the limit resets", isOn: Binding(
-                    get: { item.autoContinue == true },
-                    set: { on in context.session.send(.setAutoContinue(taskID: context.taskID, enabled: on)) }))
-                    .font(.subheadline)
+            TimelineView(.everyMinute) { timeline in
+                if resumes(at: timeline.date) {
+                    // The limit reset: the Mac's card offers Resume where it offered to continue on its own.
+                    Button("Resume") {
+                        context.session.nextStep(context.taskID, turnID: item.turnId, action: .resumeAfterReset)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!context.session.isConnected)
+                } else if (item.options ?? []).contains("autoContinue") {
+                    Toggle("Continue when the limit resets", isOn: Binding(
+                        get: { item.autoContinue == true },
+                        set: { on in context.session.send(.setAutoContinue(taskID: context.taskID, enabled: on)) }))
+                        .font(.subheadline)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -41,13 +59,22 @@ struct ErrorView: View {
     }
 
     private var isLimit: Bool { item.errorKind == "usageLimit" }
+
+    private func resumes(at now: Date) -> Bool {
+        guard (item.options ?? []).contains(RemoteNextStep.resumeAfterReset.rawValue) else { return false }
+        guard let resetsAt = item.resetsAt else { return true }
+        return context.session.date(resetsAt) <= now
+    }
 }
 
-/// The limit card's account list (§15.17): the task's account and those that share its history.
+/// The limit card's account list (§15.17): the task's account and those that share its history. Why the Mac did not
+/// move the task shows here, not under the sheet.
 private struct AccountChooser: View {
     let context: ItemContext
     @Environment(\.dismiss) private var dismiss
     @State private var accounts: [RemoteAccount]?
+    @State private var refusal: String?
+    @State private var isMoving = false
 
     var body: some View {
         NavigationStack {
@@ -56,9 +83,15 @@ private struct AccountChooser: View {
                     ForEach(accounts, id: \.id) { account in
                         Button {
                             Task {
-                                if await context.session.perform(.continueWithAccount(taskID: context.taskID,
-                                                                                      accountID: account.id)) {
+                                isMoving = true
+                                refusal = nil
+                                let response = await context.session.response(
+                                    to: .continueWithAccount(taskID: context.taskID, accountID: account.id))
+                                isMoving = false
+                                if response.ok {
                                     dismiss()
+                                } else {
+                                    refusal = HostSession.message(for: response.error, host: context.session.name)
                                 }
                             }
                         } label: {
@@ -77,7 +110,12 @@ private struct AccountChooser: View {
                                 }
                             }
                         }
-                        .disabled(account.available != true)
+                        .disabled(account.available != true || isMoving)
+                    }
+                    if let refusal {
+                        Section {
+                            Text(refusal).font(.footnote).foregroundStyle(.red)
+                        }
                     }
                 } else {
                     ProgressView().frame(maxWidth: .infinity)

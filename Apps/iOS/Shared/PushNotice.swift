@@ -66,16 +66,19 @@ enum PushNotice {
         case .waiting?:
             if event.pendingKind == "browserHandoff" { return .browser }
             return event.pendingRequest == .input ? .question : .approval
-        case .unread? where event.previousState == .active || event.previousState == .waiting:
+        case .unread? where (event.previousState == .active || event.previousState == .waiting) && event.announces != false:
             return event.indicator == .failed ? .failed : .finished
         default:
             return nil
         }
     }
 
-    /// A change that takes back what an earlier notice of its task said: it stopped waiting without a new notice.
+    /// A change that takes back what an earlier notice of its task said (§16): it stopped waiting without a new
+    /// notice, or became unread in a turn the Mac does not announce (`announces: false`).
     static func withdraws(_ event: RemoteEvent) -> Bool {
-        event.event == .attention && event.previousState == .waiting && event.state != .waiting && kind(of: event) == nil
+        guard event.event == .attention, kind(of: event) == nil else { return false }
+        return (event.previousState == .waiting && event.state != .waiting)
+            || (event.state == .unread && event.announces == false)
     }
 
     /// Fills a notification from the event: the task's title, what waits (with the request's line) or how it ended,
