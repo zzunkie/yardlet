@@ -8,8 +8,8 @@ import XCTest
 /// stop button applies) and stopping it expires the request, a waiting task's attention carries a
 /// short summary, and a message sent to a running task waits as a queued item until the turn ends.
 /// The phone app's QA runs against it, so what it offers since 2026-10-27 (§15.13–§15.18) answers as
-/// the contract says, and so do its scheduled tasks (§15.21), a task's files (§15.22) and its browser tabs (§15.25), through
-/// the server.
+/// the contract says, and so do its full detail (§15.24, §15.31), its scheduled tasks (§15.21), a task's files (§15.22) and
+/// its browser tabs (§15.25), through the server.
 final class RemoteFixtureTests: XCTestCase {
     func testWaitingTasksRunAndStoppingExpiresTheirRequest() async throws {
         let fixture = RemoteFixtureBridge(speed: 50)
@@ -137,6 +137,40 @@ final class RemoteFixtureTests: XCTestCase {
         let filed = await fixture.perform(.sendMessage(taskID: RemoteFixtureBridge.ID.idle, text: "Read this",
                                                        files: [RemoteFile(url: URL(filePath: "/tmp/x/report.pdf"), name: "report.pdf")]))
         XCTAssertNil(filed)
+    }
+
+    /// Full detail holds what the phones' screens of it show; a basic subscription reads none of it but a subagent's
+    /// Stop and child task. The running subagent is read and stopped once.
+    func testTheFixtureAnswersInFullDetail() async throws {
+        let fixture = RemoteFixtureBridge(speed: 50)
+        let snapshot = await fixture.snapshot()
+        XCTAssertTrue(snapshot.fullConversation)
+        XCTAssertTrue(snapshot.subtasks)
+        func items(_ taskID: String, _ detail: RemoteConversationDetail) async -> [RemoteItem] {
+            await fixture.conversation(of: taskID, detail: detail)?.turns.flatMap(\.items) ?? []
+        }
+        let sent = await items(RemoteFixtureBridge.ID.child, .full).first { $0.imageCount == 2 }
+        XCTAssertEqual(sent?.images?.count, 1)
+        let limit = await items(RemoteFixtureBridge.ID.limit, .full).first { $0.errorKind == "usageLimit" }
+        XCTAssertEqual(limit?.limit?.windows?.count, 2)
+        let basic = await items(RemoteFixtureBridge.ID.child, .basic) + items(RemoteFixtureBridge.ID.limit, .basic)
+        XCTAssertFalse(basic.contains { $0.images != nil || $0.body != nil || $0.limit != nil })
+        let codex = await items(RemoteFixtureBridge.ID.idle, .basic).first { $0.activity == "subagent" }
+        XCTAssertEqual(codex?.subagent, RemoteSubagent(taskIds: [RemoteFixtureBridge.ID.child]))
+
+        let approval = RemoteFixtureBridge.ID.approval
+        let running = await items(approval, .full)
+        let reviewer = try XCTUnwrap(running.first { $0.subagent?.canStop == true })
+        let activityID = try XCTUnwrap(reviewer.subagent?.activityId)
+        let read = try await fixture.subtask(taskID: approval, activityID: activityID, stop: false).get()
+        XCTAssertFalse(read.items.isEmpty)
+        _ = try await fixture.subtask(taskID: approval, activityID: activityID, stop: true).get()
+        let stopped = await items(approval, .full)
+        XCTAssertEqual(stopped.first { $0.id == reviewer.id }?.status, "stopped")
+        guard case let .failure(again) = await fixture.subtask(taskID: approval, activityID: activityID, stop: true) else {
+            return XCTFail("A stopped subagent stopped again")
+        }
+        XCTAssertEqual(again.code, .notRunning)
     }
 
     /// §15.21 through the server: the list in the Mac's order and words, Pause and Resume, Run now (a skip while

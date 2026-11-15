@@ -27,7 +27,10 @@ import YardletRemote
 /// (§15.25) "Publish the release notes" has two browser tabs, a static page and the sign-in page it hands to the person,
 /// which draws as PNG and takes clicks, typing and keys (`RemoteFixtureTabs`); the static page's site asks for the camera
 /// and microphone, and asks again 30 seconds after an answer. "Fix the footer links" links its subtask in its answer
-/// (`[title](#<task ID>)`). Nothing else is read from or written to the Mac.
+/// (`[title](#<task ID>)`). It answers a subscription in full detail (§15.24, §15.31, `RemoteFixtureFullDetail`):
+/// pictures, the release build's output while it runs, a thought process, a compaction, a provider's notice, a limit's
+/// windows, and two subagents, one that opens its child task and one that is read and stopped. Nothing else is read
+/// from or written to the Mac.
 public actor RemoteFixtureBridge: RemoteBridge {
     public enum ID {
         public static let approval = "0F1E0001-0000-4000-8000-000000000001"
@@ -166,8 +169,7 @@ public actor RemoteFixtureBridge: RemoteBridge {
             Entry(task: Self.task(ID.history, "Summarize the crash reports", .codex, ID.website, at(6), unread: true),
                   turns: historyTurns, held: held),
             Entry(task: Self.task(ID.idle, "Fix the footer links", .claude, ID.website, at(12)),
-                  turns: [Self.finishedTurn("footer-1", prompt: "Find the footer links that 404", answer: Self.footerAnswer,
-                                            now: now, suggestion: true)]),
+                  turns: [Self.footerTurn(now: now)]),
             Entry(task: Self.task(ID.plan, "Plan the cache rewrite", .claude, ID.yardlet, at(4)),
                   turns: Self.planReviewTurns(now: now), pendingRequest: ("toolu_fixture_plan", .approval)),
             Entry(task: Self.task(ID.question, "Pick the release name", .claude, ID.yardlet, at(3)),
@@ -231,17 +233,31 @@ public actor RemoteFixtureBridge: RemoteBridge {
         snapshot.tabLists = true
         snapshot.hostAccounts = true
         snapshot.suggestionOptions = true
+        snapshot.fullConversation = true
+        snapshot.conversationBodies = true
+        snapshot.subtasks = true
         return snapshot
     }
 
-    /// The fixture's tasks hold nothing beyond the phone's projection (§15.24).
+    /// The task's conversation as a subscription in that detail reads it: a basic one without what only the Mac's own
+    /// cards draw (§15.24).
     public func conversation(of taskID: String, detail: RemoteConversationDetail) -> RemoteConversation? {
-        conversation(of: taskID)
+        guard var conversation = fullConversation(of: taskID) else { return nil }
+        if detail == .basic {
+            for turn in conversation.turns.indices {
+                conversation.turns[turn].items = conversation.turns[turn].items.map(RemoteFixtureFullDetail.basic)
+            }
+        }
+        return conversation
+    }
+
+    public func conversation(of taskID: String) -> RemoteConversation? {
+        conversation(of: taskID, detail: .basic)
     }
 
     /// The task's turns with what each offers (§15.23), and the messages queued behind its running turn at the end of
     /// the last one.
-    public func conversation(of taskID: String) -> RemoteConversation? {
+    private func fullConversation(of taskID: String) -> RemoteConversation? {
         guard let entry = tasks[taskID] else { return nil }
         var turns = entry.turns
         for index in turns.indices {
@@ -1021,6 +1037,21 @@ public actor RemoteFixtureBridge: RemoteBridge {
         }
     }
 
+    /// The approval task's subagent (§15.31): its conversation, or Stop while it runs.
+    public func subtask(taskID: String, activityID: String, stop: Bool) async -> Result<RemoteSubtaskTranscript, RemoteError> {
+        guard let entry = tasks[taskID],
+              let item = entry.turns.flatMap(\.items).last(where: { $0.subagent?.activityId == activityID }) else {
+            return .failure(RemoteError(.notFound))
+        }
+        guard stop else {
+            await pause(0.4)
+            return .success(RemoteFixtureFullDetail.reviewTranscript())
+        }
+        guard item.status == "running" else { return .failure(RemoteError(.notRunning)) }
+        replaceItem(RemoteFixtureFullDetail.stopped(item), in: taskID)
+        return .success(RemoteSubtaskTranscript())
+    }
+
     // MARK: - A task's controls (§15.23)
 
     public func taskSettings(taskID: String, prepare: Bool) async -> Result<[RemoteSetting], RemoteError> {
@@ -1459,15 +1490,34 @@ public actor RemoteFixtureBridge: RemoteBridge {
         scripts[ID.streaming] = Task {
             var command = Self.activity(turnID, "build-\(turnID)", "Running swift build -c release", "running")
             command.activity = "command"
+            RemoteFixtureFullDetail.build(&command, output: "")
             self.appendItem(command, to: ID.streaming)
+            let started = command
+            async let output = self.printBuild(started)
             await self.stream(Self.releaseNotes, id: "i:\(turnID)-answer", turnID: turnID, in: ID.streaming, wordDelay: 0.12)
             guard !Task.isCancelled else { return }
+            RemoteFixtureFullDetail.build(&command, output: await output)
             command.title = "Ran swift build -c release"
             command.status = "completed"
             command.exitCode = 0
             self.replaceItem(command, in: ID.streaming)
             self.finishTurn(ID.streaming, turnID: turnID, status: "completed")
         }
+    }
+
+    /// The release build's output, a line at a time while its answer streams, as a running command's body (§15.31);
+    /// all of it once printed.
+    private func printBuild(_ command: RemoteItem) async -> String {
+        var command = command
+        var output = ""
+        for line in RemoteFixtureFullDetail.buildOutput {
+            await pause(0.5)
+            guard !Task.isCancelled else { break }
+            output += line + "\n"
+            RemoteFixtureFullDetail.build(&command, output: output)
+            replaceItem(command, in: ID.streaming)
+        }
+        return output
     }
 
     /// The stop button: the running script ends, what ran stops, a waiting request expires, and the
@@ -2015,6 +2065,7 @@ public actor RemoteFixtureBridge: RemoteBridge {
         limit.title = "You've hit your session limit"
         limit.message = "Resets in 2 hours"
         limit.resetsAt = RemoteJSON.milliseconds(now.addingTimeInterval(2 * 3600))
+        limit.limit = RemoteFixtureFullDetail.limit(now: now)
         limit.options = ["continueWithAccount", "autoContinue"]
         return RemoteTurn(id: turnID, items: [
             user(turnID, "Write a migration guide for the new session index"), header, limit,
@@ -2060,8 +2111,15 @@ public actor RemoteFixtureBridge: RemoteBridge {
             + "and list the pages they are on so the next check-in can compare.")
         checkIn.scheduled = true
         checkIn.sender = RemoteSender(kind: "claudeSchedule")
+        // The person's screenshots: one the Mac made a preview of, and one it could not read (§15.24).
+        var request = user("child-1", "Check the footer at 375 pt")
+        request.imageCount = 2
+        request.images = [RemoteFixtureFullDetail.footer(width: 375)]
+        var first = finishedTurn("child-1", message: request, answer: "The footer wraps cleanly at 375 pt.", now: now)
+        first.items.insert(RemoteFixtureFullDetail.screenshot("child-1"), at: first.items.count - 1)
+        first.items[1].workCount = 3
         return [
-            finishedTurn("child-1", prompt: "Check the footer at 375 pt", answer: "The footer wraps cleanly at 375 pt.", now: now),
+            first,
             finishedTurn("child-2", message: parent, answer: "At 320 pt the Privacy and Terms links wrap to a second line.",
                          now: now),
             finishedTurn("child-3", message: notice, answer: "The visual tests passed on every footer width.", now: now),
@@ -2073,6 +2131,15 @@ public actor RemoteFixtureBridge: RemoteBridge {
     private static func finishedTurn(_ turnID: String, message: RemoteItem, answer text: String, now: Date) -> RemoteTurn {
         var turn = finishedTurn(turnID, prompt: message.text ?? "", answer: text, now: now)
         turn.items[0] = message
+        return turn
+    }
+
+    /// The footer task's turn, which checked the small phones with a Codex subagent run in "Check the footer on mobile".
+    private static func footerTurn(now: Date) -> RemoteTurn {
+        var turn = finishedTurn("footer-1", prompt: "Find the footer links that 404", answer: footerAnswer, now: now,
+                                suggestion: true)
+        turn.items.insert(RemoteFixtureFullDetail.mobileChecker("footer-1", childTask: ID.child), at: 4)
+        turn.items[1].workCount = 3
         return turn
     }
 
@@ -2140,7 +2207,7 @@ public actor RemoteFixtureBridge: RemoteBridge {
             user(turnID, "Migrate the index to the new schema and run the migration tests"),
             header,
             activity(turnID, "read", "Read SessionRepository.swift", "completed"),
-            edit, note,
+            edit, RemoteFixtureFullDetail.reviewer(turnID), note,
             approval(turnID, requestID: "toolu_fixture_1")
         ])]
     }
@@ -2207,13 +2274,18 @@ public actor RemoteFixtureBridge: RemoteBridge {
         var command = activity(turnID, "grep", "Searched crash-\(number).ips for EXC_BAD_ACCESS", "completed")
         command.activity = "command"
         command.exitCode = 0
-        return RemoteTurn(id: turnID, items: [
-            user(turnID, "Summarize crash report \(number)"), header, command,
-            answer(turnID, "Crash \(number): a nil dereference in `TaskSidebar.row(for:)` while a task was being archived."
-                   + (number == 30 ? " I put the summary in crash-summary.pdf on the Desktop, the chart in "
-                      + "`reports/crash-chart.png`, my notes in `reports/crash-notes.txt` and the timeline in "
-                      + "[crash-timeline.md](\(crashTimeline))." : ""))
-        ])
+        let summary = answer(turnID, "Crash \(number): a nil dereference in `TaskSidebar.row(for:)` while a task was being archived."
+               + (number == 30 ? " I put the summary in crash-summary.pdf on the Desktop, the chart in "
+                  + "`reports/crash-chart.png`, my notes in `reports/crash-notes.txt` and the timeline in "
+                  + "[crash-timeline.md](\(crashTimeline))." : ""))
+        guard number == 30 else {
+            return RemoteTurn(id: turnID, items: [user(turnID, "Summarize crash report \(number)"), header, command, summary])
+        }
+        // The last one, after a compaction and on another model, thinks before it answers.
+        let notes = RemoteFixtureFullDetail.crashNotes(turnID)
+        header.workCount = 2
+        return RemoteTurn(id: turnID, items: [user(turnID, "Summarize crash report \(number)")] + notes.notices
+            + [header, command, notes.reasoning, summary])
     }
 
     private static let footerAnswer = """

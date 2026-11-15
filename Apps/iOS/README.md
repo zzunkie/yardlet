@@ -2,7 +2,9 @@
 
 The phone remote for iOS: it follows the tasks Yardlet runs on your Mac and answers them from the phone, over the
 remote protocol ([docs/REMOTE_PROTOCOL.md](../../docs/REMOTE_PROTOCOL.md)). The Mac keeps every agent, sign-in and
-session; the phone lists the tasks with the sidebar's marks, reads a task's conversation as it streams, sends
+session; the phone lists the tasks with the sidebar's marks, reads a task's conversation as it streams (in full detail
+from a Mac that sends it: the pictures sent and made, a running command's output, what a line holds, a subagent's card
+with its conversation and Stop, and the phone's own words for compactions, provider notices and limits), sends
 messages (into a running turn or queued after it), answers approvals, questions, plan reviews, MCP forms and browser
 handoffs with the Mac card's own choices, sees and uses a task's browser tabs (taps, scrolling, typing, a site's
 permission prompt), stops a turn, starts a task with the Mac's choices, starts a task the agent

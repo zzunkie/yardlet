@@ -11,6 +11,16 @@
         }
       }
     },
+    "%@ %lld%% · resets %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ %2$lld%% · %3$@ 초기화"
+          }
+        }
+      }
+    },
     "%@ asks for a passkey": {
       "localizations": {
         "ko": {
@@ -177,6 +187,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@에 이 예약된 작업이 없습니다."
+          }
+        }
+      }
+    },
+    "%@ no longer has this subagent.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 이 하위 에이전트를 더 이상 찾을 수 없습니다."
           }
         }
       }
@@ -833,6 +853,86 @@
         }
       }
     },
+    "Command": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "명령어"
+          }
+        }
+      }
+    },
+    "Compacted session": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "세션 압축됨"
+          }
+        }
+      }
+    },
+    "Compacted session · from %@ tokens": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "세션 압축됨 · 토큰 %@개에서"
+          }
+        }
+      }
+    },
+    "Compacted session · saved %@ tokens": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "세션 압축됨 · 토큰 %@개 절약"
+          }
+        }
+      }
+    },
+    "Compacted while idle, before the prompt cache expired": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "쉬는 동안 프롬프트 캐시가 만료되기 전에 압축함"
+          }
+        }
+      }
+    },
+    "Compacting session…": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "세션 압축 중…"
+          }
+        }
+      }
+    },
+    "Compacting while idle, before the prompt cache expires": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "쉬는 동안 프롬프트 캐시가 만료되기 전에 압축하는 중"
+          }
+        }
+      }
+    },
+    "Compaction failed": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "압축 실패"
+          }
+        }
+      }
+    },
     "Confirm this choice on %@.": {
       "localizations": {
         "ko": {
@@ -973,6 +1073,16 @@
         }
       }
     },
+    "Conversation": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "대화"
+          }
+        }
+      }
+    },
     "Copy": {
       "localizations": {
         "ko": {
@@ -1019,6 +1129,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "파일을 받지 못했습니다."
+          }
+        }
+      }
+    },
+    "Couldn't load the subagent's conversation.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "하위 에이전트의 대화를 불러오지 못했습니다."
           }
         }
       }
@@ -1183,12 +1303,32 @@
         }
       }
     },
+    "Error": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "오류"
+          }
+        }
+      }
+    },
     "Expired: %@": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "만료됨: %@"
+          }
+        }
+      }
+    },
+    "Extra usage": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "추가 사용량"
           }
         }
       }
@@ -1233,6 +1373,16 @@
         }
       }
     },
+    "Heads up, your request was re-routed to reduce cyber-abuse risk.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "사이버 남용의 위험을 줄이기 위해 요청이 다시 라우팅되었습니다."
+          }
+        }
+      }
+    },
     "Hide Keyboard": {
       "localizations": {
         "ko": {
@@ -1269,6 +1419,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "이 계획을 구현할까요?"
+          }
+        }
+      }
+    },
+    "In the background": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "백그라운드에서"
+          }
+        }
+      }
+    },
+    "Input": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "입력"
           }
         }
       }
@@ -1733,12 +1903,32 @@
         }
       }
     },
+    "Only the latest turns show here. The rest is on %@.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "최근 턴만 보입니다. 나머지는 %@에서 볼 수 있습니다."
+          }
+        }
+      }
+    },
     "Open Settings": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "설정 열기"
+          }
+        }
+      }
+    },
+    "Open Subtask": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "하위 작업 열기"
           }
         }
       }
@@ -1819,6 +2009,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "직접 답하기"
+          }
+        }
+      }
+    },
+    "Output": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "출력"
           }
         }
       }
@@ -1933,6 +2133,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "사진 보관함"
+          }
+        }
+      }
+    },
+    "Picture": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "사진"
           }
         }
       }
@@ -2227,6 +2437,16 @@
         }
       }
     },
+    "Result": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "결과"
+          }
+        }
+      }
+    },
     "Resume": {
       "localizations": {
         "ko": {
@@ -2443,6 +2663,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "예약으로 보냄"
+          }
+        }
+      }
+    },
+    "Session": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "세션"
           }
         }
       }
@@ -2717,6 +2947,16 @@
         }
       }
     },
+    "Subagent": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "하위 에이전트"
+          }
+        }
+      }
+    },
     "Tabs": {
       "localizations": {
         "ko": {
@@ -2843,6 +3083,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "이 변경의 나머지는 Mac에서 볼 수 있습니다."
+          }
+        }
+      }
+    },
+    "The start and the newest part of the output so far.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "지금까지 출력의 처음과 최근 부분입니다."
           }
         }
       }
@@ -3147,6 +3397,16 @@
         }
       }
     },
+    "Thought Process": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "사고 과정"
+          }
+        }
+      }
+    },
     "To change files from here, allow Write files for this device in Settings › Remote › Paired devices on %@.": {
       "localizations": {
         "ko": {
@@ -3427,12 +3687,42 @@
         }
       }
     },
+    "View Conversation": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "대화 보기"
+          }
+        }
+      }
+    },
     "Waiting for You": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "기다리는 작업"
+          }
+        }
+      }
+    },
+    "Weekly": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "주간"
+          }
+        }
+      }
+    },
+    "Weekly · %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "주간 · %@"
           }
         }
       }
@@ -3643,6 +3933,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "내 메시지 · %@"
+          }
+        }
+      }
+    },
+    "Your request was routed to %@.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "요청이 %@ 모델로 라우팅되었습니다."
           }
         }
       }

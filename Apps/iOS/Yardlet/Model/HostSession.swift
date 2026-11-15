@@ -41,6 +41,8 @@ final class HostSession: Identifiable {
     private(set) var suggestionOptions = false
     /// The Mac answers `composerState` and `composerAction` for a task's queue (§15.33).
     private(set) var composerExtensions = false
+    /// The Mac reads and stops a Claude Code subagent (`subtask`, §15.31).
+    private(set) var subtasks = false
     /// What each open task's composer on the Mac says: whether its queue is paused, and its notice (§15.33).
     private(set) var composerStates: [String: RemoteComposerState] = [:]
     /// Link requests (§12.1) waiting for an answer from any of the Mac's devices, the oldest first (§15.11).
@@ -84,6 +86,11 @@ final class HostSession: Identifiable {
     @ObservationIgnored private var connectionNumber = 0
     /// Subscriptions, the least recently shown first; a Mac takes 8 per connection (§7).
     @ObservationIgnored private var subscribed: [String] = []
+    /// The Mac answers a subscription in full detail (§15.24), as its list last said. Kept with the saved Mac: a
+    /// conversation open on a new connection is subscribed before the list answers.
+    @ObservationIgnored private var fullConversation: Bool
+    /// The detail each conversation was last asked for in.
+    @ObservationIgnored private var subscribedDetail: [String: RemoteConversationDetail] = [:]
     @ObservationIgnored static let keptSubscriptions = 6
 
     init(host: RemoteSavedHost, clientKey: RemoteKeyPair, hello: RemoteHandshakeHello, store: RemoteHostStore?,
@@ -94,6 +101,7 @@ final class HostSession: Identifiable {
         self.hello = hello
         self.store = store
         self.isDemo = isDemo
+        fullConversation = host.fullConversation == true
         browser.transport = { [weak self] request, onResponse in self?.request(request, onResponse: onResponse) }
         browser.isConnected = { [weak self] in self?.isConnected == true }
     }
@@ -208,6 +216,7 @@ final class HostSession: Identifiable {
             composerStates[taskID] = nil
             outputs[taskID] = nil
             subscribed.removeAll { $0 == taskID }
+            subscribedDetail[taskID] = nil
             applyTasks(changed: [], removed: [taskID])
         case .taskRailChanged:
             break
@@ -260,8 +269,22 @@ final class HostSession: Identifiable {
             withdrawSettledNotices()
             // Watched again once the snapshot says how (§15.25).
             browser.rewatch()
+            takeFullConversation(response.fullConversation == true)
         }
         for taskID in subscribed { subscribe(taskID) }
+    }
+
+    /// What the list says of full detail (§15.24), kept with the saved Mac. A conversation asked for in the other
+    /// detail, before the list answered or from a Mac that changed since, is asked for again in this one.
+    private func takeFullConversation(_ full: Bool) {
+        if full != fullConversation {
+            fullConversation = full
+            host.fullConversation = full ? true : nil
+            store?.save(host)
+        }
+        for taskID in subscribed {
+            if let detail = subscribedDetail[taskID], detail != (full ? .full : .basic) { requestPage(taskID) }
+        }
     }
 
     /// Pull to refresh: the list read again.
@@ -278,6 +301,7 @@ final class HostSession: Identifiable {
         followUp = response.followUp
         applyFlags(response)
         withdrawSettledNotices()
+        takeFullConversation(response.fullConversation == true)
     }
 
     /// What the snapshot says the Mac answers.
@@ -288,6 +312,7 @@ final class HostSession: Identifiable {
         scheduledTasks = snapshot.scheduledTasks == true
         taskFiles = snapshot.taskFiles == true
         nextSteps = snapshot.nextSteps == true
+        subtasks = snapshot.subtasks == true
         browser.apply(snapshot)
     }
 
@@ -418,13 +443,22 @@ final class HostSession: Identifiable {
             taskSettings[dropped] = nil
             composerStates[dropped] = nil
             outputs[dropped] = nil
+            subscribedDetail[dropped] = nil
             send(.unsubscribeTask(taskID: dropped))
         }
+        requestPage(taskID, then: then)
+    }
+
+    /// Asks for a conversation's latest page and its changes from now on, in full detail from a Mac that answers it
+    /// (§4.2, §15.24): pictures, a running command's output, a subagent's card, a compaction's and a limit's own fields.
+    private func requestPage(_ taskID: String, then: ((RemoteResponse) -> Void)? = nil) {
         guard isConnected else {
             then?(.failure("", RemoteError(.unavailable)))
             return
         }
-        request(.subscribeTask(taskID: taskID, detail: .basic)) { [weak self] response in
+        let detail: RemoteConversationDetail = fullConversation ? .full : .basic
+        subscribedDetail[taskID] = detail
+        request(.subscribeTask(taskID: taskID, detail: detail)) { [weak self] response in
             defer { then?(response) }
             guard let conversation = self?.conversations[taskID] else { return }
             if response.ok {
@@ -513,6 +547,37 @@ final class HostSession: Identifiable {
     /// What a turn offers next, as the Mac's card does: Retry its error, or Resume once its limit reset (§15.31).
     func nextStep(_ taskID: String, turnID: String, action: RemoteNextStep) {
         Task { await nextStep(taskID, turnID: turnID, action: action, text: nil) }
+    }
+
+    // MARK: - Subagents (§15.31)
+
+    /// Why the Mac did not read or stop a subagent, in a line for the sheet that asked.
+    struct Refusal: Error {
+        let message: String
+    }
+
+    /// A Claude Code subagent's conversation, its latest turns, as the Mac's subtask pane reads it.
+    func readSubtask(_ taskID: String, activityID: String) async -> Result<RemoteSubtaskTranscript, Refusal> {
+        let response = await response(to: .subtask(taskID: taskID, activityID: activityID, stop: false))
+        if response.ok { return .success(response.subtask ?? RemoteSubtaskTranscript()) }
+        return .failure(Refusal(message: subtaskRefusal(response.error)
+            ?? String(localized: "Couldn't load the subagent's conversation.")))
+    }
+
+    /// Stops a Claude Code subagent as its card's Stop on the Mac does; why the Mac refused, or nil. The line says
+    /// it stopped when the Mac's next change comes.
+    func stopSubtask(_ taskID: String, activityID: String) async -> String? {
+        let response = await response(to: .subtask(taskID: taskID, activityID: activityID, stop: true))
+        guard !response.ok else { return nil }
+        return subtaskRefusal(response.error) ?? Self.message(for: response.error, host: name)
+    }
+
+    private func subtaskRefusal(_ error: RemoteError?) -> String? {
+        switch error?.code {
+        case .notFound?: String(localized: "\(name) no longer has this subagent.")
+        case .unavailable? where error?.reason == nil: String(localized: "Can't reach \(name) right now.")
+        default: nil
+        }
     }
 
     // MARK: - Link requests (§12.1, §15.11)

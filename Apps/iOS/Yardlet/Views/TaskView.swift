@@ -3,15 +3,21 @@ import SwiftUI
 import YardletRemote
 
 /// One task's conversation, latest first at the bottom, earlier turns on request, live while it runs, with the
-/// composer below it (docs/REMOTE_PROTOCOL.md §4.2, §6). What the task made, and the files and tasks its answers link,
-/// open from here (§15.22).
+/// composer below it (docs/REMOTE_PROTOCOL.md §4.2, §6), in full detail from a Mac that sends it (§15.24). What the
+/// task made, and the files and tasks its answers link, open from here (§15.22).
 struct TaskView: View {
     let session: HostSession
     let taskID: String
     @State private var conversation: ConversationState?
     /// A turn's message in the composer to edit (§15.23).
     @State private var editing: MessageEdit?
+    /// The line whose output, body or subagent card is open.
     @State private var detailItem: RemoteItem?
+    /// The task a subagent's card chose to open, opened once the card has closed.
+    @State private var subtaskToOpen: String?
+    @State private var openedSubtask: String?
+    /// A picture shown whole, over the conversation as it goes on changing.
+    @State private var openedPreview: OpenedPreview?
     @State private var isShowingSettings = false
     @State private var isConfirmingArchive = false
     /// The end of the conversation is in view; otherwise a button takes the person back to it.
@@ -106,8 +112,22 @@ struct TaskView: View {
             // Reopened after a reconnection: marks it read again if a result came meanwhile.
             if connected { conversation = session.open(taskID) }
         }
-        .sheet(item: $detailItem) { item in
-            LineDetailView(session: session, taskID: taskID, item: item)
+        .sheet(item: $detailItem, onDismiss: {
+            openedSubtask = subtaskToOpen
+            subtaskToOpen = nil
+        }) { item in
+            if item.subagent != nil {
+                SubagentSheet(session: session, taskID: taskID, item: item) { childTask in
+                    subtaskToOpen = childTask
+                    detailItem = nil
+                }
+            } else {
+                LineDetailView(session: session, taskID: taskID, item: item)
+            }
+        }
+        .sheet(item: $openedPreview) { PreviewViewer(preview: $0.preview) }
+        .navigationDestination(item: $openedSubtask) { childTask in
+            TaskView(session: session, taskID: childTask)
         }
         .sheet(isPresented: $isShowingSettings) {
             TaskSettingsView(session: session, taskID: taskID)
@@ -218,6 +238,7 @@ struct TaskView: View {
             }
             .environment(\.openURL, OpenURLAction(handler: open))
             .scrollDismissesKeyboard(.interactively)
+            .environment(\.openPreview, OpenPreviewAction { openedPreview = OpenedPreview(preview: $0) })
             .overlay {
                 if !conversation.isLoaded { ProgressView() }
             }
@@ -461,7 +482,7 @@ struct ItemView: View {
         case .error:
             ErrorView(item: item, context: context, retryTurnID: retryTurnID)
         case .notice:
-            NoticeLine(text: item.text ?? item.title ?? "")
+            NoticeView(item: item)
         }
     }
 }
@@ -540,8 +561,9 @@ struct TurnHeaderView: View {
     }
 }
 
-/// What the person sent, on the right. A long press offers Copy and Select Text, and on the message that opened a turn
-/// the turn's Edit Message and Fork from Here (§15.23), as the Claude and ChatGPT apps offer a message's actions.
+/// What the person sent, on the right. In full detail the pictures it sent show above it (§15.24); those without a
+/// preview are counted in it. A long press offers Copy and Select Text, and on the message that opened a turn the
+/// turn's Edit Message and Fork from Here (§15.23), as the Claude and ChatGPT apps offer a message's actions.
 struct UserMessageView: View {
     let item: RemoteItem
     var offer: TurnOffer?
@@ -550,16 +572,25 @@ struct UserMessageView: View {
     @State private var isForking = false
 
     var body: some View {
+        let previews = item.images ?? []
         HStack {
             Spacer(minLength: 48)
-            bubble
-                .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .contextMenu { actions }
+            VStack(alignment: .trailing, spacing: 6) {
+                if !previews.isEmpty { PreviewStrip(previews: previews) }
+                if !(item.text ?? "").isEmpty || uncounted > 0 || item.scheduled == true || previews.isEmpty {
+                    bubble
+                        .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .contextMenu { actions }
+                }
+            }
         }
         .sheet(isPresented: $isSelecting) {
             SelectTextView(text: item.text ?? "")
         }
     }
+
+    /// Pictures it sent that came without a preview.
+    private var uncounted: Int { max(0, (item.imageCount ?? 0) - (item.images ?? []).count) }
 
     @ViewBuilder
     private var actions: some View {
@@ -599,15 +630,16 @@ struct UserMessageView: View {
     }
 
     private var bubble: some View {
-        VStack(alignment: .trailing, spacing: 4) {
+        let text = item.text ?? ""
+        return VStack(alignment: .trailing, spacing: 4) {
             if item.shell == true {
-                Text(item.text ?? "")
+                Text(text)
                     .font(.system(.callout, design: .monospaced))
-            } else {
-                Text(MarkdownView.inline(item.text ?? ""))
+            } else if !text.isEmpty || (item.images ?? []).isEmpty {
+                Text(MarkdownView.inline(text))
             }
-            if let count = item.imageCount, count > 0 {
-                Label("\(count) images", systemImage: "photo").font(.caption).foregroundStyle(.secondary)
+            if uncounted > 0 {
+                Label("\(uncounted) images", systemImage: "photo").font(.caption).foregroundStyle(.secondary)
             }
             if item.scheduled == true {
                 Label("Sent on schedule", systemImage: "clock").font(.caption).foregroundStyle(.secondary)
@@ -642,14 +674,31 @@ struct AssistantView: View {
     }
 }
 
-/// One tool, command or step in a line, in the Mac's words (§6.4). A line with more opens its output and changes.
+/// One tool, command or step in a line, in the Mac's words (§6.4). A line with more opens its output and changes, or
+/// a subagent's card. In full detail a running command shows its newest output under it, and a tool the pictures it
+/// made (§15.24, §15.31).
 struct ActivityLine: View {
     let item: RemoteItem
-    let openDetail: (RemoteItem) -> Void
+    /// Opens what the line holds; nil where nothing opens (a conversation that is only read).
+    let openDetail: ((RemoteItem) -> Void)?
+
+    private var opens: Bool { openDetail != nil && item.opensDetail }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            line
+            if item.status == "running", let output = item.body?.output {
+                LiveOutputTail(output: output).padding(.leading, 24)
+            }
+            if let images = item.images, !images.isEmpty {
+                PreviewStrip(previews: images).padding(.leading, 24)
+            }
+        }
+    }
+
+    private var line: some View {
         Button {
-            if item.hasDetail == true { openDetail(item) }
+            if opens { openDetail?(item) }
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 icon
@@ -673,14 +722,18 @@ struct ActivityLine: View {
                     }
                     .font(.footnote.monospacedDigit())
                 }
-                if item.hasDetail == true {
+                // A subagent on another harness or model than its task says which (§15.24).
+                if let runsOn = item.subagent?.harnessLabel ?? item.subagent?.model {
+                    Text(verbatim: runsOn).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                }
+                if opens {
                     Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
                 }
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(item.hasDetail != true)
+        .disabled(!opens)
     }
 
     /// The Mac's words with the verb muted, as it draws them; the title when the parts are not there.
@@ -774,19 +827,6 @@ struct PlanStepsView: View {
                 }
             }
         }
-    }
-}
-
-struct NoticeLine: View {
-    let text: String
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "info.circle").font(.footnote)
-            Text(text).font(.footnote)
-        }
-        .foregroundStyle(.secondary)
-        .frame(maxWidth: .infinity, alignment: .center)
     }
 }
 

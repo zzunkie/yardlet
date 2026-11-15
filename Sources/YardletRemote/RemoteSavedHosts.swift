@@ -19,6 +19,9 @@ public struct RemoteSavedHost: Codable, Equatable, Identifiable, Sendable {
     public var deviceID: String?
     public var pairedAt: Date
     public var lastConnectedAt: Date?
+    /// The host's list last said it answers a subscription in full detail (§15.24), so a client asks for it before
+    /// the list answers again.
+    public var fullConversation: Bool?
 
     public init(id: String = UUID().uuidString, name: String, hostKey: Data, direct: [String], relayURL: String? = nil,
                 room: String? = nil, alternateRelayURL: String? = nil, deviceID: String? = nil, pairedAt: Date = Date(),

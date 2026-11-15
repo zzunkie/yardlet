@@ -94,7 +94,8 @@ final class PhoneModel {
         guard let key = keys.load(hostID: host.id) else { return }
         endDemo()
         session?.stop()
-        let session = HostSession(host: host, clientKey: key, hello: Self.hello, store: store)
+        // The saved copy, with what a session learned of the Mac since the list was read.
+        let session = HostSession(host: store.host(host.id) ?? host, clientKey: key, hello: Self.hello, store: store)
         attach(session)
         selectedHostID = host.id
     }

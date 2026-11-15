@@ -1643,7 +1643,7 @@ message's Edit message, and Fork from here. Each acts through the path the Mac's
 ### 15.24 A conversation in full detail
 
 Yardlet on another computer (§18) draws a task's conversation with the Mac's own cards, and asks
-for what they read beyond §6's items. A phone keeps §6.
+for what they read beyond §6's items, and so do the phone apps.
 
 - The snapshot carries `fullConversation: true` when the Mac answers `subscribeTask` with `"detail": "full"` (§4.2).
   A subscription asks for it once; its page, `loadOlder` pages and events then hold the same items in the same order,
@@ -1695,10 +1695,11 @@ for what they read beyond §6's items. A phone keeps §6.
   notices opened, and `autoContinue: true` marks the armed continue, which the Mac keeps by the reset it waits for.
 - **Size.** A page still holds about 384 KB of items besides its first turn (previews count by their bytes), and a
   `conversation` event at most about 2 MiB; larger changes come as several events in a row (§5.3).
-- **For the Android app:** nothing changes until it asks. To draw the same cards it would send `"detail": "full"` to a
-  Mac with `fullConversation`, decode the previews' JPEG, and word notices and limits from their kinds as its own
-  strings, keeping `title` and `text` as the fallback for a kind it does not know. Full detail costs more over the
-  relay, so a phone on mobile data may prefer §6.
+- **Phones:** the Android and iPhone apps send `"detail": "full"` to a Mac with `fullConversation`. They keep the flag
+  with their saved copy of the Mac, since a conversation open on a new connection is subscribed before the snapshot
+  answers, and subscribe again in full detail once it says so. They decode the previews, read a line's `body` without
+  `itemDetail` (§15.31), and word compactions, provider notices and limit windows from their kinds as their own
+  strings, keeping `title` and `text` as the fallback for a kind they do not know. Neither offers §6 as a choice.
 
 ### 15.25 A task's browser tabs
 
@@ -2729,8 +2730,14 @@ device's push key, associated data the UTF-8 bytes of `yardlet-push/1`, over the
   `reason` `signIn` (§15.16), as a Mac whose login for it is signed out.
 - The fixture's v2 tasks add a plan review, an answerable question, a suggested task (with `suggestionOptions`: its
   task's harness and project, and a Start with choices names the model in its first message), lines with details,
-  and taking `createTask`, `setPinned` and `archiveTask`. It does not announce `fullConversation` (§15.24) and
-  answers every subscription in §6's shape.
+  and taking `createTask`, `setPinned` and `archiveTask`.
+- It announces `fullConversation` (§15.24) and `subtasks` (§15.31); of what follows a basic subscription reads only the
+  subagents' `taskIds`, `activityId` and `canStop`, which every subscription carries. In full detail "Check the footer on mobile" sent a screenshot with its first message (and one without a preview) and
+  took one with a tool, whose result holds it too; "Build the release bundle"'s running command prints its output a
+  line at a time; "Summarize the crash reports" ends after a compaction and a rerouted model, with a thought process;
+  "Write the migration guide"'s limit lists its session and weekly windows. "Fix the footer links" ran a Codex
+  subagent whose child task is "Check the footer on mobile", and "Approve the index migration" has a Claude Code
+  subagent running in the background, which `subtask` reads and stops.
 - Its scheduled tasks (§15.21): "Summarize new crash reports" runs every morning and its last run started "Summarize
   the crash reports"; "Check the footer links" is paused and continues "Fix the footer links"; "Nightly screenshots"
   turned itself off after three failed starts, and Run now fails again; "Weekend trip reminder" is a one-off in

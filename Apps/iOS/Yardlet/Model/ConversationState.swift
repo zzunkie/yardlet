@@ -98,6 +98,14 @@ final class ConversationState {
         details[itemID] = detail
     }
 
+    /// A line as it is now, which a sheet open on it follows while it runs (§15.31). Read through `turns`, so the
+    /// sheet is drawn again when they change; finds the line's turn by its run, not by reading every turn's items.
+    func item(_ itemID: String) -> RemoteItem? {
+        guard let run = items.run(containing: itemID) else { return nil }
+        let id = ObjectIdentifier(run)
+        return turns.first { $0.id == id }?.items.first { $0.id == itemID }
+    }
+
     /// The requests still waiting, at the end of the latest turn.
     var pendingRequests: [RemoteItem] {
         guard let last = turns.last else { return [] }

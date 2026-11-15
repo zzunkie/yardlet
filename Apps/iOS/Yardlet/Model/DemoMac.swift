@@ -145,6 +145,10 @@ final class DemoBridge: RemoteBridge {
         await fixture.limitAccounts(taskID: taskID)
     }
 
+    func subtask(taskID: String, activityID: String, stop: Bool) async -> Result<RemoteSubtaskTranscript, RemoteError> {
+        await fixture.subtask(taskID: taskID, activityID: activityID, stop: stop)
+    }
+
     func scheduledTasks() async -> Result<[RemoteSchedule], RemoteError> { await fixture.scheduledTasks() }
     func taskOutputs(taskID: String) async -> Result<[RemoteOutput], RemoteError> { await fixture.taskOutputs(taskID: taskID) }
     func fileScope(taskID: String) async -> Result<RemoteFileScope, RemoteError> { await fixture.fileScope(taskID: taskID) }

@@ -20,7 +20,9 @@ struct ErrorView: View {
             if let message = item.message, !message.isEmpty {
                 Text(message).font(.subheadline).foregroundStyle(.secondary).textSelection(.enabled)
             }
-            if let resetsAt = item.resetsAt {
+            if let windows = item.limit?.windows, !windows.isEmpty {
+                LimitWindowLines(windows: windows, session: context.session)
+            } else if let resetsAt = item.resetsAt {
                 Text("Resets \(context.session.date(resetsAt).formatted(.relative(presentation: .named)))")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -279,7 +281,8 @@ struct SuggestionView: View {
     }
 }
 
-/// A line's output and changes (§15.8), read when it opens.
+/// A line's output and changes (§15.8), read when it opens; in full detail what the line holds, at once and followed
+/// while it runs (§15.31). A file change still reads its diffs.
 struct LineDetailView: View {
     let session: HostSession
     let taskID: String
@@ -287,53 +290,68 @@ struct LineDetailView: View {
     @Environment(\.dismiss) private var dismiss
 
     private var detail: RemoteItemDetail? { session.conversations[taskID]?.details[item.id] }
+    /// The line as it is now.
+    private var live: RemoteItem { session.conversations[taskID]?.item(item.id) ?? item }
 
     var body: some View {
+        let live = self.live
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    if let command = item.detail, item.activity == "command" {
-                        Text(command)
-                            .font(.system(.footnote, design: .monospaced))
-                            .textSelection(.enabled)
-                    }
-                    if let detail {
-                        if let output = detail.output, !output.isEmpty {
-                            code(output, truncated: detail.outputTruncated)
-                        }
-                        ForEach(detail.diffs, id: \.path) { diff in
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack {
-                                    Text(diff.path).font(.footnote.weight(.semibold)).lineLimit(2)
-                                    Spacer()
-                                    if let additions = diff.additions, let deletions = diff.deletions {
-                                        Text("+\(additions)").foregroundStyle(.green).font(.footnote.monospacedDigit())
-                                        Text("−\(deletions)").foregroundStyle(.red).font(.footnote.monospacedDigit())
-                                    }
-                                }
-                                DiffView(patch: diff.patch)
-                                if diff.truncated == true {
-                                    Text("The rest of this change is on your Mac.").font(.footnote).foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                        if detail.output?.isEmpty != false && detail.diffs.isEmpty {
-                            Text("Nothing more to show.").font(.callout).foregroundStyle(.secondary)
-                        }
-                    } else {
-                        ProgressView().frame(maxWidth: .infinity).padding(.top, 40)
-                    }
+                if live.showsBody {
+                    LineBodyView(item: live).equatable().padding(16)
+                } else {
+                    fetched
                 }
-                .padding(16)
             }
+            .followsNewest(item.status == "running" && item.showsBody)
             .navigationTitle(item.title ?? "")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
-            .task { session.loadDetail(taskID, itemID: item.id) }
+            .task {
+                if !live.showsBody { session.loadDetail(taskID, itemID: item.id) }
+            }
         }
         .presentationDetents([.medium, .large])
+    }
+
+    /// The output and diffs `itemDetail` read.
+    private var fetched: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if let command = item.detail, item.activity == "command" {
+                Text(command)
+                    .font(.system(.footnote, design: .monospaced))
+                    .textSelection(.enabled)
+            }
+            if let detail {
+                if let output = detail.output, !output.isEmpty {
+                    code(output, truncated: detail.outputTruncated)
+                }
+                ForEach(detail.diffs, id: \.path) { diff in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text(diff.path).font(.footnote.weight(.semibold)).lineLimit(2)
+                            Spacer()
+                            if let additions = diff.additions, let deletions = diff.deletions {
+                                Text("+\(additions)").foregroundStyle(.green).font(.footnote.monospacedDigit())
+                                Text("−\(deletions)").foregroundStyle(.red).font(.footnote.monospacedDigit())
+                            }
+                        }
+                        DiffView(patch: diff.patch)
+                        if diff.truncated == true {
+                            Text("The rest of this change is on your Mac.").font(.footnote).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                if detail.output?.isEmpty != false && detail.diffs.isEmpty {
+                    Text("Nothing more to show.").font(.callout).foregroundStyle(.secondary)
+                }
+            } else {
+                ProgressView().frame(maxWidth: .infinity).padding(.top, 40)
+            }
+        }
+        .padding(16)
     }
 
     private func code(_ text: String, truncated: Bool) -> some View {
@@ -341,13 +359,7 @@ struct LineDetailView: View {
             if truncated {
                 Text("Showing the end of the output.").font(.footnote).foregroundStyle(.secondary)
             }
-            ScrollView(.horizontal, showsIndicators: false) {
-                Text(text)
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-                    .padding(12)
-            }
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            CodeBlock(text: text)
         }
     }
 }
