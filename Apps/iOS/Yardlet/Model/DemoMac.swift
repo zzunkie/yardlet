@@ -160,7 +160,7 @@ final class DemoBridge: RemoteBridge {
     }
 
     func composerCommands(taskID: String) async -> Result<[RemoteComposerCommand], RemoteError> {
-        await fixture.composerCommands(taskID: taskID)
+        (await fixture.composerCommands(taskID: taskID)).map { $0.map(Self.local) }
     }
 
     func runComposerCommand(taskID: String, command: String, arguments: String?) async -> Result<String?, RemoteError> {
@@ -197,6 +197,13 @@ final class DemoBridge: RemoteBridge {
             return choice
         }
         return setting
+    }
+
+    static func local(_ command: RemoteComposerCommand) -> RemoteComposerCommand {
+        var command = command
+        command.title = command.title.map(word)
+        command.description = command.description.map(word)
+        return command
     }
 
     static func local(_ conversation: RemoteConversation) -> RemoteConversation {

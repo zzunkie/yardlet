@@ -53,6 +53,8 @@ final class HostSession: Identifiable {
     private(set) var taskFiles = false
     /// Each open task's outputs as the Mac last listed them, newest first (§15.22).
     private(set) var outputs: [String: [RemoteOutput]] = [:]
+    /// The Mac takes a turn's next steps: Codex's questions answered and its plan implemented (§15.31).
+    private(set) var nextSteps = false
     private(set) var conversations: [String: ConversationState] = [:]
     /// Each open task's composer settings as the Mac last answered them (§15.23).
     private(set) var taskSettings: [String: [RemoteSetting]] = [:]
@@ -278,6 +280,7 @@ final class HostSession: Identifiable {
         composerExtensions = snapshot.composerExtensions == true
         scheduledTasks = snapshot.scheduledTasks == true
         taskFiles = snapshot.taskFiles == true
+        nextSteps = snapshot.nextSteps == true
     }
 
     private func applyTasks(changed: [RemoteTask], removed: [String]) {
@@ -501,15 +504,7 @@ final class HostSession: Identifiable {
 
     /// What a turn offers next, as the Mac's card does: Retry its error, or Resume once its limit reset (§15.31).
     func nextStep(_ taskID: String, turnID: String, action: RemoteNextStep) {
-        request(.nextStep(taskID: taskID, turnID: turnID, action: action)) { [weak self] response in
-            guard let self, !response.ok else { return }
-            switch response.error?.code {
-            case .notFound?, .notAllowed? where response.error?.reason == nil:
-                commandError = String(localized: "The task has changed, so this can't be done now.")
-            default:
-                commandError = Self.message(for: response.error, host: name)
-            }
-        }
+        Task { await nextStep(taskID, turnID: turnID, action: action, text: nil) }
     }
 
     // MARK: - Link requests (§12.1, §15.11)
@@ -523,6 +518,73 @@ final class HostSession: Identifiable {
     func answerLink(_ requestID: String, approve: Bool) {
         linkRequests.removeAll { $0.id == requestID }
         send(.answerLink(requestID: requestID, approve: approve))
+    }
+
+    // MARK: - Slash commands, edit and fork (§15.23)
+
+    /// The task's slash commands that may run from the phone, in the Mac's list's order and words; nil when the Mac
+    /// could not say.
+    func composerCommands(_ taskID: String) async -> [RemoteComposerCommand]? {
+        guard taskControls, isConnected else { return nil }
+        let response = await response(to: .composerCommands(taskID: taskID))
+        return response.ok ? response.commands ?? [] : nil
+    }
+
+    /// Runs a slash command as the Mac's composer does. Whether the Mac took it, and the task it started (`/clear`,
+    /// New chat, Fork chat), which the phone opens as the Mac's window opens it; a refusal shows as a command's does.
+    func runComposerCommand(_ taskID: String, name: String, arguments: String? = nil) async -> (ok: Bool, started: String?) {
+        let response = await response(to: .runComposerCommand(taskID: taskID, command: name, arguments: arguments))
+        guard response.ok else {
+            var words = [RemoteErrorCode.notAllowed: String(localized: "This command can't run now.")]
+            if task(taskID)?.running == true { words[.busy] = String(localized: "Available once this turn ends.") }
+            commandError = Self.message(for: response.error, host: self.name, otherwise: words)
+            return (false, nil)
+        }
+        return (true, response.taskId.flatMap { $0 == taskID ? nil : $0 })
+    }
+
+    /// Edit Message and Send: the turn is replaced by the edited message, whose pictures stay with it.
+    func editMessage(_ taskID: String, turnID: String, text: String) async -> Bool {
+        let response = await response(to: .editMessage(taskID: taskID, turnID: turnID, text: text))
+        if !response.ok {
+            commandError = Self.message(for: response.error, host: name,
+                                        otherwise: [.notAllowed: String(localized: "This message can't be edited now.")])
+        }
+        return response.ok
+    }
+
+    /// Fork from Here: the fork's task ID once the Mac started it, listed before the answer.
+    func fork(_ taskID: String, turnID: String) async -> String? {
+        let response = await response(to: .forkTask(taskID: taskID, turnID: turnID))
+        guard response.ok else {
+            commandError = Self.message(for: response.error, host: name, otherwise: [
+                .notAllowed: String(localized: "You can't fork from this turn now."),
+                .internal: String(localized: "The fork didn't start.")
+            ])
+            return nil
+        }
+        return response.taskId
+    }
+
+    /// A refusal in the person's words; one that names no reason takes the words `otherwise` gives its code, as what
+    /// the request was about says more than the code alone.
+    static func message(for error: RemoteError?, host: String, otherwise: [RemoteErrorCode: String]) -> String {
+        if let error, error.reason == nil, let words = otherwise[error.code] { return words }
+        return message(for: error, host: host)
+    }
+
+    // MARK: - Next steps (§15.31)
+
+    /// A turn's next step, for the turn the screen showed when the person chose it, and whether the Mac took it. One
+    /// the conversation moved past says so.
+    @discardableResult
+    func nextStep(_ taskID: String, turnID: String, action: RemoteNextStep, text: String?) async -> Bool {
+        let response = await response(to: .nextStep(taskID: taskID, turnID: turnID, action: action, text: text))
+        if !response.ok {
+            let moved = String(localized: "The task has changed, so this can't be done now.")
+            commandError = Self.message(for: response.error, host: name, otherwise: [.notFound: moved, .notAllowed: moved])
+        }
+        return response.ok
     }
 
     // MARK: - Files (§15.20)

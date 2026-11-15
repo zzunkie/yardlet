@@ -9,6 +9,8 @@ struct TaskView: View {
     let session: HostSession
     let taskID: String
     @State private var conversation: ConversationState?
+    /// A turn's message in the composer to edit (§15.23).
+    @State private var editing: MessageEdit?
     @State private var detailItem: RemoteItem?
     @State private var isShowingSettings = false
     @State private var isConfirmingArchive = false
@@ -20,6 +22,7 @@ struct TaskView: View {
     /// The file coming from the Mac or shown, and the copy QuickLook shows.
     @State private var reading: MacFileReading?
     @State private var preview: URL?
+    /// Opens another task over this one: a linked task, a fork, or a new chat a command started.
     @Environment(\.openTask) private var openTask
     /// The title last read from the list, kept while the list is read again after a reconnection.
     @State private var knownTitle = ""
@@ -141,7 +144,10 @@ struct TaskView: View {
                     }
                     ForEach(conversation.turns) { turn in
                         TurnView(turn: turn, isWorkOpen: conversation.openedWork.contains(turn.turnID),
-                                 context: ItemContext(session: session, taskID: taskID, task: task),
+                                 context: ItemContext(session: session, taskID: taskID, task: task,
+                                                      offersTurnActions: offersTurnActions,
+                                                      editMessage: { editing = MessageEdit(turnID: $0, text: $1) },
+                                                      openTask: { openTask($0) }),
                                  toggleWork: { toggleWork(turn.turnID, in: conversation) },
                                  openDetail: { detailItem = $0 })
                             .equatable()
@@ -186,8 +192,11 @@ struct TaskView: View {
                     CommandErrorBanner(session: session)
                     ConnectionBanner(session: session)
                     TaskNoticesView(session: session, taskID: taskID)
-                    ComposerView(session: session, taskID: taskID, conversation: conversation,
-                                 openSettings: { isShowingSettings = true })
+                    VStack(spacing: 0) {
+                        NextStepDock(session: session, taskID: taskID, conversation: conversation)
+                        ComposerView(session: session, taskID: taskID, conversation: conversation, editing: $editing,
+                                     openSettings: { isShowingSettings = true }, openTask: { openTask($0) })
+                    }
                 }
             }
         }
@@ -235,6 +244,11 @@ struct TaskView: View {
     private func closeFile() {
         reading?.close()
         reading = nil
+    }
+
+    /// A turn's edit and fork are offered while the Mac takes them from the phone and the task is still listed (§15.23).
+    private var offersTurnActions: Bool {
+        session.taskControls && session.isConnected && conversation?.isGone != true
     }
 
     private func toggleWork(_ turnID: String, in conversation: ConversationState) {
@@ -286,11 +300,22 @@ private struct OutputsReading: Equatable {
     let running: Bool
 }
 
-/// What every item view needs to act: the Mac and the task.
+/// What every item view needs to act: the Mac and the task, and the screen's own actions.
 struct ItemContext {
     let session: HostSession
     let taskID: String
     let task: RemoteTask?
+    /// The turns' Edit Message and Fork from Here may be offered now (§15.23).
+    var offersTurnActions = false
+    /// Edit Message on a turn's message: its words go into the composer (§15.23).
+    var editMessage: (_ turnID: String, _ text: String) -> Void = { _, _ in }
+    /// Opens a task this one started: a fork (§15.23).
+    var openTask: (String) -> Void = { _ in }
+
+    /// Fork from Here on a turn: the fork opens, as the Mac's window opens it.
+    @MainActor func fork(_ turnID: String) async {
+        if let forked = await session.fork(taskID, turnID: turnID) { openTask(forked) }
+    }
 }
 
 /// One turn: what was sent, the turn's header, its work (folded once finished, as on the Mac), its answers and the
@@ -308,6 +333,7 @@ struct TurnView: View, @MainActor Equatable {
 
     static func == (lhs: TurnView, rhs: TurnView) -> Bool {
         lhs.turn == rhs.turn && lhs.isWorkOpen == rhs.isWorkOpen && lhs.context.task == rhs.context.task
+            && lhs.context.offersTurnActions == rhs.context.offersTurnActions
     }
 
     var body: some View {
@@ -315,12 +341,14 @@ struct TurnView: View, @MainActor Equatable {
         // Retry goes on the turn's last error, where the Mac's card offers it (§15.31).
         let retryItem = turn.header?.options?.contains(RemoteNextStep.retry.rawValue) == true
             ? turn.items.last { $0.kind == .error }?.id : nil
+        let offer = context.offersTurnActions ? TurnOffer(turn.items) : nil
         VStack(alignment: .leading, spacing: 12) {
             ForEach(RemoteTurnFold.rows(turn.items, folds: folds, opened: openedStretches), id: \.id) { row in
                 switch row {
                 case let .item(item):
                     ItemView(item: item, context: context, isWorkOpen: isWorkOpen, toggleWork: toggleWork,
-                             openDetail: openDetail, retryTurnID: item.id == retryItem ? turn.turnID : nil)
+                             openDetail: openDetail, retryTurnID: item.id == retryItem ? turn.turnID : nil,
+                             offer: offer)
                 case let .fold(message):
                     StretchFoldView(isOpen: openedStretches.contains(message)) {
                         if openedStretches.contains(message) {
@@ -361,17 +389,20 @@ struct ItemView: View {
     let openDetail: (RemoteItem) -> Void
     /// The turn whose error this is, when its header offers Retry.
     var retryTurnID: String?
+    /// What the item's turn offers (§15.23), on the message that opened it, or on its header without one.
+    var offer: TurnOffer?
 
     var body: some View {
         switch item.kind {
         case .turn:
-            TurnHeaderView(item: item, isWorkOpen: isWorkOpen, toggleWork: toggleWork)
+            TurnHeaderView(item: item, isWorkOpen: isWorkOpen, toggleWork: toggleWork,
+                           context: offer.flatMap { $0.messageID == nil && $0.canFork ? context : nil })
         case .user:
             switch item.sender?.kind {
             case "task"?: MessageFromTask(item: item, session: context.session)
             case "backgroundTask"?: BackgroundNotice(item: item)
             case "claudeSchedule"?: MessageFromSchedule(item: item)
-            default: UserMessageView(item: item)
+            default: UserMessageView(item: item, offer: offer.flatMap { $0.messageID == item.id ? $0 : nil }, context: context)
             }
         case .assistant:
             AssistantView(item: item, opensFiles: context.session.taskFiles)
@@ -397,13 +428,37 @@ struct ItemView: View {
     }
 }
 
-/// The turn's header: "Thinking…" while it runs, "Worked for 1m 30s" once done, which opens its folded work.
+/// The turn's header: "Thinking…" while it runs, "Worked for 1m 30s" once done, which opens its folded work. A turn
+/// no message of the person's opened offers its Fork from Here here, on a long press (§15.23).
 struct TurnHeaderView: View {
     let item: RemoteItem
     let isWorkOpen: Bool
     let toggleWork: () -> Void
+    /// Set when the header holds the turn's fork.
+    var context: ItemContext?
+    @State private var isForking = false
 
     var body: some View {
+        if let context {
+            header.contextMenu {
+                Button {
+                    isForking = true
+                    Task {
+                        await context.fork(item.turnId)
+                        isForking = false
+                    }
+                } label: {
+                    Label("Fork from Here", systemImage: "arrow.triangle.branch")
+                }
+                .disabled(isForking)
+            }
+        } else {
+            header
+        }
+    }
+
+    @ViewBuilder
+    private var header: some View {
         if item.status == "running" {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
@@ -447,33 +502,82 @@ struct TurnHeaderView: View {
     }
 }
 
-/// What the person sent, on the right.
+/// What the person sent, on the right. A long press offers Copy and Select Text, and on the message that opened a turn
+/// the turn's Edit Message and Fork from Here (§15.23), as the Claude and ChatGPT apps offer a message's actions.
 struct UserMessageView: View {
     let item: RemoteItem
+    var offer: TurnOffer?
+    var context: ItemContext?
+    @State private var isSelecting = false
+    @State private var isForking = false
 
     var body: some View {
         HStack {
             Spacer(minLength: 48)
-            VStack(alignment: .trailing, spacing: 4) {
-                if item.shell == true {
-                    Text(item.text ?? "")
-                        .font(.system(.callout, design: .monospaced))
-                        .textSelection(.enabled)
-                } else {
-                    Text(MarkdownView.inline(item.text ?? ""))
-                        .textSelection(.enabled)
-                }
-                if let count = item.imageCount, count > 0 {
-                    Label("\(count) images", systemImage: "photo").font(.caption).foregroundStyle(.secondary)
-                }
-                if item.scheduled == true {
-                    Label("Sent on schedule", systemImage: "clock").font(.caption).foregroundStyle(.secondary)
+            bubble
+                .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .contextMenu { actions }
+        }
+        .sheet(isPresented: $isSelecting) {
+            SelectTextView(text: item.text ?? "")
+        }
+    }
+
+    @ViewBuilder
+    private var actions: some View {
+        if let text = item.text, !text.isEmpty {
+            Button {
+                UIPasteboard.general.string = text
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+            Button {
+                isSelecting = true
+            } label: {
+                Label("Select Text", systemImage: "selection.pin.in.out")
+            }
+        }
+        if let offer, let context {
+            if offer.canEdit, let text = item.text {
+                Button {
+                    context.editMessage(offer.turnID, text)
+                } label: {
+                    Label("Edit Message", systemImage: "pencil")
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            if offer.canFork {
+                Button {
+                    isForking = true
+                    Task {
+                        await context.fork(offer.turnID)
+                        isForking = false
+                    }
+                } label: {
+                    Label("Fork from Here", systemImage: "arrow.triangle.branch")
+                }
+                .disabled(isForking)
+            }
         }
+    }
+
+    private var bubble: some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            if item.shell == true {
+                Text(item.text ?? "")
+                    .font(.system(.callout, design: .monospaced))
+            } else {
+                Text(MarkdownView.inline(item.text ?? ""))
+            }
+            if let count = item.imageCount, count > 0 {
+                Label("\(count) images", systemImage: "photo").font(.caption).foregroundStyle(.secondary)
+            }
+            if item.scheduled == true {
+                Label("Sent on schedule", systemImage: "clock").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 }
 

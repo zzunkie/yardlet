@@ -52,7 +52,18 @@ struct TaskSettingsView: View {
 
     @ViewBuilder
     private func row(_ setting: RemoteSetting) -> some View {
-        if setting.choices.isEmpty {
+        if setting.role == "plan" {
+            // Codex's Plan indicator, sent while Plan mode is on: its command turns it off, as on the Mac.
+            LabeledContent(setting.name) {
+                Button("Turn Off") {
+                    isApplying = true
+                    Task {
+                        _ = await session.runComposerCommand(taskID, name: "plan-mode")
+                        isApplying = false
+                    }
+                }
+            }
+        } else if setting.choices.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
                 LabeledContent(setting.name, value: setting.title ?? setting.value)
                 if let note = setting.note { Text(note).font(.footnote).foregroundStyle(.secondary) }
@@ -91,9 +102,9 @@ struct TaskSettingsView: View {
         setting.choices.filter { $0.confirm == nil || $0.value == setting.value }
     }
 
-    /// "Opus 5.5 · High · Manual": the row's values in its order.
+    /// "Opus 5.5 · High · Manual": the row's values in its order. Plan mode has a chip of its own.
     static func summary(_ settings: [RemoteSetting]) -> String {
-        settings.filter { shownRoles.contains($0.role ?? "") }.map { setting in
+        settings.filter { shownRoles.contains($0.role ?? "") && $0.role != "plan" }.map { setting in
             setting.choices.first { $0.value == setting.value }?.name ?? setting.title ?? setting.value
         }.filter { !$0.isEmpty }.joined(separator: " · ")
     }

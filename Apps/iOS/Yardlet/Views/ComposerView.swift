@@ -6,14 +6,23 @@ import YardletRemote
 
 /// The message box under a conversation: a message with photos (from the library or the camera) or files to the
 /// task, sent into a running turn or queued after it (§15.14, §15.15, §15.20), Stop while it runs, the queue's own
-/// actions, and the task's model and permission mode (§15.23). What is typed stays as the task's draft until it is
-/// sent.
+/// actions, and the task's model and permission mode, slash commands and Edit Message (§15.23). What is typed stays as
+/// the task's draft until it is sent.
 struct ComposerView: View {
     let session: HostSession
     let taskID: String
     let conversation: ConversationState
+    /// A turn's message being edited: its words are in the field, and sending them goes as the turn's edit (§15.23).
+    @Binding var editing: MessageEdit?
     let openSettings: () -> Void
+    /// Opens a task a command started: a new chat, a fork.
+    let openTask: (String) -> Void
     @State private var draft = ""
+    /// What the field held before an edit began, which comes back once it ends, as on the Mac.
+    @State private var draftBeforeEdit: String?
+    /// The slash commands the Mac lists for the task (§15.23); nil until read.
+    @State private var commands: [RemoteComposerCommand]?
+    @FocusState private var isFieldFocused: Bool
     @State private var images: [PickedImage] = []
     @State private var pickerItems: [PhotosPickerItem] = []
     @State private var files: [AttachedFile] = []
@@ -29,9 +38,20 @@ struct ComposerView: View {
     private var task: RemoteTask? { session.task(taskID) }
     private var isRunning: Bool { task?.running == true }
     private var canSend: Bool {
-        session.isConnected && !isSending && !files.contains { $0.state == .uploading }
-            && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty || !files.isEmpty)
+        if editing != nil { return session.isConnected && !isSending && !trimmedDraft.isEmpty }
+        return session.isConnected && !isSending && !files.contains { $0.state == .uploading }
+            && (!trimmedDraft.isEmpty || !images.isEmpty || !files.isEmpty)
     }
+    private var trimmedDraft: String { draft.trimmingCharacters(in: .whitespacesAndNewlines) }
+    /// The Mac takes slash commands from the phone now (§15.23).
+    private var controlsUp: Bool { session.taskControls && session.isConnected }
+    /// The commands a typed `/` names, while it is one word; none while a message is edited.
+    private var slashMatches: [RemoteComposerCommand] {
+        guard editing == nil, controlsUp, let query = SlashCommands.query(draft), let commands else { return [] }
+        return SlashCommands.matching(commands, query: query)
+    }
+    /// "+" lists the slash commands too, where the Mac lists any.
+    private var offersCommands: Bool { controlsUp && commands?.isEmpty == false }
     private var acceptsImages: Bool { task?.acceptsImages == true }
     private var acceptsFiles: Bool { task?.acceptsFiles == true }
     private var draftKey: String { "draft.\(session.id).\(taskID)" }
@@ -42,15 +62,23 @@ struct ComposerView: View {
             if session.taskControls, let settings = session.taskSettings[taskID], !settings.isEmpty {
                 settingsRow(settings)
             }
-            if !images.isEmpty || !files.isEmpty { attachmentRow }
+            // An edit carries only words; the message's pictures stay with it on the Mac, and the draft's wait (§15.23).
+            if editing == nil && (!images.isEmpty || !files.isEmpty) { attachmentRow }
+            if editing != nil {
+                EditingBar { editing = nil }
+            } else if !slashMatches.isEmpty {
+                SlashList(commands: slashMatches, choose: choose)
+                    .disabled(isSending)
+            }
             HStack(alignment: .bottom, spacing: 8) {
-                if acceptsImages || acceptsFiles { attachMenu }
+                if editing == nil && (acceptsImages || acceptsFiles || offersCommands) { attachMenu }
                 HStack(alignment: .bottom, spacing: 6) {
                     TextField(isRunning ? "Message to the running task" : "Message", text: $draft, axis: .vertical)
                         .lineLimit(1...6)
+                        .focused($isFieldFocused)
                         .padding(.leading, 14)
                         .padding(.vertical, 9)
-                    if isRunning && task?.steers == true && !draft.isEmpty { followUpMenu }
+                    if editing == nil && isRunning && task?.steers == true && !draft.isEmpty { followUpMenu }
                     actionButton
                 }
                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -62,9 +90,30 @@ struct ComposerView: View {
         .background(.bar)
         .onAppear { draft = UserDefaults.standard.string(forKey: draftKey) ?? "" }
         .onChange(of: draft) { _, text in
+            // The words being edited are the turn's, not the draft, which stays as it was.
+            guard editing == nil else { return }
             if text.isEmpty { UserDefaults.standard.removeObject(forKey: draftKey) } else {
                 UserDefaults.standard.set(text, forKey: draftKey)
             }
+        }
+        .onChange(of: editing) { _, edit in
+            if let edit {
+                if draftBeforeEdit == nil { draftBeforeEdit = draft }
+                draft = edit.text
+                isFieldFocused = true
+            } else if let before = draftBeforeEdit {
+                draftBeforeEdit = nil
+                draft = before
+            }
+        }
+        // §15.23: the slash commands, read when the conversation opens or connects (they decide whether "+" lists
+        // them) and each time a typed `/` opens the list, as the Mac's list reads what it shows.
+        .task(id: controlsUp) {
+            if controlsUp { commands = await session.composerCommands(taskID) ?? commands }
+        }
+        .onChange(of: SlashCommands.query(draft) != nil) { _, typing in
+            guard typing, controlsUp else { return }
+            Task { commands = await session.composerCommands(taskID) ?? commands }
         }
         .onChange(of: pickerItems) { _, items in
             guard !items.isEmpty else { return }
@@ -115,18 +164,43 @@ struct ComposerView: View {
                 }
                 .disabled(files.count >= RemoteProtocol.maxFiles)
             }
+            if offersCommands, let commands {
+                Menu {
+                    ForEach(Array(SlashCommands.groups(commands).enumerated()), id: \.offset) { _, group in
+                        if let heading = group.heading {
+                            Section(heading) { commandButtons(group.commands) }
+                        } else {
+                            Section { commandButtons(group.commands) }
+                        }
+                    }
+                } label: {
+                    Label("Slash Commands", systemImage: "slash.circle")
+                }
+                .disabled(isSending)
+            }
         } label: {
             Image(systemName: "plus")
                 .font(.body.weight(.semibold))
                 .frame(width: 36, height: 36)
                 .background(Color(.secondarySystemBackground), in: Circle())
         }
-        .accessibilityLabel("Attach")
+        .accessibilityLabel(acceptsImages || acceptsFiles ? Text("Attach") : Text("Slash Commands"))
+    }
+
+    private func commandButtons(_ commands: [RemoteComposerCommand]) -> some View {
+        ForEach(commands, id: \.name) { command in
+            Button {
+                choose(command)
+            } label: {
+                Text(command.title ?? "/\(command.name)")
+                if let description = command.description, !description.isEmpty { Text(description) }
+            }
+        }
     }
 
     @ViewBuilder
     private var actionButton: some View {
-        if isRunning && draft.isEmpty && images.isEmpty && files.isEmpty {
+        if editing == nil && isRunning && draft.isEmpty && images.isEmpty && files.isEmpty {
             Button {
                 session.send(.stopTurn(taskID: taskID))
             } label: {
@@ -271,16 +345,36 @@ struct ComposerView: View {
     }
 
     private func settingsRow(_ settings: [RemoteSetting]) -> some View {
-        Button(action: openSettings) {
-            HStack(spacing: 6) {
-                Image(systemName: "slider.horizontal.3")
-                Text(TaskSettingsView.summary(settings)).lineLimit(1)
-                Image(systemName: "chevron.up.chevron.down").font(.caption2)
+        HStack(spacing: 10) {
+            // Codex's Plan indicator, while Plan mode is on: tapping it turns Plan mode off, as on the Mac (§15.23).
+            if let plan = settings.first(where: { $0.role == "plan" }) {
+                Button {
+                    run("plan-mode")
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(plan.name).lineLimit(1)
+                        Image(systemName: "xmark").font(.caption2.weight(.bold))
+                    }
+                    .font(.footnote.weight(.medium))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color(.tertiarySystemFill), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(!controlsUp || isSending)
+                .accessibilityLabel("Turn Off Plan Mode")
             }
-            .font(.footnote)
-            .foregroundStyle(settings.contains { $0.elevated == true } ? Color.orange : Color.secondary)
+            Button(action: openSettings) {
+                HStack(spacing: 6) {
+                    Image(systemName: "slider.horizontal.3")
+                    Text(TaskSettingsView.summary(settings)).lineLimit(1)
+                    Image(systemName: "chevron.up.chevron.down").font(.caption2)
+                }
+                .font(.footnote)
+                .foregroundStyle(settings.contains { $0.elevated == true } ? Color.orange : Color.secondary)
+            }
+            .buttonStyle(.plain)
         }
-        .buttonStyle(.plain)
         .padding(.leading, 4)
     }
 
@@ -345,13 +439,26 @@ struct ComposerView: View {
         }
     }
 
+    /// Sends the message; a draft whose first word names one of the Mac's slash commands runs it as the Mac's composer
+    /// does once sent, and an edit goes as the turn's Edit Message (§15.23).
     private func send() {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = trimmedDraft
+        if let editing { return sendEdit(editing, text: text) }
         let mode = isRunning ? (followUp ?? session.followUp) : nil
         let attached = images.map { RemoteImage(type: "image/jpeg", data: $0.jpeg) }
         let uploads = files.compactMap { $0.state == .ready ? $0.uploadID : nil }
         isSending = true
         Task {
+            if controlsUp, attached.isEmpty, uploads.isEmpty, text.hasPrefix("/") {
+                if commands == nil { commands = await session.composerCommands(taskID) }
+                if let (command, arguments) = SlashCommands.typed(text, in: commands ?? []) {
+                    let run = await session.runComposerCommand(taskID, name: command.name, arguments: arguments)
+                    if run.ok, trimmedDraft == text { draft = "" }
+                    if let started = run.started { openTask(started) }
+                    isSending = false
+                    return
+                }
+            }
             let sent = await session.perform(.sendMessage(taskID: taskID, text: text, images: attached, followUp: mode,
                                                           files: uploads))
             if sent {
@@ -359,6 +466,39 @@ struct ComposerView: View {
                 images = []
                 files = []
             }
+            isSending = false
+        }
+    }
+
+    /// Edit Message and Send: the turn is replaced by the edited message. A refusal keeps the edit, so no words are lost.
+    private func sendEdit(_ edit: MessageEdit, text: String) {
+        guard !text.isEmpty else { return }
+        isSending = true
+        Task {
+            if await session.editMessage(taskID, turnID: edit.turnID, text: text), editing == edit { editing = nil }
+            isSending = false
+        }
+    }
+
+    /// As the Mac's list: a command that runs at once (the Codex app's) takes a typed `/name` out of the draft and runs;
+    /// any other is typed into the draft as `/name `, and runs when sent.
+    private func choose(_ command: RemoteComposerCommand) {
+        let typing = SlashCommands.query(draft) != nil
+        guard command.runs == true else {
+            draft = "/\(command.name) " + (typing ? "" : String(draft.drop(while: \.isWhitespace)))
+            isFieldFocused = true
+            return
+        }
+        if typing { draft = "" }
+        run(command.name)
+    }
+
+    private func run(_ command: String) {
+        guard !isSending else { return }
+        isSending = true
+        Task {
+            let run = await session.runComposerCommand(taskID, name: command)
+            if let started = run.started { openTask(started) }
             isSending = false
         }
     }

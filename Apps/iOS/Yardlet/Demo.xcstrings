@@ -222,6 +222,40 @@
         }
       }
     },
+    "Compact": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compact"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "압축"
+          }
+        }
+      }
+    },
+    "Compact this chat's context": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compact this chat's context"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 채팅의 컨텍스트를 압축합니다"
+          }
+        }
+      }
+    },
     "Confirm": {
       "extractionState": "manual",
       "localizations": {
@@ -320,6 +354,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "빠른 답에 가장 빠름"
+          }
+        }
+      }
+    },
+    "Fork chat": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fork chat"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "채팅 포크하기"
+          }
+        }
+      }
+    },
+    "Fork this chat": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fork this chat"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 채팅 포크하기"
           }
         }
       }
@@ -460,6 +528,23 @@
         }
       }
     },
+    "New chat": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New chat"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "새 채팅"
+          }
+        }
+      }
+    },
     "On request": {
       "extractionState": "manual",
       "localizations": {
@@ -596,6 +681,40 @@
         }
       }
     },
+    "Start a blank chat in the same workspace": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Start a blank chat in the same workspace"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "같은 워크스페이스에서 빈 채팅 시작"
+          }
+        }
+      }
+    },
+    "Start a new conversation and keep this chat.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Start a new conversation and keep this chat."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "기존 채팅을 보존하고 새 대화를 시작합니다."
+          }
+        }
+      }
+    },
     "Submit": {
       "extractionState": "manual",
       "localizations": {
@@ -626,6 +745,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "전체 접근을 켤까요?"
+          }
+        }
+      }
+    },
+    "Turn plan mode off": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turn plan mode off"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "계획 모드 끄기"
+          }
+        }
+      }
+    },
+    "Turn plan mode on": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turn plan mode on"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "계획 모드 켜기"
           }
         }
       }

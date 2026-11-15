@@ -5,13 +5,14 @@ remote protocol ([docs/REMOTE_PROTOCOL.md](../../docs/REMOTE_PROTOCOL.md)). The 
 session; the phone lists the tasks with the sidebar's marks, reads a task's conversation as it streams, sends
 messages (into a running turn or queued after it), answers approvals, questions, plan reviews, MCP forms and browser
 handoffs with the Mac card's own choices, stops a turn, starts a task with the Mac's choices, starts a task the agent
-suggests as offered or with its Options, changes a task's model, effort and permission mode, and pins or archives
-tasks. It shows what the Mac's window shows above a task's composer (the task's notices, a paused queue), offers a
-turn's next steps (Try Again, Resume after a limit) and a queued message's actions, words the Mac's refusals by their
-reason, and answers another device's connection request. Choices the Mac asks to confirm before an agent may act
-without asking (Bypass permissions, Full access) are made on the Mac. It opens what a task made and the files and tasks
-an answer links, with QuickLook and the share sheet, and lists the Mac's scheduled tasks to run, pause or resume them.
-It notifies you while it is closed.
+suggests as offered or with its Options, changes a task's model, effort and permission mode, runs the slash commands
+the Mac lets another device run, edits the message that opened a turn or forks from it, answers the questions a
+Codex turn ended on or implements its plan, and pins or archives tasks. It shows what the Mac's window shows above a
+task's composer (the task's notices, a paused queue), offers a turn's next steps (Try Again, Resume after a limit) and
+a queued message's actions, words the Mac's refusals by their reason, and answers another device's connection
+request. Choices the Mac asks to confirm before an agent may act without asking (Bypass permissions, Full access) are
+made on the Mac. It opens what a task made and the files and tasks an answer links, with QuickLook and the share
+sheet, and lists the Mac's scheduled tasks to run, pause or resume them. It notifies you while it is closed.
 
 It is a SwiftUI app for iOS 17 and later. It builds `YardletRemote`, the package target the Mac's own remote is
 built from, so the protocol's types, the Noise channel, pairing links, the race between the same network, Tailscale

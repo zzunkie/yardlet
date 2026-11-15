@@ -549,6 +549,16 @@
         }
       }
     },
+    "Available once this turn ends.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이번 턴이 끝난 뒤에 실행할 수 있습니다."
+          }
+        }
+      }
+    },
     "Awaiting an answer": {
       "localizations": {
         "ko": {
@@ -565,6 +575,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "승인 대기 중"
+          }
+        }
+      }
+    },
+    "Back": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이전"
           }
         }
       }
@@ -769,6 +789,16 @@
         }
       }
     },
+    "Copy": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "복사"
+          }
+        }
+      }
+    },
     "Couldn't Load the Scheduled Tasks": {
       "localizations": {
         "ko": {
@@ -929,6 +959,16 @@
         }
       }
     },
+    "Editing message": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "메시지 편집 중"
+          }
+        }
+      }
+    },
     "Expired: %@": {
       "localizations": {
         "ko": {
@@ -949,12 +989,32 @@
         }
       }
     },
+    "Fork from Here": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "여기서 분기"
+          }
+        }
+      }
+    },
     "I'm Done": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "다 했어요"
+          }
+        }
+      }
+    },
+    "Implement this plan?": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 계획을 구현할까요?"
           }
         }
       }
@@ -1175,6 +1235,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "새 worktree"
+          }
+        }
+      }
+    },
+    "Next": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다음"
           }
         }
       }
@@ -1523,6 +1593,16 @@
         }
       }
     },
+    "Plan": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "계획"
+          }
+        }
+      }
+    },
     "Plan ready for review": {
       "localizations": {
         "ko": {
@@ -1579,6 +1659,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "질문"
+          }
+        }
+      }
+    },
+    "Question %lld of %lld": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "질문 %1$lld/%2$lld"
           }
         }
       }
@@ -1853,6 +1943,16 @@
         }
       }
     },
+    "Select Text": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "텍스트 선택"
+          }
+        }
+      }
+    },
     "Send": {
       "localizations": {
         "ko": {
@@ -2023,12 +2123,32 @@
         }
       }
     },
+    "Skip": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "건너뛰기"
+          }
+        }
+      }
+    },
     "Skip this question": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "이 질문 건너뛰기"
+          }
+        }
+      }
+    },
+    "Slash Commands": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "슬래시 명령"
           }
         }
       }
@@ -2233,6 +2353,16 @@
         }
       }
     },
+    "The fork didn't start.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "분기한 작업을 시작하지 못했습니다."
+          }
+        }
+      }
+    },
     "The message is too long.": {
       "localizations": {
         "ko": {
@@ -2313,6 +2443,16 @@
         }
       }
     },
+    "This command can't run now.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 명령은 지금 실행할 수 없습니다."
+          }
+        }
+      }
+    },
     "This command is too long to allow from a notification. Read it whole, then allow it.": {
       "localizations": {
         "ko": {
@@ -2359,6 +2499,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "이 링크는 이 휴대폰을 %@과(와) 연결합니다. 직접 쓰는 Mac에만 연결하세요. 연결하면 그 Mac이 이 휴대폰의 이름을 보고 알림을 보낼 수 있습니다."
+          }
+        }
+      }
+    },
+    "This message can't be edited now.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 메시지는 지금 편집할 수 없습니다."
           }
         }
       }
@@ -2539,6 +2689,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "Mac 없이 둘러보기"
+          }
+        }
+      }
+    },
+    "Turn Off": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "끄기"
+          }
+        }
+      }
+    },
+    "Turn Off Plan Mode": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "계획 모드 끄기"
           }
         }
       }
@@ -2779,6 +2949,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "작업 중에 Yardlet이 다시 시작되어 멈춘 곳부터 이어서 진행했습니다."
+          }
+        }
+      }
+    },
+    "Yes, Implement This Plan": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "네, 이 계획을 구현합니다"
+          }
+        }
+      }
+    },
+    "You can't fork from this turn now.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 턴에서는 지금 분기할 수 없습니다."
           }
         }
       }
