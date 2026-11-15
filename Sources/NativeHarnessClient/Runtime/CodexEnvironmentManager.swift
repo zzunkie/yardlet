@@ -113,8 +113,8 @@ actor CodexEnvironmentManager {
         let runtimeHome = paths.runtimeHomeURL.standardizedFileURL
         guard !Self.pathsOverlap(sourceHome, runtimeHome) else {
             throw CodexEnvironmentError.sourceAndRuntimeHomesOverlap(
-                sourceHome.path(),
-                runtimeHome.path()
+                sourceHome.nativePath,
+                runtimeHome.nativePath
             )
         }
 
@@ -134,10 +134,10 @@ actor CodexEnvironmentManager {
         let effectivePaths = Set(inherited).union(overlays)
         if let current = try? readManifest(),
            current.fingerprint == fingerprint,
-           current.sourceHomePath == sourceHome.path(),
-           current.runtimeHomePath == runtimeHome.path(),
+           current.sourceHomePath == sourceHome.nativePath,
+           current.runtimeHomePath == runtimeHome.nativePath,
            effectivePaths.allSatisfy({
-               fileManager.fileExists(atPath: runtimeHome.appending(path: $0).path())
+               fileManager.fileExists(atPath: runtimeHome.appending(path: $0).nativePath)
            }) {
             return current
         }
@@ -154,14 +154,14 @@ actor CodexEnvironmentManager {
             let overlaySource = paths.overlayURL.appending(path: relativePath)
             let stagedTarget = stagingRoot.appending(path: relativePath)
 
-            if fileManager.fileExists(atPath: inheritedSource.path()) {
+            if fileManager.fileExists(atPath: inheritedSource.nativePath) {
                 try copySnapshotItem(at: inheritedSource, to: stagedTarget)
             }
-            if fileManager.fileExists(atPath: overlaySource.path()) {
+            if fileManager.fileExists(atPath: overlaySource.nativePath) {
                 try applyOverlay(at: overlaySource, to: stagedTarget)
             }
             if relativePath == "config.toml",
-               fileManager.fileExists(atPath: stagedTarget.path()) {
+               fileManager.fileExists(atPath: stagedTarget.nativePath) {
                 try isolateSQLiteHome(in: stagedTarget, runtimeHome: runtimeHome)
             }
         }
@@ -169,10 +169,10 @@ actor CodexEnvironmentManager {
         for relativePath in Self.inheritedRelativePaths {
             let stagedTarget = stagingRoot.appending(path: relativePath)
             let runtimeTarget = runtimeHome.appending(path: relativePath)
-            if fileManager.fileExists(atPath: runtimeTarget.path()) {
+            if fileManager.fileExists(atPath: runtimeTarget.nativePath) {
                 try fileManager.removeItem(at: runtimeTarget)
             }
-            if fileManager.fileExists(atPath: stagedTarget.path()) {
+            if fileManager.fileExists(atPath: stagedTarget.nativePath) {
                 try fileManager.createDirectory(
                     at: runtimeTarget.deletingLastPathComponent(),
                     withIntermediateDirectories: true
@@ -182,8 +182,8 @@ actor CodexEnvironmentManager {
         }
 
         let snapshot = CodexEnvironmentSnapshot(
-            sourceHomePath: sourceHome.path(),
-            runtimeHomePath: runtimeHome.path(),
+            sourceHomePath: sourceHome.nativePath,
+            runtimeHomePath: runtimeHome.nativePath,
             fingerprint: fingerprint,
             inheritedPaths: inherited,
             overlayPaths: overlays,
@@ -200,10 +200,15 @@ actor CodexEnvironmentManager {
         if scope == .yardlet, materializedSnapshot() == nil {
             _ = try prepare()
         }
+        // Codex makes its default home when it first runs, but a `CODEX_HOME` that names no folder ends it at once,
+        // sign-in included; so on a computer where Codex never ran, its home is made here as Codex would make it.
+        if scope == .native, !fileManager.fileExists(atPath: paths.nativeHomeURL.nativePath) {
+            try? fileManager.createDirectory(at: paths.nativeHomeURL, withIntermediateDirectories: true)
+        }
         var environment = base
         environment["CODEX_HOME"] = (scope == .native
-            ? paths.nativeHomeURL : paths.runtimeHomeURL).path()
-        environment["YARDLET_NATIVE_CODEX_HOME"] = paths.nativeHomeURL.path()
+            ? paths.nativeHomeURL : paths.runtimeHomeURL).nativePath
+        environment["YARDLET_NATIVE_CODEX_HOME"] = paths.nativeHomeURL.nativePath
         if isolatesAccountEnvironment { environment["YARDLET_ACCOUNT_ENVIRONMENT"] = "isolated" }
         return CodexProcessEnvironment(values: RuntimeProcessEnvironment.accountScoped(environment))
     }
@@ -214,20 +219,20 @@ actor CodexEnvironmentManager {
 
     private func materializedSnapshot() -> CodexEnvironmentSnapshot? {
         guard let snapshot = try? readManifest(),
-              snapshot.sourceHomePath == paths.nativeHomeURL.standardizedFileURL.path(),
-              snapshot.runtimeHomePath == paths.runtimeHomeURL.standardizedFileURL.path() else {
+              snapshot.sourceHomePath == paths.nativeHomeURL.standardizedFileURL.nativePath,
+              snapshot.runtimeHomePath == paths.runtimeHomeURL.standardizedFileURL.nativePath else {
             return nil
         }
         let relativePaths = Set(snapshot.inheritedPaths).union(snapshot.overlayPaths)
         guard relativePaths.allSatisfy({
-            fileManager.fileExists(atPath: paths.runtimeHomeURL.appending(path: $0).path())
+            fileManager.fileExists(atPath: paths.runtimeHomeURL.appending(path: $0).nativePath)
         }) else { return nil }
         return snapshot
     }
 
     private func existingRelativePaths(in root: URL) -> [String] {
         Self.inheritedRelativePaths.filter {
-            fileManager.fileExists(atPath: root.appending(path: $0).path())
+            fileManager.fileExists(atPath: root.appending(path: $0).nativePath)
         }
     }
 
@@ -251,13 +256,13 @@ actor CodexEnvironmentManager {
         )
         if values.isSymbolicLink == true {
             let resolved = source.resolvingSymlinksInPath().standardizedFileURL
-            guard fileManager.fileExists(atPath: resolved.path()) else {
+            guard fileManager.fileExists(atPath: resolved.nativePath) else {
                 // Stale optional capability links are omitted instead of blocking Codex launch.
                 return
             }
-            let identity = resolved.path()
+            let identity = resolved.nativePath
             guard ancestry.insert(identity).inserted else {
-                throw CodexEnvironmentError.unsupportedSourceItem(source.path())
+                throw CodexEnvironmentError.unsupportedSourceItem(source.nativePath)
             }
             defer { ancestry.remove(identity) }
             try copySnapshotItem(at: resolved, to: destination, ancestry: &ancestry)
@@ -280,7 +285,7 @@ actor CodexEnvironmentManager {
             return
         }
         guard values.isRegularFile == true else {
-            throw CodexEnvironmentError.unsupportedSourceItem(source.path())
+            throw CodexEnvironmentError.unsupportedSourceItem(source.nativePath)
         }
         try fileManager.createDirectory(
             at: destination.deletingLastPathComponent(),
@@ -295,14 +300,14 @@ actor CodexEnvironmentManager {
     private func applyOverlay(at source: URL, to destination: URL) throws {
         let values = try source.resourceValues(forKeys: [.isDirectoryKey])
         guard values.isDirectory == true else {
-            if fileManager.fileExists(atPath: destination.path()) {
+            if fileManager.fileExists(atPath: destination.nativePath) {
                 try fileManager.removeItem(at: destination)
             }
             try copySnapshotItem(at: source, to: destination)
             return
         }
 
-        if !fileManager.fileExists(atPath: destination.path()) {
+        if !fileManager.fileExists(atPath: destination.nativePath) {
             try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
         }
         let children = try fileManager.contentsOfDirectory(
@@ -318,7 +323,7 @@ actor CodexEnvironmentManager {
 
     private func isolateSQLiteHome(in configURL: URL, runtimeHome: URL) throws {
         let original = try String(contentsOf: configURL, encoding: .utf8)
-        let escapedPath = runtimeHome.path().replacingOccurrences(of: "\\", with: "\\\\")
+        let escapedPath = runtimeHome.nativePath.replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
         let replacement = "sqlite_home = \"\(escapedPath)\""
         var lines = original.components(separatedBy: .newlines)
@@ -347,7 +352,7 @@ actor CodexEnvironmentManager {
         overlays: [String]
     ) throws -> String {
         var hasher = SHA256()
-        hasher.update(data: Data(sourceHome.path().utf8))
+        hasher.update(data: Data(sourceHome.nativePath.utf8))
         for relativePath in inherited {
             try hashItem(sourceHome.appending(path: relativePath), relativePath: "native/\(relativePath)", into: &hasher)
         }
@@ -381,13 +386,13 @@ actor CodexEnvironmentManager {
         ])
         if values.isSymbolicLink == true {
             let resolved = url.resolvingSymlinksInPath().standardizedFileURL
-            guard fileManager.fileExists(atPath: resolved.path()) else {
+            guard fileManager.fileExists(atPath: resolved.nativePath) else {
                 hasher.update(data: Data("broken-link".utf8))
                 return
             }
-            let identity = resolved.path()
+            let identity = resolved.nativePath
             guard ancestry.insert(identity).inserted else {
-                throw CodexEnvironmentError.unsupportedSourceItem(url.path())
+                throw CodexEnvironmentError.unsupportedSourceItem(url.nativePath)
             }
             defer { ancestry.remove(identity) }
             hasher.update(data: Data("resolved-link:\(identity)".utf8))

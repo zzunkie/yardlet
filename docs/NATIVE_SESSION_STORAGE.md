@@ -15,7 +15,9 @@ every read of saved history use the values stored on the task; none of them look
 - **`.native`** is the scope of every new task (`SessionRecord`, `SessionStore` and `HarnessRegistry` default to it).
   The task uses the harness's own storage environment. Codex uses the default `~/.codex`, or a native home set earlier,
   and Account Center's lookup, monitor, sign-in and sign-out look at the same home. The harness performs the actual
-  authentication.
+  authentication. Yardlet names that home in `CODEX_HOME` as the platform writes a path (`C:\Users\me\.codex` on
+  Windows), and makes the folder when it is missing, as Codex makes its default home on its first run: Codex ends at
+  once when `CODEX_HOME` names no folder.
 - **`.yardlet`** is a compatibility scope for Codex tasks saved in Yardlet's dedicated Codex home
   (`~/.yardlet/harnesses/codex/home`). Such tasks keep that home and their provider ID when the index is restored, and
   resume and side chat forks use that home too. Their files are not moved or deleted automatically, and the

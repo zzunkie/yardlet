@@ -120,6 +120,12 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File Windows/scripts/check-import.ps1 `
             -Executable "$env:APP_BIN\NativeHarnessClient.exe" -OutDirectory window-check
           exit $LASTEXITCODE
+      # The real Codex CLI, installed with npm on a profile where Codex never ran, started in the environment a
+      # task gives it: its App Server answers `initialize` and `thread/list` without a sign-in only when the app names
+      # Codex's home as Windows writes it, and a folder that is there. It is removed again at the end.
+      - name: Start Codex as a task would
+        shell: pwsh
+        run: Windows/scripts/check-codex.ps1 -Executable "$env:APP_BIN\NativeHarnessClient.exe" -OutDirectory window-check
       # The app with the Swift runtime beside it, to run on a PC that has no Swift: its executable, libraries,
       # resource folder and the Windows App Runtime's packages it puts in place when the PC lacks them, as report.ps1
       # counts them, without the fixture host the build made beside it.

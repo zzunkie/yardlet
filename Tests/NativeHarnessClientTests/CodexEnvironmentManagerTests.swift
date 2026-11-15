@@ -57,17 +57,17 @@ final class CodexEnvironmentManagerTests: XCTestCase {
             "yardlet skill"
         )
         XCTAssertTrue(FileManager.default.fileExists(
-            atPath: runtime.appending(path: "plugins/cache/sample/plugin.json").path()
+            atPath: runtime.appending(path: "plugins/cache/sample/plugin.json").path(percentEncoded: false)
         ))
         XCTAssertFalse(FileManager.default.fileExists(
-            atPath: runtime.appending(path: "plugins/.plugin-appserver").path()
+            atPath: runtime.appending(path: "plugins/.plugin-appserver").path(percentEncoded: false)
         ))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: runtime.appending(path: "auth.json").path()))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: runtime.appending(path: "sessions").path()))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: runtime.appending(path: "auth.json").path(percentEncoded: false)))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: runtime.appending(path: "sessions").path(percentEncoded: false)))
 
         let config = try String(contentsOf: runtime.appending(path: "config.toml"), encoding: .utf8)
         XCTAssertTrue(config.contains("model = \"native\""))
-        XCTAssertTrue(config.contains("sqlite_home = \"\(runtime.path())\""))
+        XCTAssertTrue(config.contains("sqlite_home = \"\(root.path(percentEncoded: false))yardlet/harnesses/codex/home\""))
         XCTAssertFalse(config.contains("/native/history"))
     }
 
@@ -148,12 +148,12 @@ final class CodexEnvironmentManagerTests: XCTestCase {
 
         XCTAssertTrue(
             FileManager.default.fileExists(
-                atPath: paths.runtimeHomeURL.appending(path: "skills").path()
+                atPath: paths.runtimeHomeURL.appending(path: "skills").path(percentEncoded: false)
             )
         )
         XCTAssertFalse(
             FileManager.default.fileExists(
-                atPath: paths.runtimeHomeURL.appending(path: "skills/missing-skill").path()
+                atPath: paths.runtimeHomeURL.appending(path: "skills/missing-skill").path(percentEncoded: false)
             )
         )
     }
@@ -172,8 +172,8 @@ final class CodexEnvironmentManagerTests: XCTestCase {
         ).values
 
         XCTAssertEqual(environment["PATH"], "/usr/bin")
-        XCTAssertEqual(environment["CODEX_HOME"], paths.runtimeHomeURL.path())
-        XCTAssertEqual(environment["YARDLET_NATIVE_CODEX_HOME"], native.path())
+        XCTAssertEqual(environment["CODEX_HOME"], root.path(percentEncoded: false) + "yardlet/harnesses/codex/home")
+        XCTAssertEqual(environment["YARDLET_NATIVE_CODEX_HOME"], root.path(percentEncoded: false) + "native")
     }
 
     func testProcessLaunchUsesPreparedSnapshotUntilExplicitRefresh() async throws {
@@ -202,11 +202,13 @@ final class CodexEnvironmentManagerTests: XCTestCase {
         XCTAssertTrue(effective.contains("model = \"second\""))
     }
 
+    /// Sign-in on a computer where Codex never ran: Codex ends at once when `CODEX_HOME` names no folder, so the home
+    /// it names, written as the file system writes it (the root's name has a space and Hangul), is made first.
     func testCodexAccountCommandsUseNativeHomeWithoutMaterializingIsolation() async throws {
         let root = temporaryRoot()
         let native = root.appending(path: "native", directoryHint: .isDirectory)
         let yardlet = root.appending(path: "yardlet", directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: native, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let manager = CodexEnvironmentManager(
             paths: CodexEnvironmentPaths(nativeHomeURL: native, yardletRootURL: yardlet)
@@ -218,12 +220,15 @@ final class CodexEnvironmentManagerTests: XCTestCase {
             executableURL: URL(filePath: "/usr/bin/true")
         )
 
-        XCTAssertEqual(command?.environment["CODEX_HOME"], native.path())
+        XCTAssertEqual(command?.environment["CODEX_HOME"], root.path(percentEncoded: false) + "native")
+        var isFolder: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.path(percentEncoded: false) + "native", isDirectory: &isFolder))
+        XCTAssertTrue(isFolder.boolValue)
         XCTAssertEqual(command?.arguments, ["login"])
         let logout = await broker.logoutCommand(for: .codex, executableURL: URL(filePath: "/usr/bin/true"))
-        XCTAssertEqual(logout?.environment["CODEX_HOME"], native.path())
+        XCTAssertEqual(logout?.environment["CODEX_HOME"], root.path(percentEncoded: false) + "native")
         XCTAssertEqual(logout?.arguments, ["logout"])
-        XCTAssertFalse(FileManager.default.fileExists(atPath: yardlet.path()))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: yardlet.path(percentEncoded: false)))
     }
 
     func testBrokenLegacyIsolationDoesNotBlockNativeAccountCommands() async throws {
@@ -252,7 +257,7 @@ final class CodexEnvironmentManagerTests: XCTestCase {
             for: .codex,
             executableURL: URL(filePath: "/usr/bin/true")
         )
-        XCTAssertEqual(command?.environment["CODEX_HOME"], native.path())
+        XCTAssertEqual(command?.environment["CODEX_HOME"], root.path(percentEncoded: false) + "native")
     }
 
     func testNativeEnvironmentPreservesInputsAndNeverCopiesProviderState() async throws {
@@ -270,18 +275,18 @@ final class CodexEnvironmentManagerTests: XCTestCase {
             "PATH": "/usr/bin", "CODEX_HOME": "/stale/isolated/home", "KEEP_SETTING": "yes"
         ]).values
 
-        XCTAssertEqual(environment["CODEX_HOME"], native.path())
+        XCTAssertEqual(environment["CODEX_HOME"], root.path(percentEncoded: false) + "native")
         XCTAssertEqual(environment["PATH"], "/usr/bin")
         XCTAssertEqual(environment["KEEP_SETTING"], "yes")
         XCTAssertEqual(try String(contentsOf: native.appending(path: "config.toml"), encoding: .utf8), config)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: yardlet.path()))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: yardlet.path(percentEncoded: false)))
         let snapshot = await manager.currentSnapshot()
         XCTAssertNil(snapshot)
     }
 
     private func temporaryRoot() -> URL {
         FileManager.default.temporaryDirectory.appending(
-            path: "yardlet-codex-environment-\(UUID().uuidString)",
+            path: "yardlet codex 환경-\(UUID().uuidString)",
             directoryHint: .isDirectory
         )
     }

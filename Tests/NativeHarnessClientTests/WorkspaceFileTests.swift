@@ -112,7 +112,12 @@ final class WorkspaceFileTests: XCTestCase {
         XCTAssertEqual(windows.nativePath(of: URL(string: "file:///C:/")!), "C:\\")
         XCTAssertEqual(windows.nativePath(of: URL(string: "file://server/share/x/")!), "\\\\server\\share\\x")
         XCTAssertEqual(windows.nativePath("C:/Users/me/"), "C:\\Users\\me")
+        // Never escaped as a URL's `path()` is, which names no file: a space and a non-ASCII name stay as they are.
+        XCTAssertEqual(windows.nativePath(of: URL(string: "file:///C:/Users/%EC%82%AC%EC%9A%A9%EC%9E%90/My%20Code/")!),
+                       "C:\\Users\\사용자\\My Code")
         XCTAssertEqual(posix.nativePath(of: URL(filePath: "/work/app/")), "/work/app")
+        XCTAssertEqual(posix.nativePath(of: URL(filePath: "/Users/me/Library/Application Support/사용자/")),
+                       "/Users/me/Library/Application Support/사용자")
         XCTAssertEqual(posix.nativePath(of: URL(filePath: "/")), "/")
 
         // One folder is one key however it is written, which is what makes it one project; a Mac's key is the path.

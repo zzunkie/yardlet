@@ -5,9 +5,10 @@ import Foundation
 /// metadata.
 enum FileCloning {
     static func clone(_ source: URL, to destination: URL) -> Bool {
-        source.path().withCString { sourcePath in
-            destination.path().withCString { destinationPath in
-                copyfile(sourcePath, destinationPath, nil, copyfile_flags_t(COPYFILE_ALL | COPYFILE_CLONE)) == 0
+        source.withUnsafeFileSystemRepresentation { sourcePath in
+            destination.withUnsafeFileSystemRepresentation { destinationPath in
+                guard let sourcePath, let destinationPath else { return false }
+                return copyfile(sourcePath, destinationPath, nil, copyfile_flags_t(COPYFILE_ALL | COPYFILE_CLONE)) == 0
             }
         }
     }

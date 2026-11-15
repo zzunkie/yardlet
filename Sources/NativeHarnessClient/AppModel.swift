@@ -4501,7 +4501,7 @@ final class AppModel {
     /// succeeds replaces it.
     func refreshCodexCloudTasks() async {
         guard !isVisualFixture, let codex = runtimeSelections.selectedURL(for: .codex) else { return }
-        let home = codexEnvironmentManager?.paths.nativeHomeURL.path() ?? CodexEnvironmentPaths.live().nativeHomeURL.path()
+        let home = (codexEnvironmentManager?.paths ?? CodexEnvironmentPaths.live()).nativeHomeURL.nativePath
         var tasks: [CodexCloudTask] = []
         var cursor: String?
         for pageIndex in 0..<CodexCloudTasks.pageLimit {

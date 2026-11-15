@@ -98,15 +98,10 @@ struct ExecutableLookup: Equatable, Sendable {
         return result
     }
 
-    /// `url`'s path as this platform writes it; on Windows with `\` and the drive letter first (`C:\Users`),
-    /// where a file URL's path is `/C:/Users`.
+    /// `url`'s path as these rules' platform writes it (`PathRules.nativePath(of:)`, `URL.nativePath`); on Windows
+    /// with `\` and the drive letter first (`C:\Users`), where a file URL's path is `/C:/Users`.
     func nativePath(_ url: URL) -> String {
-        let path = url.path(percentEncoded: false)
-        guard isWindows else { return path }
-        let start = Array(path.utf8.prefix(3))
-        let drive = start.count == 3 && start[0] == UInt8(ascii: "/") && start[2] == UInt8(ascii: ":")
-            && ((UInt8(ascii: "A")...UInt8(ascii: "Z")).contains(start[1]) || (UInt8(ascii: "a")...UInt8(ascii: "z")).contains(start[1]))
-        return String(path.dropFirst(drive ? 1 : 0)).replacingOccurrences(of: "/", with: "\\")
+        (isWindows ? PathRules.windows : PathRules.posix).nativePath(of: url)
     }
 
     /// The program `url` names, or nil when there is none: `url` itself when it is one, and on Windows, for a

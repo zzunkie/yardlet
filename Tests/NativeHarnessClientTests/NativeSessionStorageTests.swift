@@ -153,7 +153,7 @@ final class NativeSessionStorageTests: XCTestCase {
             let session = try XCTUnwrap(value, model.errorBySessionID.values.first ?? "missing")
             XCTAssertEqual(session.connection, connection)
             let id = try XCTUnwrap(session.providerSessionID)
-            XCTAssertTrue(FileManager.default.fileExists(atPath: home.appending(path: "fixture-sessions/\(id).json").path()))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: home.appending(path: "fixture-sessions/\(id).json").path(percentEncoded: false)))
             created.append(session)
         }
         await model.shutdown()
