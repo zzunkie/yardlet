@@ -81,36 +81,20 @@ private struct AccountChooser: View {
             List {
                 if let accounts {
                     ForEach(accounts, id: \.id) { account in
-                        Button {
-                            Task {
-                                isMoving = true
-                                refusal = nil
-                                let response = await context.session.response(
-                                    to: .continueWithAccount(taskID: context.taskID, accountID: account.id))
-                                isMoving = false
-                                if response.ok {
-                                    dismiss()
-                                } else {
-                                    refusal = HostSession.message(for: response.error, host: context.session.name)
-                                }
+                        if account.available == true && account.current != true {
+                            Button {
+                                pick(account)
+                            } label: {
+                                row(account)
                             }
-                        } label: {
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack {
-                                    Text(account.name).foregroundStyle(.primary)
-                                    if account.current == true {
-                                        Text("Current").font(.caption).foregroundStyle(.secondary)
-                                    }
-                                }
-                                if let detail = account.detail { Text(detail).font(.footnote).foregroundStyle(.secondary) }
-                                ForEach(account.usage, id: \.label) { usage in
-                                    Text("\(usage.label): \(usage.usedPercent ?? 0)% used")
-                                        .font(.footnote)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
+                            .disabled(isMoving)
+                        } else {
+                            // The task's own account reads in full; one it cannot move to is dimmed.
+                            row(account).opacity(account.current == true ? 1 : 0.5)
                         }
-                        .disabled(account.available != true || isMoving)
+                    }
+                    if refusal == nil, !accounts.contains(where: { $0.current != true }) {
+                        Text("No other account can continue this task.").font(.footnote).foregroundStyle(.secondary)
                     }
                     if let refusal {
                         Section {
@@ -128,10 +112,83 @@ private struct AccountChooser: View {
             }
             .task {
                 let response = await context.session.response(to: .limitAccounts(taskID: context.taskID))
+                if !response.ok { refusal = HostSession.message(for: response.error, host: context.session.name) }
                 accounts = response.accounts ?? []
             }
         }
         .presentationDetents([.medium, .large])
+    }
+
+    private func row(_ account: RemoteAccount) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(account.name).foregroundStyle(.primary)
+                Spacer(minLength: 8)
+                if account.current == true {
+                    Text("Current").font(.caption).foregroundStyle(.secondary)
+                } else if account.available != true {
+                    Text("Unavailable").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if let detail = account.detail { Text(detail).font(.footnote).foregroundStyle(.secondary) }
+            ForEach(account.usage, id: \.label) { usage in
+                UsageLine(usage: usage, session: context.session)
+            }
+        }
+    }
+
+    private func pick(_ account: RemoteAccount) {
+        Task {
+            isMoving = true
+            refusal = nil
+            let response = await context.session.response(
+                to: .continueWithAccount(taskID: context.taskID, accountID: account.id))
+            isMoving = false
+            if response.ok {
+                dismiss()
+            } else {
+                refusal = HostSession.message(for: response.error, host: context.session.name)
+            }
+        }
+    }
+}
+
+/// One limit window of an account: a short meter, then "Session 12% · Resets 4:00 PM".
+private struct UsageLine: View {
+    let usage: RemoteAccount.Usage
+    let session: HostSession
+
+    var body: some View {
+        let percent = usage.usedPercent.map { min(max($0, 0), 100) }
+        HStack(spacing: 8) {
+            if let percent {
+                ProgressView(value: Double(percent), total: 100)
+                    .tint(percent >= 90 ? .orange : .secondary)
+                    .frame(width: 36)
+            }
+            Text(text(percent))
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+    }
+
+    private func text(_ percent: Int?) -> String {
+        var parts: [String] = []
+        if let percent {
+            parts.append(String(localized: "\(usage.label) \(percent)%"))
+        } else if !usage.label.isEmpty {
+            parts.append(usage.label)
+        }
+        if let resetsAt = usage.resetsAt {
+            let date = session.date(resetsAt)
+            // The clock time today, else a short date with it ("Nov 20, 1:56 AM").
+            let time = Calendar.current.isDateInToday(date)
+                ? date.formatted(date: .omitted, time: .shortened)
+                : date.formatted(.dateTime.month(.abbreviated).day().hour().minute())
+            parts.append(String(localized: "Resets \(time)"))
+        }
+        return parts.joined(separator: " · ")
     }
 }
 

@@ -1,6 +1,16 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "%@ %lld%%": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ %2$lld%%"
+          }
+        }
+      }
+    },
     "%@ can't move this task to that account now.": {
       "localizations": {
         "ko": {
@@ -137,22 +147,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@에서 이 휴대폰을 지웠습니다. 다시 연결하려면 새로 짝지으세요."
-          }
-        }
-      }
-    },
-    "%@: %lld%% used": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "new",
-            "value": "%1$@: %2$lld%% used"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$@: %2$lld%% 사용"
           }
         }
       }
@@ -999,6 +993,16 @@
         }
       }
     },
+    "Home": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "홈"
+          }
+        }
+      }
+    },
     "I'm Done": {
       "localizations": {
         "ko": {
@@ -1275,6 +1279,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "아직 메시지가 없습니다."
+          }
+        }
+      }
+    },
+    "No other account can continue this task.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 작업을 이어 갈 다른 계정이 없습니다."
           }
         }
       }
@@ -1643,6 +1657,16 @@
         }
       }
     },
+    "Projects": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "프로젝트"
+          }
+        }
+      }
+    },
     "Proposed plan": {
       "localizations": {
         "ko": {
@@ -1719,6 +1743,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "받는 중…"
+          }
+        }
+      }
+    },
+    "Recent": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "최근"
           }
         }
       }
@@ -2753,6 +2787,16 @@
         }
       }
     },
+    "Unavailable": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "쓸 수 없음"
+          }
+        }
+      }
+    },
     "Unlock": {
       "localizations": {
         "ko": {
@@ -2829,6 +2873,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "버전"
+          }
+        }
+      }
+    },
+    "View": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "보기"
           }
         }
       }

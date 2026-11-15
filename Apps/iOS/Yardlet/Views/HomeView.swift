@@ -1,14 +1,16 @@
 import SwiftUI
 import YardletRemote
 
-/// A Mac's tasks, as its sidebar lists them: what waits for the person first, then Pinned, then each project and
-/// Chats with their subtasks folded under them (docs/REMOTE_PROTOCOL.md §4.1). Its scheduled tasks open from the bar
-/// when the Mac offers them (§15.21).
+/// A Mac's tasks: what waits for the person first, then Pinned, then either every other task by when it last moved
+/// (Home, as the Claude and ChatGPT phone apps list them) or each project and Chats as the Mac's sidebar groups them
+/// (Projects), with subtasks folded under their parents (docs/REMOTE_PROTOCOL.md §4.1). Its scheduled tasks open from
+/// the bar when the Mac offers them (§15.21).
 struct HomeView: View {
     @Environment(PhoneModel.self) private var model
     let session: HostSession
     /// Tasks by their ID, and the Schedules screen.
     @State private var path = NavigationPath()
+    @State private var view = ListView.home
     @State private var search = ""
     @State private var expanded: Set<String> = []
     @State private var isShowingSettings = false
@@ -24,6 +26,14 @@ struct HomeView: View {
                 } else if session.hasSnapshot && session.tasks.isEmpty {
                     emptyState
                 } else {
+                    if !session.tasks.isEmpty {
+                        Picker("View", selection: $view) {
+                            Text("Home").tag(ListView.home)
+                            Text("Projects").tag(ListView.projects)
+                        }
+                        .pickerStyle(.segmented)
+                        .listRowSeparator(.hidden)
+                    }
                     sections
                 }
             }
@@ -108,10 +118,14 @@ struct HomeView: View {
 
     // MARK: - Sections
 
+    enum ListView: Hashable {
+        case home
+        case projects
+    }
+
     @ViewBuilder
     private var sections: some View {
         let waiting = session.tasks.filter { $0.attention == .waiting }
-        let waitingIDs = Set(waiting.map(\.id))
         if !waiting.isEmpty {
             Section("Waiting for You") {
                 ForEach(waiting, id: \.id) { task in
@@ -119,20 +133,36 @@ struct HomeView: View {
                 }
             }
         }
-        let pinned = session.tasks.filter { $0.pinned && !waitingIDs.contains($0.id) }
+        let rest = session.tasks.filter { $0.attention != .waiting }
+        // The sidebar's Pinned is a list of its own, so a pinned task's pinned subtasks fold under it there.
+        let pinned = Array(trees(rest.filter(\.pinned)).joined())
         if !pinned.isEmpty {
             Section("Pinned") {
-                ForEach(pinned, id: \.id) { task in
-                    link(task, depth: 0, showsProject: true)
+                rows(pinned, showsProject: true)
+            }
+        }
+        switch view {
+        case .home:
+            // By time alone: a chat that moved a minute ago comes before a project's task idle since morning.
+            let recent = trees(rest.filter { !$0.pinned }).sorted { $0[0].latestActivityAt > $1[0].latestActivityAt }
+            if !recent.isEmpty {
+                Section("Recent") {
+                    rows(Array(recent.joined()), showsProject: true)
+                }
+            }
+        case .projects:
+            ForEach(projectsWithTasks, id: \.project.id) { entry in
+                Section(entry.project.name) {
+                    rows(entry.rows, showsProject: false)
                 }
             }
         }
-        ForEach(projectsWithTasks, id: \.project.id) { entry in
-            Section(entry.project.name) {
-                ForEach(entry.rows, id: \.task.id) { row in
-                    link(row.task, depth: row.depth, showsProject: false, children: row.children)
-                }
-            }
+    }
+
+    private func rows(_ rows: [Row], showsProject: Bool) -> some View {
+        ForEach(rows, id: \.task.id) { row in
+            link(row.task, depth: row.depth, showsProject: showsProject && row.depth == 0, children: row.children,
+                 activityAt: row.depth == 0 ? row.latestActivityAt : row.task.lastActivityAt)
         }
     }
 
@@ -140,16 +170,40 @@ struct HomeView: View {
         var task: RemoteTask
         var depth: Int
         var children: Int
+        /// When this task or one folded under it last moved, which places a parent in Recent.
+        var latestActivityAt: Int64
     }
 
-    /// Each project's tasks, top-level ones by recent activity, a task's subtasks under it when opened.
-    private var projectsWithTasks: [(project: RemoteProject, rows: [Row])] {
-        let listed = session.tasks.filter { !$0.pinned && $0.attention != .waiting }
-        let ids = Set(listed.map(\.id))
+    /// `tasks` with each one whose parent is among them folded under that parent: one group of rows per top-level
+    /// task, in the order given, with a parent's subtasks listed while it is opened.
+    private func trees(_ tasks: [RemoteTask]) -> [[Row]] {
+        let ids = Set(tasks.map(\.id))
         var children: [String: [RemoteTask]] = [:]
-        for task in listed {
+        for task in tasks {
             if let parent = task.parentTaskId, ids.contains(parent) { children[parent, default: []].append(task) }
         }
+        let expanded = expanded
+        func latest(_ task: RemoteTask, depth: Int) -> Int64 {
+            guard depth < 8 else { return task.lastActivityAt }
+            return (children[task.id] ?? []).reduce(task.lastActivityAt) { max($0, latest($1, depth: depth + 1)) }
+        }
+        func add(_ task: RemoteTask, depth: Int, to rows: inout [Row]) {
+            let kids = children[task.id] ?? []
+            rows.append(Row(task: task, depth: depth, children: kids.count,
+                            latestActivityAt: depth == 0 ? latest(task, depth: 0) : task.lastActivityAt))
+            guard expanded.contains(task.id), depth < 8 else { return }
+            for child in kids { add(child, depth: depth + 1, to: &rows) }
+        }
+        return tasks.filter { !($0.parentTaskId.map(ids.contains) ?? false) }.map { task in
+            var rows: [Row] = []
+            add(task, depth: 0, to: &rows)
+            return rows
+        }
+    }
+
+    /// Each project's tasks in the Mac's sidebar order, top-level ones by recent activity.
+    private var projectsWithTasks: [(project: RemoteProject, rows: [Row])] {
+        let listed = session.tasks.filter { !$0.pinned && $0.attention != .waiting }
         var projects = session.projects
         // A task under a project the snapshot did not name still shows.
         let named = Set(projects.map(\.id))
@@ -158,19 +212,9 @@ struct HomeView: View {
                 projects.append(RemoteProject(id: task.projectId ?? "", name: String(localized: "Other"), kind: .folder))
             }
         }
-        let expanded = expanded
         return projects.compactMap { project in
-            let top = listed.filter { ($0.projectId ?? "") == project.id && !($0.parentTaskId.map(ids.contains) ?? false) }
-            guard !top.isEmpty else { return nil }
-            var rows: [Row] = []
-            func add(_ task: RemoteTask, depth: Int) {
-                let kids = children[task.id] ?? []
-                rows.append(Row(task: task, depth: depth, children: kids.count))
-                guard expanded.contains(task.id), depth < 8 else { return }
-                for child in kids { add(child, depth: depth + 1) }
-            }
-            for task in top { add(task, depth: 0) }
-            return (project, rows)
+            let rows = Array(trees(listed.filter { ($0.projectId ?? "") == project.id }).joined())
+            return rows.isEmpty ? nil : (project, rows)
         }
     }
 
@@ -182,10 +226,11 @@ struct HomeView: View {
         }
     }
 
-    private func link(_ task: RemoteTask, depth: Int, showsProject: Bool, children: Int = 0) -> some View {
+    private func link(_ task: RemoteTask, depth: Int, showsProject: Bool, children: Int = 0,
+                      activityAt: Int64? = nil) -> some View {
         NavigationLink(value: task.id) {
             TaskRow(task: task, session: session, depth: depth, showsProject: showsProject, children: children,
-                    isExpanded: expanded.contains(task.id)) {
+                    isExpanded: expanded.contains(task.id), activityAt: activityAt) {
                 if expanded.contains(task.id) { expanded.remove(task.id) } else { expanded.insert(task.id) }
             }
         }
@@ -279,6 +324,8 @@ struct TaskRow: View {
     var showsProject = false
     var children = 0
     var isExpanded = false
+    /// When the row says it last moved: a folded parent shows its latest subtask's time.
+    var activityAt: Int64?
     var toggle: () -> Void = {}
 
     var body: some View {
@@ -291,7 +338,7 @@ struct TaskRow: View {
                         .font(.body.weight(task.unread || task.attention == .waiting ? .semibold : .regular))
                         .lineLimit(2)
                     Spacer(minLength: 8)
-                    Text(Formatting.shortAge(session.date(task.lastActivityAt)))
+                    Text(Formatting.shortAge(session.date(activityAt ?? task.lastActivityAt)))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
@@ -326,9 +373,10 @@ struct TaskRow: View {
         .padding(.vertical, 2)
     }
 
+    /// What it runs on, after its project or Chats where the list mixes them.
     private var subtitle: String {
         var parts = [task.harnessName]
-        if showsProject, let project = session.project(task.projectId) { parts.append(project.name) }
+        if showsProject, let project = session.project(task.projectId) { parts.insert(project.name, at: 0) }
         return parts.joined(separator: " · ")
     }
 }
