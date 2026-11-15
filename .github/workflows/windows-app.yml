@@ -111,6 +111,15 @@ jobs:
             -Executable "$env:APP_BIN\NativeHarnessClient.exe" -Fixture "$env:APP_BIN\yardlet-remote-fixture.exe" `
             -OutDirectory window-check
           exit $LASTEXITCODE
+      # A conversation the stand-in saved before the app saw it, through Import conversation: its folder chosen in
+      # Windows' folder dialog, listed by the stand-in only for that folder as Windows writes it, and drawn from the
+      # stand-in's replay once imported, with the task's row chosen.
+      - name: Import a conversation the stand-in saved
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File Windows/scripts/check-import.ps1 `
+            -Executable "$env:APP_BIN\NativeHarnessClient.exe" -OutDirectory window-check
+          exit $LASTEXITCODE
       # The app with the Swift runtime beside it, to run on a PC that has no Swift: its executable, libraries,
       # resource folder and the Windows App Runtime's packages it puts in place when the PC lacks them, as report.ps1
       # counts them, without the fixture host the build made beside it.

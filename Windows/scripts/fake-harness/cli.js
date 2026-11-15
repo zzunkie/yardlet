@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-// A stand-in for an ACP harness installed with npm, for Windows/scripts/check-harness.ps1 and
-// check-local.ps1, and for the Linux host's checks (scripts/linux/). It answers --version; under `acp` it starts a detached process of its own, which would
-// outlive it, writes both process IDs beside itself and serves ACP: initialize, a new session, loading a saved
-// one (whose turns it does not replay), and a prompt that reads a file, asks to edit it, and once allowed reports the
-// edit with its diff and streams its answer (or a short one once denied). A turn the client cancels ends as
+// A stand-in for an ACP harness installed with npm, for Windows/scripts/check-harness.ps1,
+// check-local.ps1 and check-import.ps1, and for the Linux host's checks (scripts/linux/). It answers --version; under `acp` it starts a detached process of its own, which would
+// outlive it, writes both process IDs beside itself and serves ACP: initialize, a new session, listing a folder's
+// saved sessions, loading a saved one (whose turns it replays only for the conversation it lists), and a prompt that
+// reads a file, asks to edit it, and once allowed reports the edit with its diff and streams its answer (or a short
+// one once denied). A turn the client cancels ends as
 // cancelled, and each cancel is written beside it (cancels.log). Its tool call and its request are worded as Kimi
 // Code's ACP bridge words them. It keeps running once its input ends, so it ends only when whoever started it ends it.
 'use strict'
@@ -74,6 +75,31 @@ let turns = 0
 const folders = new Map()
 const cancelled = new Set()
 
+// A conversation a terminal saved before Yardlet saw it, for Import conversation: listed for the folder `session/list`
+// asks about when that folder is written as this platform writes a folder (`C:\Users\me\proj` on Windows), as an agent
+// saves the folder it ran in and compares the two character for character, and replayed when it loads. Each folder
+// asked about is written beside it (lists.log).
+const saved = {
+  sessionId: 'stand-in-saved-1',
+  title: 'Summarize the open issues',
+  request: 'Summarize the open issues',
+  answer: 'Two issues are open: the importer and the sidebar.'
+}
+
+function list(message) {
+  const cwd = (message.params && message.params.cwd) || ''
+  fs.appendFileSync(path.join(__dirname, 'lists.log'), cwd + '\n')
+  const sessions = cwd && path.resolve(cwd) === cwd
+    ? [{ sessionId: saved.sessionId, cwd, title: saved.title, updatedAt: new Date(Date.now() - 3600 * 1000).toISOString() }]
+    : []
+  send({ id: message.id, result: { sessions } })
+}
+
+function replaySaved(sessionId) {
+  update(sessionId, { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: saved.request } })
+  update(sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: saved.answer } })
+}
+
 function ask(method, params) {
   const id = 'stand-in-' + nextRequest++
   send({ id, method, params })
@@ -89,7 +115,11 @@ function handle(message) {
   }
   switch (message.method) {
     case 'initialize':
-      send({ id: message.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true }, authMethods: [] } })
+      send({ id: message.id, result: { protocolVersion: 1,
+        agentCapabilities: { loadSession: true, sessionCapabilities: { list: {} } }, authMethods: [] } })
+      break
+    case 'session/list':
+      list(message)
       break
     case 'session/new':
       sessions += 1
@@ -98,6 +128,7 @@ function handle(message) {
       break
     case 'session/load':
       folders.set(message.params.sessionId, message.params.cwd)
+      if (message.params.sessionId === saved.sessionId) replaySaved(saved.sessionId)
       send({ id: message.id, result: null })
       break
     case 'session/prompt':

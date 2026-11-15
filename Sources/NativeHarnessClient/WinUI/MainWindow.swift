@@ -9,7 +9,8 @@ import WinUI
 /// and the composer. The sidebar follows the model's `SessionStore` through Observation, and the
 /// composer sends through the model as the Mac's does. Choosing a task reads its saved history as the Mac does
 /// (`refreshConversationStatus`, which starts no turn), and its conversation draws through `ConversationTimeline`
-/// from the same projection the Mac's timeline reads. Below the tasks, Connect to a Mac pairs with
+/// from the same projection the Mac's timeline reads. Below the tasks, Import conversation continues a conversation a
+/// harness's own CLI or app started (`ImportConversationPane`), Connect to a Mac pairs with
 /// another computer's Yardlet from the link it copies, and each paired host opens in a window of its own
 /// (`RemoteHostWindow`). Settings holds Settings › Remote (`RemoteSettingsPane`), which lets another computer or a
 /// phone follow this one's tasks.
@@ -39,6 +40,8 @@ final class MainWindow {
     private var newTask: NewTaskPane?
     /// Signing in to a harness: under the harness chosen for a new task, and where a turn failed for its sign-in.
     private let signIn: HarnessSignIn
+    private let importItem = NavigationViewItem()
+    private var importPane: ImportConversationPane?
     private let connectItem = NavigationViewItem()
     private var hostItems: [(item: NavigationViewItem, id: String)] = []
     private var hostWindows: [String: RemoteHostWindow] = [:]
@@ -92,6 +95,10 @@ final class MainWindow {
                 self.navigation.content = newTask.view
                 self.shown = .newTask
                 newTask.show()
+            } else if container == self.importItem, let pane = self.importPane {
+                self.navigation.content = pane.view
+                self.shown = .other
+                pane.show()
             } else if container == self.connectItem {
                 self.navigation.content = self.connectPane
                 self.shown = .connect
@@ -122,6 +129,11 @@ final class MainWindow {
         newTaskItem.content = L10n.string("New task")
         timeline.respond = { [weak self] request, response in self?.answer(request, response) }
         timeline.signIn = signIn
+        let importPane = ImportConversationPane(model: model, log: log) { [weak self] in self?.windowHandle ?? 0 }
+        importPane.onImported = { [weak self] in self?.showSelectedTask() }
+        self.importPane = importPane
+        importItem.content = L10n.string("Import conversation")
+        navigation.footerMenuItems.append(importItem)
         connectItem.content = L10n.string("Connect to a Mac")
         navigation.footerMenuItems.append(connectItem)
         followHosts()

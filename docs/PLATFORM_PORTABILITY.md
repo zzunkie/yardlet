@@ -146,6 +146,21 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   the menus the Mac's controls read and with the Mac's question before a choice that skips asking. Choosing a task
   reads its saved history as the Mac does (`refreshConversationStatus`, which starts no turn), and its conversation
   draws from the projection the Mac's timeline reads; a change to files opens to each file's diff.
+- **Import conversation.** Import conversation, below the tasks (`WinUI/ImportConversationPane.swift`), continues a
+  conversation a harness's own CLI or app started, as the Mac's File › Import conversation… does
+  (docs/NATIVE_SESSION_STORAGE.md, "Importing conversations from other apps"): Claude Code, Codex, Antigravity CLI and
+  each other ACP agent installed whose history Yardlet reads; a project's folder, or one chosen in Windows' folder
+  dialog with Choose project…; and the account the harness's new tasks start on, with a menu when there are others.
+  The list is the engine's (`AppModel.importableConversations`), each conversation with its title and when it was last
+  active, and Load more history when the harness has more. Choosing one imports it, or finds the task that already
+  continues it, and the main window shows that task with its row chosen; the task reads the harness's own history as
+  it opens and attaches on the first send. A folder goes to a harness as Windows writes it (`PathRules.nativePath`,
+  `C:\Users\me\proj`), not as a file URL's path (`/C:/Users/me/proj/`): ACP's `cwd`, which an agent compares
+  character for character with the folder it saved a session in, and the name Claude Code gives the folder's history
+  under `projects` (`C--Users-me-proj`). Codex's `thread/list` takes Foundation's `URL.path`, which on Windows writes
+  `C:/Users/me/proj`, and Codex resolves the folder before it compares. Without `CLAUDE_CONFIG_DIR`, Claude Code's
+  config folder is `.claude` in the profile folder (`USERPROFILE`), as Node.js's `os.homedir()` finds it on Windows
+  whatever `HOME` says. Codex's history search is the Mac's alone.
 - **Conversations.** `WinUI/ConversationTimeline.swift` draws the engine's `ConversationPresentation` turn by turn,
   for a task's own conversation and a host's: what was sent, a line for each step of the work, the answers, the
   requests waiting and how the turn ended. A turn that did not change keeps what it drew. As on the Mac, only the
@@ -304,7 +319,11 @@ without its direct addresses and so through a local relay, and each lists the ta
 allowed on the app's card. A .NET WebSocket shows the listener refuses a browser's handshake and closes a text frame
 with 1003; the phones are listed among the devices, and turning the remote off closes the listener, a connection
 still open and the room. The runner's phone reaches the listener from the same computer, which Windows' firewall
-does not filter, so what another device on the network needs is the firewall's permission above. The run
+does not filter, so what another device on the network needs is the firewall's permission above. The run then
+imports a conversation the stand-in saved before the app saw it: Import conversation, the stand-in, a folder chosen in
+Windows' folder dialog through Choose project…, the conversation the stand-in lists only for a folder written as
+Windows writes it, and its turns, which the stand-in replays as it loads, drawn in the main window with the task's row
+chosen (`Windows/scripts/check-import.ps1`). The run
 gathers the app with its resource folder and the Swift runtime beside it, opens what it gathered from another folder with the
 build folder out of reach, and uploads it (`windows-app-bin`) with the Windows App Runtime's packages it puts in place,
 to open on a PC that has no Swift. Last, it packs the app, installs it, updates it and removes it (`Windows/scripts/check-install.ps1`, "Installing
@@ -345,8 +364,10 @@ switch for checking for updates and no Check for Updates, as the Mac's has. The
 Yardlet MCP server: its endpoint is a Unix domain socket (`Sources/YardletAgentTools/Platform/UnixDomainSocket.swift`)
 with no named pipe in its place, and the app carries no `yardlet-mcp.exe`, so a Windows task has no connectors and none
 of Yardlet's session, schedule, task or browser tools. A Windows layer for the rest of what `Platform/Portable/` stands in for:
-the ConPTY terminal for the terminal panel, credential storage for the vault, and a taskbar badge (which needs a
-package identity); an accounts page (signing in to a saved account, signing out); answering the questions Codex asks
+the ConPTY terminal for the terminal panel, credential storage for the vault, a taskbar badge (which needs a
+package identity), and which Claude Code processes hold a conversation (`ClaudeConversationCatalog.runningSessionIDs`
+finds none), so a Claude conversation still open in another app is neither marked so in Import conversation nor kept
+from a send here; an accounts page (signing in to a saved account, signing out); answering the questions Codex asks
 in a message while it works (`request_user_input_async`); a new task's account, attachments, worktree and slash
 commands; and a browser host. Until the app is installed with a Start menu shortcut, its notifications carry the
 executable's name. A
@@ -482,6 +503,7 @@ Other macOS-specific values that the check does not catch:
 | `YardletRemote/PathRules.swift`: `isAbsolute`, `isRelative`, `names`, `url(for:in:)` | An absolute path starts with `/`, and `/` separates names | One rule for every engine check. On Windows an absolute path starts with a drive (`C:\`, or `/C:/` as a file URL's path writes it) or names a share (`\\server\share`, also in the `\\?\` forms), `\x` and `C:x` are neither absolute nor relative, and `\` and `/` both separate names. Paths from another computer (a remote host's, a personal agent's execution host's) keep their own checks |
 | `YardletRemote/PathRules.swift`: `relativePath(of:in:)`, `isInside`, `isStrictlyInside` | Whether a path is in a folder is decided by whole names after `.` and `..` are taken out by their text, never by a string prefix; nothing is looked up, so a check that must not follow links resolves them first. macOS and Linux compare names as Swift compares strings. The rules live in `YardletRemote`, under the engine and the phone app, and the engine reads them as its own (`Files/SharedPathRules.swift`) | On Windows names compare in any case, one character for one, as NTFS compares them, and keep their composition. The Windows rules are pure functions over strings, so the Mac tests run them (`WorkspaceFileTests`). A folder's identity (which project a task is in, a sidebar group, the tasks in one folder) compares `ProjectSidebarPresentation.folderKey`, which is `PathRules.key`: on Windows `C:\Repo`, `c:/repo` and `\\?\C:\Repo` are one folder, and on macOS the key is the path as written, as before. What is shown and passed to a CLI keeps the path's own spelling (`normalizedPath`) |
 | `YardletRemote/RemoteTaskFiles.swift` (`RemoteFileReader`) | The host's boundary for another device's file reads, listing and saves (docs/REMOTE_PROTOCOL.md §15.22, §15.27) | These rules, with POSIX names compared byte for byte (`comparingBytes`): Swift's strings read two spellings of a name (`é` composed, or `e` and an accent) as one, and a file system that keeps names as bytes, as Linux's do, holds two folders under them. On Windows they compare as NTFS does. The file access beneath the rules (resolving links, `O_NOFOLLOW_ANY`, no-follow descriptors) is the Mac's alone so far, so only a Mac host serves files (`taskFiles`) |
+| `Adapters/ACP/ACPProtocol.swift` (`cwd`), `Domain/ClaudeConversationCatalog.swift` (`projectFolderName`) | A folder is written as its file URL's path | On Windows as Windows writes it (`PathRules.nativePath`): a file URL's `path(percentEncoded:)` there is `/C:/Users/me/proj/` and its `path` is `C:/Users/me/proj` (confirmed in swift-foundation's source). An ACP agent finds no sessions under the first, and Claude Code names its history folder `C--Users-me-proj`. Codex's `thread/start` and `thread/resume` still send the first; whether Codex reads it as the folder is not confirmed |
 | `Account/HarnessAccountBroker.swift` | Finds the Grok home from the `HOME` environment variable (usually missing on Windows) | Use `homeDirectoryForCurrentUser` |
 | `Store/SessionRepository.swift`, `Domain/ProviderSessionTitleResolver.swift` | Pass the `URL.path(percentEncoded: false)` string to SQLite | `withUnsafeFileSystemRepresentation`. Whether `path()` becomes `/C:/…` on Windows is not confirmed |
 
