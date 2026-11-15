@@ -65,6 +65,28 @@ public static class ImportDesktop {
         return found;
     }
 
+    [StructLayout(LayoutKind.Sequential)] public struct Box { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)] public struct ThreadFocus {
+        public int Size; public int Flags; public IntPtr Active; public IntPtr Focus; public IntPtr Capture;
+        public IntPtr MenuOwner; public IntPtr MoveSize; public IntPtr Caret; public Box CaretBox;
+    }
+    [DllImport("user32.dll")] public static extern bool GetGUIThreadInfo(uint thread, ref ThreadFocus info);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessage(IntPtr window, uint message, IntPtr wParam, string lParam);
+
+    // Writes `text` into the control with the keyboard focus on `window`'s thread (WM_SETTEXT); that control's class,
+    // or "" when no control has the focus.
+    public static string SetFocusedText(IntPtr window, string text) {
+        uint process;
+        uint thread = GetWindowThreadProcessId(window, out process);
+        ThreadFocus info = new ThreadFocus();
+        info.Size = Marshal.SizeOf(typeof(ThreadFocus));
+        if (!GetGUIThreadInfo(thread, ref info) || info.Focus == IntPtr.Zero) return "";
+        SendMessage(info.Focus, 0x000C, IntPtr.Zero, text);
+        StringBuilder name = new StringBuilder(256);
+        GetClassName(info.Focus, name, name.Capacity);
+        return name.ToString();
+    }
+
     // Windows lets a process bring a window forward only after input of its own; Alt counts.
     public static bool BringForward(IntPtr window) {
         keybd_event(0x12, 0, 0, UIntPtr.Zero);
@@ -240,23 +262,27 @@ Save-Screen 'dialog-opened'
 if (-not $dialogHandle) { Finish 'no folder dialog' }
 $dialog = $UIA::FromHandle($dialogHandle)
 $summary.dialog = "$($dialog.Current.ClassName): $($dialog.Current.Name)"
-# The dialog's folder field (cmb13, 1148) and its Select Folder button (IDOK), by their control IDs and else their
-# English names.
-$field = Wait-For {
-    $found = $dialog.FindFirst($Scope::Descendants, (All-Of @((Property $UIA::AutomationIdProperty '1148'), (Property $UIA::ControlTypeProperty $Types::Edit))))
-    if (-not $found) { $found = Find-Named $dialog 'Folder:' $Types::Edit }
-    $found } 10
-if (-not $field) { Finish 'no folder field in the dialog' }
-$field.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($folder)
+# The folder field has the dialog's keyboard focus as the dialog opens. The path goes into it through UI Automation's
+# focused element, or else with Win32's WM_SETTEXT to the window with the focus: on the runner a search of the dialog's
+# elements found neither its control ID nor its name.
+[void][ImportDesktop]::BringForward($dialogHandle)
+$field = Wait-For { $focused = $UIA::FocusedElement
+    if ($focused -and $focused.Current.ProcessId -eq $process.Id -and $focused.Current.ControlType -eq $Types::Edit) { $focused } } 10
+if ($field) {
+    $summary.field = "$($field.Current.Name) ($($field.Current.AutomationId), $($field.Current.ClassName))"
+    try { $field.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($folder) }
+    catch { $summary.fieldError = "$_"; $field = $null }
+}
+if (-not $field) { $summary.fieldThroughWin32 = [ImportDesktop]::SetFocusedText($dialogHandle, $folder) }
 Save-Screen 'dialog'
-# Select Folder; the dialog may first go into the folder typed, and then chooses the folder it is in. Enter, with the
-# dialog in front, if its button does not close it.
+# Select Folder (IDOK), else Enter in the field, which is the dialog's default button; the dialog may first go into
+# the folder typed, and then chooses the folder it is in.
 for ($try = 0; $try -lt 3 -and (Find-Dialog); $try += 1) {
-    $select = Wait-For {
-        $found = $dialog.FindFirst($Scope::Descendants, (All-Of @((Property $UIA::AutomationIdProperty '1'), (Property $UIA::ControlTypeProperty $Types::Button))))
+    $select = if ($try -eq 0) { Wait-For {
+        $found = $dialog.FindFirst($Scope::Children, (All-Of @((Property $UIA::AutomationIdProperty '1'), (Property $UIA::ControlTypeProperty $Types::Button))))
         if (-not $found) { $found = Find-Named $dialog 'Select Folder' $Types::Button }
-        $found } 5
-    if ($select -and $try -lt 2) {
+        $found } 5 }
+    if ($select) {
         try { Invoke-Element $select } catch { $summary.selectError = "$_" }
     } else {
         $summary.selectedWithEnter = $true
