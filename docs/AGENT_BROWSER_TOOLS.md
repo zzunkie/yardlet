@@ -370,9 +370,9 @@ next result no parent read clears it.
 Where `create_task` puts the task: left empty, the task is nested under the calling task. `topLevel: true`
 makes a top-level task with no parent, as if it were created in the new task window, and `parent_task_id` makes it under
 that open task (a child task that gives its own parent makes it beside itself). Giving both, or a missing or archived
-task, is refused. The approval card for another project, the depth (the calling task + 1) and the envelope of the first
-message stay the same. The parent sentence of later messages follows the lineage (`startedFromTaskID`), so a top-level
-task, or one the person moved in the sidebar, gets them as another task's messages. The name is the same as `topLevel` of the scheduled-task tools and as
+task, is refused. The approval card for another project and the envelope of the first message stay the same, and the
+new task's depth is where it is placed (**Limits** below). The parent sentence of later messages follows the lineage
+(`startedFromTaskID`), so a top-level task, or one the person moved in the sidebar, gets them as another task's messages. The name is the same as `topLevel` of the scheduled-task tools and as
 `parent_task_id` of `spawn_task`. It matches the Codex app's `create_thread`, which adds a thread to a flat list.
 
 The permission a child or subagent starts with: left empty, on the calling task's harness its own, and on
@@ -509,7 +509,16 @@ threads the same way, in the workspace sandbox asking on request; `readOnly` and
   `_meta.progressToken`, the server sends `notifications/progress` (no text) every 20 seconds until the end
   (`MCPStdioLoop`), because Claude Code drops a stdio call that sends nothing for 30 minutes
   (`CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT`) and restarts that clock with each progress notification.
-- **Limits:** Depth 3 (task 0 → child 1 → child 2 → child 3); beyond that, refused. 32,000 characters.
+- **Limits:** 32,000 characters. Depth has two limits of 3, counted apart (`SessionToolPolicy.maximumDepth`), and a
+  refusal names the one it hit. Tasks: a task's depth is where it sits in the sidebar, how many tasks are above it
+  along its parents (0 at the top level), not who started it, so a move in the sidebar, `topLevel`, `parent_task_id`
+  and a schedule's placement each set it. As the sidebar nests a task, an archived task above it is passed over and a
+  parent that is gone leaves it at the top level; a parent the sidebar lists apart (pinned, in a split view, in another
+  project) still counts, and so do levels past the two the sidebar draws. No task is placed below level 3: a task there
+  gets no child task and no schedule whose new tasks go under it, whoever asks. Subagents: a task at any level may run
+  them. Subagents started by subagents stop 3 below their task (task → subagent 1 → 2 → 3), so a loop cannot fork
+  without end, as Claude Code stops its own Agent tool at depth 3. A subagent's `create_task` nests under its task, so
+  the task limit applies at that task's level.
   This Mac decides how many child tasks and subagents run at once (`SessionToolPolicy.admitted`). It counts
   per calling task.
   - Under 6, they start at once whatever the load (`concurrentChildrenFloor`, the number of Claude Code processes the
@@ -625,8 +634,9 @@ Times in results are ISO 8601 in the Mac's time zone (with the offset).
   default and dontAsk, acceptEdits, auto, bypassPermissions; a caller on another harness counts as acceptEdits, or plan
   when it reads only). A Codex schedule's permission may be no freer than the caller's on the same scale (Approve for me
   from a caller in auto or bypassPermissions, or a Codex task on Approve for me or Full access; Full access only from a
-  caller that runs without asking). A caller that reads only schedules new tasks only on Claude Code and Codex. A caller at the nesting limit of
-  `create_task` schedules no new tasks, and a task an agent's schedule started nests one below the task that made it.
+  caller that runs without asking). A caller that reads only schedules new tasks only on Claude Code and Codex. A run
+  sits where the schedule places it, under the task that made it or at the top level, and a schedule whose runs would go
+  under a task at level 3 is refused, as `create_task` refuses such a task (**Limits** under "Session tools").
 - **What a run sends:** a prompt an agent wrote, by creating the schedule or changing its prompt, reaches each run as
   that task's message, in the envelope `send_message_to_task` uses ("this task's own schedule" when it continues the task
   itself). A prompt the person wrote in Scheduled tasks goes as written, wherever an agent moves it. A prompt from an

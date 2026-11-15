@@ -19,7 +19,10 @@ struct SessionToolCaller: Equatable {
     let roots: [URL]
     let projectID: UUID?
     let title: String
-    let depth: Int
+    /// How many subagents down from its task the caller is: 0 for a task, 1 for a subagent a task
+    /// started, and so on (`AgentRun.depth`). Where the task sits in the sidebar is
+    /// `AppModel.sessionToolDepth(of:)`.
+    let agentDepth: Int
     /// What the caller may do without asking; a subagent it starts gets no more.
     let permission: TaskPermissionLevel
     /// When the call must have answered, below the caller harness's own limit on one MCP call
@@ -31,6 +34,14 @@ struct SessionToolCaller: Equatable {
     var remaining: Duration {
         max(.zero, deadline - ContinuousClock.now)
     }
+}
+
+/// What a session tool call would start, which `AppModel.sessionToolSpawnRefusal` weighs.
+enum SessionToolStart {
+    /// A subagent (`run_agent`), one below the caller.
+    case agent
+    /// A task (`create_task`, or a schedule's new-task runs) under this task, or at the top level (nil).
+    case task(under: UUID?)
 }
 
 /// What became of a message `send_message_to_task` delivered.
@@ -86,14 +97,14 @@ extension AppModel: SessionToolHandling {
                 id: id, hostTaskID: id, harness: session.harness, workspaceURL: session.workspaceURL,
                 roots: [session.workspaceURL] + session.additionalRootURLs,
                 projectID: project(for: session)?.id, title: session.title,
-                depth: sessionToolDepth(of: id), permission: sessionToolPermission(of: session),
+                agentDepth: 0, permission: sessionToolPermission(of: session),
                 deadline: .now + sessionToolWaitCeiling(for: session.harness))
         }
         if let run = sessionTools.run(id), let host = store.sessions.first(where: { $0.id == run.hostTaskID }) {
             return SessionToolCaller(
                 id: id, hostTaskID: host.id, harness: run.harness, workspaceURL: run.workspaceURL,
                 roots: [run.workspaceURL], projectID: project(for: host)?.id, title: host.title,
-                depth: run.depth, permission: run.permission,
+                agentDepth: run.depth, permission: run.permission,
                 deadline: .now + sessionToolWaitCeiling(for: run.harness))
         }
         return nil
@@ -125,13 +136,27 @@ extension AppModel: SessionToolHandling {
         }
     }
 
-    /// How deep a task nests under tasks agents started: as `create_task` recorded it, and for a task the
-    /// run of an agent's schedule started, one below the task that made the schedule.
-    func sessionToolDepth(of taskID: UUID, seen: Set<UUID> = []) -> Int {
-        let recorded = sessionTools.depth(of: taskID)
-        guard let maker = scheduledTasks.schedule(startedTask: taskID)?.agentTaskID, maker != taskID,
-              !seen.contains(maker) else { return recorded }
-        return max(recorded, sessionToolDepth(of: maker, seen: seen.union([taskID])) + 1)
+    /// How deep a task sits in the sidebar's families: how many tasks are above it along its parents
+    /// (`SessionRecord.parentTaskID`), 0 at the top level. Where it sits counts, not who started it, so a
+    /// move in the sidebar, `create_task`'s `topLevel` or `parent_task_id` and a schedule's placement each
+    /// set it. As the sidebar nests a task (`SidebarProjection.nest`), an archived task above it is passed
+    /// over and not counted (`SessionStore.archivedParentIDs`), and a parent that is gone leaves it at the
+    /// top level. Unlike the sidebar's drawing it does not stop at `SidebarProjection.deepestNesting`, and a
+    /// parent the sidebar lists apart (pinned, in a split view, in another project) still counts.
+    func sessionToolDepth(of taskID: UUID) -> Int {
+        let parents = Dictionary(store.sessions.map { ($0.id, $0.parentTaskID) }, uniquingKeysWith: { first, _ in first })
+        var depth = 0
+        var seen: Set<UUID> = [taskID]
+        var next = parents[taskID] ?? nil
+        while let id = next, seen.insert(id).inserted {
+            if let listed = parents[id] {
+                depth += 1
+                next = listed
+            } else {
+                next = store.archivedParentIDs[id]
+            }
+        }
+        return depth
     }
 
     /// A task's permission level as the composer shows it now (`TaskPermissionLevel`).
@@ -708,7 +733,12 @@ extension AppModel: SessionToolHandling {
         case let .success(value): harness = value
         case let .failure(error): return error.result("Not created")
         }
-        if let refusal = sessionToolSpawnRefusal(caller: caller) {
+        let parentTaskID: UUID?
+        switch await createdTaskParent(arguments, caller: caller) {
+        case let .success(value): parentTaskID = value
+        case let .failure(error): return error.result("Not created")
+        }
+        if let refusal = await sessionToolSpawnRefusal(.task(under: parentTaskID), caller: caller) {
             return .failure("Not created: \(refusal)", .refused, retry: .no)
         }
         // A read-only caller's child reads only too (`sessionToolInheritedOptions`), so it starts only on a
@@ -756,11 +786,6 @@ extension AppModel: SessionToolHandling {
             case let .failure(error): return error.result("Not created")
             }
         }
-        let parentTaskID: UUID?
-        switch await createdTaskParent(arguments, caller: caller) {
-        case let .success(value): parentTaskID = value
-        case let .failure(error): return error.result("Not created")
-        }
         if !chat, sessionToolPlaceReachesPast(folder: place.folder, project: place.project, caller: caller),
            sessionToolAsksPerson(caller) {
             let detail = L10n.format("%@ → %@", caller.title,
@@ -789,7 +814,7 @@ extension AppModel: SessionToolHandling {
             }
             return .error("Not created: \(bootstrapError ?? "Yardlet could not start the task.")")
         }
-        sessionTools.setDepth(caller.depth + 1, of: child.id)
+        sessionTools.noteMadeTask(child.id)
         sessionTools.noteStarted(child.id, by: caller.id)
         accountAssignments.record(account.assignment, for: child.id)
         let first = TaskMessage(senderID: caller.hostTaskID.uuidString, senderName: caller.title, body: prompt,
@@ -1578,14 +1603,30 @@ extension AppModel: SessionToolHandling {
         return .success(options)
     }
 
-    /// Why the caller may not start another child or subagent at all, or nil. How many run at once is
-    /// not a refusal: one beyond what fits waits for room (`admitSessionToolStart`).
-    func sessionToolSpawnRefusal(caller: SessionToolCaller) -> String? {
+    /// Why the caller may not start this subagent or task, or nil. How many run at once is not a
+    /// refusal: one beyond what fits waits for room (`admitSessionToolStart`). The two limits are
+    /// `SessionToolPolicy.maximumDepth` each, counted apart: a new task goes no deeper in the sidebar
+    /// (`sessionToolDepth(of:)`), whether a task or its subagent starts it; and a subagent goes no further
+    /// down from its task, wherever that task sits.
+    func sessionToolSpawnRefusal(_ start: SessionToolStart, caller: SessionToolCaller) async -> String? {
         guard !sessionTools.isArchivingSelf(caller.hostTaskID) else {
             return "this task is archiving itself; its conversation is ending."
         }
-        guard caller.depth < SessionToolPolicy.maximumDepth else {
-            return "tasks and subagents started this way nest at most \(SessionToolPolicy.maximumDepth) deep."
+        let limit = SessionToolPolicy.maximumDepth
+        switch start {
+        case .agent:
+            guard caller.agentDepth < limit else {
+                return "subagents nest at most \(limit) deep under a task, and this subagent is \(limit) deep already."
+            }
+        case let .task(under: parent?):
+            // An archived task above it is passed over, as the sidebar passes over it once it has the archive.
+            if store.archivedSessions == nil { try? await store.loadArchivedSessions() }
+            guard sessionToolDepth(of: parent) < limit else {
+                return "tasks nest at most \(limit) deep in the sidebar, and the task it would go under is \(limit) "
+                    + "deep already."
+            }
+        case .task(under: nil):
+            break
         }
         return nil
     }

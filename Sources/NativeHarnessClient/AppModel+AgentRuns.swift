@@ -29,7 +29,7 @@ extension AppModel {
         case let .success(value): harness = value
         case let .failure(error): return error.result("Not started")
         }
-        if let refusal = sessionToolSpawnRefusal(caller: caller) {
+        if let refusal = await sessionToolSpawnRefusal(.agent, caller: caller) {
             return .failure("Not started: \(refusal)", .refused, retry: .no)
         }
         var options: [String: String]
@@ -79,7 +79,7 @@ extension AppModel {
         let model = arguments["model"]?.stringValue?.trimmingCharacters(in: .whitespaces)
         let run = AgentRun(callerID: caller.id, hostTaskID: caller.hostTaskID, harness: harness,
                            model: model?.isEmpty == false ? model : nil, prompt: prompt, workspaceURL: folder,
-                           depth: caller.depth + 1, permission: permission)
+                           depth: caller.agentDepth + 1, permission: permission)
         run.accountStart = account
         let background = Self.bool(arguments["background"]) == true
         run.isBackground = background
@@ -452,10 +452,12 @@ extension AppModel {
             guard sessionTools.run(interrupted.id) == nil,
                   store.sessions.contains(where: { $0.id == interrupted.hostTaskID }),
                   let kept = sessionTools.keptRun(interrupted.id, hostTaskID: interrupted.hostTaskID) else { continue }
+            // One below its caller: a subagent held again before it (they come back in the order they
+            // started), else its task.
             let run = AgentRun(id: kept.id, callerID: kept.callerID, hostTaskID: interrupted.hostTaskID,
                                harness: HarnessKind(rawValue: kept.harness), model: kept.model, prompt: kept.prompt,
                                workspaceURL: URL(filePath: kept.workspacePath, directoryHint: .isDirectory),
-                               depth: sessionTools.depth(of: kept.callerID) + 1, startedAt: kept.startedAt)
+                               depth: (sessionTools.run(kept.callerID)?.depth ?? 0) + 1, startedAt: kept.startedAt)
             run.state = .interrupted
             run.answer = kept.answer
             run.entries = kept.entries

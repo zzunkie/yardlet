@@ -1058,7 +1058,7 @@ final class SessionToolTests: XCTestCase {
         let model = fixture.model
         try await model.store.linkParents([fixture.codex.id: fixture.caller.id])
         // Only the Codex child is the session tools'; the sibling is nested as a chip's Start nests one.
-        model.sessionTools.setDepth(1, of: fixture.codex.id)
+        model.sessionTools.noteMadeTask(fixture.codex.id)
 
         var rows = model.railChildTasks(of: fixture.caller.id)
         XCTAssertNotNil(rows.first { $0.id == fixture.sibling.id }, "A child a chip started is on the card too")
@@ -1291,7 +1291,7 @@ final class SessionToolTests: XCTestCase {
         XCTAssertEqual(child.workspaceURL, fixture.caller.workspaceURL)
         XCTAssertEqual(child.projectID, fixture.app.id)
         XCTAssertEqual(model.store.selectedSessionID, selected, "The person's window stays where it was")
-        XCTAssertEqual(model.sessionTools.depth(of: child.id), 1)
+        XCTAssertEqual(model.sessionToolDepth(of: child.id), 1)
         // The first message is the caller's: Yardlet's envelope with the parent's sentence on every harness, an
         // asking Claude task too (whose later messages are the CLI's peer envelope). The title still reads its words.
         let sent = await fixture.adapter.prompts(for: child.id)
@@ -1713,7 +1713,8 @@ final class SessionToolTests: XCTestCase {
     /// On a busy Mac a caller's starts go up to the floor; the next waits, says only that it is
     /// queued, and starts on its own in request order once one ends. A queued child task is a
     /// sidebar task under its caller, pending on the Agents card, its first message held until it
-    /// starts. Depth is still refused.
+    /// starts. Depth is still refused: a task's by where it sits in the sidebar, a subagent's by how far
+    /// down from its task it is.
     func testStartsBeyondWhatFitsWaitAndStartInOrderAndDepthIsCapped() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
@@ -1772,7 +1773,7 @@ final class SessionToolTests: XCTestCase {
         XCTAssertTrue(late.text.contains("state: queued") && late.text.contains("starts when there is room"), late.text)
         model.sessionTools.waitCeilingOverride = .seconds(5)
 
-        // A subagent of a subagent is depth 2; one more level is depth 3, which goes no deeper.
+        // A subagent of a subagent is depth 2; one more level is depth 3, which starts no subagent.
         let nested = try XCTUnwrap(model.sessionTools.runs(hostedBy: fixture.caller.id).first { $0.prompt == "Job 2" })
         let second = await call(model, "run_agent", ["harness": "claude-code", "prompt": "Deeper", "background": true],
                                 callerID: nested.id)
@@ -1786,10 +1787,38 @@ final class SessionToolTests: XCTestCase {
         let depthThree = try XCTUnwrap(model.sessionTools.runs(hostedBy: fixture.caller.id).first { $0.callerID == depthTwo.id })
         XCTAssertEqual(depthThree.depth, 3)
         let tooDeep = await call(model, "run_agent", ["harness": "claude-code", "prompt": "Too deep"], callerID: depthThree.id)
-        XCTAssertTrue(tooDeep.text.contains("at most 3 deep"), tooDeep.text)
-        model.sessionTools.setDepth(3, of: fixture.sibling.id)
-        let deepChild = await call(model, "create_task", ["prompt": "Nested"], from: fixture.sibling)
-        XCTAssertTrue(deepChild.text.contains("at most 3 deep"), deepChild.text)
+        XCTAssertTrue(tooDeep.text.contains("subagents nest at most 3 deep"), tooDeep.text)
+
+        // A task's depth is where it sits in the sidebar, whoever started it: moved under the sibling (level 1),
+        // the busy task is at level 2, and the child it makes at level 3.
+        try await model.store.nest(id: fixture.busy.id, under: fixture.sibling.id)
+        XCTAssertEqual(model.sessionToolDepth(of: fixture.busy.id), 2)
+        let made = await call(model, "create_task", ["prompt": "Level three"], from: fixture.busy)
+        XCTAssertFalse(made.isError, made.text)
+        let levelThree = try XCTUnwrap(model.store.sessions.first { $0.parentTaskID == fixture.busy.id })
+        XCTAssertEqual(model.sessionToolDepth(of: levelThree.id), 3)
+        // At level 3 a task makes no child, nor may anyone put one under it; it still runs subagents, and a task
+        // it places higher sits where it is placed.
+        let deepChild = await call(model, "create_task", ["prompt": "Nested"], from: levelThree)
+        XCTAssertTrue(deepChild.text.contains("tasks nest at most 3 deep"), deepChild.text)
+        let underIt = await call(model, "create_task", ["prompt": "Under it", "parent_task_id": levelThree.id.uuidString],
+                                 from: fixture.caller)
+        XCTAssertTrue(underIt.text.contains("tasks nest at most 3 deep"), underIt.text)
+        let agent = await call(model, "run_agent", ["harness": "claude-code", "prompt": "Look it up", "background": true],
+                               from: levelThree)
+        XCTAssertFalse(agent.isError, agent.text)
+        for (prompt, placement, depth) in [("Beside the sibling", ["parent_task_id": fixture.caller.id.uuidString], 1),
+                                           ("On its own", ["topLevel": true], 0)] as [(String, [String: Any], Int)] {
+            let placed = await call(model, "create_task", ["prompt": prompt].merging(placement) { $1 }, from: levelThree)
+            XCTAssertFalse(placed.isError, placed.text)
+            let task = try XCTUnwrap(model.store.sessions.first { $0.title.hasPrefix(prompt) })
+            XCTAssertEqual(model.sessionToolDepth(of: task.id), depth, prompt)
+        }
+        // As the sidebar nests a task past an archived parent, an archived task above it does not count.
+        try await model.store.archiveSession(id: fixture.busy.id)
+        let afterArchive = await call(model, "create_task", ["prompt": "Now at level three"], from: levelThree)
+        XCTAssertFalse(afterArchive.isError, afterArchive.text)
+        XCTAssertEqual(model.sessionToolDepth(of: levelThree.id), 2)
         await model.shutdown()
     }
 

@@ -193,7 +193,7 @@ final class RemoteHostModelTests: XCTestCase {
         XCTAssertTrue(remote.bufferText.contains("REMOTE_READY"))
         let terminalRead = host.readTerminal(.object([:]), caller: SessionToolCaller(
             id: task.id, hostTaskID: task.id, harness: .claudeCode, workspaceURL: folder, roots: [folder],
-            projectID: nil, title: "Read terminal", depth: 0, permission: .standard, deadline: .now.advanced(by: .seconds(5))))
+            projectID: nil, title: "Read terminal", agentDepth: 0, permission: .standard, deadline: .now.advanced(by: .seconds(5))))
         XCTAssertTrue(terminalRead.text.contains("REMOTE_READY"))
         // Creating a tab must mount/start its new renderer, not keep TerminalPane's old @State session.
         func shownSessions(in view: NSView) -> [NativeTerminalSession] {

@@ -5,12 +5,16 @@ import YardletRemote
 
 /// The limits of the session tools (docs/AGENT_BROWSER_TOOLS.md, "Session tools"). One place, so a policy change is one edit.
 enum SessionToolPolicy {
-    /// How deep tasks and subagents the session tools start may nest: a task (depth 0) may start a
-    /// child or a subagent (depth 1), and so on down to depth 3 and no further. Three, not two, since
-    /// 2026-10-23: children often offer task chips, and the person starts them under the child. The
-    /// harnesses' own subagents are their own (Claude Code 2.1.291–2.1.299 stops its Agent tool at
-    /// depth 3 — `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`, else GrowthBook `tengu_hazel_trellis` —
-    /// which Yardlet leaves alone).
+    /// How deep what the session tools start may nest, two limits counted apart
+    /// (`AppModel.sessionToolSpawnRefusal`):
+    /// - Tasks: a task sits at most this many levels down in the sidebar (`AppModel.sessionToolDepth(of:)`,
+    ///   0 at the top level), so one at this level takes no child task, nor a schedule whose new tasks
+    ///   go under it. Where a task sits counts, not who started it. Three, not two, since 2026-10-23:
+    ///   children often offer task chips, and the person starts them under the child.
+    /// - Subagents: a task at any level may run them. Subagents started by subagents stop this many
+    ///   below their task, so a model's loop cannot fork without end, as Claude Code 2.1.291–2.1.299
+    ///   stops its own Agent tool at depth 3 (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`, else GrowthBook
+    ///   `tengu_hazel_trellis`), which Yardlet leaves alone.
     static let maximumDepth = 3
 
     /// How many children and subagents one caller has running at once is the Mac's to say, not a
@@ -364,7 +368,7 @@ final class AgentRun: Identifiable {
 }
 
 /// What the session tools keep while the app runs: the approvals they wait on, the subagents they
-/// run, and how deep each task they started sits. Depth is kept across launches in Yardlet's
+/// run, and which tasks `create_task` made. That list is kept across launches in Yardlet's
 /// defaults; nothing is written to a harness's files.
 @MainActor
 @Observable
@@ -374,7 +378,9 @@ final class SessionToolCenter {
 
     @ObservationIgnored private var approvalWaiters: [String: CheckedContinuation<Bool, Never>] = [:]
     @ObservationIgnored private let defaults: UserDefaults
-    @ObservationIgnored private let depthKey = "Yardlet.sessionTools.depth"
+    /// The tasks `create_task` made, under the key that once kept how deep each sat: only whether a
+    /// task is there is read, not the number an older Yardlet wrote for it.
+    @ObservationIgnored private let madeTasksKey = "Yardlet.sessionTools.depth"
     /// Where a finished subagent's conversation is kept, under its host task; nil keeps none (tests).
     @ObservationIgnored var runDirectory: URL?
     /// A shorter wait than the caller harness's limit, for tests.
@@ -575,22 +581,17 @@ final class SessionToolCenter {
         if kept.isEmpty { defaults.removeObject(forKey: queueKey) } else { defaults.set(kept, forKey: queueKey) }
     }
 
-    // MARK: Depth
+    // MARK: Tasks made
 
-    func depth(of taskID: UUID) -> Int {
-        if let run = runs[taskID] { return run.depth }
-        return (defaults.dictionary(forKey: depthKey)?[taskID.uuidString] as? Int) ?? 0
+    func noteMadeTask(_ taskID: UUID) {
+        var stored = defaults.dictionary(forKey: madeTasksKey) ?? [:]
+        stored[taskID.uuidString] = true
+        defaults.set(stored, forKey: madeTasksKey)
     }
 
-    func setDepth(_ depth: Int, of taskID: UUID) {
-        var stored = defaults.dictionary(forKey: depthKey) ?? [:]
-        stored[taskID.uuidString] = depth
-        defaults.set(stored, forKey: depthKey)
-    }
-
-    /// Whether a session tool (`create_task`) made the task: only those have a depth on record.
+    /// Whether a session tool (`create_task`) made the task.
     func madeTask(_ taskID: UUID) -> Bool {
-        defaults.dictionary(forKey: depthKey)?[taskID.uuidString] != nil
+        defaults.dictionary(forKey: madeTasksKey)?[taskID.uuidString] != nil
     }
 
     /// A subagent's conversation as it was kept when it ended, for one that is no longer held (a
@@ -607,8 +608,8 @@ final class SessionToolCenter {
 
     /// A deleted task's record and its subagents' kept conversations go with it.
     func forget(_ taskID: UUID) {
-        var stored = defaults.dictionary(forKey: depthKey) ?? [:]
-        if stored.removeValue(forKey: taskID.uuidString) != nil { defaults.set(stored, forKey: depthKey) }
+        var stored = defaults.dictionary(forKey: madeTasksKey) ?? [:]
+        if stored.removeValue(forKey: taskID.uuidString) != nil { defaults.set(stored, forKey: madeTasksKey) }
         dequeue(taskID)
         for run in runs(hostedBy: taskID) {
             dequeue(run.id)

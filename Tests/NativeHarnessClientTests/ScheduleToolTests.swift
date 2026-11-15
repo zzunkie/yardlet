@@ -257,7 +257,9 @@ final class ScheduleToolTests: XCTestCase {
         let prompts = await fixture.adapter.prompts
         XCTAssertEqual(prompts, [TaskMessage(senderID: fixture.caller.id.uuidString, senderName: "Deploy watch",
                                              body: "Summarize yesterday's merges.", relation: .parent).text(in: .yardlet)])
-        XCTAssertEqual(model.sessionToolDepth(of: task.id), 1, "A run nests one below the task whose schedule started it")
+        XCTAssertEqual(model.sessionToolDepth(of: task.id), 1, "A run sits where the schedule places it")
+        try await model.store.nest(id: task.id, under: nil)
+        XCTAssertEqual(model.sessionToolDepth(of: task.id), 0, "Moved to the top level, it sits there, whoever started it")
         let runs = try await call("list_task_runs", ["scheduleId": schedule.id.uuidString])
         let history = try JSONDecoder().decode(Runs.self, from: Data(runs.text.utf8))
         XCTAssertEqual(history.totalRuns, 1)

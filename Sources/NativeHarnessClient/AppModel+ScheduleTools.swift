@@ -166,7 +166,10 @@ extension AppModel: ScheduleToolHandling {
         switch destination.mode {
         case .newTask:
             let becameNew = previous?.mode != .newTask
-            if becameNew, let refusal = sessionToolSpawnRefusal(caller: caller) { return refusal }
+            if becameNew || destination.parentTaskID != previous?.parentTaskID,
+               let refusal = await sessionToolSpawnRefusal(.task(under: destination.parentTaskID), caller: caller) {
+                return refusal
+            }
             let modeChanged = becameNew || destination.harness != previous?.harness
                 || destination.modelChoice?.permissionMode != previous?.modelChoice?.permissionMode
             if promptChanged || modeChanged, let refusal = scheduleFreedomRefusal(destination, caller: caller) {

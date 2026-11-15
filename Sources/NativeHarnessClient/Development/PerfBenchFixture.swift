@@ -479,7 +479,7 @@ private final class PerfBenchRunner {
         guard let task = model.store.sessions.first(where: { $0.id == PerfBenchFixture.shownTaskID }) else { return }
         let caller = SessionToolCaller(
             id: task.id, hostTaskID: task.id, harness: task.harness, workspaceURL: task.workspaceURL,
-            roots: [task.workspaceURL], projectID: model.projects.project(for: task)?.id, title: task.title, depth: 0,
+            roots: [task.workspaceURL], projectID: model.projects.project(for: task)?.id, title: task.title, agentDepth: 0,
             permission: .standard, deadline: .now + .seconds(600))
         note("run_agent")
         let answer = await model.runAgent(.object([
