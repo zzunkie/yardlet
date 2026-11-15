@@ -14,7 +14,7 @@ extension CodexProtocol {
             id: id,
             method: "skills/list",
             params: .object([
-                "cwds": .array([.string(workspaceURL.standardizedFileURL.path)]),
+                "cwds": .array([.string(CodexProtocol.folderPath(workspaceURL, posixPath: workspaceURL.standardizedFileURL.path))]),
                 "forceReload": .bool(false)
             ])
         )
@@ -25,7 +25,7 @@ extension CodexProtocol {
             id: id,
             method: "plugin/list",
             params: .object([
-                "cwds": .array([.string(workspaceURL.standardizedFileURL.path)]),
+                "cwds": .array([.string(CodexProtocol.folderPath(workspaceURL, posixPath: workspaceURL.standardizedFileURL.path))]),
                 "forceRefetch": .bool(false)
             ])
         )
@@ -44,7 +44,7 @@ extension CodexProtocol {
     ) -> CodexRPCRequest {
         var params: [String: JSONValue] = [
             "archived": .bool(false),
-            "cwd": .string(workspaceURL.standardizedFileURL.path),
+            "cwd": .string(CodexProtocol.folderPath(workspaceURL, posixPath: workspaceURL.standardizedFileURL.path)),
             "limit": .integer(limit),
             "sortDirection": .string("desc"),
             "sortKey": .string("updated_at"),
@@ -196,7 +196,7 @@ extension CodexProtocol {
     ) -> CodexRPCRequest {
         var params: [String: JSONValue] = [
             "threadId": .string(threadID),
-            "cwd": .string(workspaceURL.standardizedFileURL.path),
+            "cwd": .string(CodexProtocol.folderPath(workspaceURL, posixPath: workspaceURL.standardizedFileURL.path)),
             "ephemeral": .bool(ephemeral),
             "excludeTurns": .bool(true)
         ]

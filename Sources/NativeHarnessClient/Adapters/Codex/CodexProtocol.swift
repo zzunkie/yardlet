@@ -1,6 +1,14 @@
 import Foundation
 
 enum CodexProtocol {
+    /// A folder as the App Server takes it in `cwd` and its folder lists. On Windows that is the path as Windows writes
+    /// it (`C:\Users\me\proj`), as `codex` run in a terminal there reads its working folder: a file URL's path
+    /// (`/C:/Users/me/proj/`) is no absolute path to Codex there. Elsewhere it is `posixPath`, the URL's path as each
+    /// request has always sent it.
+    static func folderPath(_ folder: URL, rules: PathRules = .current, posixPath: @autoclosure () -> String) -> String {
+        rules.isWindows ? rules.nativePath(of: folder.standardizedFileURL) : posixPath()
+    }
+
     static func readConfig(
         id: Int64,
         workspaceURL: URL?,
@@ -10,7 +18,7 @@ enum CodexProtocol {
             "includeLayers": .bool(includeLayers)
         ]
         params["cwd"] = workspaceURL.map {
-            .string($0.standardizedFileURL.path(percentEncoded: false))
+            .string(folderPath($0, posixPath: $0.standardizedFileURL.path(percentEncoded: false)))
         } ?? .null
         return CodexRPCRequest(id: id, method: "config/read", params: .object(params))
     }
@@ -58,7 +66,7 @@ enum CodexProtocol {
     ) -> JSONValue? {
         guard !additionalRoots.isEmpty else { return nil }
         let roots = [cwd] + additionalRoots
-        return .array(roots.map { .string($0.standardizedFileURL.path(percentEncoded: false)) })
+        return .array(roots.map { .string(folderPath($0, posixPath: $0.standardizedFileURL.path(percentEncoded: false))) })
     }
 
     /// `config` is the thread's configuration override (the Yardlet MCP server's `mcp_servers`
@@ -77,7 +85,7 @@ enum CodexProtocol {
         runLocation: CodexRunLocation = .askForApproval
     ) -> CodexRPCRequest {
         var params: [String: JSONValue] = [
-            "cwd": .string(workspaceURL.standardizedFileURL.path(percentEncoded: false)),
+            "cwd": .string(folderPath(workspaceURL, posixPath: workspaceURL.standardizedFileURL.path(percentEncoded: false))),
             "ephemeral": .bool(ephemeral)
         ]
         // The thread's own permission, which every later turn keeps; a resume sends it again, so it
@@ -104,7 +112,7 @@ enum CodexProtocol {
     ) -> CodexRPCRequest {
         var params: [String: JSONValue] = [
             "threadId": .string(threadID),
-            "cwd": .string(workspaceURL.standardizedFileURL.path(percentEncoded: false))
+            "cwd": .string(folderPath(workspaceURL, posixPath: workspaceURL.standardizedFileURL.path(percentEncoded: false)))
         ]
         params.merge(runLocation.permissionParams) { _, permission in permission }
         if let roots = runtimeWorkspaceRoots(cwd: workspaceURL, additionalRoots: additionalRoots) {

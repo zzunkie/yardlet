@@ -106,6 +106,12 @@ final class CodexProtocolTests: XCTestCase {
         let global = CodexProtocol.readConfig(id: 23, workspaceURL: nil, includeLayers: false)
         XCTAssertEqual(global.params["cwd"], .null)
         XCTAssertEqual(global.params["includeLayers"]?.boolValue, false)
+
+        // On Windows a folder goes as Windows writes it, which Codex reads as absolute; a file URL's path would not be.
+        let windows = URL(string: "file:///C:/Users/me/proj/")!
+        XCTAssertEqual(CodexProtocol.folderPath(windows, rules: .windows, posixPath: "unused"), "C:\\Users\\me\\proj")
+        XCTAssertEqual(CodexProtocol.folderPath(URL(filePath: "/tmp/workspace"), rules: .posix, posixPath: "/tmp/workspace"),
+                       "/tmp/workspace")
     }
 
     func testDecodeInitializeResponseFixture() throws {

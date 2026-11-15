@@ -14,7 +14,8 @@ enum CodexThreadTitle {
 
     static func startThread(id: Int64, workspaceURL: URL, model: String?) -> CodexRPCRequest {
         var params: [String: JSONValue] = [
-            "cwd": .string(workspaceURL.standardizedFileURL.path(percentEncoded: false)),
+            "cwd": .string(CodexProtocol.folderPath(workspaceURL,
+                                                    posixPath: workspaceURL.standardizedFileURL.path(percentEncoded: false))),
             "approvalPolicy": .string("never"),
             "sandbox": .string("read-only"),
             "ephemeral": .bool(true),
@@ -62,7 +63,7 @@ enum CodexThreadTitle {
     /// The configuration a thread in `folder` would load, which names the MCP servers it would start.
     static func readConfig(id: Int64, folder: URL) -> CodexRPCRequest {
         CodexRPCRequest(id: id, method: "config/read", params: .object([
-            "cwd": .string(folder.standardizedFileURL.path(percentEncoded: false))
+            "cwd": .string(CodexProtocol.folderPath(folder, posixPath: folder.standardizedFileURL.path(percentEncoded: false)))
         ]))
     }
 
