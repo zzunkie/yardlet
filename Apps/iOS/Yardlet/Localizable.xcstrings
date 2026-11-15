@@ -81,6 +81,16 @@
         }
       }
     },
+    "%@ no longer has this scheduled task.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에 이 예약된 작업이 없습니다."
+          }
+        }
+      }
+    },
     "%@ no longer lists it.": {
       "localizations": {
         "ko": {
@@ -97,6 +107,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@에 이 작업이 더 이상 없습니다."
+          }
+        }
+      }
+    },
+    "%@ of %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ / %2$@"
           }
         }
       }
@@ -285,6 +305,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "새 기기가 연결하려 합니다"
+          }
+        }
+      }
+    },
+    "A run of it is already starting.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이미 실행을 시작하는 중입니다."
           }
         }
       }
@@ -559,6 +589,16 @@
         }
       }
     },
+    "Can't open this file on %@.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 이 파일을 열 수 없습니다."
+          }
+        }
+      }
+    },
     "Can't reach %@ right now.": {
       "localizations": {
         "ko": {
@@ -729,6 +769,16 @@
         }
       }
     },
+    "Couldn't Load the Scheduled Tasks": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "예약된 작업을 불러오지 못했습니다"
+          }
+        }
+      }
+    },
     "Couldn't connect": {
       "localizations": {
         "ko": {
@@ -745,6 +795,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "연결하지 못했습니다. 다시 시도하세요."
+          }
+        }
+      }
+    },
+    "Couldn't get the file.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "파일을 받지 못했습니다."
           }
         }
       }
@@ -969,6 +1029,16 @@
         }
       }
     },
+    "Loading…": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "불러오는 중…"
+          }
+        }
+      }
+    },
     "Macs": {
       "localizations": {
         "ko": {
@@ -1109,6 +1179,16 @@
         }
       }
     },
+    "No Scheduled Tasks": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "예약된 작업 없음"
+          }
+        }
+      }
+    },
     "No Tasks": {
       "localizations": {
         "ko": {
@@ -1135,6 +1215,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "연결 안 됨"
+          }
+        }
+      }
+    },
+    "Not on %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에 없음"
           }
         }
       }
@@ -1249,6 +1339,26 @@
         }
       }
     },
+    "Open Task": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "작업 열기"
+          }
+        }
+      }
+    },
+    "Opens the task its latest run started": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "마지막 실행이 시작한 작업을 엽니다"
+          }
+        }
+      }
+    },
     "Opens the task that sent this message": {
       "localizations": {
         "ko": {
@@ -1285,6 +1395,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "직접 답하기"
+          }
+        }
+      }
+    },
+    "Outputs": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "결과물"
           }
         }
       }
@@ -1359,6 +1479,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "연결 링크 붙여 넣기"
+          }
+        }
+      }
+    },
+    "Pause": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "일시 중지"
           }
         }
       }
@@ -1493,6 +1623,16 @@
         }
       }
     },
+    "Receiving…": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "받는 중…"
+          }
+        }
+      }
+    },
     "Reconnecting": {
       "localizations": {
         "ko": {
@@ -1613,6 +1753,16 @@
         }
       }
     },
+    "Run Now": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "지금 실행"
+          }
+        }
+      }
+    },
     "Run only the unit tests": {
       "localizations": {
         "ko": {
@@ -1653,6 +1803,16 @@
         }
       }
     },
+    "Scheduled Tasks": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "예약된 작업"
+          }
+        }
+      }
+    },
     "Scheduled check-in": {
       "localizations": {
         "ko": {
@@ -1669,6 +1829,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "예약된 작업: %@"
+          }
+        }
+      }
+    },
+    "Scheduled tasks you make on %@ show up here.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 만든 예약된 작업이 여기에 나옵니다."
           }
         }
       }
@@ -1923,6 +2093,16 @@
         }
       }
     },
+    "Starting a run…": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "실행을 시작하는 중…"
+          }
+        }
+      }
+    },
     "Starting…": {
       "localizations": {
         "ko": {
@@ -2043,6 +2223,16 @@
         }
       }
     },
+    "The file kept changing on %@.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 파일이 계속 바뀌어 받지 못했습니다."
+          }
+        }
+      }
+    },
     "The message is too long.": {
       "localizations": {
         "ko": {
@@ -2143,6 +2333,16 @@
         }
       }
     },
+    "This file is too large to open on the phone.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "파일이 너무 커서 휴대폰에서 열 수 없습니다."
+          }
+        }
+      }
+    },
     "This isn't a Yardlet pairing link.": {
       "localizations": {
         "ko": {
@@ -2193,12 +2393,32 @@
         }
       }
     },
+    "This scheduled task can't be resumed. Edit it on %@.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 예약된 작업은 다시 켤 수 없습니다. %@에서 편집하세요."
+          }
+        }
+      }
+    },
     "This task doesn't take pictures or files.": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "이 작업은 사진이나 파일을 받지 않습니다."
+          }
+        }
+      }
+    },
+    "This task hasn't made any files.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 작업이 만든 파일이 없습니다."
           }
         }
       }

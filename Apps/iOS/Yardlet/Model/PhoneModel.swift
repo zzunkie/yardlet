@@ -48,6 +48,8 @@ final class PhoneModel {
         var excluded = folder
         try? excluded.setResourceValues(values)
         store = RemoteHostStore(fileURL: folder.appending(path: "hosts.json"))
+        // Files read from a Mac are kept only while they are shown (§15.22).
+        MacFileStore.clearAll()
         hosts = store.all().filter { keys.load(hostID: $0.id) != nil }
         if let host = hosts.first(where: { $0.id == selectedHostID }) ?? hosts.first { show(host) }
         #if DEBUG
@@ -112,6 +114,7 @@ final class PhoneModel {
         keys.delete(hostID: hostID)
         PushKeys.delete(hostID: hostID)
         Task { await PushNotice.withdraw { host, _ in host == hostID } }
+        MacFileStore.clear(hostID: hostID)
         store.remove(hostID)
         hosts = store.all()
         if let next = hosts.first { show(next) }
@@ -201,6 +204,7 @@ final class PhoneModel {
         if let demoID = session?.id {
             UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [Self.demoNotice])
             Task { await PushNotice.withdraw { host, _ in host == demoID } }
+            MacFileStore.clear(hostID: demoID)
         }
         demoNoticeAt = nil
         session?.stop()

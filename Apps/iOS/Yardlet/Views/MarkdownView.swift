@@ -2,10 +2,12 @@ import SwiftUI
 
 /// An answer's Markdown (CommonMark and GFM tables, docs/REMOTE_PROTOCOL.md §6.3), drawn in blocks: paragraphs and
 /// lists with their inline styles, headings, quotes, code blocks that scroll sideways, and tables as monospaced
-/// text. Selectable, so a part can be copied.
+/// text. Selectable, so a part can be copied. Links underlined, and with `opensFiles` a code span that names a file
+/// links it too (`ConversationLinks`); the screen's `openURL` decides what a link opens.
 struct MarkdownView: View {
     let text: String
     var font: Font = .body
+    var opensFiles = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -20,16 +22,16 @@ struct MarkdownView: View {
     private func view(for block: Block) -> some View {
         switch block {
         case let .paragraph(text):
-            Text(Self.inline(text)).font(font).textSelection(.enabled)
+            Text(Self.inline(text, opensFiles: opensFiles)).font(font).textSelection(.enabled)
         case let .heading(level, text):
-            Text(Self.inline(text))
+            Text(Self.inline(text, opensFiles: opensFiles))
                 .font(level <= 1 ? .title3.weight(.semibold) : level == 2 ? .headline : .subheadline.weight(.semibold))
                 .textSelection(.enabled)
                 .padding(.top, 4)
         case let .quote(text):
             HStack(alignment: .top, spacing: 10) {
                 RoundedRectangle(cornerRadius: 1.5).fill(Color(.systemGray4)).frame(width: 3)
-                Text(Self.inline(text)).font(font).foregroundStyle(.secondary).textSelection(.enabled)
+                Text(Self.inline(text, opensFiles: opensFiles)).font(font).foregroundStyle(.secondary).textSelection(.enabled)
             }
         case let .code(code), let .table(code):
             ScrollView(.horizontal, showsIndicators: false) {
@@ -141,13 +143,20 @@ struct MarkdownView: View {
         }.joined(separator: "\n")
     }
 
-    static func inline(_ text: String) -> AttributedString {
+    static func inline(_ text: String, opensFiles: Bool = false) -> AttributedString {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace,
                                                               failurePolicy: .returnPartiallyParsedIfPossible)
         guard var parsed = try? AttributedString(markdown: text, options: options) else { return AttributedString(text) }
         // Code in a sentence: monospaced a size smaller, so it sits in the line as the Mac draws it.
         for run in parsed.runs where run.inlinePresentationIntent?.contains(.code) == true {
             parsed[run.range].font = .system(.callout, design: .monospaced)
+            if opensFiles, run.link == nil, let path = ConversationLinks.path(String(parsed[run.range].characters)) {
+                parsed[run.range].link = ConversationLinks.fileLink(path)
+            }
+        }
+        // The accent alone hardly tells a link from the words around it.
+        for run in parsed.runs where run.link != nil {
+            parsed[run.range].underlineStyle = .single
         }
         return parsed
     }

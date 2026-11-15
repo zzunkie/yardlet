@@ -45,6 +45,14 @@ final class HostSession: Identifiable {
     private(set) var composerStates: [String: RemoteComposerState] = [:]
     /// Link requests (§12.1) waiting for an answer from any of the Mac's devices, the oldest first (§15.11).
     private(set) var linkRequests: [LinkRequest] = []
+    /// The Mac lists its scheduled tasks, runs one now, and pauses or resumes one (§15.21).
+    private(set) var scheduledTasks = false
+    /// Counts the Mac's `schedulesChanged` (§15.21), so a Schedules screen open reads the list again.
+    private(set) var schedulesChanges = 0
+    /// The Mac lists a task's outputs and serves its files (§15.22).
+    private(set) var taskFiles = false
+    /// Each open task's outputs as the Mac last listed them, newest first (§15.22).
+    private(set) var outputs: [String: [RemoteOutput]] = [:]
     private(set) var conversations: [String: ConversationState] = [:]
     /// Each open task's composer settings as the Mac last answered them (§15.23).
     private(set) var taskSettings: [String: [RemoteSetting]] = [:]
@@ -192,6 +200,7 @@ final class HostSession: Identifiable {
             conversations[taskID] = nil
             taskSettings[taskID] = nil
             composerStates[taskID] = nil
+            outputs[taskID] = nil
             subscribed.removeAll { $0 == taskID }
             applyTasks(changed: [], removed: [taskID])
         case .taskRailChanged:
@@ -216,9 +225,11 @@ final class HostSession: Identifiable {
             linkRequests.removeAll { $0.id == event.requestId }
         case .attention:
             if let taskID = event.taskId, PushNotice.outdates(event) { withdrawNotices { $0 == taskID } }
-        case .schedulesChanged, .linked, .linkRefused, .tabFrame, .browserTabsChanged, .tabCopied,
+        case .schedulesChanged:
+            schedulesChanges += 1
+        case .linked, .linkRefused, .tabFrame, .browserTabsChanged, .tabCopied,
              .terminalOutput, .terminalClosed, .hostSettingsChanged, .hostAccountsChanged:
-            // Not shown on the phone yet: schedules, browser tabs and their copies, terminals, host settings and accounts (§15.21, §15.25, §15.29, §15.36, §15.37).
+            // Not shown on the phone yet: browser tabs and their copies, terminals, host settings and accounts (§15.25, §15.29, §15.36, §15.37).
             // `linked` and `linkRefused` go only to the connection that asked (§12.1).
             break
         }
@@ -234,9 +245,7 @@ final class HostSession: Identifiable {
             tasks = (response.tasks ?? []).sorted { $0.lastActivityAt > $1.lastActivityAt }
             newTask = response.newTask
             followUp = response.followUp
-            taskControls = response.taskControls == true
-            suggestionOptions = response.suggestionOptions == true
-            composerExtensions = response.composerExtensions == true
+            applyFlags(response)
             if let serverTime = response.serverTime {
                 clockOffset = Double(serverTime) / 1000 - Date().timeIntervalSince1970
             }
@@ -258,10 +267,17 @@ final class HostSession: Identifiable {
         tasks = (response.tasks ?? []).sorted { $0.lastActivityAt > $1.lastActivityAt }
         newTask = response.newTask
         followUp = response.followUp
-        taskControls = response.taskControls == true
-        suggestionOptions = response.suggestionOptions == true
-        composerExtensions = response.composerExtensions == true
+        applyFlags(response)
         withdrawSettledNotices()
+    }
+
+    /// What the snapshot says the Mac answers.
+    private func applyFlags(_ snapshot: RemoteResponse) {
+        taskControls = snapshot.taskControls == true
+        suggestionOptions = snapshot.suggestionOptions == true
+        composerExtensions = snapshot.composerExtensions == true
+        scheduledTasks = snapshot.scheduledTasks == true
+        taskFiles = snapshot.taskFiles == true
     }
 
     private func applyTasks(changed: [RemoteTask], removed: [String]) {
@@ -390,6 +406,7 @@ final class HostSession: Identifiable {
             conversations[dropped] = nil
             taskSettings[dropped] = nil
             composerStates[dropped] = nil
+            outputs[dropped] = nil
             send(.unsubscribeTask(taskID: dropped))
         }
         guard isConnected else {
@@ -529,6 +546,42 @@ final class HostSession: Identifiable {
             break
         }
         return nil
+    }
+
+    // MARK: - Files from the Mac (§15.22)
+
+    /// Reads the task's outputs again, as the Mac's Outputs card lists them. A failed read keeps the list shown.
+    func loadOutputs(_ taskID: String) async {
+        guard taskFiles, isConnected else { return }
+        let response = await response(to: .taskOutputs(taskID: taskID))
+        guard response.ok, conversations[taskID] != nil else { return }
+        let listed = response.outputs ?? []
+        if outputs[taskID] != listed { outputs[taskID] = listed }
+    }
+
+    /// Reads one of the task's files in parts into `folder` (`RemoteFileDownload`): an output, or a path its
+    /// conversation names, absolute, from `~/`, or relative to the task's folder. A connection that drops after the
+    /// first part is waited for a while.
+    func readFile(_ path: String, of taskID: String, into folder: URL,
+                  progress: @escaping @MainActor @Sendable (RemoteFileDownload.Progress) -> Void)
+        async -> Result<RemoteFileDownload.File, RemoteFileDownload.Failure> {
+        await RemoteFileDownload.read(into: folder) { [weak self] offset in
+            await self?.response(to: .readFile(taskID: taskID, path: path, offset: offset)) ?? .failure("", RemoteError(.unavailable))
+        } reconnected: { [weak self] in
+            await self?.waitForConnection() ?? false
+        } progress: { part in
+            await progress(part)
+        }
+    }
+
+    /// True once connected again within `limit`.
+    private func waitForConnection(within limit: Duration = .seconds(30)) async -> Bool {
+        let end = ContinuousClock.now + limit
+        while !isConnected {
+            guard ContinuousClock.now < end, !Task.isCancelled else { return false }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        return true
     }
 
     // MARK: - Commands

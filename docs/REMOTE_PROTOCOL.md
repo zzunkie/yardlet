@@ -2745,6 +2745,8 @@ device's push key, associated data the UTF-8 bytes of `yardlet-push/1`, over the
   tasks share a folder (`Yardlet`, `Website`, `Chats`). "Summarize the crash reports" lists `crash-summary.pdf`, in a
   `Desktop` folder beside its own, and `reports/crash-chart.png`; its conversation names `reports/crash-notes.txt`.
   `../Desktop/private-notes.txt` is neither, so it answers `notFound`.
+- "Fix the footer links" names its subtask in its answer as a task link, `[Check the footer on mobile](#<task ID>)`
+  with the ID in lower case, as an answer links another task.
 - Test vectors both implementations check (`Tests/NativeHarnessClientTests/Fixtures/RemoteNoiseVectors.json`,
   copied byte for byte into the phone app's tests): the public-domain cacophony vector for
   `Noise_IK_25519_ChaChaPoly_SHA256`, and a Yardlet vector with this protocol's prologue, a pairing

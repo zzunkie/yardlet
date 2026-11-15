@@ -26,7 +26,8 @@ import YardletRemote
 /// chat, Codex's fork and Plan mode), and a task's latest message is edited and its turns forked as on the Mac. Since then
 /// (§15.25) "Publish the release notes" has two browser tabs, a static page and the sign-in page it hands to the person,
 /// which draws as PNG and takes clicks, typing and keys (`RemoteFixtureTabs`); the static page's site asks for the camera
-/// and microphone, and asks again 30 seconds after an answer. Nothing else is read from or written to the Mac.
+/// and microphone, and asks again 30 seconds after an answer. "Fix the footer links" links its subtask in its answer
+/// (`[title](#<task ID>)`). Nothing else is read from or written to the Mac.
 public actor RemoteFixtureBridge: RemoteBridge {
     public enum ID {
         public static let approval = "0F1E0001-0000-4000-8000-000000000001"
@@ -2218,6 +2219,8 @@ public actor RemoteFixtureBridge: RemoteBridge {
     |---|---|---|
     | Docs | `/doc` | `/docs` |
     | Blog | `/blog/` | `/blog` |
+
+    [Check the footer on mobile](#\(ID.child.lowercased())) looks at the small phones.
     """
 
     private static let releaseNotes = """

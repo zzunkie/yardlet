@@ -306,6 +306,75 @@ final class RemoteHostClientTests: XCTestCase {
         XCTAssertEqual(removed.sent.count, 1)
     }
 
+    /// A file comes down in order from where each part ended (§15.22), starts over when it changes on the host between
+    /// parts, waits out the host's read budget and a connection that comes back, and leaves nothing behind when it does
+    /// not finish.
+    func testAFileComesDownWholeOrLeavesNothing() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "download-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        /// A host serving `versions` of a file 4 bytes a part, the version read chosen by how many parts were asked,
+        /// and errors answered in place of the parts asked for at the given counts.
+        final class Host: @unchecked Sendable {
+            private let lock = NSLock()
+            private var asked: [Int] = []
+            let versions: [(after: Int, text: String, modifiedAt: Int64)]
+            let errors: [Int: RemoteError]
+            init(_ versions: [(after: Int, text: String, modifiedAt: Int64)], errors: [Int: RemoteError] = [:]) {
+                self.versions = versions
+                self.errors = errors
+            }
+            var offsets: [Int] { lock.withLock { asked } }
+            func answer(_ offset: Int) -> RemoteResponse {
+                let count = lock.withLock { asked.append(offset); return asked.count }
+                if let error = errors[count] { return .failure("", error) }
+                guard let version = versions.last(where: { $0.after < count }) else { return .failure("", RemoteError(.notFound)) }
+                let bytes = Data(version.text.utf8)
+                var response = RemoteResponse(re: "")
+                response.path = "/Users/example/notes.txt"
+                response.name = "notes.txt"
+                response.mediaType = "text/plain"
+                response.size = bytes.count
+                response.offset = offset
+                response.modifiedAt = version.modifiedAt
+                response.data = bytes.subdata(in: min(offset, bytes.count)..<min(offset + 4, bytes.count))
+                return response
+            }
+        }
+        func read(_ host: Host, into folder: URL) async -> Result<RemoteFileDownload.File, RemoteFileDownload.Failure> {
+            await RemoteFileDownload.read(into: folder, pause: .zero, through: { host.answer($0) }, reconnected: { true })
+        }
+
+        let whole = Host([(0, "one two three", 1)])
+        let file = try await read(whole, into: root.appending(path: "a")).get()
+        XCTAssertEqual(whole.offsets, [0, 4, 8, 12])
+        XCTAssertEqual(try String(contentsOf: file.url, encoding: .utf8), "one two three")
+        XCTAssertEqual(file.url, root.appending(path: "a/notes.txt"))
+        XCTAssertEqual([file.path, file.mediaType], ["/Users/example/notes.txt", "text/plain"])
+
+        let changed = Host([(0, "one two three", 1), (1, "four five", 2)])
+        let second = try await read(changed, into: root.appending(path: "b")).get()
+        XCTAssertEqual(changed.offsets, [0, 4, 0, 4, 8])
+        XCTAssertEqual(try String(contentsOf: second.url, encoding: .utf8), "four five")
+        XCTAssertEqual(second.modifiedAt, 2)
+
+        let waited = Host([(0, "one two three", 1)], errors: [2: RemoteError(.rateLimited), 3: RemoteError(.unavailable)])
+        let third = try await read(waited, into: root.appending(path: "c")).get()
+        XCTAssertEqual(waited.offsets, [0, 4, 4, 4, 8, 12])
+        XCTAssertEqual(try String(contentsOf: third.url, encoding: .utf8), "one two three")
+
+        let changing = Host((0..<20).map { ($0, "version \($0) of it", Int64($0)) })
+        let gone = root.appending(path: "d")
+        let result = await read(changing, into: gone)
+        XCTAssertEqual(result, .failure(.changing))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: gone.path(percentEncoded: false)))
+
+        let refused = await read(Host([]), into: root.appending(path: "e"))
+        XCTAssertEqual(refused, .failure(.refused(RemoteError(.notFound))))
+        let dropped = await read(Host([(0, "one", 1)], errors: [1: RemoteError(.unavailable)]), into: root.appending(path: "f"))
+        XCTAssertEqual(dropped, .failure(.notConnected), "a connection lost before the first part is not waited for")
+        XCTAssertEqual(RemoteFileDownload.safeName("../a/b\u{7}.pdf"), "..ab.pdf")
+    }
+
     func testSavedHostsLiveInOnePrivateFileThatGoesWithTheLastHost() throws {
         let folder = FileManager.default.temporaryDirectory.appending(path: "remote-hosts-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: folder) }

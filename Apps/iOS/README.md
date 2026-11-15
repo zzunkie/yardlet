@@ -9,7 +9,9 @@ suggests as offered or with its Options, changes a task's model, effort and perm
 tasks. It shows what the Mac's window shows above a task's composer (the task's notices, a paused queue), offers a
 turn's next steps (Try Again, Resume after a limit) and a queued message's actions, words the Mac's refusals by their
 reason, and answers another device's connection request. Choices the Mac asks to confirm before an agent may act
-without asking (Bypass permissions, Full access) are made on the Mac. It notifies you while it is closed.
+without asking (Bypass permissions, Full access) are made on the Mac. It opens what a task made and the files and tasks
+an answer links, with QuickLook and the share sheet, and lists the Mac's scheduled tasks to run, pause or resume them.
+It notifies you while it is closed.
 
 It is a SwiftUI app for iOS 17 and later. It builds `YardletRemote`, the package target the Mac's own remote is
 built from, so the protocol's types, the Noise channel, pairing links, the race between the same network, Tailscale
@@ -42,8 +44,10 @@ Paste the pairing URL it prints into "Paste a Pairing Link", or open it in the S
 `xcrun simctl openurl booted '<pairing URL>'`.
 
 **Screens without touching them:** a debug build reads launch arguments for screenshots and checks: `-demo YES` starts
-the demo (without asking for notification permission, as "Try Without a Mac" does), `-openTask <task ID>` opens a task, and `-sheet newTask`, `-sheet settings` or `-sheet taskSettings` opens
-that sheet (`-sheet suggestionOptions` opens the Options of a suggested task in the open task), and
+the demo (without asking for notification permission, as "Try Without a Mac" does), `-openTask <task ID>` opens a
+task, and `-sheet newTask`, `-sheet settings` or `-sheet taskSettings` opens that sheet (`-sheet suggestionOptions`
+opens the Options of a suggested task and `-sheet outputs` its Outputs in the open task, `-sheet schedules` the
+scheduled tasks), and
 `-openLink '<pairing link>'` opens a link as another app would, for example:
 
 ```bash
@@ -70,6 +74,9 @@ xcrun simctl launch booted com.zzunkie.yardlet.remote -demo YES -openTask 0F1E00
 - The same network is found with Bonjour (`_yardlet._tcp`, which asks for Local Network access once), next to the
   addresses the Mac named and the relay. `NSAllowsLocalNetworking` and the `ts.net` exception let the WebSocket reach
   a Mac's direct address without TLS; the Noise handshake authenticates the Mac by its key on every path.
+- A file opened from a Mac (§15.22) is read in parts into Caches (`mac-files/<Mac>/`, never backed up) and kept only
+  while QuickLook shows it: it goes when the viewer closes, a Mac's files when that Mac is removed or the demo ends,
+  and all of them when the app starts. QuickLook draws HTML without its scripts or anything from the network.
 
 ## Notifications
 

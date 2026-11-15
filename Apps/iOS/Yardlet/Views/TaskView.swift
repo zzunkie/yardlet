@@ -1,8 +1,10 @@
+import QuickLook
 import SwiftUI
 import YardletRemote
 
 /// One task's conversation, latest first at the bottom, earlier turns on request, live while it runs, with the
-/// composer below it (docs/REMOTE_PROTOCOL.md §4.2, §6).
+/// composer below it (docs/REMOTE_PROTOCOL.md §4.2, §6). What the task made, and the files and tasks its answers link,
+/// open from here (§15.22).
 struct TaskView: View {
     let session: HostSession
     let taskID: String
@@ -12,6 +14,13 @@ struct TaskView: View {
     @State private var isConfirmingArchive = false
     /// The end of the conversation is in view; otherwise a button takes the person back to it.
     @State private var isAtLatest = true
+    @State private var isShowingOutputs = false
+    /// An output chosen in the Outputs sheet, read once the sheet has closed.
+    @State private var outputToOpen: String?
+    /// The file coming from the Mac or shown, and the copy QuickLook shows.
+    @State private var reading: MacFileReading?
+    @State private var preview: URL?
+    @Environment(\.openTask) private var openTask
     /// The title last read from the list, kept while the list is read again after a reconnection.
     @State private var knownTitle = ""
     @Environment(\.dismiss) private var dismiss
@@ -34,17 +43,33 @@ struct TaskView: View {
         .toolbarBackground(.visible, for: .navigationBar)
         .modifier(TaskSubtitle(title: title, subtitle: subtitle))
         .toolbar {
+            if session.taskFiles, !(session.outputs[taskID] ?? []).isEmpty {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        isShowingOutputs = true
+                    } label: {
+                        Image(systemName: "folder")
+                    }
+                    .accessibilityLabel("Outputs")
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) { menu }
         }
         .onAppear { conversation = session.open(taskID) }
+        // What the task made: read when it opens, on each connection and when a turn starts or ends.
+        .task(id: OutputsReading(offered: session.taskFiles && session.isConnected, running: task?.running == true)) {
+            await session.loadOutputs(taskID)
+        }
         .onChange(of: task?.title, initial: true) { _, title in
             if let title, !title.isEmpty { knownTitle = title }
         }
         #if DEBUG
         .task {
-            guard UserDefaults.standard.string(forKey: "sheet") == "taskSettings" else { return }
+            let sheet = UserDefaults.standard.string(forKey: "sheet")
+            guard sheet == "taskSettings" || sheet == "outputs" else { return }
             try? await Task.sleep(for: .seconds(1.5))
-            isShowingSettings = true
+            if sheet == "taskSettings" { isShowingSettings = true }
+            if sheet == "outputs" { isShowingOutputs = true }
         }
         #endif
         .onChange(of: session.isConnected) { _, connected in
@@ -56,6 +81,23 @@ struct TaskView: View {
         }
         .sheet(isPresented: $isShowingSettings) {
             TaskSettingsView(session: session, taskID: taskID)
+        }
+        .sheet(isPresented: $isShowingOutputs, onDismiss: {
+            if let path = outputToOpen { openFile(path) }
+            outputToOpen = nil
+        }) {
+            OutputsSheet(session: session, taskID: taskID) { output in
+                outputToOpen = output.path
+                isShowingOutputs = false
+            }
+        }
+        .quickLookPreview($preview)
+        .onChange(of: preview) { _, shown in
+            // The viewer closed: nothing of the file stays on the phone.
+            if shown == nil { closeFile() }
+        }
+        .onDisappear {
+            if preview == nil { closeFile() }
         }
         .confirmationDialog("Archive this task?", isPresented: $isConfirmingArchive, titleVisibility: .visible) {
             Button("Archive") {
@@ -131,12 +173,16 @@ struct TaskView: View {
                     .transition(.opacity)
                 }
             }
+            .environment(\.openURL, OpenURLAction(handler: open))
             .scrollDismissesKeyboard(.interactively)
             .overlay {
                 if !conversation.isLoaded { ProgressView() }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 8) {
+                    if let reading, reading.isShown, reading.file == nil {
+                        FileProgressBar(reading: reading) { closeFile() }
+                    }
                     CommandErrorBanner(session: session)
                     ConnectionBanner(session: session)
                     TaskNoticesView(session: session, taskID: taskID)
@@ -148,6 +194,48 @@ struct TaskView: View {
     }
 
     private static let latestID = "latest"
+
+    /// A link in the conversation: a task it names opens as the list opens it, a file it names comes from the Mac, and
+    /// any other link opens as it would elsewhere.
+    private func open(_ url: URL) -> OpenURLAction.Result {
+        if let linked = ConversationLinks.task(url) {
+            if linked != taskID {
+                if session.task(linked) != nil {
+                    openTask(linked)
+                } else {
+                    session.commandError = String(localized: "\(session.name) no longer lists this task.")
+                }
+            }
+            return .handled
+        }
+        if session.taskFiles, let path = ConversationLinks.file(url) {
+            openFile(path)
+            return .handled
+        }
+        return .systemAction
+    }
+
+    /// Reads one of the task's files from the Mac and shows it with QuickLook, which offers to share or save it.
+    private func openFile(_ path: String) {
+        closeFile()
+        let reading = MacFileReading(path: path, hostID: session.id)
+        self.reading = reading
+        reading.start(path, of: taskID, from: session) { outcome in
+            guard self.reading === reading else { return }
+            switch outcome {
+            case let .read(file):
+                preview = file
+            case let .failed(message):
+                closeFile()
+                if let message { session.commandError = message }
+            }
+        }
+    }
+
+    private func closeFile() {
+        reading?.close()
+        reading = nil
+    }
 
     private func toggleWork(_ turnID: String, in conversation: ConversationState) {
         if conversation.openedWork.contains(turnID) {
@@ -190,6 +278,12 @@ struct TaskView: View {
         }
         .accessibilityLabel("More")
     }
+}
+
+/// When a task's outputs are read again: on each connection to a Mac that offers them, and when a turn starts or ends.
+private struct OutputsReading: Equatable {
+    let offered: Bool
+    let running: Bool
 }
 
 /// What every item view needs to act: the Mac and the task.
@@ -280,7 +374,7 @@ struct ItemView: View {
             default: UserMessageView(item: item)
             }
         case .assistant:
-            AssistantView(item: item)
+            AssistantView(item: item, opensFiles: context.session.taskFiles)
         case .activity:
             if item.activity == "taskSuggestion", item.suggestionId != nil {
                 SuggestionView(item: item, context: context)
@@ -383,23 +477,25 @@ struct UserMessageView: View {
     }
 }
 
-/// The agent's answer in full, or a working note in smaller, muted type.
+/// The agent's answer in full, or a working note in smaller, muted type. With `opensFiles`, a code span that names a
+/// file links it (§15.22).
 struct AssistantView: View {
     let item: RemoteItem
+    var opensFiles = false
 
     var body: some View {
         if item.role == "commentary" {
-            MarkdownView(text: item.text ?? "", font: .subheadline)
+            MarkdownView(text: item.text ?? "", font: .subheadline, opensFiles: opensFiles)
                 .foregroundStyle(.secondary)
         } else if item.role == "proposedPlan" {
             VStack(alignment: .leading, spacing: 8) {
                 Label("Proposed plan", systemImage: "list.bullet.clipboard").font(.subheadline.weight(.semibold))
-                MarkdownView(text: item.text ?? "")
+                MarkdownView(text: item.text ?? "", opensFiles: opensFiles)
             }
             .padding(14)
             .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         } else {
-            MarkdownView(text: item.text ?? "")
+            MarkdownView(text: item.text ?? "", opensFiles: opensFiles)
         }
     }
 }

@@ -2,11 +2,13 @@ import SwiftUI
 import YardletRemote
 
 /// A Mac's tasks, as its sidebar lists them: what waits for the person first, then Pinned, then each project and
-/// Chats with their subtasks folded under them (docs/REMOTE_PROTOCOL.md §4.1).
+/// Chats with their subtasks folded under them (docs/REMOTE_PROTOCOL.md §4.1). Its scheduled tasks open from the bar
+/// when the Mac offers them (§15.21).
 struct HomeView: View {
     @Environment(PhoneModel.self) private var model
     let session: HostSession
-    @State private var path: [String] = []
+    /// Tasks by their ID, and the Schedules screen.
+    @State private var path = NavigationPath()
     @State private var search = ""
     @State private var expanded: Set<String> = []
     @State private var isShowingSettings = false
@@ -46,6 +48,16 @@ struct HomeView: View {
                     }
                     .accessibilityLabel("Settings")
                 }
+                if session.scheduledTasks {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            path.append(SchedulesRoute())
+                        } label: {
+                            Image(systemName: "clock")
+                        }
+                        .accessibilityLabel("Scheduled Tasks")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         isStartingTask = true
@@ -59,6 +71,9 @@ struct HomeView: View {
             .navigationDestination(for: String.self) { taskID in
                 TaskView(session: session, taskID: taskID)
             }
+            .navigationDestination(for: SchedulesRoute.self) { _ in
+                SchedulesView(session: session)
+            }
             .sheet(isPresented: $isShowingSettings) {
                 SettingsView()
             }
@@ -69,23 +84,26 @@ struct HomeView: View {
                 }
             }
             #if DEBUG
-            // Screenshots without touching the screen: `-sheet newTask` or `-sheet settings` at launch.
+            // Screenshots without touching the screen: `-sheet newTask`, `-sheet settings` or `-sheet schedules` at launch.
             .task {
                 guard let sheet = UserDefaults.standard.string(forKey: "sheet") else { return }
                 try? await Task.sleep(for: .seconds(1.5))
                 if sheet == "newTask" { isStartingTask = true }
                 if sheet == "settings" { isShowingSettings = true }
+                if sheet == "schedules" { path.append(SchedulesRoute()) }
             }
             #endif
             .onChange(of: model.taskToOpen, initial: true) { _, taskID in
                 guard let taskID else { return }
                 model.taskToOpen = nil
-                path = [taskID]
+                path = NavigationPath([taskID])
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if session.isDemo { demoBar }
             }
         }
+        // A task a conversation's link or a schedule's run names opens as the list opens it.
+        .environment(\.openTask, OpenTaskAction { path.append($0) })
     }
 
     // MARK: - Sections
