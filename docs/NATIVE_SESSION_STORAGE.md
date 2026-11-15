@@ -483,11 +483,12 @@ homes, and stores the provider session ID, the `.native` scope and the account b
   Codex task imported from a search result, the match positions are asked only with `thread/searchOccurrences` on the
   App Server of the same account and scope. A conversation already imported (same harness, scope, provider ID and
   account, or for Claude an account that shares the history) opens the existing task.
-- **ACP agents in Import conversation… (the File menu and the account menu):** besides Claude Code, Codex and
-  Antigravity CLI, the sheet lists each other ACP agent that is installed (OpenCode, Kimi Code, Grok Build, Hermes
-  Agent; `ACPSessionHistory.reads`). The list is the agent's own `session/list` (`cwd` the chosen project folder's real
-  path, as `getcwd` gives it to a CLI started there and as the CLI saves its sessions: `/private/tmp/…` for `/tmp/…`,
-  links resolved, no trailing slash, since an agent such as OpenCode matches the folder character for character; and
+- **ACP agents in Import conversation… (the File menu and the account menu; on Windows, Import conversation below the
+  tasks):** besides Claude Code, Codex and Antigravity CLI, the sheet lists each other ACP agent that is installed
+  (OpenCode, Kimi Code, Grok Build, Hermes Agent; `ACPSessionHistory.reads`). The list is the agent's own `session/list`
+  (`cwd` the chosen project folder's real path, as `getcwd` gives it to a CLI started there and as the CLI saves its
+  sessions: `/private/tmp/…` for `/tmp/…`, links resolved, no trailing slash, on Windows `C:\Users\me\proj` rather than
+  a file URL's `/C:/Users/me/proj/`, since an agent such as OpenCode matches the folder character for character; and
   `cursor` for the next page), read by a process of the read's own that stops after `initialize` and the list, with no
   session made or loaded. The agent must advertise `sessionCapabilities.list`, or the sheet says it does not list its
   conversations. Only sessions whose `cwd` is that folder show, since an agent may list every folder's; each one's title

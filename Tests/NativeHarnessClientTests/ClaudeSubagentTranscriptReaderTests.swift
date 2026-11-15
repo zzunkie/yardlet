@@ -38,6 +38,12 @@ final class ClaudeSubagentTranscriptReaderTests: XCTestCase {
         let selected = ClaudeSubagentTranscriptReader.configDirectory(connection: binding,
             environment: ["CLAUDE_CONFIG_DIR": b.path, "HOME": b.path])
         XCTAssertEqual(selected.path, a.path)
+        // Without an account, Claude Code's own home: `HOME` on a Mac, the profile folder on Windows whatever `HOME` says.
+        XCTAssertEqual(ClaudeSubagentTranscriptReader.configDirectory(connection: nil, environment: ["HOME": b.path]).path,
+                       b.appending(path: ".claude").path)
+        let windows = ClaudeSubagentTranscriptReader.configDirectory(connection: nil,
+            environment: ["HOME": "C:\\msys64\\home\\me", "UserProfile": "C:\\Users\\me"], lookup: .windows())
+        XCTAssertEqual(windows.deletingLastPathComponent().lastPathComponent, "C:\\Users\\me")
         let snapshot = try ClaudeSubagentTranscriptReader(configDirectory: selected).read(parentSessionID: parent,
             reference: .init(agentID: "same", taskType: "local_agent"))
         XCTAssertTrue(snapshot.entries.contains { if case let .assistant(text, _) = $0.content { text.contains("Account A") } else { false } })

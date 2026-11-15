@@ -53,12 +53,13 @@ struct ImportableConversationPage: Equatable, Sendable {
 /// Lists Claude Code conversations for one folder from the config's `projects` folder, the way
 /// Claude's own resume list finds them. Reads only the start and end of each transcript.
 enum ClaudeConversationCatalog {
-    /// Claude names a folder's history `projects/<path with every non-alphanumeric character as '-'>`.
-    static func projectFolderName(for workspace: URL) -> String {
+    /// Claude names a folder's history `projects/<path with every non-alphanumeric character as '-'>`, the path being
+    /// the folder it runs in as the platform writes it: `C:\Users\me\proj` on Windows is `C--Users-me-proj`, where a
+    /// file URL's path (`/C:/Users/me/proj/`) would add a dash before the drive.
+    static func projectFolderName(for workspace: URL, rules: PathRules = .current) -> String {
         // Claude replaces each UTF-16 unit of the composed path, so decomposed Hangul must not add dashes.
-        let path = workspace.standardizedFileURL.path(percentEncoded: false).precomposedStringWithCanonicalMapping
-        let trimmed = path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : path
-        return String(trimmed.utf16.map { unit -> Character in
+        let path = rules.nativePath(of: workspace.standardizedFileURL).precomposedStringWithCanonicalMapping
+        return String(path.utf16.map { unit -> Character in
             switch unit {
             case 48...57, 65...90, 97...122: Character(UnicodeScalar(UInt8(unit)))
             default: "-"

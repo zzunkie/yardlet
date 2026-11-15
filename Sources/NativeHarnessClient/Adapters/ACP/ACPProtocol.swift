@@ -83,8 +83,11 @@ enum ACPProtocol {
     /// (`sessionCapabilities.list`). The folder is its real path, as `getcwd` gives it to a CLI
     /// started there and as the CLI saves a session started in a terminal (`/private/tmp/…` for
     /// `/tmp/…`, links resolved), since the agent compares the two character for character.
-    static func listSessions(id: Int64, workspaceURL: URL, cursor: String? = nil) -> JSONValue {
-        var params: [String: JSONValue] = ["cwd": .string(CanonicalPath.resolve(cwd(workspaceURL)) ?? cwd(workspaceURL))]
+    static func listSessions(id: Int64, workspaceURL: URL, cursor: String? = nil, rules: PathRules = .current) -> JSONValue {
+        let folder = cwd(workspaceURL, rules: rules)
+        // `CanonicalPath` gives a Windows path as a file URL's path writes it (`/C:/…`).
+        let real = CanonicalPath.resolve(folder).map { rules.nativePath($0) } ?? folder
+        var params: [String: JSONValue] = ["cwd": .string(real)]
         if let cursor { params["cursor"] = .string(cursor) }
         return request(id: id, method: "session/list", params: .object(params))
     }
@@ -157,12 +160,13 @@ enum ACPProtocol {
         ])
     }
 
-    /// A folder as ACP's `cwd`: its absolute path without a trailing slash, as a shell's `pwd` gives
-    /// it. An agent can compare it with the folder it saved a session in character for character
-    /// (OpenCode's `session/list` lists nothing for `/project/` when its sessions are in `/project`).
-    static func cwd(_ folder: URL) -> String {
-        let path = folder.standardizedFileURL.path(percentEncoded: false)
-        return path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : path
+    /// A folder as ACP's `cwd`: its absolute path as the platform writes it, without a trailing
+    /// separator, as a shell's `pwd` gives it (`C:\Users\me\proj` on Windows, not a file URL's
+    /// `/C:/Users/me/proj/`). An agent can compare it with the folder it saved a session in
+    /// character for character (OpenCode's `session/list` lists nothing for `/project/` when its
+    /// sessions are in `/project`).
+    static func cwd(_ folder: URL, rules: PathRules = .current) -> String {
+        rules.nativePath(of: folder.standardizedFileURL)
     }
 
     private static func sessionParams(workspaceURL: URL, mcpServers: [JSONValue]) -> JSONValue {

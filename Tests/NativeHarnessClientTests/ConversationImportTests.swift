@@ -21,6 +21,10 @@ import XCTest
         XCTAssertEqual(ClaudeConversationCatalog.projectFolderName(for: URL(filePath: "/Users/me/w/app/.claude/worktrees/x")),
             "-Users-me-w-app--claude-worktrees-x")
         XCTAssertEqual(ClaudeConversationCatalog.projectFolderName(for: URL(filePath: "/tmp/한글 폴더")), "-tmp------")
+        // On Windows Claude Code runs in `C:\Users\me\proj`, which a file URL's path writes `/C:/Users/me/proj/`.
+        XCTAssertEqual(ClaudeConversationCatalog.projectFolderName(for: URL(string: "file:///C:/Users/me/my.proj/")!,
+                                                                   rules: .windows), "C--Users-me-my-proj")
+        XCTAssertEqual(ClaudeConversationCatalog.projectFolderName(for: URL(string: "file:///D:/")!, rules: .windows), "D--")
     }
 
     func testListingNamesEachConversationAndMarksOnesStillRunning() throws {

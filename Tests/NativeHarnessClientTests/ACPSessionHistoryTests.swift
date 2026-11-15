@@ -61,6 +61,11 @@ final class ACPSessionHistoryTests: XCTestCase {
         XCTAssertEqual(methods, ["initialize", "session/list", "initialize", "session/load"])
         let list = await connections[0].sent.first { $0["method"]?.stringValue == "session/list" }
         XCTAssertEqual(list?["params"]?["cwd"]?.stringValue, "/tmp/acp-history-project", "The folder as `pwd` gives it")
+        // On Windows as Windows writes it, not as a file URL's path does (`/C:/Users/me/proj/`).
+        let windowsFolder = URL(string: "file:///C:/Users/me/proj/")!
+        XCTAssertEqual(ACPProtocol.cwd(windowsFolder, rules: .windows), "C:\\Users\\me\\proj")
+        XCTAssertEqual(ACPProtocol.listSessions(id: 1, workspaceURL: windowsFolder, rules: .windows)["params"]?["cwd"]?
+            .stringValue, "C:\\Users\\me\\proj")
         XCTAssertEqual(list?["params"]?["cursor"]?.stringValue, "page-1")
         let load = await connections[1].sent.first { $0["method"]?.stringValue == "session/load" }
         XCTAssertEqual(load?["params"]?["mcpServers"], .array([]))

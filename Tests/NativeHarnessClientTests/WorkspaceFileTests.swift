@@ -107,6 +107,13 @@ final class WorkspaceFileTests: XCTestCase {
         XCTAssertNil(windows.comparingBytes.relativePath(of: "C:\\e\u{301}\\x", in: "C:\\\u{E9}"))
         XCTAssertEqual(windows.path(of: URL(string: "file://server/share/x")!), "//server/share/x")
         XCTAssertEqual(posix.path(of: URL(string: "file://server/share/x")!), "/share/x")
+        // A path as a program is given it: Windows' own form, without a trailing separator but a drive root's.
+        XCTAssertEqual(windows.nativePath(of: URL(string: "file:///C:/Users/me/proj/")!), "C:\\Users\\me\\proj")
+        XCTAssertEqual(windows.nativePath(of: URL(string: "file:///C:/")!), "C:\\")
+        XCTAssertEqual(windows.nativePath(of: URL(string: "file://server/share/x/")!), "\\\\server\\share\\x")
+        XCTAssertEqual(windows.nativePath("C:/Users/me/"), "C:\\Users\\me")
+        XCTAssertEqual(posix.nativePath(of: URL(filePath: "/work/app/")), "/work/app")
+        XCTAssertEqual(posix.nativePath(of: URL(filePath: "/")), "/")
 
         // One folder is one key however it is written, which is what makes it one project; a Mac's key is the path.
         for path in ["/Work/App", "/work/app/", "C:\\Repo"] { XCTAssertEqual(posix.key(path), path) }

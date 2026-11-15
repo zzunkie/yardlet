@@ -431,19 +431,24 @@ struct ClaudeSubagentTranscriptReader: Sendable {
             .resolvingSymlinksInPath())
     }
 
+    /// The config folder Claude Code uses: `CLAUDE_CONFIG_DIR`, else `.claude` in the home folder Node.js
+    /// gives it (`os.homedir()`), which is `HOME` on macOS and Linux and `USERPROFILE` on Windows,
+    /// whatever `HOME` says there.
     static func configDirectory(
         connection: ProviderConnection?,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         homeURL: URL = FileManager.default.homeDirectoryForCurrentUser,
-        workspaceURL: URL = URL(filePath: FileManager.default.currentDirectoryPath, directoryHint: .isDirectory)
+        workspaceURL: URL = URL(filePath: FileManager.default.currentDirectoryPath, directoryHint: .isDirectory),
+        lookup: ExecutableLookup = .current
     ) -> URL {
+        let rules: PathRules = lookup.isWindows ? .windows : .posix
         let values = environment.merging(connection?.environment ?? [:]) { _, new in new }
-        if let path = values["CLAUDE_CONFIG_DIR"], !path.isEmpty {
-            return PathRules.current.isAbsolute(path) ? URL(filePath: path, directoryHint: .isDirectory)
-                : PathRules.current.url(for: path, in: workspaceURL, directoryHint: .isDirectory).standardizedFileURL
+        if let path = lookup.value(of: "CLAUDE_CONFIG_DIR", in: values), !path.isEmpty {
+            return rules.isAbsolute(path) ? URL(filePath: path, directoryHint: .isDirectory)
+                : rules.url(for: path, in: workspaceURL, directoryHint: .isDirectory).standardizedFileURL
         }
-        let home = values["HOME"].flatMap {
-            PathRules.current.isAbsolute($0) ? URL(filePath: $0, directoryHint: .isDirectory) : nil
+        let home = lookup.homePath(in: values).flatMap {
+            rules.isAbsolute($0) ? URL(filePath: $0, directoryHint: .isDirectory) : nil
         } ?? homeURL
         return home.appending(path: ".claude", directoryHint: .isDirectory)
     }

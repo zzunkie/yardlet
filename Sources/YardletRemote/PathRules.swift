@@ -121,6 +121,29 @@ public struct PathRules: Equatable, Sendable {
         return "//" + host + path
     }
 
+    /// `url`'s path as a program on this platform is given it and as a shell prints its folder, without a trailing
+    /// separator but a root's: on Windows with `\` between names and the drive or the share first (`C:\Users\me`,
+    /// where a file URL's path is `/C:/Users/me/`; `\\server\share\x`).
+    public func nativePath(of url: URL) -> String {
+        nativePath(path(of: url))
+    }
+
+    /// `path`, a file URL's path or a path in this platform's own form, as `nativePath(of:)` writes it.
+    public func nativePath(_ path: String) -> String {
+        guard isWindows else { return path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : path }
+        let backslash: Unicode.Scalar = "\\"
+        var scalars = Array(path.unicodeScalars)
+        // `/C:/x` is `C:\x`.
+        if scalars.count >= 3, scalars[0] == "/", Self.isDrive(String(String.UnicodeScalarView(scalars[1...2]))),
+           scalars.count == 3 || isSeparator(scalars[3]) {
+            scalars.removeFirst()
+        }
+        var written = String(String.UnicodeScalarView(scalars.map { isSeparator($0) ? backslash : $0 }))
+        // A drive's root keeps its separator: `C:` alone is the drive's current folder.
+        if written.count > 1, written.hasSuffix("\\"), !Self.isDrive(String(written.dropLast())) { written.removeLast() }
+        return written
+    }
+
     /// The file `path` names: itself when it is absolute, else read from `folder`.
     public func url(for path: String, in folder: URL, directoryHint: URL.DirectoryHint = .inferFromPath) -> URL {
         if isAbsolute(path) { return URL(filePath: path, directoryHint: directoryHint) }
