@@ -110,7 +110,8 @@ final class NewTaskPane {
         placeRow.children.append(placeBox)
         chooseFolderButton.content = L10n.string("Choose project…")
         chooseFolderButton.verticalAlignment = .bottom
-        chooseFolderButton.click.addHandler { [weak self] _, _ in self?.chooseFolder() }
+        // The dialog runs modally until it closes, so it opens after the click returns, as Import conversation's does.
+        chooseFolderButton.click.addHandler { [weak self] _, _ in Task { @MainActor in self?.chooseFolder() } }
         placeRow.children.append(chooseFolderButton)
         view.children.append(placeRow)
 
