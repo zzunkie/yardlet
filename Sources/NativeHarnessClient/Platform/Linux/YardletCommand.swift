@@ -27,6 +27,8 @@ enum YardletCommand {
 
     @MainActor
     static func main() {
+        // A host started from an SSH shell, and a sign-in run from one, start the harnesses as the service does.
+        HostSessionEnvironment.detachFromHostSession()
         exit(run(Array(CommandLine.arguments.dropFirst())))
     }
 

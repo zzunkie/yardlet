@@ -149,8 +149,11 @@ which knows the install its tasks start and the account folder they use (`Platfo
 **Antigravity CLI** keeps its Google login in the Secret Service on Linux (through go-keyring, over D-Bus), as on the
 Mac it uses the Keychain. A headless server has none by default, so before `yardlet host login agy` the computer needs
 a D-Bus session for the account (`dbus-user-session`), a Secret Service (`gnome-keyring`) and that keyring unlocked in
-the session the host runs in; without them agy cannot keep its login. Yardlet sets none of this up, and the host does
-not read Antigravity's login on Linux yet (it reads as unknown).
+the session the host runs in; without a D-Bus session agy keeps its login in a file instead. It does that too when it
+sees an SSH connection's variables (`SSH_CONNECTION`, `SSH_CLIENT`, `SSH_TTY`), so `yardlet` drops them before it
+starts anything, as the Mac app does: a sign-in from an SSH shell, and a host started from one, keep and read the login
+where the service does. Yardlet sets none of this up. The host reads the login as agy's own check reports it
+(`AGY_CLI_CDE_AUTH_ACTION=check`).
 
 ## Processes
 
@@ -170,6 +173,9 @@ for Claude Code, npm's global folder, nvm's). As the Mac app does when the Dock 
 login shell (the account's shell in the user database, else `$SHELL`) for its `PATH` once at start
 (`Runtime/LoginShellPath.swift`, `-l -i`, at most five seconds) and starts harnesses with it; `status` answers once
 that first look for the harnesses is done. Started from a terminal, it keeps that terminal's `PATH`.
+
+Codex runs commands in a sandbox of its own, which on Linux needs bubblewrap (`bwrap`, `sudo apt install bubblewrap`);
+without it each Codex task starts with Codex's notice that it is missing.
 
 ## Direct paths
 

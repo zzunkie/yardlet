@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 
 /// Yardlet started from inside a Claude Code session (a terminal `swift run`, or an agent that opened
@@ -9,7 +8,10 @@ import Foundation
 /// Yardlet opened from an SSH shell (`open` hands the shell's variables to the app) likewise carries
 /// that connection's variables, though its tasks run in the person's own login session. A CLI that
 /// sees them takes itself to be remote: Antigravity CLI then leaves the macOS keychain alone and
-/// finds no sign-in. They are dropped too.
+/// finds no sign-in. They are dropped too. The Linux host's `yardlet` command drops them as well:
+/// there Antigravity CLI keeps its login in a file instead of the Secret Service when it sees them,
+/// so a sign-in from an SSH shell, or a host started from one, would not find the login the host
+/// running as a service reads.
 enum HostSessionEnvironment {
     private static let names: Set<String> = [
         "CLAUDECODE", "CLAUDE_PID", "CLAUDE_CONFIG_DIR", "CLAUDE_EFFORT", "ENABLE_CLAUDEAI_MCP_SERVERS",
@@ -30,7 +32,9 @@ enum HostSessionEnvironment {
         }.sorted()
     }
 
+    #if !os(Windows)
     static func detachFromHostSession() {
         for key in hostVariables(in: ProcessInfo.processInfo.environment) { unsetenv(key) }
     }
+    #endif
 }
