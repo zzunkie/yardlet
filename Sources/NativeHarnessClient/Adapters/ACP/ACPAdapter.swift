@@ -47,8 +47,6 @@ actor ACPAdapter:
     private let capabilityProjector = ACPCapabilityProjector()
 
     private var canLoadSession = false
-    /// The agent's `initialize` answer on `sessionCapabilities.close`.
-    private var canCloseSession = false
     /// The agent's `initialize` answer on stdio MCP servers; ACP makes them mandatory.
     private var acceptsStdioMCPServers = true
     /// nil until the agent has answered `initialize`.
@@ -580,11 +578,30 @@ actor ACPAdapter:
         let lane = laneByLocalSessionID[session.localSessionID]
         let wasOpen = forget(session)
         eventChannel.close(session.localSessionID)
-        // Closing the last open session of a process ends it; closing a session again, or one whose
-        // process already ended, leaves alone a process started since.
-        if wasOpen, let lane {
-            await stopProcessIfUnused(lane)
+        // Closing the last open session of a process ends it, and closing one of several tells the
+        // process (`release`); closing a session again, or one whose process already ended, leaves
+        // alone a process started since.
+        if wasOpen, let lane, let process = processes[lane] {
+            await release(session.providerSessionID, on: lane, from: process.transport)
         }
+    }
+
+    /// Lets `transport`, `lane`'s process, drop `providerSessionID`, which no open session holds there
+    /// any more: a process no open session uses ends, and one that goes on serving others is told with
+    /// `session/close` if it advertised it, so the agent can let go of what it keeps for that session,
+    /// such as its MCP servers. Without that the agent keeps the session for as long as its process runs.
+    /// The request is written before anything sent after it, so a later `session/load` of the same
+    /// conversation reaches the agent after it, and no one waits for its answer, which `accept` drops:
+    /// a slow or failed one holds up neither the close nor the next session.
+    private func release(_ providerSessionID: String, on lane: ACPProcessLane, from transport: any ACPTransport) async {
+        guard let process = processes[lane], process.transport === transport else { return }
+        guard laneByLocalSessionID.values.contains(lane) else {
+            await stopProcess(lane)
+            return
+        }
+        guard process.canCloseSession else { return }
+        let id = takeRequestID()
+        try? await transport.send(ACPProtocol.closeSession(id: id, providerSessionID: providerSessionID))
     }
 
     /// Drops what the adapter holds for `session`, and returns whether it was open.
@@ -686,7 +703,8 @@ actor ACPAdapter:
                 throw HarnessAdapterError.processExited(code: -1, message: "ACP transport stopped")
             }
             canLoadSession = result["agentCapabilities"]?["loadSession"]?.boolValue == true
-            canCloseSession = result["agentCapabilities"]?["sessionCapabilities"]?["close"] != nil
+            processes[lane]?.canCloseSession = result["agentCapabilities"]?["sessionCapabilities"]?["close"]?
+                .objectValue != nil
             acceptsStdioMCPServers = ACPProtocol.acceptsStdioMCPServers(initializeResult: result)
             // Image prompts belong to the agent, not to the ACP family. Record what this agent
             // advertised so a turn is never sent with a block it did not ask for.
@@ -757,7 +775,7 @@ actor ACPAdapter:
         }
         // Closed, or ended with its process, while the conversation loaded.
         guard handles[id] == session, laneByLocalSessionID[id] == current else {
-            await stopProcessIfUnused(lane, used: target)
+            await release(session.providerSessionID, on: lane, from: target)
             return
         }
         let source = transport(for: current)
@@ -772,14 +790,7 @@ actor ACPAdapter:
             _ = try? await setSessionOption(id: selector.id, value: selector.currentValue, in: session)
         }
         capabilityStateByLocalSessionID[id]?.actionMessage = previous?.actionMessage
-        if canCloseSession {
-            let requestID = takeRequestID()
-            _ = try? await source.request(
-                ACPProtocol.closeSession(id: requestID, providerSessionID: session.providerSessionID),
-                id: requestID
-            )
-        }
-        await stopProcessIfUnused(current, used: source)
+        await release(session.providerSessionID, on: current, from: source)
     }
 
     private func accept(_ frame: ACPRawFrame, from transport: any ACPTransport) async {
@@ -1161,10 +1172,11 @@ enum ACPProcessLane: Hashable, Sendable {
     var stepsWaitForApproval: Bool { self == .standard }
 }
 
-/// One process of an ACP adapter: its transport, whether `initialize` has run on it, and the task
-/// reading its messages.
+/// One process of an ACP adapter: its transport, whether `initialize` has run on it, the task
+/// reading its messages, and whether it advertised `sessionCapabilities.close`.
 private struct ACPAgentProcess {
     let transport: any ACPTransport
     var initialized = false
     var messageTask: Task<Void, Never>?
+    var canCloseSession = false
 }

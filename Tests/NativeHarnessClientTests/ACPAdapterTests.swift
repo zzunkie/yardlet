@@ -204,6 +204,42 @@ final class ACPAdapterTests: XCTestCase {
         XCTAssertEqual(thirdStopsAfterClose, 1)
     }
 
+    /// Every task of an agent shares its process, so a task that closes leaves the others on it. The
+    /// process hears that the task's session closed (`session/close`) when it advertised that, before
+    /// anything sent after, without anyone waiting for its answer (the fake never gives one); an agent
+    /// that did not advertise it hears nothing. The last task to close ends the process instead.
+    func testClosingOneOfAProcesssSessionsClosesItThereWhenTheAgentAdvertisedClose() async throws {
+        for advertisesClose in [true, false] {
+            let transport = FakeACPTransport(advertisesClose: advertisesClose)
+            let adapter = ACPAdapter(kind: .openCode, executableURL: URL(filePath: "/tmp/fake-opencode"),
+                                     transportFactory: transportSequence(transport))
+            let workspace = URL(filePath: "/tmp/acp-workspace")
+            let closing = try await adapter.createSession(
+                CreateHarnessSessionRequest(localSessionID: UUID(), workspaceURL: workspace, initialPrompt: nil))
+            let staying = try await adapter.resumeSession(
+                providerSessionID: "saved-session", localSessionID: UUID(), workspaceURL: workspace)
+
+            await adapter.close(closing)
+            let reopened = try await adapter.resumeSession(
+                providerSessionID: closing.providerSessionID, localSessionID: closing.localSessionID, workspaceURL: workspace)
+            let written = await transport.writtenMethods
+            let closes = await transport.sentMessages.filter { $0["method"]?.stringValue == "session/close" }
+            let stopsWhileOthersRun = await transport.stopCount
+            XCTAssertEqual(written, ["initialize", "session/new", "session/load"]
+                + (advertisesClose ? ["session/close"] : []) + ["session/load"])
+            XCTAssertEqual(closes.compactMap { $0["params"]?["sessionId"]?.stringValue }, advertisesClose ? [closing.providerSessionID] : [])
+            XCTAssertEqual(stopsWhileOthersRun, 0)
+
+            await adapter.close(staying)
+            await adapter.close(reopened)
+            let writtenAtEnd = await transport.writtenMethods
+            let stops = await transport.stopCount
+            XCTAssertEqual(writtenAtEnd.count, written.count + (advertisesClose ? 1 : 0),
+                           "Only the first of the two closes is sent; the last one ends the process")
+            XCTAssertEqual(stops, 1)
+        }
+    }
+
     func testResumeFailsClosedWhenRuntimeDoesNotAdvertiseSessionLoading() async throws {
         let transport = FakeACPTransport(canLoadSession: false)
         let adapter = ACPAdapter(
@@ -441,7 +477,7 @@ final class ACPAdapterTests: XCTestCase {
     /// session as they are chosen, and Plan, where Yardlet answers no. Bypass permissions runs the
     /// session on `agy acp --dangerously-skip-permissions`, which approves for itself even in the turns
     /// the agent starts between prompts: the conversation is loaded there with the task's model and
-    /// effort, and closed on the process it leaves, between prompts.
+    /// effort, between prompts, and the process it leaves ends once no task uses it.
     func testAntigravityKeepsItsOptionNamesAndAnswersApprovalsByItsPermissionMode() async throws {
         let transport = FakeACPTransport(exposesAntigravity: true)
         let bypassing = FakeACPTransport(exposesAntigravity: true)
@@ -530,9 +566,7 @@ final class ACPAdapterTests: XCTestCase {
         XCTAssertEqual(bypassMethods, ["initialize", "session/load", "session/set_config_option"])
         let restored = await configSent(bypassing)
         XCTAssertEqual(restored, ["thought_level=low"])
-        let left = await transport.requestMethods.last
         let leftStops = await transport.stopCount
-        XCTAssertEqual(left, "session/close")
         XCTAssertEqual(leftStops, 1, "A process no session uses ends")
         await ask("bypass-1", on: bypassing)
         try await waitUntil { await answer("bypass-1", on: bypassing) != nil }
@@ -1285,6 +1319,8 @@ actor FakeACPTransport: ACPTransport {
     /// `configOptions`, the model variants in `models.availableModels` and the modes in `modes`. A
     /// session it loads starts on the default mode.
     private let exposesAntigravity: Bool
+    /// Advertises `sessionCapabilities.close`, as `agy acp` does.
+    private let advertisesClose: Bool
     /// Runs while the transport stops, as a process's end changes what the process table shows.
     private let onStop: (@Sendable () -> Void)?
     private var antigravityModel = "gemini-3.8-flash"
@@ -1295,6 +1331,8 @@ actor FakeACPTransport: ACPTransport {
     private(set) var requestValues: [JSONValue] = []
     private(set) var requestMethodsWithoutTimeout: [String] = []
     private(set) var sentMessages: [JSONValue] = []
+    /// The methods of the requests and messages sent, in the order they were written.
+    private(set) var writtenMethods: [String] = []
     private(set) var stopCount = 0
     private var exited = false
 
@@ -1305,6 +1343,7 @@ actor FakeACPTransport: ACPTransport {
         canLoadSession: Bool = true,
         advertisesImagePrompts: Bool = false,
         exposesAntigravity: Bool = false,
+        advertisesClose: Bool = false,
         onStop: (@Sendable () -> Void)? = nil
     ) {
         let pair = AsyncStream<ACPRawFrame>.makeStream()
@@ -1316,6 +1355,7 @@ actor FakeACPTransport: ACPTransport {
         self.canLoadSession = canLoadSession
         self.advertisesImagePrompts = advertisesImagePrompts
         self.exposesAntigravity = exposesAntigravity
+        self.advertisesClose = advertisesClose || exposesAntigravity
         self.onStop = onStop
     }
 
@@ -1334,13 +1374,14 @@ actor FakeACPTransport: ACPTransport {
         guard !exited else { throw HarnessAdapterError.processExited(code: -1, message: "ACP agent is not running") }
         requestMethods.append(method)
         requestValues.append(value)
+        writtenMethods.append(method)
         switch method {
         case "initialize":
             var capabilities: [String: JSONValue] = [
                 "loadSession": .bool(canLoadSession),
                 "promptCapabilities": .object(["image": .bool(advertisesImagePrompts)])
             ]
-            if exposesAntigravity { capabilities["sessionCapabilities"] = .object(["close": .object([:])]) }
+            if advertisesClose { capabilities["sessionCapabilities"] = .object(["close": .object([:])]) }
             return .object([
                 "protocolVersion": .integer(protocolVersion),
                 "agentCapabilities": .object(capabilities)
@@ -1455,6 +1496,7 @@ actor FakeACPTransport: ACPTransport {
     func send(_ value: JSONValue) async throws {
         guard !exited else { throw HarnessAdapterError.processExited(code: -1, message: "ACP agent is not running") }
         sentMessages.append(value)
+        if let method = value["method"]?.stringValue { writtenMethods.append(method) }
     }
     func messages() async -> AsyncStream<ACPRawFrame> { stream }
     func stop() async {

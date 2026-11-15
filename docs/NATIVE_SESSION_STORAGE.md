@@ -847,7 +847,11 @@ Yardlet removes there is the CLI's extra copies of Yardlet's tool schemas, descr
 
 - **How Yardlet runs it:** from 1.4.11 the CLI serves the Agent Client Protocol (`agy acp`, documented by `agy help acp`),
   and Yardlet runs it as it runs the other ACP agents: one `agy acp` process per account and storage, `session/new` for a
-  new task and `session/load` for one that continues. Tasks in Bypass permissions share a second process,
+  new task and `session/load` for one that continues. A session no task uses any more (the task detached, or its
+  subagent run ended) is closed on a process other tasks still use with `session/close`, which the CLI advertises, so
+  the process can let go of what it keeps for that session, such as its MCP servers; the last task to leave a process
+  ends it. Another ACP agent that advertises `sessionCapabilities.close` is treated alike, and one that does not keeps
+  such sessions until its process ends. Tasks in Bypass permissions share a second process,
   `agy acp --dangerously-skip-permissions` (see Saved options). The version the runtime reported decides (`AntigravityTransport`;
   `--version` runs again only when the file changes). An earlier version, or one whose version could not be read, keeps
   print mode: one `agy --print --output-format stream-json` per turn. Print mode chosen because the version could not be
@@ -900,10 +904,10 @@ Yardlet removes there is the CLI's extra copies of Yardlet's tool schemas, descr
   also in the turns the agent starts between prompts, and still blocks the commands on the CLI's own system denylist.
   Choosing Bypass permissions, or leaving it, loads the conversation on the other process (`session/load`), sets the
   task's model, effort and mode there again, since a loaded session starts on the CLI's defaults, and closes it on the
-  process it left (`session/close`), which ends once no task uses it. This happens between prompts: Bypass permissions
-  chosen while a prompt runs takes effect when the prompt ends. The new-task screen offers the modes a session last
-  listed, and before any has, Default and Bypass permissions. Print mode's agent, sandbox and review choices are left
-  alone.
+  process it left (`session/close`), or ends that process once no task uses it. This happens between prompts: Bypass
+  permissions chosen while a prompt runs takes effect when the prompt ends. The new-task screen offers the modes a
+  session last listed, and before any has, Default and Bypass permissions. Print mode's agent, sandbox and review
+  choices are left alone.
 
 - **Index `conversation_summaries.db`:** the `/resume` list of `agy`. It is in WAL mode, so opening it read-only can
   still create `-wal` and `-shm`, and Yardlet makes a copy (with `-wal` if present) in a 0700 temporary folder, reads it
