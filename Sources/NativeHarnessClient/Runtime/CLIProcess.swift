@@ -10,7 +10,7 @@ enum CLIProcess {
             let error = Pipe()
             process.executableURL = command.executable
             process.arguments = command.arguments
-            process.standardInput = FileHandle.nullDevice
+            process.standardInput = FileHandle.childNullDevice()
             process.standardOutput = output
             process.standardError = error
             if let currentDirectory { process.currentDirectoryURL = currentDirectory }
@@ -76,7 +76,7 @@ enum CLIProcess {
             process.currentDirectoryURL = folder
             process.standardInput = input
             process.standardOutput = output
-            process.standardError = FileHandle.nullDevice
+            process.standardError = FileHandle.childNullDevice()
             process.environment = environment
             let exit: ProcessExit
             do { exit = try ProcessExit(running: process) } catch { return .failed(error.localizedDescription) }

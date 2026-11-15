@@ -43,7 +43,7 @@ enum ClaudeUsageProbe {
             process.currentDirectoryURL = folder
             process.standardInput = input
             process.standardOutput = output
-            process.standardError = FileHandle.nullDevice
+            process.standardError = FileHandle.childNullDevice()
             var values = RuntimeProcessEnvironment.values(executableURL: executableURL,
                 overrides: ["NO_COLOR": "1"].merging(environment) { _, new in new })
             // The CLI counts the usage endpoint as nonessential traffic.

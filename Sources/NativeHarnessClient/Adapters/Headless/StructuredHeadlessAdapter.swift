@@ -856,7 +856,7 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, Ha
         process.standardOutput = outputPipe
         process.standardError = errorPipe
         // A listing command left holding an inherited input waits on it (CLI 1.1.23).
-        process.standardInput = FileHandle.nullDevice
+        process.standardInput = FileHandle.childNullDevice()
         process.environment = RuntimeProcessEnvironment.values(executableURL: executableURL, overrides: environment)
         let exit = try ProcessExit(running: process)
         let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()

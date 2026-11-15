@@ -430,7 +430,7 @@ actor TaskWorktreeService {
             for: executableURL,
             overrides: ["GIT_PAGER": "cat", "PAGER": "cat", "GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0"]
         ).merging(environment) { _, new in new }
-        process.standardInput = FileHandle.nullDevice
+        process.standardInput = FileHandle.childNullDevice()
         process.standardOutput = outputHandle
         process.standardError = errorHandle
         do {

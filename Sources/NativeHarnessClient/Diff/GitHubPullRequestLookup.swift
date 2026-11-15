@@ -61,7 +61,7 @@ struct LocalGitHubCLI: GitHubCLIRunning {
             process.currentDirectoryURL = directory
             process.environment = RuntimeProcessEnvironment.values(executableURL: executableURL,
                                                                     overrides: Self.environment)
-            process.standardInput = FileHandle.nullDevice
+            process.standardInput = FileHandle.childNullDevice()
             process.standardOutput = output
             process.standardError = error
             let exit: ProcessExit

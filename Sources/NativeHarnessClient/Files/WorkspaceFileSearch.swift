@@ -54,8 +54,8 @@ enum WorkspaceFileListing {
         process.environment = GitExecutableLocator.environment(for: executableURL, overrides: ["GIT_OPTIONAL_LOCKS": "0"])
         let output = Pipe()
         process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        process.standardInput = FileHandle.nullDevice
+        process.standardError = FileHandle.childNullDevice()
+        process.standardInput = FileHandle.childNullDevice()
         let exit: ProcessExit
         do { exit = try ProcessExit(running: process) } catch { return nil }
         // Apple's Git can block while resolving a folder outside the app's file access.

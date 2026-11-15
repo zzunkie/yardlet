@@ -17,3 +17,18 @@ extension Pipe {
         return pipe
     }
 }
+
+extension FileHandle {
+    /// The null device as a child process's standard input, output or error. On Windows, Swift 6.4's `Process`
+    /// opens NUL for `nullDevice` without letting the child inherit it, so the child gets a handle that names
+    /// nothing, and a CLI that writes to it can stop there: Antigravity CLI's `agy acp` waited on its first log line
+    /// and never answered. NUL opened here is handed over as any other file is, inherited. Elsewhere it is
+    /// `nullDevice`.
+    static func childNullDevice() -> FileHandle {
+        #if os(Windows)
+        FileHandle(forUpdatingAtPath: #"\\.\NUL"#) ?? .nullDevice
+        #else
+        .nullDevice
+        #endif
+    }
+}
