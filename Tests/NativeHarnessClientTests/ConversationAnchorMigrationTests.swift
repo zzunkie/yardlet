@@ -256,12 +256,22 @@ final class ConversationAnchorMigrationTests: XCTestCase {
 
     func testTheLatestRequestKeepsItsKeyWhileTheTurnsAreRenamed() {
         let latest = ConversationLatestRequest()
-        XCTAssertNil(latest.id(latestTurnID: nil) { _, _ in true })
-        XCTAssertEqual(latest.id(latestTurnID: "echo") { _, _ in false }, "echo")
-        XCTAssertEqual(latest.id(latestTurnID: "snapshot-3") { _, _ in false }, "snapshot-3")
-        XCTAssertEqual(latest.id(latestTurnID: "turn-3") { old, new in old == "snapshot-3" && new == "turn-3" }, "snapshot-3")
-        XCTAssertEqual(latest.id(latestTurnID: "turn-3") { _, _ in false }, "snapshot-3")
-        XCTAssertEqual(latest.id(latestTurnID: "turn-4") { _, _ in false }, "turn-4")
+        func key(_ turns: [String], renamed: (String, String)? = nil) -> String? {
+            latest.id(firstTurnID: turns.first, latestTurnID: turns.last, holds: { turns.contains($0) }) { old, new in
+                renamed.map { $0 == (old, new) } ?? false
+            }
+        }
+        XCTAssertNil(key([]))
+        XCTAssertEqual(key(["echo"]), "echo")
+        XCTAssertEqual(key(["echo", "snapshot-3"]), "snapshot-3")
+        XCTAssertEqual(key(["echo", "turn-3"], renamed: ("snapshot-3", "turn-3")), "snapshot-3")
+        XCTAssertEqual(key(["turn-1", "turn-2", "turn-3"]), "snapshot-3")
+        XCTAssertEqual(key(["turn-1", "turn-2", "turn-3", "turn-4"]), "turn-4")
+        XCTAssertEqual(key(["turn-1", "turn-2", "turn-3", "edited"]), "edited", "the latest message edited is a new request")
+        // What the reading cache showed, replaced by the provider's history under its own names: nothing
+        // was sent, and a reader who went to an earlier turn while it was read is not taken to the end.
+        XCTAssertEqual(key(["file-1", "file-2", "file-3", "file-4"]), "edited")
+        XCTAssertEqual(key(["file-1", "file-2", "file-3", "file-4", "file-5"]), "file-5")
     }
 
     // MARK: - A saved Claude workspace (M9)

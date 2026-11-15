@@ -132,7 +132,10 @@ struct ConversationTimeline: View {
         // card comes or the task moves past it, not with each entry added, so a turn is not drawn
         // again for each of them.
         let context = itemContext(presentation)
-        let latestRequestID = latestRequest.id(latestTurnID: railTurns.last?.id) { loaded.anchors.isRenamed($0, as: $1) }
+        let latestRequestID = latestRequest.id(
+            firstTurnID: whole.turns.first?.id, latestTurnID: railTurns.last?.id,
+            holds: { id in loaded.whole.turns.contains { $0.id == id } },
+            isRenamed: { loaded.anchors.isRenamed($0, as: $1) })
         HStack(spacing: 0) {
             if railTurns.count > 1 || hasEarlierTurns {
                 ConversationReadingRail(
@@ -739,19 +742,31 @@ private extension View {
     func takesOfferedSize() -> some View { OfferedSizeLayout { self } }
 }
 
-/// "The latest request", which following moves to whenever it changes. A conversation that renames
-/// its turns (a detached Codex snapshot replaced by its thread) keeps it, so the reader is not taken
-/// to the bottom when nothing new was sent. The renderer owns one as `@State`; nothing observes it.
+/// "The latest request", which following moves to whenever it changes: the conversation went on to a
+/// new latest turn. A conversation read again under new names keeps it, so the reader is not taken to
+/// the bottom when nothing new was sent: a detached Codex snapshot replaced by its thread, or what
+/// Yardlet's reading cache showed replaced by the provider's own history, which holds none of the
+/// turns shown before. A reader who went to an earlier turn while the history was read stays there.
+/// The renderer owns one as `@State`; nothing observes it.
 final class ConversationLatestRequest {
     private var turnID: String?
+    /// The conversation's first turn when it was last asked.
+    private var firstTurnID: String?
     private var key: String?
 
-    /// The key for `latestTurnID`. `isRenamed(old, new)` says the previous latest turn is the new
-    /// one under a new name.
-    func id(latestTurnID: String?, isRenamed: (String, String) -> Bool) -> String? {
+    /// The key for a conversation whose turns run from `firstTurnID` to `latestTurnID`. `holds(id)`
+    /// says the conversation has turn `id`, and `isRenamed(old, new)` says the previous latest turn
+    /// is the new one under a new name. Either is asked only when the latest turn changes.
+    func id(firstTurnID: String?, latestTurnID: String?, holds: (String) -> Bool,
+            isRenamed: (String, String) -> Bool) -> String? {
+        let previousFirst = self.firstTurnID
+        self.firstTurnID = firstTurnID
         guard latestTurnID != turnID else { return key }
         defer { turnID = latestTurnID }
-        if let previous = turnID, let latestTurnID, key != nil, isRenamed(previous, latestTurnID) { return key }
+        if let previous = turnID, let latestTurnID, key != nil,
+           isRenamed(previous, latestTurnID) || !(holds(previous) || previousFirst.map(holds) == true) {
+            return key
+        }
         key = latestTurnID
         return key
     }
