@@ -29,6 +29,10 @@ final class PhoneModel {
     /// The app is in front: the scene's first `active` opens the connection, so launching starts it once.
     @ObservationIgnored private var isActive = false
     @ObservationIgnored private var pushRegistration: (provider: String, token: String)?
+    /// A notification's Allow Once, waiting for App Lock and its Mac's connection; dropped once the app leaves the front.
+    @ObservationIgnored private var notificationAllow: Task<Void, Never>?
+    /// When the demo's notification shows, once scheduled; nil until the person leaves the demo with an approval waiting.
+    @ObservationIgnored private var demoNoticeAt: Date?
 
     private var selectedHostID: String {
         get { UserDefaults.standard.string(forKey: "selectedHost") ?? "" }
@@ -107,6 +111,7 @@ final class PhoneModel {
         }
         keys.delete(hostID: hostID)
         PushKeys.delete(hostID: hostID)
+        Task { await PushNotice.withdraw { host, _ in host == hostID } }
         store.remove(hostID)
         hosts = store.all()
         if let next = hosts.first { show(next) }
@@ -190,13 +195,44 @@ final class PhoneModel {
         }
     }
 
-    /// Leaves the demo for the saved Macs, or the first screen when there are none.
+    /// Leaves the demo for the saved Macs, or the first screen when there are none. Its notification goes with it.
     func endDemo() {
         guard let demo else { return }
+        if let demoID = session?.id {
+            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [Self.demoNotice])
+            Task { await PushNotice.withdraw { host, _ in host == demoID } }
+        }
+        demoNoticeAt = nil
         session?.stop()
         session = nil
         self.demo = nil
         Task { await demo.stop() }
+    }
+
+    static let demoNotice = "demo.approval"
+
+    /// The demo's notification: a few seconds after the person leaves the app, the approval a demo task waits on
+    /// notifies as a Mac's push would, Allow Once included, so a notification can be seen without a Mac. Once per
+    /// demo, and only on this phone: the demo never registers for pushes.
+    private func scheduleDemoNotice(_ demo: DemoMac, hostID: String) {
+        guard demoNoticeAt == nil else { return }
+        let delay: TimeInterval = 4
+        demoNoticeAt = Date().addingTimeInterval(delay)
+        // Time to schedule it before iOS suspends the app.
+        let background = UIApplication.shared.beginBackgroundTask(expirationHandler: nil)
+        Task {
+            defer { UIApplication.shared.endBackgroundTask(background) }
+            guard let event = await demo.waitingApproval() else {
+                demoNoticeAt = nil
+                return
+            }
+            let content = UNMutableNotificationContent()
+            PushNotice.fill(content, with: event, hostID: hostID)
+            let center = UNUserNotificationCenter.current()
+            content.badge = NSNumber(value: PushNotice.badge((await center.deliveredNotifications()).map(\.request.content) + [content]))
+            let trigger = UNTimeIntervalNotificationTrigger(timeInterval: delay, repeats: false)
+            try? await center.add(UNNotificationRequest(identifier: Self.demoNotice, content: content, trigger: trigger))
+        }
     }
 
     func leaveDemo() {
@@ -213,11 +249,22 @@ final class PhoneModel {
             lock.appCameToFront()
             // Opens the connection closed in the background, or tries an open one again now.
             session?.reconnectNow()
+            // Back before the demo's notification showed: it waits for the next time the person leaves.
+            if let at = demoNoticeAt, Date() < at {
+                UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [Self.demoNotice])
+                demoNoticeAt = nil
+            }
+            // Notifications of a Mac no longer paired, or of a demo that ended, go; the badge counts what is left.
+            let known = Set(hosts.map(\.id) + [session?.id].compactMap { $0 })
+            Task { await PushNotice.withdraw { host, _ in host.map { !known.contains($0) } ?? false } }
         case .background:
             isActive = false
+            notificationAllow?.cancel()
+            notificationAllow = nil
             // The Mac pushes only to a phone it holds no connection from (§16).
             session?.stop()
             lock.appWentAway()
+            if let demo, let session, session.isDemo { scheduleDemoNotice(demo, hostID: session.id) }
         default:
             break
         }
@@ -225,10 +272,11 @@ final class PhoneModel {
 
     // MARK: - Notifications
 
+    /// Asked once a Mac is paired, and when the demo starts (its notification is local, so it registers no push).
     func requestNotificationPermission() {
         Task {
             let granted = (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])) ?? false
-            if granted { UIApplication.shared.registerForRemoteNotifications() }
+            if granted && !isDemo { UIApplication.shared.registerForRemoteNotifications() }
         }
     }
 
@@ -238,10 +286,43 @@ final class PhoneModel {
         session?.pushRegistration = registration
     }
 
-    /// A notification opened: its Mac shown, then its task.
+    /// A notification opened: its Mac shown, then its task. A Mac removed since, or the demo's after it ended, opens
+    /// nothing.
     func openNotification(taskID: String?, hostID: String?) {
         if let hostID, hostID != session?.id { select(hostID) }
+        guard hostID == nil || hostID == session?.id else { return }
         if let taskID { taskToOpen = taskID }
+    }
+
+    /// A notification's Allow Once (§4.4): its Mac and task shown as a tap shows them, then, once App Lock is open and
+    /// that Mac's connection is up, the same request allowed if it still waits (`HostSession.allowOnceFromNotification`).
+    /// It waits on App Lock as long as the owner takes, and on the connection for 30 seconds; it is dropped when the
+    /// app leaves the front or another Mac is shown, and a Mac removed since allows nothing.
+    func allowOnceFromNotification(taskID: String, hostID: String, requestID: String) {
+        openNotification(taskID: taskID, hostID: hostID)
+        guard let session, session.id == hostID else { return }
+        notificationAllow?.cancel()
+        notificationAllow = Task { [weak self] in
+            let mayAnswer = { [weak self] in
+                self?.session === session && self?.isActive == true && self?.lock.isLocked == false
+            }
+            var deadline: ContinuousClock.Instant?
+            while !Task.isCancelled, self?.session === session {
+                if mayAnswer() {
+                    if session.isConnected {
+                        await session.allowOnceFromNotification(taskID: taskID, requestID: requestID, mayAnswer: mayAnswer)
+                        return
+                    }
+                    let end = deadline ?? .now + .seconds(30)
+                    deadline = end
+                    if .now > end {
+                        session.commandError = HostSession.message(for: RemoteError(.unavailable), host: session.name)
+                        return
+                    }
+                }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        }
     }
 }
 

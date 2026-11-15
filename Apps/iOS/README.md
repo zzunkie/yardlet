@@ -42,7 +42,7 @@ Paste the pairing URL it prints into "Paste a Pairing Link", or open it in the S
 `xcrun simctl openurl booted '<pairing URL>'`.
 
 **Screens without touching them:** a debug build reads launch arguments for screenshots and checks: `-demo YES` starts
-the demo, `-openTask <task ID>` opens a task, and `-sheet newTask`, `-sheet settings` or `-sheet taskSettings` opens
+the demo (without asking for notification permission, as "Try Without a Mac" does), `-openTask <task ID>` opens a task, and `-sheet newTask`, `-sheet settings` or `-sheet taskSettings` opens
 that sheet (`-sheet suggestionOptions` opens the Options of a suggested task in the open task), and
 `-openLink '<pairing link>'` opens a link as another app would, for example:
 
@@ -80,6 +80,15 @@ extension. The relay sends an urgent push as an alert with `mutable-content`; th
 `k` names and shows the task, what waits and the Mac's name, or keeps the app's own fallback words when it cannot.
 A push that only withdraws a notice is a background push the app reads to remove that task's notifications. The relay
 needs the APNs key to send any of this (relay/README.md).
+
+An ordinary approval's notification offers Allow Once. It opens the app once the phone is unlocked and sends nothing
+until App Lock is open too; the app then reads the task's page again on a live connection to that Mac and allows only
+the same request, still pending, with a command short enough to allow unread (whole, one line, at most 120
+characters). Anything else opens the task's card instead. The app icon's badge counts the tasks with a notification in
+Notification Center: the extension sets it for each push, and the app lowers it when a notification is withdrawn, its
+task is read, or the list shows the task no longer waiting or unread. The demo shows one approval notification a few
+seconds after the person leaves the app, scheduled on the phone; it asks for notification permission when it starts and
+registers no push.
 
 ## Signing
 

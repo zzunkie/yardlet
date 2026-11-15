@@ -2123,6 +2123,16 @@
         }
       }
     },
+    "This command is too long to allow from a notification. Read it whole, then allow it.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "명령이 길어 알림에서 허용하지 않았습니다. 명령 전체를 확인한 뒤 허용하세요."
+          }
+        }
+      }
+    },
     "This command is too long to reach the phone whole. Allow it on your Mac.": {
       "localizations": {
         "ko": {

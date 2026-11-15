@@ -31,6 +31,16 @@
         }
       }
     },
+    "Allow Once": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "한 번만 허용"
+          }
+        }
+      }
+    },
     "Approval requested": {
       "localizations": {
         "ko": {

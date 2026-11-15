@@ -68,6 +68,8 @@ final class HostSession: Identifiable {
     @ObservationIgnored private var finder: BonjourFinder?
     @ObservationIgnored private var pending: [String: (RemoteResponse) -> Void] = [:]
     @ObservationIgnored private var nextRequest = 0
+    /// Counts connections opened and lost, so what was read on one connection is not acted on over another.
+    @ObservationIgnored private var connectionNumber = 0
     /// Subscriptions, the least recently shown first; a Mac takes 8 per connection (§7).
     @ObservationIgnored private var subscribed: [String] = []
     @ObservationIgnored static let keptSubscriptions = 6
@@ -212,7 +214,9 @@ final class HostSession: Identifiable {
             linkRequests.append(LinkRequest(id: requestID, name: event.name, code: code))
         case .linkResolved:
             linkRequests.removeAll { $0.id == event.requestId }
-        case .attention, .schedulesChanged, .linked, .linkRefused, .tabFrame, .browserTabsChanged, .tabCopied,
+        case .attention:
+            if let taskID = event.taskId, PushNotice.outdates(event) { withdrawNotices { $0 == taskID } }
+        case .schedulesChanged, .linked, .linkRefused, .tabFrame, .browserTabsChanged, .tabCopied,
              .terminalOutput, .terminalClosed, .hostSettingsChanged, .hostAccountsChanged:
             // Not shown on the phone yet: schedules, browser tabs and their copies, terminals, host settings and accounts (§15.21, §15.25, §15.29, §15.36, §15.37).
             // `linked` and `linkRefused` go only to the connection that asked (§12.1).
@@ -237,6 +241,7 @@ final class HostSession: Identifiable {
                 clockOffset = Double(serverTime) / 1000 - Date().timeIntervalSince1970
             }
             hasSnapshot = true
+            withdrawSettledNotices()
         }
         for taskID in subscribed { subscribe(taskID) }
     }
@@ -256,6 +261,7 @@ final class HostSession: Identifiable {
         taskControls = response.taskControls == true
         suggestionOptions = response.suggestionOptions == true
         composerExtensions = response.composerExtensions == true
+        withdrawSettledNotices()
     }
 
     private func applyTasks(changed: [RemoteTask], removed: [String]) {
@@ -295,6 +301,65 @@ final class HostSession: Identifiable {
         }
     }
 
+    // MARK: - Notifications
+
+    /// Takes back this Mac's notifications of the tasks `matching` picks, and their count on the badge.
+    private func withdrawNotices(_ matching: @escaping @Sendable (_ taskID: String) -> Bool) {
+        let hostID = id
+        Task { await PushNotice.withdraw { $0 == hostID && matching($1) } }
+    }
+
+    /// The list read again: notifications of tasks no longer waiting or holding an unread result go, answered, read or
+    /// removed while the phone was away. iOS may never hand the app the background push that withdraws them (§16).
+    private func withdrawSettledNotices() {
+        let notified = Set(tasks.filter { $0.attention == .waiting || $0.attention == .unread }.map(\.id))
+        withdrawNotices { !notified.contains($0) }
+    }
+
+    /// Allow Once from an approval's notification (§4.4, §5.2, §6.5). The task's page is read again on this
+    /// connection, and `allowOnce` goes only while that page holds the same ordinary request, pending and offering it,
+    /// with a command short enough to allow unread (`allowsUnread`), over the connection that read it, and while
+    /// `mayAnswer` holds. A longer command is left on its card for the person to read and allow there. An answer that
+    /// does not come back is not sent again.
+    func allowOnceFromNotification(taskID: String, requestID: String, mayAnswer: () -> Bool) async {
+        guard isConnected else {
+            commandError = Self.message(for: RemoteError(.unavailable), host: name)
+            return
+        }
+        let connection = connectionNumber
+        if conversations[taskID] == nil { conversations[taskID] = ConversationState(taskID: taskID) }
+        let page = await withCheckedContinuation { continuation in
+            subscribe(taskID) { continuation.resume(returning: $0) }
+        }
+        guard connectionNumber == connection, isConnected, mayAnswer() else { return }
+        guard page.ok else {
+            commandError = Self.message(for: page.error, host: name)
+            return
+        }
+        guard let request = conversations[taskID]?.pendingRequests.first(where: { $0.requestId == requestID }),
+              (request.requestKind ?? "approval") == "approval",
+              request.options?.contains(RemoteApprovalAnswer.allowOnce.rawValue) == true else {
+            commandError = Self.message(for: RemoteError(.requestNotFound), host: name)
+            return
+        }
+        guard Self.allowsUnread(request) else {
+            commandError = String(localized: "This command is too long to allow from a notification. Read it whole, then allow it.")
+            return
+        }
+        await perform(.answerApproval(taskID: taskID, requestID: requestID, answer: .allowOnce))
+    }
+
+    /// The longest line a notification says about a request (§5.2 `summary`).
+    static let noticeLine = 120
+
+    /// A request a notification may allow without its card being read: its command came whole, on one line and no
+    /// longer than a notification's line, or it has none.
+    static func allowsUnread(_ request: RemoteItem) -> Bool {
+        let command = (request.command ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return command.isEmpty
+            || (request.truncated != true && command.count <= noticeLine && !command.contains(where: \.isNewline))
+    }
+
     // MARK: - Conversations
 
     /// The conversation of a task shown now, subscribed if it was not.
@@ -310,10 +375,13 @@ final class HostSession: Identifiable {
             subscribe(taskID)
         }
         if isConnected, task(taskID)?.unread == true { send(.markRead(taskID: taskID)) }
+        // Read now: its notification has done its work.
+        withdrawNotices { $0 == taskID }
         return conversation
     }
 
-    private func subscribe(_ taskID: String) {
+    /// Subscribes to a task's conversation; `then` runs once its page is applied, or the Mac refused it.
+    private func subscribe(_ taskID: String, then: ((RemoteResponse) -> Void)? = nil) {
         subscribed.removeAll { $0 == taskID }
         subscribed.append(taskID)
         // The conversations shown longest ago are let go.
@@ -324,8 +392,12 @@ final class HostSession: Identifiable {
             composerStates[dropped] = nil
             send(.unsubscribeTask(taskID: dropped))
         }
-        guard isConnected else { return }
+        guard isConnected else {
+            then?(.failure("", RemoteError(.unavailable)))
+            return
+        }
         request(.subscribeTask(taskID: taskID, detail: .basic)) { [weak self] response in
+            defer { then?(response) }
             guard let conversation = self?.conversations[taskID] else { return }
             if response.ok {
                 conversation.load(response.items ?? [], cursor: response.cursor, hasOlder: response.hasOlder == true)
@@ -501,7 +573,10 @@ final class HostSession: Identifiable {
         pending.removeValue(forKey: id)?(.failure(id, RemoteError(.unavailable, "Not connected")))
     }
 
+    /// A connection opened or lost: what waits for an answer is answered `unavailable`, and what was read before no
+    /// longer counts as read on this connection (`connectionNumber`).
     private func failPending() {
+        connectionNumber += 1
         let waiting = pending
         pending = [:]
         for (id, handler) in waiting { handler(.failure(id, RemoteError(.unavailable, "Not connected"))) }

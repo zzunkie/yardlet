@@ -11,6 +11,7 @@ actor DemoMac {
     private var server: RemoteServer?
     private var listener: RemoteSecureListener?
     private var folder: URL?
+    private var bridge: DemoBridge?
 
     /// Starts the fixture Mac and returns its pairing link.
     func start() async throws -> RemoteSecurePairingURL {
@@ -20,6 +21,7 @@ actor DemoMac {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         self.folder = folder
         let bridge = DemoBridge(RemoteFixtureBridge(filesFolder: folder.appending(path: "files", directoryHint: .isDirectory)))
+        self.bridge = bridge
         var configuration = RemoteServer.Configuration(server: RemoteServerInfo(name: "Demo Mac", appVersion: "demo"),
                                                        macKey: identity.noise.publicKey)
         configuration.uploadDirectory = folder.appending(path: "uploads", directoryHint: .isDirectory)
@@ -51,10 +53,35 @@ actor DemoMac {
         throw Failure()
     }
 
+    /// The ordinary approval a demo task waits on, as the `attention` change a Mac pushes for it (§5.2, §16), for the
+    /// notification the demo shows once the person leaves the app. Nil when none waits.
+    func waitingApproval() async -> RemoteEvent? {
+        guard let snapshot = await bridge?.snapshot(),
+              let task = snapshot.tasks.first(where: {
+                  $0.attention == .waiting && $0.pendingRequest == .approval && ($0.pendingKind ?? "approval") == "approval"
+              }),
+              let requestID = snapshot.newestRequestIDs[task.id] else { return nil }
+        var event = RemoteEvent(.attention)
+        event.taskId = task.id
+        event.title = task.title
+        event.projectName = snapshot.projects.first { $0.id == task.projectId }?.name
+        event.harnessName = task.harnessName
+        event.state = .waiting
+        event.previousState = .active
+        event.indicator = task.indicator
+        event.pendingRequest = .approval
+        event.pendingKind = task.pendingKind
+        event.requestId = requestID
+        event.summary = snapshot.requestSummaries[task.id] ?? task.pendingSummary
+        event.macName = "Demo Mac"
+        return event
+    }
+
     func stop() {
         listener?.stop()
         listener = nil
         server = nil
+        bridge = nil
         if let folder { try? FileManager.default.removeItem(at: folder) }
         folder = nil
     }

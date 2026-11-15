@@ -43,7 +43,11 @@ struct WelcomeView: View {
                 }
                 .buttonStyle(CardButtonStyle(role: "secondary"))
                 Button("Try Without a Mac") {
-                    Task { await model.startDemo() }
+                    Task {
+                        await model.startDemo()
+                        // As pairing a Mac asks: the demo shows a notification once the person leaves the app.
+                        if model.isDemo { model.requestNotificationPermission() }
+                    }
                 }
                 .font(.callout)
                 .padding(.top, 8)
