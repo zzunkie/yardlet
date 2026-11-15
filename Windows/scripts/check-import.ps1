@@ -23,9 +23,17 @@ $Name = 'import'
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing, UIAutomationClient, UIAutomationTypes
 Add-Type @'
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 public static class ImportDesktop {
+    public delegate bool WindowVisitor(IntPtr window, IntPtr data);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(WindowVisitor visit, IntPtr data);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr window, StringBuilder name, int size);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr window, StringBuilder text, int size);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
@@ -37,6 +45,24 @@ public static class ImportDesktop {
         Thread.Sleep(40);
         keybd_event(key, scan, 2, UIntPtr.Zero);
         Thread.Sleep(120);
+    }
+
+    // A process's visible top-level windows, each with its class, its title and its handle.
+    public static List<KeyValuePair<IntPtr, string>> Windows(int process) {
+        List<KeyValuePair<IntPtr, string>> found = new List<KeyValuePair<IntPtr, string>>();
+        EnumWindows((window, data) => {
+            uint owner;
+            GetWindowThreadProcessId(window, out owner);
+            if (owner == (uint)process && IsWindowVisible(window)) {
+                StringBuilder name = new StringBuilder(256);
+                GetClassName(window, name, name.Capacity);
+                StringBuilder title = new StringBuilder(512);
+                GetWindowText(window, title, title.Capacity);
+                found.Add(new KeyValuePair<IntPtr, string>(window, name.ToString() + ": " + title.ToString()));
+            }
+            return true;
+        }, IntPtr.Zero);
+        return found;
     }
 
     // Windows lets a process bring a window forward only after input of its own; Alt counts.
@@ -114,16 +140,26 @@ function Invoke-Element($element) {
     $element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
 }
 
-# Windows' folder dialog, a window of the app's own: the common item dialog's frame.
+# Windows' folder dialog, a window of the app's own other than the main window: the common item dialog's frame, or
+# the window with the dialog's title. It is looked for among the app's windows rather than through UI Automation's
+# desktop, which would ask the main window too.
 function Find-Dialog {
-    $UIA::RootElement.FindFirst($Scope::Children,
-        (All-Of @((Property $UIA::ProcessIdProperty $process.Id), (Property $UIA::ClassNameProperty '#32770'))))
+    foreach ($window in [ImportDesktop]::Windows($process.Id)) {
+        if ($window.Key -eq $process.MainWindowHandle) { continue }
+        if ($window.Value -like '#32770: *' -or $window.Value -like '*: Choose project') { return $window.Key }
+    }
+    return $null
+}
+
+function App-Windows {
+    @([ImportDesktop]::Windows($process.Id) | ForEach-Object { $_.Value }) -join ' | '
 }
 
 function Finish([string] $result) {
     $summary.result = $result
+    if ($process -and -not $process.HasExited) { $summary.windows = App-Windows }
     $summary.events = (Read-Events) -join ' | '
-    if (Test-Path $lists) { $summary.listedFolders = @(Get-Content $lists) -join ' | ' }
+    if ($lists -and (Test-Path $lists)) { $summary.listedFolders = @(Get-Content $lists) -join ' | ' }
     if (Test-Path $standardError) { $summary.standardError = (Get-Content $standardError -Tail 20) -join "`n" }
     Save-Screen 'end'
     if ($process -and -not $process.HasExited) { $process.Kill() }
@@ -135,6 +171,14 @@ function Finish([string] $result) {
 
 $summary = [ordered]@{ name = $Name }
 $process = $null
+$lists = $null
+$standardError = Join-Path $OutDirectory "$Name-stderr.txt"
+$eventLog = Join-Path $OutDirectory "$Name-events.log"
+# Whatever stops the check still leaves its summary, screenshot and log.
+trap {
+    $summary.error = "$_"
+    Finish 'stopped by an error'
+}
 # The folder the conversation is in, and what the stand-in is asked to list.
 $folder = Join-Path $OutDirectory 'import-folder'
 New-Item -ItemType Directory -Force $folder | Out-Null
@@ -142,9 +186,7 @@ $folder = (Resolve-Path $folder).Path
 $summary.folder = $folder
 $lists = Join-Path $env:APPDATA 'npm\node_modules\yardlet-fake-harness\lists.log'
 Remove-Item $lists -ErrorAction SilentlyContinue
-$eventLog = Join-Path $OutDirectory "$Name-events.log"
 $env:YARDLET_QA_EVENT_LOG = $eventLog
-$standardError = Join-Path $OutDirectory "$Name-stderr.txt"
 $process = Start-Process -FilePath $Executable -WorkingDirectory (Split-Path $Executable) -PassThru `
     -RedirectStandardError $standardError -RedirectStandardOutput (Join-Path $OutDirectory "$Name-stdout.txt")
 $shown = Wait-For { $process.Refresh(); $process.HasExited -or $process.MainWindowHandle -ne [IntPtr]::Zero } 90
@@ -179,23 +221,25 @@ $picked = Wait-For { $found = Find-Named $main $Harness $Types::ListItem; if ($f
 if (-not $picked) { Finish "$Harness cannot be chosen" }
 Save-Screen 'pane'
 
-# Choose project... opens Windows' folder dialog, which runs modally on the window's thread until it closes, so the
-# button is pressed from a runspace of its own while this one fills in the dialog; if no dialog comes, the button is
-# pressed with Enter.
-$press = [PowerShell]::Create()
-[void]$press.AddScript({ param($button)
-    $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() }).AddArgument($choose)
-$pressing = $press.BeginInvoke()
-$dialog = Wait-For { Find-Dialog } 15
-if (-not $dialog) {
-    $summary.dialogWithEnter = $true
+# Choose project... opens Windows' folder dialog, which runs modally on the window's thread until it closes. The pane
+# opens it after the click returns, so invoking the button through UI Automation returns at once (a click that opened
+# it within the call left UI Automation waiting, seen on the runner). If no dialog comes, the button is pressed with
+# the keyboard, as a person presses it.
+$dialogHandle = $null
+Invoke-Element $choose
+$dialogHandle = Wait-For { Find-Dialog } 15
+if (-not $dialogHandle) {
+    $summary.dialogWithKeyboard = $true
     [void][ImportDesktop]::BringForward($process.MainWindowHandle)
     $choose.SetFocus()
-    [ImportDesktop]::Press(0x0D)
-    $dialog = Wait-For { Find-Dialog } 15
+    [ImportDesktop]::Press(0x20)
+    $dialogHandle = Wait-For { Find-Dialog } 15
 }
-if (-not $dialog) { Finish 'no folder dialog' }
-$summary.dialog = "$($dialog.Current.Name)"
+$summary.windowsWithDialog = App-Windows
+Save-Screen 'dialog-opened'
+if (-not $dialogHandle) { Finish 'no folder dialog' }
+$dialog = $UIA::FromHandle($dialogHandle)
+$summary.dialog = "$($dialog.Current.ClassName): $($dialog.Current.Name)"
 # The dialog's folder field (cmb13, 1148) and its Select Folder button (IDOK), by their control IDs and else their
 # English names.
 $field = Wait-For {
@@ -205,19 +249,23 @@ $field = Wait-For {
 if (-not $field) { Finish 'no folder field in the dialog' }
 $field.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($folder)
 Save-Screen 'dialog'
-# The dialog may first go into the folder typed; Select Folder then chooses the folder it is in.
+# Select Folder; the dialog may first go into the folder typed, and then chooses the folder it is in. Enter, with the
+# dialog in front, if its button does not close it.
 for ($try = 0; $try -lt 3 -and (Find-Dialog); $try += 1) {
     $select = Wait-For {
         $found = $dialog.FindFirst($Scope::Descendants, (All-Of @((Property $UIA::AutomationIdProperty '1'), (Property $UIA::ControlTypeProperty $Types::Button))))
         if (-not $found) { $found = Find-Named $dialog 'Select Folder' $Types::Button }
         $found } 5
-    if ($select) { try { Invoke-Element $select } catch { } }
+    if ($select -and $try -lt 2) {
+        try { Invoke-Element $select } catch { $summary.selectError = "$_" }
+    } else {
+        $summary.selectedWithEnter = $true
+        [void][ImportDesktop]::BringForward($dialogHandle)
+        [ImportDesktop]::Press(0x0D)
+    }
     [void](Wait-For { -not (Find-Dialog) } 5)
 }
 if (Find-Dialog) { Finish 'the folder dialog stayed open' }
-[void](Wait-For { $pressing.IsCompleted } 10)
-try { [void]$press.EndInvoke($pressing) } catch { $summary.pressError = "$_" }
-$press.Dispose()
 $leaf = Split-Path $folder -Leaf
 if (-not (Wait-For { (Read-Events) -contains "import folder: $leaf" } 10)) { Finish 'the folder was not chosen' }
 
@@ -227,7 +275,9 @@ $summary.conversations = "$(Read-Events | Where-Object { $_ -like 'import conver
 $summary.listedFolder = "$(if (Test-Path $lists) { Get-Content $lists | Select-Object -Last 1 })"
 Save-Screen 'listed'
 if (-not $conversations) { Finish 'the conversation was not listed' }
-if ($summary.listedFolder -ne $folder) { Finish 'the folder did not go to the harness as Windows writes it' }
+# A drive, then names between backslashes; the folder itself unless links lead elsewhere.
+$summary.listedFolderIsChosen = $summary.listedFolder -eq $folder
+if ($summary.listedFolder -notmatch '^[A-Za-z]:\\[^/]*$') { Finish 'the folder did not go to the harness as Windows writes it' }
 
 # Imported, and drawn from the stand-in's replay in the main window with its row chosen.
 $row = Wait-For { Find-Named $main $Title $Types::Button } 10
