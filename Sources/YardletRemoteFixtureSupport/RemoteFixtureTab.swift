@@ -36,11 +36,11 @@ struct RemoteFixtureTabs {
     /// The task's tabs, the sign-in page handed over while `handoff` waits.
     func listed(handoff: (requestID: String, reason: String)?) -> [RemoteBrowserTab] {
         [
-            RemoteBrowserTab(tabId: Self.docsTab, title: "Managing releases in a repository - GitHub Docs",
+            RemoteBrowserTab(tabId: Self.docsTab, title: "Managing releases in a repository",
                              url: "https://docs.github.com/en/repositories/releasing-projects-on-github",
                              active: front == Self.docsTab ? true : nil, waiting: permission == nil ? nil : "permission",
                              permission: permission),
-            RemoteBrowserTab(tabId: Self.signInTab, title: signedIn ? "New release · acme/web" : "Sign in to GitHub · GitHub",
+            RemoteBrowserTab(tabId: Self.signInTab, title: signedIn ? "New release · acme/web" : "Sign in",
                              url: signedIn ? "https://github.com/acme/web/releases/new" : "https://github.com/login",
                              active: front == Self.signInTab ? true : nil, canGoBack: true,
                              waiting: handoff == nil ? nil : "handoff", requestId: handoff?.requestID, reason: handoff?.reason,
@@ -166,7 +166,8 @@ struct RemoteFixtureTabs {
         guard tabID == Self.signInTab || tabID == Self.docsTab else { return nil }
         var picture = RemoteFixturePicture(width: size.width, height: size.height, palette: Self.palette)
         picture.fill(x: 0, y: 0, width: size.width, height: 44, color: Color.header.rawValue)
-        picture.text("GitHub", x: 16, y: 14, scale: 2, color: Color.headerText.rawValue)
+        // A site of its own words, not a copy of a real one's sign-in page.
+        picture.text(tabID == Self.docsTab ? "Docs" : "acme/web", x: 16, y: 14, scale: 2, color: Color.headerText.rawValue)
         if tabID == Self.docsTab {
             drawDocs(&picture)
         } else if signedIn {
@@ -181,7 +182,7 @@ struct RemoteFixtureTabs {
     }
 
     private func drawSignIn(_ picture: inout RemoteFixturePicture) {
-        picture.centeredText("Sign in to GitHub", y: 66, scale: size.width >= 340 ? 3 : 2, color: Color.ink.rawValue)
+        picture.centeredText("Sign in to continue", y: 66, scale: size.width >= 340 ? 3 : 2, color: Color.ink.rawValue)
         picture.text("Username or email address", x: usernameBox.x, y: usernameBox.y - 18, scale: 1,
                      color: Color.ink.rawValue)
         field(&picture, usernameBox, focused: focus == .username, text: username)
@@ -194,7 +195,7 @@ struct RemoteFixtureTabs {
         if refused {
             picture.centeredText("Enter your username and password.", y: 292, scale: 1, color: Color.error.rawValue)
         }
-        picture.centeredText("New to GitHub? Create an account.", y: 330, scale: 1, color: Color.accent.rawValue)
+        picture.centeredText("Then the agent publishes the notes.", y: 330, scale: 1, color: Color.muted.rawValue)
     }
 
     private func field(_ picture: inout RemoteFixturePicture, _ box: Box, focused: Bool,
@@ -220,7 +221,7 @@ struct RemoteFixtureTabs {
     private func drawDocs(_ picture: inout RemoteFixturePicture) {
         picture.text("Managing releases", x: 40, y: 70, scale: 3, color: Color.ink.rawValue)
         let lines = ["You can create releases to bundle and deliver iterations", "of a project to users.", "",
-                     "1. On GitHub, open the main page of the repository.", "2. Click Releases, then Draft a new release.",
+                     "1. Open the main page of the repository.", "2. Click Releases, then Draft a new release.",
                      "3. Choose a tag, write the notes, and publish."]
         for (index, line) in lines.enumerated() {
             picture.text(line, x: 40, y: 120 + index * 22, scale: 1, color: Color.ink.rawValue)
