@@ -210,6 +210,14 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   user's display languages (`GetUserPreferredUILanguages`), chooses the bundle's localization they name, and reads its
   `Localizable.strings` itself, unless Yardlet's own defaults name a language. The QA event log's `language:` line says
   which it chose.
+- **Time zone.** Foundation on Windows names the current time zone from `GetTimeZoneInformation`'s `StandardName`
+  (confirmed in swift-foundation's source), which Windows writes in its display language, while ICU maps only the
+  zone's registry name (`Korea Standard Time`); on a Korean Windows `TimeZone.current` was GMT, and a chat started at
+  07:22 in Seoul got the day before's folder (seen on a PC). Before anything reads a time, the app asks the system's
+  ICU (`icu.dll`, Windows 10 1903 and later) for the zone Windows is set to (`ucal_getDefaultTimeZone`, `Asia/Seoul`)
+  and has Foundation read it again from `TZ`, which names it only for that read, so no program the app starts inherits
+  it (`Platform/Windows/WindowsTimeZone.swift`). A `TZ` already set is left as it is. The QA event log's `time zone:`
+  line says what Foundation reads; the window check sets Windows to Seoul's zone and needs `Asia/Seoul`.
 - **No console windows.** The release app is a windowed program with no console, and Foundation's `Process` passes
   `CreateProcessW` no `CREATE_NO_WINDOW` (confirmed in its source), so each console program the app started, a
   harness's node or Git, opened a console window of its own, in Windows Terminal where that is the default terminal
@@ -435,9 +443,11 @@ zip, the package and `releases.win.json`, which go on the release beside the Mac
 which prepares the Mac's, does not do this part.
 
 Removing the app leaves `%LOCALAPPDATA%\Yardlet`, its keys in Credential Manager, the firewall's permission and the
-notifications' registration under `HKCU\Software\Classes`, as moving the Mac app to the Trash leaves its data. The
-Windows App Runtime's packages stay too: they are Microsoft's, shared with every app that uses that release, as the
-Visual C++ runtime is. The
+notifications' registration under `HKCU\Software\Classes`, as moving the Mac app to the Trash leaves its data, and
+Velopack's log of its installs, updates and removal, `%LOCALAPPDATA%\velopack\velopack_YardletApp.log`. The chats'
+folders, `%USERPROFILE%\Documents\Yardlet\<date>\<name>`, stay as the person's own files, which the harnesses worked
+in, as `~/Documents/Yardlet` stays on the Mac. The Windows App Runtime's packages stay too: they are Microsoft's,
+shared with every app that uses that release, as the Visual C++ runtime is. The
 harnesses' own folders, such as `%USERPROFILE%\.claude`, are theirs and are never touched.
 
 `windows-app.yml` checks all of it on the runner (`Windows/scripts/check-install.ps1`): it packs the build twice, as

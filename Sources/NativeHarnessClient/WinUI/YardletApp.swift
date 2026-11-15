@@ -15,10 +15,13 @@ final class YardletApp: XamlApplication {
         super.init()
     }
 
-    /// An installer's hook, or an update downloaded earlier, before anything else (`VelopackStart`); then the Windows
-    /// App Runtime's packages the app carries, should any be missing, before the runtime starts.
+    /// The time zone Windows is set to, before anything reads a time (`WindowsTimeZone`); an installer's hook, or an
+    /// update downloaded earlier, before anything else (`VelopackStart`); then the Windows App Runtime's packages the
+    /// app carries, should any be missing, before the runtime starts.
     override class func willStart() {
+        let timeZone = WindowsTimeZone.adopt()
         VelopackStart.run()
+        MainActor.assumeIsolated { QAEventLog.shared.write(timeZone) }
         let note = WindowsAppRuntimeDeployment.ensure(within: 180)
         MainActor.assumeIsolated { QAEventLog.shared.write(note) }
     }

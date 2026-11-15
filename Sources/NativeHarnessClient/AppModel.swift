@@ -864,6 +864,13 @@ final class AppModel {
                 : []
         } ?? []
         var createdSessionID: UUID?
+        // The first message as it goes to the harness: from another task, in Yardlet's envelope.
+        let firstMessage = initialPrompt.map { prompt in
+            initialPromptSender.map {
+                TaskMessage(senderID: $0.id.uuidString, senderName: $0.title, body: prompt,
+                            relation: .parent, quotes: $0.quotes).text(in: .yardlet)
+            } ?? prompt
+        }
         // An account whose tasks are moving away takes no new one; it starts on the folder they move to.
         let connection = connections.startConnection(connection)
         do {
@@ -891,18 +898,16 @@ final class AppModel {
             // Before anything waits, so the window shows the task with the new-task screen's panels.
             if takesDraftWorkspace { handOffDraftWorkspace(to: session.id) }
             if holdsInitialPrompt { return store.sessions.first(where: { $0.id == session.id }) ?? session }
-            try await startCreatedSession(session, initialPrompt: initialPrompt, text: initialPrompt.map { prompt in
-                initialPromptSender.map {
-                    TaskMessage(senderID: $0.id.uuidString, senderName: $0.title, body: prompt,
-                                relation: .parent, quotes: $0.quotes).text(in: .yardlet)
-                } ?? prompt
-            }, initialAttachments: initialAttachments)
+            try await startCreatedSession(session, initialPrompt: initialPrompt, text: firstMessage,
+                                          initialAttachments: initialAttachments)
             return store.sessions.first(where: { $0.id == session.id }) ?? session
         } catch {
             if let id = createdSessionID {
                 guard store.sessions.contains(where: { $0.id == id }) else { return nil }
                 await turnEnded(id, as: .failed, cause: .notStarted, notificationDetail: error.localizedDescription)
                 errorBySessionID[id] = error.localizedDescription
+                recordUnstartedMessage(firstMessage, attachments: initialAttachments,
+                                       error: error.localizedDescription, for: id)
             } else {
                 bootstrapError = error.localizedDescription
             }
@@ -922,8 +927,23 @@ final class AppModel {
             guard store.sessions.contains(where: { $0.id == session.id }) else { return false }
             await turnEnded(session.id, as: .failed, cause: .notStarted, notificationDetail: error.localizedDescription)
             errorBySessionID[session.id] = error.localizedDescription
+            recordUnstartedMessage(text, attachments: [], error: error.localizedDescription, for: session.id)
             return false
         }
+    }
+
+    /// A task that came to exist but whose harness did not start keeps what was asked and why in its
+    /// conversation, as a message that could not be sent does (`send`), there again after Yardlet opens: the
+    /// reason is otherwise only in memory. A failure after the message reached `send` is that path's own.
+    private func recordUnstartedMessage(_ text: String?, attachments: [CodexUserInput], error: String,
+                                        for sessionID: UUID) {
+        if let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let input = HarnessUserInput.projecting(CodexComposerDraft(inputs: [.text(text)] + attachments)).input
+            mutateTranscript(for: sessionID, publishImmediately: true) { builder in
+                builder.appendUser(input.promptText, images: input.transcriptImages)
+            }
+        }
+        recordLocalError(error, for: sessionID)
     }
 
     /// A new task's start: its runtime attaches and its first message goes, `text` alone, or with

@@ -148,6 +148,7 @@ final class RemoteHostWindow {
                 guard let taskID = taskIDs[session.id] else { continue }
                 let item = NavigationViewItem()
                 item.content = Self.label(title: session.title, detail: session.harness.displayName)
+                try? AutomationProperties.setName(item, session.title)
                 navigation.menuItems.append(item)
                 items.append((item: item, taskID: taskID))
                 if taskID == selected { selectedItem = item }

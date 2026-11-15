@@ -447,6 +447,33 @@ final class AppModelTests: XCTestCase {
         }
     }
 
+    /// A task that came to exist but whose harness did not start keeps the message it was started with and why in
+    /// its conversation, which the transcript keeps after Yardlet opens again, as a message that could not be sent
+    /// stays; the task's error alone is held in memory.
+    func testATaskWhoseHarnessDidNotStartKeepsItsMessageAndWhyInItsConversation() async throws {
+        let adapter = FakeHarnessAdapter(kind: .codex)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("NativeHarnessClientTests.notStarted")))
+        let model = AppModel(store: SessionStore(repository: InMemorySessionRepository()),
+                             runtimeSelections: RuntimeSelectionStore(defaults: defaults),
+                             registry: HarnessRegistry { _, _ in adapter }, restoresIndexOnLaunch: false)
+        await adapter.failNextCreate("CODEX_HOME names no folder")
+
+        let created = await model.createSession(harness: .codex, workspaceURL: URL(filePath: "/tmp/not-started"),
+                                                runtimeExecutableURL: URL(filePath: "/tmp/codex"), title: "Not started",
+                                                initialPrompt: "Fix the tests")
+
+        XCTAssertNil(created)
+        let task = try XCTUnwrap(model.store.sessions.first)
+        XCTAssertEqual(task.status, .failed)
+        let conversation = ConversationProjectionCache().transcript(
+            model.transcriptBySessionID[task.id] ?? [], harness: .codex, status: task.status, latestTurnIsComplete: false)
+        let turn = try XCTUnwrap(conversation.turns.last)
+        XCTAssertEqual(turn.prompt.map(\.kind), [.userMessage(text: "Fix the tests", images: [])])
+        guard case let .error(error) = turn.outcome else { return XCTFail("The conversation says why: \(turn)") }
+        XCTAssertTrue(error.message.contains("CODEX_HOME names no folder"), error.message)
+        await model.shutdown()
+    }
+
     func testCodexComposerRefreshDoesNotAttachDetachedTask() async throws {
         let session = SessionRecord(harness: .codex, workspaceURL: URL(filePath: "/tmp/composer"),
                                     runtimeExecutableURL: URL(filePath: "/tmp/codex"), title: "Detached")
@@ -4074,6 +4101,10 @@ actor FakeHarnessAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresent
 
     func createSession(_ request: CreateHarnessSessionRequest) async throws -> HarnessSessionHandle {
         createCount += 1
+        if let failure = failingCreate {
+            failingCreate = nil
+            throw HarnessAdapterError.capabilityUnavailable(failure)
+        }
         if suspendNextCreate {
             suspendNextCreate = false
             isCreateBlocked = true
@@ -4129,6 +4160,9 @@ actor FakeHarnessAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresent
     private var failingSends = 0
     /// The next plain send throws before the harness takes the message.
     func failNextSend() { failingSends += 1 }
+    private var failingCreate: String?
+    /// The next session's start throws `reason`, as a runtime that ends before it answers.
+    func failNextCreate(_ reason: String) { failingCreate = reason }
 
     func submit(
         _ draft: CodexComposerDraft,

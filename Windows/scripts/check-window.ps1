@@ -99,6 +99,11 @@ New-Item -Force $dumpKey | Out-Null
 Set-ItemProperty $dumpKey DumpFolder $dumps
 Set-ItemProperty $dumpKey DumpType 2
 
+# Windows set to Seoul's time zone, which the app must read as Windows names it (Platform/Windows/WindowsTimeZone.swift);
+# the runner's own zone comes back at the end.
+$zoneBefore = (Get-TimeZone).Id
+Set-TimeZone -Id 'Korea Standard Time'
+
 $eventLog = Join-Path $OutDirectory "$Name-events.log"
 $env:YARDLET_QA_EVENT_LOG = $eventLog
 $started = Get-Date
@@ -184,6 +189,9 @@ try {
     $sessionItems = @($automation.FindAll([System.Windows.Automation.TreeScope]::Descendants, $listItem) |
         Where-Object { $_.Current.Name -notin @('New task', 'Connect to a Mac') })
     $summary.sidebarItems = $sessionItems.Count
+    # Each task's row is named by its title, not by its type.
+    $summary.sidebarNames = @($sessionItems | ForEach-Object { $_.Current.Name }) -join ' / '
+    $summary.sidebarUnnamed = @($sessionItems | Where-Object { $_.Current.Name -eq 'NavigationViewItem' }).Count
     if ($sessionItems.Count -ge 2) {
         $sessionItems[1].GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
         Start-Sleep -Seconds 1
@@ -256,11 +264,16 @@ try {
     $summary.shiftEnterError = "$_"
 }
 $summary.result = 'window shown'
+$summary.timeZone = "$(Read-Events | Where-Object { $_ -like 'time zone: *' } | Select-Object -First 1)"
+if ($summary.timeZone -ne 'time zone: Asia/Seoul') { $summary.result = "the app read another time zone: $($summary.timeZone)" }
+if ($summary.sidebarUnnamed) { $summary.result = "$($summary.sidebarUnnamed) task rows named NavigationViewItem" }
 
 $process.Refresh()
 $summary.workingSetAfterTypingMB = [math]::Round($process.WorkingSet64 / 1MB, 1)
 [void]$process.CloseMainWindow()
 if (-not $process.WaitForExit(10000)) { $process.Kill() }
+Set-TimeZone -Id $zoneBefore
 
 $summary | ConvertTo-Json | Set-Content (Join-Path $OutDirectory "$Name-summary.json") -Encoding UTF8
 $summary | ConvertTo-Json
+if ($summary.result -ne 'window shown') { exit 1 }

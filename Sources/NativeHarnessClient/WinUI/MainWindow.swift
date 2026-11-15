@@ -168,8 +168,9 @@ final class MainWindow {
             // As the Mac's rows show a title Yardlet made: without the folder name it starts with, which a chat's
             // (`new-chat`) does not need and a project task's shows beside the harness instead.
             let folder = session.workspaceURL.lastPathComponent
+            let name = SessionTitleProjection.titleUnderProject(session, projectNames: [folder])
             let title = TextBlock()
-            title.text = SessionTitleProjection.titleUnderProject(session, projectNames: [folder])
+            title.text = name
             let detail = TextBlock()
             detail.text = ((model.projects.isChatFolder(session.workspaceURL) ? [] : [folder])
                 + [session.harness.displayName, Self.activityText(session.updatedAt, now: now)]).joined(separator: " · ")
@@ -180,6 +181,9 @@ final class MainWindow {
             label.children.append(detail)
             let item = NavigationViewItem()
             item.content = label
+            // A row whose content is a panel is named for its type in UI Automation; screen readers and automation
+            // tell the tasks apart by their titles.
+            try? AutomationProperties.setName(item, name)
             item.icon = HarnessIcon.element(for: session.harness)
             navigation.menuItems.append(item)
             items.append((item: item, id: session.id))

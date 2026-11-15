@@ -15,7 +15,7 @@ import YardletRemote
 @MainActor
 final class NewTaskPane {
     let view = StackPanel()
-    /// Called once the task has started and the model has chosen it.
+    /// Called once the task has started and the model has chosen it, or came to exist and could not start.
     var onStarted: (() -> Void)?
 
     private let model: AppModel
@@ -400,6 +400,7 @@ final class NewTaskPane {
         showSendable()
         log.write("new task: \(harness.displayName)\(submission.workspaceURL.map { " in \($0.lastPathComponent)" } ?? "")")
         let previousError = model.bootstrapError
+        let existingTasks = Set(model.store.sessions.map(\.id))
         Task {
             defer {
                 prompt.isEnabled = true
@@ -407,8 +408,14 @@ final class NewTaskPane {
             }
             do {
                 let created = try await model.createTask(submission)
+                // A task that came to exist but whose harness did not start: chosen as it was made, it shows, as on
+                // the Mac, with the message and why in its conversation, and the message stays here to try again.
+                let unstartedError = created == nil ? model.store.selectedSessionID.flatMap { id in
+                    existingTasks.contains(id) ? nil : model.errorBySessionID[id]
+                } : nil
                 let failure = created == nil
-                    ? (model.bootstrapError != previousError ? model.bootstrapError : nil) ?? L10n.string("The task could not start.")
+                    ? unstartedError ?? (model.bootstrapError != previousError ? model.bootstrapError : nil)
+                        ?? L10n.string("The task could not start.")
                     : nil
                 draft.complete(submission, succeeded: created != nil, error: failure)
                 if created != nil {
@@ -417,6 +424,8 @@ final class NewTaskPane {
                     onStarted?()
                 } else {
                     status.text = failure ?? ""
+                    log.write("new task failed: \(failure ?? "")")
+                    if unstartedError != nil { onStarted?() }
                 }
             } catch {
                 draft.complete(submission, succeeded: false, error: error.localizedDescription)
