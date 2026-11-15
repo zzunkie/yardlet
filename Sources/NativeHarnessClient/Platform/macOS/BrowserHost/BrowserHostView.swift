@@ -710,7 +710,7 @@ final class BrowserHostView: NSView, @preconcurrency NSTextInputClient, MouseHis
             onShortcut?(shift ? .previousTab : .nextTab)
             return true
         }
-        guard flags.contains(.command), let key = event.charactersIgnoringModifiers?.lowercased() else {
+        guard flags.contains(.command), let key = event.commandShortcutKey else {
             return super.performKeyEquivalent(with: event)
         }
         if !shift, flags.subtracting([.command, .numericPad]).isEmpty,

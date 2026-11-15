@@ -2812,8 +2812,9 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   shows in a side panel where the host's window has the task's browser panel: the task's tabs in the panel's strip,
   Back, Forward and Reload, the handoff's bar, with `tabPermissions` the permission bar of the Mac's panel (its
   words naming the host, the two bars one above the other when both are up), and the watched tab's page, which takes clicks, drags, the trackpad,
-  keys and the input method's committed text (what it is still composing shows on the client until committed; ⌘V
-  types the client's own clipboard; with `tabCopy`, ⌘C and ⌘X, and Edit › Copy and Cut, copy the page's selection onto
+  keys and the input method's committed text (what it is still composing shows on the client until committed; ⌘
+  keys are read as the menu bar reads them, under any input source; ⌘V types the client's own clipboard; with
+  `tabCopy`, ⌘C and ⌘X, and Edit › Copy and Cut, copy the page's selection onto
   it, and what the page copies after the panel's click or key lands there too; secure keyboard entry is on while the
   page's password field has the keyboard). The
   page lays out at the panel's size (`viewport`, never as a phone), and follows the panel once it rests 200 ms at a new

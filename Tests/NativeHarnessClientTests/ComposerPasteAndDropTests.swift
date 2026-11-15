@@ -143,10 +143,11 @@ final class ComposerPasteAndDropTests: XCTestCase {
     }
 
     func testOnlyCommandVIsThePasteShortcut() throws {
-        func key(_ characters: String, _ flags: NSEvent.ModifierFlags, keyCode: UInt16 = 9) throws -> NSEvent {
+        func key(_ characters: String, _ flags: NSEvent.ModifierFlags, keyCode: UInt16 = 9,
+                 ignoringModifiers: String? = nil) throws -> NSEvent {
             try XCTUnwrap(NSEvent.keyEvent(
                 with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0,
-                context: nil, characters: characters, charactersIgnoringModifiers: characters,
+                context: nil, characters: characters, charactersIgnoringModifiers: ignoringModifiers ?? characters,
                 isARepeat: false, keyCode: keyCode
             ))
         }
@@ -156,11 +157,11 @@ final class ComposerPasteAndDropTests: XCTestCase {
         XCTAssertFalse(ComposerExternalInput.isPasteShortcut(try key("v", [.command, .option])))
         XCTAssertFalse(ComposerExternalInput.isPasteShortcut(try key("v", [])))
         XCTAssertFalse(ComposerExternalInput.isPasteShortcut(try key("c", .command, keyCode: 8)))
-        // A Dvorak V sits elsewhere but still types v; a Russian layout types м on the V key.
-        XCTAssertTrue(ComposerExternalInput.isPasteShortcut(try key("v", .command, keyCode: 47)))
-        XCTAssertTrue(ComposerExternalInput.isPasteShortcut(try key("м", .command)))
-        XCTAssertFalse(ComposerExternalInput.isPasteShortcut(try key("м", .command, keyCode: 8)))
-        XCTAssertFalse(ComposerExternalInput.isPasteShortcut(try key(".", .command)), "Dvorak ⌘. on the V key")
+        // The key is read as it types with ⌘, as the menu bar reads it (`NSEvent.commandShortcutKey`):
+        // 2-Set Korean and Russian type ㅍ and м on the V key without ⌘, and v with it.
+        XCTAssertTrue(ComposerExternalInput.isPasteShortcut(try key("v", .command, ignoringModifiers: "ㅍ")))
+        XCTAssertTrue(ComposerExternalInput.isPasteShortcut(try key("v", .command, ignoringModifiers: "м")))
+        XCTAssertFalse(ComposerExternalInput.isPasteShortcut(try key("c", .command, keyCode: 8, ignoringModifiers: "ㅊ")))
     }
 
     // MARK: - The composer's own text field

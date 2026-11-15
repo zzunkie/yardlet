@@ -35,15 +35,12 @@ enum ComposerExternalInput: Equatable {
         return NSBitmapImageRep(data: data)?.representation(using: .png, properties: [:])
     }
 
-    /// ⌘V as the Paste menu item sees it: by its unmodified character, which input methods such
-    /// as Korean report from their ASCII layout. A non-Latin layout reports its own letter, so
-    /// the V key's position stands in for it there, as it does for menu shortcuts.
+    /// ⌘V as the Paste menu item sees it, under any input source (`NSEvent.commandShortcutKey`).
     static func isPasteShortcut(_ event: NSEvent) -> Bool {
-        guard event.type == .keyDown,
-              event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-                .subtracting([.capsLock, .numericPad, .function]) == .command,
-              let key = event.charactersIgnoringModifiers?.lowercased() else { return false }
-        return key == "v" || (event.keyCode == 9 && !key.unicodeScalars.contains(where: \.isASCII))
+        event.type == .keyDown
+            && event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                .subtracting([.capsLock, .numericPad, .function]) == .command
+            && event.commandShortcutKey == "v"
     }
 }
 

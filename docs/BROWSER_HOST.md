@@ -275,10 +275,11 @@ change and when Yardlet quits (`StateFileWriter`). Chromium's own `History` in e
   input stamped earlier than the page opened, Blink's soft navigation CHECK ends the renderer (section 3, "Renderer
   exit").
 - Shortcuts (when the panel view has focus): ⌘C/⌘X/⌘V/⌘A/⌘Z/⇧⌘Z, ⌘+/⌘−/⌘0 zoom in and out, ⌘F find, ⌘L address field, ⌘R
-  reload, ⌘[/⌘] back and forward. Tabs (only when the window's focus is on the page): ⌘T new panel browser tab, ⌘W close
-  this tab (the panel tab closing rule), ⌘⇧T reopen a closed tab as a new tab, ⌃Tab and ⌃⇧Tab next and previous browser
-  tab, ⌘5…⌘8 that tab, ⌘9 last tab. ⌘1–⌘4 go to the window's keys (task panels) first. Outside the page (the
-  conversation, the address field) the same keys go to the window's task tab strip.
+  reload, ⌘[/⌘] back and forward. Each is read by what its key types with ⌘, as the menu bar reads it, so a Korean or
+  other non-Latin input source takes them too. Tabs (only when the window's focus is on the page): ⌘T new panel browser
+  tab, ⌘W close this tab (the panel tab closing rule), ⌘⇧T reopen a closed tab as a new tab, ⌃Tab and ⌃⇧Tab next and
+  previous browser tab, ⌘5…⌘8 that tab, ⌘9 last tab. ⌘1–⌘4 go to the window's keys (task panels) first. Outside the page
+  (the conversation, the address field) the same keys go to the window's task tab strip.
 - Drag and drop: files from Finder can be dropped on the page (`drag` command → CEF drag target). Dragging out of the
   page is not supported.
 - Emulated screen size (section 3, "Screen size emulation"): while the panel draws the page shrunk, the

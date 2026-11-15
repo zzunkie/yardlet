@@ -1231,7 +1231,7 @@ final class NativeTerminalView: TerminalView {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if attachSelection != nil, window?.firstResponder === self,
            event.modifierFlags.intersection(.deviceIndependentFlagsMask) == [.command, .shift],
-           event.charactersIgnoringModifiers?.lowercased() == "l" {
+           event.commandShortcutKey == "l" {
             attachSelectionToMessage(nil)
             return true
         }

@@ -607,7 +607,7 @@ final class ImageViewerCanvasView: NSScrollView {
     private func zoom(forKey event: NSEvent) -> Bool {
         guard event.type == .keyDown,
               event.modifierFlags.intersection([.command, .control, .option]) == .command else { return false }
-        switch event.charactersIgnoringModifiers ?? "" {
+        switch event.commandShortcutKey ?? "" {
         case "=", "+": zoom(.in)
         case "-": zoom(.out)
         case "0": zoom(.fit)

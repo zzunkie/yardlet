@@ -407,7 +407,7 @@ final class RemoteBrowserPageView: NSView, @preconcurrency NSTextInputClient, NS
     // MARK: Keys
 
     override func keyDown(with event: NSEvent) {
-        if event.modifierFlags.contains(.command), let key = event.charactersIgnoringModifiers?.lowercased() {
+        if event.modifierFlags.contains(.command), let key = event.commandShortcutKey {
             switch key {
             case "v":
                 // This Mac's clipboard, typed: the host's is not the person's here.
