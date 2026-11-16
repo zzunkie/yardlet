@@ -128,7 +128,8 @@ final class WindowsScopedFilesTests: XCTestCase {
         XCTAssertEqual(Self.requests(shown), Array(1...40))
     }
 
-    /// A reviewed file is saved over the old one, keeping its attributes and an access list of its own. A save through
+    /// A reviewed file is saved over the old one, keeping its creation time, its attributes and an access list of its
+    /// own, and modified now, as an editor's save leaves it (docs/PLATFORM_PORTABILITY.md). A save through
     /// a junction, a symbolic link to a folder or one to a file beneath the folder is refused, though each reaches a
     /// file outside, and so is a save over bytes other than those reviewed, or one the caller stops at the last moment.
     func testSavesAReviewedFileAndRefusesLinks() throws {
@@ -154,8 +155,9 @@ final class WindowsScopedFilesTests: XCTestCase {
         let file = sources.appending(path: "App.swift")
         let reviewed = Data("let a = 1\n".utf8)
         try reviewed.write(to: file)
+        let keptAttributes = DWORD(FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_NOT_CONTENT_INDEXED)
         XCTAssertTrue(PathRules.windows.nativePath(of: file).withCString(encodedAs: UTF16.self) {
-            SetFileAttributesW($0, DWORD(FILE_ATTRIBUTE_HIDDEN))
+            SetFileAttributesW($0, keptAttributes)
         })
         // An entry of the file's own, for LOCAL SERVICE, which a new file in the folder does not have.
         try accessList(file, change: ["/grant", "*S-1-5-19:(R)"])
@@ -166,6 +168,9 @@ final class WindowsScopedFilesTests: XCTestCase {
         let freshList = try accessList(fresh)
         XCTAssertFalse(freshList.contains("LOCAL SERVICE"), freshList)
         try FileManager.default.removeItem(at: fresh)
+        // Made on 2020-01-01 and last changed on 2021-01-01, in 100-nanosecond intervals since 1601.
+        let created: UInt64 = 132_223_104_000_000_000, written: UInt64 = 132_539_328_000_000_000
+        try Self.setTimes(file, created: created, written: written)
 
         XCTAssertThrowsError(try Self.save("Sources/App.swift", in: root, "let a = 2\n", over: Data("let a = 0\n".utf8))) {
             XCTAssertEqual($0 as? WorkspaceFileError, .changedOnDisk)
@@ -177,8 +182,10 @@ final class WindowsScopedFilesTests: XCTestCase {
 
         try Self.save("Sources/App.swift", in: root, "let a = 2\n", over: reviewed)
         XCTAssertEqual(try Data(contentsOf: file), Data("let a = 2\n".utf8))
-        let attributes = PathRules.windows.nativePath(of: file).withCString(encodedAs: UTF16.self) { GetFileAttributesW($0) }
-        XCTAssertNotEqual(attributes & DWORD(FILE_ATTRIBUTE_HIDDEN), 0)
+        let saved = try XCTUnwrap(Self.information(file))
+        XCTAssertEqual(saved.dwFileAttributes & keptAttributes, keptAttributes)
+        XCTAssertEqual(Self.ticks(saved.ftCreationTime), created, "The file keeps its creation time")
+        XCTAssertGreaterThan(Self.ticks(saved.ftLastWriteTime), written, "The file is modified now")
         XCTAssertEqual(try accessList(file), ownList)
         XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: sources.path(percentEncoded: false))),
                        ["App.swift", "Link.swift"])
@@ -215,6 +222,27 @@ final class WindowsScopedFilesTests: XCTestCase {
     private static func save(_ path: String, in root: URL, _ text: String, over reviewed: Data) throws {
         try WorkspaceFileReplacement.replace(path: path, in: root, with: Data(text.utf8),
                                              expectedDigest: WorkspaceFileReplacement.digest(reviewed), maximumBytes: 1_000)
+    }
+
+    /// What Windows keeps of `url` beside its bytes: its attributes and times among them.
+    private static func information(_ url: URL) -> BY_HANDLE_FILE_INFORMATION? {
+        guard let item = ScopedFiles.open(PathRules.windows.nativePath(of: url), directory: false, asItself: true,
+                                          access: DWORD(FILE_READ_ATTRIBUTES)) else { return nil }
+        CloseHandle(item.handle)
+        return item.information
+    }
+
+    /// `time` as a number of 100-nanosecond intervals since 1601.
+    private static func ticks(_ time: FILETIME) -> UInt64 { UInt64(time.dwHighDateTime) << 32 | UInt64(time.dwLowDateTime) }
+
+    /// Gives `url` the creation and last write times `created` and `written`, as `ticks` counts them.
+    private static func setTimes(_ url: URL, created: UInt64, written: UInt64) throws {
+        let handle = try XCTUnwrap(Self.open(url, access: DWORD(FILE_WRITE_ATTRIBUTES),
+                                             sharing: DWORD(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)))
+        defer { CloseHandle(handle) }
+        var creation = FILETIME(dwLowDateTime: DWORD(truncatingIfNeeded: created), dwHighDateTime: DWORD(created >> 32))
+        var lastWrite = FILETIME(dwLowDateTime: DWORD(truncatingIfNeeded: written), dwHighDateTime: DWORD(written >> 32))
+        XCTAssertTrue(SetFileTime(handle, &creation, nil, &lastWrite))
     }
 
     /// `url` opened as another program opens it, for `access` and sharing it as `sharing` says.

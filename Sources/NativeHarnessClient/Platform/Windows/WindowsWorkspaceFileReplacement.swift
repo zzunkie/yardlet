@@ -6,8 +6,9 @@ import WinSDK
 /// when it is a link, and the file is replaced only while it still holds the bytes the person reviewed. The folders on
 /// the way are held as `ScopedFiles` holds them, so none can be renamed or replaced by a link meanwhile. The file is
 /// opened as itself and shared for reading and removing only, so nothing writes to it from the check until the new
-/// file takes its place. The new file is written beside it with its attributes and access list, and renamed over it
-/// through its own handle. `authorize` runs last, immediately before that rename, and stops the save by throwing.
+/// file takes its place. The new file is written beside it with its creation time, attributes and access list, and
+/// renamed over it through its own handle, so only its modification time is the save's. `authorize` runs last,
+/// immediately before that rename, and stops the save by throwing.
 enum WorkspaceFileReplacement {
     static func digest(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
 
@@ -45,8 +46,7 @@ enum WorkspaceFileReplacement {
         let temporary = folder + "\\.yardlet-save-\(UUID().uuidString)"
         let output = temporary.withCString(encodedAs: UTF16.self) {
             CreateFileW($0, DWORD(GENERIC_WRITE) | DWORD(DELETE) | DWORD(WRITE_DAC), DWORD(FILE_SHARE_READ), nil,
-                        DWORD(CREATE_NEW), DWORD(FILE_FLAG_OPEN_REPARSE_POINT) | (kept == 0 ? DWORD(FILE_ATTRIBUTE_NORMAL) : kept),
-                        nil)
+                        DWORD(CREATE_NEW), DWORD(FILE_FLAG_OPEN_REPARSE_POINT) | DWORD(FILE_ATTRIBUTE_NORMAL), nil)
         }
         guard let output, output != INVALID_HANDLE_VALUE else { throw WorkspaceFileError.notWritable }
         var renamed = false
@@ -63,7 +63,15 @@ enum WorkspaceFileReplacement {
                 offset += Int(written)
             }
         }
-        guard copyAccessList(from: source.handle, to: output), FlushFileBuffers(output) else {
+        // The old file's creation time and attributes. CreateFileW drops not-indexed, and the rename carries the
+        // creation time over only through NTFS's name tunneling, which the plain replacing rename a volume without
+        // POSIX renames gets does not trigger. The zero times leave the save's own.
+        var basic = FILE_BASIC_INFO()
+        basic.CreationTime.QuadPart = LONGLONG(bitPattern: UInt64(original.ftCreationTime.dwHighDateTime) << 32
+                                                   | UInt64(original.ftCreationTime.dwLowDateTime))
+        basic.FileAttributes = kept == 0 ? DWORD(FILE_ATTRIBUTE_NORMAL) : kept
+        guard SetFileInformationByHandle(output, FileBasicInfo, &basic, DWORD(MemoryLayout<FILE_BASIC_INFO>.size)),
+              copyAccessList(from: source.handle, to: output), FlushFileBuffers(output) else {
             throw WorkspaceFileError.notWritable
         }
 
