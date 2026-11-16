@@ -58,17 +58,22 @@ let linuxHost = false
 let macOSLayers = ["Views", "Browser", "Development", "Platform/macOS", "NativeHarnessClientApp.swift"]
 let windowsLayers = ["WinUI", "Platform/Windows"]
 let linuxLayers = ["Platform/Linux"]
+// The parts the Mac app and the Linux host build from the same POSIX calls: file access that follows no link
+// (`ScopedFiles`, `WorkspaceFileReplacement`).
+let posixLayers = ["Platform/POSIX"]
 // Platform/Portable holds Foundation versions of what each platform layer provides under the same
 // names, for the engine-only build and for what the Windows layer does not provide yet; the Mac app
-// has its own in Platform/macOS.
+// has its own in Platform/macOS and Platform/POSIX.
 let otherPlatformLayers = ["Platform/Portable"]
 // The Platform/Portable files whose parts the Windows layer provides, which the Windows app leaves out.
 let portableFilesWindowsReplaces = ["Platform/Portable/PortableProcesses.swift", "Platform/Portable/PortableRemoteHost.swift",
                                     "Platform/Portable/PortableNotifications.swift", "Platform/Portable/PortableAccounts.swift",
                                     "Platform/Portable/PortableScopedFiles.swift",
                                     "Platform/Portable/PortableWorkspaceFileReplacement.swift"]
-// The Platform/Portable files whose parts the Linux layer provides, which the Linux host leaves out.
-let portableFilesLinuxReplaces = ["Platform/Portable/PortableProcesses.swift", "Platform/Portable/PortableRemoteHost.swift"]
+// The Platform/Portable files whose parts the Linux layer and Platform/POSIX provide, which the Linux host leaves out.
+let portableFilesLinuxReplaces = ["Platform/Portable/PortableProcesses.swift", "Platform/Portable/PortableRemoteHost.swift",
+                                  "Platform/Portable/PortableScopedFiles.swift",
+                                  "Platform/Portable/PortableWorkspaceFileReplacement.swift"]
 
 // The phone remote's direct-path listener on the Mac uses Network.framework, which a build on another platform
 // leaves out. Windows has its own on Winsock (RemoteWinsockListener.swift, which builds only there); elsewhere the
@@ -107,7 +112,7 @@ let appTarget: Target = windowsApp
             .product(name: "WinUIBindings", package: "Bindings"),
             qrCode
         ],
-        exclude: macOSLayers + linuxLayers + portableFilesWindowsReplaces,
+        exclude: macOSLayers + linuxLayers + posixLayers + portableFilesWindowsReplaces,
         resources: [
             .process("Resources")
         ],
@@ -145,7 +150,7 @@ let appTarget: Target = windowsApp
             .product(name: "Markdown", package: "swift-markdown"),
             qrCode
         ],
-        exclude: macOSLayers + windowsLayers + linuxLayers,
+        exclude: macOSLayers + windowsLayers + linuxLayers + posixLayers,
         resources: [
             .process("Resources")
         ]

@@ -19,7 +19,8 @@ in the official source or a build is marked "confirmed"; the rest is "not confir
   WebKit preview), `Development/` (visual fixtures and QA), `Platform/` and `NativeHarnessClientApp.swift`.
 - Engine code names the platform's parts directly, and each platform defines them under the same names in its own
   folder: `Platform/macOS/` for the Mac app, `Platform/Windows/` for the Windows app, `Platform/Linux/` for the Linux
-  host, and `Platform/Portable/` for a build of the engine on its own and for what the Windows and Linux layers do not
+  host, `Platform/POSIX/` for what the Mac app and the Linux host build from the same POSIX calls, and
+  `Platform/Portable/` for a build of the engine on its own and for what the Windows and Linux layers do not
   provide yet. Some parts
   are protocols the engine owns with a platform's implementation (`LocalSystemNotificationCenter` implements
   `SystemNotificationCenter`, `LiveProcessTable` implements `ProcessTableReading`); others are types or extensions the
@@ -34,7 +35,8 @@ YARDLET_ENGINE_ONLY=1 swift build --build-system native --target NativeHarnessCl
 ```
 
 With `YARDLET_ENGINE_ONLY=1`, `Package.swift` turns the app target into a library that leaves out `Views/`, `WinUI/`,
-`Browser/`, `Development/`, `Platform/macOS/`, `Platform/Windows/`, `Platform/Linux/` and `NativeHarnessClientApp.swift`, and drops the
+`Browser/`, `Development/`, `Platform/macOS/`, `Platform/Windows/`, `Platform/Linux/`, `Platform/POSIX/` and
+`NativeHarnessClientApp.swift`, and drops the
 SwiftTerm and Sparkle packages and the test target. This is the build a platform other than macOS makes, and on a Mac it checks that the engine still
 stands without the screens. `--force-resolved-versions` keeps `Package.resolved` as the full build pins it; without
 it, the build rewrites the file without the packages it leaves out.
@@ -50,8 +52,8 @@ platform's layer has to provide:
 | `MacConditionReader` | Disk, memory pressure and heat for the new-task notice and the session tools | `sysctlbyname`, `getloadavg` |
 | `MemoryPressureWatch` | The memory saver's pressure warnings | Dispatch memory pressure source |
 | `NativeProcessTree` | Ending a process Yardlet started, with what it started | `proc_listchildpids`, signals |
-| `ScopedFiles` | Reading Claude's transcripts and a restore's files without following links; reading the file it opens in parts (`OpenFile`, `Files/OpenFile.swift`) is engine code | `openat` with `O_NOFOLLOW` |
-| `WorkspaceFileReplacement` | Saving a reviewed workspace file, from the Files panel and from another device (docs/REMOTE_PROTOCOL.md §15.27) | no-follow descriptors, `renameat` |
+| `ScopedFiles` | Reading Claude's transcripts and a restore's files without following links; reading the file it opens in parts (`OpenFile`, `Files/OpenFile.swift`) is engine code | `openat` with `O_NOFOLLOW` (`Platform/POSIX/`) |
+| `WorkspaceFileReplacement` | Saving a reviewed workspace file, from the Files panel and from another device (docs/REMOTE_PROTOCOL.md §15.27) | no-follow descriptors, `renameat` (`Platform/POSIX/`) |
 | `FileCloning`, `Trash`, `FileTypes` | Block-sharing copies, the Trash, file types | `copyfile`, `trashItem`, UTType |
 | `ShellLaunchEnvironment.userLoginShell` | The person's login shell | the user database |
 | `ClaudeConversationCatalog.runningSessionIDs` | Which Claude Code sessions run elsewhere | `kill(pid, 0)`, `sysctl` |
@@ -71,6 +73,18 @@ The Windows layer provides `NativeProcessTree` (`Platform/Windows/NativeProcessT
 `PortableProcesses.swift`, `PortableRemoteHost.swift`, `PortableNotifications.swift`, `PortableAccounts.swift`,
 `PortableScopedFiles.swift` and `PortableWorkspaceFileReplacement.swift` out (`portableFilesWindowsReplaces` in
 `Package.swift`).
+
+`Platform/POSIX/` holds `ScopedFiles` and `WorkspaceFileReplacement`, written once on the calls Darwin and Glibc share,
+so the Linux host reads Claude Code's transcripts and saves a reviewed file with the Mac's own code. A read opens the
+root as it is, a link included, then each name beneath it with `O_NOFOLLOW` through the descriptor of the folder above
+it, and refuses a pipe or device before reading it. A save walks to the file's folder the same way from a root that is
+not a link, and only while the file still holds the reviewed bytes puts a new file written beside it in its place with
+`renameat`. The two systems differ only in what a save keeps beyond the bytes: everything `fcopyfile` copies as
+metadata on the Mac, the file's permissions on Linux. With `NativeProcessTree` (`Platform/Linux/NativeProcessTree.swift`)
+and `RemoteHostPlatform.current` (`Platform/Linux/LinuxRemoteHost.swift`), the Linux host leaves
+`PortableProcesses.swift`, `PortableRemoteHost.swift`, `PortableScopedFiles.swift` and
+`PortableWorkspaceFileReplacement.swift` out (`portableFilesLinuxReplaces`). The Windows app and the engine-only build
+leave `Platform/POSIX/` out.
 
 `Platform/Portable/PortableFoundation.swift` also holds the few names Foundation outside Apple's platforms lacks
 (`InlinePresentationIntent`, Combine's `ObservableObject` and `Published`, `autoreleasepool`), and

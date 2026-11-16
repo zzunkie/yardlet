@@ -1,7 +1,7 @@
 import Foundation
 
 // File access that must not follow a link swapped in beneath a folder. Each platform builds it on
-// its own no-follow primitives (Platform/macOS: openat with O_NOFOLLOW; Platform/Windows: names
+// its own no-follow primitives (Platform/POSIX, for the Mac and Linux: openat with O_NOFOLLOW; Platform/Windows: names
 // opened as themselves, reparse points refused). Foundation alone cannot promise that, so here
 // nothing is read through them.
 

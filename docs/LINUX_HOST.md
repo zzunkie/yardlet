@@ -5,8 +5,9 @@ and serves its tasks to the Mac, Windows and phone apps over the remote protocol
 does in Settings › Remote. A server, a virtual machine or a computer that stays on runs the harnesses; the person works
 with them from another device. There is no Linux app with screens.
 
-It is the engine (docs/PLATFORM_PORTABILITY.md) with `Platform/Portable/` and `Platform/Linux/`, built on Linux as
-the app target `NativeHarnessClient` and the product `yardlet`.
+It is the engine (docs/PLATFORM_PORTABILITY.md) with `Platform/Portable/`, `Platform/Linux/` and `Platform/POSIX/`
+(the file access it shares with the Mac app), built on Linux as the app target `NativeHarnessClient` and the product
+`yardlet`.
 
 ## Installing
 
@@ -211,8 +212,8 @@ vault.
 ## Where it is built
 
 `.github/workflows/linux-host.yml` builds the host and its tests for x86_64 and aarch64 in swift.org's Ubuntu 22.04
-image, pinned by digest, for every pull request that changes more than documents and for `main`. It runs the Linux
-layer's tests (`Tests/YardletHostTests/`) in a home of their own, the keyring's in a D-Bus session with gnome-keyring,
+image, pinned by digest, for every pull request that changes more than documents and for `main`. It runs the tests of
+the Linux layer and of the file access it shares with the Mac (`Tests/YardletHostTests/`) in a home of their own, the keyring's in a D-Bus session with gnome-keyring,
 then `scripts/linux/check-host.sh`, which starts the
 host as a person would, asks its status, adds a project, checks that a second host refuses to start and that SIGTERM
 ends it, and lists what it left in its home. `scripts/linux/check-remote.sh` then checks the direct path: the host
