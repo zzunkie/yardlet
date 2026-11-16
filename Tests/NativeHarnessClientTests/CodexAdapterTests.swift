@@ -1,4 +1,5 @@
 import Foundation
+import os
 import XCTest
 @testable import NativeHarnessClient
 
@@ -97,6 +98,47 @@ final class CodexAdapterTests: XCTestCase {
         XCTAssertEqual(listed.map(\.mode), ["plan"])
         let methods = await transport.requestMethods
         XCTAssertEqual(methods, ["initialize", "initialize", "collaborationMode/list"])
+    }
+
+    /// The App Server ends with the last session on it, and the adapter the app keeps for the
+    /// account starts a new one for the next session: a task created after a subagent on its account
+    /// ended gets its thread. A session still starting when the last open one closes keeps the App
+    /// Server it is starting on, which unloads the closed thread.
+    func testTheSessionAfterTheLastClosedOneStartsANewAppServer() async throws {
+        func appServer() -> FakeCodexTransport {
+            FakeCodexTransport(responses: [
+                "initialize": [.object(["platformOs": .string("macos")])],
+                "thread/start": [threadResult("thread-1"), threadResult("thread-2")]
+            ])
+        }
+        let first = appServer(), second = appServer()
+        let unstarted = OSAllocatedUnfairLock(initialState: [first, second])
+        let adapter = CodexAdapter(executableURL: URL(filePath: "/tmp/codex"),
+                                   transportFactory: { unstarted.withLock { $0.removeFirst() } })
+        func request() -> CreateHarnessSessionRequest {
+            CreateHarnessSessionRequest(localSessionID: UUID(), workspaceURL: URL(filePath: "/tmp/workspace"),
+                                        initialPrompt: nil)
+        }
+
+        let closing = try await adapter.createSession(request())
+        await first.suspendNextRequest("thread/start")
+        let starting = Task { try await adapter.createSession(request()) }
+        try await waitUntil { await first.isRequestSuspended }
+        await adapter.close(closing)
+        try await waitUntil { await first.requestMethods.contains("thread/unsubscribe") }
+        let stopsWhileStarting = await first.stopCount
+        XCTAssertEqual(stopsWhileStarting, 0)
+        await first.releaseSuspendedRequest()
+        let started = try await starting.value
+
+        await adapter.close(started)
+        let stops = await first.stopCount
+        XCTAssertEqual(stops, 1)
+        let next = try await adapter.createSession(request())
+        XCTAssertEqual(next.providerSessionID, "thread-1")
+        let methods = await second.requestMethods
+        XCTAssertEqual(methods, ["initialize", "thread/start"])
+        await adapter.close(next)
     }
 
     func testSlowPresentationConsumerReceivesLatestSnapshotAndLosslessEvents() async throws {

@@ -13,7 +13,15 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
     private let executableURL: URL
     private let runtimeCompatibility: CodexRuntimeCompatibility
     private let clientVersion: String
-    private let transport: any CodexTransport
+    /// The connection to the App Server the adapter's sessions share. A stopped one cannot start
+    /// again, so the session after it gets a new one from `makeTransport`.
+    private var transport: any CodexTransport
+    private let makeTransport: @Sendable () -> any CodexTransport
+    /// The App Server stopped with no session left on it; the next session starts a new one.
+    private var transportStopped = false
+    /// Sessions being created or resumed. Their App Server is in use from their first request,
+    /// before their handles exist, so the last task closing meanwhile does not stop it.
+    private var sessionsStarting = 0
     private let projector = CodexEventProjector()
     private let activityProjector = CodexActivityProjector()
     private let capabilityProjector = CodexCapabilityProjector()
@@ -109,12 +117,14 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
     /// `namesNewThreads` and `predictsNextMessages` are on for the app's runtime adapters; a
     /// scripted transport leaves them off so each test sees only the requests it scripted.
     /// `asksForNextMessageSuggestions` is the "Next message suggestions" setting, read at each
-    /// turn's end: off, no prediction is asked for at all.
+    /// turn's end: off, no prediction is asked for at all. A given `transport` serves every App
+    /// Server the adapter starts; `transportFactory` makes one for each, as the app's own does.
     init(
         executableURL: URL,
         runtimeCompatibility: CodexRuntimeCompatibility = .restorationBaseline,
         clientVersion: String = "0.0.1",
         transport: (any CodexTransport)? = nil,
+        transportFactory: (@Sendable () -> any CodexTransport)? = nil,
         environmentManager: CodexEnvironmentManager? = nil,
         environmentScope: SessionEnvironmentScope = .native,
         namesNewThreads: Bool = false,
@@ -129,12 +139,21 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
         self.namesNewThreads = namesNewThreads
         self.predictsNextMessages = predictsNextMessages
         self.asksForNextMessageSuggestions = asksForNextMessageSuggestions
-        self.transport = transport ?? CodexProcessTransport(
-            executableURL: executableURL,
-            environmentManager: environmentManager,
-            environmentScope: environmentScope,
-            resourceOwner: resourceOwner
-        )
+        if let transportFactory {
+            makeTransport = transportFactory
+        } else if let transport {
+            makeTransport = { transport }
+        } else {
+            makeTransport = {
+                CodexProcessTransport(
+                    executableURL: executableURL,
+                    environmentManager: environmentManager,
+                    environmentScope: environmentScope,
+                    resourceOwner: resourceOwner
+                )
+            }
+        }
+        self.transport = makeTransport()
     }
 
     func probeRuntime() async throws -> HarnessRuntimeDescriptor {
@@ -241,6 +260,31 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
     }
 
     func createSession(_ request: CreateHarnessSessionRequest) async throws -> HarnessSessionHandle {
+        try await startingSession { try await createThread(request) }
+    }
+
+    func resumeSession(
+        providerSessionID: String,
+        localSessionID: UUID,
+        workspaceURL: URL
+    ) async throws -> HarnessSessionHandle {
+        try await startingSession {
+            try await resumeThread(providerSessionID, localSessionID: localSessionID, workspaceURL: workspaceURL)
+        }
+    }
+
+    /// Runs a session's start, which holds the App Server as an open session does. One that fails
+    /// leaves the App Server running: detached tasks on the account read their threads through it
+    /// with no session of their own.
+    private func startingSession(
+        _ start: () async throws -> HarnessSessionHandle
+    ) async throws -> HarnessSessionHandle {
+        sessionsStarting += 1
+        defer { sessionsStarting -= 1 }
+        return try await start()
+    }
+
+    private func createThread(_ request: CreateHarnessSessionRequest) async throws -> HarnessSessionHandle {
         try await ensureInitialized()
         let developerInstructions = await developerInstructions(for: request.localSessionID,
                                                                 workspaceURL: request.workspaceURL)
@@ -279,8 +323,8 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
         return handle
     }
 
-    func resumeSession(
-        providerSessionID: String,
+    private func resumeThread(
+        _ providerSessionID: String,
         localSessionID: UUID,
         workspaceURL: URL
     ) async throws -> HarnessSessionHandle {
@@ -1645,19 +1689,22 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
 
         // As the Codex app lets a conversation go: the App Server unloads a thread no client follows, and ends with
         // the last task on its account below. Not waited for, so quitting Yardlet does not wait on each thread.
-        if !handles.isEmpty, initialized, !transportEnded,
+        if !handles.isEmpty || sessionsStarting > 0, initialized, !transportEnded,
            !handles.values.contains(where: { $0.providerSessionID == session.providerSessionID }) {
             let request = CodexThreadTitle.unsubscribe(id: takeRequestID(), threadID: session.providerSessionID)
             Task { [transport] in _ = try? await transport.request(request) }
         }
-        if handles.isEmpty {
+        // The adapter stays usable: the next session or read starts a new App Server (`ensureInitialized`).
+        if handles.isEmpty, sessionsStarting == 0, !transportStopped {
             for threadID in titleTurns.keys { finishTitleTurn(threadID, result: nil) }
             for threadID in predictionTurns.keys { finishPredictionTurn(threadID, result: nil) }
             notificationTask?.cancel()
             notificationTask = nil
             endInitialization()
-            await transport.stop()
+            // Before the wait, so a session starting meanwhile starts a new App Server instead of this one.
             initialized = false
+            transportStopped = true
+            await transport.stop()
         }
     }
 
@@ -1687,6 +1734,11 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
     private func ensureInitialized() async throws {
         guard !transportEnded else {
             throw HarnessAdapterError.invalidProviderEvent(L10n.format("Connection to %@ ended.", "Codex"))
+        }
+        // The App Server stopped with the last session; a stopped one cannot start again.
+        if transportStopped {
+            transport = makeTransport()
+            transportStopped = false
         }
         guard !initialized else { return }
         if let initialization { return try await initialization.value }

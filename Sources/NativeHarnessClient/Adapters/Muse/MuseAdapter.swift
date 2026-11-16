@@ -42,11 +42,19 @@ actor MuseAdapter:
 
     private let executableURL: URL
     private let launchArguments: [String]
-    private let transport: any MuseTransport
+    /// The connection to the host the adapter's sessions share. A stopped one cannot start again,
+    /// so the session after it gets a new one from `makeTransport`.
+    private var transport: any MuseTransport
+    private let makeTransport: @Sendable () -> any MuseTransport
     private let projector = MuseEventProjector()
     private let subscriptionUsageStore: MuseSubscriptionUsageStore
 
     private var initialized = false
+    /// The host stopped with no session left on it; the next session starts a new one.
+    private var transportStopped = false
+    /// Sessions being created or resumed. Their host is in use from their first request, before
+    /// their handles exist, so the last task closing meanwhile does not stop it.
+    private var sessionsStarting = 0
     /// The `usage/read` in flight, so reads for several finished turns do not pile up.
     private var subscriptionUsageRead: Task<Void, Never>?
     /// Set when this host answered `usage/read` with an error, which a host without the method
@@ -81,12 +89,21 @@ actor MuseAdapter:
         executableURL: URL,
         launchArguments: [String] = ["serve"],
         transport: (any MuseTransport)? = nil,
+        transportFactory: (@Sendable () -> any MuseTransport)? = nil,
         subscriptionUsageStore: MuseSubscriptionUsageStore = .shared
     ) {
         self.kind = kind
         self.executableURL = executableURL.standardizedFileURL
         self.launchArguments = launchArguments
-        self.transport = transport ?? MuseProcessTransport(executableURL: executableURL)
+        // A given `transport` serves every host the adapter starts; `transportFactory` makes one for each.
+        if let transportFactory {
+            makeTransport = transportFactory
+        } else if let transport {
+            makeTransport = { transport }
+        } else {
+            makeTransport = { MuseProcessTransport(executableURL: executableURL) }
+        }
+        self.transport = makeTransport()
         self.subscriptionUsageStore = subscriptionUsageStore
     }
 
@@ -124,6 +141,37 @@ actor MuseAdapter:
 
     func createSession(_ request: CreateHarnessSessionRequest) async throws
         -> HarnessSessionHandle {
+        try await startingSession { try await startSession(request) }
+    }
+
+    func resumeSession(
+        providerSessionID: String,
+        localSessionID: UUID,
+        workspaceURL: URL
+    ) async throws -> HarnessSessionHandle {
+        try await startingSession {
+            try await resumeHostSession(providerSessionID, localSessionID: localSessionID, workspaceURL: workspaceURL)
+        }
+    }
+
+    /// Runs a session's start, which holds the host as an open session does. A start that fails
+    /// with no session left on the host stops it, as closing the last one does.
+    private func startingSession(
+        _ start: () async throws -> HarnessSessionHandle
+    ) async throws -> HarnessSessionHandle {
+        sessionsStarting += 1
+        do {
+            let handle = try await start()
+            sessionsStarting -= 1
+            return handle
+        } catch {
+            sessionsStarting -= 1
+            await stopTransportIfUnused()
+            throw error
+        }
+    }
+
+    private func startSession(_ request: CreateHarnessSessionRequest) async throws -> HarnessSessionHandle {
         try await ensureInitialized(workspaceURL: request.workspaceURL)
         var registeredHandle: HarnessSessionHandle?
         do {
@@ -154,48 +202,39 @@ actor MuseAdapter:
             }
             return handle
         } catch {
-            if let registeredHandle {
-                await close(registeredHandle)
-            } else {
-                await stopTransportIfUnused()
-            }
+            if let registeredHandle { await close(registeredHandle) }
             throw error
         }
     }
 
-    func resumeSession(
-        providerSessionID: String,
+    private func resumeHostSession(
+        _ providerSessionID: String,
         localSessionID: UUID,
         workspaceURL: URL
     ) async throws -> HarnessSessionHandle {
         try await ensureInitialized(workspaceURL: workspaceURL)
-        do {
-            let id = takeRequestID()
-            let result = try await transport.request(
-                MuseProtocol.resumeSession(
-                    id: id,
-                    commandID: takeCommandID(),
-                    providerSessionID: providerSessionID
-                ),
-                id: id
+        let id = takeRequestID()
+        let result = try await transport.request(
+            MuseProtocol.resumeSession(
+                id: id,
+                commandID: takeCommandID(),
+                providerSessionID: providerSessionID
+            ),
+            id: id
+        )
+        guard result["session"]?["sessionId"]?.stringValue == providerSessionID else {
+            throw HarnessAdapterError.invalidProviderEvent(
+                "MSP session/resume response did not preserve session identity"
             )
-            guard result["session"]?["sessionId"]?.stringValue == providerSessionID else {
-                throw HarnessAdapterError.invalidProviderEvent(
-                    "MSP session/resume response did not preserve session identity"
-                )
-            }
-            let handle = HarnessSessionHandle(
-                harness: kind,
-                localSessionID: localSessionID,
-                providerSessionID: providerSessionID,
-                workspaceURL: workspaceURL.standardizedFileURL
-            )
-            register(handle, providerSession: result["session"])
-            return handle
-        } catch {
-            await stopTransportIfUnused()
-            throw error
         }
+        let handle = HarnessSessionHandle(
+            harness: kind,
+            localSessionID: localSessionID,
+            providerSessionID: providerSessionID,
+            workspaceURL: workspaceURL.standardizedFileURL
+        )
+        register(handle, providerSession: result["session"])
+        return handle
     }
 
     func send(_ prompt: String, to session: HarnessSessionHandle) async throws {
@@ -601,6 +640,11 @@ actor MuseAdapter:
 
     private func ensureInitialized(workspaceURL: URL) async throws {
         guard !initialized else { return }
+        // The host stopped with the last session or a failed handshake; a stopped one cannot start again.
+        if transportStopped {
+            transport = makeTransport()
+            transportStopped = false
+        }
         do {
             try await transport.start(
                 MuseLaunchConfiguration(
@@ -631,8 +675,9 @@ actor MuseAdapter:
         } catch {
             messageTask?.cancel()
             messageTask = nil
-            await transport.stop()
             initialized = false
+            transportStopped = true
+            await transport.stop()
             throw error
         }
     }
@@ -1085,14 +1130,18 @@ actor MuseAdapter:
         }
     }
 
+    /// Ends the host once no session is on it or starting on it. The adapter stays usable: the next
+    /// session starts a new host (`ensureInitialized`).
     private func stopTransportIfUnused() async {
-        guard handles.isEmpty else { return }
+        guard handles.isEmpty, sessionsStarting == 0, !transportStopped else { return }
         messageTask?.cancel()
         messageTask = nil
         subscriptionUsageRead?.cancel()
         subscriptionUsageRead = nil
-        await transport.stop()
+        // Before the wait, so a session starting meanwhile starts a new host instead of this one.
         initialized = false
+        transportStopped = true
+        await transport.stop()
     }
 
     /// Reads the host's last-observed subscription usage for the Account Center: once the

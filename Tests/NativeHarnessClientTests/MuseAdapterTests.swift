@@ -1,4 +1,5 @@
 import Foundation
+import os
 import XCTest
 @testable import NativeHarnessClient
 
@@ -167,11 +168,15 @@ final class MuseAdapterTests: XCTestCase {
         collector.cancel()
     }
 
+    /// The host a failed start stopped is not the next session's: that one starts a new host, as
+    /// the session after the last closed one does.
     func testUnsupportedSchemaStopsTransportWithoutCreatingSession() async throws {
         let transport = FakeMuseTransport(schemaVersion: 2)
+        let next = FakeMuseTransport()
+        let unstarted = OSAllocatedUnfairLock(initialState: [transport, next])
         let adapter = MuseAdapter(
             executableURL: URL(filePath: "/tmp/fake-muse"),
-            transport: transport
+            transportFactory: { unstarted.withLock { $0.removeFirst() } }
         )
         do {
             _ = try await adapter.createSession(
@@ -189,6 +194,14 @@ final class MuseAdapterTests: XCTestCase {
         let stopCount = await transport.stopCount
         XCTAssertEqual(requestMethods, ["initialize"])
         XCTAssertEqual(stopCount, 1)
+
+        let handle = try await adapter.createSession(
+            CreateHarnessSessionRequest(localSessionID: UUID(), workspaceURL: URL(filePath: "/tmp/project"),
+                                        initialPrompt: nil))
+        XCTAssertEqual(handle.providerSessionID, Self.sessionID)
+        let nextMethods = await next.requestMethods
+        XCTAssertEqual(nextMethods.filter { $0 != "usage/read" }, ["initialize", "session/start"])
+        await adapter.close(handle)
     }
 
     func testFailedInitialPromptClosesRegisteredSessionAndTransport() async throws {
