@@ -317,10 +317,14 @@ private struct WindowChromeAlignment: NSViewRepresentable {
     }
 }
 
+/// AppKit puts the window's buttons back in their own place whenever it updates the title bar: on a resize, and
+/// on a new title or subtitle, as a remote window's connection line sets. Each move of a button asks for this
+/// view's layout, which moves the buttons to the row before the window draws again.
 private final class WindowChromeAlignmentView: NSView {
     var targetCenterFromTop: CGFloat
-    private var alignmentIsScheduled = false
-    private var windowObservers: [NSObjectProtocol] = []
+    /// Set while this view moves the buttons, so their own moves do not ask for another layout.
+    private var isAligning = false
+    private var observedButtons: [ObjectIdentifier] = []
 
     init(targetCenterFromTop: CGFloat) {
         self.targetCenterFromTop = targetCenterFromTop
@@ -334,100 +338,66 @@ private final class WindowChromeAlignmentView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        removeWindowObservers()
-        if let window {
-            let center = NotificationCenter.default
-            for name in [
-                NSWindow.didBecomeKeyNotification,
-                NSWindow.didResizeNotification,
-                NSWindow.didEndLiveResizeNotification
-            ] {
-                windowObservers.append(center.addObserver(
-                    forName: name,
-                    object: window,
-                    queue: .main
-                ) { [weak self] _ in
-                    Task { @MainActor in
-                        self?.scheduleAlignment()
-                    }
-                })
-            }
-        }
-        scheduleAlignment()
+        needsLayout = true
     }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         if newWindow !== window {
-            removeWindowObservers()
+            removeButtonObservers()
         }
         super.viewWillMove(toWindow: newWindow)
     }
 
     override func layout() {
         super.layout()
-        scheduleAlignment()
+        applyAlignment()
     }
 
-    private func removeWindowObservers() {
-        let center = NotificationCenter.default
-        windowObservers.forEach(center.removeObserver)
-        windowObservers.removeAll()
-    }
-
-    private func scheduleAlignment() {
-        guard !alignmentIsScheduled else { return }
-        alignmentIsScheduled = true
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.alignmentIsScheduled = false
-            self.applyAlignment()
+    private func observe(_ buttons: [NSButton]) {
+        let identifiers = buttons.map(ObjectIdentifier.init)
+        guard identifiers != observedButtons else { return }
+        removeButtonObservers()
+        observedButtons = identifiers
+        for button in buttons {
+            // Delivered as AppKit moves the button, so the layout it asks for comes before the window draws.
+            NotificationCenter.default.addObserver(self, selector: #selector(buttonFrameDidChange),
+                                                   name: NSView.frameDidChangeNotification, object: button)
         }
+    }
+
+    @objc private func buttonFrameDidChange(_ notification: Notification) {
+        guard !isAligning else { return }
+        needsLayout = true
+    }
+
+    private func removeButtonObservers() {
+        NotificationCenter.default.removeObserver(self, name: NSView.frameDidChangeNotification, object: nil)
+        observedButtons.removeAll()
     }
 
     func applyAlignment() {
         guard let window else { return }
-        window.titlebarSeparatorStyle = .none
+        isAligning = true
+        defer { isAligning = false }
+        if window.titlebarSeparatorStyle != .none {
+            window.titlebarSeparatorStyle = .none
+        }
+        let buttons = [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton]
+            .compactMap(window.standardWindowButton)
+        observe(buttons)
 
         let targetYInHeader = isFlipped
             ? bounds.minY + targetCenterFromTop
             : bounds.maxY - targetCenterFromTop
-        let targetCenterInWindow = convert(
-            NSPoint(x: bounds.midX, y: targetYInHeader),
-            to: nil
-        )
-        var alignedContainers = Set<ObjectIdentifier>()
-
-        for type in [
-            NSWindow.ButtonType.closeButton,
-            .miniaturizeButton,
-            .zoomButton
-        ] {
-            guard let button = window.standardWindowButton(type) else { continue }
-            guard let container = button.superview,
-                  let containerParent = container.superview else { continue }
-            guard alignedContainers.insert(ObjectIdentifier(container)).inserted else {
-                continue
-            }
-
-            let buttonCenterInWindow = container.convert(
-                NSPoint(x: button.frame.midX, y: button.frame.midY),
-                to: nil
-            )
-            let verticalDelta = targetCenterInWindow.y - buttonCenterInWindow.y
-            guard abs(verticalDelta) > 0.25 else { continue }
-
-            let containerOriginInWindow = containerParent.convert(
-                container.frame.origin,
-                to: nil
-            )
-            let targetOriginInParent = containerParent.convert(
-                NSPoint(
-                    x: containerOriginInWindow.x,
-                    y: containerOriginInWindow.y + verticalDelta
-                ),
-                from: nil
-            )
-            container.setFrameOrigin(targetOriginInParent)
+        let targetCenterInWindow = convert(NSPoint(x: bounds.midX, y: targetYInHeader), to: nil)
+        for button in buttons {
+            // In full screen the buttons are in the title bar AppKit shows at the screen's top, and stay where it puts them.
+            guard button.window === window, let bar = button.superview else { continue }
+            // Each button, not their bar: AppKit places a button where it belongs in the window whatever the bar's
+            // offset, so moving the bar again after each update would push it further down until the buttons left it.
+            let originY = bar.convert(targetCenterInWindow, from: nil).y - button.frame.height / 2
+            guard abs(button.frame.origin.y - originY) > 0.25 else { continue }
+            button.setFrameOrigin(NSPoint(x: button.frame.origin.x, y: originY))
         }
     }
 }

@@ -1187,16 +1187,18 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
                 (0..<columns).filter { bitmap.colorAt(x: $0, y: y) != background }.count
             }
         }
+        func buttonCenterFromTop() -> CGFloat? {
+            guard let button = window.standardWindowButton(.closeButton), let bar = button.superview else { return nil }
+            return window.frame.height - bar.convert(NSPoint(x: button.frame.midX, y: button.frame.midY), to: nil).y
+        }
         // At rest: the buttons on the row, and the row the same twice over once the sidebar's motion has ended.
         func row(_ state: String, width: CGFloat) async throws -> [Int] {
             var last: [Int] = []
             try await waitUntil {
                 Self.turnRunLoop(hosting)
-                guard let button = window.standardWindowButton(.closeButton), let bar = button.superview,
-                      let lines = try? pixelLines(width: width) else { return false }
+                guard let center = buttonCenterFromTop(), let lines = try? pixelLines(width: width) else { return false }
                 defer { last = lines }
-                let center = bar.convert(NSPoint(x: button.frame.midX, y: button.frame.midY), to: nil)
-                return abs(window.frame.height - center.y - ParityTheme.titleBarHeight / 2) < 1 && lines == last
+                return abs(center - ParityTheme.titleBarHeight / 2) < 1 && lines == last
             }
             try WindowlessRender.writePNG(WindowlessRender.capture(themeFrame), to: WindowlessRender.directory("remote-qa")
                 .appending(path: "\(name)-\(state).png"))
@@ -1207,6 +1209,12 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
             return ready(WindowlessRender.accessibilityElements(in: hosting))
         }
         let shown = try await row("sidebar-shown", width: SidebarWidth.minimum)
+        // AppKit puts the buttons back in its own place for a new subtitle, as the remote window's connection line
+        // sets; the window's next layout, before it draws, puts them back on the row.
+        window.subtitle = L10n.string("Reconnecting…")
+        hosting.layoutSubtreeIfNeeded()
+        XCTAssertEqual(try XCTUnwrap(buttonCenterFromTop()), ParityTheme.titleBarHeight / 2, accuracy: 1,
+                       "\(name): the buttons after a new subtitle")
         XCTAssertTrue(hosting.pressAccessibilityElement(labelled: L10n.string("Hide sidebar")))
         try await waitUntil {
             Self.turnRunLoop(hosting)
