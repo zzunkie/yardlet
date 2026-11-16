@@ -127,6 +127,11 @@ enum ComposerDraftRetention: Equatable, Sendable {
     case claudeChatReset
     case none
 
+    /// The harness's own: Codex's built-in commands, Claude Code's chat reset, and nothing for the others.
+    init(harness: HarnessKind) {
+        self = harness == .codex ? .codexBuiltinCommands : harness == .claudeCode ? .claudeChatReset : .none
+    }
+
     func keepsDraft(afterSending text: String) -> Bool {
         switch self {
         case .codexBuiltinCommands: CodexComposerCommands.isBuiltin(text)
@@ -350,7 +355,7 @@ enum ComposerSessionOptionsProjection {
         if harness == .claudeCode {
             // The window supplies the shell; without it there is no bash mode.
             options.bashMode = true
-            options.draftRetention = .claudeChatReset
+            options.draftRetention = ComposerDraftRetention(harness: harness)
             options.followUp = ComposerFollowUpOptions(policy: .claudeCode, delivery: .providerInput)
             options.commands = ComposerCommandOptions(
                 source: .provider(providerCapabilities?.composerCommands ?? []), selection: .insert,
@@ -394,7 +399,7 @@ enum ComposerSessionOptionsProjection {
     private static func codex(_ capabilities: CodexCapabilityState, tokenUsage: CodexThreadTokenUsage?,
                               input: HarnessComposerInputPolicy, harness: HarnessKind) -> ComposerSessionOptions {
         var options = ComposerSessionOptions(harnessName: harness.displayName, input: input, submission: .codexDraft,
-                                             draftRetention: .codexBuiltinCommands)
+                                             draftRetention: ComposerDraftRetention(harness: harness))
         options.followUp = ComposerFollowUpOptions(policy: .codex, delivery: .codexDraft)
         options.commands = ComposerCommandOptions(source: .codexCatalog, selection: .runCodexCommand,
                                                   preparation: .codexCommands, preparesWhenListOpens: true,

@@ -1184,6 +1184,22 @@ final class AppModel {
         await send(HarnessUserInput(text: prompt), to: session)
     }
 
+    /// Sends the text the task's draft holds, as a composer's Send does: the draft empties as the message goes,
+    /// unless it holds a command the harness runs from the draft (`ComposerDraftRetention`), and a message the
+    /// task does not take comes back to it with why (`keepUnsent`). The Windows app's composer sends through this,
+    /// showing the draft, so nothing it sends is lost on the way. The draft empties before this returns; the
+    /// returned task is the send.
+    @discardableResult
+    func sendDraft(of session: SessionRecord) -> Task<Void, Never>? {
+        let draft = composerDrafts.tasks.draft(for: session.id)
+        let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        if draft.editState == nil, !ComposerDraftRetention(harness: session.harness).keepsDraft(afterSending: text) {
+            draft.clear()
+        }
+        return Task { await send(text, to: session) }
+    }
+
     /// A message the person wrote, in a task's composer on the Mac or the phone: sent as `send` sends,
     /// and a runtime it starts asks for next-message suggestions though the task is off screen.
     func sendPersonsMessage(_ input: HarnessUserInput, to session: SessionRecord) async {

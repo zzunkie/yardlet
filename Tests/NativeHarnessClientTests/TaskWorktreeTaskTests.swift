@@ -238,8 +238,11 @@ final class TaskWorktreeTaskTests: XCTestCase {
         XCTAssertEqual(missing.path, ProjectSidebarPresentation.normalizedPath(for: own))
         XCTAssertEqual(missing.worktreeBranch, "mine")
         let draft = model.composerDrafts.tasks.draft(for: task.id)
-        await model.send(HarnessUserInput(text: "Keep going"), to: task)
-        XCTAssertEqual(draft.text, "Keep going", "The composer clears before it sends; the refusal puts it back")
+        draft.text = "Keep going"
+        let refused = model.sendDraft(of: task)
+        XCTAssertEqual(draft.text, "", "The draft empties as the message goes")
+        await refused?.value
+        XCTAssertEqual(draft.text, "Keep going", "The refusal puts it back")
         XCTAssertEqual(draft.notice, missing.localizedDescription)
         await model.resume(task)
         XCTAssertFalse(model.isAttached(task.id))
@@ -277,8 +280,10 @@ final class TaskWorktreeTaskTests: XCTestCase {
         XCTAssertEqual(try fixture.git(["symbolic-ref", "--short", "HEAD"], in: own), "mine")
         XCTAssertNil(model.missingTaskFolders[task.id])
         XCTAssertEqual(model.worktreeNotice, L10n.format("Recreated the worktree of “%@” from %@.", task.title, "mine"))
-        draft.clear()
-        await model.send(HarnessUserInput(text: "Keep going"), to: task)
+        // What stayed in the draft goes once the folder is back.
+        await model.sendDraft(of: task)?.value
+        XCTAssertEqual(draft.text, "")
+        XCTAssertNil(draft.notice)
         prompts = await adapter.prompts
         XCTAssertEqual(prompts, ["Keep going"])
 
