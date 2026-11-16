@@ -19,8 +19,13 @@ final class BrowserHost {
     private var sequence: UInt64 = 0
     private var popupRects: [Int: [String: Any]] = [:]
     private var frameCount = 0
-    /// Tabs shown to the engine that have not painted since, by when they were shown (`noteIfNoFrame`).
-    private var shownWithoutFrame: [Int: UInt64] = [:]
+    /// Tabs shown to the engine that have not painted since (`noteIfNoFrame`).
+    private var shownWithoutFrame: [Int: UnpaintedShow] = [:]
+    /// When the engine was told to hide each tab hidden now, for how long a tab shown again had been hidden.
+    private var hiddenSince: [Int: UInt64] = [:]
+    /// Each tab's last view frame sent, and its viewport's last change of size or scale, for host.log.
+    private var lastFrames: [Int: (at: UInt64, width: Int, height: Int)] = [:]
+    private var viewportChanges: [Int: (at: UInt64, width: Double, height: Double, scale: Double)] = [:]
     /// Chromium's own windows (the passkey dialog) and the activation they need.
     private var chromiumWindows: ChromiumWindows?
     /// Where tasks' own request contexts keep their data (docs/BROWSER_SESSION_ISOLATION.md).
@@ -146,8 +151,11 @@ final class BrowserHost {
             }
         case "resize":
             guard let viewport = fields["viewport"] as? [String: Any] else { return }
-            yardlet_cef_set_viewport(Int32(tab), number(viewport["width"]), number(viewport["height"]),
-                                     number(viewport["scale"], default: 1), number(viewport["screenX"]),
+            let width = number(viewport["width"]), height = number(viewport["height"]), scale = number(viewport["scale"], default: 1)
+            if viewportChanges[tab].map({ $0.width != width || $0.height != height || $0.scale != scale }) ?? true {
+                viewportChanges[tab] = (DispatchTime.now().uptimeNanoseconds, width, height, scale)
+            }
+            yardlet_cef_set_viewport(Int32(tab), width, height, scale, number(viewport["screenX"]),
                                      number(viewport["screenY"]), frameRate(viewport))
         case "openBlockedPopup":
             guard let popupTab = fields["popupTab"] as? Int else { return }
@@ -259,14 +267,13 @@ final class BrowserHost {
             yardlet_cef_set_focus(Int32(tab), (fields["isFocused"] as? Bool ?? false) ? 1 : 0)
         case "visibility":
             let hidden = fields["isHidden"] as? Bool ?? false
-            // Chromium's window over the tab goes and comes with it, which tells the host the window's tab.
-            if let chromiumWindows { chromiumWindows.changeVisibility(of: tab, hidden: hidden) }
-            else { yardlet_cef_set_hidden(Int32(tab), hidden ? 1 : 0) }
+            setHidden(tab, hidden)
             if !hidden {
                 discarder.cancel(tab: tab)
                 noteIfNoFrame(tab: tab)
             } else {
                 shownWithoutFrame[tab] = nil
+                if hiddenSince[tab] == nil { hiddenSince[tab] = DispatchTime.now().uptimeNanoseconds }
             }
             if hidden {
                 // Nothing paints a hidden tab; its rings go, and Yardlet is told so it can let go of
@@ -301,7 +308,7 @@ final class BrowserHost {
             discarder.discard(tab: tab, urgent: fields["urgent"] as? Bool ?? false)
         case "close":
             discarder.cancel(tab: tab)
-            shownWithoutFrame[tab] = nil
+            forgetPainting(tab)
             yardlet_cef_close_browser(Int32(tab))
             surfaces?.forget(key: "\(tab).view")
             surfaces?.forget(key: "\(tab).popup")
@@ -505,6 +512,8 @@ final class BrowserHost {
                 guard let self else { return }
                 for tab in self.openTabs {
                     self.reportResponsiveness(tab: tab, isResponsive: yardlet_cef_is_unresponsive(Int32(tab)) == 0)
+                    // A resize's letterbox that was the last frame: the page as it is now, once the size has held.
+                    _ = yardlet_cef_refresh_after_letterbox(Int32(tab))
                 }
                 self.unresponsiveTabs.formIntersection(self.openTabs)
             }
@@ -557,7 +566,7 @@ final class BrowserHost {
             HostLog.write("browser closed tab=\(tab)")
             blockedPopupSources = blockedPopupSources.filter { $0.value.opener != tab }
             openTabs.remove(tab)
-            shownWithoutFrame[tab] = nil
+            forgetPainting(tab)
             chromiumWindows?.closed(tab)
             waitingTabs[tab] = nil
             refusedDownloadTabs.remove(tab)
@@ -692,15 +701,16 @@ final class BrowserHost {
     func paint(tab: Int, layer: Int32, buffer: UnsafeRawPointer, width: Int, height: Int) {
         let paintedAt = DispatchTime.now().uptimeNanoseconds
         let layerName = layer == 0 ? "view" : "popup"
-        guard let surface = surfaces?.surface(copyingBuffer: buffer, width: width, height: height,
-                                              key: "\(tab).\(layerName)") else { return }
+        let surface = surfaces?.surface(copyingBuffer: buffer, width: width, height: height, key: "\(tab).\(layerName)")
+        guard layer != 0 || notePaint(tab: tab, sent: surface != nil), let surface else { return }
         sendFrame(tab: tab, layer: layerName, surface: surface, paintedAt: paintedAt, source: "software")
     }
 
     func acceleratedPaint(tab: Int, layer: Int32, surface source: IOSurfaceRef, format: Int32) {
         let paintedAt = DispatchTime.now().uptimeNanoseconds
         let layerName = layer == 0 ? "view" : "popup"
-        guard let surface = surfaces?.surface(copyingSurface: source, format: format, key: "\(tab).\(layerName)") else { return }
+        let surface = surfaces?.surface(copyingSurface: source, format: format, key: "\(tab).\(layerName)")
+        guard layer != 0 || notePaint(tab: tab, sent: surface != nil), let surface else { return }
         sendFrame(tab: tab, layer: layerName, surface: surface, paintedAt: paintedAt, source: "accelerated")
     }
 
@@ -860,29 +870,117 @@ final class BrowserHost {
         send(["devTools": ["tab": tab, "message": message]])
     }
 
-    /// Showing a tab asks its engine for a frame (`yardlet_cef_set_hidden`), which comes at once; one line in host.log
-    /// says when none came within `frameWait`, and whether the page was loading, so that a panel left blank can be
-    /// read against the log.
+    /// Hides or shows a tab in its engine. Chromium's window over the tab goes and comes with it, which tells the host
+    /// the window's tab.
+    private func setHidden(_ tab: Int, _ hidden: Bool) {
+        if let chromiumWindows { chromiumWindows.changeVisibility(of: tab, hidden: hidden) }
+        else { yardlet_cef_set_hidden(Int32(tab), hidden ? 1 : 0) }
+    }
+
+    /// A shown tab that has not painted since: what its engine was asked and did meanwhile, for host.log.
+    private struct UnpaintedShow {
+        let shownAt: UInt64
+        /// How long the engine had the tab hidden before; nil when the tab was shown already.
+        let hiddenFor: Double?
+        let letterboxedBefore: UInt32
+        /// View paints the engine gave since, and those not sent (their copy or the surface's port failed).
+        var paints = 0
+        var unsent = 0
+        /// The steps taken since: 1 asked again for a frame, 2 hidden and shown again, 3 none left.
+        var steps = 0
+    }
+
+    /// Showing a tab asks its engine for a frame (`yardlet_cef_set_hidden`), which comes at once. When none comes within
+    /// `frameWait`, host.log says so with what the engine did meanwhile, and the engine is asked again; when still none
+    /// comes and the page is not loading, the tab is hidden and shown again, as Yardlet hides and shows it. A frame after
+    /// either says which brought it. So a panel the engine leaves blank draws without a reload, and the log names the
+    /// step that was missing.
     private func noteIfNoFrame(tab: Int) {
+        let hiddenFor = hiddenSince.removeValue(forKey: tab).map(Self.seconds(since:))
         // A tab whose browser is still being made paints once its page loads.
         guard openTabs.contains(tab) else { return }
         let shownAt = DispatchTime.now().uptimeNanoseconds
-        shownWithoutFrame[tab] = shownAt
+        shownWithoutFrame[tab] = UnpaintedShow(shownAt: shownAt, hiddenFor: hiddenFor,
+                                               letterboxedBefore: yardlet_cef_letterboxed_frames(Int32(tab)))
+        checkForFrame(tab: tab, shownAt: shownAt)
+    }
+
+    private func checkForFrame(tab: Int, shownAt: UInt64) {
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.frameWait) { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, self.shownWithoutFrame[tab] == shownAt else { return }
-                self.shownWithoutFrame[tab] = nil
+                guard let self, var show = self.shownWithoutFrame[tab], show.shownAt == shownAt, show.steps < 3 else { return }
                 var signals = YardletCEFPageSignals()
                 let loading = yardlet_cef_page_signals(Int32(tab), &signals) == 1 ? "\(signals.loading)" : "-"
-                HostLog.write("tab shown without a frame tab=\(tab) loading=\(loading)")
+                let state = self.paintingState(tab: tab, show)
+                switch show.steps {
+                case 0:
+                    HostLog.write("tab shown without a frame tab=\(tab) loading=\(loading) \(state)")
+                    yardlet_cef_set_hidden(Int32(tab), 0)
+                    show.steps = 1
+                case 1 where loading == "0":
+                    HostLog.write("tab shown again for a frame tab=\(tab) \(state)")
+                    self.setHidden(tab, true)
+                    self.setHidden(tab, false)
+                    show.steps = 2
+                default:
+                    HostLog.write("tab still without a frame tab=\(tab) loading=\(loading) \(state)")
+                    show.steps = 3
+                }
+                self.shownWithoutFrame[tab] = show
+                self.checkForFrame(tab: tab, shownAt: shownAt)
             }
         }
     }
 
     static let frameWait: TimeInterval = 3
 
+    /// What the engine did for a shown tab without a frame: how long it had been hidden ("-" when shown already), the
+    /// view paints it gave since (sent or not, and those held back as a resize's letterbox), its last frame sent, its
+    /// viewport and when that last changed, and Chromium's windows over it.
+    private func paintingState(tab: Int, _ show: UnpaintedShow) -> String {
+        let hidden = show.hiddenFor.map { String(format: "%.1fs", $0) } ?? "-"
+        let letterboxed = yardlet_cef_letterboxed_frames(Int32(tab)) &- show.letterboxedBefore
+        let frame = lastFrames[tab].map { String(format: "%.1fs %dx%d", Self.seconds(since: $0.at), $0.width, $0.height) } ?? "-"
+        let viewport = viewportChanges[tab].map {
+            String(format: "%gx%g@%g %.1fs", $0.width, $0.height, $0.scale, Self.seconds(since: $0.at))
+        } ?? "-"
+        return "hiddenFor=\(hidden) paints=\(show.paints) unsent=\(show.unsent) letterboxed=\(letterboxed) lastFrame=\(frame) "
+            + "viewport=\(viewport) windows=\(chromiumWindows?.count(over: tab) ?? 0)"
+    }
+
+    /// Notes a view paint of a shown tab without a frame yet. False when a QA run holds it back (`--unpainted-shows`).
+    private func notePaint(tab: Int, sent: Bool) -> Bool {
+        guard var show = shownWithoutFrame[tab] else { return true }
+        show.paints += 1
+        var holds = false
+#if DEBUG
+        holds = show.steps < arguments.unpaintedShows
+#endif
+        if !sent || holds { show.unsent += 1 }
+        shownWithoutFrame[tab] = show
+        return !holds
+    }
+
+    private func forgetPainting(_ tab: Int) {
+        shownWithoutFrame[tab] = nil
+        hiddenSince[tab] = nil
+        lastFrames[tab] = nil
+        viewportChanges[tab] = nil
+    }
+
+    private static func seconds(since start: UInt64) -> Double {
+        Double(DispatchTime.now().uptimeNanoseconds &- start) / 1_000_000_000
+    }
+
     private func sendFrame(tab: Int, layer: String, surface: IOSurfaceRef, paintedAt: UInt64, source: String) {
-        if layer == "view" { shownWithoutFrame[tab] = nil }
+        if layer == "view" {
+            if let show = shownWithoutFrame.removeValue(forKey: tab), show.steps > 0 {
+                let after = ["", "asked-again", "shown-again", "none"][min(show.steps, 3)]
+                HostLog.write(String(format: "tab painted %.1fs after it was shown tab=", Self.seconds(since: show.shownAt))
+                              + "\(tab) after=\(after)")
+            }
+            lastFrames[tab] = (paintedAt, IOSurfaceGetWidth(surface), IOSurfaceGetHeight(surface))
+        }
         sequence += 1
         frameCount += 1
         send(["frame": ["tab": tab, "frame": [

@@ -53,6 +53,10 @@ final class BrowserHostIdleReturnQA {
         let painted = await waitUntil(.seconds(15)) { controller.title == "Idle 1" && Self.showsPage(controller.view) }
         check("the panel shows the page", painted, describe(controller))
         save(controller.view, as: "shown")
+        if let steps = BrowserHostQAFixture.argument("ui-fixture-browser-unpainted-shows").flatMap(Int.init) {
+            await lostFrame(controller, tab, steps: steps)
+            return await finish()
+        }
 
         await occludeAndReturn(controller, tab)
         await resizeWhileHidden(controller, tab)
@@ -83,6 +87,32 @@ final class BrowserHostIdleReturnQA {
         check("occluded and back: the panel paints the page again", hid && shown,
               "hidden \(hid), " + describe(controller, framesSince: before))
         save(view, as: "occluded-and-back")
+    }
+
+    /// The engine's frame for a show is lost (`--ui-fixture-browser-unpainted-shows`: the QA host holds back a shown
+    /// tab's frames until it has taken that many of its steps for one): the host asks for a frame again (1), or hides
+    /// and shows the tab again (2), and the panel paints the page without a reload. host.log says the tab was shown
+    /// without a frame and which step brought one.
+    private func lostFrame(_ controller: BrowserHostPaneController, _ tab: BrowserTab, steps: Int) async {
+        guard let view = controller.view else { return }
+        let hidden = events["hidden", default: 0]
+        view.isHidden = true
+        let hid = await waitUntil(.seconds(5)) { self.events["hidden", default: 0] > hidden }
+        try? await Task.sleep(for: .seconds(1))
+        let before = frames.count
+        let started = ContinuousClock.now
+        view.isHidden = false
+        let shown = await waitUntil(.seconds(15)) { self.frames.count > before && Self.showsPage(view) }
+        let after = ContinuousClock.now - started
+        let log = (try? String(contentsOf: MacBrowserHost.shared.paths.log, encoding: .utf8)) ?? ""
+        let step = steps == 1 ? "asked-again" : "shown-again"
+        let lines = log.split(separator: "\n").filter { $0.contains("tab=\(tab.id) ") || $0.hasSuffix("tab=\(tab.id)") }.suffix(4)
+        let noted = log.contains("tab shown without a frame tab=\(tab.id) ")
+        let painted = log.contains("tab=\(tab.id) after=\(step)")
+        check("lost frame: the panel paints the page once the host \(steps == 1 ? "asks again" : "shows the tab again")",
+              hid && shown && after >= .milliseconds(2_900 * steps) && noted && painted,
+              "hidden \(hid), after \(after), host.log \(lines.joined(separator: " | ")), " + describe(controller, framesSince: before))
+        save(view, as: "lost-frame-\(steps)")
     }
 
     /// The window is resized while it is covered (the Mac's displays come back from sleep at another size): the tab

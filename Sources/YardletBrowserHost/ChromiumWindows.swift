@@ -119,6 +119,11 @@ final class ChromiumWindows {
         update()
     }
 
+    /// Chromium's windows shown over `tab` now, for host.log.
+    func count(over tab: Int) -> Int {
+        shown.filter { owners[$0.windowNumber] == tab }.count
+    }
+
     /// The tab of each new tab dialog: the only tab not hidden, or the one whose hiding hides it. Each other tab
     /// shows again in the same call, so its page sees only a moment hidden; a tab that is the dialog's shows it again.
     private func findTabs(of windows: [NSWindow]) {

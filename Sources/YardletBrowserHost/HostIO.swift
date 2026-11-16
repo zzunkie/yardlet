@@ -19,6 +19,9 @@ struct HostArguments {
     var accessibilityRecordPath = ""
     /// DEBUG builds only: the most browsers to open, below the host's own (QA fixture); 0 keeps the host's.
     var browserLimit: Int32 = 0
+    /// DEBUG builds only: a shown tab's view frames are held back until the host has taken this many of its steps for a
+    /// frame (`noteIfNoFrame`), as when the engine's frame for a show is lost (QA fixture); 0 holds none.
+    var unpaintedShows = 0
 
     static func parse(_ arguments: [String] = CommandLine.arguments,
                       environment: [String: String] = ProcessInfo.processInfo.environment) -> HostArguments {
@@ -41,6 +44,7 @@ struct HostArguments {
 #if DEBUG
             case "--accessibility-record": result.accessibilityRecordPath = value; index += 1
             case "--browser-limit": result.browserLimit = Int32(value) ?? 0; index += 1
+            case "--unpainted-shows": result.unpaintedShows = Int(value) ?? 0; index += 1
 #endif
             default: break
             }

@@ -290,6 +290,11 @@ void yardlet_cef_navigation(int tab, int action);
 void yardlet_cef_edit(int tab, int action);
 void yardlet_cef_set_focus(int tab, int focused);
 void yardlet_cef_set_hidden(int tab, int hidden);
+/// A view frame held back as a resize's letterbox was the last the tab painted: once the size has held a second, the
+/// view is asked for a frame, which then shows whatever the page draws. Returns 1 when it asked.
+int yardlet_cef_refresh_after_letterbox(int tab);
+/// View frames the tab held back as a resize's letterbox since it opened.
+unsigned yardlet_cef_letterboxed_frames(int tab);
 
 /// kind: 0 move, 1 down, 2 up, 3 leave. button: 0 left, 1 middle, 2 right. modifiers:
 /// cef_event_flags_t.

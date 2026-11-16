@@ -156,6 +156,11 @@ typedef struct {
     double width, height, scale, screenX, screenY;
     /// When the view's size or scale last changed (CLOCK_MONOTONIC seconds), for the frames captured across it.
     double resizedAt;
+    /// View frames held back as a resize's letterbox (is_resize_letterbox), and whether the last one held back has
+    /// had no frame after it: the view then asks for one once the size has held a second
+    /// (yardlet_cef_refresh_after_letterbox).
+    unsigned letterboxed;
+    int letterboxPending;
     /// The windowless frame rate last given to CEF (the panel's display refresh rate).
     int frameRate;
     /// Yardlet's last focus command: a panel showing this tab has the keyboard.
@@ -761,12 +766,11 @@ static double monotonic_seconds(void) {
 // dragged). Shown, the page shrinks or loses its sides behind bars and jumps back; the panel keeps the frame
 // before it instead. A difference that lasts (the page held at another size than the view, as during an agent's
 // full-page screenshot) is shown once the view's size has stayed a second.
-static int is_resize_letterbox(cef_browser_t *browser, const cef_accelerated_paint_info_common_t *extra) {
+static int is_resize_letterbox(const BrowserSlot *slot, const cef_accelerated_paint_info_common_t *extra) {
     if (extra->size < offsetof(cef_accelerated_paint_info_common_t, source_size)) return 0;
     if (extra->content_rect.x == 0 && extra->content_rect.y == 0
         && extra->content_rect.width == extra->coded_size.width
         && extra->content_rect.height == extra->coded_size.height) return 0;
-    BrowserSlot *slot = slot_for_browser(browser);
     return slot != NULL && monotonic_seconds() - slot->resizedAt < 1;
 }
 
@@ -777,9 +781,17 @@ static void CEF_CALLBACK render_on_accelerated_paint(cef_render_handler_t *self,
                                                      cef_rect_t const *dirty_rects,
                                                      const cef_accelerated_paint_info_t *info) {
     (void)self; (void)dirty_count; (void)dirty_rects;
-    if (info && type == PET_VIEW && is_resize_letterbox(browser, &info->extra)) {
-        YARDLET_RELEASE(browser);
-        return;
+    if (info && type == PET_VIEW) {
+        BrowserSlot *slot = slot_for_browser(browser);
+        int letterbox = is_resize_letterbox(slot, &info->extra);
+        if (slot) {
+            slot->letterboxed += letterbox ? 1 : 0;
+            slot->letterboxPending = letterbox;
+        }
+        if (letterbox) {
+            YARDLET_RELEASE(browser);
+            return;
+        }
     }
     if (g_callbacks.acceleratedPaint && info) {
         g_callbacks.acceleratedPaint(tab_of(browser), (int)type, info->shared_texture_io_surface,
@@ -3285,6 +3297,22 @@ void yardlet_cef_set_accessibility(int tab, int enabled) {
     if (host == NULL) return;
     host->set_accessibility_state(host, enabled ? STATE_ENABLED : STATE_DISABLED);
     YARDLET_RELEASE(host);
+}
+
+int yardlet_cef_refresh_after_letterbox(int tab) {
+    BrowserSlot *slot = slot_for_tab(tab);
+    if (slot == NULL || !slot->letterboxPending || monotonic_seconds() - slot->resizedAt < 1) return 0;
+    slot->letterboxPending = 0;
+    cef_browser_host_t *host = host_for_tab(tab);
+    if (host == NULL) return 0;
+    host->invalidate(host, PET_VIEW);
+    YARDLET_RELEASE(host);
+    return 1;
+}
+
+unsigned yardlet_cef_letterboxed_frames(int tab) {
+    BrowserSlot *slot = slot_for_tab(tab);
+    return slot ? slot->letterboxed : 0;
 }
 
 void yardlet_cef_set_hidden(int tab, int hidden) {

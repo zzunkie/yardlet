@@ -106,6 +106,10 @@ final class CEFBrowserHostProcess: BrowserHostConnection {
         if let limit = CommandLine.arguments.first(where: { $0.hasPrefix("--ui-fixture-browser-limit=") }) {
             process.arguments! += ["--browser-limit", String(limit.dropFirst("--ui-fixture-browser-limit=".count))]
         }
+        // A QA run loses the engine's frames for a show (`idle-return` with this argument).
+        if let steps = CommandLine.arguments.first(where: { $0.hasPrefix("--ui-fixture-browser-unpainted-shows=") }) {
+            process.arguments! += ["--unpainted-shows", String(steps.dropFirst("--ui-fixture-browser-unpainted-shows=".count))]
+        }
 #endif
         var environment = ProcessInfo.processInfo.environment
         environment["YARDLET_BROWSER_HOST_PORT"] = portName
