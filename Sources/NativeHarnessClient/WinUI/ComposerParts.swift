@@ -39,6 +39,7 @@ enum ComposerParts {
         static let plan = "\u{E9D5}"
         static let pause = "\u{E769}"
         static let play = "\u{E768}"
+        static let attach = "\u{E723}"
         static let file = "\u{E8A5}"
         static let folder = "\u{E8B7}"
         static let image = "\u{EB9F}"
@@ -245,15 +246,17 @@ enum ComposerParts {
 }
 
 /// The Mac's composer card (`ComposerEditor`): rounded 12, filled as an input, a hairline around it that strengthens
-/// while the text has focus. Top to bottom: what waits above the text (the queue), the text, a notice in orange, and
-/// the bottom row, its controls at the start and its actions at the end. The task's composer and New task's compose
-/// theirs into it; the field is Windows' own text box, its frame and fill left to the card.
+/// while the text has focus. Top to bottom: what waits above the text (the queue), what the message carries, the text,
+/// a notice in orange, and the bottom row, its controls at the start and its actions at the end. The task's composer
+/// and New task's compose theirs into it; the field is Windows' own text box, its frame and fill left to the card.
 @MainActor
 final class ComposerCard {
     let view = Border()
     let field = TextBox()
     /// Above the text: the queued messages.
     let top = StackPanel()
+    /// Between them and the text: what the message carries (`ComposerAttachments`).
+    let attachments = Border()
     /// The leading controls, after +.
     let leading = StackPanel()
     /// The trailing controls, before Send.
@@ -281,10 +284,9 @@ final class ComposerCard {
         view.borderBrush = WindowsTheme.separator.brush
         view.borderThickness = Thickness(left: 1, top: 1, right: 1, bottom: 1)
 
-        for height in [GridLength(value: 0, gridUnitType: .auto), GridLength(value: 0, gridUnitType: .auto),
-                       GridLength(value: 0, gridUnitType: .auto), GridLength(value: 0, gridUnitType: .auto)] {
+        for _ in 0..<5 {
             let row = RowDefinition()
-            row.height = height
+            row.height = GridLength(value: 0, gridUnitType: .auto)
             grid.rowDefinitions.append(row)
         }
         top.spacing = 4
@@ -292,8 +294,13 @@ final class ComposerCard {
         top.visibility = .collapsed
         grid.children.append(top)
 
+        // The Mac's chip row: 14 in from the card's sides, below the queue.
+        attachments.margin = Thickness(left: 14, top: 10, right: 14, bottom: 0)
+        try? Grid.setRow(attachments, 1)
+        grid.children.append(attachments)
+
         styleField(metrics)
-        try? Grid.setRow(field, 1)
+        try? Grid.setRow(field, 2)
         grid.children.append(field)
 
         notice.textWrapping = .wrap
@@ -302,7 +309,7 @@ final class ComposerCard {
         notice.foreground = ComposerParts.orange.brush
         notice.margin = Thickness(left: metrics.text.left, top: 0, right: metrics.text.right, bottom: 8)
         notice.visibility = .collapsed
-        try? Grid.setRow(notice, 2)
+        try? Grid.setRow(notice, 3)
         grid.children.append(notice)
 
         let bottom = Grid()
@@ -322,7 +329,7 @@ final class ComposerCard {
         trailing.verticalAlignment = .center
         try? Grid.setColumn(trailing, 1)
         bottom.children.append(trailing)
-        try? Grid.setRow(bottom, 3)
+        try? Grid.setRow(bottom, 4)
         grid.children.append(bottom)
         view.child = grid
 

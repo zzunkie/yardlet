@@ -88,6 +88,31 @@ extension ComposerDraftEditing {
         attachments += added
         if let notice = result.notice { self.notice = notice }
     }
+
+    /// A pasted picture joins as an attachment where the harness carries images; elsewhere the notice says why,
+    /// before anything is written. `png` makes its PNG, off the main thread (`attachPastedImage(_:)`).
+    @discardableResult
+    func attachPastedImage(policy: HarnessComposerInputPolicy,
+                           png: @escaping @Sendable () -> Data?) -> Task<Void, Never>? {
+        guard policy.carriesImages else {
+            notice = L10n.string("Unsupported attachment type")
+            return nil
+        }
+        return Task { await attachPastedImage(png) }
+    }
+
+    /// The picture `png` makes, written to a private file of its own (`ComposerAttachmentIntake.storePastedImage`)
+    /// and attached; one that cannot be made or written leaves the notice.
+    func attachPastedImage(_ png: @escaping @Sendable () -> Data?) async {
+        let stored = await Task.detached(priority: .userInitiated) {
+            png().flatMap { try? ComposerAttachmentIntake.storePastedImage($0) }
+        }.value
+        guard let image = stored.flatMap(CodexUserInput.localAttachment(for:)) else {
+            notice = L10n.string("The pasted image could not be attached.")
+            return
+        }
+        attachments.append(image)
+    }
 }
 
 extension TaskComposerDraft: ComposerDraftEditing {}

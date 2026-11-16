@@ -27,6 +27,15 @@ enum PackagedImage {
         return bitmap
     }
 
+    /// A picture from any file, such as an image a message carries, decoded at most `height` pixels high. It is read
+    /// as the app's own pictures are, so a file in a folder whose path holds characters beyond ASCII shows too.
+    static func thumbnail(of file: URL, height: Int32) -> BitmapImage {
+        let bitmap = BitmapImage()
+        bitmap.decodePixelHeight = height
+        Task { await read(file, into: bitmap) }
+        return bitmap
+    }
+
     /// The app's resources first, as on the Mac, then the package's resource bundle beside the executable.
     private static func file(named name: String, subdirectory: String?) -> URL? {
         [Bundle.main, Bundle.module].lazy.compactMap { bundle in

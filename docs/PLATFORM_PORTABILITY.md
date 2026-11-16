@@ -168,7 +168,13 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   (`AppModel.interrupt`). While a turn runs, Enter sends as the follow-up setting says, steered into the turn or
   queued for after it, Ctrl+Enter sends the other way, and the queue-or-steer button beside Stop chooses either; the
   queued messages stand above the text with the Mac's actions for each (`ComposerQueueChip`), and Escape denies a
-  waiting tool approval or stops the turn. The composer holds the task's draft, the one the Mac's composer edits,
+  waiting tool approval or stops the turn. "+" at the start of the bottom row adds files or photos and folders
+  through Windows' own dialog, and a paste of copied files or of a picture with no text joins the draft rather than
+  the text (`WinUI/ComposerAttachments.swift`, `Platform/Windows/WindowsClipboard.swift`): each is taken as the Mac's
+  pickers and paste take it (`ComposerAttachmentIntake`, `ComposerDraftEditing.attachPastedImage`), a picture an app
+  offered only as a bitmap is made a PNG first (`DeviceIndependentBitmap`), and each stands as a chip above the text,
+  an image as its thumbnail. The Mac's slash commands and connectors in "+" are not on Windows yet. The composer
+  holds the task's draft, the one the Mac's composer edits,
   and Send sends that draft (`AppModel.sendDraft`), taking the message as the Mac's composer takes it
   (`TaskComposerDraft.takeMessage`) and sending it as the person's message, which also declines a request the task
   waits on (`AppModel.sendPersonsMessage`, docs/REMOTE_PROTOCOL.md, `sendMessage`): a message the task does not take

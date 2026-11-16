@@ -123,6 +123,7 @@ final class MainWindow {
         grid.children.append(composer.noticeView)
         try? Grid.setRow(composer.view, 2)
         grid.children.append(composer.view)
+        composer.windowHandle = { [weak self] in self?.windowHandle ?? 0 }
         navigation.content = grid
         makeConnectPane()
         let newTask = NewTaskPane(model: model, log: log, signIn: signIn) { [weak self] in self?.windowHandle ?? 0 }

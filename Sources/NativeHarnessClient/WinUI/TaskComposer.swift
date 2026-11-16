@@ -8,7 +8,8 @@ import WinUI
 /// Stop replaces while the turn runs. While it runs, what Enter sends follows the follow-up setting, steered into the
 /// turn or queued for after it (Codex steers, Claude Code takes it at its next step), Ctrl+Enter sends the other way,
 /// and the queue-or-steer button beside Stop chooses either; the queued messages stand above the text, each with its
-/// actions (`ComposerQueueChip`). Everything it shows is the Mac's reading of the task
+/// actions (`ComposerQueueChip`). "+" and a paste add files and pictures, which stand as chips above the text
+/// (`ComposerAttachments`). Everything it shows is the Mac's reading of the task
 /// (`ComposerSessionOptionsProjection`), and it sends through the model's draft (`AppModel.sendDraft`), which takes the
 /// message as the Mac's composer takes it (`TaskComposerDraft.takeMessage`).
 ///
@@ -25,6 +26,7 @@ final class TaskComposer {
     private let log: QAEventLog
     private let card: ComposerCard
     private let chips = ComposerOptionChips()
+    private let attachments: ComposerAttachments
     private let sendButton: Button
     private let stopButton: Button
     private let followUpButton: Button
@@ -37,6 +39,12 @@ final class TaskComposer {
     private var generation = 0
     private var shown: Shown?
     private var shownDraftNotice: String?
+
+    /// The window "+"'s dialogs belong to, as an `HWND`'s value.
+    var windowHandle: () -> UInt64 {
+        get { attachments.windowHandle }
+        set { attachments.windowHandle = newValue }
+    }
 
     /// What the composer last drew, so a change redraws only its part.
     private struct Shown: Equatable {
@@ -62,6 +70,7 @@ final class TaskComposer {
                                                   radius: ComposerParts.buttonSize / 2)
         let card = ComposerCard(metrics: .task)
         self.card = card
+        attachments = ComposerAttachments(log: log)
         view = card.placed()
         make()
     }
@@ -92,6 +101,12 @@ final class TaskComposer {
             self.log.write("composition ended: \(field.text)")
         }
         field.textChanged.addHandler { [weak self] _, _ in self?.textChanged() }
+        field.paste.addHandler { [weak self] _, args in self?.attachments.paste(args) }
+        card.attachments.child = attachments.chipRow
+        attachments.target = { [weak self] in
+            guard let self, let id = self.sessionID, let shown = self.shown, shown.id == id else { return nil }
+            return (self.model.composerDrafts.tasks.draft(for: id), shown.options.input)
+        }
         // Enter sends what the field shows, the syllable being composed included, and Shift+Enter starts a new line.
         ComposerKeys.prepare(field, send: { [weak self] in self?.enter() },
                              alternate: { [weak self] in self?.alternate() ?? false },
@@ -152,13 +167,14 @@ final class TaskComposer {
         guard let id = sessionID else {
             card.field.placeholderText = L10n.string("Choose a task")
             card.showNotice(nil)
+            attachments.redraw([])
             showNotice("")
             ComposerParts.setEnabled(sendButton, false)
             return
         }
         let draft = model.composerDrafts.tasks.draft(for: id)
-        let (state, text, notice) = withObservationTracking {
-            (read(id), draft.text, draft.notice)
+        let (state, text, notice, carried) = withObservationTracking {
+            (read(id), draft.text, draft.notice, draft.attachments)
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self, self.generation == current else { return }
@@ -174,6 +190,7 @@ final class TaskComposer {
             card.showNotice(notice)
             if let notice, !notice.isEmpty { log.write("notice: \(notice)") }
         }
+        attachments.redraw(carried)
         guard let state else { return }
         let previous = shown
         shown = state
@@ -233,6 +250,7 @@ final class TaskComposer {
         guard let shown, let session else {
             card.leading.children.clear()
             card.trailing.children.clear()
+            attachments.show(policy: nil)
             return
         }
         let options = shown.options
@@ -240,6 +258,8 @@ final class TaskComposer {
             ?? options.placeholder
         chips.turnOffPlanMode = session.harness == .codex ? { [weak self] in self?.runCodexCommand(.planMode) } : nil
         card.leading.children.clear()
+        attachments.show(policy: options.input)
+        card.leading.children.append(attachments.plusButton)
         for control in chips.leading(options) { card.leading.children.append(control) }
 
         card.trailing.children.clear()
@@ -304,7 +324,9 @@ final class TaskComposer {
     /// Send is on while the draft holds something and the task's conversation or account is not changing.
     private func showSendable() {
         let held = shown?.isHeld ?? true
-        ComposerParts.setEnabled(sendButton, sessionID != nil && !held && ComposerKeys.canSend(card.field.text))
+        let carries = sessionID.map { !model.composerDrafts.tasks.draft(for: $0).attachments.isEmpty } ?? false
+        ComposerParts.setEnabled(sendButton, sessionID != nil && !held
+            && (ComposerKeys.canSend(card.field.text) || carries))
         followUpCount.text = personQueue.isEmpty ? "" : "\(personQueue.count)"
         followUpCount.visibility = personQueue.isEmpty ? .collapsed : .visible
     }

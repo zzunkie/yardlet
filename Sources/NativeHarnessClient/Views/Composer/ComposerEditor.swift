@@ -704,24 +704,12 @@ extension ComposerDraftEditing {
         case let .files(urls):
             attachFiles(urls, policy: policy)
         case let .image(data, type):
-            guard policy.carriesImages else {
-                notice = L10n.string("Unsupported attachment type")
-                return
-            }
-            Task { await attachPastedImage(data, type: type) }
+            attachPastedImage(policy: policy) { ComposerExternalInput.pngData(data, type: type) }
         }
     }
 
     func attachPastedImage(_ data: Data, type: NSPasteboard.PasteboardType) async {
-        let stored = await Task.detached(priority: .userInitiated) {
-            ComposerExternalInput.pngData(data, type: type)
-                .flatMap { try? ComposerAttachmentIntake.storePastedImage($0) }
-        }.value
-        guard let image = stored.flatMap(CodexUserInput.localAttachment(for:)) else {
-            notice = L10n.string("The pasted image could not be attached.")
-            return
-        }
-        attachments.append(image)
+        await attachPastedImage { ComposerExternalInput.pngData(data, type: type) }
     }
 }
 
@@ -735,23 +723,9 @@ enum ComposerChipContent: Equatable {
         switch input {
         case let .image(url, _) where TranscriptImageThumbnails.canPreview(url),
              let .localImage(url, _) where TranscriptImageThumbnails.canPreview(url):
-            self = .thumbnail(url, name: Self.label(for: input))
+            self = .thumbnail(url, name: input.chipLabel)
         default:
-            self = .label(symbol: Self.symbol(for: input), text: Self.label(for: input))
-        }
-    }
-
-    /// The chip's name: a file's own, except a pasted image's, whose file name Yardlet made up.
-    static func label(for input: CodexUserInput) -> String {
-        switch input {
-        case let .text(value, _): value
-        case let .image(url, _) where url.scheme == "data": L10n.string("Image")
-        case let .localImage(url, _) where ComposerAttachmentIntake.isPastedImage(url): L10n.string("Image")
-        case let .image(url, _), let .localImage(url, _), let .audio(url), let .localAudio(url):
-            url.lastPathComponent.isEmpty ? url.absoluteString : url.lastPathComponent
-        case let .skill(name, _): "$\(name)"
-        case let .mention(name, _): "@\(name)"
-        case .unknown: L10n.string("Unknown input")
+            self = .label(symbol: Self.symbol(for: input), text: input.chipLabel)
         }
     }
 

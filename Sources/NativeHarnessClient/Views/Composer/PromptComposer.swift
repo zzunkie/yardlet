@@ -791,20 +791,6 @@ struct PromptComposer: View {
         if let chosen = ComposerFilePicker.chooseFiles(policy: inputPolicy) { composerDraft.add(chosen: chosen) }
     }
 
-    /// What "Add files or photos" adds for each chosen file.
-    static func addedInputs(_ urls: [URL], policy: HarnessComposerInputPolicy) -> [CodexUserInput] {
-        urls.compactMap { url in
-            // Only Codex has an audio envelope, so only its picker attaches one; elsewhere an audio
-            // file is context, a path the model can read, never an attachment the send refuses.
-            let kind = CodexUserInput.localAttachmentKind(for: url)
-            if (kind == .image && policy.carriesImages) || (kind == .audio && policy.acceptsAudioAttachments),
-               let attachment = CodexUserInput.localAttachment(for: url) {
-                return attachment
-            }
-            return CodexUserInput.localMention(for: url)
-        }
-    }
-
     /// "Add folder": folders join as context, as the earlier `@` button added them.
     private func chooseFolders() {
         if let chosen = ComposerFilePicker.chooseFolders() { composerDraft.add(chosen: chosen) }

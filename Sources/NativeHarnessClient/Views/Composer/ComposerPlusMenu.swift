@@ -326,12 +326,12 @@ enum ComposerFilePicker {
     /// "Add files or photos": an image (or, for Codex, audio) the harness carries joins as an
     /// attachment; any other file joins as context, a path the agent can read.
     static func chooseFiles(policy: HarnessComposerInputPolicy) -> [CodexUserInput]? {
-        choose(folders: false).map { PromptComposer.addedInputs($0, policy: policy) }
+        choose(folders: false).map { ComposerAttachmentIntake.chosenInputs($0, policy: policy) }
     }
 
     /// "Add folder": folders join as context.
     static func chooseFolders() -> [CodexUserInput]? {
-        choose(folders: true).map { $0.compactMap(CodexUserInput.localMention(for:)) }
+        choose(folders: true).map(ComposerAttachmentIntake.chosenFolders)
     }
 
     private static func choose(folders: Bool) -> [URL]? {

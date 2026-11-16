@@ -35,6 +35,26 @@ enum ComposerAttachmentIntake {
         return result
     }
 
+    /// What "+" → "Add files or photos" adds for each chosen file: an image (or, for Codex, audio) the harness
+    /// carries joins as an attachment; any other file joins as context, a path the agent can read.
+    static func chosenInputs(_ urls: [URL], policy: HarnessComposerInputPolicy) -> [CodexUserInput] {
+        urls.compactMap { url in
+            // Only Codex has an audio envelope, so only its picker attaches one; elsewhere an audio
+            // file is context, a path the model can read, never an attachment the send refuses.
+            let kind = CodexUserInput.localAttachmentKind(for: url)
+            if (kind == .image && policy.carriesImages) || (kind == .audio && policy.acceptsAudioAttachments),
+               let attachment = CodexUserInput.localAttachment(for: url) {
+                return attachment
+            }
+            return CodexUserInput.localMention(for: url)
+        }
+    }
+
+    /// What "+" → "Add folder" adds: each folder as context.
+    static func chosenFolders(_ urls: [URL]) -> [CodexUserInput] {
+        urls.compactMap(CodexUserInput.localMention(for:))
+    }
+
     /// Pasted image data has no file of its own. Providers read local images by path, so it is
     /// written once to a private temporary folder that only this user can read.
     static var pastedImageDirectory: URL {
@@ -59,5 +79,21 @@ enum ComposerAttachmentIntake {
         let file = folder.appending(path: "image.\(fileExtension)")
         try StateFile.write(data, to: file, isPrivate: true)
         return file
+    }
+}
+
+extension CodexUserInput {
+    /// The name a composer's chip shows: a file's own, except a pasted image's, whose file name Yardlet made up.
+    var chipLabel: String {
+        switch self {
+        case let .text(value, _): value
+        case let .image(url, _) where url.scheme == "data": L10n.string("Image")
+        case let .localImage(url, _) where ComposerAttachmentIntake.isPastedImage(url): L10n.string("Image")
+        case let .image(url, _), let .localImage(url, _), let .audio(url), let .localAudio(url):
+            url.lastPathComponent.isEmpty ? url.absoluteString : url.lastPathComponent
+        case let .skill(name, _): "$\(name)"
+        case let .mention(name, _): "@\(name)"
+        case .unknown: L10n.string("Unknown input")
+        }
     }
 }

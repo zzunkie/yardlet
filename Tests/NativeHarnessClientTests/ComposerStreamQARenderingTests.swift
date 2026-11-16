@@ -96,12 +96,12 @@ final class ComposerStreamQARenderingTests: XCTestCase {
         try Data("x".utf8).write(to: photo)
         try Data("x".utf8).write(to: notes)
         let claude = HarnessComposerInputPolicy(harness: .claudeCode, negotiatedImageInput: true)
-        let added = PromptComposer.addedInputs([photo, notes], policy: claude)
+        let added = ComposerAttachmentIntake.chosenInputs([photo, notes], policy: claude)
         XCTAssertEqual(added.count, 2)
         if case .localImage = added[0] {} else { XCTFail("A photo is attached: \(added[0])") }
         if case .mention = added[1] {} else { XCTFail("A file is context: \(added[1])") }
         let textOnly = HarnessComposerInputPolicy(harness: .openCode, negotiatedImageInput: false)
-        if case .mention = PromptComposer.addedInputs([photo], policy: textOnly).first {} else {
+        if case .mention = ComposerAttachmentIntake.chosenInputs([photo], policy: textOnly).first {} else {
             XCTFail("A photo the harness cannot carry is context")
         }
     }
