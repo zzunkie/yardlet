@@ -2,11 +2,36 @@ name: Windows app
 
 # The Windows app opened on a Windows runner (docs/PLATFORM_PORTABILITY.md, "The Windows app"): a
 # release build, measured, with Korean typed into its composer through the Microsoft Korean IME and
-# screenshots kept. It takes long, so it runs for the branches that port Yardlet to Windows and by
-# hand; windows-engine.yml builds the app for every pull request.
+# screenshots kept, then packed, installed, updated and removed, which leaves the installer as an
+# artifact. It takes long, so it runs when what it builds changes: the Windows app, the engine it is
+# built on and the targets beside it, the relay it carries, the package's manifest and the Windows
+# scripts, not the Mac's layers or documents. It runs for pull requests, main and the branches that
+# port Yardlet to Windows, and by hand; a windows-* branch's pull request does not run it again.
+# windows-engine.yml builds the app for every pull request.
 on:
   push:
-    branches: ['windows-*']
+    branches: [main, 'windows-*']
+    paths: &windows-app
+      - 'Sources/NativeHarnessClient/**'
+      - '!Sources/NativeHarnessClient/Views/**'
+      - '!Sources/NativeHarnessClient/Browser/**'
+      - '!Sources/NativeHarnessClient/Development/**'
+      - '!Sources/NativeHarnessClient/Platform/macOS/**'
+      - '!Sources/NativeHarnessClient/Platform/Linux/**'
+      - '!Sources/NativeHarnessClient/NativeHarnessClientApp.swift'
+      - 'Sources/CSQLiteWindows/**'
+      - 'Sources/YardletAgentTools/**'
+      - 'Sources/YardletRemote/**'
+      - 'Sources/YardletRemoteFixture/**'
+      - 'Sources/YardletRemoteFixtureSupport/**'
+      - 'Package.swift'
+      - 'Package.resolved'
+      - 'Windows/**'
+      - 'relay/**'
+      - '.github/workflows/windows-app.yml'
+      - '!**/*.md'
+  pull_request:
+    paths: *windows-app
   workflow_dispatch:
 
 permissions:
@@ -19,6 +44,7 @@ concurrency:
 jobs:
   open:
     name: Open the Windows app
+    if: github.event_name != 'pull_request' || !startsWith(github.head_ref, 'windows-')
     runs-on: windows-latest
     timeout-minutes: 120
     steps:

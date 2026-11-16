@@ -307,7 +307,10 @@ Windows/scripts/place-bootstrapper.ps1 -Binaries (swift build --show-bin-path)
 ```
 
 `windows-engine.yml` builds the Windows app for the same pull requests and branches, beside the
-engine, as a check to read. `windows-app.yml`, for `windows-*` branches only, builds a release, opens it on the
+engine, as a check to read. `windows-app.yml` runs for pull requests, `main` and `windows-*` branches when what it
+builds changes (the engine and the Windows layer, the targets beside them, the relay, the package's manifest, the
+Windows scripts and the workflow; not the Mac's layers or documents), so each such commit on `main` has an installer
+to try, and a `windows-*` branch's pull request does not run it a second time. It builds a release, opens it on the
 runner, measures it, types Korean into its composer through the Microsoft Korean IME, and checks that Shift+Enter
 starts a new line and sends nothing (`Windows/scripts/check-window.ps1`). It then starts the relay (`relay/`) and the fixture host on it
 (`Windows/scripts/start-remote-host.ps1`) and, in the same step, since a Windows runner ends the programs a step
