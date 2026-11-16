@@ -394,5 +394,14 @@ final class ProjectStoreTests: XCTestCase {
             ),
             "/Volumes/Work/yardlet"
         )
+        // Windows shows a folder as Windows writes it, never a file URL's `/C:/` path.
+        let windowsHome = URL(filePath: "/C:/Users/example", directoryHint: .isDirectory)
+        XCTAssertEqual(
+            ProjectSidebarPresentation.abbreviatedPath(
+                for: windowsHome.appending(path: "yardlet", directoryHint: .isDirectory),
+                homeDirectory: windowsHome, rules: .windows
+            ),
+            #"C:\Users\example\yardlet"#
+        )
     }
 }

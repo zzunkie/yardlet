@@ -63,7 +63,7 @@ extension AppModel {
         case let .failure(error): return error.result("Not started")
         }
         if !caller.roots.contains(where: { Self.folder(folder, isInside: $0) }), sessionToolAsksPerson(caller) {
-            let detail = L10n.format("%@ → %@", caller.title, folder.path(percentEncoded: false))
+            let detail = L10n.format("%@ → %@", caller.title, ProjectSidebarPresentation.displayPath(for: folder))
                 + "\n\n" + String(prompt.prefix(600))
             guard await askPerson(title: L10n.string("Run a subagent outside this task's folders"), detail: detail,
                                   caller: caller) else {

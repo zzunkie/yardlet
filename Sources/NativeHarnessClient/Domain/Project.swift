@@ -307,10 +307,19 @@ enum ProjectProjection {
 /// renders identically wherever it appears, and one key per folder, so it compares as the same
 /// folder however it was written.
 enum ProjectSidebarPresentation {
-    /// The sidebar compares every task's folder with every project root on each redraw, and
-    /// standardizing a URL is the costly part, so each spelling's answer is kept.
+    /// The folder as a file URL's path, for storing it and making a URL of it again: `/C:/Users/me`
+    /// on Windows. Text the person reads takes `displayPath(for:)`. The sidebar compares every task's
+    /// folder with every project root on each redraw, and standardizing a URL is the costly part,
+    /// so each spelling's answer is kept.
     static func normalizedPath(for workspaceURL: URL) -> String {
         folder(workspaceURL).path
+    }
+
+    /// The folder as the person reads it, in the platform's own form (`PathRules.nativePath`):
+    /// `C:\Users\me\repo` on Windows, `normalizedPath(for:)` itself on macOS. Neither a file URL's
+    /// path nor a comparison key (`folderKey(for:)`) is shown.
+    static func displayPath(for workspaceURL: URL, rules: PathRules = .current) -> String {
+        rules.nativePath(normalizedPath(for: workspaceURL))
     }
 
     /// The folder `workspaceURL` names, for deciding whether two folders are one (a task's project,
@@ -353,13 +362,17 @@ enum ProjectSidebarPresentation {
         }
     }
 
+    /// `displayPath(for:)` with the home folder written `~` on macOS. Windows has no such
+    /// shorthand outside PowerShell, so its apps write the whole path, and so does this.
     static func abbreviatedPath(
         for workspaceURL: URL,
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        rules: PathRules = .current
     ) -> String {
+        guard !rules.isWindows else { return displayPath(for: workspaceURL, rules: rules) }
         let path = normalizedPath(for: workspaceURL)
         let home = normalizedPath(for: homeDirectory)
-        guard let relative = PathRules.current.relativePath(of: path, in: home) else { return path }
+        guard let relative = rules.relativePath(of: path, in: home) else { return path }
         return relative.isEmpty ? "~" : "~/" + relative
     }
 

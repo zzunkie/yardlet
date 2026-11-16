@@ -8,6 +8,8 @@ import Foundation
 /// repository still has its branch, the worktree can be made again in the same place from that branch
 /// (`worktreeBranch`), as the Codex app restores a worktree it cleaned up.
 struct TaskFolderMissing: LocalizedError, Equatable, Sendable {
+    /// The folder as the person reads it (`ProjectSidebarPresentation.displayPath`), which the composer
+    /// and a phone show; a remote host sends its own.
     let path: String
     /// The branch the task's worktree can be made again from, in the same place; nil when it cannot.
     var worktreeBranch: String? = nil
@@ -19,9 +21,9 @@ struct TaskFolderMissing: LocalizedError, Equatable, Sendable {
     /// Nil while the folder is there.
     init?(workspaceURL: URL) {
         var isDirectory: ObjCBool = false
-        if FileManager.default.fileExists(atPath: workspaceURL.path(percentEncoded: false), isDirectory: &isDirectory),
+        if FileManager.default.fileExists(atPath: workspaceURL.nativePath, isDirectory: &isDirectory),
            isDirectory.boolValue { return nil }
-        path = ProjectSidebarPresentation.normalizedPath(for: workspaceURL)
+        path = ProjectSidebarPresentation.displayPath(for: workspaceURL)
     }
 
     var errorDescription: String? {

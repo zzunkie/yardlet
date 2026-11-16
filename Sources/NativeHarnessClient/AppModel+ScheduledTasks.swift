@@ -118,7 +118,7 @@ extension AppModel {
         if let path = destination.workspacePath {
             var isDirectory: ObjCBool = false
             guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue else {
-                return .failure(.init(message: L10n.format("The folder %@ is no longer there.", path)))
+                return .failure(.init(message: L10n.format("The folder %@ is no longer there.", PathRules.current.nativePath(path))))
             }
             folder = URL(filePath: path, directoryHint: .isDirectory)
         }

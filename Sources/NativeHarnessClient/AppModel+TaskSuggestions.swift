@@ -90,10 +90,10 @@ extension AppModel: TaskSuggestionToolHandling {
                                           worktreeByDefault: { draft.startsInNewWorktree(projectID: $0) })
         if let folder = place.folder, suggestion.cwd != nil {
             var isDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: folder.path(percentEncoded: false), isDirectory: &isDirectory),
+            guard FileManager.default.fileExists(atPath: folder.nativePath, isDirectory: &isDirectory),
                   isDirectory.boolValue else {
                 return .failure(SuggestedTaskStartFailure(message:
-                    L10n.format("The folder %@ is no longer there.", folder.path(percentEncoded: false))))
+                    L10n.format("The folder %@ is no longer there.", ProjectSidebarPresentation.displayPath(for: folder))))
             }
         }
         return .success(SuggestedTaskStart(parent: parent, place: place))
