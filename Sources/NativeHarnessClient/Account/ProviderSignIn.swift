@@ -3,12 +3,28 @@ import Foundation
 /// A harness that cannot work until the person signs in: how its CLI says so, and how Yardlet does.
 /// Each CLI keeps its own login, and Yardlet only runs its sign-in; nothing here reads a credential.
 enum ProviderSignIn {
-    /// A CLI's words for a turn it could not authenticate. Claude Code's (2.1.318: "Not logged in · Please
-    /// run /login", "OAuth token has expired. Please run /login."): `/login` is the CLI's own screen, which
-    /// a task in Yardlet does not have; "Fix external API key" is another failure and stays as it is.
-    /// Codex's (0.166.0), after its retries of a request sent with no login: "unexpected status 401
+    /// A CLI's words for a turn only a new sign-in lets run.
+    ///
+    /// Claude Code 2.1.325 names `/login`, its own screen, which a task in Yardlet does not have ("Not
+    /// logged in · Please run /login"). Run without a screen, as Yardlet runs it, it words what that
+    /// screen sends to `/login` as "Failed to authenticate": "…: OAuth session expired and could not be
+    /// refreshed", "…: OAuth token revoked…", "…: this login reached its time limit…", "Failed to
+    /// authenticate. API Error: 401 …". When its host signs it in, it asks to "Sign in again to continue".
+    /// A key or a cloud credential it rejects ("Fix external API key", "AWS credentials expired or
+    /// invalid") and a refresh another process holds ("…or sign in again") are other failures and stay
+    /// as they are.
+    ///
+    /// Codex 0.169.0, after its server refused a refresh: "Your access token could not be refreshed
+    /// because your refresh token has expired. Please log out and sign in again." or "…Please sign in
+    /// again."; after its retries of a request sent with no login (0.166.0): "unexpected status 401
     /// Unauthorized: Missing bearer or basic authentication in header".
-    private static let cliWords = ["Please run /login", "Run /login", "Missing bearer or basic authentication"]
+    private static let cliWords = [
+        "Please run /login", "Run /login", "Failed to authenticate", "Sign in again to continue",
+        "Please log out and sign in again", "Please sign in again", "Missing bearer or basic authentication",
+    ]
+    /// Antigravity CLI 1.5.9 refuses a session it has no login for with ACP's `auth_required` error,
+    /// whose message is these words alone. Claude Code starts other errors with them, about a connector.
+    private static let acpAuthRequired = "Authentication required"
 
     /// Whether a login read as signed out means a turn cannot run. These CLIs answer for every way
     /// they sign in: `claude auth status`, Codex's `account/read`, which leaves a provider that needs
@@ -26,7 +42,7 @@ enum ProviderSignIn {
     static var nextStep: String { L10n.string("Sign in, then send your message again.") }
 
     static func asksToSignIn(_ message: String) -> Bool {
-        cliWords.contains { message.contains($0) } || message == prompt
+        cliWords.contains { message.contains($0) } || message == acpAuthRequired || message == prompt
     }
 
     /// What a login read as signed out needs. The Claude app runs Claude Code with its own sign-in,

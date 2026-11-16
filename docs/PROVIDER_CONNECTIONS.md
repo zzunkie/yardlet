@@ -203,12 +203,16 @@ schedule lists, the scratch folders' path, and the bundled CLI it can run.
   is needed and offers **Sign in**, the harness's own `claude auth login`. A Claude task on a login read as signed out
   reads it once more and, still signed out, fails at once with no CLI started (`AppModel.isSignedOut`,
   `HarnessSignInRequired`). The CLI waits for its MCP servers before its first turn, up to 30 seconds for one that
-  does not answer, so a failure left to the turn would take that long to say the same.
+  does not answer, so a failure left to the turn would take that long to say the same. A stored login whose renewal
+  the server would refuse still reads signed in, since only a renewal finds that out; the turn that tries it is
+  refused, and the CLI then clears that login, so the check after the refusal reads it signed out.
 - **Status checks.** A Claude check has 30 seconds. When it cannot finish, or names no address, the account comes from
   `oauthAccount` in the login's `.claude.json`, which needs no prompt; a CLI signed in with a key or a token from elsewhere
   has no account, so a name left there by an earlier sign-in is not used.
-- **A turn the CLI refused.** Claude Code's refusal that names `/login` is the error card alone, without the same words
-  as an answer (`ClaudeSessionProjection`, `ProviderSignIn.asksToSignIn`); `/login` is a screen tasks here do not have.
+- **A turn the CLI refused.** A refusal only a sign-in fixes (`ProviderSignIn.asksToSignIn`) is one error card:
+  Claude Code's that names `/login`, a screen tasks here do not have, or that starts "Failed to authenticate", as it
+  words an expired or revoked login when run without a screen; Codex's that asks to sign in again; Antigravity CLI's
+  ACP `auth_required`. Claude Code also sends its refusal as an answer, which is left out (`ClaudeSessionProjection`).
   The card offers **Sign in** and, when another signed-in account shares the task's history (`TaskAccountSwitch`),
   **Continue with** that account, which moves the task as the task menu does. Its details keep the CLI's words, the
   sidebar's help and the notification say the same as the card, and the account is read again. A key the CLI rejects

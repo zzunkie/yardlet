@@ -76,6 +76,9 @@ final class SidebarTaskIndicatorProjectionTests: XCTestCase {
         XCTAssertEqual(signedOut.accessibilityName, L10n.string("Not signed in"))
         XCTAssertEqual(signedOut.help, ProviderSignIn.prompt)
         XCTAssertFalse(ProviderSignIn.asksToSignIn("Invalid API key · Fix external API key"))
+        // Claude Code 2.1.325's refresh another process holds passes, and a connector's sign-in is not the task's.
+        XCTAssertFalse(ProviderSignIn.asksToSignIn("Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh. This is usually transient; retry in a minute, and if it persists close other Claude Code processes or sign in again"))
+        XCTAssertFalse(ProviderSignIn.asksToSignIn("Authentication required for HTTP server"))
         XCTAssertEqual(SidebarTaskStatus.usageLimit(limit).help,
                        L10n.string("Session limit reached") + "\n" + (ProviderNoticeText.limitReset(limit) ?? ""))
         XCTAssertEqual(SidebarTaskStatus.running.help, L10n.string("Running"))

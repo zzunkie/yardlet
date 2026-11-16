@@ -152,21 +152,25 @@ final class ClaudeSessionProjectionTests: XCTestCase {
         await adapter.close(handle)
     }
 
-    /// Claude Code 2.1.318 refuses a turn with no login as a synthetic assistant message and an error
-    /// `result` in the same words: the card that offers the sign-in, not an answer as well.
+    /// Claude Code refuses a turn it cannot sign in for as a synthetic assistant message and an error
+    /// `result` in the same words: the card that offers the sign-in, not an answer as well. 2.1.318 with no
+    /// login; 2.1.325 run without a screen, on a login whose refresh its server refused.
     func testATurnRefusedForItsSignInIsTheErrorCardAlone() throws {
-        var projection = ClaudeSessionProjection()
-        var builder = TranscriptBuilder()
-        try apply(#"{"type":"assistant","error":"authentication_failed","isApiErrorMessage":true,"message":{"id":"m","role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"Not logged in · Please run /login"}]}}"#,
-                  to: &projection, builder: &builder)
-        try apply(#"{"type":"result","subtype":"success","is_error":true,"result":"Not logged in · Please run /login"}"#,
-                  to: &projection, builder: &builder)
-        XCTAssertEqual(builder.entries.count, 1)
-        guard case let .error(message, _, _)? = builder.entries.first?.content else {
-            return XCTFail("\(builder.entries)")
+        for refusal in ["Not logged in · Please run /login",
+                        "Failed to authenticate: OAuth session expired and could not be refreshed"] {
+            var projection = ClaudeSessionProjection()
+            var builder = TranscriptBuilder()
+            try apply(#"{"type":"assistant","error":"authentication_failed","isApiErrorMessage":true,"message":{"id":"m","role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"\#(refusal)"}]}}"#,
+                      to: &projection, builder: &builder)
+            try apply(#"{"type":"result","subtype":"success","is_error":true,"result":"\#(refusal)"}"#,
+                      to: &projection, builder: &builder)
+            XCTAssertEqual(builder.entries.count, 1, refusal)
+            guard case let .error(message, _, _)? = builder.entries.first?.content else {
+                return XCTFail("\(builder.entries)")
+            }
+            XCTAssertEqual(TranscriptRecoveryProjection.errorSummary(message), ProviderSignIn.prompt)
+            XCTAssertEqual(message, refusal, "Details keep the CLI's words")
         }
-        XCTAssertEqual(TranscriptRecoveryProjection.errorSummary(message), ProviderSignIn.prompt)
-        XCTAssertEqual(message, "Not logged in · Please run /login", "Details keep the CLI's words")
     }
 
     func testLateLaunchAcknowledgementDoesNotEraseFailure() throws {
