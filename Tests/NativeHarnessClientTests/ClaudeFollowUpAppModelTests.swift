@@ -489,6 +489,49 @@ import XCTest
         }
     }
 
+    /// A message the person sends while Claude waits on them goes first, as one for its next step (or held for the
+    /// turn's end, as the setting says), and then the request is declined with words saying the person sent a message
+    /// instead and did not refuse, as Claude Code itself closes an approval a new message arrives after. The turn goes
+    /// on. A message another task sends leaves the request waiting.
+    func testThePersonsMessageGoesFirstAndDeclinesWhatClaudeWaitsOn() async throws {
+        for mode in [CodexFollowUpMode.steer, .queue] {
+            let fixture = try await makeFixture(followUps: mode)
+            let model = fixture.model, task = fixture.task, transport = fixture.transport
+            await transport.emit(try json(toolUse))
+            await transport.emit(try json(canUseTool("perm-1")))
+            try await waitUntil {
+                model.store.sessions.first?.status == .waitingForApproval
+                    && model.pendingApprovals(in: model.store.sessions[0]).map(\.id) == ["perm-1"]
+            }
+            _ = await model.deliverTaskMessage(
+                TaskMessage(senderID: UUID().uuidString, senderName: "Child", body: "Tests pass"), to: task)
+            let afterOther = await transport.sentValues
+            XCTAssertFalse(afterOther.contains { $0["response"]?["request_id"]?.stringValue == "perm-1" }, "\(mode)")
+
+            await model.sendPersonsMessage(HarnessUserInput(text: "What does this delete?"), to: task)
+            let sent = await transport.sentValues
+            let denial = try XCTUnwrap(sent.lastIndex { $0["response"]?["request_id"]?.stringValue == "perm-1" }, "\(mode)")
+            let answer = try XCTUnwrap(sent[denial]["response"]?["response"])
+            XCTAssertEqual(answer["behavior"]?.stringValue, "deny")
+            XCTAssertEqual(answer["message"]?.stringValue, PersonsMessageAnswer.denial)
+            XCTAssertEqual(answer["interrupt"]?.boolValue, false, "the turn goes on")
+            let written = sent.lastIndex { $0["message"]?["content"]?.stringValue == "What does this delete?" }
+            if mode == .steer {
+                let message = try XCTUnwrap(written)
+                XCTAssertLessThan(message, denial, "Claude Code holds the message before the request is answered")
+                XCTAssertEqual(sent[message]["priority"]?.stringValue, "next")
+            } else {
+                XCTAssertNil(written)
+                XCTAssertEqual(model.followUps.queue(for: task.id).last?.draft.text, "What does this delete?")
+            }
+            XCTAssertTrue(model.pendingApprovals(in: try XCTUnwrap(model.store.sessions.first)).isEmpty, "\(mode)")
+            XCTAssertTrue((model.transcriptBySessionID[task.id] ?? []).contains { entry in
+                if case let .permission(request, .denied) = entry.content { request.id == "perm-1" } else { false }
+            }, "\(mode)")
+            await model.shutdown()
+        }
+    }
+
     /// A message another task sends while the person's own message is still starting the task's
     /// runtime waits for that runtime and goes into it. It neither starts a second one for the same
     /// conversation nor fails with "already attached" (2026-11-11).
@@ -640,6 +683,10 @@ import XCTest
         {"type":"assistant","parent_tool_use_id":null,"session_id":"s","message":{"role":"assistant",
           "content":[{"type":"tool_use","id":"toolu_01","name":"Bash","input":{"command":"npm test"}}]}}
         """#
+    }
+
+    private func canUseTool(_ id: String) -> String {
+        #"{"type":"control_request","request_id":"\#(id)","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"rm -rf build"},"tool_use_id":"toolu_01"}}"#
     }
 
     private var toolResult: String {

@@ -625,6 +625,17 @@ enum ConversationRequestRoute: Equatable, Sendable {
     case answer(PermissionStructuredAnswer)
     /// `AppModel.respondCodex(to:response:)`
     case codex(CodexServerRequestResponse)
+
+    /// A shared-transcript denial that leaves no rule behind, which a harness that reads a denial's words can take
+    /// with words instead (`PermissionStructuredAnswer.denial`).
+    var isPlainDenial: Bool {
+        switch self {
+        case .decision(.deny): true
+        case let .providerAction(action):
+            action.decision == .deny && PermissionActionPreference.scope(id: action.id, intent: action.kind) != .broad
+        default: false
+        }
+    }
 }
 
 /// The record a request was projected from, which today's cards draw until the cards converge.

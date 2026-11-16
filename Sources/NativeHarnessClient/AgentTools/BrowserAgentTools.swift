@@ -1418,6 +1418,10 @@ final class BrowserAgentTools {
             case .declined?:
                 end()
                 return .text("The person declined to do this in the tab, after \(waited()). The tab is as they left it.")
+            case .personSentMessage?:
+                end()
+                return .text("The person sent you a message instead of doing this in the tab, after \(waited()). "
+                    + PersonsMessageAnswer.followUp + " The tab is as they left it.")
             case .turnEnded?:
                 end()
                 return .text("The task's turn ended before the person answered; the tab is no longer handed to them.")

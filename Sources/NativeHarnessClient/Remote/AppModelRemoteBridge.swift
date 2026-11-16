@@ -572,12 +572,14 @@ final class AppModelRemoteBridge: RemoteBridge {
             }
             Self.messageAccepted(by: session, in: model)
             // As the composer sends: an idle task starts a turn, a running one takes a follow-up, steered or
-            // queued as the phone chose (the composer's send keys) or as the Mac's setting says.
-            if let followUp, session.status == .running || session.status == .waitingForApproval {
-                Task { await model.submitFollowUp(input, action: followUp == .steer ? .steer : .queue, to: session) }
+            // queued as the phone chose (the composer's send keys) or as the Mac's setting says, after what the
+            // task waits on is answered.
+            let action: CodexComposerAction = if let followUp, session.status == .running || session.status == .waitingForApproval {
+                followUp == .steer ? .steer : .queue
             } else {
-                Task { await model.sendPersonsMessage(input, to: session) }
+                .automatic
             }
+            Task { await model.sendPersonsMessage(input, action: action, to: session) }
             return nil
         case let .answerApproval(taskID, requestID, answer, note):
             guard let session = session(taskID) else { return RemoteError(.notFound) }
@@ -588,7 +590,7 @@ final class AppModelRemoteBridge: RemoteBridge {
             if let refusal = Self.answerRefusal(request, in: session, model: model) { return refusal }
             // Claude Code reads a denial's note as its message, as its own "tell Claude what to do differently",
             // whether the task's own session asks or a subagent it runs does.
-            if let note, case .transcript = request.source, Self.readsDenialNotes(request, in: session, model: model) {
+            if let note, case .transcript = request.source, model.readsDenialNote(request.id, in: session) {
                 await model.respond(to: request.id, answer: .denial(reason: note), in: session)
                 return nil
             }
@@ -758,8 +760,8 @@ final class AppModelRemoteBridge: RemoteBridge {
                 route = formed
             }
             guard mayElevate || !RemoteApprovalPolicy.allowsBeyondCall(route) else { return Self.needsTerminal }
-            if let note, case .transcript = request.source, Self.isPlainDenial(route),
-               Self.readsDenialNotes(request, in: session, model: model) {
+            if let note, case .transcript = request.source, route.isPlainDenial,
+               model.readsDenialNote(request.id, in: session) {
                 await model.respond(to: request.id, answer: .denial(reason: note), in: session)
                 return nil
             }
@@ -829,16 +831,6 @@ final class AppModelRemoteBridge: RemoteBridge {
         return RemoteError(.unavailable, "The task is not connected", reason: .notConnected)
     }
 
-    /// A denial that leaves nothing behind: the plain deny, or the provider's one-time one.
-    private static func isPlainDenial(_ route: ConversationRequestRoute) -> Bool {
-        switch route {
-        case .decision(.deny): true
-        case let .providerAction(action):
-            action.decision == .deny && PermissionActionPreference.scope(id: action.id, intent: action.kind) != .broad
-        default: false
-        }
-    }
-
     /// A phone's MCP form values as the card's form holds them (§15.19): words and numbers as typed, a switch,
     /// the options picked. A value for no field, or of the wrong shape for its field, is refused rather than left
     /// out, so the form never sends a default in place of what the person meant.
@@ -887,16 +879,6 @@ final class AppModelRemoteBridge: RemoteBridge {
         for image in images where ComposerAttachmentIntake.isPastedImage(image.url) {
             try? FileManager.default.removeItem(at: image.url.deletingLastPathComponent())
         }
-    }
-
-    /// Whoever asks reads a denial's own message: the task's Claude Code session, or the subagent
-    /// whose request the task holds when its harness takes structured answers.
-    private static func readsDenialNotes(_ request: ConversationRequest, in session: SessionRecord, model: AppModel) -> Bool {
-        guard model.heldRequests(in: session.id).contains(where: { $0.id == request.id }) else {
-            return session.harness == .claudeCode
-        }
-        let run = model.sessionTools.runs(hostedBy: session.id).first { $0.pendingRequests.contains { $0.id == request.id } }
-        return run?.adapter is any HarnessStructuredPermissionResponding
     }
 
     /// Sends a request's answer by its route, as the card does (`ConversationActions.respond`).

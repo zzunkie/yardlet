@@ -1296,23 +1296,29 @@ public actor RemoteFixtureBridge: RemoteBridge {
 
     /// A message to a running task goes into its turn when steered (the turn reads it at its next
     /// step) and otherwise waits in its queue, with the queue chip's actions, until the turn ends; to an
-    /// idle task it starts a turn that replies. A task waiting on a request queues it either way.
+    /// idle task it starts a turn that replies. A task waiting on a request has the request answered once the
+    /// message is in, as on the Mac: declined, its handed tab's wait ended, and the turn goes on with a short
+    /// answer.
     private func send(_ text: String, to taskID: String, followUp: RemoteFollowUpMode = .queue) {
         guard let entry = tasks[taskID] else { return }
         counter += 1
         if entry.task.running {
-            if followUp == .steer, entry.task.steers == true, entry.pendingRequest == nil {
+            if followUp == .steer, entry.task.steers == true {
                 steer(text, into: taskID)
-                return
+            } else {
+                var queued = RemoteItem(id: "queued:\(counter)", turnId: "", kind: .user)
+                queued.text = text
+                queued.queued = true
+                queued.options = entry.task.harness == "claude-code"
+                    ? RemoteQueuedAction.allCases.map(\.rawValue)
+                    : [RemoteQueuedAction.sendNow.rawValue, RemoteQueuedAction.remove.rawValue]
+                tasks[taskID]?.queue.append(queued)
+                touch(taskID)
             }
-            var queued = RemoteItem(id: "queued:\(counter)", turnId: "", kind: .user)
-            queued.text = text
-            queued.queued = true
-            queued.options = entry.task.harness == "claude-code"
-                ? RemoteQueuedAction.allCases.map(\.rawValue)
-                : [RemoteQueuedAction.sendNow.rawValue, RemoteQueuedAction.remove.rawValue]
-            tasks[taskID]?.queue.append(queued)
-            touch(taskID)
+            if let request = entry.pendingRequest, let item = pendingItem(taskID, request.id) {
+                if item.requestKind == "browserHandoff" { browserChanged() }
+                resolve(taskID, item: item, status: "denied", reply: "I left that, since you sent a message instead.")
+            }
             return
         }
         startReply(to: text, in: taskID)

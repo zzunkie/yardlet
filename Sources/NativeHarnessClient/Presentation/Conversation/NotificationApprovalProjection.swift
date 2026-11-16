@@ -17,6 +17,11 @@ import Foundation
 ///
 /// The composer's keys answer the same requests the same way (`ComposerApprovalKey`): "Allow once",
 /// or the card's one-time denial (`deny`).
+///
+/// A message the person sends while a request waits declines it first (`declinedByMessage`), as the
+/// harness's own app lets the person type past a request: Claude Code's "No, and tell Claude what to
+/// do differently", the Codex app's decline. That one is given for every request it can answer once,
+/// questions and plan reviews too.
 enum NotificationApprovalProjection {
     struct PendingRequest: Equatable, Sendable {
         let id: String
@@ -28,6 +33,9 @@ enum NotificationApprovalProjection {
         /// It asks the person a question rather than for approval (`asksQuestion`), which Settings lets notify on
         /// its own switch (`TaskNotificationKind`).
         var asksQuestion = false
+        /// What a message the person sends while it waits answers it with (`AppModel.answerWaits(_:forPersonsMessageIn:)`);
+        /// nil for a request only its card answers.
+        var declinedByMessage: ConversationRequestRoute? = nil
     }
 
     /// Claude Code's AskUserQuestion and the other harnesses' questions in the shared transcript.
@@ -51,12 +59,12 @@ enum NotificationApprovalProjection {
             return (codex?.serverRequestsByID.values.filter { $0.resolution == .pending } ?? [])
                 .sorted { $0.id.compare($1.id, options: [.numeric, .literal]) == .orderedAscending }
                 .map { PendingRequest(id: $0.id, allowOnce: allowOnce(for: $0), deny: deny(for: $0),
-                                      asksQuestion: asksQuestion($0)) }
+                                      asksQuestion: asksQuestion($0), declinedByMessage: messageDecline(for: $0)) }
         }
         return transcript.compactMap { entry in
             guard case let .permission(request, .pending) = entry.content else { return nil }
             return PendingRequest(id: request.id, allowOnce: allowOnce(for: request), deny: deny(for: request),
-                                  asksQuestion: asksQuestion(request))
+                                  asksQuestion: asksQuestion(request), declinedByMessage: messageDecline(for: request))
         }
     }
 
@@ -67,9 +75,26 @@ enum NotificationApprovalProjection {
         switch request.source {
         case let .transcript(entry):
             guard case let .permission(permission, _) = entry.content else { return nil }
-            return PendingRequest(id: request.id, allowOnce: allowOnce(for: permission), deny: deny(for: permission))
+            return PendingRequest(id: request.id, allowOnce: allowOnce(for: permission), deny: deny(for: permission),
+                                  declinedByMessage: messageDecline(for: permission))
         case let .codexServerRequest(state):
-            return PendingRequest(id: request.id, allowOnce: allowOnce(for: state), deny: deny(for: state))
+            return PendingRequest(id: request.id, allowOnce: allowOnce(for: state), deny: deny(for: state),
+                                  declinedByMessage: messageDecline(for: state))
+        case .codexApproval:
+            return nil
+        }
+    }
+
+    /// The answer a message the person sends gives a request as its card holds it, by the record it was read from,
+    /// whatever form the card shows.
+    static func messageDecline(for request: ConversationRequest) -> ConversationRequestRoute? {
+        guard request.state == .pending else { return nil }
+        switch request.source {
+        case let .transcript(entry):
+            guard case let .permission(permission, _) = entry.content else { return nil }
+            return messageDecline(for: permission)
+        case let .codexServerRequest(state):
+            return messageDecline(for: state)
         case .codexApproval:
             return nil
         }
@@ -97,11 +122,24 @@ enum NotificationApprovalProjection {
     /// The denial a shared-transcript request that takes "Allow once" gets from the keyboard: the plain
     /// deny where the provider listed no options, or its own narrowest denial unless that one is standing.
     static func deny(for request: PermissionRequest) -> ConversationRequestRoute? {
-        guard allowOnce(for: request) != nil else { return nil }
+        allowOnce(for: request) == nil ? nil : messageDecline(for: request)
+    }
+
+    /// The answer a message the person sends while a shared-transcript request waits gives it: the plain deny where
+    /// the provider listed no options, which declines a question or a plan review as a whole (Claude Code's
+    /// AskUserQuestion and ExitPlanMode), or the provider's own narrowest denial unless that one is standing.
+    static func messageDecline(for request: PermissionRequest) -> ConversationRequestRoute? {
         guard !request.actions.isEmpty else { return .decision(.deny) }
         guard let action = PermissionActionPreference.preferred(from: request.actions, decision: .deny),
               PermissionActionPreference.scope(id: action.id, intent: action.kind) != .broad else { return nil }
         return .providerAction(action)
+    }
+
+    /// The same for a Codex server request: the answer Stop gives it (`CodexAdapter.stopAnswer`), which declines an
+    /// approval, a permissions request or an MCP form and sends a question back unanswered.
+    static func messageDecline(for request: CodexServerRequestState) -> ConversationRequestRoute? {
+        guard request.resolution == .pending else { return nil }
+        return CodexAdapter.stopAnswer(for: request.method).map { .codex($0) }
     }
 
     /// The denial a Codex server request that takes "Allow once" gets from the keyboard: the card's
@@ -138,4 +176,18 @@ enum NotificationApprovalProjection {
 
     /// ACP's tool kind for a call that switches the agent's mode, such as leaving plan mode.
     private static let modeSwitchKind = "switch_mode"
+}
+
+/// What the agent is told of a request or a wait that a message from the person answered
+/// (`AppModel.answerWaits(_:forPersonsMessageIn:)`).
+enum PersonsMessageAnswer {
+    /// Where the message is: with this result where the harness takes a message during its turn, after the turn
+    /// where it does not.
+    static let followUp = "Go by their message rather than this request; if it did not reach you with this result, "
+        + "end your turn to receive it."
+
+    /// A request declined for it, where the harness reads a denial's words (Claude Code), as Claude Code itself closes
+    /// an approval that a new message arrives after: it did not run, and the person did not refuse it.
+    static let denial = "The person sent a message instead of answering this request, so it did not run. They did not "
+        + "refuse it. " + followUp + " Ask again if it is still needed."
 }

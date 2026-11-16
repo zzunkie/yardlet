@@ -40,17 +40,32 @@ extension AppModel: BrowserHandoffPresenting {
     /// the tab it is over, which ends the wait and its notification as the bar does. False when the tab is gone or
     /// already answered.
     func answerBrowserHandoff(_ notice: String, done: Bool, in session: UUID) -> Bool {
-        guard let wait = browserHandoffWaits[session]?.first(where: { $0.notice == notice }),
-              let tab = handoffTab(wait, in: session) else { return false }
         // The agent's ask to keep a two-factor setup (docs/BROWSER_VAULT_DESIGN.md §20): I'm done saves it where the
         // panel's bar suggests, Decline is its Not Now.
+        answerBrowserWait(notice, in: session, handoff: done ? .done : .declined,
+                          setupAsk: done ? .save(.suggested) : .declined)
+    }
+
+    /// The person sent the task a message while its tabs wait on them (`answerWaits(_:forPersonsMessageIn:)`): each wait ends
+    /// as that message, so the agent's call returns and the message reaches it, as the bar's Decline would end it.
+    func endBrowserWaitsForPersonsMessage(in session: UUID) {
+        for wait in browserHandoffWaits[session] ?? [] {
+            answerBrowserWait(wait.notice, in: session, handoff: .personSentMessage, setupAsk: .personSentMessage)
+        }
+    }
+
+    @discardableResult
+    private func answerBrowserWait(_ notice: String, in session: UUID, handoff: BrowserHandoff.Answer,
+                                   setupAsk: BrowserVaultSetupAsk.Answer) -> Bool {
+        guard let wait = browserHandoffWaits[session]?.first(where: { $0.notice == notice }),
+              let tab = handoffTab(wait, in: session) else { return false }
         if let ask = tab.vaultSetupAsk, ask.answer == nil, notice == BrowserAgentTools.handoffNotice(ask.id) {
-            tab.answerSetupAsk(done ? .save(.suggested) : .declined)
+            tab.answerSetupAsk(setupAsk)
             handoffEnded(notice: notice)
             return true
         }
         guard tab.handoff?.answer == nil else { return false }
-        tab.answerHandoff(done ? .done : .declined)
+        tab.answerHandoff(handoff)
         handoffEnded(notice: notice)
         return true
     }

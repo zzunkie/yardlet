@@ -213,6 +213,14 @@ means the Mac accepted the command; what happens next arrives as events.
   Claude Code queues). A message that waits shows as a `queued` user item at the end of the
   conversation (§6.2) until the provider takes it; then that item is removed and the message
   appears as an ordinary `user` item in its turn.
+- While the task waits on the person, the message answers what waits once it has gone, as the Mac's
+  composer does and as each harness's own app lets the person type past a request: each request is
+  declined once (an approval or a plan review is denied, a Codex question or form goes back unanswered,
+  a Claude Code question is declined), and a tab handed to the person (§15.25) ends its wait, its tool
+  call telling the agent the person sent a message instead. Claude Code is told in the denial that the
+  person sent a message and did not refuse. A request only the Mac's card answers keeps waiting. The
+  message goes first, so a turn that takes a message while it runs reads it with that answer; one that
+  does not (Antigravity) has it when the turn ends.
 - `text`: trimmed; 1–32,000 characters. Plain text only, no attachments.
 - Errors: `emptyMessage`, `tooLarge`, `unsupportedCommand` (the first word is a slash command such as
   `/clear` or `/model` — commands stay on the Mac, but for those `runComposerCommand` runs, §15.23), `busy` (the Mac is editing a message in this task,
@@ -603,7 +611,8 @@ swift run --build-system native yardlet-remote-fixture --secure-port 47700 --sin
   - "Build the release bundle" (Codex) streams an answer word by word with a running command;
     `stopTurn` interrupts it; it starts streaming again 30 s after it stops or finishes.
   - A message sent to a running task waits as a `queued` item and is taken when the turn ends, which
-    starts a reply turn.
+    starts a reply turn; steered, it goes into the turn. Sent while the task waits on a request, it also
+    declines that request (or ends the handed tab's wait), and the turn ends with a short answer.
   - "Summarize the crash reports" (Codex) is finished and unread with 30 turns, for `loadOlder`. Its outputs
     (§15.22) are a PDF beside its folder and a PNG in it, and its last answer names `reports/crash-notes.txt`.
   - "Fix the footer links" (Claude Code) is idle; `sendMessage` (to it or any idle task) starts a turn

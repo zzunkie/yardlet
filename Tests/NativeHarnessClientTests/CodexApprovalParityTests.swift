@@ -288,6 +288,49 @@ final class CodexApprovalParityTests: XCTestCase {
         await adapter.close(handle)
     }
 
+    /// A message the person sends while Codex waits on them goes into the turn first, as the Codex app's follow-up
+    /// steers once Deny has answered, and then what waits is declined as the Codex app's Stop declines it; the turn
+    /// goes on and reads the message after the declined call.
+    @MainActor
+    func testThePersonsMessageSteersIntoTheTurnAndThenDeclinesWhatWaits() async throws {
+        for routed in [false, true] {
+            let fixture = try CommandFixture(routed: routed)
+            defer { fixture.cleanup() }
+            let model = fixture.model, transport = fixture.transport, id = fixture.session.id
+            await transport.enqueue(method: "turn/steer", result: .object(["turnId": .string("turn-1")]))
+            await model.submitCodex(CodexComposerDraft(inputs: [.text("Clean the build")]), action: .automatic,
+                                    to: fixture.session)
+            await transport.emit(method: "turn/started", params: .object(["threadId": .string("original"),
+                "turn": .object(["id": .string("turn-1"), "status": .string("inProgress"), "items": .array([])])]))
+            try await waitUntil { model.codexPresentationBySessionID[id]?.activeTurnID == "turn-1" }
+            await transport.emitServerRequest(id: .integer(9), method: "item/commandExecution/requestApproval", params: .object([
+                "threadId": .string("original"), "turnId": .string("turn-1"), "itemId": .string("cmd-1"),
+                "command": .string("rm -rf build")
+            ]))
+            try await waitUntil {
+                model.store.sessions.first.map { model.pendingApprovals(in: $0).count } == 1
+            }
+
+            await transport.suspendNextRequest("turn/steer")
+            let task = try XCTUnwrap(model.store.sessions.first)
+            let send = Task {
+                await model.sendPersonsCodexDraft(CodexComposerDraft(inputs: [.text("What does it delete?")]),
+                                                  action: .automatic, to: task)
+            }
+            try await waitUntil { await transport.isRequestSuspended }
+            let early = await transport.sentResponses
+            XCTAssertTrue(early.isEmpty, "routed: \(routed): nothing is answered before the message is in the turn")
+            await transport.releaseSuspendedRequest()
+            await send.value
+            let answered = await transport.sentResponses.map(\.result)
+            XCTAssertEqual(answered, [.object(["decision": .string("decline")])], "routed: \(routed)")
+            let steer = await transport.requests.last { $0.method == "turn/steer" }
+            XCTAssertEqual(steer?.params["input"]?.arrayValue?.first?["text"], .string("What does it delete?"))
+            try await waitUntil { model.store.sessions.first.map { model.pendingApprovals(in: $0).isEmpty } == true }
+            await model.shutdown()
+        }
+    }
+
     func testStoppingWithOnlyARequestLeftAnswersItInsteadOfFailing() async throws {
         let transport = FakeCodexTransport(responses: [
             "initialize": [.object(["platformOs": .string("macos")])],

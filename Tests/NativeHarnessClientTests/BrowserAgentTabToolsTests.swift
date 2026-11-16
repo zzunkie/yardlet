@@ -316,6 +316,22 @@ final class BrowserAgentTabToolsTests: XCTestCase {
         XCTAssertTrue(client.tab(forSession: task) === own, "once the person stops, the panel follows the agent")
     }
 
+    /// A message the person sends the task while a tab waits on them ends the wait as that message
+    /// (`AppModel.answerWaits(_:forPersonsMessageIn:)`): the call returns, saying so and where the message is.
+    func testAHandoffEndsWhenThePersonSendsAMessageInstead() async throws {
+        connection.answersDevTools = true
+        _ = try tabs.page(for: task, tabID: nil)
+        let tab = try XCTUnwrap(client.tab(forSession: task))
+        let call = Task { await run(AgentToolCatalog.handoff, ["reason": .string("Sign in with your security key.")]) }
+        try await waitUntil { tab.handoff != nil }
+        tab.answerHandoff(.personSentMessage)
+        let result = await call.value
+        XCTAssertFalse(result.isError)
+        XCTAssertTrue(text(result).hasPrefix("The person sent you a message instead of doing this in the tab"), text(result))
+        XCTAssertTrue(text(result).contains(PersonsMessageAnswer.followUp), text(result))
+        XCTAssertNil(tab.handoff, "the tab is the agent's again")
+    }
+
     func testThePageTheAgentLoadedIsThereAtItsNextTurn() async throws {
         let connection = connection
         let client = BrowserHostClient(idleGrace: .milliseconds(30), agentVisibleWindow: .milliseconds(20)) { connection }

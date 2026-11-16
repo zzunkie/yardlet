@@ -2407,6 +2407,8 @@ struct BrowserHandoff: Equatable, Sendable {
         case done
         /// The person's Decline.
         case declined
+        /// The person sent the task a message instead of answering (`AppModel.answerWaits(_:forPersonsMessageIn:)`).
+        case personSentMessage
         /// The agent's turn ended first.
         case turnEnded
     }
@@ -2431,6 +2433,8 @@ struct BrowserVaultSetupAsk: Equatable, Sendable {
         case save(Target)
         /// The person's Not Now.
         case declined
+        /// The person sent the task a message instead of answering (`AppModel.answerWaits(_:forPersonsMessageIn:)`).
+        case personSentMessage
         /// The page went to another address before the person answered.
         case pageMoved
         /// The agent's turn ended first.

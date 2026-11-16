@@ -6,7 +6,8 @@ import XCTest
 
 /// The fixture server's tasks behave as the Mac's do: a task waiting on a request is running (the
 /// stop button applies) and stopping it expires the request, a waiting task's attention carries a
-/// short summary, and a message sent to a running task waits as a queued item until the turn ends.
+/// short summary, a message queued to a running task waits as a queued item until the turn ends, and a
+/// message sent while the task waits on a request declines that request.
 /// The phone app's QA runs against it, so what it offers since 2026-10-27 (§15.13–§15.18) answers as
 /// the contract says, and so do its full detail (§15.24, §15.31), its scheduled tasks (§15.21), a task's files (§15.22) and
 /// its browser tabs (§15.25), through the server.
@@ -35,18 +36,20 @@ final class RemoteFixtureTests: XCTestCase {
     }
 
     func testAMessageToARunningTaskWaitsQueuedUntilTheTurnEnds() async throws {
-        let fixture = RemoteFixtureBridge(speed: 50)
+        let fixture = RemoteFixtureBridge(speed: 1)
         let approval = RemoteFixtureBridge.ID.approval
-        let sent = await fixture.perform(.sendMessage(taskID: approval, text: "Also update the changelog"))
+        let sent = await fixture.perform(.sendMessage(taskID: approval, text: "Also update the changelog", followUp: .queue))
         XCTAssertNil(sent)
         let afterSending = await fixture.conversation(of: approval)
-        let queued = try XCTUnwrap(afterSending?.turns.last?.items.last)
+        let queued = try XCTUnwrap(afterSending?.turns.last?.items.last { $0.queued == true })
         XCTAssertEqual(queued.kind, .user)
-        XCTAssertEqual(queued.queued, true)
         XCTAssertEqual(queued.text, "Also update the changelog")
+        // The message declined what the task waited on, as on the Mac, and the turn goes on to its end.
+        XCTAssertEqual(afterSending?.turns.last?.items.last { $0.kind == .approval }?.status, "denied")
+        let answered = await fixture.snapshot().tasks.first { $0.id == approval }
+        XCTAssertNotEqual(answered?.attention, .waiting)
+        XCTAssertEqual(answered?.running, true)
 
-        let answer = await fixture.perform(.answerApproval(taskID: approval, requestID: "toolu_fixture_1", answer: .deny))
-        XCTAssertNil(answer)
         let deadline = Date().addingTimeInterval(testWaitLimitSeconds)
         var taken: RemoteItem?
         while taken == nil, Date() < deadline {
@@ -94,19 +97,28 @@ final class RemoteFixtureTests: XCTestCase {
         let answered = await fixture.snapshot().tasks.first { $0.id == RemoteFixtureBridge.ID.handoff }
         XCTAssertNotEqual(answered?.attention, .waiting)
 
-        // Allow for the session is offered beside allow once; a queued message is sent now.
+        // Allow for the session is offered beside allow once; a queued message is removed, at the speed a phone sees.
         let approval = RemoteFixtureBridge.ID.approval
-        let request = await fixture.conversation(of: approval)?.turns.last?.items.last { $0.kind == .approval }
+        let slow = RemoteFixtureBridge(speed: 1)
+        let request = await slow.conversation(of: approval)?.turns.last?.items.last { $0.kind == .approval }
         XCTAssertEqual(request?.options, ["allowOnce", "allowForSession", "deny"])
         XCTAssertNotNil(request?.macNote)
-        _ = await fixture.perform(.sendMessage(taskID: approval, text: "Also bump the version"))
-        let afterSending = await fixture.conversation(of: approval)
+        _ = await slow.perform(.sendMessage(taskID: approval, text: "Also bump the version", followUp: .queue))
+        let afterSending = await slow.conversation(of: approval)
         let queued = try XCTUnwrap(afterSending?.turns.last?.items.last { $0.queued == true })
         XCTAssertEqual(queued.options, ["sendNow", "stopAndSend", "remove"])
-        let removed = await fixture.perform(.actOnQueued(taskID: approval, itemID: queued.id, action: .remove))
+        let removed = await slow.perform(.actOnQueued(taskID: approval, itemID: queued.id, action: .remove))
         XCTAssertNil(removed)
-        let afterRemoving = await fixture.conversation(of: approval)
+        let afterRemoving = await slow.conversation(of: approval)
         XCTAssertEqual(afterRemoving?.turns.flatMap(\.items).contains { $0.queued == true }, false)
+
+        // A message steered while a question waits goes into the turn and declines the question.
+        let question = RemoteFixtureBridge.ID.question
+        _ = await fixture.perform(.sendMessage(taskID: question, text: "Which names did we use before?", followUp: .steer))
+        let asked = await fixture.conversation(of: question)?.turns.last?.items ?? []
+        XCTAssertEqual(asked.last { $0.kind == .approval }?.status, "denied")
+        XCTAssertEqual(asked.last { $0.kind == .user }?.text, "Which names did we use before?")
+        XCTAssertFalse(asked.contains { $0.queued == true })
 
         // A new task on the harness and model the phone picked.
         let options = try await fixture.newTaskOptions(projectID: RemoteFixtureBridge.ID.yardlet, harness: "codex").get()

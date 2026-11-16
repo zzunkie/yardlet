@@ -1200,12 +1200,29 @@ final class AppModel {
         return Task { await send(text, to: session) }
     }
 
-    /// A message the person wrote, in a task's composer on the Mac or the phone: sent as `send` sends,
-    /// and a runtime it starts asks for next-message suggestions though the task is off screen.
-    func sendPersonsMessage(_ input: HarnessUserInput, to session: SessionRecord) async {
+    /// A message the person wrote, in a task's composer on the Mac or the phone: sent as `send` sends, or
+    /// queued or steered as `submitFollowUp` does when the person chose which; then what the task waited on
+    /// is answered (`answerWaits(_:forPersonsMessageIn:)`). A runtime it starts asks for next-message
+    /// suggestions though the task is off screen.
+    func sendPersonsMessage(_ input: HarnessUserInput, action: CodexComposerAction = .automatic,
+                            to session: SessionRecord) async {
         let marked = startsAskingForSuggestions.insert(session.id).inserted
         defer { if marked { startsAskingForSuggestions.remove(session.id) } }
-        await send(input, to: session)
+        let waits = waitsForPersonsMessage(input.text, in: session.id)
+        if action == .automatic {
+            await send(input, to: session)
+        } else {
+            await submitFollowUp(input, action: action, to: session)
+        }
+        if let waits { await answerWaits(waits, forPersonsMessageIn: session.id) }
+    }
+
+    /// The person's Codex draft from the task's composer, sent as `submitCodex` sends it, after which it answers
+    /// what the task waited on (`answerWaits(_:forPersonsMessageIn:)`).
+    func sendPersonsCodexDraft(_ draft: CodexComposerDraft, action: CodexComposerAction, to session: SessionRecord) async {
+        let waits = draft.isEmpty ? nil : waitsForPersonsMessage(draft.text, in: session.id)
+        await submitCodex(draft, action: action, to: session)
+        if let waits { await answerWaits(waits, forPersonsMessageIn: session.id) }
     }
 
     /// The composer's submission, attachments included. Text-only input takes exactly the path

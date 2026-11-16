@@ -2605,6 +2605,18 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertEqual(awaited34?.reason, .editing, "Said as what it is about, for the device's own words")
         model.composerDrafts.tasks.draft(for: session.id).editState = nil
 
+        // A message sent while a request waits declines it, as the composer's does, and goes the way the phone chose.
+        let fourth = PermissionRequest(id: "bash-4", title: "Bash", detail: nil, command: "rm -rf DerivedData")
+        await adapter.emit(.permissionRequested(fourth), for: session.id, sequence: 7)
+        await adapter.emit(.sessionStatusChanged(.waitingForApproval), for: session.id, sequence: 8)
+        try await waitUntil {
+            model.store.sessions.first.map { model.pendingApprovals(in: $0).map(\.id) } == ["bash-4"]
+        }
+        let instead = await bridge.perform(.sendMessage(taskID: taskID, text: "Clean only the test products", followUp: .queue))
+        XCTAssertNil(instead)
+        try await waitUntilAsync { await adapter.permissionDecisions["bash-4"] == .deny }
+        try await waitUntil { model.followUps.queue(for: session.id).last?.draft.text == "Clean only the test products" }
+
         await adapter.emit(.sessionStatusChanged(.running), for: session.id, sequence: 3)
         try await waitUntil { model.store.sessions.first?.status == .running }
         let awaited35 = await bridge.perform(.stopTurn(taskID: taskID))

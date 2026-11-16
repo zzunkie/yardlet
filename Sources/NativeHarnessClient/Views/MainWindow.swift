@@ -1785,12 +1785,12 @@ struct MainWindow: View {
         )
         if wiring.submission == .codexDraft {
             actions.submitCodex = { draft, action in
-                Task { await model.submitCodex(draft, action: action, to: session) }
+                Task { await model.sendPersonsCodexDraft(draft, action: action, to: session) }
             }
         }
         if wiring.followUpQueue != nil {
             actions.submitFollowUp = { input, action in
-                Task { await model.submitFollowUp(input, action: action, to: session) }
+                Task { await model.sendPersonsMessage(input, action: action, to: session) }
             }
             actions.sendQueuedNow = { itemID in
                 Task { await model.sendQueuedNow(itemID, for: session) }

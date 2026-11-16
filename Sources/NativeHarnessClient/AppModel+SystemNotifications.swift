@@ -106,6 +106,57 @@ extension AppModel {
         return true
     }
 
+    /// What a message the person sends to a task that waits on them, from its composer on the Mac or a phone, answers
+    /// once it has gone (`answerWaits(_:forPersonsMessageIn:)`), read before it goes; nil when the task waits on nothing
+    /// or the message would not go: an edit, a command the composer runs itself, or a task the send refuses.
+    func waitsForPersonsMessage(_ text: String, in sessionID: UUID) -> [NotificationApprovalProjection.PendingRequest]? {
+        guard let session = store.sessions.first(where: { $0.id == sessionID }), isRunning(sessionID), isAttached(sessionID),
+              composerDrafts.tasks.existingDraft(for: sessionID)?.editState == nil,
+              !isHeld(session, by: TaskBlocker.holdingOffActions), sendRefusal(for: session) == nil else { return nil }
+        let command = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch session.harness {
+        case .codex where CodexComposerCommands.isBuiltin(command): return nil
+        case .claudeCode where ClaudeComposerCommands.isResetCandidate(command): return nil
+        default: break
+        }
+        let requests = pendingApprovals(in: session).filter { $0.declinedByMessage != nil }
+        return requests.isEmpty && browserHandoffWaits[sessionID]?.isEmpty != false ? nil : requests
+    }
+
+    /// Answers what the task waited on when the person's message went, as the harness's own app lets the person type
+    /// past a request: Claude Code's "No, and tell Claude what to do differently", the Codex app's decline. The message
+    /// goes first, so a harness that takes it during the turn has it with the answer's result: Claude Code reads it at
+    /// that step, Codex at its next one; a harness that takes nothing while its turn runs has it once the turn ends.
+    /// - Each request is declined once (`NotificationApprovalProjection.declinedByMessage`). Claude Code, which reads a
+    ///   denial's words, is told the person sent a message instead and did not refuse, as it closes an approval itself
+    ///   when a new message arrives while one waits.
+    /// - Each tab handed to the person ends its wait as that message (`BrowserHandoff.Answer.personSentMessage`).
+    /// A request only its card answers keeps waiting.
+    func answerWaits(_ requests: [NotificationApprovalProjection.PendingRequest], forPersonsMessageIn sessionID: UUID) async {
+        endBrowserWaitsForPersonsMessage(in: sessionID)
+        for request in requests {
+            // An earlier answer can end the turn and the rest with it.
+            guard let route = request.declinedByMessage,
+                  let current = store.sessions.first(where: { $0.id == sessionID }),
+                  pendingApproval(request.id, in: current) != nil else { continue }
+            if route.isPlainDenial, readsDenialNote(request.id, in: current) {
+                await respond(to: request.id, answer: .denial(reason: PersonsMessageAnswer.denial), in: current)
+            } else {
+                _ = await answer(request.id, with: route, in: current)
+            }
+        }
+    }
+
+    /// Whether a denial's words reach the agent: Claude Code reads them as its tool's result, whether the task's own
+    /// session asks or a subagent it runs does. A session tool's own approval takes only a yes or a no.
+    func readsDenialNote(_ requestID: String, in session: SessionRecord) -> Bool {
+        guard heldRequests(in: session.id).contains(where: { $0.id == requestID }) else {
+            return session.harness == .claudeCode
+        }
+        let run = sessionTools.runs(hostedBy: session.id).first { $0.pendingRequests.contains { $0.id == requestID } }
+        return run?.adapter is any HarnessStructuredPermissionResponding
+    }
+
     /// Sends a request card's answer by its route, as the card sends it; false for an answer only the
     /// card's form gives.
     private func answer(_ requestID: String, with route: ConversationRequestRoute, in session: SessionRecord) async -> Bool {
@@ -147,7 +198,8 @@ extension AppModel {
         // What Yardlet holds in the task (`heldRequests`), answered by the same "Allow once".
         + heldRequests(in: session.id).map {
             NotificationApprovalProjection.pendingRequest(for: $0)
-                ?? NotificationApprovalProjection.PendingRequest(id: $0.id, allowOnce: nil)
+                ?? NotificationApprovalProjection.PendingRequest(
+                    id: $0.id, allowOnce: nil, declinedByMessage: NotificationApprovalProjection.messageDecline(for: $0))
         }
     }
 

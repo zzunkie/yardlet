@@ -1387,6 +1387,10 @@ extension BrowserAgentTools {
                 end()
                 throw BrowserAgentToolError("The person chose not to save the two-factor code for \(host) in Yardlet's "
                     + "password manager, so nothing was saved or filled. Hand the tab to the person if the setup is to go on.")
+            case .personSentMessage?:
+                end()
+                throw BrowserAgentToolError("The person sent you a message instead of answering whether to save the two-factor "
+                    + "code for \(host), so nothing was saved. " + PersonsMessageAnswer.followUp)
             case .pageMoved?:
                 end()
                 throw BrowserAgentToolError("The page went to another address before the person answered; nothing was saved.",

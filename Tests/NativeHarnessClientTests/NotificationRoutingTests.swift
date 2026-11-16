@@ -304,6 +304,16 @@ final class NotificationRoutingTests: XCTestCase {
             id: "mode", title: "Ready to code?", detail: "switch_mode", command: nil,
             actions: [PermissionRequestAction(id: "yes", label: "Yes", decision: .allow, kind: "allow_once")]
         )))
+
+        // A message the person sends while one waits declines it once, a question or a plan as a whole too,
+        // and never by a standing rule.
+        let decline = NotificationApprovalProjection.messageDecline(for:) as (PermissionRequest) -> ConversationRequestRoute?
+        XCTAssertEqual(decline(plain), .decision(.deny))
+        XCTAssertEqual(decline(request(actions: claudeOffer)), .providerAction(claudeOffer[2]))
+        XCTAssertNil(decline(request(actions: standingDenial)))
+        XCTAssertEqual(decline(request(actions: onlyAlways)), .providerAction(onlyAlways[1]))
+        XCTAssertEqual(decline(request(structured: .questions([question]))), .decision(.deny))
+        XCTAssertEqual(decline(request(structured: .plan("1. Do it"))), .decision(.deny))
     }
 
     func testCodexOffersAllowOnceOnlyForCommandAndFileChangeApprovals() {
@@ -352,6 +362,21 @@ final class NotificationRoutingTests: XCTestCase {
         var answered = codexRequest(.commandExecutionApproval, "item/commandExecution/requestApproval")
         answered.resolution = .resolved(.object(["decision": .string("accept")]))
         XCTAssertNil(NotificationApprovalProjection.allowOnce(for: answered))
+
+        // A message the person sends while one waits answers it as the Codex app's Stop does: declined, a question
+        // sent back unanswered; nothing for one already answered.
+        let decline = NotificationApprovalProjection.messageDecline(for:) as (CodexServerRequestState) -> ConversationRequestRoute?
+        XCTAssertEqual(decline(codexRequest(.commandExecutionApproval, "item/commandExecution/requestApproval")),
+                       .codex(.command(.decline)))
+        XCTAssertEqual(decline(offered), .codex(.command(.decline)))
+        XCTAssertEqual(decline(codexRequest(.fileChangeApproval, "item/fileChange/requestApproval")),
+                       .codex(.fileChange(.decline)))
+        XCTAssertEqual(decline(codexRequest(.permissionsApproval, "item/permissions/requestApproval")),
+                       .codex(.permissions(permissions: .object([:]), scope: .turn, strictAutoReview: nil)))
+        XCTAssertEqual(decline(codexRequest(.toolUserInput, "item/tool/requestUserInput")), .codex(.toolUserInput(answers: [:])))
+        XCTAssertEqual(decline(codexRequest(.mcpElicitation, "mcpServer/elicitation/request")),
+                       .codex(.mcpElicitation(action: .decline)))
+        XCTAssertNil(decline(answered))
     }
 
     // MARK: - Allow once from the notification (Claude Code, the real adapter on a fake CLI)
