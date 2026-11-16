@@ -1,12 +1,5 @@
 import SwiftUI
 
-/// Shared copy and identity controls for a new task, whether its harness runs here or on a host.
-enum NewTaskComposerText {
-    static func placeholder(harnessName: String?) -> String {
-        harnessName.map { L10n.format("Ask %@ to do anything", $0) } ?? L10n.string("Describe a task…")
-    }
-}
-
 struct NewTaskHarnessControl<Items: View>: View {
     @Environment(\.yardletInterfaceScale) private var interfaceScale
     let harness: HarnessKind?

@@ -287,3 +287,16 @@ final class NewTaskDraft {
         }
     }
 }
+
+extension NewTaskDraft {
+    /// Whether the chosen harness refuses what the draft carries, as when the harness changed after an image was
+    /// attached: true, with why in the notice, so the task does not start without it. Codex keeps its own typed
+    /// envelopes, as the task composer's Codex send does.
+    func refusesAttachments(options: ComposerSessionOptions?) -> Bool {
+        guard !attachments.isEmpty, let options, options.submission == .providerInput,
+              case let .refuse(why) = options.input.submission(for: .init(inputs: [.text(text)] + attachments))
+        else { return false }
+        notice = why
+        return true
+    }
+}
