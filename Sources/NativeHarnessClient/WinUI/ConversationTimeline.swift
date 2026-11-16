@@ -39,11 +39,13 @@ final class ConversationTimeline {
 
     init() {
         stack.spacing = ConversationStyle.turnSpacing
-        stack.maxWidth = WindowsTheme.contentWidth
         stack.padding = Thickness(left: WindowsTheme.conversationInset, top: ConversationStyle.topPadding,
                                   right: WindowsTheme.conversationInset, bottom: ConversationStyle.bottomPadding)
-        // Stretched to at most its widest, the column stands in the middle of a wider window.
-        stack.horizontalAlignment = .stretch
+        // The column's width is set from the view's rather than stretched up to a maximum: the scroll view places
+        // its content by the width the content asks for, so a stretched column whose turns asked for less stood
+        // to the right of the middle.
+        stack.horizontalAlignment = .center
+        view.sizeChanged.addHandler { [weak self] _, _ in self?.fitColumn() }
         turnsPanel.spacing = ConversationStyle.turnSpacing
         view.horizontalScrollBarVisibility = .disabled
         loadMore.content = L10n.string("Load more history")
@@ -89,6 +91,11 @@ final class ConversationTimeline {
         let windowed = window.apply(to: presentation)
         loadMore.visibility = windowed.earlier != .none && (loadEarlier != nil || windowed.earlier.isLocal) ? .visible : .collapsed
         draw(windowed, requestNote: requestNote)
+    }
+
+    /// The column as wide as the view, up to its widest, in the middle of a wider view.
+    private func fitColumn() {
+        stack.width = min(WindowsTheme.contentWidth, max(0, view.actualWidth))
     }
 
     /// Ten more of the loaded turns, or once every loaded turn shows, the ones before them.

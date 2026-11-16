@@ -39,20 +39,20 @@ enum ConversationWorkLines {
         let labels = StackPanel()
         let caret = ConversationStyle.caret(isOpen: isOpen)
         for (index, line) in lines.enumerated() {
-            var pieces: [UIElement] = []
+            var pieces: [(element: UIElement, shrinks: Bool)] = []
             for (part, isSubject) in [(line.leading, true), (line.verb, false), (line.trailing, true)] where !part.isEmpty {
                 let tone: ConversationStyle.Tone = isSubject ? (isOpen ? .primary : .secondary)
                     : phase == .running ? .secondary : .tertiary
                 let piece = ConversationStyle.text(part, size: size, tone: tone, selectable: false, wraps: false)
                 piece.verticalAlignment = .center
                 if isSubject { subjects.append(piece) }
-                pieces.append(piece)
+                pieces.append((piece, isSubject))
             }
             if index == 0 {
-                pieces += trailing
-                if detail != nil { pieces.append(caret) }
+                pieces += trailing.map { (element: $0, shrinks: false) }
+                if detail != nil { pieces.append((caret, false)) }
             }
-            let row = ConversationStyle.row(pieces)
+            let row = wordsRow(pieces)
             row.minHeight = ConversationStyle.statusLineHeight
             labels.children.append(row)
         }
@@ -96,6 +96,25 @@ enum ConversationWorkLines {
         try? Grid.setColumn(actionRow, 1)
         header.children.append(actionRow)
         return panel
+    }
+
+    /// A line's words and marks side by side as the Mac sets them (`ConversationStatusLineLabel`): a subject too long
+    /// for the column gives way first and ends in an ellipsis, so the verb, the marks and the caret stay in view, and
+    /// a short line keeps them right after its words. Left-aligned, the grid is as wide as what it holds, and its
+    /// subjects' star columns take only what is left after the rest.
+    private static func wordsRow(_ pieces: [(element: UIElement, shrinks: Bool)]) -> Grid {
+        let row = Grid()
+        row.horizontalAlignment = .left
+        row.columnSpacing = 6
+        for (index, piece) in pieces.enumerated() {
+            let column = ColumnDefinition()
+            column.width = piece.shrinks ? GridLength(value: 1, gridUnitType: .star)
+                : GridLength(value: 0, gridUnitType: .auto)
+            row.columnDefinitions.append(column)
+            if let placed = piece.element as? FrameworkElement { try? Grid.setColumn(placed, Int32(index)) }
+            row.children.append(piece.element)
+        }
+        return row
     }
 
     /// Whether what a line holds was drawn yet.
