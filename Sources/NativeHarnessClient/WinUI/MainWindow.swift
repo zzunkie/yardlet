@@ -76,7 +76,6 @@ final class MainWindow {
 
     func open() {
         model.setShowsTasks(true, inWindow: windowID)
-        window.title = YardletProduct.name
         try? window.appWindow.resize(SizeInt32(width: 1000, height: 680))
 
         navigation.paneDisplayMode = .left
@@ -150,7 +149,7 @@ final class MainWindow {
         connectItem.content = L10n.string("Connect to a Mac")
         navigation.footerMenuItems.append(connectItem)
         followHosts()
-        window.content = navigation
+        WindowChrome.frame(window, title: YardletProduct.name, content: navigation)
         // As on the Mac, the shown task's folder is looked at again when the app comes to the front.
         window.activated.addHandler { [weak self] _, _ in self?.refreshShownTaskFolder() }
         try? window.activate()

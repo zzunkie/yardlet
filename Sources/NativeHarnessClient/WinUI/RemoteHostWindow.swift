@@ -32,7 +32,6 @@ final class RemoteHostWindow {
     }
 
     func open() {
-        window.title = model.name
         try? window.appWindow.resize(SizeInt32(width: 1000, height: 680))
         window.closed.addHandler { [weak self] _, _ in self?.onClose?() }
 
@@ -80,7 +79,7 @@ final class RemoteHostWindow {
         try? Grid.setRow(composerRow, 2)
         grid.children.append(composerRow)
         navigation.content = grid
-        window.content = navigation
+        WindowChrome.frame(window, title: model.name, content: navigation)
         try? window.activate()
         timeline.loadEarlier = { [weak self] in
             guard let self, let taskID = self.selectedTaskID else { return }

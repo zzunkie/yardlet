@@ -153,7 +153,12 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
 `Platform/Portable/`'s parts, the Windows app leaves that portable file out.
 
 - **Assembly.** `Platform/Windows/AppModel+Live.swift` makes the model with its stores in `%LOCALAPPDATA%\Yardlet`
-  and no browser host. `WinUI/YardletApp.swift` makes it once WinUI has started and opens `WinUI/MainWindow.swift`:
+  and no browser host. `WinUI/YardletApp.swift` makes it once WinUI has started and opens `WinUI/MainWindow.swift`,
+  framed as Windows 11's own apps frame their windows (`WinUI/WindowChrome.swift`): Mica behind it, the content up to
+  a tall title bar of Yardlet's own with Yardlet's mark and the window's title, and Windows' caption buttons. Its
+  colors and measures are the Mac's (`WinUI/WindowsTheme.swift`, from `ParityTheme`), light or dark as Windows is set;
+  pictures the app carries, such as the harnesses' marks, are read from their files (`WinUI/PackagedImage.swift`),
+  since XAML does not load a `file:` URI from a folder whose path holds characters beyond ASCII. The window shows
   the store's tasks in the sidebar, followed through Observation, with their titles and harness marks as the Mac's
   rows show them, and a composer that sends through the model with Send beside it, and Stop in Send's place while the
   task's turn runs, which stops it through the harness's own cancel (`AppModel.interrupt`). The composer holds the
@@ -448,7 +453,7 @@ same icon. In the same resource update, before signing, it writes `VS_VERSIONINF
 `ProductName` are `Yardlet`, `FileVersion` and `ProductVersion` keep the full pack version, and their fixed numeric
 fields use its version core with a zero fourth component when omitted. The resource and its Unicode string table
 use English (US), with a matching `Translation`. This supplies the executable's name to Windows surfaces that read
-file descriptions. The window's title bar keeps WinUI's default icon.
+file descriptions. The window draws its own title bar with Yardlet's mark (`WinUI/WindowChrome.swift`).
 
 The icon is also packed beside the executable as `Yardlet.ico`, for notification registration. Packed builds pass
 the name `Yardlet` and this icon to `AppNotificationManager.Register`: the Windows App SDK's automatic shortcut
