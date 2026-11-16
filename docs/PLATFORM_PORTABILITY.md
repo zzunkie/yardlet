@@ -50,7 +50,7 @@ platform's layer has to provide:
 | `MacConditionReader` | Disk, memory pressure and heat for the new-task notice and the session tools | `sysctlbyname`, `getloadavg` |
 | `MemoryPressureWatch` | The memory saver's pressure warnings | Dispatch memory pressure source |
 | `NativeProcessTree` | Ending a process Yardlet started, with what it started | `proc_listchildpids`, signals |
-| `ScopedFiles`, `OpenFile` | Reading Claude's transcripts without following links | `openat` with `O_NOFOLLOW` |
+| `ScopedFiles` | Reading Claude's transcripts and a restore's files without following links; reading the file it opens in parts (`OpenFile`, `Files/OpenFile.swift`) is engine code | `openat` with `O_NOFOLLOW` |
 | `WorkspaceFileReplacement` | Saving a reviewed workspace file, from the Files panel and from another device (docs/REMOTE_PROTOCOL.md §15.27) | no-follow descriptors, `renameat` |
 | `FileCloning`, `Trash`, `FileTypes` | Block-sharing copies, the Trash, file types | `copyfile`, `trashItem`, UTType |
 | `ShellLaunchEnvironment.userLoginShell` | The person's login shell | the user database |
@@ -65,10 +65,10 @@ platform, with its keys behind `RemoteIdentityStoring`: the Keychain on the Mac,
 
 The Windows layer provides `NativeProcessTree` (`Platform/Windows/NativeProcessTree.swift`),
 `RemoteHostPlatform.current` (`Platform/Windows/WindowsRemoteHost.swift`), `LocalSystemNotificationCenter`
-(`Platform/Windows/WindowsNotifications.swift`) and `HarnessAccountBroker.antigravityCredentialState`
-(`Platform/Windows/WindowsAccounts.swift`), so the Windows app leaves `PortableProcesses.swift`,
-`PortableRemoteHost.swift`, `PortableNotifications.swift` and `PortableAccounts.swift` out
-(`portableFilesWindowsReplaces` in `Package.swift`).
+(`Platform/Windows/WindowsNotifications.swift`), `HarnessAccountBroker.antigravityCredentialState`
+(`Platform/Windows/WindowsAccounts.swift`) and `ScopedFiles` (`Platform/Windows/WindowsScopedFiles.swift`), so the
+Windows app leaves `PortableProcesses.swift`, `PortableRemoteHost.swift`, `PortableNotifications.swift`,
+`PortableAccounts.swift` and `PortableScopedFiles.swift` out (`portableFilesWindowsReplaces` in `Package.swift`).
 
 `Platform/Portable/PortableFoundation.swift` also holds the few names Foundation outside Apple's platforms lacks
 (`InlinePresentationIntent`, Combine's `ObservableObject` and `Published`, `autoreleasepool`), and
@@ -311,10 +311,11 @@ Windows/scripts/place-bootstrapper.ps1 -Binaries (swift build --show-bin-path)
 ```
 
 `windows-engine.yml` builds the Windows app for the same pull requests and branches, beside the
-engine, as a check to read. `windows-app.yml` runs for pull requests, `main` and `windows-*` branches when what it
-builds changes (the engine and the Windows layer, the targets beside them, the relay, the package's manifest, the
-Windows scripts and the workflow; not the Mac's layers or documents), so each such commit on `main` has an installer
-to try, and a `windows-*` branch's pull request does not run it a second time. It builds a release, opens it on the
+engine, as a check to read, and runs the Windows layer's own tests (`Tests/YardletWindowsTests/`) against it.
+`windows-app.yml` runs for pull requests, `main` and `windows-*` branches when what it builds changes (the engine and
+the Windows layer, the targets beside them, the relay, the package's manifest, the Windows scripts and the workflow;
+not the Mac's layers or documents), so each such commit on `main` has an installer to try, and a `windows-*` branch's
+pull request does not run it a second time. It builds a release, opens it on the
 runner, measures it, types Korean into its composer through the Microsoft Korean IME, and checks that Shift+Enter
 starts a new line and sends nothing (`Windows/scripts/check-window.ps1`). It then starts the relay (`relay/`) and the fixture host on it
 (`Windows/scripts/start-remote-host.ps1`) and, in the same step, since a Windows runner ends the programs a step
@@ -513,7 +514,8 @@ notification posted must be gone too.
 | `NativeProcessTree` | Collects descendants with `proc_listchildpids` and ends the tree with `kill` (also on the process group), `waitpid` and `usleep`. Every harness transport, Git, the account commands and the protocol process host start processes with `run(_:)` and end them with `terminate(process:)` | Provided (`Platform/Windows/NativeProcessTree.swift`). Foundation's `Process` creates no job object on Windows, and `terminate()` ends only the root with `TerminateProcess`, so grandchildren such as node and MCP servers would stay behind (confirmed: [swift-corelibs-foundation `Process.swift`](https://github.com/swiftlang/swift-corelibs-foundation/blob/main/Sources/Foundation/Process.swift)). `run(_:)` puts each process in a job object of its own (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) right after it starts, `terminate(process:)` ends it with `TerminateJobObject`, and a job is closed once a completion port reports its last process ended. Foundation's `Process` takes no creation flags, so a process the child starts in the moment before it is in the job stays outside it |
 | `AccountLoginController` | A `LocalProcessTerminalViewDelegate` driving a PTY through SwiftTerm, `NSWorkspace.open`, URL detection with `NSDataDetector`. The engine keeps the output parsing (`Account/AccountLoginOutput.swift`: `stripANSI`, device codes, input prompts) | A ConPTY (`CreatePseudoConsole`) host with the members the portable one has. Find URLs with a regular expression, because `NSDataDetector` does not exist in Foundation outside Apple platforms (confirmed: [swift-corelibs-foundation #4305](https://github.com/swiftlang/swift-corelibs-foundation/issues/4305)) |
 | `NativeTerminalSession`, `TaskShellProcess` | SwiftTerm `LocalProcess` and a PTY | ConPTY and a Windows terminal view |
-| `ScopedFiles`, `WorkspaceFileReplacement` | No-follow descriptors | Opening without following reparse points (`FILE_FLAG_OPEN_REPARSE_POINT`); the portable versions refuse |
+| `ScopedFiles` | No-follow descriptors | Provided (`Platform/Windows/WindowsScopedFiles.swift`). The root is opened as it is, links included, as on the Mac; each name beneath it is opened as itself (`FILE_FLAG_OPEN_REPARSE_POINT`), one at a time below the root's final path (`GetFinalPathNameByHandleW`), and refused when it is a reparse point of any kind: a symbolic link, a junction, or a cloud file's placeholder. The folders on the way stay open without `FILE_SHARE_DELETE` until the next name is open, so none can be renamed or replaced by a link meanwhile; a file is opened sharing everything, so Claude Code goes on appending to it, or removes it, while it is read. A folder is listed through its own handle (`GetFileInformationByHandleEx`), and a name that is not a plain one (a separator, a drive, a stream, a pattern, `..`) is refused |
+| `WorkspaceFileReplacement` | No-follow descriptors, `renameat` | The same walk to the file's folder, then a new file written beside it and renamed over it through its handle; the portable version refuses |
 | `CanonicalPath` (`Files/CanonicalPath.swift`) | `realpath(3)` | An opened file's final path (`GetFinalPathNameByHandleW`); for now Foundation resolves the links |
 | The file chooser's private copy (`BrowserAgentWorkspaceFile.privateCopy`) | `openat` one folder at a time without following links | The same with reparse points refused; refused on Windows until then |
 | Removing an account folder's links (`ClaudeAccountHome.unlinkShared`) | `unlink(2)`, which never follows the link | `DeleteFileW` for a file link and `RemoveDirectoryW` for a folder link, never a recursive removal; refused on Windows until then |

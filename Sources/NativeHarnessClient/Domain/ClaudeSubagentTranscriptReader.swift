@@ -1060,10 +1060,7 @@ extension ClaudeSubagentTranscriptReader {
             return unchanged
         }
         var scan = try ClaudePullRequestLinkScanner.scan(file: identity, size: file.size, previous: previous) { offset, count in
-            try autoreleasepool {
-                try file.handle.seek(toOffset: UInt64(offset))
-                return try file.handle.read(upToCount: count) ?? Data()
-            }
+            try file.read(count, at: offset)
         }
         scan.path = path
         return scan
@@ -1095,10 +1092,7 @@ extension ClaudeSubagentTranscriptReader {
             providerSessionID: sessionID, device: file.identity.device, inode: file.identity.inode,
             size: file.size, previous: previous
         ) { offset, count in
-            try autoreleasepool {
-                try file.handle.seek(toOffset: UInt64(offset))
-                return try file.handle.read(upToCount: count) ?? Data()
-            }
+            try file.read(count, at: offset)
         }
         touches.claudeScan?.path = path
         return touches

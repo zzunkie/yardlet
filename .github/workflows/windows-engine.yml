@@ -154,6 +154,16 @@ jobs:
           swift build --product NativeHarnessClient --force-resolved-versions -Xswiftc -continue-building-after-errors 2>&1 |
             Tee-Object -FilePath build.log
           exit $LASTEXITCODE
+      # The Windows layer's own tests (Tests/YardletWindowsTests), built against the app. The test program links
+      # the Windows App SDK's bootstrapper as the app does, so the bootstrapper goes beside it.
+      - name: Test the Windows layer
+        shell: pwsh
+        run: |
+          swift build --build-tests --force-resolved-versions 2>&1 | Tee-Object -FilePath test-build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Windows/scripts/place-bootstrapper.ps1 -Binaries (swift build --show-bin-path)
+          swift test --skip-build --force-resolved-versions --filter YardletWindowsTests 2>&1 | Tee-Object -FilePath test.log
+          exit $LASTEXITCODE
       - name: Report a failure
         if: failure()
         shell: pwsh
@@ -166,4 +176,11 @@ jobs:
           if (Test-Path build.log) {
             Report 'App build errors' (Select-String -Path build.log -Pattern 'error:' | ForEach-Object { $_.Line.Trim() } | Sort-Object -Unique | Select-Object -First 150)
             Report 'App build log' (Get-Content build.log -Tail 60)
+          }
+          if (Test-Path test-build.log) {
+            Report 'Test build errors' (Select-String -Path test-build.log -Pattern 'error:' | ForEach-Object { $_.Line.Trim() } | Sort-Object -Unique | Select-Object -First 150)
+          }
+          if (Test-Path test.log) {
+            Report 'Test failures' (Select-String -Path test.log -Pattern 'error|failed' | ForEach-Object { $_.Line.Trim() } | Select-Object -First 100)
+            Report 'Test log' (Get-Content test.log -Tail 60)
           }

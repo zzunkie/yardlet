@@ -59,7 +59,8 @@ let linuxLayers = ["Platform/Linux"]
 let otherPlatformLayers = ["Platform/Portable"]
 // The Platform/Portable files whose parts the Windows layer provides, which the Windows app leaves out.
 let portableFilesWindowsReplaces = ["Platform/Portable/PortableProcesses.swift", "Platform/Portable/PortableRemoteHost.swift",
-                                    "Platform/Portable/PortableNotifications.swift", "Platform/Portable/PortableAccounts.swift"]
+                                    "Platform/Portable/PortableNotifications.swift", "Platform/Portable/PortableAccounts.swift",
+                                    "Platform/Portable/PortableScopedFiles.swift"]
 // The Platform/Portable files whose parts the Linux layer provides, which the Linux host leaves out.
 let portableFilesLinuxReplaces = ["Platform/Portable/PortableProcesses.swift", "Platform/Portable/PortableRemoteHost.swift"]
 
@@ -302,6 +303,12 @@ let package = Package(
         .testTarget(
             name: "YardletHostTests",
             dependencies: ["NativeHarnessClient", "YardletRemote", "YardletAgentTools"]
+        )
+    ] : []) + (windowsApp ? [
+        // The Windows layer's own tests, which build against the Windows app.
+        .testTarget(
+            name: "YardletWindowsTests",
+            dependencies: ["NativeHarnessClient"]
         )
     ] : []) + (engineOnly || windowsApp || linuxHost ? [] : [
         // The tests build against the Mac app, SwiftTerm included.
