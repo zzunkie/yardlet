@@ -79,9 +79,11 @@ so the Linux host reads Claude Code's transcripts and saves a reviewed file with
 root as it is, a link included, then each name beneath it with `O_NOFOLLOW` through the descriptor of the folder above
 it, and refuses a pipe or device before reading it. A save walks to the file's folder the same way from a root that is
 not a link, and only while the file still holds the reviewed bytes puts a new file written beside it in its place with
-`renameat`. The two systems differ only in what a save keeps beyond the bytes: everything `fcopyfile` copies as
-metadata on the Mac, the file's permissions on Linux. With `NativeProcessTree` (`Platform/Linux/NativeProcessTree.swift`)
-and `RemoteHostPlatform.current` (`Platform/Linux/LinuxRemoteHost.swift`), the Linux host leaves
+`renameat`. As with an editor's save, the file is then modified at the time of the save. The two systems differ only
+in what a save keeps beyond the bytes: on the Mac everything `fcopyfile` copies as metadata (permissions, owner, flags,
+ACL and extended attributes, but not the old times) and the creation date, on Linux the file's permissions. With
+`NativeProcessTree` (`Platform/Linux/NativeProcessTree.swift`) and `RemoteHostPlatform.current`
+(`Platform/Linux/LinuxRemoteHost.swift`), the Linux host leaves
 `PortableProcesses.swift`, `PortableRemoteHost.swift`, `PortableScopedFiles.swift` and
 `PortableWorkspaceFileReplacement.swift` out (`portableFilesLinuxReplaces`). The Windows app and the engine-only build
 leave `Platform/POSIX/` out.

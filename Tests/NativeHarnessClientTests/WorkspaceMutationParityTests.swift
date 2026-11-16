@@ -39,11 +39,22 @@ final class WorkspaceMutationParityTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appending(path: "utf16.txt")
         try XCTUnwrap(WorkspaceFileEncoding.utf16LittleEndian.data("처음\n")).write(to: file)
+        let created = Date(timeIntervalSince1970: 1_577_836_800), modified = Date(timeIntervalSince1970: 1_609_459_200)
+        try FileManager.default.setAttributes([.posixPermissions: 0o640, .creationDate: created, .modificationDate: modified],
+                                              ofItemAtPath: file.path)
+        XCTAssertEqual(setxattr(file.path, "user.yardlet-note", "kept", 4, 0, 0), 0)
         let doc = try WorkspaceFileService.read(.init(relativePath: "utf16.txt"), in: root)
         let saved = try WorkspaceFileService.save(path: doc.path, text: "변경\n", expectedDigest: try XCTUnwrap(doc.sourceDigest), encoding: doc.encoding, in: root)
         XCTAssertEqual(saved.text, "변경\n")
         XCTAssertEqual(saved.encoding, .utf16LittleEndian)
         XCTAssertTrue(try Data(contentsOf: file).starts(with: [0xff, 0xfe]))
+        // Like an editor's save, the file keeps its permissions, extended attributes and creation date, and is
+        // modified now, so tools that compare modification times see the change.
+        let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
+        XCTAssertEqual(attributes[.posixPermissions] as? Int, 0o640)
+        XCTAssertEqual(getxattr(file.path, "user.yardlet-note", nil, 0, 0, 0), 4)
+        XCTAssertEqual(attributes[.creationDate] as? Date, created)
+        XCTAssertGreaterThan(try XCTUnwrap(attributes[.modificationDate] as? Date), modified)
         let link = root.appending(path: "linked.txt")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: file)
         XCTAssertThrowsError(try WorkspaceFileService.save(path: "linked.txt", text: "No", expectedDigest: saved.sourceDigest!, encoding: .utf8, in: root))

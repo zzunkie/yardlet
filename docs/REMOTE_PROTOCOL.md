@@ -2054,7 +2054,8 @@ bytes the client read. The host replaces the file only when it is a regular file
 folder (its links resolved, as for the listing) by names none of which is a symbolic link, the file's own place
 included, and only while the file still holds bytes with that SHA-256, as the local panel saves: the save stops if
 the file changed since it was read. It writes the new contents to a temporary file beside it, with the file's
-permissions and other metadata, and renames that over the file, so a failed write never leaves a half-written file.
+permissions and other metadata but the time of the save as its modification time, and renames that over the file, so
+a failed write never leaves a half-written file.
 Nothing is created, and the task's other folders and outputs are read, not written: the Mac's Files panel saves only
 in the task's folder. A folder that is the home folder or holds it saves nothing, as it lists nothing. `writeFile`
 takes the device's `fileWrites` permission (§15.28), checked when the request arrives and again, through a permit

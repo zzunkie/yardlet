@@ -56,11 +56,22 @@ enum WorkspaceFileReplacement {
         guard renameat(parent, temporary, parent, name) == 0 else { throw WorkspaceFileError.notWritable }
     }
 
-    /// Gives the new file what the old one had beyond its bytes: on the Mac everything `copyfile` copies as metadata,
-    /// on Linux its permissions, which the process's umask may have narrowed when the new file was made.
+    /// Gives the new file what the old one had beyond its bytes: on the Mac everything `copyfile` copies as metadata and
+    /// the creation date, on Linux its permissions, which the process's umask may have narrowed when the new file was
+    /// made. As with an editor's save, the file is modified now, so tools that compare modification times see the change.
     private static func keepMetadata(of source: Int32, _ original: stat, on output: Int32) -> Bool {
         #if canImport(Darwin)
-        fcopyfile(source, output, nil, copyfile_flags_t(COPYFILE_METADATA)) == 0
+        // Only `COPYFILE_STAT` carries the owner, mode and flags, and it also sets the old file's times, which lowers
+        // the creation date to the old modification date. Make the times the save's, then restore the creation date.
+        guard fcopyfile(source, output, nil, copyfile_flags_t(COPYFILE_METADATA)) == 0, futimens(output, nil) == 0 else {
+            return false
+        }
+        var attributes = attrlist()
+        attributes.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
+        attributes.commonattr = attrgroup_t(ATTR_CMN_CRTIME)
+        var created = original.st_birthtimespec
+        _ = fsetattrlist(output, &attributes, &created, MemoryLayout<timespec>.size, 0) // Not every file system keeps one.
+        return true
         #else
         fchmod(output, original.st_mode & 0o777) == 0
         #endif
