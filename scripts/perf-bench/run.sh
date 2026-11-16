@@ -253,6 +253,9 @@ PY
         # icon would, and the fixture starts in the window: open it again as soon as the app has launched.
         for _ in {1..300}; do [[ -e "$markers/launched" ]] && break; sleep 0.05; done
         for attempt in {1..10}; do
+            # Only the copy still running: once it has quit, opening the bundle would launch it again without the
+            # temporary home and the background setting.
+            kill -0 "$app_pid" 2>/dev/null || break
             /usr/bin/open -g "$qa_app"
             for _ in {1..60}; do [[ -e "$markers/window" ]] && break; sleep 0.05; done
             [[ -e "$markers/window" ]] && break

@@ -14,24 +14,31 @@ enum QABackground {
     /// with clicks passing through (`ShowcaseFixture.install`).
     private static let drawsOnScreen = CommandLine.arguments.contains { $0.hasPrefix("--ui-fixture-browser-perf=") }
         || Set(CommandLine.arguments).isSuperset(of: ["--ui-fixture=showcase", "--ui-fixture-ignore-pointer"])
-    private static var observer: (any NSObjectProtocol)?
+    private static var observers: [any NSObjectProtocol] = []
 
+    /// As the launch begins: SwiftUI orders the first window in before the launch finishes.
     static func start() {
         NSApp.setActivationPolicy(.accessory)
         guard !drawsOnScreen else { return }
         DispatchQueue.main.async { NSApp.windows.forEach(moveOffScreen) }
-        // A window ordered in later (another Yardlet window, a sheet's parent) changes its occlusion.
-        observer = NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification,
-                                                          object: nil, queue: .main) { _ in
-            MainActor.assumeIsolated { NSApp.windows.forEach(moveOffScreen) }
+        // SwiftUI sizes and places a window before ordering it in, at launch or when an app launched in the
+        // background is opened again (`open -g`, as a Dock click would), so each window is clear and off every
+        // screen before it first shows. A fixture sizing or centering its window moves it again, and a window
+        // ordered in later (another Yardlet window, a sheet's parent) changes its occlusion.
+        observers = [NSWindow.didMoveNotification, NSWindow.didResizeNotification,
+                     NSWindow.didChangeOcclusionStateNotification].map { name in
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { NSApp.windows.forEach(moveOffScreen) }
+            }
         }
     }
 
     /// Below and left of every screen, and clear and click-through, since AppKit keeps a corner of a
-    /// titled window on a screen. Pages still paint there (the QA passes
-    /// `--ui-fixture-browser-ignore-occlusion`), and the checks capture the views, not the screen.
+    /// titled window on a screen once it shows or is resized. Pages still paint there (the QA passes
+    /// `--ui-fixture-browser-ignore-occlusion`), and the checks capture the views, not the screen. A window
+    /// not shown yet goes too, so it shows nowhere; a sheet moves with its window.
     static func moveOffScreen(_ window: NSWindow) {
-        guard window.isVisible, window.sheetParent == nil else { return }
+        guard window.sheetParent == nil else { return }
         if window.alphaValue != 0 { window.alphaValue = 0 }
         if !window.ignoresMouseEvents { window.ignoresMouseEvents = true }
         window.collectionBehavior.formUnion([.transient, .ignoresCycle])

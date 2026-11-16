@@ -216,6 +216,9 @@ final class NativeHarnessClientAppDelegate: NSObject, NSApplicationDelegate {
     var hasStartedLaunch = false
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        // QA runs launched with `open -g` must not take focus from the person using the Mac, nor show them a window
+        // to click. SwiftUI orders the first window in before the launch finishes.
+        if QABackground.isOn { QABackground.start() }
         MainThreadHangLog.start()
         // Tabs are the window's own task tabs (`SplitStore.tabs`); macOS's window tabs would add a
         // second kind (View › Show Tab Bar, Window › Merge All Windows) whose tabs all show the
@@ -237,9 +240,7 @@ final class NativeHarnessClientAppDelegate: NSObject, NSApplicationDelegate {
 #if DEBUG
         PerfBenchFixture.applicationDidFinishLaunching()
 #endif
-        // QA runs launched with `open -g` must not take focus from the person using the Mac, nor show them
-        // a window to click.
-        if QABackground.isOn { return QABackground.start() }
+        if QABackground.isOn { return }
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
     }

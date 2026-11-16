@@ -350,7 +350,6 @@ private final class PerfBenchRunner {
         }
         self.window = window
         window.setContentSize(NSSize(width: 1440, height: 900))
-        if QABackground.isOn { QABackground.moveOffScreen(window) }
         record["window"] = ["width": 1440, "height": 900]
         if let screen = NSScreen.main {
             record["screen"] = ["name": screen.localizedName, "maximumFramesPerSecond": screen.maximumFramesPerSecond,
