@@ -205,16 +205,31 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   resolves as a terminal's `codex` would. Without `CLAUDE_CONFIG_DIR`, Claude Code's
   config folder is `.claude` in the profile folder (`USERPROFILE`), as Node.js's `os.homedir()` finds it on Windows
   whatever `HOME` says. Codex's history search is the Mac's alone.
-- **Conversations.** `WinUI/ConversationTimeline.swift` draws the engine's `ConversationPresentation` turn by turn,
-  for a task's own conversation and a host's: what was sent, a line for each step of the work, the answers, the
-  requests waiting and how the turn ended. A turn that did not change keeps what it drew. As on the Mac, only the
-  latest turns are drawn (`ConversationTurnWindow`, 10 at first) and Load more history draws 10 more, so what an
-  update compares and draws in the window is bounded by those turns however long the history. Answers draw their
+- **Conversations.** `WinUI/ConversationTimeline.swift` draws the engine's `ConversationPresentation` for a task's
+  own conversation and a host's, in the Mac's column: at most 768 wide and centered, a 32 gutter, text at 14 with the
+  Mac's spacing between lines, blocks and turns. Each turn is laid out as the Mac's (`WinUI/ConversationTurnElement.swift`):
+  what was sent as the Mac's gray bubble on the right with no name over it, clipped past 20 lines; the header that
+  folds a finished turn's work under how long it worked; runs of calls folded on their summary lines, which open into a
+  ringed box with a line for each call (`WinUI/ConversationWorkLines.swift`); while the turn runs, one live line with
+  what the provider does now, its steps and time; the answers; and how the turn ended, with Retry and sign-in where the
+  Mac's error card offers them. The grouping, the summaries, the live line, the fold and where each line starts are the
+  engine's (`ConversationWorkGrouping`, `ConversationWorkSummary`, `ConversationLiveWork`, `ConversationWorkDisclosure`,
+  `ConversationTurn.drawsHeader`), and what the person opened stays open as a turn redraws. A line that opens is a
+  toggle, which tells assistive apps whether it is open. A turn that did not change keeps what it drew. As on the Mac,
+  only the latest turns are drawn (`ConversationTurnWindow`, 10 at first) and Load more history draws 10 more, so what
+  an update compares and draws in the window is bounded by those turns however long the history. Answers draw their
   Markdown from the engine's reading of it (`WinUI/MarkdownView.swift`, `TranscriptMarkdownDocument`): bold,
-  italic, code, struck and linked words, lists, quotes, code blocks, tables and rules.
-- **Requests.** `WinUI/RequestCard.swift` draws the `ConversationRequest` the Mac's request card draws, waiting or
-  answered where it happened in the work: an approval with the provider's own options; questions one at a time with
-  their options as radio buttons or check boxes, the person's own answer, Skip and Next (`ConversationQuestionStepper`);
+  italic, code, struck and linked words, lists, quotes, code blocks with their language, Copy and the Mac's colors
+  (`TranscriptCodeSyntax`), tables and rules; code is in Cascadia Mono, or Consolas where it is missing. A message's
+  copy shows while the pointer is over it or the keyboard's focus is in it. A file's change opens to the Mac's diff box
+  (`WinUI/FileChangeView.swift`). Sizes are the Mac's, except that none goes under 12, Windows' Caption size.
+- **Requests.** `WinUI/RequestCard.swift` draws the `ConversationRequest` the Mac's request card draws, in its look,
+  waiting or answered where it happened in the work: the request's mark on a tile in its state's color, the state over
+  the title, what the request would do (an edit's diff, a file's new contents or a command,
+  `PermissionRequestPreviewProjection`), and the provider's own options as the Mac's gray buttons, the prominent one in
+  the accent; questions one at a time with their options as filled rows (radio buttons or check boxes), the picked
+  option's preview beside them where the options have previews, the person's own answer, Skip and Next
+  (`ConversationQuestionStepper`);
   a plan with what to change; and an MCP form field by field with what each field takes and why it cannot be sent yet
   (`CodexMCPElicitationForm`). An answer goes back by the route the form makes of what was entered
   (`ConversationRequest.route(for:input:)`), carried out as the Mac's card carries it out, and an answered form reads
@@ -362,7 +377,8 @@ runner, measures it, types Korean into its composer through the Microsoft Korean
 starts a new line and sends nothing (`Windows/scripts/check-window.ps1`). It then starts the relay (`relay/`) and the fixture host on it
 (`Windows/scripts/start-remote-host.ps1`) and, in the same step, since a Windows runner ends the programs a step
 started when the step ends, pairs the app with the host through Connect to a Mac, opens a task, sends a message and
-waits for the answer to stream in, then removes the host with Remove… and its question, which closes its window and
+waits for the answer to stream in, captures the host's tasks that wait on an approval or a question, ended on an error
+or finished, then removes the host with Remove… and its question, which closes its window and
 takes it off the list (`Windows/scripts/check-remote.ps1`, through UI Automation). It installs a
 stand-in harness the way npm installs one (`Windows/scripts/fake-harness/`, whose `kimi.cmd` npm itself writes into
 `%APPDATA%\npm`) and opens the app with `YARDLET_QA_HARNESS_CHECK=kimi-code` (`WinUI/QAHarnessCheck.swift`, a QA
@@ -371,7 +387,7 @@ probe on it, which starts it through Node.js for `--version` and the ACP handsha
 a detached process of its own, which outlives a stop of the stand-in alone, as the check shows first without the
 app; the check passes when that process ended with the app's stop (`Windows/scripts/check-harness.ps1`). With that
 stand-in, which serves one ACP turn that asks to edit a file, the app then starts a task from New task with its Send, allows the
-request from its card, opens the edit's line to its diff, waits for the answer to stream in, and opens again to find
+request from its card, opens the turn's folded work and the edit's line until its diff shows, waits for the answer to stream in, and opens again to find
 the answer kept; a second turn is then stopped with Stop while it waits on its request, which must reach the stand-in
 as ACP's `session/cancel`, end the turn and leave the stand-in running (`Windows/scripts/check-local.ps1`); while the stand-in runs, no console window opens beside the ones already there,
 which a console program started on its own first shows the count would see. That task is then served to phones

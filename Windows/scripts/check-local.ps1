@@ -121,13 +121,21 @@ function Find-Typed($root, $type) {
     $root.FindFirst($Scope::Descendants, (New-Object System.Windows.Automation.PropertyCondition($UIA::ControlTypeProperty, $type)))
 }
 
-# The conversation's line that opens and closes: an element with the expand and collapse pattern that is not a
-# sidebar row or a menu. What else has the pattern is kept for the summary.
-function Find-Expandable($root) {
-    $condition = New-Object System.Windows.Automation.PropertyCondition($UIA::IsExpandCollapsePatternAvailableProperty, $true)
-    $found = @($root.FindAll($Scope::Descendants, $condition))
-    $script:summary.expandable = @($found | ForEach-Object { "$($_.Current.ClassName): $($_.Current.Name)" }) -join ' | '
-    $found | Where-Object { @('NavigationViewItem', 'ComboBox', 'ListViewItem') -notcontains $_.Current.ClassName } |
+# The conversation's lines that open and close are toggles, as the Mac's lines with their carets: the first one still
+# folded. What toggles there are is kept for the summary.
+function Find-Folded($root) {
+    $condition = New-Object System.Windows.Automation.PropertyCondition($UIA::IsTogglePatternAvailableProperty, $true)
+    $found = @($root.FindAll($Scope::Descendants, $condition) | Where-Object { $_.Current.ClassName -eq 'ToggleButton' })
+    $script:summary.toggles = @($found | ForEach-Object { $_.Current.Name }) -join ' | '
+    $found | Where-Object {
+        $_.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -eq 'Off'
+    } | Select-Object -First 1
+}
+
+# A text the window shows whose words hold `$text`.
+function Find-Text($root, [string] $text) {
+    $condition = New-Object System.Windows.Automation.PropertyCondition($UIA::ControlTypeProperty, $Types::Text)
+    @($root.FindAll($Scope::Descendants, $condition)) | Where-Object { $_.Current.Name -like "*$text*" } |
         Select-Object -First 1
 }
 
@@ -210,17 +218,23 @@ $summary.answer = "$answer"
 if (-not $answer) { Finish 'no answer' }
 Start-Sleep -Seconds 1
 Save-Screen 'answered'
-# The edit's line, opened to its diff.
-$change = Find-Expandable $main
-if (-not $change) { Finish 'no file change line to open' }
-$change.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
-Start-Sleep -Seconds 1
-$summary.fileChange = "$($change.Current.ClassName)"
+# The edit's line, opened to its diff. The finished turn folds its work under its header as the Mac's does, so the
+# lines open one after another until the diff's added line shows.
+$opened = @()
+$diffLine = $null
+for ($try = 0; $try -lt 8; $try++) {
+    $diffLine = Wait-For { Find-Text $main 'npm install' } 1
+    if ($diffLine) { break }
+    $folded = Find-Folded $main
+    if (-not $folded) { break }
+    $opened += $folded.Current.Name
+    $folded.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+    Start-Sleep -Milliseconds 500
+}
+$summary.opened = $opened -join ' | '
 Save-Screen 'file-change'
-# Opened, it holds more than its own line: the file's name and the diff's lines.
-$texts = Wait-For { $found = @($change.FindAll($Scope::Descendants, (New-Object System.Windows.Automation.PropertyCondition($UIA::ControlTypeProperty, $Types::Text)))); if ($found.Count -ge 3) { $found } } 10
-$summary.fileChangeTexts = @($texts | ForEach-Object { $_.Current.Name }) -join ' | '
-if (-not $texts) { Finish 'the file change opened empty' }
+if (-not $diffLine) { Finish 'the file change did not open to its diff' }
+$summary.fileChange = "$($diffLine.Current.Name)"
 $process.Kill()
 $process.WaitForExit()
 

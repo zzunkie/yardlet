@@ -219,6 +219,20 @@ $answered = Wait-For { Read-Events | Where-Object { $_ -like 'remote answer: Don
 $summary.answer = "$answered"
 $summary.answeredSeconds = [math]::Round(((Get-Date) - $started).TotalSeconds, 1)
 if (-not $answered) { Finish 'no answer' }
+Save-Screen 'answered'
+
+# The host's tasks that wait on the person or ended on an error, each drawn as its card draws it: an approval, a
+# question, a failed turn, and a finished conversation. Only looked at; nothing is answered.
+$cards = [ordered]@{ approval = 'Approve the index migration'; question = 'Pick the release name';
+    failed = 'Regenerate the screenshots'; history = 'Summarize the crash reports' }
+foreach ($card in $cards.GetEnumerator()) {
+    $found = Wait-For { Find-Item $hostWindow $card.Value } 10
+    if (-not $found) { $summary["card $($card.Key)"] = 'not listed'; continue }
+    Select-Item $found
+    $summary["card $($card.Key)"] = [bool](Wait-For { (Read-Events) -contains "remote showing: $($card.Value)" } 10)
+    Start-Sleep -Seconds 2
+    Save-Screen "card-$($card.Key)"
+}
 
 # Remove... on the host under Connect to a Mac: asked first, then its window closes, the host is forgotten and the
 # list no longer has it. The main window's item is chosen again until its pane shows, as for pairing above.

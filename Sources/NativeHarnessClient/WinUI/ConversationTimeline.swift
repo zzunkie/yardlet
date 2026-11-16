@@ -1,14 +1,13 @@
 import Foundation
 import WinUI
 
-/// A task's conversation as the engine lays it out for every harness (`ConversationPresentation`), drawn turn by
-/// turn: what was sent, a line for each step of the work (a change to files opens to its diff, `FileChangeView`), the
-/// answers with their Markdown (`MarkdownView`), the requests waiting and how the turn ended. A turn that did not
-/// change keeps what it drew, so an answer streaming in
-/// redraws its own turn and nothing else, and the view stays at the end while it was there. As on the Mac, only the
-/// latest turns are drawn (`ConversationTurnWindow`, 10 at first) and Load more history above them draws 10 more,
-/// so what an update compares and draws is bounded by the window, however long the conversation is. A host's
-/// conversation (`RemoteConversationModel`) and a task's own draw through it.
+/// A task's conversation as the engine lays it out for every harness (`ConversationPresentation`), in the Mac's
+/// column: at most 768 wide and centered in a wider window, with a 32 gutter, 24 above the first turn and 28 under
+/// the last, 15 between turns. Each turn is drawn as the Mac's (`ConversationTurnElement`). A turn that did not change
+/// keeps what it drew, so an answer streaming in redraws its own turn and nothing else, and the view stays at the end
+/// while it was there. As on the Mac, only the latest turns are drawn (`ConversationTurnWindow`, 10 at first) and Load
+/// more history above them draws 10 more, so what an update compares and draws is bounded by the window, however
+/// long the conversation is. A host's conversation (`RemoteConversationModel`) and a task's own draw through it.
 @MainActor
 final class ConversationTimeline {
     let view = ScrollViewer()
@@ -18,29 +17,38 @@ final class ConversationTimeline {
     private var window = ConversationTurnWindow()
     private var conversationID: String?
     private var shown: (presentation: ConversationPresentation, requestNote: String?)?
-    private var drawn: [String: (turn: ConversationTurn, element: StackPanel)] = [:]
+    private var drawn: [String: ConversationTurnElement] = [:]
     private var order: [String] = []
     private var placeholder: String?
     /// The request cards, by turn and request, so what a form holds stays while its turn redraws.
     private var cards: [String: RequestCard] = [:]
+    private var requestNote: String?
     /// Carries out the answer a request's card sent, with the route its form made, where the conversation can be
     /// answered here; without it a request shows `requestNote` instead of its answers.
     var respond: ((ConversationRequest, ConversationRequestResponse) -> Void)?
     /// Asks the provider or the host for the turns before the loaded ones, once the window shows every loaded turn.
     var loadEarlier: (() -> Void)?
+    /// Retries a turn by its ID, as the Mac's error card offers it for a turn its provider says can pass; without it
+    /// the card offers no Retry.
+    var retry: (@MainActor (String) -> Void)?
     /// Signs in to the harness of a turn that failed for its sign-in, as the Mac's error card offers it; without
     /// it the failure only says so.
     var signIn: HarnessSignIn?
-    private var signInRows: [String: SignInRow] = [:]
     /// The task's folder, which a file change's paths are read against; nil for another computer's task.
     var workspaceURL: URL?
 
     init() {
-        stack.spacing = 20
-        turnsPanel.spacing = 20
-        view.padding = Thickness(left: 28, top: 20, right: 28, bottom: 12)
+        stack.spacing = ConversationStyle.turnSpacing
+        stack.maxWidth = WindowsTheme.contentWidth
+        stack.padding = Thickness(left: WindowsTheme.conversationInset, top: ConversationStyle.topPadding,
+                                  right: WindowsTheme.conversationInset, bottom: ConversationStyle.bottomPadding)
+        // Stretched to at most its widest, the column stands in the middle of a wider window.
+        stack.horizontalAlignment = .stretch
+        turnsPanel.spacing = ConversationStyle.turnSpacing
+        view.horizontalScrollBarVisibility = .disabled
         loadMore.content = L10n.string("Load more history")
         loadMore.visibility = .collapsed
+        loadMore.horizontalAlignment = .center
         loadMore.click.addHandler { [weak self] _, _ in self?.showMore() }
         stack.children.append(loadMore)
         stack.children.append(turnsPanel)
@@ -59,7 +67,6 @@ final class ConversationTimeline {
             drawn = [:]
             order = []
             cards = [:]
-            signInRows = [:]
         }
         guard let presentation, !presentation.turns.isEmpty else {
             shown = nil
@@ -69,7 +76,9 @@ final class ConversationTimeline {
             drawn = [:]
             order = []
             self.placeholder = placeholder
-            if let placeholder { turnsPanel.children.append(Self.text(placeholder, muted: true)) }
+            if let placeholder {
+                turnsPanel.children.append(ConversationStyle.text(placeholder, tone: .secondary))
+            }
             return
         }
         if self.placeholder != nil || order.isEmpty {
@@ -95,27 +104,30 @@ final class ConversationTimeline {
 
     private func draw(_ presentation: ConversationPresentation, requestNote: String?) {
         let followsEnd = isAtEnd
-        var next: [String: (turn: ConversationTurn, element: StackPanel)] = [:]
+        let noteChanged = requestNote != self.requestNote
+        self.requestNote = requestNote
+        let context = turnContext(harness: presentation.harness)
+        var next: [String: ConversationTurnElement] = [:]
         for turn in presentation.turns {
-            if let earlier = drawn[turn.id], turn.isUnchanged(from: earlier.turn) || turn == earlier.turn {
-                next[turn.id] = (turn, earlier.element)
+            if let element = drawn[turn.id] {
+                if noteChanged || !(turn.isUnchanged(from: element.turn) || turn == element.turn) {
+                    element.update(turn, context: context)
+                }
+                next[turn.id] = element
             } else {
-                next[turn.id] = (turn, draw(turn, harness: presentation.harness, requestNote: requestNote))
+                next[turn.id] = ConversationTurnElement(turn: turn, context: context)
             }
         }
         let ids = presentation.turns.map(\.id)
         if ids.starts(with: order) {
-            // Turns only came after the ones shown: replace the ones that changed, add the new ones.
-            for (index, id) in order.enumerated() where next[id]?.element !== drawn[id]?.element {
-                if let element = next[id]?.element { turnsPanel.children.setAt(UInt32(index), element) }
-            }
+            // Turns only came after the ones shown: the turns kept redraw in place, the new ones are added.
             for id in ids.dropFirst(order.count) {
-                if let element = next[id]?.element { turnsPanel.children.append(element) }
+                if let element = next[id] { turnsPanel.children.append(element.view) }
             }
         } else {
             turnsPanel.children.clear()
             for id in ids {
-                if let element = next[id]?.element { turnsPanel.children.append(element) }
+                if let element = next[id] { turnsPanel.children.append(element.view) }
             }
         }
         drawn = next
@@ -127,86 +139,26 @@ final class ConversationTimeline {
         view.verticalOffset >= view.scrollableHeight - 48
     }
 
-    private func draw(_ turn: ConversationTurn, harness: HarnessKind, requestNote: String?) -> StackPanel {
-        let panel = StackPanel()
-        panel.spacing = 8
-        for item in turn.prompt + turn.notices + turn.work + turn.answers {
-            // An answered request is an item of the work, where it happened, and reads as its answer.
-            if case let .request(request) = item.kind {
-                card(for: request, in: turn, requestNote: requestNote).place(in: panel)
-            } else if let element = Self.element(for: item, harness: harness, workspaceURL: workspaceURL) {
-                panel.children.append(element)
-            }
-        }
-        for request in turn.requests {
-            card(for: request, in: turn, requestNote: requestNote).place(in: panel)
-        }
-        if case let .error(error) = turn.outcome {
-            panel.children.append(Self.text([error.title, error.summary].compactMap { $0 }.joined(separator: "\n")))
-            if let signIn, ProviderSignIn.asksToSignIn(error.message) {
-                let row = signInRows[turn.id] ?? SignInRow(signIn: signIn, offersAlways: true)
-                signInRows[turn.id] = row
-                row.show(harness)
-                row.place(in: panel)
-            }
-        }
-        switch turn.progress {
-        case .thinking: panel.children.append(Self.text(L10n.string("Thinking"), muted: true))
-        case let .reconnecting(message): panel.children.append(Self.text(message, muted: true))
-        case .none: break
-        }
-        return panel
+    private func turnContext(harness: HarnessKind) -> ConversationTurnContext {
+        ConversationTurnContext(
+            harness: harness, workspaceURL: workspaceURL,
+            card: { [weak self] request, turn in
+                self?.card(for: request, in: turn) ?? RequestCard(request: request, respond: nil, note: nil)
+            },
+            retry: retry, signIn: signIn
+        )
     }
 
     /// The card for `request` as it stands, the same one while the request is in the turn.
-    private func card(for request: ConversationRequest, in turn: ConversationTurn, requestNote: String?) -> RequestCard {
+    private func card(for request: ConversationRequest, in turn: ConversationTurn) -> RequestCard {
         let key = turn.id + "\n" + request.id
         if let card = cards[key] {
             card.update(request, respond: respond, note: requestNote)
             return card
         }
-        let card = RequestCard(request: request, respond: respond, note: requestNote)
+        let card = RequestCard(request: request, respond: respond, note: requestNote, workspaceURL: workspaceURL)
         cards[key] = card
         return card
-    }
-
-    private static func element(for item: ConversationItem, harness: HarnessKind, workspaceURL: URL?) -> UIElement? {
-        switch item.kind {
-        case let .userMessage(message, _):
-            let block = StackPanel()
-            block.spacing = 4
-            block.children.append(text(L10n.string("You"), muted: true, size: 12))
-            block.children.append(text(message))
-            return block
-        case let .scheduledTaskMessage(message):
-            return text(message.instructions)
-        case let .answer(body, _), let .commentary(body, _), let .proposedPlan(body, _):
-            return MarkdownView.element(body)
-        case let .reasoning(summary, _, _):
-            return text(summary ?? L10n.string("Thinking"), muted: true)
-        case let .command(command):
-            let words = ConversationLineWording.command(command, phase: item.phase, harness: harness).map(\.text)
-            return words.isEmpty ? nil : text(words.joined(separator: ", "), muted: true)
-        case let .tool(tool):
-            let words = ConversationLineWording.tool(tool, phase: item.phase, harness: harness, workspaceURL: workspaceURL).text
-            let diffs = tool.diff.map { [$0] } ?? tool.diffs
-            if diffs.isEmpty { return text(words, muted: true) }
-            return FileChangeView.element(words: words, diffs: diffs, phase: item.phase, workspaceURL: workspaceURL)
-        case let .fileChange(change):
-            return FileChangeView.element(item, change: change, harness: harness, workspaceURL: workspaceURL)
-        default:
-            return nil
-        }
-    }
-
-    private static func text(_ string: String, muted: Bool = false, size: Double = 14) -> TextBlock {
-        let block = TextBlock()
-        block.text = string
-        block.fontSize = size
-        block.textWrapping = .wrap
-        block.isTextSelectionEnabled = true
-        if muted { block.opacity = 0.6 }
-        return block
     }
 }
 

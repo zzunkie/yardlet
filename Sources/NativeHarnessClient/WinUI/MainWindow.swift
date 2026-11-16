@@ -131,6 +131,7 @@ final class MainWindow {
         self.newTask = newTask
         newTaskItem.content = L10n.string("New task")
         timeline.respond = { [weak self] request, response in self?.answer(request, response) }
+        timeline.retry = { [weak self] turnID in self?.retry(turnID) }
         timeline.signIn = signIn
         let importPane = ImportConversationPane(model: model, log: log) { [weak self] in self?.windowHandle ?? 0 }
         importPane.onImported = { [weak self] in self?.showSelectedTask() }
@@ -290,6 +291,14 @@ final class MainWindow {
             case .structured: break
             }
         }
+    }
+
+    /// Retries the turn a busy server, a rate limit or a lost connection ended, as the Mac's error card does
+    /// (`AppModel.retryTurn`).
+    private func retry(_ turnID: String) {
+        guard let session = selectedSession else { return }
+        log.write("retry: \(turnID)")
+        Task { await model.retryTurn(turnID, in: session) }
     }
 
     // MARK: New task
