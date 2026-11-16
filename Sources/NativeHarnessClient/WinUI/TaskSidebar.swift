@@ -400,29 +400,38 @@ final class TaskSidebar {
         section.onToggle = { [weak self] in self?.disclosure.toggle(key) }
         section.onShowMore = { [weak self] in self?.disclosure.showMore(key) }
         section.list.onPick = { [weak self] picked in self?.pickTask(picked) }
-        section.header.contextFlyout = actions.projectMenu(for: { [weak self, weak section] in
-            guard let self, let section else { return nil }
-            return self.layout.sections.first { $0.disclosureKey == section.key }?.group
-        }, newTask: { [weak self, weak section] in
-            guard let self, let section, let group = self.layout.sections.first(where: { $0.disclosureKey == section.key })?.group
-            else { return }
-            self.onNewTaskInProject(group.workspaceURL)
-        })
+        let group: @MainActor () -> WorkspaceGroup? = { [weak self] in
+            self?.layout.sections.first { $0.disclosureKey == key }?.group
+        }
+        let newTask: @MainActor () -> Void = { [weak self] in
+            guard let self, let folder = group()?.workspaceURL else { return }
+            self.onNewTaskInProject(folder)
+        }
+        section.onNewTask = newTask
+        // One menu for a right click on the name and one for its options button, which open on their own.
+        section.header.contextFlyout = actions.projectMenu(for: group, newTask: newTask)
+        section.options.flyout = actions.projectMenu(for: group, newTask: newTask)
         return section
     }
 }
 
 /// A project in the sidebar, as the Mac's: its name, which collapses and expands it (with a caret while collapsed
-/// and, then, its most urgent task's state at its end) and opens the project's menu; its tasks; and "Show more", or
-/// "No chats" for a project with none.
+/// and, then, its most urgent task's state at its end) and opens the project's menu on a right click; under the
+/// pointer, the Mac's Project options and New task in project at its end; its tasks; and "Show more", or "No chats"
+/// for a project with none.
 @MainActor
 final class SidebarProjectSection {
     let key: String
     let view = StackPanel()
     let header = Button()
+    /// Project options, the project's menu, at the name's end under the pointer.
+    let options = Button()
     let list = SidebarList()
     var onToggle: () -> Void = {}
     var onShowMore: () -> Void = {}
+    var onNewTask: () -> Void = {}
+    private let headerRow = Grid()
+    private let hoverButtons = StackPanel()
     private let name = SidebarStyle.label("")
     private let caret = SidebarStyle.glyph("\u{E76C}", size: 8, color: WindowsTheme.secondaryText)
     private let end = Grid()
@@ -449,10 +458,37 @@ final class SidebarProjectSection {
         SidebarStyle.stylePlain(header)
         header.padding = Thickness(left: SidebarStyle.labelLeading - SidebarStyle.rowInset, top: 0,
                                    right: SidebarStyle.rowTrailingPadding, bottom: 0)
-        header.margin = Thickness(left: SidebarStyle.rowInset, top: 4, right: SidebarStyle.rowInset, bottom: 0)
         header.content = words
         header.click.addHandler { [weak self] _, _ in self?.onToggle() }
-        view.children.append(header)
+        headerRow.margin = Thickness(left: SidebarStyle.rowInset, top: 4, right: SidebarStyle.rowInset, bottom: 0)
+        headerRow.children.append(header)
+        hoverButtons.orientation = .horizontal
+        hoverButtons.horizontalAlignment = .right
+        hoverButtons.verticalAlignment = .center
+        hoverButtons.margin = Thickness(left: 0, top: 0, right: 3, bottom: 0)
+        hoverButtons.opacity = 0
+        let newTask = Button()
+        newTask.click.addHandler { [weak self] _, _ in self?.onNewTask() }
+        for (button, glyph, name) in [(options, "\u{E712}", L10n.string("Project options")),
+                                      (newTask, "\u{E70F}", L10n.string("New task in project"))] {
+            SidebarStyle.stylePlain(button)
+            button.width = 24
+            button.height = 24
+            button.padding = Thickness(left: 0, top: 0, right: 0, bottom: 0)
+            button.cornerRadius = CornerRadius(topLeft: 6, topRight: 6, bottomRight: 6, bottomLeft: 6)
+            button.isTabStop = false
+            let mark = SidebarStyle.glyph(glyph, size: 11, color: WindowsTheme.secondaryText)
+            mark.horizontalAlignment = .center
+            button.content = mark
+            try? AutomationProperties.setName(button, name)
+            try? ToolTipService.setToolTip(button, name)
+            hoverButtons.children.append(button)
+        }
+        headerRow.children.append(hoverButtons)
+        // The Mac shows the project's buttons in place of its state while the pointer is over its name.
+        headerRow.pointerEntered.addHandler { [weak self] _, _ in self?.showHoverButtons(true) }
+        headerRow.pointerExited.addHandler { [weak self] _, _ in self?.showHoverButtons(false) }
+        view.children.append(headerRow)
         view.children.append(list.view)
         more.content = TaskSidebar.moreLabel()
         SidebarStyle.stylePlain(more)
@@ -462,6 +498,11 @@ final class SidebarProjectSection {
         empty.margin = Thickness(left: SidebarStyle.rowInset + SidebarStyle.gutterWidth, top: 6, right: 8, bottom: 6)
         view.children.append(empty)
         view.padding = Thickness(left: 0, top: 0, right: 0, bottom: 8)
+    }
+
+    private func showHoverButtons(_ shown: Bool) {
+        hoverButtons.opacity = shown ? 1 : 0
+        end.opacity = shown ? 0 : 1
     }
 
     func show(group: WorkspaceGroup, isCollapsed: Bool, hiddenRowCount: Int, showsEmptyState: Bool,
