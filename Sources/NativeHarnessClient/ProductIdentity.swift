@@ -4,38 +4,13 @@ enum YardletProduct {
     static let name = "Yardlet"
     static let bundleIdentifier = "com.zzunkie.yardlet"
     static let applicationSupportDirectoryName = "Yardlet"
-    static let legacyApplicationSupportDirectoryName = "NativeHarnessClient"
     static let storageDirectoryName = ".yardlet"
 
-    static func applicationSupportURL(
-        baseURL: URL,
-        fileManager: FileManager = .default
-    ) throws -> URL {
-        let destination = baseURL.appending(
-            path: applicationSupportDirectoryName,
-            directoryHint: .isDirectory
-        )
-        guard !fileManager.fileExists(atPath: destination.path(percentEncoded: false)) else {
-            return destination
-        }
-
-        let legacy = baseURL.appending(
-            path: legacyApplicationSupportDirectoryName,
-            directoryHint: .isDirectory
-        )
-        if fileManager.fileExists(atPath: legacy.path(percentEncoded: false)) {
-            try fileManager.copyItem(at: legacy, to: destination)
-        }
-        return destination
-    }
-
-    /// Returns the user-visible Yardlet storage root and copies the existing session index on
-    /// first use. The Application Support copy remains untouched as a rollback source.
-    /// The folder holds task titles, transcripts, schedules and connector records, so it is the
-    /// person's alone (0700), also one an earlier version made that the Mac's other accounts could read.
+    /// Returns the user-visible Yardlet storage root, made on first use. The folder holds task titles,
+    /// transcripts, schedules and connector records, so it is the person's alone (0700), also one an
+    /// earlier version made that the Mac's other accounts could read.
     static func storageRootURL(
         homeURL: URL = FileManager.default.homeDirectoryForCurrentUser,
-        applicationSupportBaseURL: URL,
         fileManager: FileManager = .default
     ) throws -> URL {
         let destination = homeURL.appending(
@@ -45,22 +20,6 @@ enum YardletProduct {
         try fileManager.createDirectory(at: destination, withIntermediateDirectories: true,
                                         attributes: [.posixPermissions: 0o700])
         try? fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: destination.path(percentEncoded: false))
-
-        let previousRoot = try applicationSupportURL(
-            baseURL: applicationSupportBaseURL,
-            fileManager: fileManager
-        )
-        for filename in [
-            "session-index.sqlite3",
-            "session-index.sqlite3-wal",
-            "session-index.sqlite3-shm"
-        ] {
-            let source = previousRoot.appending(path: filename)
-            let target = destination.appending(path: filename)
-            guard fileManager.fileExists(atPath: source.path()),
-                  !fileManager.fileExists(atPath: target.path()) else { continue }
-            try fileManager.copyItem(at: source, to: target)
-        }
         return destination
     }
 }

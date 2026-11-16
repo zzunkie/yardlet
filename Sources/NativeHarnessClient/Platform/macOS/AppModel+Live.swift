@@ -26,10 +26,6 @@ extension AppModel {
         LoginShellPath.startReading(shell: ShellLaunchEnvironment.loginShellPath())
         AccountCheckLog.fileURL = FileManager.default.homeDirectoryForCurrentUser
             .appending(path: YardletProduct.storageDirectoryName).appending(path: "logs/account-checks.log")
-        let supportRootURL = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first!
         let codexEnvironmentManager = CodexEnvironmentManager(
             paths: CodexEnvironmentPaths.live()
         )
@@ -38,9 +34,7 @@ extension AppModel {
                 .appending(path: YardletProduct.storageDirectoryName).appending(path: "drafts")
         )
         do {
-            let storageRootURL = try YardletProduct.storageRootURL(
-                applicationSupportBaseURL: supportRootURL
-            )
+            let storageRootURL = try YardletProduct.storageRootURL()
             let defaults = UserDefaults.yardlet
             let repository = try SQLiteSessionRepository(
                 databaseURL: storageRootURL.appending(path: "session-index.sqlite3")
