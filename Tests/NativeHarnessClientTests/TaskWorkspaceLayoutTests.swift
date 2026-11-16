@@ -1,3 +1,5 @@
+import AppKit
+import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
@@ -99,5 +101,93 @@ final class TaskWorkspaceLayoutTests: XCTestCase {
             XCTAssertEqual(closed.upperHeight, height)
             XCTAssertEqual(closed.terminalHeight, 0)
         }
+    }
+
+    /// The panel in the conversation's place, expanded or in a narrow area, leaves the hidden conversation the width
+    /// it showed at: no message is laid out at another width as it hides and shows, and a turn is measured again
+    /// only when it is drawn again (as it is disabled and enabled), however long the conversation.
+    /// `NHC_HIDDEN_CONVERSATION_TURNS` sets its length; the main thread's time for each step is printed.
+    @MainActor
+    func testTheHiddenConversationKeepsTheWidthItShowedAt() async throws {
+        let turns = Int(ProcessInfo.processInfo.environment["NHC_HIDDEN_CONVERSATION_TURNS"] ?? "") ?? 40
+        // Scrollers over the content, as with a trackpad. A scroller that takes room (a mouse, or a Mac without
+        // a display, as on CI) leaves a disabled scroll view, and its messages are laid out at the width it gives up.
+        let arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        UserDefaults.standard.setVolatileDomain(arguments.merging(["AppleShowScrollBars": "WhenScrolling"]) { $1 },
+                                                forName: UserDefaults.argumentDomain)
+        NotificationCenter.default.post(name: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil)
+        defer {
+            UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+            NotificationCenter.default.post(name: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil)
+        }
+        let area = HiddenConversationArea()
+        let conversation = ConversationTimeline(
+            source: .transcript(entries: LongConversationFixture.claude(turns: turns, seed: "hidden-conversation"),
+                                harness: .claudeCode, status: .ready, latestTurnIsComplete: true),
+            readingPosition: TranscriptReadingPosition(), actions: ConversationActions(),
+            renderState: ConversationRenderState())
+        let host = WindowlessRender.Host(HiddenConversationWorkspace(area: area, conversation: conversation),
+                                         size: NSSize(width: 1200, height: 800))
+        defer { host.close(); ViewBodyCensus.isEnabled = false; ViewBodyCensus.reset() }
+        await host.settle(until: {
+            (BlankFrameProbe.conversationScrollView(in: host.hosting)?.documentView?.bounds.height ?? 0) > 800
+        })
+        func proseLayouts() -> Int {
+            TranscriptProseRenderingTests.containers(in: host.hosting).reduce(0) { $0 + $1.newWidthLayouts }
+        }
+        // Laid out once several passes in a row lay nothing out: on a slow Mac the conversation still draws turns
+        // into its window after it first fills the view.
+        ViewBodyCensus.isEnabled = true
+        func settled() async {
+            var quiet = 0, last = (-1, -1)
+            await host.settle(until: {
+                let now = (ViewBodyCensus[.conversationRowLaidOut], proseLayouts())
+                quiet = now == last ? quiet + 1 : 0
+                last = now
+                return quiet >= 5
+            })
+        }
+        await settled()
+        let proseBefore = proseLayouts()
+        ViewBodyCensus.reset()
+        var milliseconds: [Int] = []
+        func step(_ change: () -> Void) {
+            var start = timespec(), end = timespec()
+            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &start)
+            change()
+            host.settle(passes: 4, interval: 0.01)
+            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &end)
+            milliseconds.append((end.tv_sec - start.tv_sec) * 1_000 + (end.tv_nsec - start.tv_nsec) / 1_000_000)
+        }
+        for _ in 0..<3 {
+            step { area.preferences.isExpanded = true }
+            step { area.preferences.isExpanded = false }
+        }
+        // Narrower than the conversation and the panel side by side.
+        step { host.window.setContentSize(NSSize(width: 600, height: 800)) }
+        step { host.window.setContentSize(NSSize(width: 1200, height: 800)) }
+        await settled()
+        let prose = proseLayouts() - proseBefore
+        let measured = ViewBodyCensus[.conversationRowLaidOut], drawn = ViewBodyCensus[.conversationTurn]
+        print("[hidden-conversation] turns=\(turns) proseLayouts=\(prose) turnsMeasured=\(measured) turnsDrawn=\(drawn) "
+              + "mainCPUMilliseconds=\(milliseconds)")
+        XCTAssertEqual(prose, 0)
+        XCTAssertLessThanOrEqual(measured, drawn)
+    }
+}
+
+@MainActor @Observable
+private final class HiddenConversationArea {
+    var preferences = TaskWorkspacePreferences()
+}
+
+private struct HiddenConversationWorkspace: View {
+    @Bindable var area: HiddenConversationArea
+    let conversation: ConversationTimeline
+
+    var body: some View {
+        TaskWorkspaceLayout(showsTrailing: true, showsTerminal: false, preferences: $area.preferences,
+                            onReturnToChat: {}, chat: { conversation }, rail: { EmptyView() },
+                            trailing: { Color.gray }, bottom: { EmptyView() })
     }
 }

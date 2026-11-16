@@ -287,6 +287,9 @@ struct TaskWorkspaceLayout<Chat: View, Rail: View, Trailing: View, Bottom: View>
     @State private var startingHeight: CGFloat?
     /// The sizes when a drag began, kept again if the drag closes a panel.
     @State private var startingPreferences: TaskWorkspacePreferences?
+    /// The conversation's width when it last showed, which it keeps while the panel stands in its place. Held by
+    /// reference, as no view draws it: a resize changes it at each frame.
+    @State private var shownChat = ShownChatWidth()
     @Environment(\.yardletInterfaceScale) private var interfaceScale
     @Environment(\.taskWindowHeight) private var windowHeight
     @Environment(\.taskAreaHeader) private var header
@@ -308,12 +311,16 @@ struct TaskWorkspaceLayout<Chat: View, Rail: View, Trailing: View, Bottom: View>
             let panelInRow = header != nil && metrics.panelPlacement == .beside
             let trailingTop = panelInRow ? 0 : headerHeight
             let floats = metrics.panelPlacement == .over
+            // Under the panel in its place, the conversation keeps the width it last showed at and takes no room. Given
+            // none, it laid each of its turns out again at a width it never shows at, and again once it showed.
+            let chatWidth = shownChat.width(for: metrics, areaWidth: below.width)
             ZStack(alignment: .topLeading) {
                 VStack(spacing: 0) {
                     HStack(alignment: .top, spacing: 0) {
                         HStack(spacing: 0) {
                             chat()
-                                .frame(width: max(0, metrics.chatWidth), height: metrics.upperHeight)
+                                .frame(width: chatWidth, height: metrics.upperHeight)
+                                .frame(width: metrics.showsChat ? chatWidth : 0, alignment: .leading)
                                 .contentShape(Rectangle()).clipped().opacity(metrics.showsChat ? 1 : 0)
                                 .disabled(!metrics.showsChat).allowsHitTesting(metrics.showsChat)
                                 .accessibilityHidden(!metrics.showsChat)
@@ -485,5 +492,17 @@ struct TaskWorkspaceLayout<Chat: View, Rail: View, Trailing: View, Bottom: View>
                 else { NSCursor.pop() }
             }
             .accessibilityElement()
+    }
+}
+
+/// The width the conversation last showed at (`TaskWorkspaceLayout`).
+private final class ShownChatWidth {
+    private var width: CGFloat?
+
+    /// The width to lay the conversation out at: the one it shows at, or while hidden the last it showed at,
+    /// else the area's.
+    func width(for metrics: TaskWorkspaceMetrics, areaWidth: CGFloat) -> CGFloat {
+        if metrics.showsChat { width = max(0, metrics.chatWidth) }
+        return width ?? areaWidth
     }
 }
