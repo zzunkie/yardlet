@@ -118,6 +118,9 @@ final class BrowserHostClient {
     var openingProfileForSession: (@MainActor (UUID) -> BrowserTabProfile?)?
     /// The host ended (idle, quit or crashed): the moment no profile folder is open.
     var onHostEnded: (@MainActor () -> Void)?
+    /// A session's tabs all closed as its task was archived or deleted (`closeTabs(forSession:)`): its profile's
+    /// request context goes once the host has closed them.
+    var onSessionClosed: (@MainActor (UUID) -> Void)?
 
     /// The sessions with tabs in the host, whose profiles are open there.
     var sessionsWithTabs: [UUID] {
@@ -537,6 +540,7 @@ final class BrowserHostClient {
         agentUsedTabs[session] = nil
         sessionOrder[session] = nil
         notifySession(session)
+        onSessionClosed?(session)
     }
 
     /// Calls `observer` when the session's tabs open, close, change order or front, or a tab's title,

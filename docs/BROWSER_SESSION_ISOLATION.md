@@ -49,7 +49,7 @@ These are the rules of "Per task". Why sign-ins are not copied between profiles 
 | The person's sign-ins | Made in any task that uses the default profile, they are the default profile's, and every such task has them at once | As in one browser |
 | The new task screen | Uses the default profile; the task its tabs move to keeps them as they are | The new task screen has no agent of its own |
 | The mailbox's panel | Uses the default profile and never takes one of its own | It belongs to no task and has no agent, and mail's links (sign-in links, invoices) are the person's own (docs/MAILBOX.md, "Links") |
-| Archive and delete | Both delete the task's own folder. When the host does not have the folders open (when the host ends), folders that belong to no remaining task's profile of its own are deleted, along with the record of that profile that Chromium left in `Local State` | So that nothing is left behind after removal. The Claude app deletes only on delete |
+| Archive and delete | Both delete the task's own folder once the host has let go of it. While the host runs, that is soon after the task's tabs close, when none of the host's processes has a file open in the folder any more. At launch and when the host ends, every folder that belongs to no remaining task's profile of its own goes, along with the record of that profile that Chromium left in `Local State`, which the running host keeps and writes over | So that nothing is left behind after removal, without waiting for the host to end, which a task with tabs open keeps from happening for days. The Claude app deletes only on delete |
 | Turning it on and off | Settings › General "Keep cookies": "Per task" (default) / "Shared by all tasks". With "Shared by all tasks", no task takes a profile of its own, and the tabs of tasks that have one open in the default profile | A setting in the same place as the Claude app's "Keep cookies". "Until quit" was left out, because it would mean something different in Yardlet, whose host ends often |
 | Sign-ins from another browser | The cookies of the sites the person chose from the page menu of the browser panel replace that site's cookies in the default profile and, if the panel's task has a profile of its own, in that one too | So that sites whose passkey exists only in another browser can be used in Yardlet (section 10) |
 | Touch ID passkeys | The default profile's `webauthn.touchid.metadata_secret` is put into each new task profile | Chromium reads Touch ID passkey metadata per profile with this key. Without it, the passkeys would not show in a task's profile |
@@ -79,13 +79,23 @@ These are the rules of "Per task". Why sign-ins are not copied between profiles 
   the first page script; `MacBrowserHost.takeOwnProfile` records it, writes a line in `Browser/Logs/sign-ins.log` (the
   site's host, the task and the sign-in or script it was about to make; never a value or an account) and opens the
   task's tabs again (`BrowserHostClient.reopenTabs`, departure cause `ownProfile`). `BrowserHostClient` attaches the
-  profile every time it opens a task's tab (`BrowserTaskProfiles.opening`, where a child task's first tab decides) and
-  calls cleanup when the host ends. Cleanup runs only after the saved task list has been read in full. It moves each
-  folder it removes into `Browser/Removed task profiles` and deletes it there off the main thread, so a profile with a
-  large cache does not hold up the app as it quits; a deletion that a quit cut short is finished at the next cleanup.
-  Chromium writes every profile it opens into `Local State` (`profile.info_cache`, `profile.profiles_order`,
-  `variations_google_groups`) and does not remove them when the folder disappears, so cleanup also removes `Task-`
-  names without a folder from there.
+  profile every time it opens a task's tab (`BrowserTaskProfiles.opening`, where a child task's first tab decides).
+  `MacBrowserHost.removeUnusedProfiles` cleans up at launch, when the host ends, and after a task's tabs close as it is
+  archived or deleted or its subagent ends (`BrowserHostClient.closeTabs(forSession:)`). Cleanup runs only after the
+  saved task list has been read in full, and a subagent still running counts as a task, since its tabs are under its
+  own ID. It forgets the profiles of tasks that are gone at once. While the host runs, it removes only the folders that
+  none of the host's processes has a file open in, which it reads off the main thread from the kernel
+  (`BrowserProfileFolderUse`: `proc_pidinfo` and `proc_pidfdinfo` for the host and the Chromium processes under it).
+  The bridge releasing a context is not enough, because Chromium closes the profile's files in the browser process
+  and its network and storage services after that (within a second in the isolation QA). So after a task's tabs close it looks 10 seconds, 1
+  minute, 5 minutes and 30 minutes later, until the folder is gone, and the host's end or the next launch removes
+  what is left. A folder that a kept task's new profile is about to start from (its parent's, before the child's own
+  folder is made) stays. Each folder removed moves into `Browser/Removed task profiles` and is deleted there off the
+  main thread, so a profile with a large cache does not hold up the app; a deletion that a quit cut short is finished
+  at the next launch. Chromium writes every profile it opens into `Local State` (`profile.info_cache`,
+  `profile.profiles_order`, `variations_google_groups`) and does not remove them when the folder disappears, so
+  cleanup also removes `Task-` names without a folder from there, but only while the host is not running, since the
+  running host writes its own copy over the file.
 
 ## 5. Costs and limits
 
@@ -126,8 +136,10 @@ a profile of its own starts with a copy of it and a child of a task in the defau
 ID key goes into a new profile; that after the host ends and starts again each task opens in the profile it had (the
 task's own cookies, session cookies included, and localStorage, a child's copy, the others in the default profile, and
 the same answer from `TaskProfiles.json` read again); that with "Shared by all tasks" a task with a profile of its own
-opens in the default profile; and that cleanup removes the folders of tasks that are gone or use the default profile,
-and their `Local State` records, and keeps the rest.
+opens in the default profile; that while the host runs, a removed task's folder stays while its tab is open and goes
+soon after its tabs close, once the host has closed its files (how long Chromium took is `profileReleasedAfterSeconds`
+in `result.json`), while a kept task's tab keeps its cookies; and that when the host ends cleanup removes the folders
+of tasks that are gone or use the default profile, and their `Local State` records, and keeps the rest.
 
 Whether cookies move in the shape Chromium stored them (section 8): whether the QA server's sign-in check across two
 sites (`/cookie-check`, console 127.0.0.1 and account site localhost) is `ok` both in the default profile and in a new

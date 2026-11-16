@@ -119,6 +119,47 @@ final class BrowserTaskProfilesTests: XCTestCase {
         XCTAssertFalse(profiles.takeOwnProfile(for: UUID()))
     }
 
+    /// While the host runs, archived tasks' profiles go only once none of the host's processes has a file open in them,
+    /// as the kernel reports it (to which a temporary folder under /var is in /private/var), and `Local State`, which
+    /// the running host writes over, is left for its end. The folder a kept task's new profile is about to start from
+    /// stays, and what a quit cut short of deleting goes at the next removal, as at launch.
+    func testWhileTheHostRunsOnlyTheFoldersItHasLetGoOfGo() async throws {
+        let profiles = BrowserTaskProfiles(root: folder, defaults: defaults)
+        profiles.storage = .perTask
+        XCTAssertNotNil(profiles.shareEarlierProfiles(setAside: folder.appending(path: "Trash/Aside")) { _ in [] })
+        let parent = UUID(), child = UUID(), open = UUID(), closed = UUID()
+        profiles.parentOf = { $0 == child ? parent : nil }
+        for task in [parent, open, closed] {
+            XCTAssertTrue(profiles.takeOwnProfile(for: task))
+            try makeFolder(profiles.folder(for: task.uuidString))
+        }
+        XCTAssertEqual(profiles.opening(for: child)?.seedFrom, parent.uuidString)
+        let leftover = folder.appending(path: BrowserTaskProfiles.removingFolderName).appending(path: UUID().uuidString)
+        try makeFolder(leftover)
+        let localState = Data(#"{"profile":{"info_cache":{"Task-\#(closed.uuidString)":{}}}}"#.utf8)
+        try localState.write(to: folder.appending(path: "Local State"))
+        let file = profiles.folder(for: open.uuidString).appending(path: "Cookies")
+        try Data().write(to: file)
+        let handle = try FileHandle(forReadingFrom: file)
+        defer { try? handle.close() }
+
+        // The parent, `open` and `closed` are archived; the child, whose first tab is opening, is kept.
+        let unused = profiles.unusedFolders(keeping: [child])
+        XCTAssertEqual(Set(unused), [open.uuidString, closed.uuidString],
+                       "the folder the child's new profile starts from stays until the child's folder is there")
+        XCTAssertNil(profiles.profile(for: open), "an archived task's profile is forgotten at once")
+        let folders = Dictionary(uniqueKeysWithValues: unused.map { ($0, profiles.folder(for: $0)) })
+        let held = BrowserProfileFolderUse.keys(of: folders, openInTreeOf: getpid())
+        XCTAssertEqual(held, [open.uuidString], "a folder a process has a file open in is in use")
+        XCTAssertEqual(profiles.removeFolders(unused.filter { !held.contains($0) }), [closed.uuidString])
+        XCTAssertTrue(profiles.folderExists(open.uuidString))
+        try await waitUntil { !FileManager.default.fileExists(atPath: leftover.path(percentEncoded: false)) }
+        XCTAssertEqual(try Data(contentsOf: folder.appending(path: "Local State")), localState, "the running host's to write")
+
+        try handle.close()
+        XCTAssertEqual(BrowserProfileFolderUse.keys(of: folders, openInTreeOf: getpid()), [])
+    }
+
     /// The task profiles from before tasks shared the default profile, sorted once: one that had signed in to a site
     /// itself stays; one of copies moves its task to the default profile, which first takes the sites it holds and the
     /// default profile has no cookie of, never over the default profile's own, and its folder goes to the Trash, where the

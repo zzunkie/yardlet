@@ -577,7 +577,9 @@ struct NativeHarnessClientApp: App {
                         }
                         MacBrowserHost.shared.keptTasks = { [weak model] in
                             guard let model, model.hasRestoredIndex else { return nil }
-                            return Set(model.store.sessions.map(\.id))
+                            // A subagent's tabs are under its own ID while it runs.
+                            let running = model.sessionTools.runs.values.filter { !$0.state.isFinished }.map(\.id)
+                            return Set(model.store.sessions.map(\.id)).union(running)
                         }
                     }
                     MacAgentToolService.shared.vault.describeTask = { [weak model] in model?.vaultTaskDescription($0) }
@@ -615,6 +617,9 @@ struct NativeHarnessClientApp: App {
                     // What follows reads the restored tasks against what is kept beside them, so none of it
                     // runs on a list that failed to load: it would take every saved task for gone.
                     if !model.usesVisualFixture, model.hasRestoredIndex {
+                        // Archived and deleted tasks' browser profiles go before the host opens any, and what the
+                        // last quit cut short of deleting them.
+                        MacBrowserHost.shared.removeUnusedProfiles()
                         // What the last quit cut off continues alongside the rest of the launch.
                         Task {
                             await newestRuntimes.value

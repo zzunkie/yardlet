@@ -182,28 +182,86 @@ final class BrowserHostIsolationQA {
         await keepsEveryAccount()
         await removesTheOldCopysDomainCookies()
         let earlier = await sharesEarlierProfiles()
+        let kept = Set([a] + (earlier.map { [$0.kept, $0.moved] } ?? []))
+        let unkept = Set(([c] + more).map(profiles.key(for:)))
+        await removesProfilesWhileTheHostRuns(page, owner: a, keeping: kept)
 
-        // Archived and deleted tasks' profiles go once the host has let them go; the folder of a task that moved to the
+        // The rest of the archived and deleted tasks' profiles go when the host ends, as Yardlet removes them then, and
+        // Chromium's own list of the profiles it opened forgets the removed ones; the folder of a task that moved to the
         // default profile is in the Trash already.
         client.terminateHost()
         _ = await waitUntil(.seconds(20)) { !self.client.isHostRunning }
         try? await Task.sleep(for: .seconds(1))
-        let unkept = Set(([c] + more).map(profiles.key(for:)))
         let keptKeys = [profiles.key(for: a)] + (earlier.map { [profiles.key(for: $0.kept)] } ?? [])
-        let removed = Set(profiles.removeFolders(keeping: Set([a] + (earlier.map { [$0.kept, $0.moved] } ?? []))))
-        // Chromium's own list of the profiles it opened forgets the removed ones too.
         let localState = (try? Data(contentsOf: MacBrowserHost.shared.paths.root.appending(path: "Local State")))
             .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
         let listed = Set(((localState?["profile"] as? [String: Any])?["info_cache"] as? [String: Any])?.keys.map { $0 } ?? [])
         let listedUnkept = unkept.filter { listed.contains(BrowserTaskProfiles.folderPrefix + $0) }
-        check("removing profiles keeps the folders of kept tasks with profiles of their own and removes the rest, from "
+        let left = profiles.unusedFolders(keeping: kept)
+        check("when the host ends, the folders of kept tasks with profiles of their own stay and the rest go, from "
               + "Chromium's profile list too",
-              keptKeys.allSatisfy(profiles.folderExists) && unkept.isSubset(of: removed) && !unkept.contains(where: profiles.folderExists)
+              keptKeys.allSatisfy(profiles.folderExists) && left.isEmpty && !unkept.contains(where: profiles.folderExists)
                 && earlier.map { !profiles.folderExists(profiles.key(for: $0.moved)) } != false
                 && listed.contains(BrowserTaskProfiles.folderPrefix + profiles.key(for: a)) && listedUnkept.isEmpty,
-              "removed \(removed.count), this run's \(unkept.intersection(removed).count) of \(unkept.count); "
+              "left \(left.count), this run's still there \(unkept.filter(profiles.folderExists).count) of \(unkept.count); "
                 + "Local State lists \(listed.count), removed ones still listed \(listedUnkept.count)")
         await finish()
+    }
+
+    // MARK: Removal while the host runs
+
+    /// While the host runs, an archived task's profile goes once none of the host's processes has a file open in it
+    /// (docs/BROWSER_SESSION_ISOLATION.md 3, "Archive and delete"): not while its tab is open, and soon after its tabs
+    /// close as an archive closes them (`BrowserHostClient.closeTabs(forSession:)`); a kept task's profile with a tab
+    /// open stays, and its tab keeps its cookies. Records how long Chromium took to close a profile's files.
+    private func removesProfilesWhileTheHostRuns(_ page: String, owner: UUID, keeping kept: Set<UUID>) async {
+        let host = MacBrowserHost.shared
+        let open = UUID(), closing = UUID()
+        guard let ownerTab = await taskTab(owner, page), await ownTab(open, page) != nil,
+              await ownTab(closing, page) != nil, let pid = host.process?.processIdentifier else {
+            return check("removal while the host runs: the tabs load", false, "no tab")
+        }
+        _ = await value(ownerTab, "document.cookie = 'stay=A; path=/; max-age=3600'; 1")
+        let openKey = profiles.key(for: open), closingKey = profiles.key(for: closing)
+        let closingFolder = profiles.folder(for: closingKey)
+        // Both are archived; the app has let go of them before the host lets go of their profiles.
+        host.keptTasks = { kept }
+        let heldBefore = BrowserProfileFolderUse.keys(of: [closingKey: closingFolder], openInTreeOf: pid).contains(closingKey)
+        let closed = ContinuousClock.now
+        client.closeTabs(forSession: closing)
+        var released: Duration?
+        while ContinuousClock.now - closed < .seconds(60), released == nil {
+            if BrowserProfileFolderUse.keys(of: [closingKey: closingFolder], openInTreeOf: pid).isEmpty {
+                released = ContinuousClock.now - closed
+            } else {
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        }
+        record["profileReleasedAfterSeconds"] = released.map {
+            .number(Double($0.components.seconds) + Double($0.components.attoseconds) / 1e18)
+        } ?? .null
+        // The archive's own looks at it, the first ten seconds after its tabs closed.
+        let went = await waitUntil(.seconds(80)) { !self.profiles.folderExists(closingKey) }
+        let wentAfter = ContinuousClock.now - closed
+        await host.removeUnusedProfiles()?.value
+        let openStayed = profiles.folderExists(openKey) && client.isHostRunning
+        check("removal while the host runs: an archived task's profile goes soon after its tabs close, once the host has "
+              + "closed its files, and one whose tab is open stays",
+              heldBefore && released != nil && went && openStayed,
+              "held before \(heldBefore), released after \(String(describing: released)), gone \(went) after \(wentAfter), "
+                + "open one stayed \(openStayed)")
+        client.closeTabs(forSession: open)
+        let openWent = await waitUntil(.seconds(80)) { !self.profiles.folderExists(openKey) }
+        let removing = host.paths.root.appending(path: BrowserTaskProfiles.removingFolderName).path(percentEncoded: false)
+        let deleted = await waitUntil(.seconds(30)) { !FileManager.default.fileExists(atPath: removing) }
+        _ = await value(ownerTab, "document.cookie = 'after=A; path=/; max-age=3600'; 1")
+        let ownerCookies = await cookies(ownerTab)
+        check("removal while the host runs: the other one goes once its tab closes, both are deleted, and a kept task's "
+              + "profile with a tab open stays and keeps its cookies",
+              openWent && deleted && profiles.folderExists(profiles.key(for: owner)) && ownerCookies.contains("stay=A")
+                && ownerCookies.contains("after=A"),
+              "gone \(openWent), deleted \(deleted), owner \(ownerCookies)")
+        client.closeTabs(forSession: owner)
     }
 
     // MARK: Cookies copied as stored
@@ -410,8 +468,8 @@ final class BrowserHostIsolationQA {
             .appending(path: "sign-ins.log"), encoding: .utf8)) ?? "")
             .split(separator: "\n").filter { $0.contains("task \(g.uuidString.prefix(8))") }.map(String.init)
         check("sign-ins: the log names the task that took a profile of its own and how, with no cookie value",
-              logged.count == 1 && logged[0].contains("localhost: task \(g.uuidString.prefix(8)) took a profile of its own before "
-                + "its agent's sign-in (typed into a password or code field)") && !logged[0].contains("AGENT"),
+              logged.count == 1 && logged[0].contains("localhost: task \(g.uuidString.prefix(8)) took a profile of its own for its "
+                + "agent (typed into a password or code field)") && !logged[0].contains("AGENT"),
               logged.joined(separator: " | "))
         for task in [a, b, g] { client.closeTabs(forSession: task) }
         // The page's own cookie would show in the next run's other checks, which read the default profile's cookies.

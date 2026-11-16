@@ -286,6 +286,7 @@ final class MacBrowserHost: NativeSurfaceResource {
         client.profileForSession = { [unowned self] in self.profiles.profile(for: $0) }
         client.openingProfileForSession = { [unowned self] in self.profiles.opening(for: $0) }
         client.onHostEnded = { [unowned self] in self.removeUnusedProfiles() }
+        client.onSessionClosed = { [unowned self] in self.removeProfileOnceLetGo(of: $0) }
         client.externalApps = LaunchServicesApps()
         client.addressHistory = addressHistory
         client.onChromiumWindowsChange = { [unowned self] in self.chromiumWindows.present() }
@@ -361,11 +362,57 @@ final class MacBrowserHost: NativeSurfaceResource {
     var searchSuggest = BrowserSearchSuggestService()
     /// The tasks whose profiles stay, once the app knows them (nil before the saved tasks are loaded).
     var keptTasks: (@MainActor () -> Set<UUID>?)?
+    /// The profiles of their own whose task's tabs closed as it was archived or deleted, or its subagent ended, while
+    /// they wait to go (`removeProfileOnceLetGo`).
+    private var leaving: Set<String> = []
+    private var leavingChecks: Task<Void, Never>?
+    /// When those are looked at after the last of their tabs closed: Chromium closes a profile's files within a second
+    /// of its last tab (the isolation QA's `profileReleasedAfterSeconds`), the app lets go of an archived task once its
+    /// runtime has stopped, and the host's end and the next launch remove what is left after the last look.
+    private static let leavingCheckDelays: [Duration] = [.seconds(10), .seconds(60), .seconds(300), .seconds(1800)]
 
-    /// Removes the profiles of archived and deleted tasks, while the host (which holds them open) is not running.
-    func removeUnusedProfiles() {
-        guard !client.isHostRunning, let kept = keptTasks?() else { return }
-        profiles.removeFolders(keeping: kept)
+    /// Removes the profiles of archived and deleted tasks. While the host is not running, every such folder goes,
+    /// with Chromium's records of them in `Local State`. While it runs, a folder goes once none of the host's
+    /// processes has a file open in it (`BrowserProfileFolderUse`), and `Local State`, which the host keeps and writes
+    /// over, waits for its end. The returned task finishes when the folders the host has let go of are moved.
+    @discardableResult
+    func removeUnusedProfiles() -> Task<Void, Never>? {
+        guard let kept = keptTasks?() else { return nil }
+        guard client.isHostRunning else {
+            profiles.removeFolders(keeping: kept)
+            return nil
+        }
+        let unused = profiles.unusedFolders(keeping: kept)
+        guard !unused.isEmpty, let host = process?.processIdentifier else { return nil }
+        let folders = Dictionary(uniqueKeysWithValues: unused.map { ($0, profiles.folder(for: $0)) })
+        return Task { [weak self] in
+            let open = await Task.detached(priority: .utility) {
+                BrowserProfileFolderUse.keys(of: folders, openInTreeOf: host)
+            }.value
+            // A host that ended meanwhile removes them itself; a folder that is a kept task's again stays.
+            guard let self, self.client.isHostRunning, self.process?.processIdentifier == host,
+                  let kept = self.keptTasks?() else { return }
+            let still = Set(self.profiles.unusedFolders(keeping: kept))
+            self.profiles.removeFolders(unused.filter { still.contains($0) && !open.contains($0) })
+        }
+    }
+
+    /// A task's tabs closed as it was archived or deleted, or its subagent ended: its profile of its own goes once
+    /// the app has let go of the task and the host of the profile, looked at a few times (`leavingCheckDelays`).
+    private func removeProfileOnceLetGo(of session: UUID) {
+        guard profiles.hasOwnProfile(session) else { return }
+        leaving.insert(profiles.key(for: session))
+        leavingChecks?.cancel()
+        leavingChecks = Task { [weak self] in
+            for delay in Self.leavingCheckDelays {
+                do { try await Task.sleep(for: delay) } catch { return }
+                guard let self else { return }
+                await self.removeUnusedProfiles()?.value
+                self.leaving = self.leaving.filter(self.profiles.folderExists)
+                if self.leaving.isEmpty { return }
+            }
+            self?.leaving = []
+        }
     }
     private(set) weak var process: CEFBrowserHostProcess?
     let paths = BrowserHostPaths.standard()

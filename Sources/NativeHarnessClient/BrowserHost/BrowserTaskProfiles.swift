@@ -193,35 +193,58 @@ final class BrowserTaskProfiles {
 #endif
 
     /// Removes the profile folders no kept task uses (archived and deleted tasks, a task that uses the default
-    /// profile). Only while the host is not running, which holds the folders open.
-    ///
-    /// Each folder is moved out of the profiles at once and deleted off the main thread: deleting a profile
-    /// with a large cache took seconds, and the host ends, which removes them, as the app quits. What a quit
-    /// cut short is deleted at the next removal.
+    /// profile), and Chromium's records of them in `Local State`. Only while the host is not running, which holds
+    /// the folders and `Local State` open; while it runs, `unusedFolders` and `removeFolders(_:)` remove those it has
+    /// let go of.
     @discardableResult
     func removeFolders(keeping tasks: Set<UUID>) -> [String] {
+        let removed = removeFolders(unusedFolders(keeping: tasks))
+        forgetMissingProfiles()
+        return removed
+    }
+
+    /// The keys of the profile folders no kept task uses, once the profiles of tasks not kept are forgotten. The
+    /// default profile and Chromium's own folders are none of them, nor the folder a kept task's new profile is about
+    /// to start from (its parent's, `profile(for:)`), which the host opens as that task's first tab opens.
+    func unusedFolders(keeping tasks: Set<UUID>) -> [String] {
         let keys = Set(tasks.map(key(for:)))
         let kept = keys.filter(isOwn)
+        let before = saved.aliases.count + (saved.own?.count ?? 0) + (saved.sharedChildren?.count ?? 0)
         saved.aliases = saved.aliases.filter { tasks.contains(UUID(uuidString: $0.key) ?? UUID()) }
         saved.own = saved.own?.filter { keys.contains($0.key) }
         saved.sharedChildren = saved.sharedChildren?.intersection(keys)
-        save()
-        // Only task profiles: the root cache also holds the default profile and Chromium's own folders.
+        if saved.aliases.count + (saved.own?.count ?? 0) + (saved.sharedChildren?.count ?? 0) != before { save() }
+        let seeds = Set((saved.own ?? [:]).filter { !$0.value.isEmpty && !folderExists($0.key) }.values)
         let names = (try? FileManager.default.contentsOfDirectory(atPath: root.path(percentEncoded: false))) ?? []
+        return names.compactMap { name in
+            guard name.hasPrefix(Self.folderPrefix) else { return nil }
+            let key = String(name.dropFirst(Self.folderPrefix.count))
+            return UUID(uuidString: key) != nil && !kept.contains(key) && !seeds.contains(key) ? key : nil
+        }
+    }
+
+    /// Moves the folders of these profiles out of the profiles at once and deletes them off the main thread, as the
+    /// rest of what was removed: deleting a profile with a large cache took seconds, and the host ends, which removes
+    /// them, as the app quits. Returns the keys of the folders moved.
+    @discardableResult
+    func removeFolders(_ keys: [String]) -> [String] {
         let removing = root.appending(path: Self.removingFolderName, directoryHint: .isDirectory)
         var removed: [String] = []
-        for name in names where name.hasPrefix(Self.folderPrefix) {
-            let key = String(name.dropFirst(Self.folderPrefix.count))
-            guard UUID(uuidString: key) != nil, !kept.contains(key) else { continue }
+        for key in keys {
             try? FileManager.default.createDirectory(at: removing, withIntermediateDirectories: true)
             // A move within the root cache is one rename, however much the profile holds.
             if (try? FileManager.default.moveItem(at: folder(for: key), to: removing.appending(path: UUID().uuidString))) != nil {
                 removed.append(key)
             }
         }
-        forgetMissingProfiles()
-        Self.deleteRemovedFolders(in: removing)
+        deleteRemovedFolders()
         return removed
+    }
+
+    /// Deletes what was removed, off the main thread: also what a quit cut short, which the app does at launch. The
+    /// host never opens these folders.
+    func deleteRemovedFolders() {
+        Self.deleteRemovedFolders(in: root.appending(path: Self.removingFolderName, directoryHint: .isDirectory))
     }
 
     private nonisolated static func deleteRemovedFolders(in removing: URL) {
