@@ -157,13 +157,14 @@ final class WindowsScopedFilesTests: XCTestCase {
         XCTAssertTrue(PathRules.windows.nativePath(of: file).withCString(encodedAs: UTF16.self) {
             SetFileAttributesW($0, DWORD(FILE_ATTRIBUTE_HIDDEN))
         })
-        // The folder's entries copied into an access list of the file's own, which a new file there does not have.
-        try accessList(file, change: "/inheritance:d")
+        // An entry of the file's own, for LOCAL SERVICE, which a new file in the folder does not have.
+        try accessList(file, change: ["/grant", "*S-1-5-19:(R)"])
         let ownList = try accessList(file)
-        XCTAssertFalse(ownList.contains("(I)"), ownList)
+        XCTAssertTrue(ownList.contains("LOCAL SERVICE"), ownList)
         let fresh = sources.appending(path: "New.swift")
         try Data().write(to: fresh)
-        XCTAssertTrue(try accessList(fresh).contains("(I)"))
+        let freshList = try accessList(fresh)
+        XCTAssertFalse(freshList.contains("LOCAL SERVICE"), freshList)
         try FileManager.default.removeItem(at: fresh)
 
         XCTAssertThrowsError(try Self.save("Sources/App.swift", in: root, "let a = 2\n", over: Data("let a = 0\n".utf8))) {
@@ -233,19 +234,19 @@ final class WindowsScopedFilesTests: XCTestCase {
         return Data(buffer.prefix(Int(count)))
     }
 
-    /// The access list Windows' own `icacls` shows for `url`, after it makes `change` when there is one.
+    /// The access list Windows' own `icacls` shows for `url`, after it makes `change`.
     @discardableResult
-    private func accessList(_ url: URL, change: String? = nil) throws -> String {
+    private func accessList(_ url: URL, change: [String] = []) throws -> String {
         let process = Process()
         process.executableURL = URL(filePath: (ProcessInfo.processInfo.environment["SystemRoot"] ?? #"C:\Windows"#)
                                     + #"\System32\icacls.exe"#)
-        process.arguments = [PathRules.windows.nativePath(of: url)] + (change.map { [$0] } ?? [])
+        process.arguments = [PathRules.windows.nativePath(of: url)] + change
         let output = Pipe()
         process.standardOutput = output
         try process.run()
         let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-        XCTAssertEqual(process.terminationStatus, 0, "icacls \(change ?? "")")
+        XCTAssertEqual(process.terminationStatus, 0, "icacls \(change)")
         // Its output is ASCII here, in UTF-16 or a code page; without the zero bytes it reads the same either way.
         return String(decoding: data.filter { $0 != 0 }, as: UTF8.self)
     }
