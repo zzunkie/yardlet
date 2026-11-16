@@ -95,6 +95,17 @@ enum CodexTurnStatus: Equatable, Sendable {
     case failed
     case unknown(String)
 
+    /// A conversation turn's status in Codex's terms.
+    init(_ status: ConversationTurnStatus) {
+        self = switch status {
+        case .running: .inProgress
+        case .completed: .completed
+        case .interrupted: .interrupted
+        case .failed: .failed
+        case let .unknown(value): .unknown(value ?? "")
+        }
+    }
+
     var isTerminal: Bool {
         switch self {
         case .completed, .interrupted, .failed:

@@ -423,26 +423,15 @@ struct ConversationTurnView: View, Equatable {
         }
     }
 
-    /// The header is drawn when it holds something: a work time or a fold.
+    /// The header is drawn when it holds something: a work time or a fold (`ConversationTurn.drawsHeader`).
     private var showsHeader: Bool {
-        guard turn.showsHeader else { return false }
-        return showsWorkTime || (foldsWork && turn.hasWorkDetails)
-    }
-
-    /// The header reads the turn's work time once the turn no longer runs: always for a provider's own
-    /// times, and for times read from the entries when they span a second or more (D4). While the turn
-    /// runs, every harness reads its time on the live line, beside what it does now, so the header
-    /// adds no row of its own before the work folds.
-    private var showsWorkTime: Bool {
-        turn.status != .running && (!turn.timing.isApproximate || turn.timing.durationMilliseconds != nil)
+        turn.drawsHeader(foldsWork: foldsWork)
     }
 
     @ViewBuilder
     private func headerLabel(canExpand: Bool) -> some View {
-        if showsWorkTime {
-            CodexWorkSummaryLabel(
-                status: turn.status, timing: turn.timing, isExpanded: workDetailsAreVisible, canExpand: canExpand
-            )
+        if turn.showsWorkTime {
+            CodexWorkSummaryLabel(turn: turn, isExpanded: workDetailsAreVisible, canExpand: canExpand)
             .contentShape(Rectangle())
         } else if canExpand {
             HStack(alignment: .firstTextBaseline, spacing: 6) {

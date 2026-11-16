@@ -43,7 +43,7 @@ struct ConversationRequestCard: View {
             header
 
             if let detail = request.detail,
-               !(request.preview.map { PermissionRequestPreviewView.repeats(detail, in: $0) } ?? false) {
+               request.preview?.repeats(detail) != true {
                 Text(detail)
                     .font(.callout)
                     .foregroundStyle(.secondary)

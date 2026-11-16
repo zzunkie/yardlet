@@ -81,7 +81,7 @@ struct ConversationSentMessage: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .modifier(ConversationMessageFrame(label: Self.senderLabel(message), phase: phase,
+        .modifier(ConversationMessageFrame(label: message.senderLabel, phase: phase,
                                            isHistoryMatch: isHistoryMatch))
     }
 
@@ -95,7 +95,7 @@ struct ConversationSentMessage: View {
                 Image(systemName: "clock")
                     .font(.system(size: 11 * interfaceScale))
                     .accessibilityHidden(true)
-                Text(Self.scheduleLabel(kind))
+                Text(kind.label)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
@@ -108,17 +108,8 @@ struct ConversationSentMessage: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .modifier(ConversationMessageFrame(label: Self.scheduleLabel(kind), phase: phase,
+        .modifier(ConversationMessageFrame(label: kind.label, phase: phase,
                                            isHistoryMatch: isHistoryMatch))
-    }
-
-    /// The Claude app's words for what its schedule sent: "Scheduled check-in" for a `CronCreate` job
-    /// or a `/loop` wakeup, "Scheduled task: {name}" for a named scheduled task.
-    static func scheduleLabel(_ kind: ClaudeScheduledPrompt.Kind) -> String {
-        switch kind {
-        case .checkIn: L10n.string("Scheduled check-in")
-        case let .task(name): L10n.format("Scheduled task: %@", name)
-        }
     }
 
     /// A message someone other than the person sent, in a quiet box on the left.
@@ -197,18 +188,13 @@ struct ConversationSentMessage: View {
         ))
     }
 
-    /// "Sent from {task}" above a message another task sent; it opens that task while it is there.
-    static func senderLabel(_ message: TaskMessage) -> String {
-        message.senderName.map { L10n.format("Sent from %@", $0) } ?? L10n.string("Sent from another task")
-    }
-
     @ViewBuilder
     private func taskMessageLabel(_ message: TaskMessage) -> some View {
         let label = HStack(spacing: 4) {
             Image(systemName: "bubble.left.and.bubble.right")
                 .font(.system(size: 11 * interfaceScale))
                 .accessibilityHidden(true)
-            Text(Self.senderLabel(message))
+            Text(message.senderLabel)
                 .lineLimit(1)
                 .truncationMode(.middle)
         }

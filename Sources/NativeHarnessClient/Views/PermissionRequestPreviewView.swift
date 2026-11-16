@@ -91,15 +91,4 @@ struct PermissionRequestPreviewView: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
     }
-
-    /// The card's own summary line when it only repeats what the preview already shows.
-    static func repeats(_ detail: String, in preview: PermissionRequestPreview) -> Bool {
-        let trimmed = detail.trimmingCharacters(in: .whitespacesAndNewlines)
-        switch preview {
-        case let .command(_, description):
-            return trimmed == description
-        case let .edits(path, _, _), let .write(path, _):
-            return !trimmed.isEmpty && (trimmed == path || path.hasSuffix("/" + trimmed))
-        }
-    }
 }

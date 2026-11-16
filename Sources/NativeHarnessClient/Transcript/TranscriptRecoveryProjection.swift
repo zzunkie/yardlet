@@ -2,6 +2,19 @@ import Foundation
 
 /// Editing is a local draft operation, never a provider retry or a connection attempt.
 enum TranscriptRecoveryProjection {
+    /// An error card's heading: the plain heading of a known failure category (`title`), else that the harness
+    /// isn't signed in, or that it could not complete the request.
+    static func errorCardTitle(_ title: String?, message: String, harness: HarnessKind) -> String {
+        title ?? (ProviderSignIn.asksToSignIn(message) ? L10n.format("%@ isn't signed in", harness.displayName)
+            : L10n.format("%@ could not complete the request", harness.displayName))
+    }
+
+    /// The line under an error card's heading: for a missing sign-in what to do next, which the heading already
+    /// names, else the error's summary.
+    static func errorCardSummary(_ message: String) -> String {
+        ProviderSignIn.asksToSignIn(message) ? ProviderSignIn.nextStep : errorSummary(message)
+    }
+
     static func errorSummary(_ message: String) -> String {
         // The CLI's own words name a screen a task here does not have.
         if ProviderSignIn.asksToSignIn(message) { return ProviderSignIn.prompt }

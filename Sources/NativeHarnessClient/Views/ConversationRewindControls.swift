@@ -109,7 +109,7 @@ struct ClaudeFileRewindSheet: View {
     /// another task sent, under its sender, as the composer's queue shows it.
     private static func summary(_ text: String) -> String {
         if let message = TaskMessage.parse(text) {
-            return L10n.format("%@: %@", ConversationSentMessage.senderLabel(message), message.body)
+            return L10n.format("%@: %@", message.senderLabel, message.body)
         }
         return ClaudeBashMessage.summary(of: text) ?? text
     }

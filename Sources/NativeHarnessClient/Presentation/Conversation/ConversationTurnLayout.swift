@@ -110,6 +110,31 @@ extension ConversationTurn {
         return answers.contains(where: ConversationTurnLayout.isAnswer) || work.contains(where: ConversationTurnLayout.isAnswer)
     }
 
+    /// The header reads the turn's work time once the turn no longer runs: always for a provider's own times, and
+    /// for times read from the entries when they span a second or more (D4). While the turn runs, every harness reads
+    /// its time on the live line, beside what it does now, so the header adds no row of its own before the work folds.
+    var showsWorkTime: Bool {
+        status != .running && (!timing.isApproximate || timing.durationMilliseconds != nil)
+    }
+
+    /// The header is drawn when it holds something: a work time or a fold. `foldsWork` is whether the part of the turn
+    /// drawn folds its work (`foldsWork` for a whole turn).
+    func drawsHeader(foldsWork: Bool) -> Bool {
+        showsHeader && (showsWorkTime || (foldsWork && hasWorkDetails))
+    }
+
+    /// What the header reads once the turn no longer runs: how long it worked, or that it was stopped, as the Codex
+    /// app reads its turn (`CodexTurnProgressProjection.finishedTitle`).
+    var workTimeTitle: String {
+        CodexTurnProgressProjection.finishedTitle(
+            status: CodexTurnStatus(status),
+            duration: CodexTurnProgressProjection.completedDuration(
+                durationMilliseconds: timing.durationMilliseconds, startedAt: timing.startedAt,
+                completedAt: timing.completedAt
+            )
+        )
+    }
+
     /// What a folded turn keeps in view of its work, in its order (`wj`, `Tj`):
     /// - a final answer it went on past;
     /// - a message the person sent into it. The Codex app folds one that a finished final answer

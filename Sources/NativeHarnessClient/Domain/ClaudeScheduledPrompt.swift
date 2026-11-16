@@ -17,6 +17,15 @@ struct ClaudeScheduledPrompt: Equatable, Sendable {
         case checkIn
         /// A Claude app scheduled task, by its name.
         case task(name: String)
+
+        /// The Claude app's words for what its schedule sent: "Scheduled check-in" for a `CronCreate` job or a
+        /// `/loop` wakeup, "Scheduled task: {name}" for a named scheduled task.
+        var label: String {
+            switch self {
+            case .checkIn: L10n.string("Scheduled check-in")
+            case let .task(name): L10n.format("Scheduled task: %@", name)
+            }
+        }
     }
 
     let kind: Kind

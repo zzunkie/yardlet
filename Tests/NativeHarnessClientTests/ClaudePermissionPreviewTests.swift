@@ -167,12 +167,12 @@ final class ClaudePermissionPreviewTests: XCTestCase {
 
     func testTheCardsOwnSummaryIsHiddenOnlyWhenThePreviewRepeatsIt() {
         let edit = PermissionRequestPreview.edits(path: calcPath, edits: [], omittedEditCount: 0)
-        XCTAssertTrue(PermissionRequestPreviewView.repeats("calc.py", in: edit))
-        XCTAssertTrue(PermissionRequestPreviewView.repeats(calcPath, in: edit))
-        XCTAssertFalse(PermissionRequestPreviewView.repeats("Claude wants to edit a file outside the project", in: edit))
+        XCTAssertTrue(edit.repeats("calc.py"))
+        XCTAssertTrue(edit.repeats(calcPath))
+        XCTAssertFalse(edit.repeats("Claude wants to edit a file outside the project"))
         let bash = PermissionRequestPreview.command(.init(bounding: "ls"), description: "List files")
-        XCTAssertTrue(PermissionRequestPreviewView.repeats("List files", in: bash))
-        XCTAssertFalse(PermissionRequestPreviewView.repeats("Network access", in: bash))
+        XCTAssertTrue(bash.repeats("List files"))
+        XCTAssertFalse(bash.repeats("Network access"))
     }
 
     // MARK: - Saved transcripts

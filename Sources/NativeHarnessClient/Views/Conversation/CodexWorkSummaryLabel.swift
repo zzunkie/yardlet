@@ -27,24 +27,10 @@ struct CodexWorkSummaryLabel: View {
     }
 
     /// A conversation turn whose times the provider reported.
-    init(status: ConversationTurnStatus, timing: ConversationTurnTiming, isExpanded: Bool, canExpand: Bool) {
-        isRunning = status == .running
-        startedAt = timing.startedAt
-        let codexStatus: CodexTurnStatus = switch status {
-        case .running: .inProgress
-        case .completed: .completed
-        case .interrupted: .interrupted
-        case .failed: .failed
-        case let .unknown(value): .unknown(value ?? "")
-        }
-        finishedTitle = CodexTurnProgressProjection.finishedTitle(
-            status: codexStatus,
-            duration: CodexTurnProgressProjection.completedDuration(
-                durationMilliseconds: timing.durationMilliseconds,
-                startedAt: timing.startedAt,
-                completedAt: timing.completedAt
-            )
-        )
+    init(turn: ConversationTurn, isExpanded: Bool, canExpand: Bool) {
+        isRunning = turn.status == .running
+        startedAt = turn.timing.startedAt
+        finishedTitle = turn.workTimeTitle
         self.isExpanded = isExpanded
         self.canExpand = canExpand
     }

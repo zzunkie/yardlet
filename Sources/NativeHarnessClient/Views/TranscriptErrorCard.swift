@@ -18,15 +18,14 @@ struct TranscriptErrorCard: View {
     private var offeredSignIn: ConversationSignIn? { asksToSignIn ? signIn : nil }
 
     var body: some View {
-        let summary = asksToSignIn ? ProviderSignIn.nextStep : TranscriptRecoveryProjection.errorSummary(message)
+        let summary = TranscriptRecoveryProjection.errorCardSummary(message)
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "exclamationmark.triangle")
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(.red)
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(title ?? (asksToSignIn ? L10n.format("%@ isn't signed in", harness.displayName)
-                        : L10n.format("%@ could not complete the request", harness.displayName)))
+                    Text(TranscriptRecoveryProjection.errorCardTitle(title, message: message, harness: harness))
                         .font(.callout.weight(.semibold))
                     Text(summary)
                         .font(.callout)

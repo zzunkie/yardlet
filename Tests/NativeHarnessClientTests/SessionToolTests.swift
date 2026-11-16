@@ -522,7 +522,7 @@ final class SessionToolTests: XCTestCase {
         if case let .userMessage(text, _) = item.kind { XCTAssertEqual(text, "Run the retry tests again.") } else {
             XCTFail("\(item.kind)")
         }
-        XCTAssertEqual(ConversationSentMessage.senderLabel(try XCTUnwrap(item.taskMessage)), L10n.format("Sent from %@", "Caller"))
+        XCTAssertEqual(try XCTUnwrap(item.taskMessage).senderLabel, L10n.format("Sent from %@", "Caller"))
         let read = try await callAllowing(model, "read_task", ["task_id": fixture.sibling.id.uuidString, "turns": 1],
                                           from: fixture.neighbor)
         XCTAssertTrue(read.text.contains("From task \"Caller\" (\(fixture.caller.id.uuidString)): Run the retry tests again."),
@@ -751,7 +751,7 @@ final class SessionToolTests: XCTestCase {
                      "Quoting an envelope keeps the person's message theirs")
         XCTAssertNil(TaskMessage.parse("<yardlet-task-message from=\"x\">\nhi\n</yardlet-task-message>"),
                      "Yardlet's envelope carries its notice")
-        XCTAssertEqual(ConversationSentMessage.senderLabel(TaskMessage(senderID: "x", senderName: nil, body: "")),
+        XCTAssertEqual(TaskMessage(senderID: "x", senderName: nil, body: "").senderLabel,
                        L10n.string("Sent from another task"))
 
         // The tag inside a body, opening or closing in any case, reads as no tag; an agent's own text sent as it
@@ -1139,7 +1139,7 @@ final class SessionToolTests: XCTestCase {
                 harness: .claudeCode, status: .ready, latestTurnIsComplete: true)
             let item = try XCTUnwrap(transcript.turns.first?.prompt.first)
             XCTAssertEqual(item.taskMessage?.senderName, "Check task progress")
-            XCTAssertEqual(ConversationSentMessage.senderLabel(try XCTUnwrap(item.taskMessage)),
+            XCTAssertEqual(try XCTUnwrap(item.taskMessage).senderLabel,
                            L10n.format("Sent from %@", "Check task progress"))
             let decoder = CodexTaskDecoder()
             var turn = try XCTUnwrap(decoder.turn(from: .object(["id": .string("t1"), "status": .string("completed"),

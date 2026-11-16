@@ -13,6 +13,18 @@ enum PermissionRequestPreview: Codable, Equatable, Sendable {
 
     /// Edits kept from one request; the rest are counted.
     static let editLimit = 20
+
+    /// Whether a request card's own summary line only repeats what the preview shows: the command's description,
+    /// or the file's name or path.
+    func repeats(_ detail: String) -> Bool {
+        let trimmed = detail.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch self {
+        case let .command(_, description):
+            return trimmed == description
+        case let .edits(path, _, _), let .write(path, _):
+            return !trimmed.isEmpty && (trimmed == path || path.hasSuffix("/" + trimmed))
+        }
+    }
 }
 
 struct PermissionEditPreview: Codable, Equatable, Sendable {

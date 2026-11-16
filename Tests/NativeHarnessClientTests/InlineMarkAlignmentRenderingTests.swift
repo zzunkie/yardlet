@@ -54,8 +54,11 @@ final class InlineMarkAlignmentRenderingTests: XCTestCase {
         let (offset, tolerance) = try Self.offset(named: "turn-header-caret") {
             // As the turn header lays it out, in a row.
             HStack(spacing: 8) {
-                CodexWorkSummaryLabel(status: .completed, timing: ConversationTurnTiming(durationMilliseconds: 50_000),
-                                      isExpanded: false, canExpand: true)
+                CodexWorkSummaryLabel(
+                    turn: ConversationTurn(id: "turn", status: .completed,
+                                           timing: ConversationTurnTiming(durationMilliseconds: 50_000)),
+                    isExpanded: false, canExpand: true
+                )
             }
         }
         XCTAssertLessThanOrEqual(abs(offset), tolerance, "\(offset) pt")
