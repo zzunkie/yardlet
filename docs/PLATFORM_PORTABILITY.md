@@ -129,7 +129,8 @@ opened with the `package` access level, a change to nearly every engine file. Ch
 ## The Windows app
 
 On Windows, without `YARDLET_ENGINE_ONLY`, `Package.swift` makes the app target the Windows app: the engine,
-`Platform/Portable/`, `Platform/Windows/` and the screens in `WinUI/`, in one module as on the Mac. The Mac's build and
+`Platform/Portable/`, `Platform/Windows/` and the screens in `WinUI/`, in one module as on the Mac. As for the Linux
+host, the package there leaves out the Mac's own targets: the browser host's parts and the lid helper. The Mac's build and
 the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Windows layer comes to provide one of
 `Platform/Portable/`'s parts, the Windows app leaves that portable file out.
 

@@ -185,10 +185,10 @@ let package = Package(
         // The Yardlet MCP server a harness starts over stdio; build-app.sh places it in
         // Contents/Helpers. It forwards tool calls to the running app (docs/AGENT_BROWSER_TOOLS.md).
         .executable(name: "yardlet-mcp", targets: ["YardletMCP"]),
-    ] + (linuxHost ? [] : [
+    ] + (linuxHost || windowsApp ? [] : [
         // The launch daemon behind Settings › General › "Keep tasks working with the lid closed";
         // build-app.sh places it in Contents/Helpers beside its launchd property list
-        // (docs/SLEEP_PREVENTION.md). The Linux host leaves it out: it is the Mac's alone.
+        // (docs/SLEEP_PREVENTION.md). The Linux host and the Windows app leave it out: it is the Mac's alone.
         .executable(name: "yardlet-lid-helper", targets: ["YardletLidHelper"])
     ]) + [
         // The phone remote's fixture server: the remote protocol on loopback with fixture tasks, for
@@ -237,8 +237,8 @@ let package = Package(
         // Developer ID library validation. Use the SDK header and system library in every build.
         // Windows supplies its own SQLite (winsqlite3), with the header in the Windows SDK.
         sqliteTarget,
-    ] + (linuxHost ? [] : [
-        // The browser host's parts, which the Linux host has no use for.
+    ] + (linuxHost || windowsApp ? [] : [
+        // The browser host's parts, which the Linux host and the Windows app have no use for.
         // Mach hand-off of IOSurfaces between the browser host and Yardlet (macOS platform layer).
         .target(
             name: "YardletSurfacePort",
@@ -258,7 +258,7 @@ let package = Package(
             name: "YardletMCP",
             dependencies: ["YardletAgentTools"]
         ),
-    ] + (linuxHost ? [] : [
+    ] + (linuxHost || windowsApp ? [] : [
         // The lid helper's state, its XPC interface and the power readings it shares with the app.
         .target(
             name: "YardletLidSleep",

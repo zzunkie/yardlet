@@ -159,7 +159,8 @@ jobs:
       - name: Test the Windows layer
         shell: pwsh
         run: |
-          swift build --build-tests --force-resolved-versions 2>&1 | Tee-Object -FilePath test-build.log
+          swift build --build-tests --force-resolved-versions -Xswiftc -continue-building-after-errors 2>&1 |
+            Tee-Object -FilePath test-build.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Windows/scripts/place-bootstrapper.ps1 -Binaries (swift build --show-bin-path)
           swift test --skip-build --force-resolved-versions --filter YardletWindowsTests 2>&1 | Tee-Object -FilePath test.log
