@@ -194,21 +194,27 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   (`TaskFolderMissing`) once the task is shown or the window comes to the front. The composer redraws its controls
   only when what they show changes, not for every event a turn streams. As in the Mac's composer and the harnesses'
   own apps, Enter sends and Shift+Enter starts a new line (`WinUI/ComposerKeys.swift`); New task and a host's window
-  have the same field and Send. New task, under Home (`WinUI/NewTaskPane.swift`),
-  starts a task as the Mac's new-task screen does, from the Mac's home draft: a harness whose CLI Yardlet found,
-  where it works (a project, a folder chosen in Windows' own folder dialog, `Platform/Windows/WindowsFolderPicker.swift`,
-  or a chat with no project), and the model, effort and permission the harness takes before its task exists, from
-  the menus the Mac's controls read and with the Mac's question before a choice that skips asking. Choosing a task
+  have the same field and Send. New task, under Home (`WinUI/NewTaskPane.swift`), is the Mac's home and starts a task
+  as the Mac's does, from the Mac's home draft: over it the recent tasks with Import conversation…, and at its foot
+  the Mac's large title (`NewTaskHeroTitleKind`), whose project name opens the project menu, the chip that chooses
+  where a task without a project starts, and the composer card, whose bottom row holds the harness with its mark (a
+  harness whose CLI Yardlet found), the account, the permission and the model, and Start task. Where the task works
+  is a project, a folder chosen in Windows' own folder dialog (`Platform/Windows/WindowsFolderPicker.swift`) or a
+  chat with no project, and the model, effort and permission are what the harness takes before its task exists, from
+  the menus the Mac's controls read and with the Mac's question before a choice that skips asking. A harness whose
+  login reads signed out says so in the card with Sign in, and its account chip says it too. Choosing a task
   reads its saved history as the Mac does (`refreshConversationStatus`, which starts no turn), and its conversation
   draws from the projection the Mac's timeline reads; a change to files opens to each file's diff.
-- **Import conversation.** Import conversation, below the tasks (`WinUI/ImportConversationPane.swift`), continues a
-  conversation a harness's own CLI or app started, as the Mac's File › Import conversation… does
-  (docs/NATIVE_SESSION_STORAGE.md, "Importing conversations from other apps"): Claude Code, Codex, Antigravity CLI and
-  each other ACP agent installed whose history Yardlet reads; a project's folder, or one chosen in Windows' folder
-  dialog with Choose project…; and the account the harness's new tasks start on, with a menu when there are others.
+- **Import conversation.** Import conversation…, New task's link as on the Mac's home, opens a dialog over the window
+  with the Mac's sheet's look (`WinUI/ImportConversationPane.swift`) and continues a conversation a harness's own CLI
+  or app started, as the Mac's File › Import conversation… does (docs/NATIVE_SESSION_STORAGE.md, "Importing
+  conversations from other apps"): Claude Code, Codex, Antigravity CLI and each other ACP agent installed whose
+  history Yardlet reads, side by side; a project's folder, or one chosen in Windows' folder dialog with the project
+  menu's Choose project…; and the account the harness's new tasks start on, with a menu when there are others.
   The list is the engine's (`AppModel.importableConversations`), each conversation with its title and when it was last
   active, and Load more history when the harness has more. Choosing one imports it, or finds the task that already
-  continues it, and the main window shows that task with its row chosen; the task reads the harness's own history as
+  continues it, closes the dialog, and the main window shows that task with its row chosen; the task reads the
+  harness's own history as
   it opens and attaches on the first send. A folder goes to a harness as Windows writes it (`PathRules.nativePath`,
   `C:\Users\me\proj`), not as a file URL's path (`/C:/Users/me/proj/`): ACP's `cwd`, which an agent compares
   character for character with the folder it saved a session in, and the name Claude Code gives the folder's history

@@ -185,9 +185,9 @@ try {
     $automation = [System.Windows.Automation.AutomationElement]::FromHandle($window)
     $listItem = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::ListItem)
-    # The tasks' rows, not Home above them nor Import conversation and Settings below.
+    # The tasks' rows, not Home above them nor Settings below.
     $sessionItems = @($automation.FindAll([System.Windows.Automation.TreeScope]::Descendants, $listItem) |
-        Where-Object { $_.Current.Name -notin @('Home', 'Import conversation', 'Settings') })
+        Where-Object { $_.Current.Name -notin @('Home', 'Settings') })
     $summary.sidebarItems = $sessionItems.Count
     # Each task's row is named by its title, not by its type.
     $summary.sidebarNames = @($sessionItems | ForEach-Object { $_.Current.Name }) -join ' / '

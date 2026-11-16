@@ -1,72 +1,91 @@
 import Foundation
+import Observation
 import UWP
 // WinRT's async operations are not marked Sendable; a dialog's answer comes back on the window's thread.
 @preconcurrency import WindowsFoundation
 import WinUI
 import YardletRemote
 
-/// New task, as the Mac's new-task screen starts one: the harnesses whose CLI Yardlet found, where the task works
-/// (a project, a folder chosen in Windows' folder dialog, or a chat with no project), the model, effort and permission
-/// the harness takes before its task exists, and the message the task starts with. The choices are the Mac's
-/// home draft (`ComposerDrafts.home`), so they are remembered as the Mac remembers them, and the menus are the ones
-/// the Mac's new-task controls read (`ComposerSessionOptionsProjection.newTask`), as a paired computer's new task
-/// lists them (`AppModelRemoteBridge.taskSettings`) and chooses them (`AppModelRemoteBridge.choosing`). A choice the
-/// Mac asks about first, such as skipping permission prompts, is asked about here in the Mac's words.
+/// New task, which is Yardlet's home, as the Mac's (`NewTaskHome`): over it the recent tasks with Import
+/// conversation…, and at its foot the large title ("What should we build?", or "…in {project}?", whose project
+/// name opens the project menu), under a title without a project the chip that chooses where the task starts, and the
+/// composer card, whose bottom row holds "+" (`ComposerAttachments`), the harness with its mark, the account, the
+/// permission and the model, and Start. The choices are the Mac's home draft (`ComposerDrafts.home`), so they are remembered as the Mac remembers
+/// them, and the menus are the ones the Mac's new-task controls read (`ComposerSessionOptionsProjection.newTask`), as a
+/// paired computer's new task chooses them (`AppModelRemoteBridge.choosing`). A choice the Mac asks about first, such
+/// as skipping permission prompts, is asked about here in the Mac's words. A harness whose login reads signed out says
+/// so in the card with Sign in, as the Mac's does.
 @MainActor
 final class NewTaskPane {
-    let view = StackPanel()
+    let view = Grid()
     /// Called once the task has started and the model has chosen it, or came to exist and could not start.
     var onStarted: (() -> Void)?
+    /// Opens a task the home lists.
+    var onOpenTask: ((SessionRecord.ID) -> Void)?
+    /// Opens Import conversation, from the link over the recent tasks.
+    var onImportConversation: (() -> Void)?
 
     private let model: AppModel
     private let log: QAEventLog
+    private let signIn: HarnessSignIn
     /// The window's handle, which owns the folder dialog.
     private let windowHandle: () -> UInt64
-    private let harnessList = ListView()
-    private let placeBox = ComboBox()
-    private let chooseFolderButton = Button()
-    /// The menus, two to a row.
-    private let settingsGrid = Grid()
-    /// The menus shown, kept so their handlers find them: the bindings keep no Swift object alive for an element
-    /// XAML holds.
-    private var settingBoxes: [ComboBox] = []
-    private let prompt = TextBox()
-    /// Starts the task with the message, as Enter does.
-    private var sendButton: Button?
-    private let status = TextBlock()
+    private let card = ComposerCard(metrics: .newTask)
+    private let chips = ComposerOptionChips()
+    private let attachments: ComposerAttachments
+    private let recent = StackPanel()
+    /// The recent tasks' scroll view, whose width sets theirs.
+    private let listScroll = ScrollViewer()
+    private let title = StackPanel()
+    private let destination = Grid()
+    private let sendButton = ComposerParts.sendButton(name: L10n.string("Start task"))
+    private let starting = ProgressRing()
+    private let guidance = TextBlock()
     /// The chosen harness's sign-in, while its account reads signed out.
     private let signInRow: SignInRow
-    /// The harnesses the list shows, in its order.
+    /// The harnesses Yardlet found, in the menu's order.
     private var harnesses: [HarnessKind] = []
-    /// What the place menu lists, in its order.
-    private var places: [Place] = []
     private var lookedForRuntimes = false
-    /// The harnesses whose model list was read for the menus since the pane was made.
-    private var preparedModels: Set<HarnessKind> = []
-    /// Set while the controls are filled, whose selection changes are then not the person's.
-    private var isFilling = false
+    /// The draft's text as it last went to the draft or came from it.
+    private var textInDraft: String?
     private var settingsGeneration = 0
+    private var followGeneration = 0
+    private var isInRepository = false
+    private var repositoryFolder: URL?
+    /// The title's words, which the window's width sizes.
+    private var titleTexts: [TextBlock] = []
+    /// What each part last drew, so a change redraws only its part: the tasks change with every turn's status.
+    private var shownRecent: [String]?
+    private var shownTitle: [String]?
+    private var shownControls: Controls?
 
-    private enum Place: Equatable {
-        case chat
-        case project(Project)
-        /// A folder chosen directly that no project holds yet; the task's start makes it one.
-        case folder(URL)
+    private struct Controls: Equatable {
+        var harnesses: [HarnessKind]
+        var harness: HarnessKind?
+        var options: ComposerSessionOptions?
+        var accounts: [String]
+        var account: String?
+        var needsSignIn: Bool
+        var isCreating: Bool
+        var failure: String?
+        var notice: String?
+        var hasRuntime: Bool
     }
 
     init(model: AppModel, log: QAEventLog, signIn: HarnessSignIn, windowHandle: @escaping () -> UInt64) {
         self.model = model
         self.log = log
-        signInRow = SignInRow(signIn: signIn)
+        self.signIn = signIn
+        signInRow = SignInRow(signIn: signIn, inline: true)
         self.windowHandle = windowHandle
+        attachments = ComposerAttachments(log: log)
         make()
     }
 
     private var draft: NewTaskDraft { model.composerDrafts.home }
 
     private var chosenHarness: HarnessKind? {
-        let index = Int(harnessList.selectedIndex)
-        return harnesses.indices.contains(index) ? harnesses[index] : nil
+        draft.harness.flatMap { harnesses.contains($0) ? $0 : nil }
     }
 
     /// The projects the Mac's project menu lists.
@@ -74,79 +93,86 @@ final class NewTaskPane {
         model.projects.visibleGroups(sessions: model.store.sessions).compactMap(\.project)
     }
 
-    private func make() {
-        view.spacing = 12
-        view.padding = Thickness(left: 28, top: 28, right: 28, bottom: 28)
-        view.maxWidth = 560
-        view.horizontalAlignment = .left
-        let title = TextBlock()
-        title.text = L10n.string("New task")
-        title.fontSize = 20
-        view.children.append(title)
-        let harnessTitle = TextBlock()
-        harnessTitle.text = L10n.string("Harness")
-        harnessTitle.opacity = 0.7
-        view.children.append(harnessTitle)
-        harnessList.selectionMode = .single
-        harnessList.selectionChanged.addHandler { [weak self] _, _ in
-            guard let self, !self.isFilling else { return }
-            self.draft.harness = self.chosenHarness
-            self.showPrompt()
-            self.refreshSettings()
-        }
-        view.children.append(harnessList)
-        view.children.append(signInRow.view)
-
-        let placeRow = StackPanel()
-        placeRow.orientation = .horizontal
-        placeRow.spacing = 8
-        placeBox.header = L10n.string("Project")
-        placeBox.minWidth = 240
-        try? AutomationProperties.setName(placeBox, L10n.string("Project"))
-        placeBox.selectionChanged.addHandler { [weak self] _, _ in
-            guard let self, !self.isFilling else { return }
-            self.choosePlace(at: Int(self.placeBox.selectedIndex))
-        }
-        placeRow.children.append(placeBox)
-        chooseFolderButton.content = L10n.string("Choose project…")
-        chooseFolderButton.verticalAlignment = .bottom
-        // The dialog runs modally until it closes, so it opens after the click returns, as Import conversation's does.
-        chooseFolderButton.click.addHandler { [weak self] _, _ in Task { @MainActor in self?.chooseFolder() } }
-        placeRow.children.append(chooseFolderButton)
-        view.children.append(placeRow)
-
-        settingsGrid.columnSpacing = 8
-        settingsGrid.rowSpacing = 8
-        for _ in 0..<2 {
-            let column = ColumnDefinition()
-            column.width = GridLength(value: 1, gridUnitType: .star)
-            settingsGrid.columnDefinitions.append(column)
-        }
-        view.children.append(settingsGrid)
-
-        // The message with Send beside it, as the Mac's new task has them.
-        let promptRow = Grid()
-        promptRow.columnSpacing = 8
-        let promptColumn = ColumnDefinition()
-        promptColumn.width = GridLength(value: 1, gridUnitType: .star)
-        let buttonColumn = ColumnDefinition()
-        buttonColumn.width = GridLength(value: 0, gridUnitType: .auto)
-        promptRow.columnDefinitions.append(promptColumn)
-        promptRow.columnDefinitions.append(buttonColumn)
-        ComposerKeys.prepare(prompt) { [weak self] in self?.startTask() }
-        prompt.textChanged.addHandler { [weak self] _, _ in self?.showSendable() }
-        promptRow.children.append(prompt)
-        let sendButton = ComposerKeys.sendButton(L10n.string("Send")) { [weak self] in self?.startTask() }
-        try? Grid.setColumn(sendButton, 1)
-        promptRow.children.append(sendButton)
-        self.sendButton = sendButton
-        view.children.append(promptRow)
-        status.textWrapping = .wrap
-        status.opacity = 0.7
-        view.children.append(status)
+    private var runtimeURL: URL? {
+        chosenHarness.flatMap { model.runtimeSelections.selectedURL(for: $0) }
     }
 
-    /// Fills the pane from the draft and the harnesses found, when New task is chosen.
+    private func make() {
+        let listsRow = RowDefinition()
+        listsRow.height = GridLength(value: 1, gridUnitType: .star)
+        let bottomRow = RowDefinition()
+        bottomRow.height = GridLength(value: 0, gridUnitType: .auto)
+        view.rowDefinitions.append(listsRow)
+        view.rowDefinitions.append(bottomRow)
+
+        // Over the composer: the recent tasks with Import conversation…, as the Mac's home lists them.
+        // The list's width is set from the view's rather than stretched up to a maximum: the scroll view places its
+        // content by the width the content asks for, so a stretched list stood to the right of the middle, its
+        // Import conversation… past the window's edge (as `ConversationTimeline.fitColumn`).
+        recent.horizontalAlignment = .center
+        recent.margin = Thickness(left: 28, top: 28, right: 28, bottom: 16)
+        recent.spacing = 2
+        listScroll.content = recent
+        listScroll.sizeChanged.addHandler { [weak self] _, _ in
+            guard let self else { return }
+            self.recent.width = min(760, max(0, self.listScroll.actualWidth - 56))
+        }
+        view.children.append(listScroll)
+
+        let bottom = StackPanel()
+        bottom.maxWidth = 760 + 2 * 28
+        bottom.horizontalAlignment = .stretch
+        bottom.padding = Thickness(left: 28, top: 14, right: 28, bottom: 20)
+        title.orientation = .horizontal
+        title.horizontalAlignment = .center
+        bottom.children.append(title)
+        destination.horizontalAlignment = .center
+        destination.margin = Thickness(left: 0, top: 8, right: 0, bottom: 0)
+        bottom.children.append(destination)
+        let composer = card.view
+        composer.margin = Thickness(left: 0, top: 20, right: 0, bottom: 0)
+        bottom.children.append(composer)
+        try? Grid.setRow(bottom, 1)
+        view.children.append(bottom)
+        // The title fits the window: smaller where the window is narrow, as the Mac's steps down.
+        view.sizeChanged.addHandler { [weak self] _, _ in self?.fitTitle() }
+
+        let field = card.field
+        ComposerKeys.prepare(field, send: { [weak self] in self?.startTask() })
+        field.textChanged.addHandler { [weak self] _, _ in self?.textChanged() }
+        // "+" and a paste add to the home draft as the Mac's home adds them.
+        field.paste.addHandler { [weak self] _, args in self?.attachments.paste(args) }
+        card.attachments.child = attachments.chipRow
+        attachments.windowHandle = windowHandle
+        attachments.target = { [weak self] in
+            guard let self, let options = self.optionsNow() else { return nil }
+            return (self.draft, options.input)
+        }
+        guidance.textWrapping = .wrap
+        guidance.fontSize = 12
+        guidance.foreground = WindowsTheme.secondaryText.brush
+        guidance.margin = Thickness(left: 0, top: 0, right: 0, bottom: 10)
+        guidance.visibility = .collapsed
+        card.extras.children.append(guidance)
+        signInRow.place(in: card.extras)
+        signInRow.view.margin = Thickness(left: 0, top: 0, right: 0, bottom: 12)
+
+        starting.isActive = true
+        starting.minWidth = 0
+        starting.minHeight = 0
+        starting.width = 14
+        starting.height = 14
+        starting.verticalAlignment = .center
+        starting.visibility = .collapsed
+        try? ToolTipService.setToolTip(sendButton, L10n.string("Start task"))
+        sendButton.click.addHandler { [weak self] _, _ in self?.startTask() }
+
+        chips.redraw = { [weak self] in self?.showControls() }
+        chips.choose = { [weak self] id, value, _ in self?.apply(value, to: id) }
+        chips.prepare = { [weak self] in await self?.readModels() }
+    }
+
+    /// Fills the home from the draft and the harnesses found, when it is shown.
     func show() {
         let descriptors = model.runtimeSelections.connectedDescriptors
         harnesses = descriptors.map(\.id)
@@ -155,16 +181,16 @@ final class NewTaskPane {
         // With no project to start in, the task starts as a chat (`NewTaskDraft.startsChat`).
         draft.dropUnavailableProject(visible: projects)
         if let harness = draft.harness, !harnesses.contains(harness) { draft.harness = harnesses.first }
-
-        isFilling = true
-        harnessList.items.clear()
-        for harness in harnesses { harnessList.items.append(harnessItem(harness)) }
-        harnessList.selectedIndex = Int32(draft.harness.flatMap { harnesses.firstIndex(of: $0) } ?? (harnesses.isEmpty ? -1 : 0))
-        isFilling = false
-        status.text = descriptors.isEmpty ? L10n.string("Choose or install a runtime first.") : ""
         log.write("new task harnesses: \(descriptors.map(\.displayName).joined(separator: ", "))")
-        showPlaces()
-        showPrompt()
+        if card.field.text != draft.text {
+            textInDraft = draft.text
+            card.field.text = draft.text
+        }
+        // Drawn whole each time it is shown; while it shows, only what changes.
+        shownRecent = nil
+        shownTitle = nil
+        shownControls = nil
+        follow()
         refreshSettings()
         // The installs are looked for once, when the list first comes up empty.
         guard descriptors.isEmpty, !lookedForRuntimes else { return }
@@ -175,83 +201,234 @@ final class NewTaskPane {
         }
     }
 
-    /// A harness's row: its mark and its name, which also names the row for UI Automation.
-    private func harnessItem(_ harness: HarnessKind) -> ListViewItem {
-        let row = StackPanel()
-        row.orientation = .horizontal
-        row.spacing = 8
-        if let icon = HarnessIcon.element(for: harness) {
-            icon.verticalAlignment = .center
-            row.children.append(icon)
+    /// Follows the draft, the accounts and the tasks through Observation while the home shows, and draws them.
+    private func follow() {
+        followGeneration += 1
+        let current = followGeneration
+        let (recent, heading, controls, text, carried) = withObservationTracking {
+            (recentShown(), titleShown(), controlsShown(), draft.text, draft.attachments)
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self, self.followGeneration == current else { return }
+                self.follow()
+            }
         }
-        let name = TextBlock()
-        name.text = harness.displayName
-        name.verticalAlignment = .center
-        row.children.append(name)
-        let item = ListViewItem()
-        item.content = row
-        try? AutomationProperties.setName(item, harness.displayName)
-        return item
-    }
-
-    private func showPrompt() {
-        signInRow.show(chosenHarness)
-        prompt.placeholderText = chosenHarness.map { L10n.format("What should %@ work on?", $0.displayName) } ?? ""
+        if text != textInDraft {
+            textInDraft = text
+            if card.field.text != text { card.field.text = text }
+        }
+        if recent != shownRecent {
+            shownRecent = recent
+            showRecent()
+        }
+        if heading != shownTitle {
+            shownTitle = heading
+            showTitle()
+        }
+        if controls != shownControls { showControls() }
+        attachments.redraw(carried)
         showSendable()
     }
 
-    /// Send is on while there is a harness and a message, and no task is starting.
-    private func showSendable() {
-        sendButton?.isEnabled = chosenHarness != nil && prompt.isEnabled && ComposerKeys.canSend(prompt.text)
+    private func recentShown() -> [String] {
+        model.store.listedSessions.prefix(6).map { session in
+            [session.id.uuidString, session.title, session.status.displayName, model.projects.displayName(for: session)]
+                .joined(separator: "\u{1F}")
+        }
     }
 
-    // MARK: Where the task works
+    private func titleShown() -> [String] {
+        [draft.startsChat ? "chat" : "", draft.workspaceURL?.path ?? "", draft.projectID?.uuidString ?? ""]
+            + visibleProjects.map { "\($0.id) \($0.name)" }
+    }
 
-    /// Chat (no project), the projects, and a folder chosen directly, the one the draft names chosen.
-    private func showPlaces() {
-        let projects = visibleProjects
-        places = [.chat] + projects.map(Place.project)
-        let current: Place
-        if draft.startsChat {
-            current = .chat
-        } else if let folder = draft.workspaceURL {
-            if let project = draft.projectID.flatMap({ id in projects.first { $0.id == id } })
-                ?? projects.first(where: { $0.contains(root: folder) }) {
-                current = .project(project)
-            } else {
-                current = .folder(folder)
-                places.append(current)
-            }
+    private func controlsShown() -> Controls {
+        let harness = chosenHarness
+        let connections = model.connections
+        let choices = harness.map { connections.choices(for: [$0]) } ?? []
+        return Controls(harnesses: harnesses, harness: harness, options: optionsNow(),
+                        accounts: choices.map { "\($0.title) \($0.canSelect)" },
+                        account: harness.flatMap { connections.selection[$0] },
+                        needsSignIn: harness.map { signIn.needsSignIn($0) } ?? false,
+                        isCreating: draft.isCreating, failure: draft.creationFailed ? draft.creationError ?? "" : nil,
+                        notice: draft.notice, hasRuntime: runtimeURL != nil)
+    }
+
+    // MARK: Over the composer
+
+    /// "Recent tasks" with Import conversation… beside it, then the latest tasks, each opening its task.
+    private func showRecent() {
+        recent.children.clear()
+        let header = Grid()
+        let wide = ColumnDefinition()
+        wide.width = GridLength(value: 1, gridUnitType: .star)
+        header.columnDefinitions.append(wide)
+        let links = ColumnDefinition()
+        links.width = GridLength(value: 0, gridUnitType: .auto)
+        header.columnDefinitions.append(links)
+        header.margin = Thickness(left: 10, top: 0, right: 0, bottom: 6)
+        header.children.append(ComposerParts.label(L10n.string("Recent tasks"), size: 12, weight: 600))
+        let link = ComposerParts.control(title: L10n.string("Import conversation…"), name: L10n.string("Import conversation"))
+        try? ToolTipService.setToolTip(link, L10n.string("Continue a conversation started in another app or CLI."))
+        link.click.addHandler { [weak self] _, _ in self?.onImportConversation?() }
+        try? Grid.setColumn(link, 1)
+        header.children.append(link)
+        recent.children.append(header)
+        for session in model.store.listedSessions.prefix(6) {
+            recent.children.append(recentRow(session))
+        }
+    }
+
+    /// A recent task (`RecentTaskButton`): its harness's mark, its title over its project and harness, its state.
+    private func recentRow(_ session: SessionRecord) -> UIElement {
+        let button = Button()
+        ComposerParts.styleFlat(button, radius: 8)
+        button.horizontalAlignment = .stretch
+        button.horizontalContentAlignment = .stretch
+        button.padding = Thickness(left: 10, top: 6, right: 10, bottom: 6)
+        button.minHeight = 48
+        let row = Grid()
+        row.columnSpacing = 11
+        for width in [GridLength(value: 24, gridUnitType: .pixel), GridLength(value: 1, gridUnitType: .star),
+                      GridLength(value: 0, gridUnitType: .auto), GridLength(value: 0, gridUnitType: .auto)] {
+            let column = ColumnDefinition()
+            column.width = width
+            row.columnDefinitions.append(column)
+        }
+        if let icon = HarnessIcon.element(for: session.harness) {
+            icon.verticalAlignment = .center
+            icon.horizontalAlignment = .center
+            row.children.append(icon)
+        }
+        let words = StackPanel()
+        words.spacing = 2
+        words.verticalAlignment = .center
+        words.children.append(ComposerParts.label(session.title, size: 14, color: WindowsTheme.text))
+        words.children.append(ComposerParts.label(
+            "\(model.projects.displayName(for: session)) · \(session.harness.displayName)", size: 12, weight: 400))
+        try? Grid.setColumn(words, 1)
+        row.children.append(words)
+        let state = ComposerParts.label(session.status.displayName, size: 12,
+                                        color: session.status == .failed ? ComposerParts.red : WindowsTheme.secondaryText,
+                                        weight: 400)
+        try? Grid.setColumn(state, 2)
+        row.children.append(state)
+        let chevron = ComposerParts.glyph("\u{E76C}", size: 10, color: WindowsTheme.tertiaryText)
+        try? Grid.setColumn(chevron, 3)
+        row.children.append(chevron)
+        button.content = row
+        try? AutomationProperties.setName(button, session.title)
+        let id = session.id
+        button.click.addHandler { [weak self] _, _ in self?.onOpenTask?(id) }
+        return button
+    }
+
+    // MARK: The title and where the task starts
+
+    private func showTitle() {
+        let folder = draft.startsChat ? nil : draft.workspaceURL
+        if folder != repositoryFolder {
+            repositoryFolder = folder
+            isInRepository = folder.map { GitWorktreeOriginResolver.isInRepository($0) } ?? false
+        }
+        let kind = NewTaskHeroTitleKind(startsChat: draft.startsChat, workspaceURL: draft.workspaceURL,
+                                        isInRepository: isInRepository,
+                                        projectName: { [model] in model.projects.displayName(for: $0) })
+        let parts = kind.parts
+        title.children.clear()
+        titleTexts = []
+        if !parts.before.isEmpty { title.children.append(heroText(parts.before)) }
+        if let project = parts.project {
+            // The project's name is the project menu, underlined as the Codex app's is.
+            let name = Button()
+            ComposerParts.styleFlat(name, pointerOver: ComposerParts.clear, pressed: ComposerParts.clear, radius: 0)
+            name.padding = Thickness(left: 0, top: 0, right: 0, bottom: 0)
+            let text = heroText(project)
+            text.foreground = WindowsTheme.text.brush
+            let underline = Border()
+            underline.borderBrush = WindowsTheme.tertiaryText.brush
+            underline.borderThickness = Thickness(left: 0, top: 0, right: 0, bottom: 1.5)
+            underline.child = text
+            name.content = underline
+            name.flyout = destinationMenu()
+            try? AutomationProperties.setName(name, L10n.string("Project"))
+            try? ToolTipService.setToolTip(name, L10n.string("Project"))
+            title.children.append(name)
+        }
+        if !parts.after.isEmpty { title.children.append(heroText(parts.after)) }
+        try? AutomationProperties.setName(title, kind.sentence)
+        fitTitle()
+
+        destination.children.clear()
+        if draft.workspaceURL == nil {
+            let label = draft.startsChat ? L10n.string("Chat (no project)") : L10n.string("Choose project")
+            let chip = ComposerParts.control(title: label, glyph: draft.startsChat ? "\u{E8BD}" : ComposerParts.Glyph.folder,
+                                             chevron: true, name: L10n.string("Project"))
+            chip.flyout = destinationMenu()
+            destination.children.append(chip)
+            destination.visibility = .visible
         } else {
-            current = .chat
+            destination.visibility = .collapsed
         }
-        isFilling = true
-        placeBox.items.clear()
-        for place in places {
-            switch place {
-            case .chat: placeBox.items.append(L10n.string("Chat (no project)"))
-            case let .project(project): placeBox.items.append(project.name)
-            case let .folder(url): placeBox.items.append(url.lastPathComponent)
-            }
-        }
-        placeBox.selectedIndex = Int32(places.firstIndex(of: current) ?? 0)
-        isFilling = false
     }
 
-    private func choosePlace(at index: Int) {
-        guard places.indices.contains(index) else { return }
-        switch places[index] {
-        case .chat:
-            draft.chooseChat()
-            log.write("new task place: chat")
-        case let .project(project):
-            draft.projectID = project.id
-            draft.workspaceURL = project.primaryRoot
-            log.write("new task place: \(project.name)")
-        case .folder:
-            return
+    private func heroText(_ words: String) -> TextBlock {
+        let text = TextBlock()
+        text.text = words
+        text.fontSize = 28
+        text.fontWeight = UWP.FontWeight(weight: 600)
+        text.foreground = WindowsTheme.text.brush
+        text.textWrapping = .noWrap
+        text.verticalAlignment = .bottom
+        titleTexts.append(text)
+        return text
+    }
+
+    /// 28 points where the window has room, 22 where it is narrow.
+    private func fitTitle() {
+        let size: Double = view.actualWidth > 0 && view.actualWidth < 640 ? 22 : 28
+        for text in titleTexts where text.fontSize != size { text.fontSize = size }
+    }
+
+    /// The project menu (`NewTaskDestinationMenuItems`): Choose project…, Chat (no project), then the projects, the
+    /// current one checked.
+    private func destinationMenu() -> MenuFlyout {
+        let menu = MenuFlyout()
+        menu.items.append(ComposerParts.menuItem(L10n.string("Choose project…")) { [weak self] in
+            // The dialog runs modally until it closes, so it opens after the menu's click returns.
+            Task { @MainActor in self?.chooseFolder() }
+        })
+        let chat = ToggleMenuFlyoutItem()
+        chat.text = L10n.string("Chat (no project)")
+        chat.isChecked = draft.startsChat
+        chat.click.addHandler { [weak self] _, _ in
+            guard let self else { return }
+            self.draft.chooseChat()
+            self.log.write("new task place: chat")
+            self.refreshSettings()
         }
-        refreshSettings()
+        menu.items.append(chat)
+        let projects = visibleProjects
+        if !projects.isEmpty {
+            menu.items.append(MenuFlyoutSeparator())
+            let current = draft.startsChat ? nil : (draft.projectID.flatMap { id in projects.first { $0.id == id } }
+                ?? draft.workspaceURL.flatMap { folder in projects.first { $0.contains(root: folder) } })?.id
+            for project in projects {
+                let item = RadioMenuFlyoutItem()
+                item.text = project.name
+                item.groupName = "project"
+                item.isChecked = project.id == current
+                item.click.addHandler { [weak self] _, _ in
+                    guard let self else { return }
+                    self.draft.projectID = project.id
+                    self.draft.workspaceURL = project.primaryRoot
+                    self.log.write("new task place: \(project.name)")
+                    self.refreshSettings()
+                }
+                menu.items.append(item)
+            }
+        }
+        return menu
     }
 
     /// Choose project…: a folder from Windows' own dialog, in the project that holds it or as a folder the task's
@@ -262,99 +439,167 @@ final class NewTaskPane {
         draft.workspaceURL = folder
         draft.projectID = visibleProjects.first { $0.contains(root: folder) }?.id
         log.write("new task place: \(folder.lastPathComponent)")
-        showPlaces()
         refreshSettings()
+    }
+
+    // MARK: The composer's row
+
+    private func optionsNow() -> ComposerSessionOptions? {
+        chosenHarness.map { harness in
+            ComposerSessionOptionsProjection.newTask(harness: harness, choice: draft.modelChoices[harness],
+                                                     catalogs: model.modelCatalogs,
+                                                     connection: model.connections.selected(for: harness),
+                                                     workspaceURL: draft.workspaceURL)
+        }
+    }
+
+    /// The bottom row (`NewTaskComposerControlRow`): the harness, the account and the permission, then the model and
+    /// Start; over it what stops a start, in the Mac's words.
+    private func showControls() {
+        shownControls = controlsShown()
+        let harness = chosenHarness
+        card.field.placeholderText = NewTaskComposerText.placeholder(harnessName: harness?.displayName)
+        let options = optionsNow()
+        card.leading.children.clear()
+        attachments.show(policy: options?.input)
+        card.leading.children.append(attachments.plusButton)
+        card.leading.children.append(harnessControl())
+        if let harness { card.leading.children.append(accountControl(harness)) }
+        if let options { for control in chips.leading(options) { card.leading.children.append(control) } }
+        card.trailing.children.clear()
+        if let options { for control in chips.trailing(options) { card.trailing.children.append(control) } }
+        starting.visibility = draft.isCreating ? .visible : .collapsed
+        card.trailing.children.append(starting)
+        card.trailing.children.append(sendButton)
+
+        // Why the last edit left the draft as it is, as the Mac's editor says it, else why the last start failed.
+        card.showNotice(draft.notice ?? (draft.creationFailed
+            ? draft.creationError ?? L10n.string("The task could not start. Your draft is still here.") : nil))
+        if harness != nil, runtimeURL == nil {
+            showGuidance(L10n.string("The selected harness is unavailable. Choose another harness or manage harnesses."))
+        } else if harnesses.isEmpty {
+            showGuidance(L10n.string("Add a harness to start a task."))
+        } else {
+            showGuidance(nil)
+        }
+        signInRow.show(harness)
+        showSendable()
+    }
+
+    private func showGuidance(_ text: String?) {
+        guidance.text = text ?? ""
+        guidance.visibility = text == nil ? .collapsed : .visible
+    }
+
+    /// The harness with its mark (`NewTaskHarnessControl`), whose menu lists the harnesses Yardlet found.
+    private func harnessControl() -> Button {
+        let harness = chosenHarness
+        let button = Button()
+        ComposerParts.styleFlat(button)
+        button.height = ComposerParts.controlHeight
+        button.padding = Thickness(left: 7, top: 0, right: 7, bottom: 0)
+        button.verticalAlignment = .center
+        let row = StackPanel()
+        row.orientation = .horizontal
+        row.spacing = 5
+        if let harness, let icon = HarnessIcon.element(for: harness) {
+            icon.verticalAlignment = .center
+            row.children.append(icon)
+        }
+        row.children.append(ComposerParts.label(harness?.displayName ?? L10n.string("Choose harness"),
+                                                color: WindowsTheme.text))
+        row.children.append(ComposerParts.glyph(ComposerParts.Glyph.chevronDown, size: 8, color: WindowsTheme.text))
+        button.content = row
+        try? AutomationProperties.setName(button, L10n.string("Harness"))
+        try? ToolTipService.setToolTip(button, harness?.displayName ?? L10n.string("No available harnesses"))
+        let menu = MenuFlyout()
+        menu.placement = .top
+        for kind in harnesses {
+            let item = RadioMenuFlyoutItem()
+            item.text = kind.displayName
+            item.groupName = "harness"
+            item.isChecked = kind == harness
+            if let icon = HarnessIcon.element(for: kind) { item.icon = icon }
+            item.click.addHandler { [weak self] _, _ in self?.choose(kind) }
+            menu.items.append(item)
+        }
+        if !harnesses.isEmpty { button.flyout = menu }
+        return button
+    }
+
+    private func choose(_ harness: HarnessKind) {
+        log.write("new task harness: \(harness.displayName)")
+        guard harness != draft.harness else { return }
+        draft.harness = harness
+        refreshSettings()
+    }
+
+    /// The account the next task starts on (`ProviderConnectionPicker`): its name, or that it is not signed in, and a
+    /// menu of the harness's accounts, with Sign in for one that needs it.
+    private func accountControl(_ harness: HarnessKind) -> Button {
+        let connections = model.connections
+        let choices = connections.choices(for: [harness])
+        let selected = choices.first { $0.connection?.id == connections.selection[harness] }
+        let display = ProviderConnectionDisplay(choice: selected, automatic: connections.startsNewTasksAutomatically(for: harness))
+        let control = ComposerParts.control(title: display.title, glyph: "\u{E77B}", chevron: true,
+                                            name: L10n.string("Choose account"))
+        try? ToolTipService.setToolTip(control, display.accessibilityTitle)
+        let menu = MenuFlyout()
+        menu.placement = .top
+        for choice in choices {
+            let item = RadioMenuFlyoutItem()
+            item.text = choice.title
+            item.groupName = "account"
+            item.isChecked = choice.connection?.id == selected?.connection?.id
+            item.isEnabled = choice.canSelect
+            item.click.addHandler { [weak self] _, _ in
+                guard let self else { return }
+                self.model.connections.choose(choice)
+                self.log.write("new task account: \(choice.title)")
+                self.refreshSettings()
+            }
+            menu.items.append(item)
+        }
+        if signIn.needsSignIn(harness) {
+            if !choices.isEmpty { menu.items.append(MenuFlyoutSeparator()) }
+            menu.items.append(ComposerParts.menuItem(L10n.string("Sign in")) { [weak self] in self?.signIn.start(harness) })
+        }
+        control.flyout = menu
+        return control
+    }
+
+    /// Start is on while there is a harness, a place and a message, and no task is starting.
+    private func showSendable() {
+        ComposerParts.setEnabled(sendButton, draft.canCreate(runtimeURL: runtimeURL))
+    }
+
+    private func textChanged() {
+        let text = card.field.text
+        if text != textInDraft {
+            textInDraft = text
+            draft.text = text
+        }
+        showSendable()
     }
 
     // MARK: Model, effort and permission
 
     /// Reads the account's defaults for the harness in the folder, as the Mac's new-task controls do whenever the
-    /// harness or the folder changes, then shows the menus. Nothing starts.
+    /// harness or the folder changes. Nothing starts.
     private func refreshSettings() {
         settingsGeneration += 1
         let generation = settingsGeneration
-        showSettings()
         guard let harness = chosenHarness else { return }
         let connection = model.connections.selected(for: harness)
         let folder = draft.workspaceURL
         Task {
             await model.modelCatalogs.refreshDefaults(for: harness, connection: connection, workspaceURL: folder)
-            if generation == settingsGeneration { showSettings() }
+            if generation == settingsGeneration { showControls() }
         }
     }
 
-    private func showSettings() {
-        settingsGrid.children.clear()
-        settingBoxes = []
-        settingsGrid.rowDefinitions.clear()
+    private func apply(_ value: String, to settingID: String) {
         guard let harness = chosenHarness else { return }
-        let settings = AppModelRemoteBridge.taskSettings(options(for: harness)).filter { !$0.choices.isEmpty }
-        isFilling = true
-        for (index, setting) in settings.enumerated() {
-            if index % 2 == 0 {
-                let row = RowDefinition()
-                row.height = GridLength(value: 0, gridUnitType: .auto)
-                settingsGrid.rowDefinitions.append(row)
-            }
-            let box = settingBox(setting, harness: harness)
-            settingBoxes.append(box)
-            try? Grid.setRow(box, Int32(index / 2))
-            try? Grid.setColumn(box, Int32(index % 2))
-            settingsGrid.children.append(box)
-        }
-        isFilling = false
-        if settings.contains(where: { $0.prepare == true }) { readModels(for: harness) }
-    }
-
-    private func options(for harness: HarnessKind) -> ComposerSessionOptions {
-        ComposerSessionOptionsProjection.newTask(harness: harness, choice: draft.modelChoices[harness],
-                                                 catalogs: model.modelCatalogs,
-                                                 connection: model.connections.selected(for: harness),
-                                                 workspaceURL: draft.workspaceURL)
-    }
-
-    /// One menu: its name, its choices, the value now, which is shown even before the list that names it is read.
-    private func settingBox(_ setting: RemoteSetting, harness: HarnessKind) -> ComboBox {
-        // The value now leads when the list does not name it yet.
-        let leads = !setting.value.isEmpty && !setting.choices.contains { $0.value == setting.value }
-        let values = (leads ? [setting.value] : []) + setting.choices.map(\.value)
-        let names = (leads ? [setting.title ?? setting.value] : []) + setting.choices.map(\.name)
-        let box = ComboBox()
-        box.header = setting.name
-        box.horizontalAlignment = .stretch
-        try? AutomationProperties.setName(box, setting.name)
-        for name in names { box.items.append(name) }
-        box.selectedIndex = Int32(values.firstIndex(of: setting.value) ?? -1)
-        box.selectionChanged.addHandler { [weak self, weak box] _, _ in
-            guard let self, let box, !self.isFilling else { return }
-            let index = Int(box.selectedIndex)
-            guard values.indices.contains(index), values[index] != setting.value else { return }
-            self.choose(values[index], in: setting, harness: harness)
-        }
-        return box
-    }
-
-    private func choose(_ value: String, in setting: RemoteSetting, harness: HarnessKind) {
-        guard let confirmation = setting.choices.first(where: { $0.value == value })?.confirm else {
-            apply(value, to: setting.id, harness: harness)
-            return
-        }
-        let dialog = ContentDialog()
-        dialog.title = confirmation.title
-        dialog.content = confirmation.message
-        dialog.primaryButtonText = confirmation.button
-        dialog.closeButtonText = L10n.string("Cancel")
-        dialog.xamlRoot = view.xamlRoot
-        Task {
-            guard let result = try? await dialog.showAsync()?.get(), result == .primary else {
-                showSettings()
-                return
-            }
-            apply(value, to: setting.id, harness: harness)
-        }
-    }
-
-    private func apply(_ value: String, to settingID: String, harness: HarnessKind) {
         switch AppModelRemoteBridge.choosing([settingID: value], harness: harness, from: draft.modelChoices[harness],
                                              model: model, connection: model.connections.selected(for: harness),
                                              folder: draft.workspaceURL, allowsConfirmed: true) {
@@ -362,49 +607,36 @@ final class NewTaskPane {
             draft.modelChoices[harness] = chosen
             log.write("new task \(settingID): \(value)")
         case let .failure(error):
-            status.text = error.message
+            card.showNotice(error.message)
         }
-        // Drawn again after the menu that changed has finished its own change.
-        Task { showSettings() }
     }
 
-    /// The harness's model list, read once as opening the Mac's model menu reads it: the CLI starts and lists its
-    /// models, and no turn runs.
-    private func readModels(for harness: HarnessKind) {
-        guard preparedModels.insert(harness).inserted, let runtime = model.runtimeSelections.selectedURL(for: harness)
-        else { return }
-        let connection = model.connections.selected(for: harness)
-        let folder = draft.workspaceURL
-        Task {
-            await model.loadNewTaskModels(harness: harness, runtimeURL: runtime, connection: connection, workspaceURL: folder)
-            if chosenHarness == harness { showSettings() }
-        }
+    /// The harness's model list, read as opening the Mac's model menu reads it: the CLI starts and lists its models,
+    /// and no turn runs.
+    private func readModels() async {
+        guard let harness = chosenHarness, let runtime = runtimeURL else { return }
+        await model.loadNewTaskModels(harness: harness, runtimeURL: runtime,
+                                      connection: model.connections.selected(for: harness),
+                                      workspaceURL: draft.workspaceURL)
     }
 
     // MARK: Start
 
     private func startTask() {
-        let text = prompt.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, let harness = chosenHarness else { return }
-        guard let runtime = model.runtimeSelections.selectedURL(for: harness) else {
-            status.text = L10n.format("%@ is not available in Yardlet.", harness.displayName)
+        // The draft takes the text as shown, the syllable being composed included.
+        draft.text = card.field.text
+        guard let harness = chosenHarness, !draft.refusesAttachments(options: optionsNow()) else { return }
+        guard let runtime = runtimeURL else {
+            card.showNotice(L10n.format("%@ is not available in Yardlet.", harness.displayName))
             return
         }
-        draft.harness = harness
-        draft.text = text
         guard let submission = draft.beginSubmission(runtimeURL: runtime,
                                                      connection: model.connections.selected(for: harness)) else { return }
-        status.text = ""
-        prompt.isEnabled = false
-        showSendable()
         log.write("new task: \(harness.displayName)\(submission.workspaceURL.map { " in \($0.lastPathComponent)" } ?? "")")
         let previousError = model.bootstrapError
         let existingTasks = Set(model.store.sessions.map(\.id))
+        showControls()
         Task {
-            defer {
-                prompt.isEnabled = true
-                showSendable()
-            }
             do {
                 let created = try await model.createTask(submission)
                 // A task that came to exist but whose harness did not start: chosen as it was made, it shows, as on
@@ -418,18 +650,16 @@ final class NewTaskPane {
                     : nil
                 draft.complete(submission, succeeded: created != nil, error: failure)
                 if created != nil {
-                    prompt.text = ""
                     log.write("new task started")
                     onStarted?()
                 } else {
-                    status.text = failure ?? ""
                     log.write("new task failed: \(failure ?? "")")
                     if unstartedError != nil { onStarted?() }
                 }
             } catch {
                 draft.complete(submission, succeeded: false, error: error.localizedDescription)
-                status.text = error.localizedDescription
             }
+            showControls()
         }
     }
 }

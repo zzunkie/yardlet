@@ -1,6 +1,7 @@
 # Imports a conversation that the stand-in harness check-harness.ps1 installed (fake-harness/, an ACP harness the app
-# knows as Kimi Code) saved before the app saw it: Import conversation, the harness, a folder chosen in Windows' own
-# folder dialog through Choose project..., the conversation the stand-in lists for that folder, and its turns drawn in
+# knows as Kimi Code) saved before the app saw it: Import conversation from New task's link, the harness in its dialog,
+# a folder chosen in Windows' own folder dialog through the project menu's Choose project..., the conversation the
+# stand-in lists for that folder, and its turns drawn in
 # the main window with the task's row chosen once it is imported. The stand-in lists it only for a folder written as
 # Windows writes one, as an agent compares the folder it saved a session in, and replays it when it loads. It drives
 # the window and the dialog through UI Automation and reads the window's own event log (YARDLET_QA_EVENT_LOG); it
@@ -150,6 +151,23 @@ function Find-Item($root, [string] $text) {
     return $null
 }
 
+# The dialog and the menus over the window are in windows of their own, looked for among the app's windows.
+function Find-InApp([string] $text, $type) {
+    foreach ($window in $UIA::RootElement.FindAll($Scope::Children, (Property $UIA::ProcessIdProperty $process.Id))) {
+        $found = Find-Named $window $text $type
+        if ($found) { return $found }
+    }
+    return $null
+}
+
+function Find-InAppById([string] $id) {
+    foreach ($window in $UIA::RootElement.FindAll($Scope::Children, (Property $UIA::ProcessIdProperty $process.Id))) {
+        $found = $window.FindFirst($Scope::Descendants, (Property $UIA::AutomationIdProperty $id))
+        if ($found) { return $found }
+    }
+    return $null
+}
+
 function Select-Item($item) {
     try {
         $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
@@ -158,8 +176,13 @@ function Select-Item($item) {
     }
 }
 
+# A menu's radio and check items answer Toggle, which chooses them as a click does; the rest answer Invoke.
 function Invoke-Element($element) {
-    $element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    if ($element.GetSupportedPatterns() -contains [System.Windows.Automation.TogglePattern]::Pattern) {
+        $element.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+    } else {
+        $element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    }
 }
 
 # Windows' folder dialog, a window of the app's own other than the main window: the common item dialog's frame, or
@@ -217,30 +240,36 @@ if (-not (Wait-For { (Read-Events) -contains 'ready' } 30)) { Finish 'not ready'
 $main = $UIA::FromHandle($process.MainWindowHandle)
 [void][ImportDesktop]::BringForward($process.MainWindowHandle)
 
-# Import conversation, chosen again until its pane shows, once by invoking it, as check-remote.ps1 chooses Connect to
-# a Mac: just after launch a choice made through UI Automation now and then takes the item's focus but not its
-# selection.
+# Import conversation, New task's link, which opens its dialog over the window; invoked again until the window's event
+# log says it opened, as a choice made through UI Automation just after launch now and then does not take. The window
+# reopens the task an earlier check chose, so Home comes first.
+$homeItem = Wait-For { Find-Named $main 'Home' $Types::ListItem } 15
+if (-not $homeItem) { Finish 'no Home item' }
+$homeItem.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
 $chooseName = 'Choose project' + [char]0x2026
 $summary.importTries = 0
-$choose = $null
+$opened = $false
 $deadline = (Get-Date).AddSeconds(30)
-while (-not $choose -and (Get-Date) -lt $deadline) {
+while (-not $opened -and (Get-Date) -lt $deadline) {
     $summary.importTries += 1
-    $chosen = Wait-For { $found = Find-Item $main 'Import conversation'; if ($found) {
-        if ($summary.importTries % 2 -eq 0) { Invoke-Element $found } else { Select-Item $found }
-        $true } } 10
-    if (-not $chosen) { Finish 'no Import conversation item' }
-    $choose = Wait-For { Find-Named $main $chooseName $Types::Button } 4
+    $link = Wait-For { Find-Named $main 'Import conversation' $Types::Button } 10
+    if (-not $link) { Finish 'no Import conversation link' }
+    Invoke-Element $link
+    $opened = [bool](Wait-For { (Read-Events) -contains 'import opened' } 4)
 }
-if (-not $choose) { Finish 'the import pane did not show' }
+if (-not $opened) { Finish 'the import dialog did not open' }
 
-# The stand-in among the harnesses.
+# The stand-in among the harnesses, side by side at the dialog's top.
 $listed = Wait-For { Read-Events | Where-Object { $_ -like "import harnesses: *$Harness*" } | Select-Object -Last 1 } 60
 $summary.harnesses = "$(Read-Events | Where-Object { $_ -like 'import harnesses: *' } | Select-Object -Last 1)"
 if (-not $listed) { Finish "$Harness is not listed" }
-$picked = Wait-For { $found = Find-Named $main $Harness $Types::ListItem; if ($found) { Select-Item $found }
+$picked = Wait-For { $found = Find-InApp $Harness $Types::Button; if ($found) { Invoke-Element $found }
     (Read-Events) -contains "import harness: $Harness" } 15
 if (-not $picked) { Finish "$Harness cannot be chosen" }
+# Choose project... is the last item of the project's menu.
+$choose = Wait-For { $picker = Find-InAppById 'ImportProject'; if ($picker) { Invoke-Element $picker }
+    Wait-For { Find-InApp $chooseName $Types::MenuItem } 3 } 15
+if (-not $choose) { Finish 'no Choose project in the project menu' }
 Save-Screen 'pane'
 
 # Choose project... opens Windows' folder dialog, which runs modally on the window's thread until it closes. The pane
@@ -306,7 +335,7 @@ $summary.listedFolderIsChosen = $summary.listedFolder -eq $folder
 if ($summary.listedFolder -notmatch '^[A-Za-z]:\\[^/]*$') { Finish 'the folder did not go to the harness as Windows writes it' }
 
 # Imported, and drawn from the stand-in's replay in the main window with its row chosen.
-$row = Wait-For { Find-Named $main $Title $Types::Button } 10
+$row = Wait-For { Find-InApp $Title $Types::Button } 10
 if (-not $row) { Finish 'no row for the conversation' }
 Invoke-Element $row
 $imported = Wait-For { Read-Events | Where-Object { $_ -eq "imported: $Title" -or $_ -like 'import failed: *' } | Select-Object -Last 1 } 30
@@ -319,8 +348,8 @@ $summary.answer = "$answer"
 Start-Sleep -Seconds 1
 Save-Screen 'imported'
 if (-not $answer) { Finish 'the conversation was not drawn' }
-$summary.paneClosed = [bool](Wait-For { -not (Find-Named $main $chooseName $Types::Button) } 10)
-if (-not $summary.paneClosed) { Finish 'the import pane stayed' }
+$summary.paneClosed = [bool](Wait-For { (Read-Events) -contains 'import closed' } 10)
+if (-not $summary.paneClosed) { Finish 'the import dialog stayed' }
 $summary.rowChosen = [bool](Wait-For { $item = Find-Item $main $Title
     $item -and $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Current.IsSelected } 10)
 if (-not $summary.rowChosen) { Finish "the task's row was not chosen" }

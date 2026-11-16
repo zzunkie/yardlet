@@ -152,13 +152,24 @@ final class SignInRow {
     /// The panel the row was placed in, which it leaves when it is placed again.
     private var host: StackPanel?
 
-    init(signIn: HarnessSignIn, offersAlways: Bool = false) {
+    /// `inline` draws it as the Mac's new task says what it needs, inside its composer: the words small and dim
+    /// on one line, Sign in after them.
+    init(signIn: HarnessSignIn, offersAlways: Bool = false, inline: Bool = false) {
         self.signIn = signIn
         self.offersAlways = offersAlways
-        view.spacing = 8
+        view.spacing = inline ? 10 : 8
         view.visibility = .collapsed
         words.textWrapping = .wrap
-        words.opacity = 0.75
+        if inline {
+            view.orientation = .horizontal
+            words.fontSize = 12
+            words.foreground = WindowsTheme.secondaryText.brush
+            words.verticalAlignment = .center
+            words.maxWidth = 560
+            button.verticalAlignment = .center
+        } else {
+            words.opacity = 0.75
+        }
         view.children.append(words)
         button.click.addHandler { [weak self] _, _ in self?.action?() }
         view.children.append(button)

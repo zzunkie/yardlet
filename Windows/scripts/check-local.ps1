@@ -1,5 +1,6 @@
 # Starts a task in the Windows app with the stand-in harness check-harness.ps1 installed (fake-harness/, an
-# ACP harness the app knows as Kimi Code): New task, the harness, a message and Send beside it; then the stand-in's
+# ACP harness the app knows as Kimi Code): Home (New task), the harness from its menu, a chat to start in, a message and
+# Start task; then the stand-in's
 # request is allowed from its card and its answer streams in, with no console window opened for the stand-in's
 # node, and its edit's line opens to the diff. The app is then opened again, and the task's conversation must show
 # the same answer from its saved history. A second message's turn is then stopped with Stop while it waits on its
@@ -147,6 +148,38 @@ function Find-Text($root, [string] $text) {
         Select-Object -First 1
 }
 
+# What a menu holds is in a window of its own: Windows' menus open as popups over the app's window.
+function Find-InApp([string] $text, $type) {
+    $windows = $UIA::RootElement.FindAll($Scope::Children,
+        (New-Object System.Windows.Automation.PropertyCondition($UIA::ProcessIdProperty, $script:process.Id)))
+    foreach ($window in $windows) {
+        $found = Find-Named $window $text $type
+        if ($found) { return $found }
+    }
+    return $null
+}
+
+# A menu's radio and check items answer Toggle, which chooses them as a click does; the rest answer Invoke.
+function Invoke-Element($element) {
+    if ($element.GetSupportedPatterns() -contains [System.Windows.Automation.TogglePattern]::Pattern) {
+        $element.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+    } else {
+        $element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    }
+}
+
+# Opens the control's menu and chooses an item of it, until the window's event log says it was chosen.
+function Choose-FromMenu($root, [string] $control, [string] $item, [string] $event) {
+    Wait-For {
+        if ((Read-Events) -contains $event) { return $true }
+        $button = Find-Named $root $control $Types::Button
+        if (-not $button) { return $false }
+        Invoke-Element $button
+        $entry = Wait-For { Find-InApp $item $Types::MenuItem } 3
+        if ($entry) { Invoke-Element $entry }
+        (Read-Events) -contains $event } 20
+}
+
 function Select-Named($root, [string] $text) {
     $item = Find-Named $root $text $Types::ListItem
     if (-not $item) { return $false }
@@ -196,13 +229,15 @@ if (-not (Wait-For { Select-Named $main 'Home' } 15)) { Finish 'no Home item' }
 $listed = Wait-For { Read-Events | Where-Object { $_ -like "new task harnesses: *$Harness*" } | Select-Object -Last 1 } 60
 $summary.harnesses = "$(Read-Events | Where-Object { $_ -like 'new task harnesses: *' } | Select-Object -Last 1)"
 if (-not $listed) { Finish "$Harness is not listed" }
-if (-not (Wait-For { Select-Named $main $Harness } 10)) { Finish "$Harness cannot be chosen" }
+if (-not (Choose-FromMenu $main 'Harness' $Harness "new task harness: $Harness")) { Finish "$Harness cannot be chosen" }
+# With no project yet, the task starts as a chat, chosen from the project menu as on the Mac.
+if (-not (Choose-FromMenu $main 'Project' 'Chat (no project)' 'new task place: chat')) { Finish 'no chat to start in' }
 $prompt = Wait-For { Find-Field $main } 10
 if (-not $prompt) { Finish 'no message field' }
 $prompt.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Message)
-# Send turns on once the message is there.
-$send = Wait-For { $button = Find-Named $main 'Send' $Types::Button; if ($button -and $button.Current.IsEnabled) { $button } } 10
-if (-not $send) { Finish 'no Send beside the message' }
+# Start task turns on once the message is there.
+$send = Wait-For { $button = Find-Named $main 'Start task' $Types::Button; if ($button -and $button.Current.IsEnabled) { $button } } 10
+if (-not $send) { Finish 'no Start task in the composer' }
 Save-Screen 'new-task'
 $send.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
 [void](Wait-For { (Read-Events) -contains 'new task started' } 60)

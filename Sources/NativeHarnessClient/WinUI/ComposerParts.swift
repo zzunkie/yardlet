@@ -261,6 +261,8 @@ final class ComposerCard {
     let leading = StackPanel()
     /// The trailing controls, before Send.
     let trailing = StackPanel()
+    /// Over the bottom row: what the composer needs said before it can send, such as a sign-in.
+    let extras = StackPanel()
     private let notice = TextBlock()
     private let grid = Grid()
 
@@ -284,7 +286,7 @@ final class ComposerCard {
         view.borderBrush = WindowsTheme.separator.brush
         view.borderThickness = Thickness(left: 1, top: 1, right: 1, bottom: 1)
 
-        for _ in 0..<5 {
+        for _ in 0..<6 {
             let row = RowDefinition()
             row.height = GridLength(value: 0, gridUnitType: .auto)
             grid.rowDefinitions.append(row)
@@ -312,6 +314,11 @@ final class ComposerCard {
         try? Grid.setRow(notice, 3)
         grid.children.append(notice)
 
+        // Each of its rows keeps its own space below it, so an empty one takes none.
+        extras.margin = Thickness(left: metrics.text.left, top: 0, right: metrics.text.right, bottom: 0)
+        try? Grid.setRow(extras, 4)
+        grid.children.append(extras)
+
         let bottom = Grid()
         bottom.margin = Thickness(left: 10, top: 0, right: 9, bottom: 9)
         bottom.columnSpacing = 7
@@ -329,7 +336,7 @@ final class ComposerCard {
         trailing.verticalAlignment = .center
         try? Grid.setColumn(trailing, 1)
         bottom.children.append(trailing)
-        try? Grid.setRow(bottom, 4)
+        try? Grid.setRow(bottom, 5)
         grid.children.append(bottom)
         view.child = grid
 

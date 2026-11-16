@@ -1,18 +1,20 @@
 import Foundation
 import UWP
+// WinRT's async operations are not marked Sendable; the dialog's answer comes back on the window's thread.
+@preconcurrency import WindowsFoundation
 import WinUI
 
 /// Import conversation, as the Mac's sheet (`ImportConversationSheet`) continues a conversation another app or CLI
-/// started: a Yardlet task with the same session, whose history stays where the harness keeps it. The list is one
-/// folder's history under the chosen account, read by the engine as the Mac reads it (`importableConversations`):
-/// Claude Code's, Codex's, Antigravity CLI's, and that of each other ACP agent installed whose history
-/// `ACPSessionHistory` reads. The folders are the projects' and one chosen in Windows' folder dialog; the account is
-/// the one the harness's new tasks start on, with a menu when there are others. Choosing a conversation imports it,
-/// or finds the task that already continues it, and the window shows that task. Codex's history search is the Mac's
-/// alone so far.
+/// started: a Yardlet task with the same session, whose history stays where the harness keeps it. It opens over the
+/// window as a dialog with the sheet's look: the harnesses side by side, the project and the account, the list, and
+/// Done. The list is one folder's history under the chosen account, read by the engine as the Mac reads it
+/// (`importableConversations`): Claude Code's, Codex's, Antigravity CLI's, and that of each other ACP agent installed
+/// whose history `ACPSessionHistory` reads. The folders are the projects' and one chosen in Windows' folder dialog; the
+/// account is the one the harness's new tasks start on, with a menu when there are others. Choosing a conversation
+/// imports it, or finds the task that already continues it, and the window shows that task. Codex's history search is
+/// the Mac's alone so far.
 @MainActor
 final class ImportConversationPane {
-    let view = ScrollViewer()
     /// Called once the model has chosen the imported task, or the one that already continued the conversation.
     var onImported: (() -> Void)?
 
@@ -21,13 +23,12 @@ final class ImportConversationPane {
     /// The window's handle, which owns the folder dialog.
     private let windowHandle: () -> UInt64
     private let stack = StackPanel()
-    private let harnessList = ListView()
-    private let folderBox = ComboBox()
-    private let chooseFolderButton = Button()
-    private let accountBox = ComboBox()
+    private let harnessRow = StackPanel()
+    private let pickers = StackPanel()
     private let list = StackPanel()
     private let loadMoreButton = Button()
     private let status = TextBlock()
+    private var dialog: ContentDialog?
 
     /// The harnesses the list shows, in its order, and the one chosen.
     private var harnesses: [HarnessKind] = []
@@ -46,8 +47,6 @@ final class ImportConversationPane {
     private var importingID: String?
     /// Ends a read of the list that a newer one replaced.
     private var listGeneration = 0
-    /// Set while the controls are filled, whose selection changes are then not the person's.
-    private var isFilling = false
     private var lookedForRuntimes = false
 
     private struct Folder {
@@ -68,80 +67,65 @@ final class ImportConversationPane {
     private var folder: Folder? { folders.first { $0.key == folderKey } }
 
     private func make() {
-        stack.spacing = 12
-        stack.padding = Thickness(left: 28, top: 28, right: 28, bottom: 28)
-        stack.maxWidth = 640
-        stack.horizontalAlignment = .left
-        let title = TextBlock()
-        title.text = L10n.string("Import conversation")
-        title.fontSize = 20
-        stack.children.append(title)
+        stack.spacing = 14
+        stack.width = 612
         let explanation = Self.text(L10n.string("Continue a conversation started in another app or CLI. Its history stays where it is."))
-        explanation.opacity = 0.7
+        explanation.foreground = WindowsTheme.secondaryText.brush
         stack.children.append(explanation)
 
-        let harnessTitle = Self.text(L10n.string("Harness"))
-        harnessTitle.opacity = 0.7
-        stack.children.append(harnessTitle)
-        harnessList.selectionMode = .single
-        harnessList.selectionChanged.addHandler { [weak self] _, _ in
-            guard let self, !self.isFilling else { return }
-            let index = Int(self.harnessList.selectedIndex)
-            guard self.harnesses.indices.contains(index), self.harnesses[index] != self.harness else { return }
-            self.harness = self.harnesses[index]
-            self.log.write("import harness: \(self.harness.displayName)")
-            self.selectAccount()
-            self.showAccounts()
-            self.load()
-            self.checkAccounts()
-        }
-        stack.children.append(harnessList)
+        // The harnesses side by side, the chosen one filled, as the Mac's segmented control.
+        let segments = Border()
+        segments.background = WindowsTheme.subtleFill.brush
+        segments.cornerRadius = ComposerParts.corners(8)
+        segments.padding = Thickness(left: 2, top: 2, right: 2, bottom: 2)
+        segments.horizontalAlignment = .left
+        harnessRow.orientation = .horizontal
+        harnessRow.spacing = 2
+        segments.child = harnessRow
+        stack.children.append(segments)
 
-        let folderRow = StackPanel()
-        folderRow.orientation = .horizontal
-        folderRow.spacing = 8
-        folderBox.header = L10n.string("Project")
-        folderBox.minWidth = 240
-        try? AutomationProperties.setName(folderBox, L10n.string("Project"))
-        folderBox.selectionChanged.addHandler { [weak self] _, _ in
-            guard let self, !self.isFilling else { return }
-            let index = Int(self.folderBox.selectedIndex)
-            guard self.folders.indices.contains(index), self.folders[index].key != self.folderKey else { return }
-            self.folderKey = self.folders[index].key
-            self.log.write("import folder: \(self.folders[index].name)")
-            self.load()
-        }
-        folderRow.children.append(folderBox)
-        chooseFolderButton.content = L10n.string("Choose project…")
-        chooseFolderButton.verticalAlignment = .bottom
-        // The dialog runs modally until it closes, so it opens after the click returns: a click that UI Automation
-        // invokes (a screen reader, a check) would otherwise wait inside that call for the dialog to close.
-        chooseFolderButton.click.addHandler { [weak self] _, _ in Task { @MainActor in self?.chooseFolder() } }
-        folderRow.children.append(chooseFolderButton)
-        stack.children.append(folderRow)
-
-        accountBox.header = L10n.string("Account")
-        accountBox.minWidth = 240
-        accountBox.visibility = .collapsed
-        try? AutomationProperties.setName(accountBox, L10n.string("Account"))
-        accountBox.selectionChanged.addHandler { [weak self] _, _ in
-            guard let self, !self.isFilling else { return }
-            let index = Int(self.accountBox.selectedIndex)
-            guard self.accounts.indices.contains(index), self.accounts[index].id != self.accountID else { return }
-            self.accountID = self.accounts[index].id
-            self.load()
-        }
-        stack.children.append(accountBox)
+        pickers.orientation = .horizontal
+        pickers.spacing = 24
+        stack.children.append(pickers)
 
         list.spacing = 2
-        stack.children.append(list)
+        let scroll = ScrollViewer()
+        scroll.height = 300
+        scroll.content = list
+        stack.children.append(scroll)
         loadMoreButton.content = L10n.string("Load more history")
         loadMoreButton.visibility = .collapsed
         loadMoreButton.click.addHandler { [weak self] _, _ in self?.loadMore() }
         stack.children.append(loadMoreButton)
         status.textWrapping = .wrap
+        status.foreground = ComposerParts.red.brush
         stack.children.append(status)
-        view.content = stack
+        let note = Self.detail(L10n.string("A conversation still open in another app can be read here, and continues here once you close it there."))
+        stack.children.append(note)
+    }
+
+    /// Opens the dialog over the window `root` is in, filled as when Import conversation is chosen.
+    func present(over root: XamlRoot?) {
+        guard dialog == nil, let root else { return }
+        let dialog = ContentDialog()
+        dialog.title = L10n.string("Import conversation")
+        dialog.closeButtonText = L10n.string("Done")
+        dialog.xamlRoot = root
+        // As wide as the Mac's sheet, which Windows' dialogs narrow by default.
+        _ = dialog.resources?.insert("ContentDialogMaxWidth", 700.0)
+        dialog.content = stack
+        dialog.closed.addHandler { [weak self] _, _ in
+            guard let self else { return }
+            self.dialog?.content = nil
+            self.dialog = nil
+            self.log.write("import closed")
+        }
+        self.dialog = dialog
+        show()
+        Task {
+            _ = try? await dialog.showAsync()?.get()
+        }
+        log.write("import opened")
     }
 
     /// Fills the pane when Import conversation is chosen: the harnesses, the folders and the account, then the list
@@ -151,16 +135,12 @@ final class ImportConversationPane {
             ACPSessionHistory.reads($0) && model.runtimeSelections.selectedURL(for: $0) != nil
         }
         if !harnesses.contains(harness) { harness = .claudeCode }
-        isFilling = true
-        harnessList.items.clear()
-        for harness in harnesses { harnessList.items.append(Self.harnessItem(harness)) }
-        harnessList.selectedIndex = Int32(harnesses.firstIndex(of: harness) ?? 0)
-        isFilling = false
+        showHarnesses()
         log.write("import harnesses: \(harnesses.map(\.displayName).joined(separator: ", "))")
         // The folder New task last chose leads, as the Mac's sheet opens on it.
         showFolders(choosing: folderKey ?? model.composerDrafts.home.workspaceURL.map(ProjectSidebarPresentation.folderKey(for:)))
         selectAccount()
-        showAccounts()
+        showPickers()
         load()
         checkAccounts()
         // The installs are looked for once, when none has been found yet, as New task does.
@@ -172,23 +152,41 @@ final class ImportConversationPane {
         }
     }
 
-    /// A harness's row: its mark and its name, which also names the row for UI Automation.
-    private static func harnessItem(_ harness: HarnessKind) -> ListViewItem {
-        let row = StackPanel()
-        row.orientation = .horizontal
-        row.spacing = 8
-        if let icon = HarnessIcon.element(for: harness) {
-            icon.verticalAlignment = .center
-            row.children.append(icon)
+    /// The harnesses side by side, each its mark and its name, which also names it for UI Automation.
+    private func showHarnesses() {
+        harnessRow.children.clear()
+        for kind in harnesses {
+            let chosen = kind == harness
+            let button = Button()
+            ComposerParts.styleFlat(button, rest: chosen ? WindowsTheme.elevated.brush : nil,
+                                    pointerOver: chosen ? WindowsTheme.elevated.brush : nil, radius: 6)
+            button.padding = Thickness(left: 14, top: 4, right: 14, bottom: 4)
+            let row = StackPanel()
+            row.orientation = .horizontal
+            row.spacing = 6
+            if let icon = HarnessIcon.element(for: kind, size: 14) {
+                icon.verticalAlignment = .center
+                row.children.append(icon)
+            }
+            row.children.append(ComposerParts.label(kind.displayName, size: 13,
+                                                    color: chosen ? WindowsTheme.text : WindowsTheme.secondaryText,
+                                                    weight: chosen ? 600 : 400))
+            button.content = row
+            try? AutomationProperties.setName(button, kind.displayName)
+            button.click.addHandler { [weak self] _, _ in self?.choose(kind) }
+            harnessRow.children.append(button)
         }
-        let name = TextBlock()
-        name.text = harness.displayName
-        name.verticalAlignment = .center
-        row.children.append(name)
-        let item = ListViewItem()
-        item.content = row
-        try? AutomationProperties.setName(item, harness.displayName)
-        return item
+    }
+
+    private func choose(_ kind: HarnessKind) {
+        log.write("import harness: \(kind.displayName)")
+        guard kind != harness else { return }
+        harness = kind
+        showHarnesses()
+        selectAccount()
+        showPickers()
+        load()
+        checkAccounts()
     }
 
     // MARK: Folder and account
@@ -206,11 +204,7 @@ final class ImportConversationPane {
             folders.append(Folder(name: chosenFolder.lastPathComponent, url: chosenFolder))
         }
         folderKey = (folders.first { $0.key == key } ?? folders.first)?.key
-        isFilling = true
-        folderBox.items.clear()
-        for folder in folders { folderBox.items.append(folder.name) }
-        folderBox.selectedIndex = Int32(folders.firstIndex { $0.key == folderKey } ?? -1)
-        isFilling = false
+        showPickers()
     }
 
     /// Choose project…: a folder from Windows' own dialog, as New task's Choose project… chooses one.
@@ -230,15 +224,68 @@ final class ImportConversationPane {
         accountID = accounts.first { $0.connection?.id == selected }?.id ?? accounts.first?.id ?? ""
     }
 
-    /// The account menu, shown only when there is more than one account to choose.
-    private func showAccounts() {
+    /// The project and, when there is more than one account to choose, the account, each its name with a menu, as
+    /// the Mac's sheet lists them under the harnesses.
+    private func showPickers() {
         accounts = model.connections.importChoices(for: harness)
-        isFilling = true
-        accountBox.items.clear()
-        for choice in accounts { accountBox.items.append(choice.title) }
-        accountBox.selectedIndex = Int32(accounts.firstIndex { $0.id == accountID } ?? -1)
-        accountBox.visibility = accounts.count > 1 ? .visible : .collapsed
-        isFilling = false
+        pickers.children.clear()
+        let projectMenu = MenuFlyout()
+        for (index, folder) in folders.enumerated() {
+            let item = RadioMenuFlyoutItem()
+            item.text = folder.name
+            item.groupName = "folder"
+            item.isChecked = folder.key == folderKey
+            item.click.addHandler { [weak self] _, _ in
+                guard let self, self.folders.indices.contains(index), self.folders[index].key != self.folderKey else { return }
+                self.folderKey = self.folders[index].key
+                self.log.write("import folder: \(self.folders[index].name)")
+                self.showPickers()
+                self.load()
+            }
+            projectMenu.items.append(item)
+        }
+        if !folders.isEmpty { projectMenu.items.append(MenuFlyoutSeparator()) }
+        // The dialog runs modally until it closes, so it opens after the click returns: a click that UI Automation
+        // invokes (a screen reader, a check) would otherwise wait inside that call for the dialog to close.
+        projectMenu.items.append(ComposerParts.menuItem(L10n.string("Choose project…")) { [weak self] in
+            Task { @MainActor in self?.chooseFolder() }
+        })
+        pickers.children.append(picker(L10n.string("Project"), value: folder?.name ?? L10n.string("Choose project"),
+                                       menu: projectMenu, id: "ImportProject"))
+        if accounts.count > 1 {
+            let accountMenu = MenuFlyout()
+            for choice in accounts {
+                let item = RadioMenuFlyoutItem()
+                item.text = choice.title
+                item.groupName = "account"
+                item.isChecked = choice.id == accountID
+                item.click.addHandler { [weak self] _, _ in
+                    guard let self, choice.id != self.accountID else { return }
+                    self.accountID = choice.id
+                    self.showPickers()
+                    self.load()
+                }
+                accountMenu.items.append(item)
+            }
+            pickers.children.append(picker(L10n.string("Account"), value: account?.title ?? "", menu: accountMenu,
+                                           id: "ImportAccount"))
+        }
+    }
+
+    /// A label and the chosen value as a control with a chevron, which opens `menu`; `id` tells it from New task's
+    /// controls of the same name for UI Automation.
+    private func picker(_ label: String, value: String, menu: MenuFlyout, id: String) -> UIElement {
+        let row = StackPanel()
+        row.orientation = .horizontal
+        row.spacing = 8
+        row.children.append(ComposerParts.label(label, size: 13, color: WindowsTheme.text, weight: 400))
+        let control = ComposerParts.control(title: value, chevron: true, tint: WindowsTheme.text, name: label)
+        control.background = WindowsTheme.subtleFill.brush
+        _ = control.resources?.insert("ButtonBackground", WindowsTheme.subtleFill.brush)
+        control.flyout = menu
+        try? AutomationProperties.setAutomationId(control, id)
+        row.children.append(control)
+        return row
     }
 
     /// The harness's account folders looked for and its accounts read, as the Mac's sheet does when its harness
@@ -254,7 +301,7 @@ final class ImportConversationPane {
             if !choices.contains(where: { $0.id == accountID }) || accountID == AccountChoice.nativeID(for: harness) {
                 selectAccount()
             }
-            showAccounts()
+            showPickers()
             if accountID != before { load() }
         }
     }
@@ -336,11 +383,7 @@ final class ImportConversationPane {
     private func row(_ conversation: ImportableConversation, now: Date) -> Button {
         let words = StackPanel()
         words.spacing = 2
-        let title = TextBlock()
-        title.text = conversation.title
-        title.maxLines = 1
-        title.textTrimming = .characterEllipsis
-        words.children.append(title)
+        words.children.append(ComposerParts.label(conversation.title, size: 14, color: WindowsTheme.text))
         // An ACP agent may list a session without its time.
         if conversation.updatedAt != .distantPast {
             words.children.append(Self.detail(now.timeIntervalSince(conversation.updatedAt) < 60 ? RelativeTime.now()
@@ -366,12 +409,11 @@ final class ImportConversationPane {
             content.children.append(text)
         }
         let button = Button()
+        // A row of the list rather than a button among buttons: no fill or frame until the pointer is on it.
+        ComposerParts.styleFlat(button, radius: 8)
         button.content = content
         button.horizontalAlignment = .stretch
         button.horizontalContentAlignment = .stretch
-        // A row of the list rather than a button among buttons: no fill or frame until the pointer is on it.
-        button.background = SolidColorBrush(UWP.Color(a: 0, r: 0, g: 0, b: 0))
-        button.borderThickness = Thickness(left: 0, top: 0, right: 0, bottom: 0)
         button.padding = Thickness(left: 12, top: 8, right: 12, bottom: 8)
         button.isEnabled = importingID == nil
         try? AutomationProperties.setName(button, conversation.title)
@@ -392,6 +434,7 @@ final class ImportConversationPane {
             importingID = nil
             if let task {
                 log.write("imported: \(task.title)")
+                try? dialog?.hide()
                 onImported?()
             } else {
                 let failure = model.bootstrapError ?? L10n.string("The conversation could not be imported.")
@@ -412,7 +455,7 @@ final class ImportConversationPane {
     private static func detail(_ words: String) -> TextBlock {
         let block = text(words)
         block.fontSize = 12
-        block.opacity = 0.6
+        block.foreground = WindowsTheme.secondaryText.brush
         return block
     }
 }

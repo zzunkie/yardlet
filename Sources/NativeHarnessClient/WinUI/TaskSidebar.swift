@@ -8,7 +8,6 @@ enum SidebarPlace: Equatable {
     /// New task, the Mac's home.
     case home
     case task(UUID)
-    case importConversation
     case settings
 }
 
@@ -57,10 +56,10 @@ final class TaskSidebar {
     /// Where each of the footer's rows goes.
     private var footerPlaces: [String: SidebarPlace] = [:]
 
-    init(model: AppModel, actions: TaskActions, showsImport: Bool) {
+    init(model: AppModel, actions: TaskActions) {
         self.model = model
         self.actions = actions
-        make(showsImport: showsImport)
+        make()
         follow()
     }
 
@@ -102,7 +101,7 @@ final class TaskSidebar {
 
     // MARK: Making
 
-    private func make(showsImport: Bool) {
+    private func make() {
         view.width = WindowsTheme.sidebarWidth
         for height in [GridLength(value: 0, gridUnitType: .auto), GridLength(value: 0, gridUnitType: .auto),
                        GridLength(value: 1, gridUnitType: .star), GridLength(value: 0, gridUnitType: .auto)] {
@@ -153,15 +152,9 @@ final class TaskSidebar {
         view.children.append(scroller)
 
         // The Mac's account button at the bottom is Settings here, as Windows apps keep it, under a line.
-        var footerRows: [(key: String, item: ListViewItem)] = []
-        if showsImport {
-            footerRows.append((key: "import", item: SidebarList.actionRow(glyph: "\u{E8B5}",
-                                                                          title: L10n.string("Import conversation"))))
-            footerPlaces["import"] = .importConversation
-        }
-        footerRows.append((key: "settings", item: SidebarList.actionRow(glyph: "\u{E713}", title: L10n.string("Settings"))))
+        // Import conversation is New task's link, as on the Mac's home.
+        footer.fill([(key: "settings", item: SidebarList.actionRow(glyph: "\u{E713}", title: L10n.string("Settings")))])
         footerPlaces["settings"] = .settings
-        footer.fill(footerRows)
         footer.onPick = { [weak self] key in
             guard let self, let place = self.footerPlaces[key] else { return }
             self.pick(place)

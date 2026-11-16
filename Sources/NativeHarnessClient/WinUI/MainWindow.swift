@@ -5,11 +5,12 @@ import WinAppSDK
 import WindowsFoundation
 import WinUI
 
-/// The Windows app's main window: the sidebar (`TaskSidebar`), and beside it the chosen task's conversation and the
-/// composer, New task (the Mac's home), or Settings. The composer sends through the model as the Mac's does. Choosing a
-/// task reads its saved history as the Mac does (`refreshConversationStatus`, which starts no turn), and its
-/// conversation draws through `ConversationTimeline` from the same projection the Mac's timeline reads. Import
-/// conversation continues a conversation a harness's own CLI or app started (`ImportConversationPane`). Settings
+/// The Windows app's main window: the sidebar (`TaskSidebar`), and beside it the chosen task's conversation and its
+/// composer (`TaskComposer`), New task (the Mac's home), or Settings. The composer sends through the model as the
+/// Mac's does. Choosing a task reads its saved history as the Mac does (`refreshConversationStatus`, which starts no
+/// turn), and its conversation draws through `ConversationTimeline` from the same projection the Mac's timeline reads.
+/// Import conversation, a link on New task as on the Mac's home, continues a conversation a harness's own CLI or app
+/// started, in a dialog over the window (`ImportConversationPane`). Settings
 /// (`SettingsPane`) holds Settings › Remote, which lets another computer or a phone follow this one's tasks, and
 /// Connect to a Mac, which pairs with another computer's Yardlet from the link it copies; each paired host opens in a
 /// window of its own (`RemoteHostWindow`).
@@ -88,6 +89,11 @@ final class MainWindow {
         composer.windowHandle = { [weak self] in self?.windowHandle ?? 0 }
         let newTask = NewTaskPane(model: model, log: log, signIn: signIn) { [weak self] in self?.windowHandle ?? 0 }
         newTask.onStarted = { [weak self] in self?.showSelectedTask() }
+        newTask.onOpenTask = { [weak self] id in self?.show(.task(id)) }
+        newTask.onImportConversation = { [weak self] in
+            guard let self else { return }
+            self.importPane?.present(over: self.root.xamlRoot)
+        }
         self.newTask = newTask
         timeline.respond = { [weak self] request, response in self?.answer(request, response) }
         timeline.retry = { [weak self] turnID in self?.retry(turnID) }
@@ -101,8 +107,7 @@ final class MainWindow {
         let actions = TaskActions(model: model, log: log, host: { [weak self] in self?.root },
                                   windowHandle: { [weak self] in self?.windowHandle ?? 0 })
         self.actions = actions
-        // Import conversation stays at the sidebar's foot until New task links to it, as the Mac's home does.
-        let sidebar = TaskSidebar(model: model, actions: actions, showsImport: true)
+        let sidebar = TaskSidebar(model: model, actions: actions)
         sidebar.onChoose = { [weak self] place in self?.show(place) }
         sidebar.onNewTaskInProject = { [weak self] folder in self?.showNewTask(in: folder) }
         sidebar.onAddProject = { [weak self] in self?.addProject() }
@@ -175,11 +180,6 @@ final class MainWindow {
             shown = .task
             choose(id)
             if reads { Task { await model.store.markRead(id: id) } }
-        case .importConversation:
-            guard let importPane else { return }
-            content.child = importPane.view
-            shown = .other
-            importPane.show()
         case .settings:
             let pane = settings ?? makeSettings()
             content.child = pane.view
