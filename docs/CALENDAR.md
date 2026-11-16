@@ -119,8 +119,10 @@ calendar while the calendar is on.
   for the Projects view, another screen or a closed window.
 - **Today** lists today's events with the scheduled runs in time order: all-day events first, then each event's time,
   its calendar's color, its title, and whether it ended, is under way or starts soon ("in 1 hour"). An invitation not
-  answered yet says "Not replied", kept when the line is too narrow for the rest. The header's and the zone's count of
-  what is left today counts the runs to come and the timed events that have not ended.
+  answered yet says "Not replied", kept when the line is too narrow for the rest. The runs that already ran ask nothing,
+  so the list folds them into one line after the others ("12 already ran"), which lists them when chosen, as "Show
+  more" does under the results just finished; the time axis below keeps every run at its time. The header's and the
+  zone's count of what is left today counts the runs to come and the timed events that have not ended.
 - With the calendar on and the home at least 1,200 points wide (`DeskLayout.zones`), the desk stands as three zones:
   what waits, what runs and just finished, and today on a time axis (`DeskTimeAxis`). Like the desk's two columns,
   they stand no wider than the Projects view's grid (1,360 points between 30-point margins), so a wider home keeps

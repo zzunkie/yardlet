@@ -4036,6 +4036,7 @@
 "Event under way" = "진행 중";
 "Time axis now %@" = "지금 %@";
 "%lld left today with the calendar" = "오늘 남은 일정 %lld";
+"%lld of today's runs already ran" = "실행됨 %lld";
 "%lld left with the calendar" = "남은 일정 %lld";
 "Accept invitation" = "수락";
 "Decline invitation" = "거절";

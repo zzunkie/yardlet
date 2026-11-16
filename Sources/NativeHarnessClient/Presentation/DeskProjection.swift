@@ -163,6 +163,17 @@ struct Desk: Equatable, Sendable {
             + timed.sorted { $0.at != $1.at ? $0.at < $1.at : $0.item.id < $1.item.id }.map(\.item)
     }
 
+    /// How many of today's runs already ran.
+    var ranToday: Int { today.filter { $0.kind == .ran }.count }
+
+    /// Today's lines as a list shows them: the runs that already ran, which ask nothing, fold into one line
+    /// unless `showsRan`. The time axis places every line at its time (`todayItems`).
+    func listedToday(showsRan: Bool) -> [DeskTodayItem] {
+        showsRan ? todayItems : todayItems.filter { item in
+            if case let .run(run) = item { run.kind != .ran } else { true }
+        }
+    }
+
     /// Puts today's events on the desk.
     mutating func setEvents(_ events: [CalendarEvent], now: Date) {
         self.events = events

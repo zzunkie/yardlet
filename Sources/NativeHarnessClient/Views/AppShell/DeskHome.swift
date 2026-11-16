@@ -134,6 +134,8 @@ struct DeskHome<Switch: View, Bottom: View>: View {
     @State private var screenID = UUID()
     /// "Show more" under the results just finished was chosen.
     @State private var showsAllFinished = false
+    /// The line of today's runs that already ran was chosen: a list of today shows them.
+    @State private var showsRanToday = false
 
     var body: some View {
 #if DEBUG
@@ -372,10 +374,18 @@ struct DeskHome<Switch: View, Bottom: View>: View {
     }
 
     private func todayZone(_ desk: Desk, onAxis: Bool = false) -> some View {
-        DeskTodayZone(items: desk.todayItems, left: desk.remainingToday, countsEvents: desk.showsEvents, now: activity.now,
+        DeskTodayZone(items: onAxis ? desk.todayItems : desk.listedToday(showsRan: showsRanToday),
+                      ran: onAxis ? 0 : desk.ranToday, showsRan: showsRanToday,
+                      left: desk.remainingToday, countsEvents: desk.showsEvents, now: activity.now,
                       onAxis: onAxis,
                       highlighted: focus.wrappedValue == .desk ? keyboard.highlightedEntry : nil,
-                      onOpenSchedule: activity.onOpenSchedule, onOpenEvent: { onAction(.openEvent($0)) })
+                      onOpenSchedule: activity.onOpenSchedule, onOpenEvent: { onAction(.openEvent($0)) },
+                      onToggleRan: { showsRanToday.toggle() })
+    }
+
+    /// Today stands on a time axis: the three zones, unless the day is quiet.
+    private func todayOnAxis(_ desk: Desk) -> Bool {
+        !desk.isQuiet && DeskLayout.choose(width: size.width, calendarOn: calendarOn) == .zones
     }
 
     // MARK: - Lines and keyboard
@@ -402,7 +412,14 @@ struct DeskHome<Switch: View, Bottom: View>: View {
             + desk.families.map { .row(.desk(.running), $0.id.uuidString) }
             + shownFinished(desk).map { .row(.desk(.finished), $0.id.uuidString) }
             + (desk.finished.count > DeskLines.finished ? [.toggle(.desk(.finished))] : [])
-            + desk.todayItems.map { .row(.desk(.today), $0.id) }
+            + today(desk)
+    }
+
+    /// Today's lines in the keyboard's order: the axis's or the list's, then the list's line of runs that ran.
+    private func today(_ desk: Desk) -> [NewTaskHomeListKeyboard.Entry] {
+        if todayOnAxis(desk) { return desk.todayItems.map { .row(.desk(.today), $0.id) } }
+        return desk.listedToday(showsRan: showsRanToday).map { .row(.desk(.today), $0.id) }
+            + (desk.ranToday > 0 ? [.toggle(.desk(.today))] : [])
     }
 
     private func isHighlighted(_ entry: NewTaskHomeListKeyboard.Entry) -> Bool {
@@ -421,6 +438,9 @@ struct DeskHome<Switch: View, Bottom: View>: View {
             return .handled
         case .perform(.toggle(.desk(.finished))):
             showsAllFinished.toggle()
+            return .handled
+        case .perform(.toggle(.desk(.today))):
+            showsRanToday.toggle()
             return .handled
         case let .perform(entry):
             guard case let .row(.desk(zone), id) = entry else { return .ignored }
@@ -817,10 +837,15 @@ struct DeskFinishedRow: View, @MainActor Equatable {
 
 /// "Today": today's scheduled runs and, while the calendar is on, its events, in time order, then the inboxes'
 /// unread threads while the mailbox is on. It reads the mailbox and the calendars' colors in its own body, so new
-/// mail redraws this zone alone. Empty, it is not there. On the time axis (`onAxis`, the three zones) the mail
-/// folds to one line, all-day events stay lines, and the runs and timed events stand at their times.
+/// mail redraws this zone alone. Empty, it is not there. As a list, the runs that already ran fold into one line
+/// after the others, which shows them when chosen, as "Show more" does under the results just finished. On the
+/// time axis (`onAxis`, the three zones) the mail folds to one line, all-day events stay lines, and the runs and
+/// timed events stand at their times.
 struct DeskTodayZone: View {
     let items: [DeskTodayItem]
+    /// How many runs already ran, which `items` leaves out unless `showsRan`: the folded line's count.
+    var ran = 0
+    var showsRan = false
     /// The title's "N left": runs still to come and timed events not ended.
     let left: Int
     /// The calendar is on, so `left` counts events too.
@@ -830,6 +855,7 @@ struct DeskTodayZone: View {
     var highlighted: NewTaskHomeListKeyboard.Entry?
     let onOpenSchedule: (UUID) -> Void
     let onOpenEvent: (CalendarEvent) -> Void
+    var onToggleRan: () -> Void = {}
     @Environment(\.mailbox) private var mailbox
     @Environment(\.calendarCenter) private var calendarCenter
 
@@ -849,12 +875,28 @@ struct DeskTodayZone: View {
                     .padding(.top, 10)
                     .padding(.bottom, 16)
             }
-        } else if !items.isEmpty || !mail.isEmpty {
+        } else if !items.isEmpty || ran > 0 || !mail.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
                 title
                 ForEach(items) { line($0, colors: colors) }
-                if !mail.isEmpty { mailBlock(mail, compact: false).padding(.top, items.isEmpty ? 0 : 8) }
+                if ran > 0 { ranLine }
+                if !mail.isEmpty { mailBlock(mail, compact: false).padding(.top, items.isEmpty && ran == 0 ? 0 : 8) }
             }
+        }
+    }
+
+    /// The runs that already ran, folded: their count, or "Show less" once they show.
+    private var ranLine: some View {
+        NewTaskHomeRow(isHighlighted: highlighted == .toggle(.desk(.today)), showsChevron: false, action: onToggleRan) {
+            timeText("", isPast: true)
+            Image(systemName: "clock")
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(.tertiary)
+                .frame(width: 14)
+            Text(showsRan ? L10n.string("Show less") : L10n.format("%lld of today's runs already ran", ran))
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
         }
     }
 

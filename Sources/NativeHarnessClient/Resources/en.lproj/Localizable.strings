@@ -4036,6 +4036,7 @@
 "Event under way" = "Under way";
 "Time axis now %@" = "Now %@";
 "%lld left today with the calendar" = "%lld left today";
+"%lld of today's runs already ran" = "%lld already ran";
 "%lld left with the calendar" = "%lld left";
 "Accept invitation" = "Accept";
 "Decline invitation" = "Decline";

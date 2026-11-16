@@ -626,6 +626,8 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         XCTAssertTrue(shows(busy, L10n.string("Just finished")))
         XCTAssertTrue(shows(busy, w("두 해지 조항은", "The two termination clauses")))
         XCTAssertTrue(shows(busy, w("설계 검토 매일 평가", "Design review daily check")), "Today's runs")
+        XCTAssertFalse(shows(busy, w("홍보 확인 · 오전", "Promotion check · morning")), "A run that already ran folds")
+        XCTAssertTrue(shows(busy, L10n.format("%lld of today's runs already ran", 1)), report[busy]!)
         XCTAssertTrue(shows(busy, "Google Play Console"), "Unread mail")
         XCTAssertFalse(shows(busy, "Issue 412"), "Read mail is not on the desk")
         XCTAssertTrue(shows(busy, L10n.string("Now")), "The view switch")
@@ -709,6 +711,7 @@ final class NewTaskHomeRenderingTests: XCTestCase {
                     XCTAssertTrue(elements.contains { $0.label.hasPrefix(meeting) && $0.value == L10n.string("Not replied") },
                                   "The invitation not answered: \(report)")
                     XCTAssertTrue(shows(w("0.12 출시 목표", "0.12 release target")), "The all-day event as a line")
+                    XCTAssertTrue(shows(w("홍보 확인 · 오전", "Promotion check · morning")), "The axis keeps a run that ran")
                     XCTAssertTrue(shows(L10n.string("Unread mail")))
                     XCTAssertFalse(shows("Google Play Console"), "The mail folds to one line beside the axis")
                 case "calendar-off-1449":
