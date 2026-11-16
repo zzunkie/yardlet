@@ -90,7 +90,9 @@ class Run:
         self.children = set()
         self.stopping = False
         self.xctest = xcrun("--find", "xctest")
-        platform = xcrun("--show-sdk-platform-path")
+        # The macOS SDK's platform by name: an SDKROOT that names Command Line Tools' SDK, as some CI
+        # runners have, is no SDK of the selected Xcode and has no platform path.
+        platform = xcrun("--sdk", "macosx", "--show-sdk-platform-path")
         # What `swift test` adds for xctest on macOS: the build's products and the platform's XCTest
         # and Swift Testing, and Swift Testing switched off inside XCTest's process.
         self.environment = dict(os.environ)
@@ -253,17 +255,12 @@ class Run:
 
 
 def xcrun(*arguments):
-    """What `xcrun` answers. On a CI runner it now and then fails at once, with nothing wrong in the
-    toolchain, and the same call a moment later answers, so a failure is tried again a few times
-    before the run gives up."""
-    for attempt in range(4):
-        if attempt:
-            time.sleep(2 * attempt)
-        result = subprocess.run(["xcrun", *arguments], capture_output=True, text=True)
-        if result.returncode == 0:
-            return result.stdout.strip()
+    """What `xcrun` answers; when it fails, what it said goes to the log before the run ends."""
+    result = subprocess.run(["xcrun", *arguments], capture_output=True, text=True)
+    if result.returncode != 0:
         print(f"xcrun {' '.join(arguments)} failed ({result.returncode}): {result.stderr.strip()}", file=sys.stderr)
     result.check_returncode()
+    return result.stdout.strip()
 
 
 def prepend(environment, key, *paths):
