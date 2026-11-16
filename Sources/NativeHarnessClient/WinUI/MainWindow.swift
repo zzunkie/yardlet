@@ -439,14 +439,24 @@ final class MainWindow {
         // The Mac's composer is off while a change of the task's conversation or account is under way; what was
         // written waits.
         guard !model.isHeld(session, by: TaskBlocker.holdingOffActions) else { return }
-        log.write("sent: \(text)")
         // The draft takes the text as shown, the syllable being composed included, which TextChanged may not have
         // brought yet.
         let draft = model.composerDrafts.tasks.draft(for: session.id)
         draft.text = composer.text
-        model.sendDraft(of: session)
+        let sending = model.sendDraft(of: session)
+        let noticeAsSent = draft.notice
         composerTextInDraft = draft.text
         if composer.text != draft.text { composer.text = draft.text }
+        // The log says what became of the message once the model has it: a message the task did not take is back
+        // in the draft with why.
+        Task {
+            await sending?.value
+            if let notice = draft.notice, notice != noticeAsSent {
+                log.write("not sent: \(text): \(notice)")
+            } else {
+                log.write("sent: \(text)")
+            }
+        }
     }
 
     /// A request's answer from its card, carried out as the Mac's card does (`ConversationActions.respond`); a form's
