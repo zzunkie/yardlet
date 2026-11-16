@@ -13,14 +13,29 @@ enum ComposerKeys {
     /// The tallest a composer grows before it scrolls, about eight lines.
     static let maximumHeight: Double = 200
 
-    static func prepare(_ field: TextBox, send: @escaping @MainActor () -> Void) {
+    /// While a task's turn runs, Ctrl+Enter sends the other way (`alternate`, where it returns true), as the Mac's
+    /// ⌘Return does, and Escape stops what runs (`escape`), as the Mac composer's Escape does.
+    static func prepare(_ field: TextBox, send: @escaping @MainActor () -> Void,
+                        alternate: (@MainActor () -> Bool)? = nil, escape: (@MainActor () -> Bool)? = nil) {
         field.textWrapping = .wrap
         field.acceptsReturn = true
         field.maxHeight = maximumHeight
         field.previewKeyDown.addHandler { _, args in
-            guard let args, args.key == .enter, !isShiftDown else { return }
-            args.handled = true
-            send()
+            guard let args else { return }
+            switch args.key {
+            case .enter where isDown(VK_SHIFT):
+                return
+            case .enter where isDown(VK_CONTROL):
+                guard let alternate, alternate() else { return }
+                args.handled = true
+            case .enter:
+                args.handled = true
+                send()
+            case .escape:
+                if let escape, escape() { args.handled = true }
+            default:
+                return
+            }
         }
     }
 
@@ -40,7 +55,7 @@ enum ComposerKeys {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private static var isShiftDown: Bool {
-        GetKeyState(VK_SHIFT) < 0
+    private static func isDown(_ key: Int32) -> Bool {
+        GetKeyState(key) < 0
     }
 }

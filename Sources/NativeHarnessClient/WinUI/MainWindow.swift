@@ -6,7 +6,7 @@ import WindowsFoundation
 import WinUI
 
 /// The Windows app's main window: the engine's tasks in the sidebar, the chosen task's conversation,
-/// and the composer. The sidebar follows the model's `SessionStore` through Observation, and the
+/// and its composer (`TaskComposer`). The sidebar follows the model's `SessionStore` through Observation, and the
 /// composer sends through the model as the Mac's does. Choosing a task reads its saved history as the Mac does
 /// (`refreshConversationStatus`, which starts no turn), and its conversation draws through `ConversationTimeline`
 /// from the same projection the Mac's timeline reads. Below the tasks, Import conversation continues a conversation a
@@ -22,20 +22,8 @@ final class MainWindow {
     private let window = Window()
     private let navigation = NavigationView()
     private let timeline = ConversationTimeline()
-    private let composer = TextBox()
-    /// Above the composer: that the shown task's folder is gone, and why a message stayed in the composer, as the
-    /// Mac's composer says them.
-    private let composerNotice = TextBlock()
-    private var shownNotice = ""
-    /// The composer's text as it last went to the shown task's draft or came from it, which tells the person's typing
-    /// from a message the model put back in the draft.
-    private var composerTextInDraft: String?
-    /// Ends the observation of a draft no longer shown.
-    private var draftGeneration = 0
-    /// Sends what the composer holds, as the Mac composer's Send does; Stop takes its place while the task's turn runs.
-    private var sendButton: Button?
-    /// Stops the shown task's turn while it runs, as the Mac composer's Stop does.
-    private let stopButton = Button()
+    /// The shown task's composer, as the Mac's.
+    private let composer: TaskComposer
     private var items: [(item: NavigationViewItem, id: SessionRecord.ID)] = []
     private var projectionCaches: [SessionRecord.ID: ConversationProjectionCache] = [:]
     /// The tasks whose saved history was read since the window opened.
@@ -72,6 +60,7 @@ final class MainWindow {
         self.model = model
         self.directory = directory
         signIn = HarnessSignIn(model: model)
+        composer = TaskComposer(model: model, log: QAEventLog.shared)
     }
 
     func open() {
@@ -130,9 +119,10 @@ final class MainWindow {
         grid.rowDefinitions.append(noticeRow)
         grid.rowDefinitions.append(composerRow)
         grid.children.append(timeline.view)
-        grid.children.append(makeComposerNotice())
-        grid.children.append(makeComposerRow())
-        observeComposer()
+        try? Grid.setRow(composer.noticeView, 1)
+        grid.children.append(composer.noticeView)
+        try? Grid.setRow(composer.view, 2)
+        grid.children.append(composer.view)
         navigation.content = grid
         makeConnectPane()
         let newTask = NewTaskPane(model: model, log: log, signIn: signIn) { [weak self] in self?.windowHandle ?? 0 }
@@ -151,7 +141,7 @@ final class MainWindow {
         followHosts()
         WindowChrome.frame(window, title: YardletProduct.name, content: navigation)
         // As on the Mac, the shown task's folder is looked at again when the app comes to the front.
-        window.activated.addHandler { [weak self] _, _ in self?.refreshShownTaskFolder() }
+        window.activated.addHandler { [weak self] _, _ in self?.composer.refreshFolder() }
         try? window.activate()
 
         Task {
@@ -246,16 +236,8 @@ final class MainWindow {
         if session?.id != shownSessionID {
             shownSessionID = session?.id
             if let session { log.write("showing: \(session.title)") }
-            composer.placeholderText = session.map { L10n.format("Ask %@…", $0.harness.displayName) }
-                ?? L10n.string("Choose a task")
-            composerTextInDraft = nil
-            followDraft()
-            refreshShownTaskFolder()
+            composer.show(session?.id)
         }
-        let isRunning = session.map { $0.status == .running || $0.status == .waitingForApproval } ?? false
-        stopButton.visibility = isRunning ? .visible : .collapsed
-        sendButton?.visibility = isRunning ? .collapsed : .visible
-        showSendable()
         let placeholder = session != nil ? error : hasTasks ? L10n.string("Choose a task") : L10n.string("No tasks")
         timeline.workspaceURL = session?.workspaceURL
         timeline.show(presentation, conversationID: session?.id.uuidString, placeholder: placeholder)
@@ -291,171 +273,6 @@ final class MainWindow {
         return cache.transcript(model.transcriptBySessionID[session.id] ?? [], harness: session.harness,
                                 status: session.status, latestTurnIsComplete: session.completionState == .completed,
                                 latestTurnWasCutOff: session.completionState == .interrupted)
-    }
-
-    /// The composer with Send beside it, and Stop in Send's place while the task's turn runs, as on the Mac.
-    private func makeComposerRow() -> Grid {
-        let row = Grid()
-        row.margin = Thickness(left: 28, top: 8, right: 28, bottom: 20)
-        row.columnSpacing = 8
-        let composerColumn = ColumnDefinition()
-        composerColumn.width = GridLength(value: 1, gridUnitType: .star)
-        let buttonColumn = ColumnDefinition()
-        buttonColumn.width = GridLength(value: 0, gridUnitType: .auto)
-        row.columnDefinitions.append(composerColumn)
-        row.columnDefinitions.append(buttonColumn)
-        row.children.append(composer)
-        let sendButton = ComposerKeys.sendButton(L10n.string("Send")) { [weak self] in self?.send() }
-        try? Grid.setColumn(sendButton, 1)
-        row.children.append(sendButton)
-        self.sendButton = sendButton
-        stopButton.content = L10n.string("Stop")
-        stopButton.verticalAlignment = .bottom
-        stopButton.visibility = .collapsed
-        stopButton.click.addHandler { [weak self] _, _ in self?.stop() }
-        try? Grid.setColumn(stopButton, 1)
-        row.children.append(stopButton)
-        try? Grid.setRow(row, 2)
-        return row
-    }
-
-    private func makeComposerNotice() -> TextBlock {
-        composerNotice.textWrapping = .wrap
-        composerNotice.isTextSelectionEnabled = true
-        composerNotice.opacity = 0.7
-        composerNotice.margin = Thickness(left: 28, top: 8, right: 28, bottom: 0)
-        composerNotice.visibility = .collapsed
-        try? Grid.setRow(composerNotice, 1)
-        return composerNotice
-    }
-
-    /// Send is on while the composer holds something and a task is chosen to send it to, and off, as the Mac's
-    /// composer is, while a change of the task's conversation or account is under way.
-    private func showSendable() {
-        sendButton?.isEnabled = selectedSession.map { !model.isHeld($0, by: TaskBlocker.holdingOffActions) } == true
-            && ComposerKeys.canSend(composer.text)
-    }
-
-    /// The shown task's draft in the composer, and above it that the task's folder is gone and why a message stayed,
-    /// followed through Observation as the Mac's composer follows them: a message the task did not take comes back to
-    /// the draft with why (`AppModel.sendDraft`), and so to the composer.
-    private func followDraft() {
-        draftGeneration += 1
-        let generation = draftGeneration
-        guard let id = shownSessionID else {
-            showNotice("")
-            return
-        }
-        let draft = model.composerDrafts.tasks.draft(for: id)
-        let session = model.store.sessions.first { $0.id == id }
-        let (text, notice, missing) = withObservationTracking {
-            // Read for Send, which a change of the task's conversation or account turns off.
-            _ = session.map { model.isHeld($0, by: TaskBlocker.holdingOffActions) }
-            return (draft.text, draft.notice, model.missingTaskFolders[id])
-        } onChange: { [weak self] in
-            Task { @MainActor in
-                guard let self, generation == self.draftGeneration else { return }
-                self.followDraft()
-            }
-        }
-        if text != composerTextInDraft {
-            composerTextInDraft = text
-            if composer.text != text { composer.text = text }
-        }
-        var lines = missing.map { [$0.localizedDescription] } ?? []
-        if let notice, !lines.contains(notice) { lines.append(notice) }
-        showNotice(lines.joined(separator: "\n"))
-        showSendable()
-    }
-
-    private func showNotice(_ text: String) {
-        guard text != shownNotice else { return }
-        shownNotice = text
-        composerNotice.text = text
-        composerNotice.visibility = text.isEmpty ? .collapsed : .visible
-        if !text.isEmpty { log.write("notice: \(text)") }
-    }
-
-    /// Looks at the shown task's folder, which the line above the composer names when it is gone: when the task is
-    /// shown and when the window comes to the front, as on the Mac.
-    private func refreshShownTaskFolder() {
-        guard let id = shownSessionID else { return }
-        Task { await model.refreshTaskFolder(id) }
-    }
-
-    /// The harness's own cancel stops the turn (`AppModel.interrupt`), as the Mac's Stop does.
-    private func stop() {
-        guard let session = selectedSession, session.status == .running || session.status == .waitingForApproval
-        else { return }
-        log.write("stop: \(session.title)")
-        Task { await model.interrupt(session) }
-    }
-
-    // Enter sends what the composer shows, the syllable being composed included, and Shift+Enter starts a new line
-    // (`ComposerKeys`).
-    private func observeComposer() {
-        composer.loaded.addHandler { [weak self] _, _ in
-            guard let self else { return }
-            _ = try? self.composer.focus(.programmatic)
-            self.log.write("ready")
-        }
-        composer.textCompositionStarted.addHandler { [weak self] _, _ in
-            self?.log.write("composition started")
-        }
-        composer.textCompositionChanged.addHandler { [weak self] _, _ in
-            guard let self else { return }
-            self.log.write("composition changed: \(self.composer.text)")
-        }
-        composer.textCompositionEnded.addHandler { [weak self] _, _ in
-            guard let self else { return }
-            self.log.write("composition ended: \(self.composer.text)")
-        }
-        composer.textChanged.addHandler { [weak self] _, _ in self?.composerTextChanged() }
-        ComposerKeys.prepare(composer) { [weak self] in self?.send() }
-    }
-
-    /// What the person types goes to the shown task's draft, which keeps it while another task is shown and across
-    /// launches, as the Mac's composer does.
-    private func composerTextChanged() {
-        let text = composer.text
-        if let id = shownSessionID, text != composerTextInDraft {
-            composerTextInDraft = text
-            model.composerDrafts.tasks.draft(for: id).text = text
-        }
-        showSendable()
-    }
-
-    /// Sends the draft through the model, which empties it as the message goes and puts back, with why, a message the
-    /// task does not take, such as one for a task whose folder is gone (`AppModel.sendDraft`).
-    private func send() {
-        let text = composer.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        guard let session = selectedSession else {
-            log.write("sent: \(text)")
-            composer.text = ""
-            return
-        }
-        // The Mac's composer is off while a change of the task's conversation or account is under way; what was
-        // written waits.
-        guard !model.isHeld(session, by: TaskBlocker.holdingOffActions) else { return }
-        // The draft takes the text as shown, the syllable being composed included, which TextChanged may not have
-        // brought yet.
-        let draft = model.composerDrafts.tasks.draft(for: session.id)
-        draft.text = composer.text
-        let sending = model.sendDraft(of: session)
-        let noticeAsSent = draft.notice
-        composerTextInDraft = draft.text
-        if composer.text != draft.text { composer.text = draft.text }
-        // The log says what became of the message once the model has it: a message the task did not take is back
-        // in the draft with why.
-        Task {
-            await sending?.value
-            if let notice = draft.notice, notice != noticeAsSent {
-                log.write("not sent: \(text): \(notice)")
-            } else {
-                log.write("sent: \(text)")
-            }
-        }
     }
 
     /// A request's answer from its card, carried out as the Mac's card does (`ConversationActions.respond`); a form's
