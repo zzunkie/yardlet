@@ -646,8 +646,8 @@ final class TaskContinuationCoordinator {
     /// Reads the record the last run left, once, after the task index is back, and continues what
     /// it allows: the most recent first, a few starting at a time, and those that waited on the
     /// person once they are opened. The record is the last quit's, or, after an exit that wrote
-    /// nothing, the one the last run kept. The subagents it cut off cannot continue; the callers that
-    /// waited for them are told.
+    /// nothing, the one the last run kept. The subagents it cut off cannot continue; their calling
+    /// tasks are told.
     /// Then the idle Claude Code tasks whose CLI brings session jobs back start again, after them.
     func continueWorkInterruptedByRestart(now: Date = Date()) async {
         guard let model, !model.isVisualFixture else { return }
@@ -693,10 +693,10 @@ final class TaskContinuationCoordinator {
         taskOpened(model.store.selectedSessionID, now: now)
     }
 
-    /// Tells each caller that waited for a subagent the last quit cut off, as `notify` tells it of one
-    /// that ended, with its answer so far: a foreground call's caller holds no ID to ask with. Only
-    /// under the restart setting and within its day, as a cut-off turn continues; the message starts
-    /// a turn in an idle caller.
+    /// Tells the calling task of each subagent the last quit cut off, as it is told of one that ended
+    /// (`AppModel.finishAgentRun`), with its answer so far: a foreground call's caller holds no ID to
+    /// ask with. Only under the restart setting and within its day, as a cut-off turn continues; the
+    /// message starts a turn in an idle caller.
     private func tellCallersOfAgentRunsCutOffByQuit(_ interrupted: [SessionToolCenter.InterruptedRun], now: Date) async {
         guard let model, RestartResumePreference.isOn(in: model.preferences) else { return }
         for run in interrupted where now < run.interruptedAt.addingTimeInterval(RestartResumePolicy.maxAge) {

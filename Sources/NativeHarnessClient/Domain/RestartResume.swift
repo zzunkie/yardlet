@@ -139,7 +139,7 @@ struct RestartResumeRecord: Codable, Equatable, Sendable {
 ///   Claude app's words as the next prompt (`RestartContinuation.claudeText`), by the rules above.
 /// - Other harnesses: their apps continue nothing, so neither does Yardlet.
 /// - `run_agent` subagents keep no history with their harness, so none continues: the quit ends each
-///   as interrupted, and the next launch tells the caller that waited for it, under this setting and
+///   as interrupted, and the next launch tells its calling task, under this setting and
 ///   within `maxAge` (`AppModel.interruptAgentRunsForQuit`).
 enum RestartResumePolicy {
     /// The Claude app's `864e5` ms, counted from when the turn was cut off.

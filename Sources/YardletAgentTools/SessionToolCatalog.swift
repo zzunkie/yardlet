@@ -217,7 +217,8 @@ package enum SessionToolCatalog {
                 "account": account,
                 "folder": property("string", "A folder of this task's project. Defaults to this task's folder."),
                 "background": property("boolean", "Return an agent id at once; wait_tasks returns the answer."),
-                "notify": property("boolean", "With background: send this task a message when it ends.")
+                "notify": property("boolean", "Default true: when it ends after this call returned and no "
+                    + "wait_tasks call is waiting for it, send this task a message with how it ended and its answer.")
             ], required: ["harness", "prompt"]),
             readOnly: false,
             openWorld: false

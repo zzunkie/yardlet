@@ -82,8 +82,12 @@ extension AppModel {
                            depth: caller.agentDepth + 1, permission: permission)
         run.accountStart = account
         let background = Self.bool(arguments["background"]) == true
-        run.isBackground = background
-        run.notifiesCaller = background && Self.bool(arguments["notify"]) == true
+        // Only a task can receive a message; a subagent that runs one waits for it or asks wait_tasks.
+        run.notifiesCaller = caller.id == caller.hostTaskID && Self.bool(arguments["notify"]) != false
+        // This call answers with the subagent's end while it lasts; once it has returned, a message
+        // does (`finishAgentRun`).
+        run.waitingCalls += 1
+        defer { run.waitingCalls -= 1 }
         run.state = .queued
         sessionTools.add(run)
         sessionTools.noteStarted(run.id, by: caller.id)
@@ -98,7 +102,6 @@ extension AppModel {
                     self.finishAgentRun(run, state: .failed(error.localizedDescription))
                 }
             })
-            if run.notifiesCaller { watchForNotification(run.id, caller: caller) }
             if background {
                 return .text("Queued agent \(run.id.uuidString) on \(harness.displayName); it starts when there is "
                     + "room. wait_tasks with this id waits for it.\n" + account.toolLines)
@@ -112,8 +115,8 @@ extension AppModel {
             finishAgentRun(run, state: .failed(error.localizedDescription))
             return .error("Not started: \(error.localizedDescription)")
         }
-        if run.notifiesCaller { watchForNotification(run.id, caller: caller) }
-        if background {
+        // One that already ended answers as a foreground call does.
+        if background, !run.state.isFinished {
             return .text("Started agent \(run.id.uuidString) on \(harness.displayName). wait_tasks with this id "
                 + "returns its answer.\n" + account.toolLines)
         }
@@ -260,6 +263,8 @@ extension AppModel {
                 guard let self, let run else { return }
                 self.acceptAgentRun(envelope.payload, in: run)
             }
+            guard !Task.isCancelled, let self, let run else { return }
+            await self.agentRunEventsEnded(run, adapter: adapter, handle: handle)
         })
         if let codex = adapter as? any CodexPresentationProviding {
             let states = try await codex.presentationStates(for: handle)
@@ -358,6 +363,22 @@ extension AppModel {
         sessionToolApprovalsChanged(in: run.hostTaskID)
     }
 
+    /// Its harness ended the session's events while it worked: the process exited or the connection
+    /// dropped without a last word (a Codex App Server gone before the turn showed, an ACP agent's
+    /// process gone). As for a task (`AppModel.eventStreamEnded`), its last Codex state says how its
+    /// turn ended, the dead adapter leaves the registry, and one still at work ends as failed.
+    private func agentRunEventsEnded(_ run: AgentRun, adapter: any HarnessAdapter,
+                                     handle: HarnessSessionHandle) async {
+        guard !run.state.isFinished else { return }
+        if let codex = adapter as? any CodexPresentationProviding,
+           let state = try? await codex.presentationState(for: handle) {
+            acceptAgentRun(state, in: run)
+        }
+        await registry.invalidate(adapter)
+        finishAgentRun(run, state: .failed(run.lastError
+            ?? L10n.format("Connection to %@ ended.", run.harness.displayName)))
+    }
+
     func respondToAgentRun(_ run: AgentRun, requestID: String, action: PermissionRequestAction?,
                            answer: PermissionStructuredAnswer?, decision: PermissionDecision) async {
         guard let adapter = run.adapter, let handle = run.handle else { return }
@@ -403,7 +424,10 @@ extension AppModel {
     }
 
     /// The subagent ended: its session closes, its token stops working, and its conversation is
-    /// kept with its host task.
+    /// kept with its host task. When no call is waiting for it (its foreground call ran past its time,
+    /// or it ran in the background), its calling task gets a message saying how it ended, as Claude
+    /// Code tells a turn of its background agents' ends (`AgentRun.notifiesCaller`). One the quit cut
+    /// off is told of at the next launch (`interruptAgentRunsForQuit`).
     func finishAgentRun(_ run: AgentRun, state: AgentRun.State) {
         guard !run.state.isFinished else { return }
         sessionTools.dequeue(run.id)
@@ -425,6 +449,9 @@ extension AppModel {
         sessionToolApprovalsChanged(in: run.hostTaskID)
         // Its browser tab, if it drove one, is no longer one a turn is using.
         BrowserAgentUse.shared.endTurn(session: run.id)
+        if run.notifiesCaller, run.waitingCalls == 0, state != .interrupted {
+            Task { await notifyCaller(of: run.id, hostTaskID: run.hostTaskID) }
+        }
     }
 
     // MARK: - Quitting and opening again
@@ -439,13 +466,13 @@ extension AppModel {
         for run in cut { finishAgentRun(run, state: .interrupted) }
         sessionTools.noteInterrupted(cut.map { run in
             SessionToolCenter.InterruptedRun(id: run.id, hostTaskID: run.hostTaskID, interruptedAt: now,
-                tellsCaller: run.callerID == run.hostTaskID && (!run.isBackground || run.notifiesCaller))
+                tellsCaller: run.notifiesCaller)
         })
     }
 
     /// The subagents the last quit cut off, held again as they were kept, so that `wait_tasks`, the
     /// Agents card and the subagent's card find them by the IDs their callers hold. Read once. Returns
-    /// those whose caller waited for their answer.
+    /// those whose calling task is told (`AgentRun.notifiesCaller`).
     func restoreAgentRunsCutOffByQuit() -> [SessionToolCenter.InterruptedRun] {
         var waitedFor: [SessionToolCenter.InterruptedRun] = []
         for interrupted in sessionTools.takeInterrupted() {

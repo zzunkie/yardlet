@@ -84,7 +84,7 @@ enum SessionToolPolicy {
     static let splitNeighborsShareProject = true
     /// How long the app waits for the person's answer to a session tool's approval before refusing.
     static let approvalTimeout: Duration = .seconds(600)
-    /// How long a notification for a child or subagent the agent asked about may wait for its end.
+    /// How long a notification for a child task the agent asked about may wait for its first turn's end.
     static let notificationWatchLimit: Duration = .seconds(6 * 60 * 60)
     /// A person's message up to this many characters goes whole with a quote from it: a chat message,
     /// even several short paragraphs of one. A longer one is mostly a brief or a paste, and only its
@@ -199,10 +199,12 @@ final class AgentRun: Identifiable {
     let permission: TaskPermissionLevel
     /// When it started: when it was asked for, or when it left the line for room.
     var startedAt: Date
-    /// `run_agent` returned at once and the caller picks the answer up later; a foreground call waits
-    /// inside the call for it.
-    var isBackground = false
+    /// Its calling task gets a message when it ends with no call waiting for it (`AppModel.finishAgentRun`),
+    /// unless the call said `notify: false`, the caller is a subagent, or the caller's turn stopped it.
     var notifiesCaller = false
+    /// Calls waiting for it now (its own `run_agent`, `wait_tasks`): an end while one waits is in that
+    /// call's answer.
+    @ObservationIgnored var waitingCalls = 0
     /// The harness keeps this session out of its own history (Claude Code
     /// `--no-session-persistence`, an ephemeral Codex thread, Pi `--no-session`); false where it
     /// has no way to, and its history then has the session as any other.
@@ -642,7 +644,7 @@ extension SessionToolCenter {
         var id: UUID
         var hostTaskID: UUID
         var interruptedAt: Date
-        /// Its caller is a task that waited for its answer: inside the `run_agent` call, or by `notify`.
+        /// Its calling task is told when it ends (`AgentRun.notifiesCaller`).
         var tellsCaller: Bool
     }
 

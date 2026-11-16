@@ -610,8 +610,12 @@ extension AppModel: SessionToolHandling {
         }
         let requested = Self.integer(arguments["timeout_seconds"]).map { Duration.seconds(max(0, $0)) }
             ?? SessionToolPolicy.waitDefault
+        // A subagent that ends while this call waits is in its answer, so no message tells of it again.
+        let runs = ids.compactMap { sessionTools.run($0) }
+        for run in runs { run.waitingCalls += 1 }
         _ = await waitForAny(ids, timeout: min(requested, caller.remaining))
         let states = ids.map { sessionToolOutcome(of: $0) }
+        for run in runs { run.waitingCalls -= 1 }
         for (id, state) in zip(ids, states) where state.kind == "task" && state.ended && state.answer != nil {
             await sessionToolNoteParentRead(of: id, by: caller)
         }
@@ -1886,18 +1890,20 @@ extension AppModel: SessionToolHandling {
     }
 
     /// The caller's turn stopped or the task went away: its subagents stop and what its session
-    /// tools wait on is refused.
+    /// tools wait on is refused. They stop with it, so no message of theirs starts its turn again.
     func stopSessionToolWork(for taskID: UUID) async {
         sessionTools.refuseApprovals(in: taskID)
         for run in sessionTools.runs(hostedBy: taskID) where !run.state.isFinished {
+            run.notifiesCaller = false
             await stopAgentRun(run)
         }
     }
 
     // MARK: - Notifications the agent asked for
 
-    /// When a child task's first turn, or a background subagent, ends, its caller gets a message
-    /// from it saying so, delivered as any message between tasks is. Only a task can receive one.
+    /// When a child task's first turn ends, its caller gets a message from it saying so, delivered
+    /// as any message between tasks is. Only a task can receive one. A subagent's caller is told from
+    /// where the subagent ends (`finishAgentRun`).
     func watchForNotification(_ id: UUID, caller: SessionToolCaller) {
         guard caller.id == caller.hostTaskID else { return }
         Task { [weak self] in
@@ -1905,11 +1911,7 @@ extension AppModel: SessionToolHandling {
             let deadline = ContinuousClock.now + SessionToolPolicy.notificationWatchLimit
             while ContinuousClock.now < deadline {
                 let look = ContinuousClock.now
-                if let run = self.sessionTools.run(id) {
-                    // One the quit cut off is told of at the next launch (`interruptAgentRunsForQuit`).
-                    if run.state == .interrupted { return }
-                    if run.state.isFinished { break }
-                } else if let session = self.store.sessions.first(where: { $0.id == id }) {
+                if let session = self.store.sessions.first(where: { $0.id == id }) {
                     if self.firstBlocker(of: session, among: TaskBlocker.keepingTaskAtWork) == nil { break }
                 } else {
                     return

@@ -1562,12 +1562,16 @@ final class SessionToolTests: XCTestCase {
         await model.shutdown()
     }
 
-    func testABackgroundSubagentIsPickedUpByWaitOrAMessageAndAForegroundOneAnswersAtItsDeadline() async throws {
+    /// A caller learns once how a subagent ended: in the answer of a call that waits for it, else in a
+    /// message from it, as Claude Code tells a turn of its background agents. Without the message a
+    /// caller whose call returned first stalled (2026-11-16): a foreground call that outlasted its time,
+    /// a background one started without `notify`, or one whose harness exited with no last word.
+    func testACallerLearnsOfASubagentsEndOnceByAWaitOrAMessage() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
         let model = fixture.model
         let started = await call(model, "run_agent",
-                                 ["harness": "claude-code", "prompt": "Count the TODOs", "background": true, "notify": true],
+                                 ["harness": "claude-code", "prompt": "Count the TODOs", "background": true],
                                  from: fixture.caller)
         XCTAssertTrue(started.text.hasPrefix("Started agent "), started.text)
         let run = try XCTUnwrap(model.sessionTools.runs(hostedBy: fixture.caller.id).first)
@@ -1579,6 +1583,7 @@ final class SessionToolTests: XCTestCase {
 
         let waiting = Task { await self.call(model, "wait_tasks", ["ids": [run.id.uuidString]], from: fixture.caller) }
         try await waitUntil { await fixture.adapter.prompts(for: run.id).count == 1 }
+        try await waitUntil { run.waitingCalls == 1 }
         await fixture.adapter.emit(.sessionStatusChanged(.running), for: run.id)
         await fixture.adapter.emit(.assistantMessageCompleted("12 TODOs."), for: run.id)
         await fixture.adapter.emit(.turnCompleted, for: run.id)
@@ -1586,21 +1591,39 @@ final class SessionToolTests: XCTestCase {
         XCTAssertEqual(ended.first?.state, "completed")
         XCTAssertEqual(ended.first?.answer, "12 TODOs.")
 
-        // The caller asked to be told: its message arrives as from the agent, starting a turn.
-        try await waitUntil { await fixture.adapter.prompts(for: fixture.caller.id).contains { TaskMessage.parse($0) != nil } }
-        let callerPrompts = await fixture.adapter.prompts(for: fixture.caller.id)
-        let note = try XCTUnwrap(callerPrompts.compactMap(TaskMessage.parse).last)
-        XCTAssertEqual(note.senderID, run.id.uuidString)
-        XCTAssertEqual(note.senderName, L10n.format("%@ agent", "Claude Code"))
-        XCTAssertTrue(note.body.contains("12 TODOs."))
-
-        // A foreground subagent that outlasts the call answers with its id and goes on.
+        // A foreground subagent that outlasts the call answers with its id and goes on; when it ends,
+        // its message arrives as from the agent, starting a turn.
         model.sessionTools.waitCeilingOverride = .milliseconds(400)
         let late = await call(model, "run_agent", ["harness": "claude-code", "prompt": "Profile the build"], from: fixture.caller)
         XCTAssertTrue(late.text.contains("still running; wait_tasks with this id"), late.text)
         let lateRun = try XCTUnwrap(ConversationAgentRunProjection.agentID(inResult: late.text).flatMap(UUID.init(uuidString:))
             .flatMap(model.sessionTools.run))
         XCTAssertFalse(lateRun.state.isFinished)
+        await fixture.adapter.emit(.sessionStatusChanged(.running), for: lateRun.id)
+        await fixture.adapter.emit(.assistantMessageCompleted("The link step takes 4 minutes."), for: lateRun.id)
+        await fixture.adapter.emit(.turnCompleted, for: lateRun.id)
+        func told() async -> [TaskMessage] { await fixture.adapter.prompts(for: fixture.caller.id).compactMap(TaskMessage.parse) }
+        try await waitUntil { await !told().isEmpty }
+        let first = await told().first
+        let note = try XCTUnwrap(first)
+        XCTAssertEqual(note.senderID, lateRun.id.uuidString,
+                       "The first one's end was in the answer of the wait_tasks call that waited for it, and is not told again")
+        XCTAssertEqual(note.senderName, L10n.format("%@ agent", "Claude Code"))
+        XCTAssertTrue(note.body.hasPrefix("Ended (completed). Its id is \(lateRun.id.uuidString)."), note.body)
+        XCTAssertTrue(note.body.hasSuffix("The link step takes 4 minutes."), note.body)
+
+        // One whose harness exits with no last word ends as failed, and its caller is told.
+        _ = await call(model, "run_agent", ["harness": "claude-code", "prompt": "Lint", "background": true], from: fixture.caller)
+        let gone = try XCTUnwrap(model.sessionTools.runs(hostedBy: fixture.caller.id).first { $0.prompt == "Lint" })
+        try await waitUntil { await fixture.adapter.prompts(for: gone.id).count == 1 }
+        await fixture.adapter.emit(.sessionStatusChanged(.running), for: gone.id)
+        await fixture.adapter.endEvents(for: gone.id)
+        try await waitUntil { await told().count == 2 }
+        XCTAssertEqual(gone.state, .failed(L10n.format("Connection to %@ ended.", "Claude Code")))
+        let last = await told().last
+        let failed = try XCTUnwrap(last)
+        XCTAssertEqual(failed.senderID, gone.id.uuidString)
+        XCTAssertTrue(failed.body.hasPrefix("Ended (failed)."), failed.body)
         await model.shutdown()
     }
 
@@ -1632,24 +1655,28 @@ final class SessionToolTests: XCTestCase {
         let refused = await pending.value
         XCTAssertTrue(refused.isError, refused.text)
         XCTAssertTrue(model.approvalsAreEmpty(in: fixture.caller.id))
+        // It stopped with the caller's turn, so no message of it starts that turn again.
+        try await Task.sleep(for: .milliseconds(500))
+        let told = await fixture.adapter.prompts(for: fixture.caller.id).compactMap(TaskMessage.parse)
+        XCTAssertTrue(told.isEmpty)
         await model.shutdown()
     }
 
     /// A subagent keeps no history with its harness, so a quit leaves nothing of it to continue
     /// (2026-10-31: an update cut off a Codex subagent, and its caller's `wait_tasks` no longer knew
     /// its ID). The quit ends each one at work as interrupted, kept with its answer so far; the next
-    /// launch holds it again under the same ID, and tells once each caller that waited for it, inside
-    /// the call or by `notify`, under the restart setting.
+    /// launch holds it again under the same ID, and tells its calling task once, unless the call said
+    /// `notify: false`, under the restart setting.
     func testAQuitInterruptsSubagentsAndTheNextLaunchTellsTheCallersThatWaited() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
         let model = fixture.model
         // The foreground call waits until the quit.
         model.sessionTools.waitCeilingOverride = .seconds(600)
-        _ = await call(model, "run_agent", ["harness": "claude-code", "prompt": "Rate the app", "background": true,
-                                            "notify": true], from: fixture.caller)
-        _ = await call(model, "run_agent", ["harness": "claude-code", "prompt": "Count the TODOs", "background": true],
+        _ = await call(model, "run_agent", ["harness": "claude-code", "prompt": "Rate the app", "background": true],
                        from: fixture.caller)
+        _ = await call(model, "run_agent", ["harness": "claude-code", "prompt": "Count the TODOs", "background": true,
+                                            "notify": false], from: fixture.caller)
         let foreground = Task { await self.call(model, "run_agent", ["harness": "claude-code", "prompt": "Profile the build"],
                                                 from: fixture.caller) }
         try await waitUntil { model.sessionTools.runs(hostedBy: fixture.caller.id).count == 3 }
@@ -1687,7 +1714,7 @@ final class SessionToolTests: XCTestCase {
         XCTAssertEqual(outcomes.last?.answer, "Onboarding is clear; pricing is not.")
         XCTAssertEqual(after.railAgentRuns(hostedBy: fixture.caller.id).map(\.state), [.interrupted, .interrupted, .interrupted],
                        "The Agents card shows them as they ended")
-        // Only the callers that waited are told: by `notify`, and inside the call.
+        // Only the callers that did not turn the message off are told: in the background, and inside the call.
         let told = await fixture.adapter.prompts(for: fixture.caller.id).compactMap(TaskMessage.parse)
         XCTAssertEqual(Set(told.map(\.senderID)), [notified.id.uuidString, waited.id.uuidString])
         let note = try XCTUnwrap(told.first { $0.senderID == notified.id.uuidString })
@@ -3271,6 +3298,11 @@ actor SessionToolAdapter: HarnessAdapter, HarnessLaunchOptionConfiguring, Harnes
     func emit(_ payload: HarnessEventPayload, for id: UUID) {
         sequence += 1
         streams[id]?.continuation.yield(HarnessEventEnvelope(localSessionID: id, sequence: sequence, payload: payload))
+    }
+
+    /// The session's process exits, or its connection drops, with no last word: its events end.
+    func endEvents(for id: UUID) {
+        streams[id]?.continuation.finish()
     }
 
     func setLaunchOptions(_ options: [String: String], for localSessionID: UUID) {
