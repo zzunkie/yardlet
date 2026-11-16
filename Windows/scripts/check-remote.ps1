@@ -1,4 +1,4 @@
-# Opens the Windows app, pairs it with a host from -Link through Connect to a Mac, opens a task in the host's
+# Opens the Windows app, pairs it with a host from -Link through Connect to a Mac in Settings, opens a task in the host's
 # window, sends a message and waits for the answer to stream in, then removes the host from Connect to a Mac. It drives the window through UI Automation
 # and reads the window's own event log (YARDLET_QA_EVENT_LOG); it writes screenshots, the log and a summary
 # to -OutDirectory. The CI host is yardlet-remote-fixture on a local relay (docs/REMOTE_PROTOCOL.md, sections 9 and 14).
@@ -143,7 +143,7 @@ if (-not (Wait-For { (Read-Events) -contains 'ready' } 30)) { Finish 'not ready'
 $main = $UIA::FromHandle($process.MainWindowHandle)
 [void][RemoteDesktop]::BringForward($process.MainWindowHandle)
 
-# Connect to a Mac, the link pasted, Connect.
+# Settings, the link pasted under Connect to a Mac, Connect.
 # A list redrawn meanwhile leaves an item that no longer takes a pattern, so finding and choosing go together. Just
 # after launch a choice made through UI Automation now and then takes the item's focus but not its selection, so the
 # item is chosen again, once by invoking it, until its pane shows; the summary keeps how many tries it took and how long
@@ -153,18 +153,15 @@ $field = $null
 $deadline = (Get-Date).AddSeconds(30)
 while (-not $field -and (Get-Date) -lt $deadline) {
     $summary.connectTries += 1
-    $chosen = Wait-For { $found = Find-Item $main 'Connect to a Mac'; if ($found) {
+    $chosen = Wait-For { $found = Find-Item $main 'Settings'; if ($found) {
         if ($summary.connectTries % 2 -eq 0) {
             $found.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
         } else {
             Select-Item $found
         }
         $true } } 10
-    if (-not $chosen) { Finish 'no Connect to a Mac item' }
-    # The pane's Connect button, which the task's pane does not have; the pane's one field is then the link's.
-    if (Wait-For { Find-Named $main 'Connect' ([System.Windows.Automation.ControlType]::Button) } 4) {
-        $field = Wait-For { Find-Typed $main ([System.Windows.Automation.ControlType]::Edit) } 4
-    }
+    if (-not $chosen) { Finish 'no Settings item' }
+    $field = Wait-For { Find-Named $main 'Connection link' ([System.Windows.Automation.ControlType]::Edit) } 4
 }
 $summary.uiaAnswerSeconds = [math]::Round((Measure-Command { try { [void]$main.FindFirst($Scope::Children, [System.Windows.Automation.Condition]::TrueCondition) } catch {} }).TotalSeconds, 2)
 if (-not $field) { Finish 'no link field' }
@@ -234,8 +231,8 @@ foreach ($card in $cards.GetEnumerator()) {
     Save-Screen "card-$($card.Key)"
 }
 
-# Remove... on the host under Connect to a Mac: asked first, then its window closes, the host is forgotten and the
-# list no longer has it. The main window's item is chosen again until its pane shows, as for pairing above.
+# Remove... on the host under Connect to a Mac in Settings: asked first, then its window closes, the host is forgotten
+# and the list no longer has it. Settings is chosen again until it shows, as for pairing above.
 [void][RemoteDesktop]::BringForward($process.MainWindowHandle)
 $removeName = "Remove $hostName"
 $remove = $null
@@ -243,7 +240,7 @@ $tries = 0
 $deadline = (Get-Date).AddSeconds(30)
 while (-not $remove -and (Get-Date) -lt $deadline) {
     $tries += 1
-    [void](Wait-For { $found = Find-Item $main 'Connect to a Mac'; if ($found) {
+    [void](Wait-For { $found = Find-Item $main 'Settings'; if ($found) {
         if ($tries % 2 -eq 0) {
             $found.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
         } else {
@@ -273,10 +270,10 @@ $closed = Wait-For { -not $UIA::RootElement.FindFirst($Scope::Children, (New-Obj
     (New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, $hostName)))))) } 10
 if (-not $closed) { Finish 'host window still open' }
 if (-not (Wait-For { -not (Find-Named $main $removeName ([System.Windows.Automation.ControlType]::Button)) } 15)) { Finish 'host still listed' }
-# The sidebar still has Connect to a Mac chosen, as the pane beside it shows.
-$summary.connectChosen = [bool](Wait-For { $item = Find-Item $main 'Connect to a Mac'
+# The sidebar still has Settings chosen, as the pane beside it shows.
+$summary.connectChosen = [bool](Wait-For { $item = Find-Item $main 'Settings'
     $item -and $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Current.IsSelected } 10)
-if (-not $summary.connectChosen) { Finish 'Connect to a Mac no longer chosen' }
+if (-not $summary.connectChosen) { Finish 'Settings no longer chosen' }
 $summary.removed = $true
 Save-Screen 'removed'
 Finish 'answered'

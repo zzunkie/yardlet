@@ -121,6 +121,14 @@ function Find-Typed($root, $type) {
     $root.FindFirst($Scope::Descendants, (New-Object System.Windows.Automation.PropertyCondition($UIA::ControlTypeProperty, $type)))
 }
 
+# The message field or the composer: a text field other than the sidebar's search.
+function Find-Field($root) {
+    $root.FindFirst($Scope::Descendants, (New-Object System.Windows.Automation.AndCondition(
+        (New-Object System.Windows.Automation.PropertyCondition($UIA::ControlTypeProperty, $Types::Edit)),
+        (New-Object System.Windows.Automation.NotCondition((New-Object System.Windows.Automation.PropertyCondition(
+            $UIA::NameProperty, 'Search tasks')))))))
+}
+
 # The conversation's lines that open and close are toggles, as the Mac's lines with their carets: the first one still
 # folded. What toggles there are is kept for the summary.
 function Find-Folded($root) {
@@ -183,13 +191,13 @@ $summary.consoleWindowsBefore = [LocalDesktop]::ConsoleWindows()
 $summary.consoleTitlesBefore = @([LocalDesktop]::ConsoleTitles()) -join ' | '
 $main = Open-App 'first'
 
-# New task, the stand-in, the message.
-if (-not (Wait-For { Select-Named $main 'New task' } 15)) { Finish 'no New task item' }
+# Home (New task), the stand-in, the message.
+if (-not (Wait-For { Select-Named $main 'Home' } 15)) { Finish 'no Home item' }
 $listed = Wait-For { Read-Events | Where-Object { $_ -like "new task harnesses: *$Harness*" } | Select-Object -Last 1 } 60
 $summary.harnesses = "$(Read-Events | Where-Object { $_ -like 'new task harnesses: *' } | Select-Object -Last 1)"
 if (-not $listed) { Finish "$Harness is not listed" }
 if (-not (Wait-For { Select-Named $main $Harness } 10)) { Finish "$Harness cannot be chosen" }
-$prompt = Wait-For { Find-Typed $main $Types::Edit } 10
+$prompt = Wait-For { Find-Field $main } 10
 if (-not $prompt) { Finish 'no message field' }
 $prompt.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Message)
 # Send turns on once the message is there.
@@ -250,7 +258,7 @@ if (-not $kept) { Finish 'the answer was not kept' }
 $standIn = Join-Path $env:APPDATA 'npm\node_modules\yardlet-fake-harness'
 $cancels = Join-Path $standIn 'cancels.log'
 Remove-Item $cancels -ErrorAction SilentlyContinue
-$composer = Wait-For { Find-Typed $main $Types::Edit } 10
+$composer = Wait-For { Find-Field $main } 10
 if (-not $composer) { Finish 'no composer' }
 $composer.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('Stop before the edit')
 [void][LocalDesktop]::BringForward($process.MainWindowHandle)

@@ -436,6 +436,7 @@
 "Cursor did not return a chat identifier" = "Cursor did not return a chat identifier";
 "Cursor did not create a chat in time" = "Cursor did not create a chat in time";
 "Show in Finder" = "Show in Finder";
+"Show in File Explorer" = "Show in File Explorer";
 "No provider session" = "No provider session";
 "Codex history is unavailable for this task" = "Codex history is unavailable for this task";
 "Task was deleted during harness attach" = "Task was deleted during harness attach";

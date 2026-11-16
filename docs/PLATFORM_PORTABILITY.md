@@ -158,9 +158,16 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   a tall title bar of Yardlet's own with Yardlet's mark and the window's title, and Windows' caption buttons. Its
   colors and measures are the Mac's (`WinUI/WindowsTheme.swift`, from `ParityTheme`), light or dark as Windows is set;
   pictures the app carries, such as the harnesses' marks, are read from their files (`WinUI/PackagedImage.swift`),
-  since XAML does not load a `file:` URI from a folder whose path holds characters beyond ASCII. The window shows
-  the store's tasks in the sidebar, followed through Observation, with their titles and harness marks as the Mac's
-  rows show them, and the task's composer as the Mac's (`WinUI/TaskComposer.swift`, `WinUI/ComposerParts.swift`): a
+  since XAML does not load a `file:` URI from a folder whose path holds characters beyond ASCII. The window's sidebar
+  (`WinUI/TaskSidebar.swift`) is the Mac's: Home and Search tasks at the top, then Pinned, Chats and Projects, each
+  project under its name, which collapses it and opens its menu, listing five tasks until Show more, and each task
+  nested under the task it was started from, with its harness's mark, its title (semibold while unread) and its state
+  at the end. What it lists, in what order and with what state is the Mac's reading (`SidebarProjection`,
+  `SidebarTaskIndicatorProjection`), followed through Observation; a row whose state changes is redrawn in place and a
+  list is filled again only when its rows change. A task's and a project's menus are the Mac's, with Show in File
+  Explorer for Show in Finder (`WinUI/TaskActions.swift`); the search narrows by titles and project names. With no
+  task the window opens New task, as the Mac opens its home. Beside the sidebar is the task's composer as the Mac's
+  (`WinUI/TaskComposer.swift`, `WinUI/ComposerParts.swift`): a
   rounded card at most as wide as the conversation, its text above a bottom row with the task's session controls
   (the mode or Codex's Plan indicator, the permissions and the model menu, from `ComposerSessionOptionsProjection`,
   in Windows' own menus, `WinUI/ComposerOptionChips.swift`), the context ring where the harness reports its window,
@@ -182,7 +189,7 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   (`TaskFolderMissing`) once the task is shown or the window comes to the front. The composer redraws its controls
   only when what they show changes, not for every event a turn streams. As in the Mac's composer and the harnesses'
   own apps, Enter sends and Shift+Enter starts a new line (`WinUI/ComposerKeys.swift`); New task and a host's window
-  have the same field and Send. New task at the top (`WinUI/NewTaskPane.swift`)
+  have the same field and Send. New task, under Home (`WinUI/NewTaskPane.swift`),
   starts a task as the Mac's new-task screen does, from the Mac's home draft: a harness whose CLI Yardlet found,
   where it works (a project, a folder chosen in Windows' own folder dialog, `Platform/Windows/WindowsFolderPicker.swift`,
   or a chat with no project), and the model, effort and permission the harness takes before its task exists, from
@@ -284,7 +291,7 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   (seen on the CI runner). At launch the app makes a console with no window for those programs to share
   (`Platform/Windows/WindowsConsole.swift`, `AllocConsoleWithOptions` with `ALLOC_CONSOLE_MODE_NO_WINDOW`, Windows 11
   24H2 and later); a Windows without that call keeps the console windows.
-- **Another computer's Yardlet.** Connect to a Mac, below the tasks in the main window, pairs with the link a host
+- **Another computer's Yardlet.** Connect to a Mac, a group of Settings, pairs with the link a host
   copies in Settings › Remote, as File › Connect to Mac… does on the Mac (docs/REMOTE_PROTOCOL.md, "Yardlet as a
   client"), and lists the paired Macs with Open and Remove…, which forgets the host and asks it to forget this
   computer when it can be reached. `WinUI/RemoteHostWindow.swift` opens each paired host in a window of its own: the host's tasks as it
@@ -293,7 +300,8 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   host's key in Credential Manager and the list and cache under `%LOCALAPPDATA%\Yardlet`. Without Bonjour, a host is
   reached at the direct addresses it named, on the same network or over Tailscale, and through its relay. A host's
   sidebar is drawn again only when what it shows changes, not as a task's marks and times change while it streams.
-- **This computer's tasks elsewhere.** Settings, at the foot of the sidebar, holds Settings › Remote as the Mac's
+- **This computer's tasks elsewhere.** Settings, at the foot of the sidebar, draws its settings as Windows 11 Settings
+  does, a card for each in its group (`WinUI/SettingsPane.swift`), and holds Settings › Remote as the Mac's
   (`WinUI/RemoteSettingsPane.swift`): Allow remote connections, off until turned on and then served on the same
   network and over Tailscale by a listener on every interface at port 47616, advertised with DNS-SD, and through the
   relay; the paths a device can take now; pairing with a QR code (Swift QR Code Generator) and Copy link, which keeps the link

@@ -11,17 +11,19 @@ import YardletRemote
 /// Yardlet on another computer follow and drive this computer's tasks, the paths a device can take now, pairing
 /// a device (a QR code or its link, once, for five minutes) and the paired devices with how each is connected,
 /// its permissions and a way to remove each (docs/REMOTE_PROTOCOL.md §11–§14). The service is the engine's
-/// `RemoteControlService`; this pane follows it through Observation. The Mac's switches for the relay and for
-/// keeping the computer awake, and its account link requests, are not here.
+/// `RemoteControlService`; this pane follows it through Observation. Its settings are cards of Settings' Remote group
+/// (`SettingsPane`), as Windows 11 Settings draws them. The Mac's switches for the relay and for keeping the computer
+/// awake, and its account link requests, are not here.
 @MainActor
 final class RemoteSettingsPane {
-    let view = ScrollViewer()
+    let view = StackPanel()
     private let service: RemoteControlService
     private let log = QAEventLog.shared
-    private let stack = StackPanel()
-    private let enabledSwitch = ToggleSwitch()
-    private let reachLine = TextBlock()
+    private let enabledSwitch = SettingsCard.toggle(named: L10n.string("Allow remote connections"))
+    private var reachCard = Border()
+    private var reachLine = TextBlock()
     private let pairingPanel = StackPanel()
+    private var pairingCard = Border()
     private let devicesPanel = StackPanel()
     private var shownPairing: RemoteControlService.Pairing?
     private var countdown: TextBlock?
@@ -33,35 +35,27 @@ final class RemoteSettingsPane {
 
     init(service: RemoteControlService) {
         self.service = service
-        stack.spacing = 16
-        stack.padding = Thickness(left: 28, top: 28, right: 28, bottom: 28)
-        stack.maxWidth = 640
-        stack.horizontalAlignment = .left
-        let title = Self.text(L10n.string("Remote"), size: 20)
-        stack.children.append(title)
-
-        let enabled = StackPanel()
-        enabled.spacing = 4
-        enabled.children.append(Self.text(L10n.string("Allow remote connections"), size: 14, semibold: true))
-        enabled.children.append(Self.text(L10n.string("Follow and drive this computer's tasks from Yardlet on your phone or another computer."),
-                                          muted: true))
+        view.spacing = SettingsCard.spacing
         enabledSwitch.isOn = service.isEnabled
-        try? AutomationProperties.setName(enabledSwitch, L10n.string("Allow remote connections"))
         enabledSwitch.toggled.addHandler { [weak self] _, _ in
             guard let self, self.enabledSwitch.isOn != self.service.isEnabled else { return }
             self.service.setEnabled(self.enabledSwitch.isOn)
             self.log.write("remote host: \(self.enabledSwitch.isOn ? "on" : "off")")
         }
-        enabled.children.append(enabledSwitch)
-        stack.children.append(enabled)
-        reachLine.textWrapping = .wrap
-        reachLine.opacity = 0.7
-        stack.children.append(reachLine)
+        let (enabled, _) = SettingsCard.row(
+            glyph: "\u{E8EA}", title: L10n.string("Allow remote connections"),
+            description: L10n.string("Follow and drive this computer's tasks from Yardlet on your phone or another computer."),
+            control: enabledSwitch)
+        view.children.append(SettingsCard.card(enabled))
+        let (reach, reachLine) = SettingsCard.row(glyph: "\u{E774}", title: L10n.string("Connections"), description: " ")
+        self.reachLine = reachLine
+        reachCard = SettingsCard.card(reach)
+        view.children.append(reachCard)
         pairingPanel.spacing = 8
-        stack.children.append(pairingPanel)
-        devicesPanel.spacing = 8
-        stack.children.append(devicesPanel)
-        view.content = stack
+        pairingCard = SettingsCard.card(pairingPanel)
+        view.children.append(pairingCard)
+        devicesPanel.spacing = SettingsCard.spacing
+        view.children.append(devicesPanel)
         follow()
     }
 
@@ -78,12 +72,13 @@ final class RemoteSettingsPane {
         }
         let (isEnabled, reach, pairing, pairedName, devices) = state
         if enabledSwitch.isOn != isEnabled { enabledSwitch.isOn = isEnabled }
-        let reachText = isEnabled ? L10n.string("Connections") + ": " + Self.reachText(reach) : ""
+        let reachText = isEnabled ? Self.reachText(reach) : ""
         reachLine.text = reachText
-        reachLine.visibility = isEnabled ? .visible : .collapsed
+        reachLine.visibility = .visible
+        reachCard.visibility = isEnabled ? .visible : .collapsed
         if isEnabled, reachText != loggedReach {
             loggedReach = reachText
-            log.write("remote host reach: \(Self.reachText(reach))")
+            log.write("remote host reach: \(reachText)")
         }
         showPairing(isEnabled ? pairing : nil, visible: isEnabled, canPair: reach.direct || reach.relay == .connected,
                     pairedName: pairedName)
@@ -93,7 +88,7 @@ final class RemoteSettingsPane {
     // MARK: - Pairing
 
     private func showPairing(_ pairing: RemoteControlService.Pairing?, visible: Bool, canPair: Bool, pairedName: String?) {
-        pairingPanel.visibility = visible ? .visible : .collapsed
+        pairingCard.visibility = visible ? .visible : .collapsed
         guard visible else { return }
         if let pairing, pairing == shownPairing { return }
         shownPairing = pairing
@@ -102,13 +97,14 @@ final class RemoteSettingsPane {
         copiedNote = nil
         pairingPanel.children.clear()
         guard let pairing else {
-            pairingPanel.children.append(Self.text(L10n.string("Pair a device"), size: 14, semibold: true))
-            pairingPanel.children.append(Self.text(pairedName.map { L10n.format("%@ is paired.", $0) }
-                ?? L10n.string("A code to scan with your phone, or a link for Yardlet on another computer."),
-                muted: true))
             let pair = Self.button(L10n.string("Pair…")) { [weak self] in Task { await self?.service.startPairing() } }
             pair.isEnabled = canPair
-            pairingPanel.children.append(pair)
+            let (row, _) = SettingsCard.row(
+                glyph: "\u{ED14}", title: L10n.string("Pair a device"),
+                description: pairedName.map { L10n.format("%@ is paired.", $0) }
+                    ?? L10n.string("A code to scan with your phone, or a link for Yardlet on another computer."),
+                control: pair)
+            pairingPanel.children.append(row)
             return
         }
         let row = Grid()
@@ -272,9 +268,12 @@ final class RemoteSettingsPane {
         shownDevices = layout
         permissionSwitches = [:]
         devicesPanel.children.clear()
-        devicesPanel.children.append(Self.text(L10n.string("Paired devices"), size: 14, semibold: true))
+        devicesPanel.children.append(SettingsCard.groupTitle(L10n.string("Paired devices")))
         let devices = rows.compactMap(\.device)
-        if devices.isEmpty { devicesPanel.children.append(Self.text(L10n.string("No paired devices"), muted: true)) }
+        if devices.isEmpty {
+            let (none, _) = SettingsCard.row(glyph: "\u{E8EA}", title: L10n.string("No paired devices"))
+            devicesPanel.children.append(SettingsCard.card(none))
+        }
         for row in rows {
             guard let device = row.device else {
                 for error in row.errors {
@@ -289,32 +288,18 @@ final class RemoteSettingsPane {
                 }
                 continue
             }
-            let header = Grid()
-            let wordsColumn = ColumnDefinition()
-            wordsColumn.width = GridLength(value: 1, gridUnitType: .star)
-            let buttonColumn = ColumnDefinition()
-            buttonColumn.width = GridLength(value: 0, gridUnitType: .auto)
-            header.columnDefinitions.append(wordsColumn)
-            header.columnDefinitions.append(buttonColumn)
-            let words = StackPanel()
-            words.spacing = 2
-            words.children.append(Self.text(device.name, size: 14, semibold: true))
-            words.children.append(Self.text(row.detail, muted: true))
-            header.children.append(words)
             let remove = Self.button(L10n.string("Remove")) { [weak self] in self?.confirmRemoval(of: device) }
             remove.isEnabled = !row.removing
-            remove.verticalAlignment = .center
             try? AutomationProperties.setName(remove, L10n.format("Remove %@", device.name))
-            try? Grid.setColumn(remove, 1)
-            header.children.append(remove)
-            devicesPanel.children.append(header)
-            let permissions = StackPanel()
-            permissions.spacing = 6
-            permissions.padding = Thickness(left: 16, top: 0, right: 0, bottom: 8)
+            let (header, _) = SettingsCard.row(glyph: "\u{E8EA}", title: device.name, description: row.detail,
+                                               control: remove)
+            let content = StackPanel()
+            content.spacing = 12
+            content.children.append(header)
             for (permission, isOn) in zip(RemoteDevicePermission.allCases, row.permissions) {
-                permissions.children.append(permissionRow(permission, isOn: isOn, device: device, enabled: !row.removing))
+                content.children.append(permissionRow(permission, isOn: isOn, device: device, enabled: !row.removing))
             }
-            devicesPanel.children.append(permissions)
+            devicesPanel.children.append(SettingsCard.card(content))
         }
         log.write("remote host devices: \(devices.map(\.name).joined(separator: ", "))")
     }
@@ -322,22 +307,9 @@ final class RemoteSettingsPane {
     private func permissionRow(_ permission: RemoteDevicePermission, isOn: Bool, device: RemoteDevice,
                                enabled: Bool) -> UIElement {
         let title = Self.permissionTitle(permission)
-        let row = Grid()
-        let wordsColumn = ColumnDefinition()
-        wordsColumn.width = GridLength(value: 1, gridUnitType: .star)
-        let switchColumn = ColumnDefinition()
-        switchColumn.width = GridLength(value: 0, gridUnitType: .auto)
-        row.columnDefinitions.append(wordsColumn)
-        row.columnDefinitions.append(switchColumn)
-        let words = StackPanel()
-        words.children.append(Self.text(title))
-        words.children.append(Self.text(Self.permissionDetail(permission), muted: true))
-        row.children.append(words)
-        let toggle = ToggleSwitch()
+        let toggle = SettingsCard.toggle(named: L10n.format("%@ for %@", title, device.name))
         toggle.isOn = isOn
         toggle.isEnabled = enabled
-        toggle.verticalAlignment = .center
-        try? AutomationProperties.setName(toggle, L10n.format("%@ for %@", title, device.name))
         toggle.toggled.addHandler { [weak self, weak toggle] _, _ in
             guard let self, let toggle else { return }
             let key = RemotePermissionKey(deviceID: device.id, permission: permission)
@@ -346,8 +318,9 @@ final class RemoteSettingsPane {
             guard toggle.isOn != current else { return }
             Task { await self.service.setPermission(permission, allowed: toggle.isOn, for: device) }
         }
-        try? Grid.setColumn(toggle, 1)
-        row.children.append(toggle)
+        let (row, _) = SettingsCard.row(glyph: nil, title: title, description: Self.permissionDetail(permission),
+                                        control: toggle)
+        row.margin = Thickness(left: 36, top: 0, right: 0, bottom: 0)
         permissionSwitches[RemotePermissionKey(deviceID: device.id, permission: permission)] = toggle
         return row
     }

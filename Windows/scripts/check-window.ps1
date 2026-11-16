@@ -185,13 +185,13 @@ try {
     $automation = [System.Windows.Automation.AutomationElement]::FromHandle($window)
     $listItem = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::ListItem)
-    # The tasks' items, not New task and Connect to a Mac around them.
+    # The tasks' rows, not Home above them nor Import conversation and Settings below.
     $sessionItems = @($automation.FindAll([System.Windows.Automation.TreeScope]::Descendants, $listItem) |
-        Where-Object { $_.Current.Name -notin @('New task', 'Connect to a Mac') })
+        Where-Object { $_.Current.Name -notin @('Home', 'Import conversation', 'Settings') })
     $summary.sidebarItems = $sessionItems.Count
     # Each task's row is named by its title, not by its type.
     $summary.sidebarNames = @($sessionItems | ForEach-Object { $_.Current.Name }) -join ' / '
-    $summary.sidebarUnnamed = @($sessionItems | Where-Object { $_.Current.Name -eq 'NavigationViewItem' }).Count
+    $summary.sidebarUnnamed = @($sessionItems | Where-Object { $_.Current.Name -in @('NavigationViewItem', 'ListViewItem', '') }).Count
     if ($sessionItems.Count -ge 2) {
         $sessionItems[1].GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
         Start-Sleep -Seconds 1
@@ -242,8 +242,11 @@ $summary.korean = if ($sent -contains $expected) { 'sent as typed' } elseif ($se
 try {
     $automation = [System.Windows.Automation.AutomationElement]::FromHandle($window)
     $type = [System.Windows.Automation.AutomationElement]::ControlTypeProperty
-    $edit = $automation.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
-        (New-Object System.Windows.Automation.PropertyCondition($type, [System.Windows.Automation.ControlType]::Edit)))
+    # The composer, not the sidebar's search field above it.
+    $edit = $automation.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition(
+        (New-Object System.Windows.Automation.PropertyCondition($type, [System.Windows.Automation.ControlType]::Edit)),
+        (New-Object System.Windows.Automation.NotCondition((New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::NameProperty, 'Search tasks')))))))
     $send = $automation.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition(
         (New-Object System.Windows.Automation.PropertyCondition($type, [System.Windows.Automation.ControlType]::Button)),
         (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, 'Send')))))
@@ -266,7 +269,7 @@ try {
 $summary.result = 'window shown'
 $summary.timeZone = "$(Read-Events | Where-Object { $_ -like 'time zone: *' } | Select-Object -First 1)"
 if ($summary.timeZone -ne 'time zone: Asia/Seoul') { $summary.result = "the app read another time zone: $($summary.timeZone)" }
-if ($summary.sidebarUnnamed) { $summary.result = "$($summary.sidebarUnnamed) task rows named NavigationViewItem" }
+if ($summary.sidebarUnnamed) { $summary.result = "$($summary.sidebarUnnamed) task rows named for their type" }
 
 $process.Refresh()
 $summary.workingSetAfterTypingMB = [math]::Round($process.WorkingSet64 / 1MB, 1)

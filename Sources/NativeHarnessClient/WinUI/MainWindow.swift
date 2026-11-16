@@ -5,26 +5,30 @@ import WinAppSDK
 import WindowsFoundation
 import WinUI
 
-/// The Windows app's main window: the engine's tasks in the sidebar, the chosen task's conversation,
-/// and its composer (`TaskComposer`). The sidebar follows the model's `SessionStore` through Observation, and the
-/// composer sends through the model as the Mac's does. Choosing a task reads its saved history as the Mac does
-/// (`refreshConversationStatus`, which starts no turn), and its conversation draws through `ConversationTimeline`
-/// from the same projection the Mac's timeline reads. Below the tasks, Import conversation continues a conversation a
-/// harness's own CLI or app started (`ImportConversationPane`), Connect to a Mac pairs with
-/// another computer's Yardlet from the link it copies, and each paired host opens in a window of its own
-/// (`RemoteHostWindow`). Settings holds Settings › Remote (`RemoteSettingsPane`), which lets another computer or a
-/// phone follow this one's tasks.
+/// The Windows app's main window: the sidebar (`TaskSidebar`), and beside it the chosen task's conversation and the
+/// composer, New task (the Mac's home), or Settings. The composer sends through the model as the Mac's does. Choosing a
+/// task reads its saved history as the Mac does (`refreshConversationStatus`, which starts no turn), and its
+/// conversation draws through `ConversationTimeline` from the same projection the Mac's timeline reads. Import
+/// conversation continues a conversation a harness's own CLI or app started (`ImportConversationPane`). Settings
+/// (`SettingsPane`) holds Settings › Remote, which lets another computer or a phone follow this one's tasks, and
+/// Connect to a Mac, which pairs with another computer's Yardlet from the link it copies; each paired host opens in a
+/// window of its own (`RemoteHostWindow`).
 @MainActor
 final class MainWindow {
     private let model: AppModel
     private let directory: RemoteHostDirectory
     private let log = QAEventLog.shared
     private let window = Window()
-    private let navigation = NavigationView()
+    /// The sidebar beside the content.
+    private let root = Grid()
+    /// What the sidebar chose: on Windows' layer over the window's Mica, rounded where it meets the sidebar and the title
+    /// bar, as Windows 11's own apps set their content apart.
+    private let content = Border()
+    private var sidebar: TaskSidebar?
+    private var actions: TaskActions?
     private let timeline = ConversationTimeline()
     /// The shown task's composer, as the Mac's.
     private let composer: TaskComposer
-    private var items: [(item: NavigationViewItem, id: SessionRecord.ID)] = []
     private var projectionCaches: [SessionRecord.ID: ConversationProjectionCache] = [:]
     /// The tasks whose saved history was read since the window opened.
     private var preparedSessionIDs: Set<SessionRecord.ID> = []
@@ -33,24 +37,15 @@ final class MainWindow {
     private var shownSessionID: SessionRecord.ID?
     private var loggedAnswer: String?
     private let taskPane = Grid()
-    private let newTaskItem = NavigationViewItem()
     private var newTask: NewTaskPane?
     /// Signing in to a harness: under the harness chosen for a new task, and where a turn failed for its sign-in.
     private let signIn: HarnessSignIn
-    private let importItem = NavigationViewItem()
     private var importPane: ImportConversationPane?
-    private let connectItem = NavigationViewItem()
-    private var hostItems: [(item: NavigationViewItem, id: String)] = []
     private var hostWindows: [String: RemoteHostWindow] = [:]
-    private let connectPane = StackPanel()
-    private let linkField = TextBox()
-    private let connectButton = Button()
-    private let connectStatus = TextBlock()
-    private var pairedMacs: PairedMacsList?
-    private var remoteSettings: RemoteSettingsPane?
-    /// What the window shows beside the sidebar, so redrawing the tasks keeps what the person chose. The model
-    /// learns whether it shows a task, which decides, as on the Mac, whether a task's news is a notification.
-    private enum Shown { case task, newTask, connect, other }
+    private var settings: SettingsPane?
+    /// What the window shows beside the sidebar. The model learns whether it shows a task, which decides, as on the
+    /// Mac, whether a task's news is a notification.
+    private enum Shown { case task, newTask, other }
     private var shown = Shown.task {
         didSet { model.setShowsTasks(shown == .task, inWindow: windowID) }
     }
@@ -66,47 +61,6 @@ final class MainWindow {
     func open() {
         model.setShowsTasks(true, inWindow: windowID)
         try? window.appWindow.resize(SizeInt32(width: 1000, height: 680))
-
-        navigation.paneDisplayMode = .left
-        navigation.isSettingsVisible = model.remoteControl != nil
-        navigation.isBackButtonVisible = .collapsed
-        navigation.isPaneToggleButtonVisible = false
-        navigation.openPaneLength = 300
-        // XAML hands back a new Swift wrapper for an item, so the chosen one is found with the
-        // bindings' ==, which compares the COM objects underneath.
-        navigation.selectionChanged.addHandler { [weak self] _, args in
-            guard let self else { return }
-            if args?.isSettingsSelected == true, let remote = self.model.remoteControl {
-                let pane = self.remoteSettings ?? RemoteSettingsPane(service: remote)
-                self.remoteSettings = pane
-                self.navigation.content = pane.view
-                self.shown = .other
-                pane.show()
-                self.log.write("showing settings")
-                return
-            }
-            guard let container = args?.selectedItemContainer else { return }
-            if container == self.newTaskItem {
-                // Chosen again as the tasks are redrawn, it keeps the harness and the message as they were.
-                guard self.shown != .newTask, let newTask = self.newTask else { return }
-                self.navigation.content = newTask.view
-                self.shown = .newTask
-                newTask.show()
-            } else if container == self.importItem, let pane = self.importPane {
-                self.navigation.content = pane.view
-                self.shown = .other
-                pane.show()
-            } else if container == self.connectItem {
-                self.navigation.content = self.connectPane
-                self.shown = .connect
-            } else if let hostID = self.hostItems.first(where: { $0.item == container })?.id {
-                self.openHost(hostID)
-            } else if let id = self.items.first(where: { $0.item == container })?.id {
-                self.navigation.content = self.taskPane
-                self.shown = .task
-                self.choose(id)
-            }
-        }
 
         let grid = taskPane
         let conversationRow = RowDefinition()
@@ -124,24 +78,35 @@ final class MainWindow {
         try? Grid.setRow(composer.view, 2)
         grid.children.append(composer.view)
         composer.windowHandle = { [weak self] in self?.windowHandle ?? 0 }
-        navigation.content = grid
-        makeConnectPane()
         let newTask = NewTaskPane(model: model, log: log, signIn: signIn) { [weak self] in self?.windowHandle ?? 0 }
         newTask.onStarted = { [weak self] in self?.showSelectedTask() }
         self.newTask = newTask
-        newTaskItem.content = L10n.string("New task")
         timeline.respond = { [weak self] request, response in self?.answer(request, response) }
         timeline.retry = { [weak self] turnID in self?.retry(turnID) }
         timeline.signIn = signIn
         let importPane = ImportConversationPane(model: model, log: log) { [weak self] in self?.windowHandle ?? 0 }
         importPane.onImported = { [weak self] in self?.showSelectedTask() }
         self.importPane = importPane
-        importItem.content = L10n.string("Import conversation")
-        navigation.footerMenuItems.append(importItem)
-        connectItem.content = L10n.string("Connect to a Mac")
-        navigation.footerMenuItems.append(connectItem)
-        followHosts()
-        WindowChrome.frame(window, title: YardletProduct.name, content: navigation)
+
+        let actions = TaskActions(model: model, log: log, host: { [weak self] in self?.root },
+                                  windowHandle: { [weak self] in self?.windowHandle ?? 0 })
+        self.actions = actions
+        // Import conversation stays at the sidebar's foot until New task links to it, as the Mac's home does.
+        let sidebar = TaskSidebar(model: model, actions: actions, showsImport: true)
+        sidebar.onChoose = { [weak self] place in self?.show(place) }
+        sidebar.onNewTaskInProject = { [weak self] folder in self?.showNewTask(in: folder) }
+        sidebar.onAddProject = { [weak self] in self?.addProject() }
+        self.sidebar = sidebar
+        SidebarStyle.columns(root, [SidebarStyle.auto, SidebarStyle.star])
+        root.children.append(sidebar.view)
+        content.background = Self.layerFill.brush
+        content.borderBrush = SettingsCard.stroke.brush
+        content.borderThickness = Thickness(left: 1, top: 1, right: 0, bottom: 0)
+        content.cornerRadius = CornerRadius(topLeft: 8, topRight: 0, bottomRight: 0, bottomLeft: 0)
+        content.child = taskPane
+        try? Grid.setColumn(content, 1)
+        root.children.append(content)
+        WindowChrome.frame(window, title: YardletProduct.name, content: root)
         // As on the Mac, the shown task's folder is looked at again when the app comes to the front.
         window.activated.addHandler { [weak self] _, _ in self?.composer.refreshFolder() }
         try? window.activate()
@@ -149,68 +114,73 @@ final class MainWindow {
         Task {
             await model.restoreIndex()
             log.write("tasks: \(model.store.sessions.count)")
-            followTasks()
+            // The task chosen last, as the Mac opens on it; with no task, New task, as the Mac opens its home.
+            if let id = model.store.selectedSessionID ?? model.store.listedSessions.first?.id {
+                show(.task(id))
+            } else {
+                showHome()
+            }
         }
     }
 
-    private func followTasks() {
-        let sessions = withObservationTracking {
-            model.store.sessions
-        } onChange: { [weak self] in
-            Task { @MainActor in self?.followTasks() }
+    /// Windows' layer fill for an app's content over Mica (`LayerFillColorDefault`).
+    private static let layerFill = ThemeColor(light: .paper(0.5), dark: UWP.Color(a: 0x4C, r: 0x3A, g: 0x3A, b: 0x3A))
+
+    /// Shows what the sidebar chose.
+    private func show(_ place: SidebarPlace) {
+        switch place {
+        case .home:
+            showHome()
+        case let .task(id):
+            content.child = taskPane
+            shown = .task
+            choose(id)
+        case .importConversation:
+            guard let importPane else { return }
+            content.child = importPane.view
+            shown = .other
+            importPane.show()
+        case .settings:
+            let pane = settings ?? makeSettings()
+            content.child = pane.view
+            shown = .other
+            pane.show()
+            log.write("showing settings")
         }
-        showSidebar(sessions)
     }
 
-    private func showSidebar(_ sessions: [SessionRecord]) {
-        let ordered = sessions.sorted { $0.updatedAt > $1.updatedAt }
-        let now = Date()
-        let selected = model.store.selectedSessionID ?? ordered.first?.id
-        navigation.menuItems.clear()
-        navigation.menuItems.append(newTaskItem)
-        items = []
-        var selectedItem: NavigationViewItem?
-        for session in ordered {
-            // As the Mac's rows show a title Yardlet made: without the folder name it starts with, which a chat's
-            // (`new-chat`) does not need and a project task's shows beside the harness instead.
-            let folder = session.workspaceURL.lastPathComponent
-            let name = SessionTitleProjection.titleUnderProject(session, projectNames: [folder])
-            let title = TextBlock()
-            title.text = name
-            let detail = TextBlock()
-            detail.text = ((model.projects.isChatFolder(session.workspaceURL) ? [] : [folder])
-                + [session.harness.displayName, Self.activityText(session.updatedAt, now: now)]).joined(separator: " · ")
-            detail.fontSize = 12
-            detail.opacity = 0.6
-            let label = StackPanel()
-            label.children.append(title)
-            label.children.append(detail)
-            let item = NavigationViewItem()
-            item.content = label
-            // A row whose content is a panel is named for its type in UI Automation; screen readers and automation
-            // tell the tasks apart by their titles.
-            try? AutomationProperties.setName(item, name)
-            item.icon = HarnessIcon.element(for: session.harness)
-            navigation.menuItems.append(item)
-            items.append((item: item, id: session.id))
-            if session.id == selected { selectedItem = item }
-        }
-        // The rows are new, so the one chosen is chosen again: the task shown, or New task. Connect to a Mac, a host
-        // and Settings are not among them and stay chosen.
-        switch shown {
-        case .task: navigation.selectedItem = selectedItem
-        case .newTask: navigation.selectedItem = newTaskItem
-        case .connect, .other: break
-        }
-        if let selected { choose(selected) } else { showConversation() }
+    /// New task, the Mac's home, with the harness and the message as they were left.
+    private func showHome() {
+        guard let newTask else { return }
+        content.child = newTask.view
+        shown = .newTask
+        sidebar?.choose(.home)
+        newTask.show()
     }
 
-    private static func activityText(_ date: Date, now: Date) -> String {
-        now.timeIntervalSince(date) < 60 ? RelativeTime.now() : RelativeTime.ago(date, relativeTo: now)
+    /// New task in a project, from its menu in the sidebar, as the Mac's.
+    private func showNewTask(in folder: URL) {
+        let project = model.projects.ensureProject(forRoot: folder)
+        let draft = model.composerDrafts.home
+        draft.projectID = project.id
+        draft.workspaceURL = project.primaryRoot
+        showHome()
+    }
+
+    /// The + beside Projects: a folder from Windows' folder dialog becomes a project, and New task opens in it, as the
+    /// Mac's Add project does.
+    private func addProject() {
+        // The dialog runs modally until it closes, so it opens after the click returns.
+        Task { @MainActor in
+            guard let folder = WindowsFolderPicker.chooseFolder(window: windowHandle, title: L10n.string("Add project"))
+            else { return }
+            showNewTask(in: folder.standardizedFileURL)
+        }
     }
 
     private func choose(_ id: SessionRecord.ID) {
         if model.store.selectedSessionID != id { model.store.selectedSessionID = id }
+        sidebar?.choose(.task(id))
         if let session = selectedSession, preparedSessionIDs.insert(id).inserted {
             Task { await model.refreshConversationStatus(for: session) }
         }
@@ -233,6 +203,14 @@ final class MainWindow {
             Task { @MainActor in
                 guard let self, generation == self.conversationGeneration else { return }
                 self.showConversation()
+            }
+        }
+        // A task that goes while it is shown (archived, deleted) leaves the window on New task, as the store leaves
+        // the Mac's on its home.
+        if session == nil, shown == .task {
+            Task { @MainActor [weak self] in
+                guard let self, self.shown == .task, self.selectedSession == nil else { return }
+                self.showHome()
             }
         }
         if session?.id != shownSessionID {
@@ -312,94 +290,22 @@ final class MainWindow {
     /// The task the model chose, shown with its row chosen: one New task started, or one a notification's click
     /// opened.
     func showSelectedTask() {
-        navigation.content = taskPane
-        shown = .task
-        navigation.selectedItem = items.first { $0.id == model.store.selectedSessionID }?.item
+        guard let id = model.store.selectedSessionID else { return showHome() }
+        show(.task(id))
     }
 
-    // MARK: Other computers
+    // MARK: Settings and other computers
 
-    /// The hosts paired before, one footer item each, as the Mac lists them under File › Connect to Mac….
-    private func followHosts() {
-        let hosts = withObservationTracking {
-            directory.hosts
-        } onChange: { [weak self] in
-            Task { @MainActor in self?.followHosts() }
-        }
-        for (item, _) in hostItems {
-            var index: UInt32 = 0
-            if navigation.footerMenuItems.indexOf(item, &index) { navigation.footerMenuItems.removeAt(index) }
-        }
-        hostItems = hosts.map { host in
-            let item = NavigationViewItem()
-            item.content = host.name
-            navigation.footerMenuItems.append(item)
-            return (item: item, id: host.id)
-        }
-        // Changing the footer's items clears NavigationView's choice, so Connect to a Mac, where a host is removed
-        // from the list, is chosen again (seen on the runner).
-        if shown == .connect { navigation.selectedItem = connectItem }
-        pairedMacs?.show(hosts)
+    private func makeSettings() -> SettingsPane {
+        let pane = SettingsPane(remote: model.remoteControl, directory: directory, log: log)
+        pane.onOpenHost = { [weak self] hostID in self?.openHost(hostID) }
+        pane.onRemoveHost = { [weak self] hostID in self?.hostWindows[hostID]?.close() }
+        settings = pane
+        return pane
     }
 
-    private func makeConnectPane() {
-        connectPane.spacing = 12
-        connectPane.padding = Thickness(left: 28, top: 28, right: 28, bottom: 28)
-        connectPane.maxWidth = 560
-        connectPane.horizontalAlignment = .left
-        let title = TextBlock()
-        title.text = L10n.string("Connect to a Mac")
-        title.fontSize = 20
-        connectPane.children.append(title)
-        let explanation = TextBlock()
-        explanation.text = L10n.string("Follow and drive another Mac's tasks here. On that Mac, open Settings › Remote, choose Pair…, then Copy link, and paste the link below.")
-        explanation.textWrapping = .wrap
-        explanation.opacity = 0.7
-        connectPane.children.append(explanation)
-        linkField.placeholderText = L10n.string("Connection link")
-        connectPane.children.append(linkField)
-        connectButton.content = L10n.string("Connect")
-        connectButton.click.addHandler { [weak self] _, _ in self?.connect() }
-        connectPane.children.append(connectButton)
-        connectStatus.textWrapping = .wrap
-        connectStatus.opacity = 0.7
-        connectPane.children.append(connectStatus)
-        let pairedMacs = PairedMacsList(directory: directory, log: log)
-        pairedMacs.onOpen = { [weak self] hostID in self?.openHost(hostID) }
-        pairedMacs.onRemove = { [weak self] hostID in self?.hostWindows[hostID]?.close() }
-        connectPane.children.append(pairedMacs.view)
-        self.pairedMacs = pairedMacs
-    }
-
-    /// Pairs with the host the pasted link names; nothing pairs until Connect is chosen.
-    private func connect() {
-        let link = linkField.text
-        guard !link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        connectButton.isEnabled = false
-        connectStatus.text = L10n.string("Connecting…")
-        log.write("remote pairing")
-        Task {
-            defer { connectButton.isEnabled = true }
-            do {
-                let host = try await directory.pair(link: link)
-                log.write("remote paired: \(host.name)")
-                linkField.text = ""
-                connectStatus.text = ""
-                openHost(host.id)
-            } catch let failure as RemoteHostDirectory.PairingFailure {
-                log.write("remote pairing failed: \(failure.message)")
-                connectStatus.text = failure.message
-            } catch {
-                connectStatus.text = error.localizedDescription
-            }
-        }
-    }
-
-    /// The host's window, opened or brought forward; the sidebar keeps the task it showed.
+    /// The host's window, opened or brought forward; the main window keeps what it shows.
     private func openHost(_ hostID: String) {
-        shown = .task
-        navigation.selectedItem = items.first { $0.id == model.store.selectedSessionID }?.item
-        navigation.content = taskPane
         if let open = hostWindows[hostID] {
             open.bringForward()
             return
