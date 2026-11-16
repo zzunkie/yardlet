@@ -312,7 +312,9 @@ Windows/scripts/place-bootstrapper.ps1 -Binaries (swift build --show-bin-path)
 ```
 
 `windows-engine.yml` builds the Windows app for the same pull requests and branches, beside the
-engine, as a check to read, and runs the Windows layer's own tests (`Tests/YardletWindowsTests/`) against it.
+engine, as a check to read, and runs the Windows layer's own tests (`Tests/YardletWindowsTests/`) against it. They
+build with `YARDLET_WINDOWS_TESTS=1`, which declares their target and leaves out the release's windowed entry point:
+SwiftPM 6.4 hands an executable's linker settings to the test library in every configuration.
 `windows-app.yml` runs for pull requests, `main` and `windows-*` branches when what it builds changes (the engine and
 the Windows layer, the targets beside them, the relay, the package's manifest, the Windows scripts and the workflow;
 not the Mac's layers or documents), so each such commit on `main` has an installer to try, and a `windows-*` branch's

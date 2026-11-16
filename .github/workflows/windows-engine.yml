@@ -154,10 +154,13 @@ jobs:
           swift build --product NativeHarnessClient --force-resolved-versions -Xswiftc -continue-building-after-errors 2>&1 |
             Tee-Object -FilePath build.log
           exit $LASTEXITCODE
-      # The Windows layer's own tests (Tests/YardletWindowsTests), built against the app. The test program links
-      # the Windows App SDK's bootstrapper as the app does, so the bootstrapper goes beside it.
+      # The Windows layer's own tests (Tests/YardletWindowsTests), built against the app (YARDLET_WINDOWS_TESTS in
+      # Package.swift). The test program links the Windows App SDK's bootstrapper as the app does, so the bootstrapper
+      # goes beside it.
       - name: Test the Windows layer
         shell: pwsh
+        env:
+          YARDLET_WINDOWS_TESTS: "1"
         run: |
           swift build --build-tests --force-resolved-versions -Xswiftc -continue-building-after-errors 2>&1 |
             Tee-Object -FilePath test-build.log

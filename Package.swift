@@ -43,6 +43,11 @@ let windowsApp = !engineOnly
 #else
 let windowsApp = false
 #endif
+// The Windows layer's tests (Tests/YardletWindowsTests) link the app's code into a test library, built with
+// YARDLET_WINDOWS_TESTS=1. SwiftPM 6.4 hands an executable's linker settings to the targets that depend on it in every
+// configuration, so that build leaves out the release's windowed entry point, which would make the library start as an
+// application.
+let windowsTests = windowsApp && Context.environment["YARDLET_WINDOWS_TESTS"] == "1"
 // On Linux the app target is the headless host, `yardlet` (docs/LINUX_HOST.md): the engine, Platform/Portable and
 // Platform/Linux, with no screens. It serves the computer's tasks to the Mac, Windows and phone apps over the remote.
 #if os(Linux)
@@ -107,7 +112,7 @@ let appTarget: Target = windowsApp
         ],
         // A release build is a windowed application with no console; a debug build keeps one for
         // print.
-        linkerSettings: [
+        linkerSettings: windowsTests ? [] : [
             .unsafeFlags(["-Xlinker", "/SUBSYSTEM:WINDOWS", "-Xlinker", "/ENTRY:mainCRTStartup"],
                          .when(platforms: [.windows], configuration: .release))
         ]
@@ -304,7 +309,7 @@ let package = Package(
             name: "YardletHostTests",
             dependencies: ["NativeHarnessClient", "YardletRemote", "YardletAgentTools"]
         )
-    ] : []) + (windowsApp ? [
+    ] : []) + (windowsTests ? [
         // The Windows layer's own tests, which build against the Windows app.
         .testTarget(
             name: "YardletWindowsTests",
