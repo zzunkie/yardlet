@@ -267,6 +267,9 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   (`Platform/Windows/WindowsApplicationAttention.swift`). Whether they show is the person's switch in Windows'
   Settings › System › Notifications, which the app reads; Windows asks no permission first. A new approval while
   Yardlet is behind flashes the main window's taskbar button until it comes forward, as the Mac bounces its Dock icon.
+  The count of tasks that need the person, which the Mac's Dock badge shows, is an overlay icon on that button
+  (`ITaskbarList3::SetOverlayIcon`, `Platform/Windows/WindowsTaskbarBadge.swift`): the number in white on a red disc,
+  with the count as its spoken description. Windows' Settings › Personalization › Taskbar decides whether it shows.
   An app without a package registers at launch (`AppNotificationManager.Register()`), which writes its entry under
   `HKCU\Software\Classes` (`AppUserModelId` and the click's COM activator under `CLSID`) and takes its name and icon
   from its Start menu shortcut, else from its executable; removing the app calls `UnregisterAll()`, which removes the
@@ -461,8 +464,7 @@ switch for checking for updates and no Check for Updates, as the Mac's has. The
 Yardlet MCP server: its endpoint is a Unix domain socket (`Sources/YardletAgentTools/Platform/UnixDomainSocket.swift`)
 with no named pipe in its place, and the app carries no `yardlet-mcp.exe`, so a Windows task has no connectors and none
 of Yardlet's session, schedule, task or browser tools. A Windows layer for the rest of what `Platform/Portable/` stands in for:
-the ConPTY terminal for the terminal panel, credential storage for the vault, a taskbar badge (which needs a
-package identity), and which Claude Code processes hold a conversation (`ClaudeConversationCatalog.runningSessionIDs`
+the ConPTY terminal for the terminal panel, credential storage for the vault, and which Claude Code processes hold a conversation (`ClaudeConversationCatalog.runningSessionIDs`
 finds none), so a Claude conversation still open in another app is neither marked so in Import conversation nor kept
 from a send here; an accounts page (signing in to a saved account, signing out); answering the questions Codex asks
 in a message while it works (`request_user_input_async`); a new task's account, attachments, worktree and slash

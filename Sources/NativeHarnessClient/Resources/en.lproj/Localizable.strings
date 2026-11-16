@@ -4044,3 +4044,4 @@
 "%lld projects" = "%lld projects";
 "1 project" = "1 project";
 "%lld left for a while" = "%lld left for a while";
+"Tasks that need your attention: %lld" = "Tasks that need your attention: %lld";

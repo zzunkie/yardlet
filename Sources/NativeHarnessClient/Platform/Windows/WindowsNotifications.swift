@@ -41,6 +41,10 @@ final class LocalSystemNotificationCenter: SystemNotificationCenter {
         await authorization().isDeliverable
     }
 
+    /// Any app may show a count over its taskbar button (`WindowsTaskbarBadge`); whether Windows shows it is the
+    /// person's switch in Settings › Personalization › Taskbar, which Windows applies itself.
+    func allowsBadges() async -> Bool { true }
+
     func post(title: String, body: String, identifier: String) async {
         show(title: title, body: body, identifier: identifier, launch: nil, allowOnce: nil)
     }

@@ -4044,3 +4044,4 @@
 "%lld projects" = "프로젝트 %lld개";
 "1 project" = "프로젝트 1개";
 "%lld left for a while" = "한동안 손대지 않은 %lld개";
+"Tasks that need your attention: %lld" = "확인이 필요한 작업 %lld개";

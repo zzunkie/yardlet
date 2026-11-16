@@ -56,6 +56,8 @@ extension AppModel {
             model.accountAssignments = AccountAssignmentLog(
                 fileURL: storageRootURL.appending(path: AccountAssignmentLog.fileName))
             model.followRuntimeChoices()
+            // The taskbar's count of the tasks that need the person, which Windows always allows an app to show.
+            Task { await model.refreshNotificationPermission() }
             return model
         } catch {
             return storageUnavailable(error, codexEnvironmentManager: codexEnvironmentManager,
