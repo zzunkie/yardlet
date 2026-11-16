@@ -65,7 +65,8 @@ let otherPlatformLayers = ["Platform/Portable"]
 // The Platform/Portable files whose parts the Windows layer provides, which the Windows app leaves out.
 let portableFilesWindowsReplaces = ["Platform/Portable/PortableProcesses.swift", "Platform/Portable/PortableRemoteHost.swift",
                                     "Platform/Portable/PortableNotifications.swift", "Platform/Portable/PortableAccounts.swift",
-                                    "Platform/Portable/PortableScopedFiles.swift"]
+                                    "Platform/Portable/PortableScopedFiles.swift",
+                                    "Platform/Portable/PortableWorkspaceFileReplacement.swift"]
 // The Platform/Portable files whose parts the Linux layer provides, which the Linux host leaves out.
 let portableFilesLinuxReplaces = ["Platform/Portable/PortableProcesses.swift", "Platform/Portable/PortableRemoteHost.swift"]
 
