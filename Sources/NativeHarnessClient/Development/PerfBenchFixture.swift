@@ -553,7 +553,7 @@ private final class PerfBenchRunner {
             // With no frame served (a display asleep stops its display link) nothing moved.
             ["movedPoints": Int(moved), "jumps": jumps, "reversals": reversals,
              "farthestFromEndPoints": Int(farthestFromEnd),
-             "nearestToTopPoints": nearestToTop.isFinite && nearestToTop < 1e9 ? Int(nearestToTop) : -1,
+             "nearestToTopPoints": Self.points(nearestToTop),
              "listHeightStart": Int(height), "listHeightEnd": Int(scroll.documentView?.frame.height ?? 0)]
         }
         func resetTravel() {
@@ -621,6 +621,13 @@ private final class PerfBenchRunner {
     }
 
     /// How far `scroll`'s view is from its document's top and from its end.
+    /// A distance as whole points, or -1 for one never measured: a nearest distance starts at
+    /// `greatestFiniteMagnitude` and stays there when no frame is served (a display asleep stops its
+    /// display link), and converting that to `Int` traps.
+    private static func points(_ value: CGFloat) -> Int {
+        value.isFinite && abs(value) < 1e9 ? Int(value) : -1
+    }
+
     private static func edges(of scroll: NSScrollView) -> (top: CGFloat, bottom: CGFloat) {
         let visible = scroll.documentVisibleRect
         let height = scroll.documentView?.frame.height ?? 0
@@ -692,8 +699,8 @@ private final class PerfBenchRunner {
         func traveled(from start: CGFloat) -> [String: Any] {
             // With no frame served (a display asleep stops its display link) nothing moved.
             ["movedPoints": Int(moved), "arrivals": arrivals, "reversals": reversals,
-             "nearestToTopPoints": nearestToTop < 1e9 ? Int(nearestToTop) : -1,
-             "nearestToEndPoints": nearestToEnd < 1e9 ? Int(nearestToEnd) : -1,
+             "nearestToTopPoints": Self.points(nearestToTop),
+             "nearestToEndPoints": Self.points(nearestToEnd),
              "listHeightStart": Int(start), "listHeightEnd": Int(height())]
         }
         func restart() {
@@ -748,8 +755,9 @@ private final class PerfBenchRunner {
         dragged["jumps"] = jumps
         dragged["stepPoints"] = Int(step)
         if moved < 2_000 { problems.append("the drag moved the conversation only \(Int(moved)) pt (is the display asleep?)") }
-        if nearestToTop > 1 || nearestToEnd > 1 {
-            problems.append("the drag got no nearer than \(Int(nearestToTop)) pt to the top and \(Int(nearestToEnd)) pt to the end")
+        // With no frame served the nearest distances were never measured, and the line above says so.
+        if Self.points(nearestToTop) >= 0, nearestToTop > 1 || nearestToEnd > 1 {
+            problems.append("the drag got no nearer than \(Self.points(nearestToTop)) pt to the top and \(Self.points(nearestToEnd)) pt to the end")
         }
         if height() <= dragHeight { problems.append("no earlier turns came in as the knob reached the top") }
 
