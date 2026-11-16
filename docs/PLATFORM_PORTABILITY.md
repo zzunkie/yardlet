@@ -139,9 +139,11 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   the store's tasks in the sidebar, followed through Observation, with their titles and harness marks as the Mac's
   rows show them, and a composer that sends through the model with Send beside it, and Stop in Send's place while the
   task's turn runs, which stops it through the harness's own cancel (`AppModel.interrupt`). The composer holds the
-  task's draft, the one the Mac's composer edits, and Send sends that draft (`AppModel.sendDraft`): a message the
-  task does not take comes back to it, and the line above the composer says why, as it says that the task's folder is
-  gone (`TaskFolderMissing`) once the task is shown or the window comes to the front. As in the Mac's composer
+  task's draft, the one the Mac's composer edits, and Send sends that draft (`AppModel.sendDraft`) as the Mac's
+  composer sends the person's message, which also declines a request the task waits on (`AppModel.sendPersonsMessage`,
+  docs/REMOTE_PROTOCOL.md, `sendMessage`): a message the task does not take comes back to it, and the line above
+  the composer says why, as it says that the task's folder is gone (`TaskFolderMissing`) once the task is shown or
+  the window comes to the front. As in the Mac's composer
   and the harnesses' own apps, Enter sends and Shift+Enter starts a new line (`WinUI/ComposerKeys.swift`); New task
   and a host's window have the same field and Send. New task at the top (`WinUI/NewTaskPane.swift`)
   starts a task as the Mac's new-task screen does, from the Mac's home draft: a harness whose CLI Yardlet found,

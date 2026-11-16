@@ -1187,17 +1187,26 @@ final class AppModel {
     /// Sends the text the task's draft holds, as a composer's Send does: the draft empties as the message goes,
     /// unless it holds a command the harness runs from the draft (`ComposerDraftRetention`), and a message the
     /// task does not take comes back to it with why (`keepUnsent`). The Windows app's composer sends through this,
-    /// showing the draft, so nothing it sends is lost on the way. The draft empties before this returns; the
-    /// returned task is the send.
+    /// showing the draft, so nothing it sends is lost on the way. It goes as the person's message
+    /// (`sendPersonsMessage`), which answers what the task waits on as the Mac's composer does; an edit goes as
+    /// `send` takes it, with the draft's attachments. The draft empties before this returns; the returned task is
+    /// the send.
     @discardableResult
     func sendDraft(of session: SessionRecord) -> Task<Void, Never>? {
         let draft = composerDrafts.tasks.draft(for: session.id)
         let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
-        if draft.editState == nil, !ComposerDraftRetention(harness: session.harness).keepsDraft(afterSending: text) {
+        let isEdit = draft.editState != nil
+        if !isEdit, !ComposerDraftRetention(harness: session.harness).keepsDraft(afterSending: text) {
             draft.clear()
         }
-        return Task { await send(text, to: session) }
+        return Task {
+            if isEdit {
+                await send(text, to: session)
+            } else {
+                await sendPersonsMessage(HarnessUserInput(text: text), to: session)
+            }
+        }
     }
 
     /// A message the person wrote, in a task's composer on the Mac or the phone: sent as `send` sends, or

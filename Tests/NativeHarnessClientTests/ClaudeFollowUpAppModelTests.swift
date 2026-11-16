@@ -492,9 +492,10 @@ import XCTest
     /// A message the person sends while Claude waits on them goes first, as one for its next step (or held for the
     /// turn's end, as the setting says), and then the request is declined with words saying the person sent a message
     /// instead and did not refuse, as Claude Code itself closes an approval a new message arrives after. The turn goes
-    /// on. A message another task sends leaves the request waiting.
+    /// on. The Windows app's composer, which sends the task's draft, does the same. A message another task sends
+    /// leaves the request waiting.
     func testThePersonsMessageGoesFirstAndDeclinesWhatClaudeWaitsOn() async throws {
-        for mode in [CodexFollowUpMode.steer, .queue] {
+        for (mode, fromDraft) in [(CodexFollowUpMode.steer, false), (.queue, false), (.steer, true)] {
             let fixture = try await makeFixture(followUps: mode)
             let model = fixture.model, task = fixture.task, transport = fixture.transport
             await transport.emit(try json(toolUse))
@@ -508,7 +509,14 @@ import XCTest
             let afterOther = await transport.sentValues
             XCTAssertFalse(afterOther.contains { $0["response"]?["request_id"]?.stringValue == "perm-1" }, "\(mode)")
 
-            await model.sendPersonsMessage(HarnessUserInput(text: "What does this delete?"), to: task)
+            if fromDraft {
+                let draft = model.composerDrafts.tasks.draft(for: task.id)
+                draft.text = "What does this delete?"
+                await model.sendDraft(of: try XCTUnwrap(model.store.sessions.first))?.value
+                XCTAssertEqual(draft.text, "")
+            } else {
+                await model.sendPersonsMessage(HarnessUserInput(text: "What does this delete?"), to: task)
+            }
             let sent = await transport.sentValues
             let denial = try XCTUnwrap(sent.lastIndex { $0["response"]?["request_id"]?.stringValue == "perm-1" }, "\(mode)")
             let answer = try XCTUnwrap(sent[denial]["response"]?["response"])
