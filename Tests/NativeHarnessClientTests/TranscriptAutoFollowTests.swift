@@ -180,9 +180,10 @@ final class TranscriptAutoFollowTests: XCTestCase {
     }
 
     /// The keyboard scrolls the conversation as the reader's scroll does, from a message's text that has
-    /// it: Page Up moves a page and lets go of following, growth then leaves the reader where they are,
-    /// Home goes to the top and End back to the end, which follows again. The row list's: in the stack a
-    /// page key moves the conversation without letting go of following, and Home and End do not move it.
+    /// it: Page Up moves a page and lets go of following, though an answer arrives as the page starts to
+    /// move, growth then leaves the reader where they are, Home goes to the top and End back to the end,
+    /// which follows again. The row list's: in the stack a page key moves the conversation without
+    /// letting go of following, and Home and End do not move it.
     func checkTheKeyboardScrollsAsTheReaderDoes() throws {
         try XCTSkipUnless(ConversationRowListSwitch.isOn, "the row list's keyboard scrolling")
         try requireAwakeDisplay()
@@ -203,6 +204,9 @@ final class TranscriptAutoFollowTests: XCTestCase {
         }
 
         try press(#selector(NSResponder.scrollPageUp(_:)))
+        // The page eases up from the end, still followed for its first steps (`ConversationRowListScrollView`).
+        feed.entries.append(TranscriptEntry(content: .assistant(
+            text: String(repeating: "Streamed reasoning. ", count: 30), isStreaming: false)))
         pump(hosting)
         XCTAssertGreaterThan(distance(scroll), scroll.contentView.bounds.height / 2, "a page up")
         feed.entries.append(TranscriptEntry(content: .assistant(

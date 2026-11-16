@@ -111,10 +111,15 @@ struct ConversationRowTarget: Equatable {
 final class ConversationRowListScrollView: NSScrollView {
     /// The reader started a new scroll.
     var onReaderBeganScrolling: () -> Void = {}
-    /// The reader's gesture, or their drag of the scroller, ended with its momentum.
+    /// The reader's gesture, their drag of the scroller or a page key's move ended, momentum included.
     var onReaderEndedScrolling: () -> Void = {}
-    /// A trackpad's gesture or a drag of the scroller is under way, momentum included.
-    private(set) var isLiveScrolling = false
+    /// A trackpad's gesture, a drag of the scroller or a page key's move is under way, momentum included.
+    var isLiveScrolling: Bool { isTracking || isPaging }
+    /// A trackpad's gesture or a drag of the scroller, as AppKit tells its start and end.
+    private var isTracking = false
+    /// A page key's move (`page(up:)`), and the steps AppKit has taken it so far.
+    private var isPaging = false
+    private var pagingSteps = 0
     private var lastReaderMovement: TimeInterval = 0
     private var wheelMonitor: Any?
     /// Whether the scroll gesture under way scrolls the conversation though it started over a code
@@ -131,6 +136,7 @@ final class ConversationRowListScrollView: NSScrollView {
         let center = NotificationCenter.default
         center.addObserver(self, selector: #selector(liveScrollStarted), name: NSScrollView.willStartLiveScrollNotification, object: self)
         center.addObserver(self, selector: #selector(liveScrollEnded), name: NSScrollView.didEndLiveScrollNotification, object: self)
+        center.addObserver(self, selector: #selector(liveScrolled), name: NSScrollView.didLiveScrollNotification, object: self)
     }
 
     @available(*, unavailable)
@@ -180,12 +186,25 @@ final class ConversationRowListScrollView: NSScrollView {
     }
 
     @objc private func liveScrollStarted() {
-        isLiveScrolling = true
+        isTracking = true
         onReaderBeganScrolling()
     }
 
     @objc private func liveScrollEnded() {
-        isLiveScrolling = false
+        isTracking = false
+        endedScrolling()
+    }
+
+    /// A step of the reader's live scroll: a gesture's, the scroller's or a page key's.
+    @objc private func liveScrolled() {
+        readerMoved()
+        guard isPaging else { return }
+        pagingSteps += 1
+        endPagingOnceItRests()
+    }
+
+    private func endedScrolling() {
+        guard !isLiveScrolling else { return }
         readerMoved()
         onReaderEndedScrolling()
     }
@@ -205,17 +224,42 @@ final class ConversationRowListScrollView: NSScrollView {
 
     // The keyboard's scrolling, which a text in the conversation hands on (`TranscriptProseTextView`):
     // the reader's own, as the wheel's is. NSScrollView answers only `pageUp:` and `pageDown:` itself.
-    override func scrollPageUp(_ sender: Any?) { readerScroll(by: -page) }
-    override func scrollPageDown(_ sender: Any?) { readerScroll(by: page) }
-    override func pageUp(_ sender: Any?) { readerScroll(by: -page) }
-    override func pageDown(_ sender: Any?) { readerScroll(by: page) }
+    override func scrollPageUp(_ sender: Any?) { page(up: true) }
+    override func scrollPageDown(_ sender: Any?) { page(up: false) }
+    override func pageUp(_ sender: Any?) { page(up: true) }
+    override func pageDown(_ sender: Any?) { page(up: false) }
     override func scrollLineUp(_ sender: Any?) { readerScroll(by: -verticalLineScroll) }
     override func scrollLineDown(_ sender: Any?) { readerScroll(by: verticalLineScroll) }
     override func scrollToBeginningOfDocument(_ sender: Any?) { readerScroll(toY: 0) }
     override func scrollToEndOfDocument(_ sender: Any?) { readerScroll(toY: .greatestFiniteMagnitude) }
 
-    /// A page, less what stays in view of the one before.
-    private var page: CGFloat { max(0, contentView.bounds.height - verticalPageScroll) }
+    /// A page key moves the view as AppKit's scroll views do, the stack's among them: a page, less what
+    /// stays in view, eased over about a fifth of a second. The rows a page brings into view come in over
+    /// its frames; moved at once, a page laid out and drew a screen of rows in one frame, and each press
+    /// missed frames. AppKit tells the move's start and each step as a live scroll, and not its end,
+    /// taken here as the first moment without a step: until then the list treats the move as the
+    /// reader's gesture, so what arrives below a followed conversation waits for it rather than taking
+    /// the view back to the end.
+    private func page(up: Bool) {
+        if !isReaderScrolling { onReaderBeganScrolling() }
+        readerMoved()
+        let wasTracking = isTracking
+        isPaging = true
+        if up { super.pageUp(nil) } else { super.pageDown(nil) }
+        isTracking = wasTracking
+        endPagingOnceItRests()
+    }
+
+    /// Ends a page key's move once a tenth of a second passes without a step: after its last, or after
+    /// anything else moved the view and stopped it.
+    private func endPagingOnceItRests() {
+        let steps = pagingSteps
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self, isPaging, pagingSteps == steps else { return }
+            isPaging = false
+            endedScrolling()
+        }
+    }
 
     private func readerScroll(by delta: CGFloat) {
         readerScroll(toY: contentView.bounds.minY + delta)
