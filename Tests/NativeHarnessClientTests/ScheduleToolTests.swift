@@ -616,9 +616,9 @@ final class ScheduleToolTests: XCTestCase {
         await bypass.model.shutdown()
     }
 
-    func testATaskAScheduleStartedAsksInEveryModeAndCannotRunOrDeleteItsOwn() async throws {
-        // The Claude app's rules for a session a schedule started: a change is asked of the person in
-        // every permission mode, and it may not run a schedule or delete the one that started it.
+    func testATaskAScheduleStartedAsksAsItsModeDoesAndCannotRunOrDeleteItsOwn() async throws {
+        // A session a schedule started is asked as any task in its permission mode is, and, as the Claude app
+        // refuses, it may not run a schedule or delete the one that started it.
         let claudeID = UUID()
         var origin = ScheduledTask(name: "Nightly", prompt: "Go.", trigger: .daily(ScheduleTime(hour: 2, minute: 0)),
                                    destination: ScheduleDestination(harness: .claudeCode), createdAt: date(16))
@@ -635,21 +635,23 @@ final class ScheduleToolTests: XCTestCase {
         XCTAssertTrue(delete.isError && delete.text.hasPrefix("Refusing to delete the scheduled task whose run"), delete.text)
         XCTAssertNotNil(model.scheduledTasks.schedule(id: origin.id))
 
-        // Bypass permissions would not ask, so Yardlet's own card does: refused, then allowed.
+        // Bypass permissions asks nothing here either: it creates, changes and deletes another schedule without a
+        // card, and the person is told of the one it made, as from a task the person started.
         let arguments: [String: Any] = ["name": "Follow-up", "prompt": "Check again.", "fireAt": "2026-10-18T09:00:00+09:00"]
-        let refused = Task { await self.call(model, "create_scheduled_task", arguments, from: fixture.claude) }
-        let first = try await waitForApproval(in: claudeID, model: model)
-        XCTAssertEqual(first.request.title, L10n.format("Allow Claude to create the scheduled task “%@”?", "Follow-up"))
-        XCTAssertTrue(model.sessionTools.answer(first.id, allow: false))
-        let no = await refused.value
-        XCTAssertTrue(no.isError && no.text.contains("needs the person's approval"), no.text)
-        XCTAssertEqual(model.scheduledTasks.schedules.count, 1)
-        let allowed = Task { await self.call(model, "create_scheduled_task", arguments, from: fixture.claude) }
-        let second = try await waitForApproval(in: claudeID, model: model)
-        XCTAssertTrue(model.sessionTools.answer(second.id, allow: true))
-        let yes = await allowed.value
-        XCTAssertFalse(yes.isError, yes.text)
-        XCTAssertEqual(model.scheduledTasks.schedules.last?.name, "Follow-up")
+        let created = await call(model, "create_scheduled_task", arguments, from: fixture.claude)
+        XCTAssertFalse(created.isError, created.text)
+        let followUp = try XCTUnwrap(model.scheduledTasks.schedules.last)
+        XCTAssertEqual(followUp.name, "Follow-up")
+        XCTAssertEqual(fixture.notifications.posts.last?.title,
+                       L10n.format("%@ scheduled a task: “%@”", "Claude Code", "Follow-up"))
+        let renamed = await call(model, "update_scheduled_task", ["scheduleId": followUp.id.uuidString, "name": "Recheck"],
+                                 from: fixture.claude)
+        XCTAssertFalse(renamed.isError, renamed.text)
+        let deleted = await call(model, "delete_scheduled_task", ["scheduleId": followUp.id.uuidString],
+                                 from: fixture.claude)
+        XCTAssertFalse(deleted.isError, deleted.text)
+        XCTAssertNil(model.scheduledTasks.schedule(id: followUp.id))
+        XCTAssertTrue(model.approvalsAreEmpty(in: claudeID))
 
         // A task the person started asks nothing more than its harness does.
         let other = await call(model, "update_scheduled_task", ["scheduleId": origin.id.uuidString, "enabled": false],

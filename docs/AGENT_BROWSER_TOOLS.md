@@ -667,9 +667,11 @@ Times in results are ISO 8601 in the Mac's time zone (with the offset).
   permission its new tasks start with, or that of the task its runs continue), is the person's to start and stop: where
   the harness did not ask, running it now, deleting it, changing when it runs and resuming it ask with a card ("Run a
   scheduled task with more permissions than this task", and the like for the other three). Pausing it and renaming it
-  ask nothing. In a
-  task a schedule started, when Claude Code is in a mode that does not ask (Auto or bypass permissions), a call that
-  changes things is asked with the session tool approval card (the Claude app's `unattended`). That is a task a run
+  ask nothing. A
+  task a schedule started is asked as any task in its permission mode is: in Auto or bypass permissions it creates,
+  changes and deletes other schedules without a card, and a schedule it creates gets the notification below. The
+  Claude app asks such an `unattended` session in every mode; Yardlet does not, since the person chose that mode for the
+  schedule's runs and a card raised while nobody is there would stop the run. Such a task is one a run
   started as a new task: each run keeps whether it started its task or continued one, so a task a run only continued
   stays the person's, also after the schedule's runs start new tasks (a run recorded without this counts as continued when
   its task is the one new runs nest under, the one the schedule continues, or one another of its runs also went to, so a

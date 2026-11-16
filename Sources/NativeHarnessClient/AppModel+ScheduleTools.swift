@@ -12,12 +12,13 @@ import YardletAgentTools
 //
 // Where the Claude app and the Codex app ask before a change, the harness's own approval asks in
 // Yardlet too (Claude Code's request card; Codex as its approval setting and the tool's annotations
-// decide), so a call that arrives here was allowed. Yardlet adds two cards of its own. One is the
-// Claude app's rule for a session a schedule started: a change from it is asked in every permission
-// mode, and it may not run a schedule or delete the one that started it. The other is
-// `send_message_to_task`'s rule for a schedule whose runs continue another task, since each run is a
-// message into that task. What an agent writes runs as its task's message, never as the person's,
-// and a schedule runs no more freely than the task that made it.
+// decide), so a call that arrives here was allowed. A session a schedule started is asked as any task
+// in its permission mode is (the person chose that mode for the schedule's runs, and a card raised
+// while nobody is there would only stop the run), but as the Claude app refuses, it may not run a
+// schedule or delete the one that started it. Yardlet adds a card of its own: `send_message_to_task`'s
+// rule for a schedule whose runs continue another task, since each run is a message into that task.
+// What an agent writes runs as its task's message, never as the person's, and a schedule runs no more
+// freely than the task that made it.
 
 extension AppModel: ScheduleToolHandling {
     func callScheduleTool(named name: String, arguments: ToolJSON, callerID: UUID) async -> AgentToolResult {
@@ -26,7 +27,7 @@ extension AppModel: ScheduleToolHandling {
             return .error("Yardlet no longer has the task that made this call.")
         }
         if ScheduleToolCatalog.changingTools.contains(name),
-           let refusal = await scheduledRunRefusal(name, arguments: arguments, caller: caller) {
+           let refusal = scheduledRunRefusal(name, arguments: arguments, caller: caller) {
             return .error(refusal)
         }
         switch name {
@@ -49,10 +50,11 @@ extension AppModel: ScheduleToolHandling {
     }
 
     /// Why a change from a task a schedule started may not go ahead, or nil. As the Claude app refuses
-    /// in a scheduled-run session: no run of a schedule, no deleting the schedule that started it, and
-    /// any other change asked of the person even where Claude Code would not ask (Auto or Bypass
-    /// permissions).
-    private func scheduledRunRefusal(_ tool: String, arguments: JSONValue, caller: SessionToolCaller) async -> String? {
+    /// in a scheduled-run session: no run of a schedule, and no deleting the schedule that started it.
+    /// Any other change is asked as in an ordinary task of the same permission mode (Claude Code's card,
+    /// Auto's classifier, or nothing in Bypass permissions), since the person chose that mode for the
+    /// schedule's runs.
+    private func scheduledRunRefusal(_ tool: String, arguments: JSONValue, caller: SessionToolCaller) -> String? {
         guard let origin = scheduleThatStarted(caller.hostTaskID) else { return nil }
         if tool == ScheduleToolCatalog.run {
             return "Refusing to run a scheduled task from a task a scheduled run started. Run it from a regular "
@@ -63,14 +65,7 @@ extension AppModel: ScheduleToolHandling {
             return "Refusing to delete the scheduled task whose run started this task. Delete it from a regular "
                 + "task instead."
         }
-        guard let host = store.sessions.first(where: { $0.id == caller.hostTaskID }),
-              Self.unaskedPermissionMode(of: host) != nil,
-              let text = ScheduleToolApproval.request(
-                toolName: "mcp__\(AgentToolEnvironment.serverName)__\(tool)", input: arguments,
-                calendar: scheduledTasks.calendar(), now: scheduledTasks.now()) else { return nil }
-        let allowed = await askPerson(title: text.title, detail: text.detail, caller: caller)
-        return allowed ? nil : "\(tool) needs the person's approval in a task a scheduled run started, and it was "
-            + "not given. Carry on without it."
+        return nil
     }
 
     // MARK: - create_scheduled_task
