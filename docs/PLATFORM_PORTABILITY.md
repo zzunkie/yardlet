@@ -444,7 +444,18 @@ runtime; the relay the build carries (`place-relay.ps1`); Velopack's C library,
 `velopack_libc_win_x64_msvc.dll`, at the version and SHA-256 the script pins; and, when `-UpdateFeed` names one, the
 feed in `YardletUpdateFeed`. `Windows/scripts/set-app-icon.ps1` writes Yardlet's icon into the packed copy of the
 executable, from which the taskbar button, the shortcut and the Apps entry take theirs, and gives the installer the
-same icon. The window's title bar keeps WinUI's default icon.
+same icon. In the same resource update, before signing, it writes `VS_VERSIONINFO`: `FileDescription` and
+`ProductName` are `Yardlet`, `FileVersion` and `ProductVersion` keep the full pack version, and their fixed numeric
+fields use its version core with a zero fourth component when omitted. The resource and its Unicode string table
+use English (US), with a matching `Translation`. This supplies the executable's name to Windows surfaces that read
+file descriptions. The window's title bar keeps WinUI's default icon.
+
+The icon is also packed beside the executable as `Yardlet.ico`, for notification registration. Packed builds pass
+the name `Yardlet` and this icon to `AppNotificationManager.Register`: the Windows App SDK's automatic shortcut
+lookup can fail, and its process fallback uses the executable's filename, even with a version resource. Each
+registration overwrites `DisplayName` in its AppUserModelID entry, including one left by an older install, so the
+next unelevated launch refreshes an old name without a migration. Builds without the packed icon use the SDK's
+automatic lookup.
 
 In the app (`Platform/Windows/WindowsUpdates.swift`), the library is looked for in the executable's folder alone, with
 its dependencies from System32, so a build run from its build folder has none and runs as before. Velopack's start
@@ -499,8 +510,9 @@ Setup.exe then installs the app without a window,
 Velopack's log must show the app answered the install hook in time, the hook's event log must say it added the
 runtime's packages, and each must then be there; the installed app opened must find them in place. The installed
 folder must hold no other executable, the
-executable must carry an icon, and the shortcut, the Apps entry and the version must be there, with the data folder
-unchanged. Opened, the app must find nothing newer. With the second version's files in the feed, the app opened again
+executable must carry an icon, `FileDescription` and `ProductName` must be `Yardlet`, and both version strings must
+match the pack version before and after updating. The shortcut, the Apps entry and the version must be there, with
+the data folder unchanged. Opened, the app must find nothing newer. With the second version's files in the feed, the app opened again
 must download it and, once its window is closed, hand it to the updater, after which the installed version must be the
 second; opened once more it must say so and find nothing newer. It packs what the run gathered (`windows-app-bin`), as
 a computer that holds the certificate does, and signs the second version with a certificate made for the check and

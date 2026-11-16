@@ -4,12 +4,14 @@
 # first taken from this Windows user where Windows lets them go (on the runner the framework stays, as on a PC that
 # has the framework alone, the case a PC showed), and the first's Setup.exe installs the app
 # without a window; its install hook must put the runtime's packages the app carries in place and end in time, and
-# the installed app must have Yardlet's icon and a Start menu shortcut, and find no update. The next version's files then replace the feed's: the app opened again must
+# the installed app must have Yardlet's name and pack version in its executable's version resource, its icon and a
+# Start menu shortcut, and find no update. The next version's files then replace the feed's: the app opened again must
 # download it and, once its window is closed, hand it to Velopack's updater, which puts it in place; opened once
 # more it must be that version. The next version is signed with a certificate made for the check, as a release is
 # signed with Yardlet's (vpk's signtool with a certificate in this user's store): its Setup.exe and the executable it
 # installs must carry that signature, and the Windows App SDK's bootstrapper keeps Microsoft's. Opened as a person opens it,
-# not elevated, the app must register for notifications. Removing it, also not elevated, must take the installed folder,
+# not elevated, the app must register for notifications as Yardlet, including after an update over a registration
+# carrying the old executable name. Removing it, also not elevated, must take the installed folder,
 # the shortcut, the entry in Settings > Apps and the notifications' registration, and leave %LOCALAPPDATA%\Yardlet, the
 # app's own data, as it was. It writes the event logs, Velopack's logs, screenshots and a summary to -OutDirectory.
 param(
@@ -166,6 +168,20 @@ function Installed-Version {
     ([xml](Get-Content $manifest -Raw)).package.metadata.version
 }
 
+function Check-VersionInfo([string] $label, [string] $version) {
+    $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($executable)
+    $summary["$label-versionInfo"] = [ordered]@{
+        FileDescription = $info.FileDescription; ProductName = $info.ProductName
+        FileVersion = $info.FileVersion; ProductVersion = $info.ProductVersion
+    }
+    if ($info.FileDescription -ne 'Yardlet' -or $info.ProductName -ne 'Yardlet') {
+        Finish "$label`: the executable's FileDescription and ProductName must be Yardlet"
+    }
+    if ($info.FileVersion -ne $version -or $info.ProductVersion -ne $version) {
+        Finish "$label`: the executable's FileVersion and ProductVersion must be $version"
+    }
+}
+
 # Opens the installed app with its own event log, waits for its window and for the line its updater writes once
 # it has looked, and returns that line. The app stays open. With -Medium it is not elevated (MediumIntegrity).
 function Open-Installed([string] $label, [switch] $Medium) {
@@ -262,6 +278,7 @@ if ($summary.runtimeHook -notlike 'runtime: added *') { Finish "the install hook
 $absent = @($runtimePackages | Where-Object { -not (Get-AppxPackage -Name $_ | Where-Object Architecture -eq 'X64') })
 if ($absent.Count) { Finish "not in place after Setup: $($absent -join ', ')" }
 if (-not (Test-Path $executable)) { Finish 'not installed' }
+Check-VersionInfo 'installed' $FirstVersion
 $summary.executables = @(Get-ChildItem (Join-Path $installRoot 'current') -Recurse -File -Filter '*.exe' | ForEach-Object Name) -join ', '
 if ($summary.executables -ne 'NativeHarnessClient.exe') { Finish "other executables installed: $($summary.executables)" }
 $summary.relay = Test-Path (Join-Path $installRoot 'current\YardletRelayURL')
@@ -277,11 +294,15 @@ if ($summary.version -ne $FirstVersion) { Finish "installed $($summary.version),
 if ((Data-Listing) -ne $before) { Finish 'installing changed the data folder' }
 
 # Nothing newer in the feed yet, and nothing of the runtime missing.
-$looked = Open-Installed 'first'
+$looked = Open-Installed 'first' -Medium
 if ("$looked" -ne 'update: none') { Finish "first: $looked" }
 $summary.runtimeAtStart = (Get-Content (Join-Path $OutDirectory "$Name-first-events.log") | Where-Object { $_ -like 'runtime: *' }) -join ' | '
 if ($summary.runtimeAtStart -notlike 'runtime: in place*') { Finish "first: $($summary.runtimeAtStart)" }
 Close-Installed 'first'
+# Keep an existing registration with the name older builds wrote, to check it is refreshed after updating.
+$summary.firstNotificationName = (Get-ItemProperty $appUserModelIDKey -ErrorAction SilentlyContinue).DisplayName
+if ($summary.firstNotificationName -ne 'Yardlet') { Finish "first: notification name is $($summary.firstNotificationName)" }
+Set-ItemProperty $appUserModelIDKey -Name DisplayName -Value 'NativeHarnessClient'
 
 # The next version in the feed: downloaded while the app runs, put in place once it quits.
 Get-ChildItem $Feed | Remove-Item -Recurse -Force
@@ -299,6 +320,7 @@ if (-not (Wait-For { -not (Get-Process -ErrorAction SilentlyContinue | Where-Obj
     Finish 'the updater did not finish'
 }
 $summary.updatedVersion = Installed-Version
+Check-VersionInfo 'updated' $NextVersion
 $summary.updatedSigner = (Get-AuthenticodeSignature $executable).SignerCertificate.Subject
 if ((Signer $executable) -ne $thumbprint) { Finish "the updated executable is signed by $($summary.updatedSigner)" }
 $bootstrapper = Get-AuthenticodeSignature (Join-Path $installRoot 'current\Microsoft.WindowsAppRuntime.Bootstrap.dll')
@@ -320,6 +342,8 @@ $looked = Open-Installed 'registered' -Medium
 if ("$looked" -ne 'update: none') { Finish "registered: $looked" }
 $summary.notifications = (Get-Content (Join-Path $OutDirectory "$Name-registered-events.log") | Where-Object { $_ -like 'notifications: *' }) -join ' | '
 if ($summary.notifications -ne 'notifications: registered') { Finish "registered: $($summary.notifications)" }
+$summary.updatedNotificationName = (Get-ItemProperty $appUserModelIDKey -ErrorAction SilentlyContinue).DisplayName
+if ($summary.updatedNotificationName -ne 'Yardlet') { Finish "registered: notification name is $($summary.updatedNotificationName)" }
 $activator = (Get-ItemProperty $appUserModelIDKey -ErrorAction SilentlyContinue).CustomActivator
 $summary.activator = "$activator"
 if (-not $activator -or -not (Test-Path "HKCU:\Software\Classes\CLSID\$activator")) { Finish 'registered: no AppUserModelId or CLSID entry' }

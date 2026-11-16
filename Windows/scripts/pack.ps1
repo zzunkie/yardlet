@@ -1,6 +1,7 @@
 # Packs the Windows app with Velopack (docs/PLATFORM_PORTABILITY.md, "Installing and updating the Windows app").
-# It gathers what the app runs with into one folder: its executable with Yardlet's icon (set-app-icon.ps1), the
-# libraries and resource folder the build made beside it, the Windows App SDK's bootstrapper and the Windows App
+# It gathers what the app runs with into one folder: its executable with Yardlet's name, pack version and icon
+# (set-app-icon.ps1, before signing), the same icon beside it for notifications, the libraries and resource folder
+# the build made beside it, the Windows App SDK's bootstrapper and the Windows App
 # Runtime's packages in WindowsAppRuntime (place-bootstrapper.ps1 put them there), the Swift runtime, the relay the build carries (place-relay.ps1), Velopack's library, the update
 # feed, and the license and third-party notices. No other executable goes in, so a test program the build made,
 # such as yardlet-remote-fixture.exe, stays out.
@@ -103,8 +104,8 @@ if ($UpdateFeed) {
 } else {
     'Updates: none, no feed given'
 }
-$icon = Join-Path $work 'Yardlet.ico'
-& (Join-Path $PSScriptRoot 'set-app-icon.ps1') -Executable (Join-Path $stage $main) -Icon $icon
+$icon = Join-Path $stage 'Yardlet.ico'
+& (Join-Path $PSScriptRoot 'set-app-icon.ps1') -Executable (Join-Path $stage $main) -Icon $icon -Version $Version
 $executables = @(Get-ChildItem $stage -Recurse -File -Filter '*.exe' | ForEach-Object Name)
 if ($executables.Count -ne 1 -or $executables[0] -ne $main) { throw "The app's folder has other executables: $executables" }
 Get-ChildItem $stage -Recurse -File | Measure-Object -Property Length -Sum |

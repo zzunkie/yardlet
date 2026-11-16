@@ -14,10 +14,12 @@ import WinUIApplication
 ///
 /// Windows asks no permission first: whether Yardlet's notifications show is the person's switch in Settings ›
 /// System › Notifications, which `authorization()` reads. An app without a package registers at launch, handing
-/// Windows the way back to the running app for a click; its name and icon come from its Start menu shortcut, else
-/// from its executable. Registering writes the app's entry under `HKCU\Software\Classes` (`AppUserModelId` and the
-/// activator's `CLSID`), which removing the app takes away (`WindowsNotificationRegistration`). A click while the app
-/// runs comes to `NotificationInvoked`; a click after it quit opens it without choosing the task.
+/// Windows the way back to the running app for a click. Packed builds supply the name "Yardlet" and the icon packed
+/// beside the executable: the SDK's automatic lookup can miss the shortcut and uses the executable's filename,
+/// even with a version resource. Each registration refreshes the app's entry under `HKCU\Software\Classes`
+/// (`AppUserModelId` and the activator's `CLSID`), which removing the app takes away
+/// (`WindowsNotificationRegistration`). A click while the app runs comes to `NotificationInvoked`; a click after it
+/// quit opens it without choosing the task.
 @MainActor
 final class LocalSystemNotificationCenter: SystemNotificationCenter {
     /// Whether the app registered, once it tried: one try a launch, so a failed one adds no second click handler.
@@ -81,7 +83,12 @@ final class LocalSystemNotificationCenter: SystemNotificationCenter {
             Task { @MainActor in center?.invoked(argument) }
         }
         do {
-            try manager.register()
+            if let icon = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("Yardlet.ico"),
+               FileManager.default.fileExists(atPath: icon.nativePath) {
+                try manager.register("Yardlet", Uri(icon.nativePath))
+            } else {
+                try manager.register()
+            }
         } catch {
             QAEventLog.shared.write("notifications: not registered: \(error)")
             return false
