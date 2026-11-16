@@ -145,7 +145,7 @@ final class RemoteHostModelTests: XCTestCase {
         let paired = try await directory.pair(link: link.absoluteString)
         let client = try XCTUnwrap(directory.model(for: paired.id))
         defer { directory.close(paired.id) }
-        try await waitUntil { client.hasSnapshot }
+        try await waitUntil(message: client.waitingForList) { client.hasSnapshot }
         XCTAssertTrue(client.offersTerminals)
         let stream = client.terminals.makeStream(taskID: task.id.uuidString)
         let denied = NativeTerminalSession(workspaceURL: folder, hosting: RemoteTerminalHosting(stream: stream))
@@ -175,9 +175,12 @@ final class RemoteHostModelTests: XCTestCase {
         }
         var remote = newRemote()
         defer { remote.end() }
+        func shells() -> String {
+            "remote running \(remote.isRunning), host shells \(bridge.terminals.sessions.count), \(client.waitingForList)"
+        }
         remote.start()
         remote.resize(columns: 100, rows: 30)
-        try await waitUntil { remote.isRunning && bridge.terminals.sessions.count == 1 }
+        try await waitUntil(message: shells()) { remote.isRunning && bridge.terminals.sessions.count == 1 }
         let local = try XCTUnwrap(host.taskWorkspaces.loadedState(for: task.id)?.terminals.first)
         XCTAssertTrue(local.isRunning)
         try await waitUntil { Project.isSamePath(remote.workspaceURL, folder) }
@@ -257,10 +260,15 @@ final class RemoteHostModelTests: XCTestCase {
             local.requestOpenLink(source: localView, link: "custom-run://command", params: [:])
             XCTAssertEqual(openedLinks.count, 2, "Remote-origin links cannot launch an unrelated app on either Mac")
             let marker = "QUERY_" + appearance.suffix.uppercased()
-            let query = #"python3 -c 'import os,tty,termios,select; old=termios.tcgetattr(0); tty.setraw(0); os.write(1,b"\x1b[6n"); data=b""; exec("while select.select([0],[],[],1)[0]:\n data+=os.read(0,1024)"); termios.tcsetattr(0,termios.TCSANOW,old); print("\#(marker)="+str(data.count(b"R")))'"#
+            // The probe reads the first answer whenever it comes (the host's renderer answers in its own time, on a busy
+            // Mac later than a second, and an answer after the probe ended went to the shell as typed keys), then counts
+            // what else comes in a second's quiet: a second renderer answering too.
+            let query = #"python3 -c 'import os,tty,termios,select; old=termios.tcgetattr(0); tty.setraw(0); os.write(1,b"\x1b[6n"); data=b""; r=b"R"; exec("while r not in data and select.select([0],[],[],15)[0]:\n data+=os.read(0,1024)\nwhile select.select([0],[],[],1)[0]:\n data+=os.read(0,1024)"); termios.tcsetattr(0,termios.TCSANOW,old); print("\#(marker)="+str(data.count(b"R")))'"#
             let queried = await remote.runWhenReady(query)
             XCTAssertTrue(queried)
-            try await waitUntil { remote.bufferText.contains(marker + "=1") || !remote.isRunning }
+            try await waitUntil(message: "the remote shows \(remote.bufferText.suffix(160).debugDescription)") {
+                remote.bufferText.contains(marker + "=1") || !remote.isRunning
+            }
             guard remote.isRunning else {
                 XCTFail("Terminal closed: \((remote.hosting as? RemoteTerminalHosting)?.stream.closeReason ?? "unknown")")
                 await host.shutdown()
@@ -363,7 +371,7 @@ final class RemoteHostModelTests: XCTestCase {
             XCTAssertEqual((remote.hosting as? RemoteTerminalHosting)?.stream.closeReason, "closed")
         }
         remote = newRemote(); remote.start()
-        try await waitUntil { remote.isRunning && bridge.terminals.sessions.count == 1 }
+        try await waitUntil(message: shells()) { remote.isRunning && bridge.terminals.sessions.count == 1 }
         let revokedLocal = try XCTUnwrap(host.taskWorkspaces.loadedState(for: task.id)?.terminals.first)
         try await stack.server.setPermission(.terminal, allowed: false, for: try XCTUnwrap(client.host.deviceID))
         try await waitUntil { remote.hasEnded && revokedLocal.hasEnded && bridge.terminals.sessions.isEmpty }
@@ -371,7 +379,7 @@ final class RemoteHostModelTests: XCTestCase {
         // Re-enabling requires an explicit new open.
         try await stack.server.setPermission(.terminal, allowed: true, for: try XCTUnwrap(client.host.deviceID))
         remote = newRemote(); remote.start()
-        try await waitUntil { remote.isRunning && bridge.terminals.sessions.count == 1 }
+        try await waitUntil(message: shells()) { remote.isRunning && bridge.terminals.sessions.count == 1 }
         XCTAssertTrue(client.offersTerminalReattach)
         let kept = try XCTUnwrap(bridge.terminals.sessions.values.first?.session)
         let sentBefore = await remote.runWhenReady("printf 'BEFORE_%s\\n' DROP")
@@ -465,7 +473,7 @@ final class RemoteHostModelTests: XCTestCase {
         let paired = try await directory.pair(link: link.absoluteString)
         let client = try XCTUnwrap(directory.model(for: paired.id))
         defer { directory.close(paired.id) }
-        try await waitUntil { client.hasSnapshot }
+        try await waitUntil(message: client.waitingForList) { client.hasSnapshot }
         XCTAssertTrue(client.offersWorkspaceFiles)
         XCTAssertTrue(client.offersWorkspaceFileWrites)
         let deviceID = try XCTUnwrap(client.host.deviceID)
@@ -1499,7 +1507,7 @@ final class RemoteHostModelTests: XCTestCase {
                                             hello: RemoteHandshakeHello(name: "MacBook Air", platform: "macos", appVersion: "test"))
         let paired = try await directory.pair(link: link.absoluteString)
         let client = try XCTUnwrap(directory.model(for: paired.id))
-        try await waitUntil { client.hasSnapshot }
+        try await waitUntil(message: client.waitingForList) { client.hasSnapshot }
         XCTAssertTrue(client.offersHostSettings)
 
         // Opening the sheet reads host settings read-only until the host grants the settings permission.
@@ -1629,7 +1637,7 @@ final class RemoteHostModelTests: XCTestCase {
         let paired = try await directory.pair(link: link.absoluteString)
         let client = try XCTUnwrap(directory.model(for: paired.id))
         defer { directory.close(paired.id) }
-        try await waitUntil { client.hasSnapshot }
+        try await waitUntil(message: client.waitingForList) { client.hasSnapshot }
         XCTAssertTrue(client.offersHostAccounts)
 
         await client.watchHostAccounts()
@@ -1687,5 +1695,15 @@ private final class FakeDiscovery {
 
     func report(_ addresses: [String]) {
         found?(addresses)
+    }
+}
+
+extension RemoteHostModel {
+    /// What a wait for the host's list saw instead: the connection and why its last attempt failed, how often the list
+    /// was asked for on it, and the host's last refusal of it.
+    var waitingForList: String {
+        let refusal = snapshotRefusal.map { "\($0.code.rawValue) (\($0.message))" } ?? "none"
+        return "connection \(connection) (last failure: \(connectionFailure ?? "none")), list asked \(snapshotRequests) time(s), "
+            + "last refusal \(refusal)"
     }
 }

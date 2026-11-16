@@ -1279,7 +1279,7 @@ final class RemoteBridgeTests: XCTestCase {
         let afterResuming = try await bridge.scheduledTasks().get()
         XCTAssertEqual(Array(afterResuming.map(\.id).prefix(2)), [morning, weekly].map(\.id.uuidString),
                        "Resumed, it runs again and joins the ones that run, by next run")
-        XCTAssertEqual(afterResuming[1].enabled, true)
+        XCTAssertEqual(afterResuming.dropFirst().first?.enabled, true)
 
         // Run now while the task of its previous run works is recorded as a skip, as on the Mac.
         let ran = await bridge.perform(.runScheduledTask(scheduleID: morning.id.uuidString))

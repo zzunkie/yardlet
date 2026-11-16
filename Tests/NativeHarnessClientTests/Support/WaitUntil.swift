@@ -13,10 +13,12 @@ let testWaitLimitSeconds: TimeInterval = testWaitLimit / .seconds(1)
 /// Waits until `condition` holds, checking it every 10 ms on the caller's actor, and fails the test
 /// at the caller's line when it still does not hold after `timeout`. Use it instead of sleeping for
 /// a fixed time before asserting that something happened. A check that something did *not* happen
-/// still sleeps: there is nothing to wait for.
+/// still sleeps: there is nothing to wait for. `message`, read only when the wait fails, says what
+/// was there instead.
 func waitUntil(
     timeout: Duration = testWaitLimit,
     isolation: isolated (any Actor)? = #isolation,
+    message: @autoclosure () -> String = "",
     file: StaticString = #filePath,
     line: UInt = #line,
     _ condition: () async throws -> Bool
@@ -27,5 +29,6 @@ func waitUntil(
         try await Task.sleep(for: .milliseconds(10))
     }
     if try await condition() { return }
-    XCTFail("Condition was not met within \(timeout)", file: file, line: line)
+    let detail = message()
+    XCTFail("Condition was not met within \(timeout)" + (detail.isEmpty ? "" : ": \(detail)"), file: file, line: line)
 }

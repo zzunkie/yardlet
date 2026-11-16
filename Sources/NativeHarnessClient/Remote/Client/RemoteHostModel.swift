@@ -43,6 +43,12 @@ final class RemoteHostModel: Identifiable {
     /// Why the host closed the last connection on purpose: its remote turned off, or Yardlet quit there.
     private(set) var closingReason: String?
     private(set) var hasSnapshot = false
+    /// How many times the list was asked for on this connection, and the host's last refusal of it: what the window
+    /// waits on when the list has not come.
+    @ObservationIgnored private(set) var snapshotRequests = 0
+    @ObservationIgnored private(set) var snapshotRefusal: RemoteError?
+    /// Why the last attempt to connect failed, until one succeeds.
+    @ObservationIgnored private(set) var connectionFailure: String?
     private(set) var projects: [RemoteProject] = []
     /// The host's listed tasks, most recently active first.
     private(set) var tasks: [RemoteTask] = []
@@ -132,6 +138,10 @@ final class RemoteHostModel: Identifiable {
     /// Whether this host's window is the key window.
     @ObservationIgnored var isWindowInFront = false
     @ObservationIgnored private let connector: RemoteHostConnection
+    /// The connection's pace, which asking for a refused list again follows too.
+    @ObservationIgnored private let timing: RemoteHostConnection.Timing
+    /// The list asked for again after the host refused it on a connection that stays.
+    @ObservationIgnored private var snapshotRetry: Task<Void, Never>?
     @ObservationIgnored private let store: RemoteHostStore?
     @ObservationIgnored private let cache: RemoteHostCache?
     @ObservationIgnored private let discovery: RemoteHostDiscovery?
@@ -158,6 +168,7 @@ final class RemoteHostModel: Identifiable {
         self.cache = cache
         self.discovery = discovery
         files = RemoteHostFiles(hostID: host.id, hostFolder: cache?.folder)
+        self.timing = timing
         connector = RemoteHostConnection(target: host.target ?? RemoteHostTarget(hostKey: Data(), direct: []),
                                          clientKey: clientKey, hello: hello, timing: timing)
         schedules.model = self
@@ -212,6 +223,8 @@ final class RemoteHostModel: Identifiable {
         terminals.close()
         reader?.cancel()
         reader = nil
+        snapshotRetry?.cancel()
+        snapshotRetry = nil
         stopDiscovery?()
         stopDiscovery = nil
         cache?.close()
@@ -254,6 +267,7 @@ final class RemoteHostModel: Identifiable {
             terminals.disconnected(final: false)
             failPending()
             closingReason = nil
+            connectionFailure = nil
             host.update(from: reply)
             store?.save(host)
             if let target = host.target { Task { await connector.update(target: target) } }
@@ -261,7 +275,8 @@ final class RemoteHostModel: Identifiable {
             browser.hostName = host.name
             connection = .connected(path)
             resync()
-        case let .waiting(retryAt, _):
+        case let .waiting(retryAt, reason):
+            connectionFailure = reason
             terminals.disconnected(final: false)
             failPending()
             clearAttentionTasks()
@@ -331,8 +346,30 @@ final class RemoteHostModel: Identifiable {
 
     /// The list again, then each open conversation's latest page: what changed while away.
     private func resync() {
+        snapshotRetry?.cancel()
+        snapshotRetry = nil
+        snapshotRequests = 0
+        snapshotRefusal = nil
+        requestSnapshot()
+        for taskID in subscribed { subscribe(taskID) }
+    }
+
+    /// Asks for the list. Any request may be refused (§7), and a refusal on a connection that stays would leave the
+    /// window empty until the next connection: the list is asked for again after the connection's next backoff delay.
+    private func requestSnapshot() {
+        snapshotRequests += 1
         request(.snapshot) { [weak self] response in
-            guard let self, isConnected, response.ok else { return }
+            guard let self, isConnected else { return }
+            guard response.ok else {
+                snapshotRefusal = response.error
+                let delay = timing.backoff[min(snapshotRequests - 1, timing.backoff.count - 1)]
+                snapshotRetry = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(delay))
+                    guard !Task.isCancelled, let self, isConnected else { return }
+                    requestSnapshot()
+                }
+                return
+            }
             projects = response.projects ?? []
             tasks = (response.tasks ?? []).sorted { $0.lastActivityAt > $1.lastActivityAt }
             resetAttentionTasks(from: tasks)
@@ -387,7 +424,6 @@ final class RemoteHostModel: Identifiable {
             if offersSchedules, schedules.isFollowing { schedules.load() }
             if offersHostAccounts, watchingHostAccountsCount > 0 { Task { await loadHostAccounts() } }
         }
-        for taskID in subscribed { subscribe(taskID) }
     }
 
     /// Whether the person is using this host's window now: its phone pushes wait meanwhile (§18). The host is

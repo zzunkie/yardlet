@@ -272,7 +272,7 @@ final class RemoteSecureTests: XCTestCase {
         connection.receive(try noise.writeMessage1(payload: Data(RemoteJSON.string(hello).utf8)))
         try await waitUntil { pipe.count == 3 }
         let frames = pipe.take()
-        _ = try noise.readMessage2(frames[0])
+        _ = try noise.readMessage2(try XCTUnwrap(frames.first))
         var cipher = noise.split().receive
         var joiner = RemoteNoiseFraming.Joiner(limit: RemoteProtocol.maxServerMessageBytes)
         let held = try XCTUnwrap(joiner.add(frames[1], with: &cipher))

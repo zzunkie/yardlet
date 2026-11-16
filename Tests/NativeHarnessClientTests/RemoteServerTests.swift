@@ -1883,7 +1883,9 @@ final class RemoteServerTests: XCTestCase {
     func testWatchingAgainDoesNotSpeedUpTheLooks() async throws {
         let harness = try await ServerHarness { $0.tabFrameInterval = 0.5; $0.tabFrameIdleInterval = 1 }
         let phone = try await harness.authenticatedPhone()
-        await harness.bridge.setDelays(capture: .milliseconds(200))
+        // The first look stays under way until the tab is watched again: a look that ended first sent its frame, and
+        // the next would wait for that frame's acknowledgement, which the test's clock never lets run out.
+        await harness.bridge.holdCaptures()
         await harness.send(#"{"id":"w0","type":"watchTab","taskId":"A","tabId":"T1"}"#, on: phone)
         _ = try await phone.response("w0")
         try await waitUntilAsync { await harness.bridge.captureStarts.count == 1 }
@@ -1893,9 +1895,13 @@ final class RemoteServerTests: XCTestCase {
             await harness.send(#"{"id":"w\#(index)","type":"watchTab","taskId":"A","tabId":"T2"}"#, on: phone)
             _ = try await phone.response("w\(index)")
         }
+        let lookEnded = Date()
+        await harness.bridge.releaseCaptures()
         try await waitUntilAsync { await harness.bridge.captureStarts.count >= 2 }
         let starts = await harness.bridge.captureStarts
-        XCTAssertGreaterThanOrEqual(starts[1].timeIntervalSince(starts[0]), 0.45, "the next look waited for the pace")
+        // The wait failed the test when the next look did not start; reading it would end the whole test process.
+        guard starts.count >= 2 else { return }
+        XCTAssertGreaterThanOrEqual(starts[1].timeIntervalSince(lookEnded), 0.45, "the next look waited for the pace")
     }
 
     /// A connection that sends faster than the Mac handles its requests is closed once it holds the most messages the Mac
@@ -2339,9 +2345,9 @@ actor FakeBridge: RemoteBridge {
     var picture = Data("one".utf8)
     private(set) var watchedTabs: Set<RemoteTabWatch> = []
     private(set) var captures = 0
-    /// When each capture began, and how long one takes.
+    /// When each capture began, and the captures held until the test lets them finish (`holdCaptures`).
     private(set) var captureStarts: [Date] = []
-    var captureDelay: Duration = .zero
+    private var heldCaptures: [CheckedContinuation<Void, Never>]?
     private(set) var tabInputs: [RemoteTabInput] = []
     /// The watch each input came under (`RemoteTabPermit.id`).
     private(set) var inputPermits: [UUID] = []
@@ -2440,7 +2446,7 @@ actor FakeBridge: RemoteBridge {
     func captureTab(taskID: String, tabID: String, maxWidth: Int, maxHeight: Int) async -> Result<RemoteTabFrame, RemoteError> {
         captures += 1
         captureStarts.append(Date())
-        if captureDelay > .zero { try? await Task.sleep(for: captureDelay) }
+        if heldCaptures != nil { await withCheckedContinuation { heldCaptures?.append($0) } }
         return .success(RemoteTabFrame(image: picture, width: maxWidth, height: maxWidth / 2, viewportWidth: 1280,
                                        viewportHeight: 640))
     }
@@ -2451,10 +2457,16 @@ actor FakeBridge: RemoteBridge {
         permitsAtEnd.append(permit.isValid)
         return nil
     }
-    func setDelays(input: Duration = .zero, list: Duration = .zero, capture: Duration = .zero) {
+    func setDelays(input: Duration = .zero, list: Duration = .zero) {
         inputDelay = input
         listDelay = list
-        captureDelay = capture
+    }
+    /// Captures from now on wait, under way, until `releaseCaptures`.
+    func holdCaptures() { heldCaptures = heldCaptures ?? [] }
+    func releaseCaptures() {
+        let held = heldCaptures ?? []
+        heldCaptures = nil
+        held.forEach { $0.resume() }
     }
     func setTabs(_ tabs: [RemoteBrowserTab]) { self.tabs = tabs }
     func setPicture(_ picture: Data) { self.picture = picture }

@@ -106,7 +106,8 @@ removed (§1).
 ```
 
 After a client's first `snapshot`, the server pushes `tasksChanged` and `attention` events (§5) to it.
-Call `snapshot` again after reconnecting.
+Call `snapshot` again after reconnecting, and after a refused one on the same connection, waiting as long as before
+the next reconnection attempt.
 
 **Project:** `id`; `name` (as the sidebar names it); `kind`: `project` (a Yardlet project), `folder`
 (tasks of a folder outside any project) or `chats` (the sidebar's Chats, `id` `"chats"`, name in the
