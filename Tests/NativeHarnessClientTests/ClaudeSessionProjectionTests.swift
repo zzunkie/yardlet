@@ -152,24 +152,37 @@ final class ClaudeSessionProjectionTests: XCTestCase {
         await adapter.close(handle)
     }
 
-    /// Claude Code refuses a turn it cannot sign in for as a synthetic assistant message and an error
-    /// `result` in the same words: the card that offers the sign-in, not an answer as well. 2.1.318 with no
-    /// login; 2.1.325 run without a screen, on a login whose refresh its server refused.
-    func testATurnRefusedForItsSignInIsTheErrorCardAlone() throws {
-        for refusal in ["Not logged in · Please run /login",
-                        "Failed to authenticate: OAuth session expired and could not be refreshed"] {
+    /// Claude Code words a request it could not make as an assistant message of its own and an error
+    /// `result` in the same words: the error card, not an answer as well, whatever the error. A sign-in
+    /// refusal's card offers the sign-in (2.1.318 with no login; 2.1.325 run without a screen, on a login
+    /// whose refresh its server refused); 2.1.325 on a server error. What the model answered before
+    /// stays. A saved conversation keeps no `result`, and its notice reads as that card.
+    func testATurnTheCLIRefusedIsTheErrorCardAlone() throws {
+        let request = #"{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"s","message":{"role":"user","content":"Build it"}}"#
+        let answer = #"{"type":"assistant","uuid":"a1","parentUuid":"u1","sessionId":"s","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"Checking the build."}]}}"#
+        for (category, words) in [("authentication_failed", "Not logged in · Please run /login"),
+                                  ("authentication_failed",
+                                   "Failed to authenticate: OAuth session expired and could not be refreshed"),
+                                  ("server_error", "API Error: 500 Internal server error")] {
+            let notice = #"{"type":"assistant","uuid":"a2","parentUuid":"a1","sessionId":"s","error":"\#(category)","isApiErrorMessage":true,"message":{"id":"m2","role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"\#(words)"}]}}"#
             var projection = ClaudeSessionProjection()
             var builder = TranscriptBuilder()
-            try apply(#"{"type":"assistant","error":"authentication_failed","isApiErrorMessage":true,"message":{"id":"m","role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"\#(refusal)"}]}}"#,
-                      to: &projection, builder: &builder)
-            try apply(#"{"type":"result","subtype":"success","is_error":true,"result":"\#(refusal)"}"#,
-                      to: &projection, builder: &builder)
-            XCTAssertEqual(builder.entries.count, 1, refusal)
-            guard case let .error(message, _, _)? = builder.entries.first?.content else {
-                return XCTFail("\(builder.entries)")
+            for json in [answer, notice, #"{"type":"result","subtype":"success","is_error":true,"result":"\#(words)"}"#] {
+                try apply(json, to: &projection, builder: &builder)
             }
-            XCTAssertEqual(TranscriptRecoveryProjection.errorSummary(message), ProviderSignIn.prompt)
-            XCTAssertEqual(message, refusal, "Details keep the CLI's words")
+            let saved = try ClaudeSubagentTranscriptReader(configDirectory: URL(filePath: "/unused"))
+                .project(Data([request, answer, notice].joined(separator: "\n").utf8), parentSessionID: "s").entries
+            for entries in [Array(builder.entries), Array(saved.dropFirst())] {
+                XCTAssertEqual(entries.count, 2, "\(category): \(entries.map(\.content))")
+                XCTAssertEqual(entries.first?.content, .assistant(text: "Checking the build.", isStreaming: false))
+                guard case let .error(message, _, _)? = entries.last?.content else {
+                    return XCTFail("\(category): \(entries.map(\.content))")
+                }
+                XCTAssertEqual(message, words, "Details keep the CLI's words")
+                if category == "authentication_failed" {
+                    XCTAssertEqual(TranscriptRecoveryProjection.errorSummary(message), ProviderSignIn.prompt)
+                }
+            }
         }
     }
 

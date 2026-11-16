@@ -646,6 +646,12 @@ nothing to show while it is read shows as loading instead of "Start a conversati
     the task was idle (`idle_compactions` below) reads as it showed live: its `/compact` opens a turn with no request,
     the marker carries the idle note, and the output is left out. None of them, nor a compaction's summary, is an edit
     or rewind point.
+  - A request Claude Code could not make (a server or connection error, a refused sign-in, a safeguard) is saved as an
+    assistant record of its own, `<synthetic>`, with the error's category in `error` and `isApiErrorMessage`. The
+    stream sends that record and then a `result` in the same words, the turn's error card, so live the record is left
+    out; it shows where it stood only when what follows is not such a `result`. The saved conversation keeps no
+    `result`, and the record reads as that card (`ClaudeSessionProjection.errorNotice`). A plan limit's reads as its
+    limit card.
   - For an attached task, everything from the first turn on (including what the runtime streamed) stays as it is, and
     the turns read are put before the boundary entry (`TranscriptBuilder.replaceEntries(before:)`). In the conversation
     this is `ConversationEarlierTurns.providerFile`, and the marker disappears once the read reaches the start.

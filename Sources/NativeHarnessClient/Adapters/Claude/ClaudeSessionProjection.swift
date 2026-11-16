@@ -29,12 +29,43 @@ struct ClaudeSessionProjection: Sendable {
     private var rejectedThisTurn = false
     /// The card the current turn shows for the limit that stopped it.
     private var turnLimit: HarnessRateLimit?
+    /// The words of the CLI's notice of a request it could not make (`errorNotice`), until what follows it.
+    private var heldErrorNotice: String?
     var hasLiveTasks: Bool { tasks.values.contains { !$0.terminal } }
     /// The plan-limit status the CLI last reported, nil before any report.
     var rateLimitStatus: HarnessRateLimit.Status? { latestRateLimit?.status }
 
+    /// The words of Claude Code's notice of a request it could not make: an assistant message of its own
+    /// (`<synthetic>`) marked with the error's category, which the stream follows with an error `result`
+    /// in the same words and a saved conversation keeps alone. A plan limit's shows as its limit card.
+    static func errorNotice(in frame: JSONValue) -> String? {
+        guard frame["type"]?.stringValue == "assistant", let category = frame["error"]?.stringValue,
+              category != "rate_limit" else { return nil }
+        let words = assistantText(frame)
+        return words.isEmpty ? nil : words
+    }
+
     mutating func payloads(from frame: JSONValue) -> [HarnessEventPayload] {
         guard frame["parent_tool_use_id"]?.stringValue?.isEmpty != false else { return [] }
+        // An error notice is no answer when the turn's `result` repeats it, as that result is the error
+        // card; before anything else that follows it in the conversation, it shows where it stood.
+        var shown: [HarnessEventPayload] = []
+        let type = frame["type"]?.stringValue
+        if let held = heldErrorNotice, ["assistant", "user", "stream_event", "result"].contains(type) {
+            heldErrorNotice = nil
+            let repeated = type == "result" && frame["is_error"]?.boolValue == true
+                && frame["result"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    == held.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !repeated { shown.append(.assistantMessageCompleted(held)) }
+        }
+        if let notice = Self.errorNotice(in: frame) {
+            heldErrorNotice = notice
+            return shown
+        }
+        return shown + projectedPayloads(from: frame)
+    }
+
+    private mutating func projectedPayloads(from frame: JSONValue) -> [HarnessEventPayload] {
         if frame["type"]?.stringValue == "rate_limit_event" {
             return rateLimitPayloads(from: frame)
         }
@@ -59,13 +90,7 @@ struct ClaudeSessionProjection: Sendable {
         // The CLI words a refused request as an assistant message marked with the error's
         // category. A plan limit is shown as its own card, not as the model's answer.
         if frame["type"]?.stringValue == "assistant", frame["error"]?.stringValue == "rate_limit" {
-            return [.usageLimitReached(stoppedTurn(message: assistantText(frame), in: frame))]
-        }
-        // A turn the CLI could not sign in for is no answer: its `result` brings the same words,
-        // which become the card that offers the sign-in.
-        if frame["type"]?.stringValue == "assistant", frame["error"]?.stringValue == "authentication_failed",
-           ProviderSignIn.asksToSignIn(assistantText(frame)) {
-            return []
+            return [.usageLimitReached(stoppedTurn(message: Self.assistantText(frame), in: frame))]
         }
 
         if frame["type"]?.stringValue == "assistant" {
@@ -193,7 +218,9 @@ struct ClaudeSessionProjection: Sendable {
     /// The CLI's process ended, and the background work it ran (a shell, an agent) with it, which the
     /// CLI can no longer report. Each such task the session shows ends as stopped.
     mutating func processEnded() -> [HarnessEventPayload] {
-        var result: [HarnessEventPayload] = []
+        // An error notice no `result` followed shows as the CLI wrote it.
+        var result: [HarnessEventPayload] = heldErrorNotice.map { [.assistantMessageCompleted($0)] } ?? []
+        heldErrorNotice = nil
         for id in taskOrder {
             guard var task = tasks[id], !task.terminal, task.activity.isBackground == true,
                   task.activity.subtask?.isSubagentWork != true || shownSubagentTaskIDs.contains(id) else { continue }
@@ -239,7 +266,7 @@ struct ClaudeSessionProjection: Sendable {
         return limit
     }
 
-    private func assistantText(_ frame: JSONValue) -> String {
+    private static func assistantText(_ frame: JSONValue) -> String {
         (frame["message"]?["content"]?.arrayValue ?? []).compactMap { block in
             block["type"]?.stringValue == "text" ? block["text"]?.stringValue : nil
         }.joined()

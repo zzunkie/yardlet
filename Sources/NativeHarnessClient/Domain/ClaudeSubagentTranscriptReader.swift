@@ -833,6 +833,13 @@ struct ClaudeSubagentTranscriptReader: Sendable {
                     builder.appendUser(text, images: images)
                 }
             }
+            // Claude saves no `result`: the notice of a request it could not make reads as the error card
+            // its `result` showed live.
+            if let notice = ClaudeSessionProjection.errorNotice(in: value) {
+                builder.apply(.error(message: notice, recoverable: true))
+                record(added(after: lastID), from: value)
+                continue
+            }
             // Child framing must remain in this reader, never leak into the parent transcript.
             guard case var .object(object) = value else { continue }
             object["parent_tool_use_id"] = .null
