@@ -438,7 +438,7 @@ struct PromptComposer: View {
     /// One queued message: what it says, shortened to the row, then where it goes and its actions,
     /// which keep their size so a long message never pushes them out of view.
     private func queueChip(_ item: CodexQueuedSubmission, chip: ComposerQueueChip, at index: Int) -> some View {
-        ComposerQueueRow(title: Self.queueTitle(item.draft), failed: item.state == .failed,
+        ComposerQueueRow(title: ComposerQueueChip.title(of: item.draft), failed: item.state == .failed,
                          fromTask: TaskMessage.parse(item.draft.text) != nil, chip: chip,
                          moveUp: { actions.moveQueued?(item.id, index - 1) },
                          moveDown: { actions.moveQueued?(item.id, index + 1) },
@@ -639,19 +639,6 @@ struct PromptComposer: View {
                                        key: mode == returnMode ? sendShortcut.sendSymbol : sendShortcut.alternateSymbol)
     }
 
-    /// A queued message's words: its request, or the count of the comments it carries alone.
-    static func queueTitle(_ draft: CodexComposerDraft) -> String {
-        if let message = TaskMessage.parse(draft.text) {
-            return L10n.format("%@: %@", ConversationSentMessage.senderLabel(message), message.body)
-        }
-        if let sent = DiffCommentPrompt.parse(draft.text) {
-            guard sent.request.isEmpty else { return sent.request }
-            return sent.comments.isEmpty ? BrowserCommentChip.title(count: sent.browserComments.count)
-                : DiffCommentsChip.title(count: sent.comments.count)
-        }
-        return draft.text.isEmpty ? L10n.string("Attached context") : draft.text
-    }
-
     /// Whether the window gave this composer the submit its queue and steering take.
     private func canSubmit(_ path: ComposerSubmissionPath) -> Bool {
         switch path {
@@ -660,44 +647,20 @@ struct PromptComposer: View {
         }
     }
 
+    /// The draft's message, taken as every task composer takes it (`TaskComposerDraft.takeMessage`), to the
+    /// window's path for it. A draft the harness cannot carry stays, with why.
     private func submit(_ action: CodexComposerAction) {
-        let draft = currentDraft
-        guard !draft.isEmpty else { return }
+        guard !currentDraft.isEmpty else { return }
         if isBashMode {
             runShellCommand()
             return
         }
-        if options.submission == .codexDraft, let submitCodex = actions.submitCodex {
-            if composerDraft.editState == nil && !options.draftRetention.keepsDraft(afterSending: draft.text) {
-                composerDraft.clear()
-            }
-            submitCodex(draft, action)
-            return
-        }
-        guard action == .automatic else {
-            guard options.followUp?.delivery == .providerInput, let submitFollowUp = actions.submitFollowUp else { return }
-            switch inputPolicy.submission(for: draft) {
-            case let .refuse(notice):
-                composerDraft.notice = notice
-            case let .send(input):
-                // An edited message is refused by the model, which says why; the draft stays.
-                if composerDraft.editState == nil { composerDraft.clear() }
-                submitFollowUp(input, action)
-            }
-            return
-        }
-        // A draft restored on a harness that cannot carry its attachment is not sent silently
-        // without it. The attachment stays in the composer and the user is told why.
-        switch inputPolicy.submission(for: draft) {
-        case let .refuse(notice):
-            composerDraft.notice = notice
-        case let .send(input):
-            // A chat transition consumes its command only after local creation succeeds.
-            // Rejected arguments/attachments and alias metadata failures retain the draft.
-            if composerDraft.editState == nil && !options.draftRetention.keepsDraft(afterSending: input.text) {
-                composerDraft.clear()
-            }
-            actions.send(input)
+        switch composerDraft.takeMessage(options: options, action: action, submitsCodexDraft: actions.submitCodex != nil,
+                                         submitsFollowUp: actions.submitFollowUp != nil) {
+        case let .codexDraft(draft, action)?: actions.submitCodex?(draft, action)
+        case let .input(input, .automatic)?: actions.send(input)
+        case let .input(input, action)?: actions.submitFollowUp?(input, action)
+        case nil: break
         }
     }
 

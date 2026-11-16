@@ -360,10 +360,10 @@ final class DiffCommentTests: XCTestCase {
         let item = QueuedFollowUp(draft: CodexComposerDraft(inputs: [.text(Self.codexText)]), state: .failed,
                                   failureMessage: "Offline")
         model.followUps.append(item, to: session.id)
-        XCTAssertEqual(PromptComposer.queueTitle(item.draft), "Please address these.")
+        XCTAssertEqual(ComposerQueueChip.title(of: item.draft), "Please address these.")
         // A message another task sent reads as that task's in the queue, not as the person's text.
         let fromTask = TaskMessage(senderID: UUID().uuidString, senderName: "Browser fix", body: "Merged; rebase.")
-        XCTAssertEqual(PromptComposer.queueTitle(CodexComposerDraft(inputs: [.text(fromTask.text(in: .yardlet))])),
+        XCTAssertEqual(ComposerQueueChip.title(of: CodexComposerDraft(inputs: [.text(fromTask.text(in: .yardlet))])),
                        L10n.format("%@: %@", L10n.format("Sent from %@", "Browser fix"), "Merged; rebase."))
         let composer = model.composerDrafts.tasks.draft(for: session.id)
         // Comments already waiting do not stop the edit.

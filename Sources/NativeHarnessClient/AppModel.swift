@@ -1184,27 +1184,24 @@ final class AppModel {
         await send(HarnessUserInput(text: prompt), to: session)
     }
 
-    /// Sends the text the task's draft holds, as a composer's Send does: the draft empties as the message goes,
-    /// unless it holds a command the harness runs from the draft (`ComposerDraftRetention`), and a message the
-    /// task does not take comes back to it with why (`keepUnsent`). The Windows app's composer sends through this,
-    /// showing the draft, so nothing it sends is lost on the way. It goes as the person's message
-    /// (`sendPersonsMessage`), which answers what the task waits on as the Mac's composer does; an edit goes as
-    /// `send` takes it, with the draft's attachments. The draft empties before this returns; the returned task is
-    /// the send.
+    /// Sends what the task's draft holds, its attachments with it, as the Mac's composer sends it
+    /// (`TaskComposerDraft.takeMessage`): as any message (`.automatic`), or queued or steered while a turn runs. The
+    /// draft empties as the message goes, unless it holds a command the harness runs from the draft
+    /// (`ComposerDraftRetention`), and a message the task does not take comes back to it with why (`keepUnsent`).
+    /// The Windows app's composer sends through this, showing the draft, so nothing it sends is lost on the way. It
+    /// goes as the person's message (`sendPersonsMessage`, `sendPersonsCodexDraft`), which answers what the task waits
+    /// on as the Mac's composer does. The draft empties before this returns; the returned task is the send.
     @discardableResult
-    func sendDraft(of session: SessionRecord) -> Task<Void, Never>? {
-        let draft = composerDrafts.tasks.draft(for: session.id)
-        let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return nil }
-        let isEdit = draft.editState != nil
-        if !isEdit, !ComposerDraftRetention(harness: session.harness).keepsDraft(afterSending: text) {
-            draft.clear()
-        }
+    func sendDraft(of session: SessionRecord, action: CodexComposerAction = .automatic) -> Task<Void, Never>? {
+        let wiring = ComposerSessionOptionsProjection.wiring(for: session.harness)
+        let options = AppModelRemoteBridge.composerOptions(of: session, in: self)
+        guard let message = composerDrafts.tasks.draft(for: session.id).takeMessage(
+            options: options, action: action, submitsCodexDraft: wiring.submission == .codexDraft,
+            submitsFollowUp: wiring.followUpQueue != nil) else { return nil }
         return Task {
-            if isEdit {
-                await send(text, to: session)
-            } else {
-                await sendPersonsMessage(HarnessUserInput(text: text), to: session)
+            switch message {
+            case let .codexDraft(draft, action): await sendPersonsCodexDraft(draft, action: action, to: session)
+            case let .input(input, action): await sendPersonsMessage(input, action: action, to: session)
             }
         }
     }

@@ -222,3 +222,10 @@ enum DiffCommentPrompt {
         return (.init(side: one, line: line), .init(side: one, line: line))
     }
 }
+
+extension DiffComment {
+    /// The comments a message carries, named by their count: "1 attached comment", "3 attached comments".
+    static func countTitle(_ count: Int) -> String {
+        count == 1 ? L10n.string("1 attached comment") : L10n.format("%lld attached comments", count)
+    }
+}

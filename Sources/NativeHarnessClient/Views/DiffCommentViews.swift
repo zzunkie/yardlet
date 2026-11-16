@@ -182,9 +182,7 @@ struct DiffCommentsChip: View {
     }
 
     /// "1 comment", "3 comments".
-    static func title(count: Int) -> String {
-        count == 1 ? L10n.string("1 attached comment") : L10n.format("%lld attached comments", count)
-    }
+    static func title(count: Int) -> String { DiffComment.countTitle(count) }
 
     /// Each comment's file and lines, then its words (`tB` in `app-primary`).
     static func tooltip(_ comments: [DiffComment]) -> String {

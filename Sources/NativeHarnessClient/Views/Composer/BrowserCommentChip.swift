@@ -12,9 +12,7 @@ struct BrowserCommentChip: View {
 
     /// The sent message's chip for the comments (`1 annotation`), which a queued message alone with
     /// them is named by.
-    static func title(count: Int) -> String {
-        count == 1 ? L10n.string("1 annotation") : L10n.format("%lld annotations", count)
-    }
+    static func title(count: Int) -> String { BrowserComment.countTitle(count) }
 
     /// What the chip names: the element (its tag and words), on the page's host.
     static func label(_ comment: BrowserComment) -> String {

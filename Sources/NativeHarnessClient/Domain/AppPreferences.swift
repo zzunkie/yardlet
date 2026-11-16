@@ -103,6 +103,13 @@ enum SendShortcut: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
+#if os(Windows)
+    // Windows names its keys as its own apps write them: Enter, with Ctrl where the Mac has Command.
+    var sendSymbol: String { self == .return ? "Enter" : "Ctrl+Enter" }
+    var alternateSymbol: String { self == .return ? "Ctrl+Enter" : "Ctrl+Shift+Enter" }
+    var sendKeyName: String { sendSymbol }
+    var alternateKeyName: String { alternateSymbol }
+#else
     /// The key that sends in this mode whatever the draft, as a menu writes it.
     var sendSymbol: String { self == .return ? "↩" : "⌘↩" }
     /// The key that sends the other way while a turn runs, as a menu writes it.
@@ -111,6 +118,7 @@ enum SendShortcut: String, CaseIterable, Identifiable, Sendable {
     var sendKeyName: String { self == .return ? "Return" : "Command-Return" }
     /// `alternateSymbol` in words.
     var alternateKeyName: String { self == .return ? "Command-Return" : "Shift-Command-Return" }
+#endif
 }
 
 /// Settings › General › "Keep the screen unlocked while tasks work". Off by default: a Mac left alone

@@ -204,3 +204,10 @@ enum BrowserCommentPrompt {
         return value
     }
 }
+
+extension BrowserComment {
+    /// The browser comments a message carries, named by their count, as its sent chip names them: "1 annotation".
+    static func countTitle(_ count: Int) -> String {
+        count == 1 ? L10n.string("1 annotation") : L10n.format("%lld annotations", count)
+    }
+}

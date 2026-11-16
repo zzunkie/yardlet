@@ -35,6 +35,11 @@ struct TaskMessage: Equatable, Sendable {
     /// The person's own messages from the sending task, passed on after the sentence.
     var quotes: [Quote] = []
 
+    /// "Sent from {task}" above the message, where the receiving conversation draws it.
+    var senderLabel: String {
+        senderName.map { L10n.format("Sent from %@", $0) } ?? L10n.string("Sent from another task")
+    }
+
     /// One of the person's own messages in the sending task as they typed it, or the paragraphs of a
     /// long one, or their answer on a question card there, which Yardlet found before sending
     /// (`send_message_to_task`'s and `create_task`'s `person_quotes` and `quote_latest_person_message`).
