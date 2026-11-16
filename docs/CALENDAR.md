@@ -124,7 +124,9 @@ calendar while the calendar is on.
   more" does under the results just finished; the time axis below keeps every run at its time. The header's and the
   zone's count of what is left today counts the runs to come and the timed events that have not ended.
 - With the calendar on and the home at least 1,200 points wide (`DeskLayout.zones`), the desk stands as three zones:
-  what waits, what runs and just finished, and today on a time axis (`DeskTimeAxis`). Like the desk's two columns,
+  what waits with what just finished under it, what runs, and today on a time axis (`DeskTimeAxis`). While both fit,
+  the results stand right under what waits; when they do not, they keep their lines at the column's foot, up to half
+  of it, and what waits scrolls in the rest (`DeskWaitingOverFinished`). Like the desk's two columns,
   they stand no wider than the Projects view's grid (1,360 points between 30-point margins), so a wider home keeps
   them in its middle rather than stretching their lines (`DeskColumnsPlacement`). Unread mail folds to one line
   above it and all-day events stay lines. The axis spans 9:00 to 23:00, widened to today's earliest and latest items;

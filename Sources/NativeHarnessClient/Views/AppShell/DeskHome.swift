@@ -216,16 +216,21 @@ struct DeskHome<Switch: View, Bottom: View>: View {
         }
     }
 
-    /// Three zones over the composer, with the calendar on and the room for them: what waits, what runs and
-    /// what finished, and today on a time axis.
+    /// Three zones over the composer, with the calendar on and the room for them: what waits with what just
+    /// finished under it, what runs, and today on a time axis.
     private func zones(_ desk: Desk) -> some View {
         VStack(spacing: 0) {
             header(desk)
                 .modifier(DeskHeaderPlacement(width: size.width))
             HStack(alignment: .top, spacing: 28) {
-                DeskScroll { keyboardZones(desk) { waitingZone(desk, detailLines: 3) }.padding(.bottom, 16) }
-                    .frame(maxWidth: .infinity)
-                DeskScroll { runningZone(desk, showsMembers: true).padding(.bottom, 16) }
+                DeskWaitingOverFinished {
+                    DeskScroll { keyboardZones(desk) { waitingZone(desk, detailLines: 3) }.padding(.bottom, 16) }
+                    if !desk.finished.isEmpty {
+                        DeskScroll { finishedZone(desk).padding(.top, 8).padding(.bottom, 16) }
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                DeskScroll { familiesZone(desk, showsMembers: true).padding(.bottom, 16) }
                     .frame(width: max(280, (columnsWidth * 0.26).rounded()))
                 todayZone(desk, onAxis: true)
                     .frame(width: max(210, (columnsWidth * 0.18).rounded()))
@@ -331,42 +336,57 @@ struct DeskHome<Switch: View, Bottom: View>: View {
         }
     }
 
+    /// What runs, and under it what just finished: the second column of two, or the single column.
     @ViewBuilder
     private func runningZone(_ desk: Desk, showsMembers: Bool) -> some View {
         if !desk.families.isEmpty || !desk.finished.isEmpty {
             VStack(alignment: .leading, spacing: 2) {
-                if !desk.families.isEmpty {
-                    DeskSectionTitle(title: L10n.string("Running (home)"), count: "\(desk.running)")
-                    ForEach(desk.families) { family in
-                        let entry = NewTaskHomeListKeyboard.Entry.row(.desk(.running), family.id.uuidString)
-                        DeskFamilyView(
-                            family: family, place: place(of: family.root), showsMembers: showsMembers,
-                            isHighlighted: isHighlighted(entry), latestTurn: activity.latestTurn,
-                            onOpen: { onAction(.openTask($0)) })
-                            .equatable()
-                    }
+                familiesZone(desk, showsMembers: showsMembers)
+                finishedZone(desk)
+                    .padding(.top, desk.families.isEmpty ? 0 : 14)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func familiesZone(_ desk: Desk, showsMembers: Bool) -> some View {
+        if !desk.families.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                DeskSectionTitle(title: L10n.string("Running (home)"), count: "\(desk.running)")
+                ForEach(desk.families) { family in
+                    let entry = NewTaskHomeListKeyboard.Entry.row(.desk(.running), family.id.uuidString)
+                    DeskFamilyView(
+                        family: family, place: place(of: family.root), showsMembers: showsMembers,
+                        isHighlighted: isHighlighted(entry), latestTurn: activity.latestTurn,
+                        onOpen: { onAction(.openTask($0)) })
+                        .equatable()
                 }
-                if !desk.finished.isEmpty {
-                    DeskSectionTitle(title: L10n.string("Just finished"), count: "\(desk.finished.count)")
-                        .padding(.top, desk.families.isEmpty ? 0 : 14)
-                    ForEach(shownFinished(desk)) { session in
-                        let entry = NewTaskHomeListKeyboard.Entry.row(.desk(.finished), session.id.uuidString)
-                        DeskFinishedRow(
-                            session: session, place: place(of: session), isHighlighted: isHighlighted(entry),
-                            isAnswering: replyTaskID == session.id, answerLine: activity.answerLine,
-                            onChoose: { opens in onAction(Self.action(session, opens: opens || replyTaskID == session.id)) },
-                            onMarkRead: { activity.onMarkRead([session.id]) })
-                            .equatable()
-                    }
-                    if desk.finished.count > DeskLines.finished {
-                        NewTaskHomeRow(isHighlighted: isHighlighted(.toggle(.desk(.finished))), showsChevron: false,
-                                       action: { showsAllFinished.toggle() }) {
-                            Text(showsAllFinished ? L10n.string("Show less")
-                                 : L10n.format("Show %lld more", desk.finished.count - DeskLines.finished))
-                                .font(.system(size: 12))
-                                .foregroundStyle(.secondary)
-                                .padding(.leading, 21)
-                        }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func finishedZone(_ desk: Desk) -> some View {
+        if !desk.finished.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                DeskSectionTitle(title: L10n.string("Just finished"), count: "\(desk.finished.count)")
+                ForEach(shownFinished(desk)) { session in
+                    let entry = NewTaskHomeListKeyboard.Entry.row(.desk(.finished), session.id.uuidString)
+                    DeskFinishedRow(
+                        session: session, place: place(of: session), isHighlighted: isHighlighted(entry),
+                        isAnswering: replyTaskID == session.id, answerLine: activity.answerLine,
+                        onChoose: { opens in onAction(Self.action(session, opens: opens || replyTaskID == session.id)) },
+                        onMarkRead: { activity.onMarkRead([session.id]) })
+                        .equatable()
+                }
+                if desk.finished.count > DeskLines.finished {
+                    NewTaskHomeRow(isHighlighted: isHighlighted(.toggle(.desk(.finished))), showsChevron: false,
+                                   action: { showsAllFinished.toggle() }) {
+                        Text(showsAllFinished ? L10n.string("Show less")
+                             : L10n.format("Show %lld more", desk.finished.count - DeskLines.finished))
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .padding(.leading, 21)
                     }
                 }
             }
@@ -383,8 +403,8 @@ struct DeskHome<Switch: View, Bottom: View>: View {
                       onToggleRan: { showsRanToday.toggle() })
     }
 
-    /// Today stands on a time axis: the three zones, unless the day is quiet.
-    private func todayOnAxis(_ desk: Desk) -> Bool {
+    /// The desk stands as three zones, with today on a time axis: wide with the calendar on, unless the day is quiet.
+    private func standsInZones(_ desk: Desk) -> Bool {
         !desk.isQuiet && DeskLayout.choose(width: size.width, calendarOn: calendarOn) == .zones
     }
 
@@ -408,16 +428,17 @@ struct DeskHome<Switch: View, Bottom: View>: View {
 
     /// The desk's lines in the keyboard's order: the zones as they stand, today's lines last.
     private func entries(_ desk: Desk) -> [NewTaskHomeListKeyboard.Entry] {
-        desk.waiting.map { .row(.desk(.waiting), $0.id.uuidString) }
-            + desk.families.map { .row(.desk(.running), $0.id.uuidString) }
-            + shownFinished(desk).map { .row(.desk(.finished), $0.id.uuidString) }
+        let waiting = desk.waiting.map { NewTaskHomeListKeyboard.Entry.row(.desk(.waiting), $0.id.uuidString) }
+        let running = desk.families.map { NewTaskHomeListKeyboard.Entry.row(.desk(.running), $0.id.uuidString) }
+        let finished = shownFinished(desk).map { NewTaskHomeListKeyboard.Entry.row(.desk(.finished), $0.id.uuidString) }
             + (desk.finished.count > DeskLines.finished ? [.toggle(.desk(.finished))] : [])
-            + today(desk)
+        // In three zones what just finished stands under what waits.
+        return waiting + (standsInZones(desk) ? finished + running : running + finished) + today(desk)
     }
 
     /// Today's lines in the keyboard's order: the axis's or the list's, then the list's line of runs that ran.
     private func today(_ desk: Desk) -> [NewTaskHomeListKeyboard.Entry] {
-        if todayOnAxis(desk) { return desk.todayItems.map { .row(.desk(.today), $0.id) } }
+        if standsInZones(desk) { return desk.todayItems.map { .row(.desk(.today), $0.id) } }
         return desk.listedToday(showsRan: showsRanToday).map { .row(.desk(.today), $0.id) }
             + (desk.ranToday > 0 ? [.toggle(.desk(.today))] : [])
     }
@@ -503,6 +524,35 @@ private struct DeskScroll<Content: View>: View {
                     .frame(height: 22)
                     .allowsHitTesting(false)
             }
+    }
+}
+
+/// What waits on the person over what just finished, the first of the three zones, each in its own scroll area.
+/// While both fit, each stands as tall as its lines, the results right under what waits. When they do not, the
+/// results keep their lines at the column's foot, up to half of it, and what waits scrolls in the rest: neither is
+/// pushed off the screen, and what waits keeps at least half.
+struct DeskWaitingOverFinished: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? subviews.map { $0.sizeThatFits(.unspecified).width }.max() ?? 0
+        let ideal = subviews.reduce(0) { $0 + $1.sizeThatFits(ProposedViewSize(width: width, height: nil)).height }
+        guard let height = proposal.height, height.isFinite else { return CGSize(width: width, height: ideal) }
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let waiting = subviews.first else { return }
+        guard subviews.count > 1 else {
+            waiting.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+            return
+        }
+        let finished = subviews[1]
+        func ideal(_ view: LayoutSubview) -> CGFloat { view.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil)).height }
+        let waitingIdeal = ideal(waiting)
+        let finishedHeight = min(ideal(finished), max(bounds.height - waitingIdeal, bounds.height / 2))
+        let waitingHeight = min(waitingIdeal, bounds.height - finishedHeight)
+        waiting.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: waitingHeight))
+        finished.place(at: CGPoint(x: bounds.minX, y: bounds.minY + waitingHeight),
+                       proposal: ProposedViewSize(width: bounds.width, height: finishedHeight))
     }
 }
 

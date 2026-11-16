@@ -712,6 +712,12 @@ final class NewTaskHomeRenderingTests: XCTestCase {
                                   "The invitation not answered: \(report)")
                     XCTAssertTrue(shows(w("0.12 출시 목표", "0.12 release target")), "The all-day event as a line")
                     XCTAssertTrue(shows(w("홍보 확인 · 오전", "Promotion check · morning")), "The axis keeps a run that ran")
+                    // What just finished stands under what waits, in its column.
+                    let lines = controls(in: host)
+                    let question = try XCTUnwrap(lines.first { $0.label.contains(w("탐색 메뉴 이름 정하기", "Name the archive menu")) })
+                    let result = try XCTUnwrap(lines.first { $0.label.contains(w("블로그 소재 고르기", "Pick the next blog topic")) })
+                    XCTAssertEqual(result.frame.minX, question.frame.minX, "\(result.frame) \(question.frame)")
+                    XCTAssertGreaterThan(result.frame.minY, question.frame.maxY)
                     XCTAssertTrue(shows(L10n.string("Unread mail")))
                     XCTAssertFalse(shows("Google Play Console"), "The mail folds to one line beside the axis")
                 case "calendar-off-1449":
