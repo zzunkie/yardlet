@@ -3,7 +3,8 @@
 # the host listens on loopback and private addresses alone, a browser's WebSocket handshake is refused, a phone (the
 # fixture's, yardlet-remote-fixture --pair) pairs from `yardlet host pair`, starts a chat on a stand-in harness
 # (Windows/scripts/fake-harness, which asks to edit a file) through the host, allows the request and gets the answer,
-# the pairing's QR code reads back as the link, and stopping the host ends the stand-in and the process it detached.
+# the pairing's QR code reads back as the link, the host rests once the phone is done, and stopping the host ends the
+# stand-in and the process it detached.
 # Then the host is started again with --every-address, which listens on every address. Needs node, curl and
 # zbarimg.
 #
@@ -51,6 +52,11 @@ listening() {
   awk -v port=":$port" '$4 == "0A" && substr($2, length($2) - 4) == port { print $2 }' /proc/net/tcp /proc/net/tcp6 | sort
 }
 
+# The host's CPU time so far, user and system, in clock ticks, from /proc: utime and stime are the 14th and 15th fields.
+cpu_ticks() {
+  awk '{ sub(/.*\) /, ""); print $12 + $13 }' "/proc/$host/stat"
+}
+
 # On a failure, what the host, the stand-in and the host's data folder show.
 show() {
   kill -KILL ${host:-0} 2>/dev/null || true
@@ -91,6 +97,15 @@ link=$("$yardlet" host pair --no-wait --json | sed -E 's/.*"link":"([^"]*)".*/\1
 grep -q 'connected through direct' "$logs/phone.log"
 "$yardlet" host status
 "$yardlet" host status --json | grep -q '"name":"Fixture phone"'
+
+echo '--- at rest'
+# With the phone gone and nothing to do, the host waits: under a second of CPU in five. A thread that spins takes all
+# five, as the listener's did while a wake byte it never drained kept poll returning.
+before=$(cpu_ticks)
+sleep 5
+used=$(( $(cpu_ticks) - before ))
+ticks=$(getconf CLK_TCK)
+(( used < ticks )) || { echo "The host used $used of $(( 5 * ticks )) clock ticks at rest"; exit 1; }
 
 echo '--- a sign-in in the terminal'
 # The harness's own sign-in runs here, with what is pasted reaching it; the stand-in's login reads signed out after.

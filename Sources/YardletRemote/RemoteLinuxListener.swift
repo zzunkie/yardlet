@@ -341,8 +341,10 @@ private final class RemoteLinuxServing: @unchecked Sendable {
                 onFailure(RemoteSocketFailure("poll").message)
                 break
             }
+            // The wake is a pipe, which `recv` refuses (ENOTSOCK): read, or the byte stays and poll returns at once
+            // for ever.
             if polled[0].revents != 0 {
-                while Self.receive(wakeRead, into: &buffer, limit: buffer.count) > 0 {}
+                while buffer.withUnsafeMutableBytes({ Glibc.read(wakeRead, $0.baseAddress, $0.count) }) > 0 {}
             }
             let served = channels
             for (index, channel) in served.enumerated() where polled[1 + sockets.count + index].revents != 0 {
