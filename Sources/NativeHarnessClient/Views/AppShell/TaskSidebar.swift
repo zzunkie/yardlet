@@ -281,6 +281,9 @@ struct TaskSidebar: View {
     /// Told when the list comes to its top or leaves it, where the shown task's place is held
     /// (`SidebarOrderHold`).
     var onListAtTopChange: (Bool) -> Void = { _ in }
+    /// Told when the pointer comes onto the list or leaves it, where every row's place is held
+    /// (`SidebarOrderHold.holdAll`): a row stays where the person saw it until the click.
+    var onPointerOverList: (Bool) -> Void = { _ in }
     /// Where the list was left, if the window keeps it.
     var place: SidebarListPlace? = nil
     @FocusState private var isTaskListFocused: Bool
@@ -409,6 +412,9 @@ struct TaskSidebar: View {
                 } action: { _, atTop in
                     onListAtTopChange(atTop)
                 }
+                .onHover { onPointerOverList($0) }
+                // A list hidden or replaced under the pointer hears no pointer leave it.
+                .onDisappear { onPointerOverList(false) }
                 .focusable()
                 .focusEffectDisabled()
                 .focused($isTaskListFocused)

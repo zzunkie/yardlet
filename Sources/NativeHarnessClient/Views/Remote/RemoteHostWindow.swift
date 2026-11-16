@@ -201,6 +201,10 @@ struct RemoteHostView: View {
     /// How the task list groups its rows, as this Mac's own windows group theirs.
     @AppStorage(SidebarGrouping.defaultsKey, store: .yardlet) private var grouping = SidebarGrouping.project
     @State private var windowSize: CGSize = .zero
+    /// Every row's place in the task list while the pointer is over it, as in this Mac's own windows
+    /// (`SidebarOrderHold.holdAll`).
+    @State private var sidebarOrderHold = SidebarOrderHold()
+    @State private var isPointerOverSidebarList = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(model: RemoteHostModel, directory: RemoteHostDirectory, drafts: RemoteComposerDrafts = RemoteComposerDrafts(),
@@ -258,7 +262,10 @@ struct RemoteHostView: View {
         }
         .focusedSceneValue(\.yardletTaskCommands, taskCommands)
         .focusedSceneValue(\.yardletSplitCommands, splitCommands)
-        .onChange(of: windowSelection) { old, new in shell.follow(new, from: old) }
+        .onChange(of: windowSelection) { old, new in
+            shell.follow(new, from: old)
+            holdSidebarOrder()
+        }
         .background(RemoteDraftAutosave(draft: shownDraft, drafts: drafts))
         .onAppear { drafts.restore(from: model.cacheFolder) }
         .onChange(of: model.selection) { _, _ in drafts.save() }
@@ -289,8 +296,31 @@ struct RemoteHostView: View {
         } else { taskSidebar }
     }
 
-    private var taskSidebar: some View {
+    /// The host's lists as the task list orders them: every task where it was while the pointer is over the list
+    /// (`SidebarOrderHold`).
+    private var listedSidebar: RemoteSidebarMirror {
+        var mirror = model.sidebar
+        mirror.groups = mirror.groups.map {
+            WorkspaceGroup(workspaceURL: $0.workspaceURL, sessions: sidebarOrderHold.listing($0.sessions), project: $0.project)
+        }
+        mirror.chats = sidebarOrderHold.listing(mirror.chats)
+        return mirror
+    }
+
+    /// Holds every row's place while the pointer is over the list, or lets them go.
+    private func holdSidebarOrder() {
         let mirror = model.sidebar
+        let state: ((SessionRecord) -> TaskAttentionState)? = grouping == .state
+            ? { TaskAttentionProjection.state(of: $0, detail: mirror.details[$0.id]) } : nil
+        guard isPointerOverSidebarList else {
+            sidebarOrderHold.hold([], listing: mirror.sessions, state: state)
+            return
+        }
+        sidebarOrderHold.holdAll(showing: Set(shownTaskID.map { [$0] } ?? []), listing: mirror.sessions, state: state)
+    }
+
+    private var taskSidebar: some View {
+        let mirror = listedSidebar
         let layout = sidebarLayout(mirror)
         return TaskSidebar(
             layout: layout,
@@ -323,7 +353,11 @@ struct RemoteHostView: View {
             remoteProjectMoveOptions: model.projectMoveOptions,
             footer: AnyView(RemoteHostFooter(model: model, directory: directory)),
             disclosure: shell.disclosure,
-            activity: activity(mirror)
+            activity: activity(mirror),
+            onPointerOverList: { isOver in
+                isPointerOverSidebarList = isOver
+                holdSidebarOrder()
+            }
         )
         .environment(\.taskAttentionDetails, mirror.details)
         .environment(\.openWindowItemInNewTab, WindowItemNewTabAction(open: { openInNewTab($0, before: nil) }))
@@ -347,7 +381,9 @@ struct RemoteHostView: View {
             waiting: Set(mirror.sessions.filter {
                 TaskAttentionProjection.waitingRequest(of: $0, detail: mirror.details[$0.id]) != nil
             }.map(\.id)),
-            state: grouping == .state ? { TaskAttentionProjection.state(of: $0, detail: mirror.details[$0.id]) } : nil)
+            state: grouping == .state ? { [held = sidebarOrderHold.heldStates] in
+                held[$0.id] ?? TaskAttentionProjection.state(of: $0, detail: mirror.details[$0.id])
+            } : nil)
     }
 
     /// The activity view's list while it is on: the host's tasks that need the person or work, in attention order.

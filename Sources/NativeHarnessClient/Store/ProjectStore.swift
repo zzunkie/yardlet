@@ -204,33 +204,45 @@ final class ProjectStore {
     }
 
     /// The main window, its title bar, the task menus and the Dock badge each read the sidebar's
-    /// groups and chats several times per redraw, so the last answer is kept for the same tasks and
+    /// groups and chats several times per redraw, so the last answers are kept for the same tasks and
     /// projects. Reading `projects` here still makes the caller observe them.
     func visibleGroups(sessions: [SessionRecord]) -> [WorkspaceGroup] {
         let projects = projects
-        if let memo = groupsMemo, memo.projects == projects, memo.sessions == sessions { return memo.value }
+        if let groups = groupsMemo.value(for: sessions, projects) { return groups }
         let groups = ProjectProjection.visibleGroups(sessions: sessions, projects: projects, home: chatWorkspaceHome)
-        groupsMemo = Memo(sessions: sessions, projects: projects, value: groups)
+        groupsMemo.keep(groups, for: sessions, projects)
         return groups
     }
 
     /// The tasks the sidebar lists under Chats, most recent first.
     func chats(sessions: [SessionRecord]) -> [SessionRecord] {
         let projects = projects
-        if let memo = chatsMemo, memo.projects == projects, memo.sessions == sessions { return memo.value }
+        if let chats = chatsMemo.value(for: sessions, projects) { return chats }
         let chats = ProjectProjection.chats(from: sessions, projects: projects, home: chatWorkspaceHome)
-        chatsMemo = Memo(sessions: sessions, projects: projects, value: chats)
+        chatsMemo.keep(chats, for: sessions, projects)
         return chats
     }
 
+    /// The answers for the last three lists of tasks asked about. A redraw asks about more than one
+    /// list: the tasks as they are, and, while the sidebar holds its rows' places (`SidebarOrderHold`),
+    /// its tasks as it lists them. One answer kept would be worked out again for each, on every redraw.
     private struct Memo<Value> {
-        let sessions: [SessionRecord]
-        let projects: [Project]
-        let value: Value
+        private var entries: [(sessions: [SessionRecord], projects: [Project], value: Value)] = []
+
+        func value(for sessions: [SessionRecord], _ projects: [Project]) -> Value? {
+            // The same list again first, found at once, before comparing a list with another task by task.
+            let entry = entries.first { $0.sessions.isSameStorage(as: sessions) && $0.projects == projects }
+                ?? entries.first { $0.sessions == sessions && $0.projects == projects }
+            return entry?.value
+        }
+
+        mutating func keep(_ value: Value, for sessions: [SessionRecord], _ projects: [Project]) {
+            entries = [(sessions, projects, value)] + entries.prefix(2)
+        }
     }
 
-    @ObservationIgnored private var groupsMemo: Memo<[WorkspaceGroup]>?
-    @ObservationIgnored private var chatsMemo: Memo<[SessionRecord]>?
+    @ObservationIgnored private var groupsMemo = Memo<[WorkspaceGroup]>()
+    @ObservationIgnored private var chatsMemo = Memo<[SessionRecord]>()
 
     /// Whether `folder` is one a harness app makes for a chat (`ChatWorkspaces`).
     func isChatFolder(_ folder: URL) -> Bool {
@@ -407,5 +419,14 @@ final class ProjectStore {
             do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
             self?.persistNow()
         }
+    }
+}
+
+private extension Array {
+    /// Whether both arrays are the same storage, which `==` finds at once and a cache can look for
+    /// before comparing element by element.
+    func isSameStorage(as other: [Element]) -> Bool {
+        count == other.count
+            && withUnsafeBufferPointer { lhs in other.withUnsafeBufferPointer { $0.baseAddress == lhs.baseAddress } }
     }
 }

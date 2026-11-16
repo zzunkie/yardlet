@@ -58,6 +58,8 @@ struct MainWindow: View {
     /// is drawn again only when the hold changes the order, not each time the list crosses its top.
     @State private var sidebarOrderHold = SidebarOrderHold()
     @State private var isSidebarListAtTop = true
+    /// While the pointer is over the task list, every row keeps its place (`SidebarOrderHold.holdAll`).
+    @State private var isPointerOverSidebarList = false
     /// How the task list groups its rows, the same in every window and kept across launches.
     @AppStorage(SidebarGrouping.defaultsKey, store: .yardlet) private var sidebarGrouping = SidebarGrouping.project
     @State private var searchText = ""
@@ -211,28 +213,30 @@ struct MainWindow: View {
         projects.chats(sessions: listedSessions)
     }
 
-    /// The tasks as the task list orders them: the shown task where it was while the list is scrolled
-    /// away from its top (`SidebarOrderHold`).
+    /// The tasks as the task list orders them: every task where it was while the pointer is over the
+    /// list, and the shown task while the list is scrolled away from its top (`SidebarOrderHold`).
     private var listedSessions: [SessionRecord] {
         sidebarOrderHold.listing(model.store.listedSessions)
     }
 
-    /// Holds the shown task's place from now, or lets it go with the list at its top.
+    /// Holds every row's place while the pointer is over the list, and the shown task's while the
+    /// list is away from its top; lets them go otherwise.
     private func holdSidebarOrder() {
         let state = sidebarGrouping == .state ? taskState : nil
-        guard !isSidebarListAtTop else {
-            sidebarOrderHold.hold([], listing: model.store.listedSessions, state: state)
-            return
-        }
-        let shown: [UUID]
+        let listed = model.store.listedSessions
+        let shown: Set<UUID>
         switch model.splits.selection {
         case let .session(id): shown = [id]
-        case let .split(id): shown = model.splits.splits.first { $0.id == id }?.sessionIDs ?? []
+        case let .split(id): shown = Set(model.splits.splits.first { $0.id == id }?.sessionIDs ?? [])
         case .home: shown = []
         }
-        let ids = Set(shown)
-        let listed = model.store.listedSessions
-        sidebarOrderHold.hold(listed.filter { ids.contains($0.id) }, listing: listed, state: state)
+        if isPointerOverSidebarList {
+            sidebarOrderHold.holdAll(showing: shown, listing: listed, state: state)
+        } else if isSidebarListAtTop {
+            sidebarOrderHold.hold([], listing: listed, state: state)
+        } else {
+            sidebarOrderHold.hold(listed.filter { shown.contains($0.id) }, listing: listed, state: state)
+        }
     }
 
     /// A task's state, which the task list grouped by state lists it under.
@@ -2141,6 +2145,10 @@ struct MainWindow: View {
                         onOpenCloudItem: openCloudItem,
                         onListAtTopChange: { atTop in
                             isSidebarListAtTop = atTop
+                            holdSidebarOrder()
+                        },
+                        onPointerOverList: { isOver in
+                            isPointerOverSidebarList = isOver
                             holdSidebarOrder()
                         },
                         place: sidebarListPlace

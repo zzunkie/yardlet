@@ -688,33 +688,84 @@ extension WindowItem {
 ///
 /// In a list grouped by state the shown row's tasks also keep the state they are listed under, so a
 /// message sent in a task far down Idle does not take it up to Working out of view.
+///
+/// While the pointer is over the list every row keeps its place (2026-11-16 user report: with many
+/// tasks at work the list sorted itself again between seeing a row and clicking it, and the click
+/// opened the task that had come under the pointer). As a chat client's list waits for the pointer to
+/// leave before it sorts again, every task is listed at the time and in the state it had when the
+/// pointer came onto the list, and a task that appears since stays out of the list until the pointer
+/// leaves (`holdAll`). Titles and marks stay live; only places hold. A task the window shows meanwhile
+/// is listed at once: one the person starts or opens from elsewhere.
 @MainActor @Observable
 final class SidebarOrderHold {
     /// Changes whenever the hold changes how the tasks are listed, so the listing is read again.
     private(set) var revision = 0
     @ObservationIgnored private var listedAt: [UUID: Date] = [:]
     @ObservationIgnored private var listedStates: [UUID: TaskAttentionState] = [:]
+    /// While every task is held (`holdAll`), the tasks listed: those listed when the hold began and
+    /// those shown since. Nil while a task that appears is listed at once.
+    @ObservationIgnored private var listedIDs: Set<UUID>?
+    /// The last listing and the tasks it was made from. Read again from the same tasks, the listing is
+    /// the same array, which the window's caches (`ProjectStore.visibleGroups`) find the same at once
+    /// rather than comparing thousands of tasks each time the window is drawn while every task is held.
+    @ObservationIgnored private var lastListing: (sessions: [SessionRecord], listed: [SessionRecord])?
 
     init() {}
 
-    /// Holds `held` at the times they have now, in place of what was held; none lets the hold go.
+    /// Holds `held` where the list has them, in place of what was held; none lets the hold go. A task
+    /// held already keeps the time and the state it is listed at; another is held at what it has now.
     /// `sessions` are the tasks as they are listed now. `state` gives each task's state in a list
     /// grouped by state, where the held tasks keep theirs too.
     func hold(_ held: [SessionRecord], listing sessions: [SessionRecord],
               state: ((SessionRecord) -> TaskAttentionState)? = nil) {
-        let listedAt = Dictionary(held.map { ($0.id, $0.updatedAt) }, uniquingKeysWith: { first, _ in first })
-        let states = state.map { state in
-            Dictionary(held.map { ($0.id, state($0)) }, uniquingKeysWith: { first, _ in first })
-        } ?? [:]
-        guard listedAt != self.listedAt || states != listedStates else { return }
-        let before = Self.listing(sessions, at: self.listedAt)
-        // A task let go from a state it has since left moves to its own.
-        let leavesState = !listedStates.isEmpty && sessions.contains { session in
-            listedStates[session.id].map { $0 != state?(session) } ?? false
+        hold(held, listing: sessions, state: state, listedIDs: nil)
+    }
+
+    /// Holds every task where the list has it, while the pointer is over the list: a task that
+    /// appears since stays out of the list until a `hold`, unless it is among `shown`, what the
+    /// window shows.
+    func holdAll(showing shown: Set<UUID>, listing sessions: [SessionRecord],
+                 state: ((SessionRecord) -> TaskAttentionState)? = nil) {
+        guard let listed = listedIDs else {
+            hold(sessions, listing: sessions, state: state, listedIDs: Set(sessions.lazy.map(\.id)).union(shown))
+            return
         }
+        let ids = listed.union(shown)
+        hold(sessions.filter { ids.contains($0.id) }, listing: sessions, state: state, listedIDs: ids)
+    }
+
+    private func hold(_ held: [SessionRecord], listing sessions: [SessionRecord],
+                      state: ((SessionRecord) -> TaskAttentionState)?, listedIDs: Set<UUID>?) {
+        let listedAt = Dictionary(held.map { ($0.id, self.listedAt[$0.id] ?? $0.updatedAt) },
+                                  uniquingKeysWith: { first, _ in first })
+        let states = state.map { state in
+            Dictionary(held.map { ($0.id, listedStates[$0.id] ?? state($0)) }, uniquingKeysWith: { first, _ in first })
+        } ?? [:]
+        guard listedAt != self.listedAt || states != listedStates || listedIDs != self.listedIDs else { return }
+        let relists = Self.reorders(Self.listing(sessions, at: self.listedAt), Self.listing(sessions, at: listedAt))
+            || Self.restates(sessions, from: listedStates, to: states, state: state)
+            || (listedIDs != self.listedIDs && sessions.contains { session in
+                (self.listedIDs?.contains(session.id) ?? true) != (listedIDs?.contains(session.id) ?? true)
+            })
         self.listedAt = listedAt
         listedStates = states
-        if leavesState || Self.reorders(before, Self.listing(sessions, at: listedAt)) { revision += 1 }
+        self.listedIDs = listedIDs
+        lastListing = nil
+        if relists { revision += 1 }
+    }
+
+    /// Whether a task is listed under another state with `new` held than with `old`: a task let go
+    /// from a state it has since left moves to its own.
+    private static func restates(_ sessions: [SessionRecord], from old: [UUID: TaskAttentionState],
+                                 to new: [UUID: TaskAttentionState],
+                                 state: ((SessionRecord) -> TaskAttentionState)?) -> Bool {
+        guard old != new else { return false }
+        return sessions.contains { session in
+            let before = old[session.id], after = new[session.id]
+            guard before != after else { return false }
+            let live = state?(session)
+            return (before ?? live) != (after ?? live)
+        }
     }
 
     /// Whether the sidebar can order `after` otherwise than `before`, the same tasks at other times:
@@ -739,11 +790,20 @@ final class SidebarOrderHold {
         return listedStates
     }
 
-    /// `sessions` as the sidebar orders them: a held task that has been active since the hold began
-    /// at the time it had then. The array is returned as it is when no held task moved.
+    /// `sessions` as the sidebar lists them: a held task that has been active since the hold began
+    /// at the time it had then, and while every task is held, none that appeared since. The array is
+    /// returned as it is when no held task moved and none is left out.
     func listing(_ sessions: [SessionRecord]) -> [SessionRecord] {
         _ = revision
-        return Self.listing(sessions, at: listedAt)
+        if let last = lastListing, last.sessions == sessions { return last.listed }
+        let listed: [SessionRecord]
+        if let listedIDs, sessions.contains(where: { !listedIDs.contains($0.id) }) {
+            listed = Self.listing(sessions.filter { listedIDs.contains($0.id) }, at: listedAt)
+        } else {
+            listed = Self.listing(sessions, at: listedAt)
+        }
+        lastListing = (sessions, listed)
+        return listed
     }
 
     private static func listing(_ sessions: [SessionRecord], at listedAt: [UUID: Date]) -> [SessionRecord] {

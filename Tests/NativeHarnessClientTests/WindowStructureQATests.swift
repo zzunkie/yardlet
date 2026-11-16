@@ -173,6 +173,24 @@ final class WindowStructureQATests: XCTestCase {
         if settles { host.settle(passes: 3, interval: 0.02) }
     }
 
+    /// Hands the window's hosting view the pointer at `point` (top-left coordinates), coming into the window first when
+    /// `entering`, and lets the window lay out what it changed. The real pointer stays where it is.
+    private func pointer<Content: View>(at point: NSPoint, entering: Bool = false, in host: WindowlessRender.Host<Content>) {
+        let hosting = host.hosting, number = host.window.windowNumber, now = ProcessInfo.processInfo.systemUptime
+        let location = NSPoint(x: point.x, y: host.window.frame.height - point.y)
+        if entering, let area = hosting.trackingAreas.first(where: { $0.options.contains(.mouseEnteredAndExited) }),
+           let entered = NSEvent.enterExitEvent(
+               with: .mouseEntered, location: location, modifierFlags: [], timestamp: now, windowNumber: number, context: nil,
+               eventNumber: 0, trackingNumber: Int(bitPattern: Unmanaged.passUnretained(area).toOpaque()), userData: nil) {
+            hosting.mouseEntered(with: entered)
+        }
+        if let moved = NSEvent.mouseEvent(with: .mouseMoved, location: location, modifierFlags: [], timestamp: now,
+                                          windowNumber: number, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) {
+            hosting.mouseMoved(with: moved)
+        }
+        host.settle(passes: 3, interval: 0.02)
+    }
+
     /// Drags from the middle of `control` by `offset` (top-left coordinates), in steps.
     private func drag<Content: View>(_ control: Control, by offset: CGSize, in host: WindowlessRender.Host<Content>) {
         let start = NSPoint(x: control.frame.midX, y: control.frame.midY)
@@ -1121,6 +1139,105 @@ final class WindowStructureQATests: XCTestCase {
             host.settle(passes: 3, interval: 0.02)
         }
         XCTAssertEqual(ViewBodyCensus[.mainWindow], 0, "Crossing the list's top drew the window again")
+    }
+
+    /// 2026-11-16 (a user reported that a click in the sidebar often opened another task than the one aimed at: with many
+    /// tasks at work, the list sorted itself again between seeing a row and clicking it): while the pointer is over the
+    /// list every row keeps its place, grouped by project or by state. A task active since, a task whose state changed and
+    /// a task started elsewhere wait for the pointer to leave, and a click opens the row the pointer is on. Off the list,
+    /// the rows go where their activity and states put them. Coming onto the list and leaving it with nothing changed draws
+    /// no window again. The pointer's events go to the window, into `.build/window-structure-qa/sidebar-pointer-hold-*.png`.
+    func testRowsKeepTheirPlacesWhileThePointerIsOverTheSidebar() async throws {
+        addTeardownBlock { @MainActor in UserDefaults.yardlet.removeObject(forKey: SidebarGrouping.defaultsKey) }
+        let directory = try WindowlessRender.directory(Self.folder)
+        for grouping in SidebarGrouping.allCases {
+            UserDefaults.yardlet.set(grouping.rawValue, forKey: SidebarGrouping.defaultsKey)
+            let root = FileManager.default.temporaryDirectory.appending(path: "yardlet-pointer-hold-\(UUID().uuidString)")
+            addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+            let cli = URL(filePath: "/usr/bin/true")
+            let now = Date()
+            var sessions: [SessionRecord] = []
+            var folders: [URL] = []
+            for project in 0..<6 {
+                let folder = root.appending(path: "project-\(project)")
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                folders.append(folder)
+                for task in 0..<4 {
+                    sessions.append(SessionRecord(harness: .codex, workspaceURL: folder, runtimeExecutableURL: cli,
+                        title: "Task \(project)-\(task)", updatedAt: now.addingTimeInterval(-Double(project * 10 + task) * 60),
+                        hasUnreadUpdate: project == 1 && task == 2))
+                }
+            }
+            let model = try sidebarModel(sessions, folders: folders, root: root, suite: "WindowStructureQA.pointerHold")
+            func task(_ title: String) throws -> SessionRecord { try XCTUnwrap(sessions.first { $0.title == title }) }
+            // The aimed-at task has an unread result, which opening it reads: grouped by state, that alone would move it.
+            let target = try task("Task 1-2")
+            let host = WindowlessRender.Host(window(model, .light, size: Self.size), size: Self.size, appearance: .light)
+            defer { host.close() }
+            orderIn(host)
+            // The list scrolls to the task shown at launch at its next update, which a window off every screen makes only
+            // when the list's rows change: a row marked unread and read again makes one now.
+            await model.store.markUnread(id: sessions[0].id)
+            host.settle(passes: 6, interval: 0.03)
+            await model.store.markRead(id: sessions[0].id)
+            host.settle(passes: 6, interval: 0.03)
+            /// The task rows in view, by title, at their tops.
+            func rows() -> [String: CGFloat] {
+                Dictionary(elements(in: host).compactMap { control -> (String, CGFloat)? in
+                    let title = String(control.label.prefix { $0 != "," })
+                    guard title.hasPrefix("Task ") || title == "Started elsewhere", control.frame.height > 0,
+                          control.frame.minY < Self.size.height else { return nil }
+                    return (title, control.frame.minY)
+                }, uniquingKeysWith: { first, _ in first })
+            }
+            let before = rows()
+            let aimed = try XCTUnwrap(before[target.title], "\(grouping): the task's row is not in view")
+            let point = NSPoint(x: 120, y: aimed + 10)
+            pointer(at: point, entering: true, in: host)
+            try WindowlessRender.writePNG(host.capture().bitmap,
+                                          to: directory.appending(path: "sidebar-pointer-hold-\(grouping.rawValue)-before.png"))
+
+            // Under the pointer: a task far down becomes the most recently active, another starts working, and a task is
+            // started elsewhere in a project the list shows.
+            _ = try await model.store.moveLastActivity(id: task("Task 4-3").id, forwardTo: Date())
+            try await model.store.updateSession(id: task("Task 5-0").id, status: .running)
+            try await model.store.createSession(harness: .codex, workspaceURL: folders[3], runtimeExecutableURL: cli,
+                                                title: "Started elsewhere", selectsSession: false)
+            host.settle(passes: 12, interval: 0.03)
+            XCTAssertEqual(rows(), before, "\(grouping): rows moved under the pointer")
+            try WindowlessRender.writePNG(host.capture().bitmap,
+                                          to: directory.appending(path: "sidebar-pointer-hold-\(grouping.rawValue)-held.png"))
+
+            // The click opens the row the pointer is on, and opening it, which reads its result, moves nothing either.
+            mouse(.leftMouseDown, at: point, in: host)
+            mouse(.leftMouseUp, at: point, in: host)
+            XCTAssertEqual(model.splits.selection, .session(target.id), "\(grouping): the click opened another task")
+            await host.settle(until: { model.store.sessions.first { $0.id == target.id }?.hasUnreadUpdate == false })
+            host.settle(passes: 6, interval: 0.03)
+            XCTAssertEqual(rows(), before, "\(grouping): opening the task moved rows under the pointer")
+
+            // Off the list, the rows go where their activity and states put them, the task started elsewhere with them.
+            pointer(at: NSPoint(x: ParityTheme.sidebarWidth + 300, y: 300), in: host)
+            host.settle(passes: 12, interval: 0.03)
+            let after = rows()
+            XCTAssertNotNil(after["Started elsewhere"], "\(grouping): the task started elsewhere is not listed")
+            XCTAssertNotNil(after["Task 4-3"], "\(grouping): the active task did not come up into view")
+            let first = after.min { $0.value < $1.value }?.key
+            // The newest task's project first; grouped by state, Working above the rest.
+            XCTAssertEqual(first, grouping == .project ? "Started elsewhere" : "Task 5-0", "\(grouping): the list did not sort")
+            try WindowlessRender.writePNG(host.capture().bitmap,
+                                          to: directory.appending(path: "sidebar-pointer-hold-\(grouping.rawValue)-after.png"))
+
+            // Onto the list and off it again with nothing changed: the window is not drawn again.
+            ViewBodyCensus.isEnabled = true
+            ViewBodyCensus.reset()
+            defer { ViewBodyCensus.isEnabled = false; ViewBodyCensus.reset() }
+            for _ in 0..<3 {
+                pointer(at: point, in: host)
+                pointer(at: NSPoint(x: ParityTheme.sidebarWidth + 300, y: 300), in: host)
+            }
+            XCTAssertEqual(ViewBodyCensus[.mainWindow], 0, "\(grouping): the pointer coming and going drew the window again")
+        }
     }
 
     /// A task's state changing in a sidebar of 3,000 tasks in 30 projects, grouped by project and by state: a task
