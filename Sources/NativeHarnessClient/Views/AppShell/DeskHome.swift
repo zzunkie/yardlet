@@ -32,10 +32,25 @@ struct DeskHeaderPlacement: ViewModifier {
                 .padding(.bottom, 10)
         } else {
             content
-                .padding(.horizontal, 30)
+                .modifier(DeskColumnsPlacement())
                 .padding(.top, 14)
                 .padding(.bottom, 10)
         }
+    }
+}
+
+/// The wide desk's columns, and the header over them: `margin` from the home's sides and no wider than the
+/// projects' grid, so a wider home keeps them in its middle rather than stretching their lines.
+struct DeskColumnsPlacement: ViewModifier {
+    static let margin: CGFloat = 30
+    /// The width the columns and their margins take at most.
+    static let maxWidth = NewTaskHomeLayout.gridWidth + 2 * margin
+
+    func body(content: Content) -> some View {
+        content
+            .frame(maxWidth: NewTaskHomeLayout.gridWidth)
+            .padding(.horizontal, Self.margin)
+            .frame(maxWidth: .infinity)
     }
 }
 
@@ -155,6 +170,9 @@ struct DeskHome<Switch: View, Bottom: View>: View {
 
     private var calendarOn: Bool { calendarCenter?.isEnabled == true }
 
+    /// The home's width the wide layouts share among their columns: no more than the columns stand in.
+    private var columnsWidth: CGFloat { min(size.width, DeskColumnsPlacement.maxWidth) }
+
     /// The desk as it stands, its lines in their places, with today's events while the calendar is on.
     private func projected(today: DateInterval) -> Desk {
         var desk = kept(DeskProjection.desk(
@@ -190,9 +208,9 @@ struct DeskHome<Switch: View, Bottom: View>: View {
                     }
                     .padding(.bottom, 16)
                 }
-                .frame(width: max(300, (size.width * 0.27).rounded()))
+                .frame(width: max(300, (columnsWidth * 0.27).rounded()))
             }
-            .padding(.horizontal, 30)
+            .modifier(DeskColumnsPlacement())
         }
     }
 
@@ -201,19 +219,17 @@ struct DeskHome<Switch: View, Bottom: View>: View {
     private func zones(_ desk: Desk) -> some View {
         VStack(spacing: 0) {
             header(desk)
-                .padding(.horizontal, 30)
-                .padding(.top, 14)
-                .padding(.bottom, 10)
+                .modifier(DeskHeaderPlacement(width: size.width))
             HStack(alignment: .top, spacing: 28) {
                 DeskScroll { keyboardZones(desk) { waitingZone(desk, detailLines: 3) }.padding(.bottom, 16) }
                     .frame(maxWidth: .infinity)
                 DeskScroll { runningZone(desk, showsMembers: true).padding(.bottom, 16) }
-                    .frame(width: max(280, (size.width * 0.26).rounded()))
+                    .frame(width: max(280, (columnsWidth * 0.26).rounded()))
                 todayZone(desk, onAxis: true)
-                    .frame(width: max(210, (size.width * 0.18).rounded()))
+                    .frame(width: max(210, (columnsWidth * 0.18).rounded()))
                     .frame(maxHeight: .infinity, alignment: .top)
             }
-            .padding(.horizontal, 30)
+            .modifier(DeskColumnsPlacement())
             bottomPane
         }
     }

@@ -122,7 +122,9 @@ calendar while the calendar is on.
   answered yet says "Not replied", kept when the line is too narrow for the rest. The header's and the zone's count of
   what is left today counts the runs to come and the timed events that have not ended.
 - With the calendar on and the home at least 1,200 points wide (`DeskLayout.zones`), the desk stands as three zones:
-  what waits, what runs and just finished, and today on a time axis (`DeskTimeAxis`). Unread mail folds to one line
+  what waits, what runs and just finished, and today on a time axis (`DeskTimeAxis`). Like the desk's two columns,
+  they stand no wider than the Projects view's grid (1,360 points between 30-point margins), so a wider home keeps
+  them in its middle rather than stretching their lines (`DeskColumnsPlacement`). Unread mail folds to one line
   above it and all-day events stay lines. The axis spans 9:00 to 23:00, widened to today's earliest and latest items;
   events sit at their times in their calendars' colors, side by side where they overlap; an invitation not answered
   yet is outlined dashed; runs are dashed with a clock; a red line marks the time now. A column too short for it
