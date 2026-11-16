@@ -198,11 +198,12 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   Yardlet is behind flashes the main window's taskbar button until it comes forward, as the Mac bounces its Dock icon.
   An app without a package registers at launch (`AppNotificationManager.Register()`), which writes its entry under
   `HKCU\Software\Classes` (`AppUserModelId` and the click's COM activator under `CLSID`) and takes its name and icon
-  from its Start menu shortcut, else from its executable; `UnregisterAll()` removes the entry. A click after the app
+  from its Start menu shortcut, else from its executable; removing the app calls `UnregisterAll()`, which removes the
+  entry ("Installing and updating the Windows app" below). A click after the app
   quit opens it without choosing the task. The Windows App SDK offers app notifications only to a process that is not
   elevated (`AppNotificationManager.IsSupported()`, confirmed in its source), so Yardlet run as administrator shows
   none, nor does the app on a GitHub Actions runner, whose processes run elevated (its event log says
-  `notifications: not supported`).
+  `notifications: not supported`) unless the install check opens it at medium integrity.
 - **Language.** The app's words follow Windows' display language, as WinUI's own controls do. Foundation outside
   Apple's platforms looks for the preferred languages only in `AppleLanguages`, which nothing writes on Windows, so
   it answered in English on a Korean Windows while WinUI drew Settings and its switches in Korean (seen on a PC).
@@ -423,7 +424,8 @@ its dependencies from System32, so a build run from its build folder has none an
 runs first, before the Windows App Runtime (`XamlApplication.willStart()`): it answers an installer's hook (installed,
 updated, replaced, about to be removed) and ends the process, as Setup.exe and Update.exe wait for it to, after the
 install and update hooks have put the Windows App Runtime's packages in place within the time Velopack gives them
-(25 of the install hook's 30 seconds, 12 of the update hook's 15); it
+(25 of the install hook's 30 seconds, 12 of the update hook's 15), and the uninstall hook has let go of the app's
+notifications (45 of its 60 seconds); it
 puts in an update downloaded earlier that is not yet in place and opens the app again; and it gives the process the
 AppUserModelID of the app's shortcut (`velopack.YardletApp`). An installed app whose package names a feed then does
 what Sparkle does on the Mac: it looks for an update when it opens and once a day, downloads one in the background,
@@ -449,8 +451,13 @@ checked out at that tag and the .NET SDK for `vpk`, but no Swift, `pack.ps1 -Bin
 zip, the package and `releases.win.json`, which go on the release beside the Mac's disk images. `scripts/release.sh`,
 which prepares the Mac's, does not do this part.
 
-Removing the app leaves `%LOCALAPPDATA%\Yardlet`, its keys in Credential Manager, the firewall's permission and the
-notifications' registration under `HKCU\Software\Classes`, as moving the Mac app to the Trash leaves its data, and
+Removing the app takes its notifications with it: before Velopack deletes the app, its uninstall hook clears what
+the app left in Windows' notification center and lets go of its notifications' registration, the
+`HKCU\Software\Classes\AppUserModelId\velopack.YardletApp` entry, the activator's `CLSID` and the notification
+platform's record of the app (`Platform/Windows/WindowsNotifications.swift`), since none of it means anything once the
+app is gone. The Windows App SDK offers notifications only to a process that is not elevated, so an app only ever run
+elevated has none to take, and a removal run elevated leaves them. Removing the app leaves `%LOCALAPPDATA%\Yardlet`, its
+keys in Credential Manager and the firewall's permission, as moving the Mac app to the Trash leaves its data, and
 Velopack's log of its installs, updates and removal, `%LOCALAPPDATA%\velopack\velopack_YardletApp.log`. The chats'
 folders, `%USERPROFILE%\Documents\Yardlet\<date>\<name>`, stay as the person's own files, which the harnesses worked
 in, as `~/Documents/Yardlet` stays on the Mac. The Windows App Runtime's packages stay too: they are Microsoft's,
@@ -471,8 +478,13 @@ must download it and, once its window is closed, hand it to the updater, after w
 second; opened once more it must say so and find nothing newer. It packs what the run gathered (`windows-app-bin`), as
 a computer that holds the certificate does, and signs the second version with a certificate made for the check and
 taken out of the store again: its Setup.exe and the executable the update puts in place must carry that signature,
-and the Windows App SDK's bootstrapper must keep Microsoft's. Removing it must answer the uninstall hook and take
-the installed app, the shortcut and the Apps entry, and leave the data folder as it was.
+and the Windows App SDK's bootstrapper must keep Microsoft's. Every process on the runner is elevated, where the
+Windows App SDK has no notifications, so the app is then opened at medium integrity, as Explorer opens it for a
+person, and must register for them, writing its `AppUserModelId` entry and its activator's `CLSID`; a notification is
+posted under its AppUserModelID. Removing it, also at medium integrity, must answer the uninstall hook, which must say
+it removed the notifications and the registration, and take the installed app, the shortcut, the Apps entry and both
+registry entries, and leave the data folder as it was. Where the runner lets the notification center be read, the
+notification posted must be gone too.
 
 ## The check that blocks new violations
 

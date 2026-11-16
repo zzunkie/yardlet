@@ -3,6 +3,7 @@ import Foundation
 import WinAppSDK
 @preconcurrency import WindowsFoundation
 import WinSDK
+import WinUIApplication
 
 /// System notifications in the Windows app, through the Windows App SDK's app notifications
 /// (`AppNotificationManager`), as the Mac's go through UserNotifications. The engine decides when to post, by the
@@ -15,8 +16,8 @@ import WinSDK
 /// System › Notifications, which `authorization()` reads. An app without a package registers at launch, handing
 /// Windows the way back to the running app for a click; its name and icon come from its Start menu shortcut, else
 /// from its executable. Registering writes the app's entry under `HKCU\Software\Classes` (`AppUserModelId` and the
-/// activator's `CLSID`), which `AppNotificationManager.UnregisterAll()` removes. A click while the app runs comes to
-/// `NotificationInvoked`; a click after it quit opens it without choosing the task.
+/// activator's `CLSID`), which removing the app takes away (`WindowsNotificationRegistration`). A click while the app
+/// runs comes to `NotificationInvoked`; a click after it quit opens it without choosing the task.
 @MainActor
 final class LocalSystemNotificationCenter: SystemNotificationCenter {
     /// Whether the app registered, once it tried: one try a launch, so a failed one adds no second click handler.
@@ -134,6 +135,91 @@ final class LocalSystemNotificationCenter: SystemNotificationCenter {
     /// The tag a notification is withdrawn by: Windows takes at most 64 characters, so the identifier's digest.
     private static func tag(_ identifier: String) -> String {
         SHA256.hash(data: Data(identifier.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+/// What notifications leave for this Windows user, taken away when the app is removed, in Velopack's uninstall hook
+/// (`VelopackStart`), as its shortcut and its entry in Settings › Apps are: the app's notifications still in Windows'
+/// notification center, then its registration, through `AppNotificationManager.UnregisterAll()`, which removes the
+/// entry under `HKCU\Software\Classes\AppUserModelId`, the activator's `CLSID` and the notification platform's record
+/// of the app. The Windows App SDK names the app by the process's AppUserModelID, which Velopack sets only after its
+/// hooks have run, so the hook sets the one the app registered under first; without one the SDK would name the app by
+/// its executable's path and write an entry for that. Nothing is asked of the SDK when the app never registered, since
+/// `UnregisterAll()` would then write the entry before it fails. The Windows App SDK has notifications only for a
+/// process that is not elevated, so an app run elevated registered nothing, and a removal run elevated removes nothing.
+enum WindowsNotificationRegistration {
+    /// Takes the notifications and the registration away, waiting at most `seconds`, and says what it did, for the
+    /// QA log.
+    static func remove(appUserModelID: String, within seconds: Int) -> String {
+        guard isRegistered(appUserModelID) else { return "notifications: none registered" }
+        let outcome = Outcome()
+        let finished = DispatchSemaphore(value: 0)
+        // On a thread of its own in the multithreaded apartment, as the runtime's packages are added
+        // (`WindowsAppRuntimeDeployment`), so the hook can give up waiting in time.
+        let worker = Thread {
+            _ = RoInitialize(RO_INIT_MULTITHREADED)
+            outcome.set(unregister(appUserModelID, within: seconds))
+            RoUninitialize()
+            finished.signal()
+        }
+        worker.start()
+        guard finished.wait(timeout: .now() + .seconds(seconds)) == .success else {
+            return "notifications: still removing after \(seconds) s"
+        }
+        return outcome.words
+    }
+
+    /// Whether an app registered for notifications under `appUserModelID` for this user.
+    private static func isRegistered(_ appUserModelID: String) -> Bool {
+        var key: HKEY?
+        let opened = ("Software\\Classes\\AppUserModelId\\" + appUserModelID).withCString(encodedAs: UTF16.self) {
+            RegOpenKeyExW(HKEY_CURRENT_USER, $0, 0, REGSAM(KEY_QUERY_VALUE), &key)
+        }
+        guard opened == ERROR_SUCCESS else { return false }
+        RegCloseKey(key)
+        return true
+    }
+
+    private static func unregister(_ appUserModelID: String, within seconds: Int) -> String {
+        do {
+            try XamlApplication.startWindowsAppRuntimeWithoutWindow()
+        } catch {
+            return "notifications: not removed: \(error)"
+        }
+        let named = appUserModelID.withCString(encodedAs: UTF16.self) { SetCurrentProcessExplicitAppUserModelID($0) }
+        guard named >= 0 else { return "notifications: not removed: SetCurrentProcessExplicitAppUserModelID \(named)" }
+        guard (try? AppNotificationManager.isSupported()) == true, let manager = AppNotificationManager.default else {
+            return "notifications: not supported"
+        }
+        var words: [String] = []
+        do {
+            if let removal = try manager.removeAllAsync() {
+                let deadline = Date().addingTimeInterval(Double(seconds) / 2)
+                while removal.status == .started, Date() < deadline { Sleep(50) }
+                try removal.getResults()
+            }
+            words.append("removed the notifications")
+        } catch {
+            words.append("notifications not removed: \(error)")
+        }
+        do {
+            try manager.unregisterAll()
+            words.append("unregistered")
+        } catch {
+            words.append("not unregistered: \(error)")
+        }
+        return "notifications: " + words.joined(separator: ", ")
+    }
+
+    private final class Outcome: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored = ""
+
+        var words: String { lock.withLock { stored } }
+
+        func set(_ words: String) {
+            lock.withLock { stored = words }
+        }
     }
 }
 

@@ -8,9 +8,10 @@
 # download it and, once its window is closed, hand it to Velopack's updater, which puts it in place; opened once
 # more it must be that version. The next version is signed with a certificate made for the check, as a release is
 # signed with Yardlet's (vpk's signtool with a certificate in this user's store): its Setup.exe and the executable it
-# installs must carry that signature, and the Windows App SDK's bootstrapper keeps Microsoft's. Removing it must take the installed folder, the shortcut and the entry in
-# Settings > Apps, and leave %LOCALAPPDATA%\Yardlet, the app's own data, as it was. It writes the event logs,
-# Velopack's logs, screenshots and a summary to -OutDirectory.
+# installs must carry that signature, and the Windows App SDK's bootstrapper keeps Microsoft's. Opened as a person opens it,
+# not elevated, the app must register for notifications. Removing it, also not elevated, must take the installed folder,
+# the shortcut, the entry in Settings > Apps and the notifications' registration, and leave %LOCALAPPDATA%\Yardlet, the
+# app's own data, as it was. It writes the event logs, Velopack's logs, screenshots and a summary to -OutDirectory.
 param(
     [Parameter(Mandatory)] [string] $Binaries,
     [Parameter(Mandatory)] [string] $OutDirectory,
@@ -26,12 +27,86 @@ $Name = 'install'
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 Add-Type @'
 using System;
+using System.ComponentModel;
 using System.Runtime.InteropServices;
 public static class InstalledFile {
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     static extern uint ExtractIconEx(string file, int index, IntPtr[] large, IntPtr[] small, uint count);
     // How many icons the file carries.
     public static uint Icons(string file) { return ExtractIconEx(file, -1, null, null, 0); }
+}
+// Starts a program as this user at medium integrity, as Explorer starts one for a person: every process on the runner is
+// elevated, and the Windows App SDK offers notifications only to a process that is not. The token is this process's own
+// with its integrity lowered, as Microsoft's "Designing Applications to Run at a Low Integrity Level" lowers it, and the
+// program inherits this process's environment. It starts suspended until its handle is held, so its exit code stays
+// readable however soon it ends.
+public static class MediumIntegrity {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct StartupInfo {
+        public int cb; public string reserved; public string desktop; public string title;
+        public int x; public int y; public int width; public int height; public int columns; public int rows;
+        public int fillAttribute; public int flags; public short showWindow; public short reserved2Size;
+        public IntPtr reserved2; public IntPtr input; public IntPtr output; public IntPtr error;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct ProcessInformation { public IntPtr process; public IntPtr thread; public int processId; public int threadId; }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MandatoryLabel { public IntPtr sid; public uint attributes; }
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern bool DuplicateTokenEx(IntPtr token, uint access, IntPtr attributes, int level, int type, out IntPtr copy);
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern bool ConvertStringSidToSid(string text, out IntPtr sid);
+    [DllImport("advapi32.dll")]
+    static extern int GetLengthSid(IntPtr sid);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern bool SetTokenInformation(IntPtr token, int infoClass, ref MandatoryLabel label, int length);
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern bool CreateProcessAsUser(IntPtr token, string application, string commandLine, IntPtr processAttributes,
+        IntPtr threadAttributes, bool inheritHandles, uint flags, IntPtr environment, string directory,
+        ref StartupInfo startup, out ProcessInformation information);
+    [DllImport("kernel32.dll")]
+    static extern IntPtr GetCurrentProcess();
+    [DllImport("kernel32.dll")]
+    static extern uint ResumeThread(IntPtr thread);
+    [DllImport("kernel32.dll")]
+    static extern bool CloseHandle(IntPtr handle);
+    [DllImport("kernel32.dll")]
+    static extern IntPtr LocalFree(IntPtr memory);
+
+    public static System.Diagnostics.Process Start(string commandLine, string directory) {
+        IntPtr token, copy, sid;
+        // TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_QUERY and TOKEN_ADJUST_DEFAULT.
+        if (!OpenProcessToken(GetCurrentProcess(), 0x0001 | 0x0002 | 0x0008 | 0x0080, out token)) throw new Win32Exception();
+        // MAXIMUM_ALLOWED, as a primary token (SecurityImpersonation, TokenPrimary).
+        bool copied = DuplicateTokenEx(token, 0x02000000, IntPtr.Zero, 2, 1, out copy);
+        CloseHandle(token);
+        if (!copied) throw new Win32Exception();
+        try {
+            // Medium integrity, S-1-16-8192; SE_GROUP_INTEGRITY; TokenIntegrityLevel.
+            if (!ConvertStringSidToSid("S-1-16-8192", out sid)) throw new Win32Exception();
+            var label = new MandatoryLabel { sid = sid, attributes = 0x20 };
+            bool lowered = SetTokenInformation(copy, 25, ref label, Marshal.SizeOf(label) + GetLengthSid(sid));
+            LocalFree(sid);
+            if (!lowered) throw new Win32Exception();
+            var startup = new StartupInfo();
+            startup.cb = Marshal.SizeOf(startup);
+            ProcessInformation information;
+            // CREATE_SUSPENDED.
+            if (!CreateProcessAsUser(copy, null, commandLine, IntPtr.Zero, IntPtr.Zero, false, 0x4, IntPtr.Zero, directory,
+                                     ref startup, out information)) throw new Win32Exception();
+            var process = System.Diagnostics.Process.GetProcessById(information.processId);
+            GC.KeepAlive(process.Handle);
+            ResumeThread(information.thread);
+            CloseHandle(information.thread);
+            CloseHandle(information.process);
+            return process;
+        } finally {
+            CloseHandle(copy);
+        }
+    }
 }
 '@
 
@@ -41,6 +116,10 @@ $executable = Join-Path $installRoot 'current\NativeHarnessClient.exe'
 $shortcut = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Yardlet.lnk'
 $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\YardletApp'
 $data = Join-Path $env:LOCALAPPDATA 'Yardlet'
+# The AppUserModelID Velopack gives the installed app, which its notifications are registered under, and the entry
+# registering writes for it.
+$appUserModelID = 'velopack.YardletApp'
+$appUserModelIDKey = "HKCU:\Software\Classes\AppUserModelId\$appUserModelID"
 $script:process = $null
 
 function Save-Screen([string] $file) {
@@ -88,13 +167,17 @@ function Installed-Version {
 }
 
 # Opens the installed app with its own event log, waits for its window and for the line its updater writes once
-# it has looked, and returns that line. The app stays open.
-function Open-Installed([string] $label) {
+# it has looked, and returns that line. The app stays open. With -Medium it is not elevated (MediumIntegrity).
+function Open-Installed([string] $label, [switch] $Medium) {
     $log = Join-Path $OutDirectory "$Name-$label-events.log"
     $env:YARDLET_QA_EVENT_LOG = $log
-    $script:process = Start-Process -FilePath $executable -WorkingDirectory (Split-Path $executable) -PassThru `
-        -RedirectStandardError (Join-Path $OutDirectory "$Name-$label-stderr.txt") `
-        -RedirectStandardOutput (Join-Path $OutDirectory "$Name-$label-stdout.txt")
+    if ($Medium) {
+        $script:process = [MediumIntegrity]::Start("`"$executable`"", (Split-Path $executable))
+    } else {
+        $script:process = Start-Process -FilePath $executable -WorkingDirectory (Split-Path $executable) -PassThru `
+            -RedirectStandardError (Join-Path $OutDirectory "$Name-$label-stderr.txt") `
+            -RedirectStandardOutput (Join-Path $OutDirectory "$Name-$label-stdout.txt")
+    }
     # Its handle, taken while it runs, keeps the exit code readable once it has quit.
     [void]$script:process.Handle
     $shown =Wait-For { $script:process.Refresh(); $script:process.HasExited -or $script:process.MainWindowHandle -ne [IntPtr]::Zero } 90
@@ -230,19 +313,67 @@ if (-not (Get-Content (Join-Path $OutDirectory "$Name-updated-events.log") | Whe
 }
 Close-Installed 'updated'
 
-# Removed, as Settings > Apps removes it. The app wrote to its data folder while it was open; removing it must
-# change nothing there. Any Yardlet still running is recorded, since one would hold the data folder's files.
+# Notifications, as a person's app has them: opened not elevated, the app registers for them as it starts, which writes
+# its AppUserModelID's entry and the CLSID of its activator under HKCU\Software\Classes. A notification is then posted
+# under its AppUserModelID for the notification center to keep, where Windows lets one be read on the runner.
+$looked = Open-Installed 'registered' -Medium
+if ("$looked" -ne 'update: none') { Finish "registered: $looked" }
+$summary.notifications = (Get-Content (Join-Path $OutDirectory "$Name-registered-events.log") | Where-Object { $_ -like 'notifications: *' }) -join ' | '
+if ($summary.notifications -ne 'notifications: registered') { Finish "registered: $($summary.notifications)" }
+$activator = (Get-ItemProperty $appUserModelIDKey -ErrorAction SilentlyContinue).CustomActivator
+$summary.activator = "$activator"
+if (-not $activator -or -not (Test-Path "HKCU:\Software\Classes\CLSID\$activator")) { Finish 'registered: no AppUserModelId or CLSID entry' }
+Close-Installed 'registered'
+# The notifications Windows keeps for the app, or the error reading them gave, through Windows PowerShell, which reaches
+# Windows' notification API; with -Post one is posted first.
+function Notification-Count([switch] $Post) {
+    $command = @"
+[void][Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+[void][Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime]
+if (`$$($Post.IsPresent)) {
+    `$xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+    `$xml.LoadXml('<toast><visual><binding template="ToastGeneric"><text>Yardlet install check</text></binding></visual></toast>')
+    [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('$appUserModelID').Show([Windows.UI.Notifications.ToastNotification]::new(`$xml))
+    Start-Sleep -Seconds 2
+}
+@([Windows.UI.Notifications.ToastNotificationManager]::History.GetHistory('$appUserModelID')).Count
+"@
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+    "$(powershell.exe -NoProfile -EncodedCommand $encoded 2>&1 | Select-Object -Last 1)"
+}
+$summary.notificationsKept = Notification-Count -Post
+
+# Removed, as Settings > Apps removes it, not elevated, so its uninstall hook can let go of the notifications. The app
+# wrote to its data folder while it was open; removing it must change nothing there. Any Yardlet still running is
+# recorded, since one would hold the data folder's files.
 $summary.running = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '*NativeHarnessClient.exe' } |
     ForEach-Object { "$($_.Id) $($_.Path)" }) -join '; '
 $before = Data-Listing
 $updater = Join-Path $installRoot 'Update.exe'
-$remover = Start-Process -FilePath $updater -ArgumentList 'uninstall', '--silent', '--log', (Join-Path $OutDirectory "$Name-uninstall.log") -Wait -PassThru
+$uninstallLog = Join-Path $OutDirectory "$Name-uninstall.log"
+$uninstallEvents = Join-Path $OutDirectory "$Name-uninstall-events.log"
+New-Item -ItemType File -Force $uninstallEvents | Out-Null
+$env:YARDLET_QA_EVENT_LOG = $uninstallEvents
+$remover = [MediumIntegrity]::Start("`"$updater`" uninstall --silent --log `"$uninstallLog`"", (Get-Location).Path)
+if (-not $remover.WaitForExit(120000)) { Finish 'uninstall did not end' }
 if ($remover.ExitCode -ne 0) { Finish "uninstall ended with $($remover.ExitCode)" }
-$summary.uninstallHook = [bool](Select-String -Path (Join-Path $OutDirectory "$Name-uninstall.log") -Pattern 'Hook executed successfully' -Quiet)
+$summary.uninstallHook = [bool](Select-String -Path $uninstallLog -Pattern 'Hook executed successfully' -Quiet)
 if (-not $summary.uninstallHook) { Finish 'the uninstall hook did not end at once' }
+$summary.uninstallNotifications = (Get-Content $uninstallEvents -ErrorAction SilentlyContinue | Where-Object { $_ -like 'notifications: *' }) -join ' | '
 if (-not (Wait-For { -not (Test-Path $executable) } 30)) { Finish 'the app is still installed' }
 if (Test-Path $shortcut) { Finish 'the Start menu shortcut is left' }
 if (Get-ItemProperty $uninstallKey -ErrorAction SilentlyContinue) { Finish 'the entry in Settings > Apps is left' }
+if ($summary.uninstallNotifications -ne 'notifications: removed the notifications, unregistered') {
+    Finish "uninstall: $($summary.uninstallNotifications)"
+}
+if (Test-Path $appUserModelIDKey) { Finish 'the notifications'' AppUserModelId entry is left' }
+if (Test-Path "HKCU:\Software\Classes\CLSID\$activator") { Finish 'the notifications'' CLSID entry is left' }
+# A count read before and after: a notification the notification center kept must be gone. Where Windows does not let
+# the runner read them, the summary says so and the registration above is the check.
+$summary.notificationsLeft = Notification-Count
+if (($summary.notificationsKept -as [int]) -ge 1 -and ($summary.notificationsLeft -as [int]) -ge 1) {
+    Finish 'notifications are left in the notification center'
+}
 if ((Data-Listing) -ne $before) { Finish 'removing changed the data folder' }
 $summary.left = @(Get-ChildItem $installRoot -Force -ErrorAction SilentlyContinue | ForEach-Object Name) -join ', '
 Finish 'installed, updated and removed'

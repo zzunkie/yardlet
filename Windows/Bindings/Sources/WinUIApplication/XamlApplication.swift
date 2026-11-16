@@ -91,18 +91,23 @@ open class XamlApplication: Application, IXamlMetadataProvider {
     private static func startWindowsAppRuntime() throws {
         let initialized = RoInitialize(RO_INIT_SINGLETHREADED)
         guard initialized >= 0 else { throw StartFailure.call("RoInitialize", initialized) }
+        try bootstrap(MddBootstrapInitializeOptions_OnNoMatch_ShowUI)
+    }
+
+    /// Starts the Windows App Runtime for a process that ends without a window, such as an installer's hook: through
+    /// the bootstrapper `main()` uses, without its offer to install a runtime this PC lacks. COM is the caller's.
+    public static func startWindowsAppRuntimeWithoutWindow() throws {
+        try bootstrap(MddBootstrapInitializeOptions_None)
+    }
+
+    private static func bootstrap(_ options: MddBootstrapInitializeOptions) throws {
         // The Windows App SDK release the bindings were generated from; a stable release has no tag. From
         // 2.0 the bootstrapper reads only the major version, so the runtime must also be at least the
         // version the bindings were generated from, which the WinUI types they call were in.
         var minimum = PACKAGE_VERSION()
         minimum.Version = UInt64(WINDOWSAPPSDK_RUNTIME_VERSION_UINT64)
         let result = "".withCString(encodedAs: UTF16.self) { tag in
-            MddBootstrapInitialize2(
-                UInt32(WINDOWSAPPSDK_RELEASE_MAJORMINOR),
-                tag,
-                minimum,
-                MddBootstrapInitializeOptions_OnNoMatch_ShowUI
-            )
+            MddBootstrapInitialize2(UInt32(WINDOWSAPPSDK_RELEASE_MAJORMINOR), tag, minimum, options)
         }
         guard result >= 0 else { throw StartFailure.call("MddBootstrapInitialize2", result) }
     }

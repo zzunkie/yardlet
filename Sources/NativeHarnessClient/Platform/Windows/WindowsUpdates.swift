@@ -76,12 +76,21 @@ final class WindowsUpdater {
 ///
 /// The install and update hooks put the Windows App Runtime's packages the app carries in place
 /// (`WindowsAppRuntimeDeployment`) while Setup shows its progress, inside the time Velopack gives a hook: 30 seconds
-/// for the install hook, and less for the update hook, which its documentation gives 15.
+/// for the install hook, and less for the update hook, which its documentation gives 15. The uninstall hook, which
+/// has 60 seconds, takes away the app's notifications and their registration (`WindowsNotificationRegistration`).
 enum VelopackStart {
+    /// The AppUserModelID Velopack gives the installed app, `velopack.<pack id>` (its `locator.rs`) with
+    /// `pack.ps1`'s pack id, and which its notifications are registered under.
+    static let appUserModelID = "velopack.YardletApp"
+
     static func run() {
         guard let library = VelopackLibrary.shared else { return }
         library.setHookAfterInstall { _, _ in VelopackStart.deployRuntime(within: 25) }
         library.setHookAfterUpdate { _, _ in VelopackStart.deployRuntime(within: 12) }
+        library.setHookBeforeUninstall { _, _ in
+            QAEventLog.append(WindowsNotificationRegistration.remove(appUserModelID: VelopackStart.appUserModelID,
+                                                                     within: 45))
+        }
         library.appRun(nil)
     }
 
@@ -205,6 +214,7 @@ final class VelopackLibrary: @unchecked Sendable {
     let appRun: Free
     let setHookAfterInstall: SetHook
     let setHookAfterUpdate: SetHook
+    let setHookBeforeUninstall: SetHook
     let newSourceGitHub: NewSourceGitHub
     let freeSource: Free
     let newUpdateManager: NewUpdateManager
@@ -234,6 +244,7 @@ final class VelopackLibrary: @unchecked Sendable {
         guard let appRun = load("vpkc_app_run", as: Free.self),
               let setHookAfterInstall = load("vpkc_app_set_hook_after_install", as: SetHook.self),
               let setHookAfterUpdate = load("vpkc_app_set_hook_after_update", as: SetHook.self),
+              let setHookBeforeUninstall = load("vpkc_app_set_hook_before_uninstall", as: SetHook.self),
               let newSourceGitHub = load("vpkc_new_source_github", as: NewSourceGitHub.self),
               let freeSource = load("vpkc_free_source", as: Free.self),
               let newUpdateManager = load("vpkc_new_update_manager", as: NewUpdateManager.self),
@@ -252,6 +263,7 @@ final class VelopackLibrary: @unchecked Sendable {
         self.appRun = appRun
         self.setHookAfterInstall = setHookAfterInstall
         self.setHookAfterUpdate = setHookAfterUpdate
+        self.setHookBeforeUninstall = setHookBeforeUninstall
         self.newSourceGitHub = newSourceGitHub
         self.freeSource = freeSource
         self.newUpdateManager = newUpdateManager
