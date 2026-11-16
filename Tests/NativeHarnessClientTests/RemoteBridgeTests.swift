@@ -965,19 +965,38 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertEqual(snapshot.tasks.map(\.steers), [true, true, true])
         XCTAssertEqual(snapshot.tasks.map(\.acceptsImages), [true, true, true])
 
-        // A tab the agent handed to the person is a wait on the phone, with the bar's two answers (§15.18).
+        // A tab the agent handed to the person is a wait on the phone, with the bar's two answers (§15.18). The tab's own
+        // wait has already marked the task waiting, as the browser host tells it before the handoff is recorded.
+        func showWait(_ wait: BrowserTaskWait?) {
+            model.browserWaits[child.id] = wait
+            model.refreshAttentionDetail(for: child.id)
+        }
+        showWait(BrowserTaskWait(wait: BrowserPersonWait(kind: .handoff, id: "handoff-1"), tabKey: UUID(), site: nil))
         model.browserHandoffWaits[child.id] = [BrowserHandoffWait(notice: "yardlet-handoff-1", tabKey: nil,
                                                                   reason: "Sign in to GitHub")]
         try await waitUntil { bridge.snapshot().tasks.first { $0.id == child.id.uuidString }?.attention == .waiting }
         let handedOver = try XCTUnwrap(bridge.snapshot().tasks.first { $0.id == child.id.uuidString })
         XCTAssertEqual(handedOver.pendingKind, "browserHandoff")
         XCTAssertEqual(handedOver.pendingSummary, "Sign in to GitHub")
+        XCTAssertEqual(bridge.snapshot().newestRequestIDs[child.id.uuidString], "yardlet-handoff-1")
         let handoff = try XCTUnwrap(bridge.conversation(of: child.id.uuidString)?.turns.last?.items.last)
         XCTAssertEqual(handoff.requestKind, "browserHandoff")
         XCTAssertEqual(handoff.options, ["done", "decline"])
         let gone = await bridge.perform(.answerHandoff(taskID: child.id.uuidString, requestID: "yardlet-handoff-1", answer: .done))
         XCTAssertEqual(gone?.code, .requestNotFound, "No tab, nothing to answer")
         model.browserHandoffWaits[child.id] = nil
+        // Whatever else a tab waits on from the person tells the phone what it is, in the Mac notification's words.
+        let prompt = BrowserTaskWait(wait: BrowserPersonWait(kind: .permission, id: "permission-3"), tabKey: UUID(),
+                                     site: "github.com")
+        showWait(prompt)
+        try await waitUntil { bridge.snapshot().tasks.first { $0.id == child.id.uuidString }?.pendingKind == nil }
+        let asking = try XCTUnwrap(bridge.snapshot().tasks.first { $0.id == child.id.uuidString })
+        XCTAssertEqual(asking.attention, .waiting)
+        XCTAssertNil(asking.pendingKind)
+        XCTAssertNil(asking.pendingRequest, "Nothing to allow or answer from the phone's request card")
+        XCTAssertEqual(asking.pendingSummary, L10n.format("%@ asks for a permission", "github.com"))
+        XCTAssertEqual(bridge.snapshot().newestRequestIDs[child.id.uuidString], AppModel.notice(prompt))
+        showWait(nil)
 
         let removed = await bridge.perform(.actOnQueued(taskID: waiting.id.uuidString, itemID: "queued:\(queued.id.uuidString)",
                                                         action: .remove))

@@ -170,8 +170,11 @@ final class AppModelRemoteBridge: RemoteBridge {
             if acceptsImages(session, in: model) { snapshot.tasks[index].acceptsImages = true }
             if inputPolicy(session, in: model).showsMentionControl { snapshot.tasks[index].acceptsFiles = true }
             if FollowUpPolicy(harness: session.harness)?.steers == true { snapshot.tasks[index].steers = true }
-            // A tab handed to the person is a wait on the phone (§15.18); the Mac shows it in the panel's bar.
-            if snapshot.tasks[index].attention != .waiting, let wait = model.browserHandoffWaits[id]?.last {
+            // What the task's browser waits on from the person, when the task waits on no request of its own: the tab's
+            // wait already marks it waiting, so without this the phone would announce a wait that names nothing.
+            let waitsOnARequest = snapshot.tasks[index].pendingRequest != nil
+            if !waitsOnARequest, let wait = model.browserHandoffWaits[id]?.last {
+                // A tab handed to the person (§15.18); the Mac shows it in the panel's bar.
                 let summary = RemoteSummary.line([model.browserHandoffSite(wait, in: id), wait.reason])
                 snapshot.tasks[index].attention = .waiting
                 snapshot.tasks[index].pendingRequest = .input
@@ -179,6 +182,13 @@ final class AppModelRemoteBridge: RemoteBridge {
                 snapshot.tasks[index].pendingKind = "browserHandoff"
                 snapshot.tasks[index].pendingSummary = summary
                 snapshot.newestRequestIDs[snapshot.tasks[index].id] = wait.notice
+                snapshot.requestSummaries[snapshot.tasks[index].id] = summary
+            } else if !waitsOnARequest, let wait = model.browserWaits[id], wait.wait.kind != .handoff {
+                // A site's sign-in or passkey window, a permission prompt, a dialog: answered on the Mac or in the
+                // phone's view of the tab, so the phone says it in the Mac notification's words and offers no answer.
+                let summary = RemoteSummary.line([BrowserPersonWaitText.describe(wait.wait, site: wait.site)])
+                snapshot.tasks[index].pendingSummary = summary
+                snapshot.newestRequestIDs[snapshot.tasks[index].id] = AppModel.notice(wait)
                 snapshot.requestSummaries[snapshot.tasks[index].id] = summary
             }
         }

@@ -1278,11 +1278,17 @@ that does not know them ignores them.
 ### 15.18 A browser tab handed to the person
 
 - While the agent waits on a tab it handed to the person (`browser_handoff`), the task is `waiting` with
-  `pendingRequest` `input` and `pendingKind` `browserHandoff`, and its latest turn ends with a pending `approval`
-  item, `requestKind` `browserHandoff`: `title` the site (host), `detail` the agent's reason, `options` `done` and
-  `decline`. The Mac's panel shows the tab with the same reason and the two buttons. This is the one wait the
-  Mac's sidebar does not mark (it shows the task running, and the panel's bar and a Mac notification say the
-  rest), so here `attention` is the phone's alone.
+  `pendingRequest` `input`, `pendingKind` `browserHandoff` and a `summary` of the site and the agent's reason, and
+  its latest turn ends with a pending `approval` item, `requestKind` `browserHandoff`: `title` the site (host),
+  `detail` the agent's reason, `options` `done` and `decline`. The Mac's panel shows the tab with the same reason
+  and the two buttons, and its sidebar marks the task as waiting in the browser. A request the task waits on as
+  well (an approval, a question) is the one the task's fields name, as on the Mac.
+- A tab that waits on the person for anything else (a site's sign-in or passkey window, a permission prompt,
+  another app to open, a dialog, a file chooser: the tab's `waiting`, §15.25) makes the task `waiting` too. When
+  the task waits on no request of its own, it has no `pendingRequest` or `pendingKind`, its `summary` says what
+  waits in the words of the Mac's own notification ("github.com asks for a permission"), and `requestId` changes
+  with each new wait, so the phone notifies again. Nothing in the conversation answers it: the Mac's panel does,
+  and a device watching the tab answers a permission prompt (§15.25).
 - `{"type": "answerHandoff", "taskId": "4C1F…", "requestId": "…", "answer": "done"}`: the bar's "I'm done" or
   "Decline", once the step is finished in the tab (§15.25) or elsewhere (a sign-in approved in another app, a link
   opened on the phone). A command. Errors: `requestNotFound`, `notAllowed`.
