@@ -114,8 +114,11 @@ struct ClaudeSessionProjection: Sendable {
                 // A question call keeps what it asked and the answers its result recorded, which its
                 // answered card reads, live and when the conversation is read back.
                 if let tool = toolInputs[completed.id], tool.name == ClaudeAnswerableTool.askUserQuestion,
-                   let answered = ClaudeProtocol.answeredQuestions(
+                   var answered = ClaudeProtocol.answeredQuestions(
                        input: tool.input, result: typedResult(in: frame, for: completed.id)) {
+                    // When the result was written: the saved record's time, or now for the live stream's.
+                    answered.answeredAt = frame["timestamp"]?.stringValue.flatMap(ClaudeSubagentTranscriptReader.timestamp)
+                        ?? Date()
                     completed.answeredQuestions = answered
                 }
                 if let taskID, var task = tasks[taskID] {

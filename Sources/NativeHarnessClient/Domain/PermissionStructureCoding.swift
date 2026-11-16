@@ -86,10 +86,14 @@ enum PermissionStructureCoding {
     /// A tool call's asked questions and recorded answers (`HarnessActivity.answeredQuestions`), as a
     /// tool call carries them across the boundary.
     static func encode(_ answered: HarnessAnsweredQuestions) -> JSONValue {
-        .object([
+        var value: [String: JSONValue] = [
             "questions": .array(answered.questions.map(encode)),
             "answers": .array(answered.answers.map(encode))
-        ])
+        ]
+        if let answeredAt = answered.answeredAt {
+            value["answeredAt"] = .string(answeredAt.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true)))
+        }
+        return .object(value)
     }
 
     static func answeredQuestions(from value: JSONValue?) -> HarnessAnsweredQuestions? {
@@ -97,7 +101,8 @@ enum PermissionStructureCoding {
               !questions.isEmpty else { return nil }
         return HarnessAnsweredQuestions(
             questions: questions,
-            answers: (value["answers"]?.arrayValue ?? []).compactMap(decodeAnswer)
+            answers: (value["answers"]?.arrayValue ?? []).compactMap(decodeAnswer),
+            answeredAt: value["answeredAt"]?.stringValue.flatMap(ClaudeSubagentTranscriptReader.timestamp)
         )
     }
 

@@ -1937,10 +1937,12 @@ extension AppModel: SessionToolHandling {
 
     // MARK: - The person's words
 
-    /// The person's own messages a call passes on, from the calling task's conversation, with when they
-    /// sent each: with `quote_latest_person_message` the message that started the turn the call answers
-    /// (`turnOfCall`), or the person's latest before it when another task's message or a schedule started
-    /// it, whole; and for each `person_quotes` phrase the message that holds it (`personQuote`). What the
+    /// The person's own words a call passes on, from the calling task's conversation, with when they
+    /// sent each: their messages and their answers on question cards (`personMessages`). With
+    /// `quote_latest_person_message`, the message that started the turn the call answers (`turnOfCall`),
+    /// or the person's latest message before it when another task's message or a schedule started it,
+    /// whole, with the answers the person gave in that turn before the call began; and for each
+    /// `person_quotes` phrase the message that holds it (`personQuote`), or the whole answer. What the
     /// person sent after the turn began is not what the call answers: the latest leaves it out and the
     /// result names it, for `person_quotes`. Each part of a message goes once; an error names the first
     /// phrase that places none.
@@ -1969,43 +1971,62 @@ extension AppModel: SessionToolHandling {
         let turns = sessionToolPresentation(of: session).turns
         // Read as Unicode composes them (NFC), which draws and compares as typed, so a phrase matches
         // however either side composed its characters.
-        let messages = Self.personMessages(in: turns).map {
-            PersonMessage(text: $0.text.precomposedStringWithCanonicalMapping, sentAt: $0.sentAt, turn: $0.turn,
-                          opensTurn: $0.opensTurn)
+        let messages = Self.personMessages(in: turns).map { message in
+            var read = message
+            read.text = message.text.precomposedStringWithCanonicalMapping
+            return read
         }
-        func whole(_ index: Int) -> TaskMessage.Quote {
-            TaskMessage.Quote(text: messages[index].text.trimmingCharacters(in: .whitespacesAndNewlines),
-                              sentAt: messages[index].sentAt.map(time.string(from:)))
+        func wholePart(_ index: Int) -> QuotedPart {
+            QuotedPart(message: index, range: messages[index].text.startIndex..<messages[index].text.endIndex)
+        }
+        func quote(_ part: QuotedPart) -> TaskMessage.Quote {
+            TaskMessage.Quote(text: messages[part.message].text[part.range].trimmingCharacters(in: .whitespacesAndNewlines),
+                              sentAt: messages[part.message].sentAt.map(time.string(from:)),
+                              isAnswer: messages[part.message].isAnswer)
         }
         var parts: [QuotedPart] = []
         var later: [Int] = []
         if latest {
             let turn = turnOfCall(caller, in: turns)
-            let isLater = { (message: PersonMessage) in message.turn > turn || (message.turn == turn && !message.opensTurn) }
+            // The answers the person gave in the call's turn before the call began answer what it asked them,
+            // so the call answers them as it answers the turn's request: every one for the task's own call,
+            // and for a subagent's those given before it started.
+            let started = caller.id == caller.hostTaskID ? nil : sessionTools.run(caller.id)?.startedAt
+            let answersCall = { (message: PersonMessage) -> Bool in
+                guard message.turn == turn, message.isAnswer, !message.opensTurn else { return false }
+                guard let started else { return true }
+                return message.sentAt.map { $0 <= started } ?? false
+            }
+            let isLater = { (message: PersonMessage) in
+                message.turn > turn || (message.turn == turn && !message.opensTurn && !answersCall(message))
+            }
             later = messages.indices.filter { isLater(messages[$0]) }
-            guard let index = messages.firstIndex(where: { !isLater($0) }) else {
+            // The request is a message that started a turn or was sent into one, or a reply that started a turn;
+            // an answer given on a card goes with its own turn.
+            let request = messages.firstIndex { !isLater($0) && (!$0.isAnswer || $0.opensTurn) }
+            let answers = messages.indices.filter { answersCall(messages[$0]) }.reversed()
+            guard request != nil || !answers.isEmpty else {
                 let message = later.isEmpty ? "the person has sent no message in this task."
-                    : "the person sent no message in this task before this turn began." + Self.laterLines(later.map(whole))
+                    : "the person sent no message in this task before this turn began."
+                        + Self.laterLines(later.map { quote(wholePart($0)) })
                 return .failure(SessionToolError(message: message, failure: AgentToolFailure(.refused, retry: .withChanges)))
             }
-            parts.append(QuotedPart(message: index, range: messages[index].text.startIndex..<messages[index].text.endIndex))
+            parts = ([request].compactMap { $0 } + answers).map(wholePart)
         }
         for phrase in phrases {
-            let part: QuotedPart
+            var part: QuotedPart
             switch Self.personQuote(phrase, in: messages.map(\.text)) {
             case let .success(found): part = found
             case let .failure(error): return .failure(error)
             }
+            // An answer goes whole: each question with what it was answered with.
+            if messages[part.message].isAnswer { part = wholePart(part.message) }
             guard !parts.contains(where: { $0.covers(part) }) else { continue }
             parts.removeAll { part.covers($0) }
             parts.append(part)
         }
-        let quotes = parts.map { part in
-            TaskMessage.Quote(text: messages[part.message].text[part.range].trimmingCharacters(in: .whitespacesAndNewlines),
-                              sentAt: messages[part.message].sentAt.map(time.string(from:)))
-        }
         let unquoted = later.filter { index in !parts.contains { $0.message == index } }
-        return .success(PersonQuotes(quotes: quotes, later: unquoted.map(whole)))
+        return .success(PersonQuotes(quotes: parts.map(quote), later: unquoted.map { quote(wholePart($0)) }))
     }
 
     /// The person's words a call passes on, and those it left out.
@@ -2104,10 +2125,12 @@ extension AppModel: SessionToolHandling {
         String(text).precomposedStringWithCanonicalMapping.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 
-    /// The lines a result adds for the person's messages it passed on: how each starts and when it was sent.
+    /// The lines a result adds for the person's messages and answers it passed on: how each starts and when
+    /// it was sent.
     private static func quotedLines(_ quotes: [TaskMessage.Quote]) -> String {
         quotes.map { quote in
-            "\nQuoted the person's message" + (quote.sentAt.map { " sent \($0)" } ?? "") + ": \"\(quoteStart(quote.text))\""
+            "\nQuoted the person's " + (quote.isAnswer ? "answer" : "message") + (quote.sentAt.map { " sent \($0)" } ?? "")
+                + ": \"\(quoteStart(quote.text))\""
         }.joined()
     }
 
@@ -2128,32 +2151,82 @@ extension AppModel: SessionToolHandling {
         return flat.count > 80 ? String(flat.prefix(80)) + "…" : flat
     }
 
-    /// One of the person's messages in a conversation (`personMessages`).
+    /// One of the person's messages in a conversation, or their answer on a question card (`personMessages`).
     struct PersonMessage {
         var text: String
         var sentAt: Date?
         /// Its turn's place in the conversation's turns.
         var turn: Int
-        /// It is the turn's request, rather than a message the person sent into the running turn.
+        /// It is the turn's request, rather than a message the person sent into the running turn or an answer
+        /// they gave in it.
         var opensTurn: Bool
+        /// The person's answer to questions the agent asked them (`answeredText`), rather than words they typed.
+        var isAnswer = false
     }
 
-    /// What the person typed in a conversation, latest first, with when they sent it and the turn it is
-    /// in: not another task's message, a background command's notice or a schedule's.
+    /// What the person said in a conversation, latest first, with when they said it and the turn it is in:
+    /// what they typed, and what they answered on a question card the agent showed them (Claude Code's
+    /// `AskUserQuestion`, Codex's `item/tool/requestUserInput` and `request_user_input_async`), from the Mac,
+    /// a phone or the provider's own app. Not another task's message, a background command's notice or a
+    /// schedule's, and not an answer the provider's record does not hold: a question their message declined,
+    /// and an approval, which an automatic reviewer may give, are no answers here.
     static func personMessages(in turns: [ConversationTurn]) -> [PersonMessage] {
         var messages: [PersonMessage] = []
         for (index, turn) in turns.enumerated() {
             for (item, opensTurn) in turn.prompt.map({ ($0, true) }) + turn.work.map({ ($0, false) }) {
-                guard case let .userMessage(text, _) = item.kind, item.taskMessage == nil,
-                      item.backgroundTaskNotice == nil else { continue }
                 let sentAt: Date? = if case let .transcript(entry) = item.source { entry.createdAt } else {
                     turn.timing.startedAt
                 }
-                messages.append(PersonMessage(text: text.replacingOccurrences(of: "\r\n", with: "\n"), sentAt: sentAt,
-                                              turn: index, opensTurn: opensTurn))
+                switch item.kind {
+                case let .userMessage(text, _) where item.isPersonMessage:
+                    // A reply to a Codex message's questions, which the Mac's or a phone's question card wrote in the
+                    // person's place; another task's message that holds one is that task's (`isPersonMessage`).
+                    if case let .codex(state, _) = item.source, case let .userMessage(sent) = state.content,
+                       let replied = CodexAsyncQuestionReply.answers(in: sent.sentContent.text) {
+                        guard let answered = answeredText(replied.map { ($0.question, $0.answer) }) else { continue }
+                        messages.append(PersonMessage(text: answered, sentAt: sentAt, turn: index, opensTurn: opensTurn,
+                                                      isAnswer: true))
+                    } else {
+                        messages.append(PersonMessage(text: text.replacingOccurrences(of: "\r\n", with: "\n"),
+                                                      sentAt: sentAt, turn: index, opensTurn: opensTurn))
+                    }
+                case let .request(request):
+                    guard let answered = answeredText(request) else { continue }
+                    var answeredAt: Date?
+                    if case let .transcript(entry) = item.source, case let .activity(activity, _) = entry.content {
+                        answeredAt = activity.answeredQuestions?.answeredAt
+                    }
+                    messages.append(PersonMessage(text: answered, sentAt: answeredAt, turn: index, opensTurn: false,
+                                                  isAnswer: true))
+                default:
+                    continue
+                }
             }
         }
         return messages.reversed()
+    }
+
+    /// A question card the person answered, as a quote passes it on (`answeredText(_:)`), from the answers its
+    /// provider recorded; nil for anything else, or a card whose answers the record does not hold. A question
+    /// that hides its answer (Codex `isSecret`) is left out.
+    static func answeredText(_ request: ConversationRequest) -> String? {
+        guard request.isAnsweredQuestion, let recorded = request.recordedAnswers else { return nil }
+        return answeredText((request.form?.questionSteps ?? []).compactMap { step in
+            guard !step.isSecret, let answer = recorded[step.id] else { return nil }
+            return (step.text ?? step.header, answer.values.joined(separator: ", "))
+        })
+    }
+
+    /// Each question answered, in its asker's words, over what it was answered with as the answered card reads
+    /// it (the options picked, then the person's own words), a blank line between questions; nil when none was.
+    static func answeredText(_ answered: [(question: String?, answer: String)]) -> String? {
+        let blocks = answered.compactMap { question, answer -> String? in
+            let answer = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !answer.isEmpty else { return nil }
+            let asked = question?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return (asked.isEmpty ? "" : "Question: \(asked)\n") + "Answer: \(answer)"
+        }
+        return blocks.isEmpty ? nil : blocks.joined(separator: "\n\n").replacingOccurrences(of: "\r\n", with: "\n")
     }
 
     // MARK: - Arguments

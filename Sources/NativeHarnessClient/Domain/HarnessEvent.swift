@@ -128,6 +128,8 @@ struct HarnessAnsweredQuestions: Codable, Equatable, Sendable {
     let questions: [PermissionQuestion]
     /// One entry per question answered, in the questions' order; a question left out was not.
     let answers: [PermissionQuestionAnswer]
+    /// When the provider recorded the answers: the saved result's time, or when the live result arrived.
+    var answeredAt: Date? = nil
 }
 
 /// An answer that carries more than allow or deny, for the requests whose provider asked for one.

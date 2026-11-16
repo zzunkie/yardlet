@@ -558,7 +558,8 @@ final class ClaudeAnswerableRequestTests: XCTestCase {
     }
 
     /// An own answer crosses YHP to the wire, and the answers the call's result recorded cross back
-    /// on the call's card, which the answered question card reads.
+    /// on the call's card, which the answered question card reads, with when the result was written,
+    /// which a quote of the answer names.
     func testAnOwnAnswerAndTheRecordedAnswersCrossTheYHPRouteTheAppShips() async throws {
         let transport = FakeClaudeTransport()
         let routed = YHPProviderCompatibilityAdapter(
@@ -615,6 +616,7 @@ final class ClaudeAnswerableRequestTests: XCTestCase {
         // The CLI's result for the call, with the answers as it records them.
         await transport.emit(.object([
             "type": .string("user"),
+            "timestamp": .string("2026-11-16T12:31:20.123Z"),
             "message": .object(["role": .string("user"), "content": .array([.object([
                 "type": .string("tool_result"), "tool_use_id": .string("toolu_ask"),
                 "content": .string("User has answered your questions.")
@@ -640,6 +642,7 @@ final class ClaudeAnswerableRequestTests: XCTestCase {
             PermissionQuestionAnswer(question: "Which features do you want to enable?", selectedLabels: ["Telemetry"],
                                      customAnswer: "Undo, and redo")
         ])
+        XCTAssertEqual(answered.answeredAt, ClaudeSubagentTranscriptReader.timestamp("2026-11-16T12:31:20.123Z"))
         await routed.close(handle)
     }
 

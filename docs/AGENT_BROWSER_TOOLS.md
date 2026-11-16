@@ -471,28 +471,40 @@ threads the same way, in the workspace sandbox asking on request; `readOnly` and
     "Sent by another Yardlet task (task id …); the person did not type it." Nothing about what to do, and nothing about
     approval. Reading accepts the current sentence and the ones earlier versions wrote (`earlierNotices`). A message
     that a `run_agent` subagent sends goes in the name of the task that started that subagent.
-  - **The person's own messages (`person_quotes` and `quote_latest_person_message`):**
+  - **The person's own messages and answers (`person_quotes` and `quote_latest_person_message`):**
     After the sentence comes a blank line, then for each quote "Yardlet found these words in the person's own message in
     task <id>, sent <ISO 8601>:" and `> ` lines (for a conversation without times, ", sent …" is left out). The sources
     are the `.userMessage`s of the sending task's `sessionToolPresentation` (newest first), not counting other tasks'
-    messages and background notices. `quote_latest_person_message: true` quotes whole the one that started the turn the
-    call answers, or the newest before that turn when another task's message, a schedule or a notice started it, and is
-    refused when there is none. The turn is the sending task's latest, where a message the provider read into the running
-    turn stays (a Claude follow-up read mid-turn, a Codex steer); for a `run_agent` subagent it is the host task's turn
-    that was running when the subagent started, by the turns' start times, or the latest when they cannot place it.
-    What the person sent after that turn began is not passed on: the result says "Not quoted: the person sent … after
-    this turn began. To pass one on, give words from it in person_quotes." with each message's time and first 80
-    characters, unless a `person_quotes` phrase in the same call quoted it. Each `person_quotes` entry is a phrase
-    copied from one of them: both sides are compared in NFC with every run of whitespace and line breaks as one space,
-    and nothing else may differ. Yardlet quotes the message
-    that holds the phrase as the person typed it (in NFC): whole up to 1,000 characters
+    messages and background notices, and the question cards the person answered there (`AppModel.personMessages(in:)`).
+  - **An answered question card is the person's when the provider's record holds its answers:** Claude Code's
+    `AskUserQuestion` result, a Codex `item/tool/requestUserInput` response, and a Codex reply to
+    `request_user_input_async` questions that is the person's message (not another task's), whether the Mac, a phone or
+    the provider's own app answered. An approval, which an automatic reviewer may give, and a question the person's
+    message declined are not answers. An answer goes whole under "Yardlet found the person's answer to a question the
+    agent asked them in task <id>, sent <ISO 8601>:", each question answered as "Question: …" over "Answer: …" (the
+    options picked, then the person's own words, as the answered card reads them); a question that hides its answer is
+    left out. Its time is when the provider recorded the answers (Claude Code) or when the reply's turn started (a Codex
+    reply); a Codex `requestUserInput` response has none.
+  - **`quote_latest_person_message: true`** quotes whole the message that started the turn the call answers, or the
+    newest message before that turn when another task's message, a schedule or a notice started it, then the answers the
+    person gave in that turn before the call began, and is refused when there is none of these. The turn is the sending
+    task's latest, where a message the provider read into the running turn stays (a Claude follow-up read mid-turn, a
+    Codex steer); for a `run_agent` subagent it is the host task's turn that was running when the subagent started, by
+    the turns' start times, or the latest when they cannot place it, and only the answers given before the subagent
+    started count. What the person sent after that turn began is not passed on: the result says "Not quoted: the person
+    sent … after this turn began. To pass one on, give words from it in person_quotes." with each message's time and
+    first 80 characters, unless a `person_quotes` phrase in the same call quoted it.
+  - **Each `person_quotes` entry is a phrase copied from those messages and answers:** both sides are compared in NFC
+    with every run of whitespace and line breaks as one space, and nothing else may differ. Yardlet quotes an answer
+    whole, and the message that holds the phrase as the person typed it (in NFC): whole up to 1,000 characters
     (`SessionToolPolicy.wholeQuotedMessageLength`), and past that the paragraphs (lines between blank lines) the phrase
     stands in. A phrase equal to a whole message takes the newest such message, however short; any other needs at least
     6 characters besides spaces (`SessionToolCatalog.minimumPersonQuoteLength`) and must lead to one quote, so a phrase
     in messages that differ is refused with "… is in N of the person's messages in this task: give more of the one you
     mean." A phrase it cannot find refuses the call with "Not sent: the person's messages in this task do not hold …"
     (at most 5 phrases, `SessionToolCatalog.maximumPersonQuotes`). A part already quoted goes once, and the result names
-    each quote by its start and time ("Quoted the person's message sent …"). After the envelope, nothing but the sentence
+    each quote by its start and time ("Quoted the person's message sent …", "Quoted the person's answer sent …"). After
+    the envelope, nothing but the sentence
     and this group of quotes may come. The receiving conversation draws them below the body with a quote bar and "Your
     message · time".
   - **CLI peer envelopes are only read:** `<cross-session-message …>` (CLI 2.1.291 to 2.1.299, `from-name` and `name`)

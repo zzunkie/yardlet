@@ -945,6 +945,136 @@ final class SessionToolTests: XCTestCase {
         await model.shutdown()
     }
 
+    /// The person's answers on question cards are theirs to pass on too, whole, each question in the agent's words
+    /// over the answer, under a lead that says so: a Claude question's answers as its result recorded them, with when;
+    /// a Codex reply to its questions that the person sent, never another task's message that holds one, nor a
+    /// question whose record holds no answer. `quote_latest_person_message` passes on the answers given in the call's
+    /// turn after its request, not those of an earlier turn.
+    func testPersonQuotesPassOnTheAnswersThePersonGaveOnQuestionCards() async throws {
+        let answeredAt = Date(timeIntervalSince1970: 1_800_000_100)
+        func ask(_ id: String, _ question: String, _ options: [String], answer: [String]?) -> [HarnessEventPayload] {
+            let asked = PermissionQuestion(question: question, options: options.map { PermissionQuestionOption(label: $0) },
+                                           allowsCustomAnswer: true)
+            let started = HarnessActivity(id: id, kind: ClaudeAnswerableTool.askUserQuestion, title: "Questions")
+            var completed = started
+            if let answer {
+                let picked = answer.filter(options.contains)
+                let own = answer.filter { !options.contains($0) }
+                completed.answeredQuestions = HarnessAnsweredQuestions(questions: [asked], answers: [
+                    PermissionQuestionAnswer(question: question, selectedLabels: picked, customAnswer: own.first)
+                ], answeredAt: answeredAt)
+            } else {
+                completed.outcome = .failed
+            }
+            return [.activityStarted(started), .activityCompleted(completed)]
+        }
+        var builder = TranscriptBuilder()
+        builder.appendUser("Ship the release tonight.")
+        ask("ask-channel", "Which channel gets the release?", ["Beta", "Stable"], answer: ["Stable", "after 6 pm"])
+            .forEach { builder.apply($0) }
+        builder.apply(.assistantMessageCompleted("Stable, after 6 pm."))
+        builder.apply(.turnCompleted)
+        builder.appendUser(TaskMessage(senderID: UUID().uuidString, senderName: "Release",
+                                       body: "The build is ready.").text(in: .yardlet))
+        // Declined, so its record holds no answer.
+        ask("ask-tag", "Tag the release as latest too?", ["Tag", "Skip"], answer: nil).forEach { builder.apply($0) }
+        ask("ask-deploy", "Deploy to production now?", ["Yes, deploy", "Not yet"], answer: ["Yes, deploy"])
+            .forEach { builder.apply($0) }
+        builder.appendUser("Wait for CI first.", joinsRunningTurn: true)
+
+        // The Codex task asked twice: the person's card answered the first; another task's message carries a reply
+        // to the second.
+        func user(_ id: String, _ text: String) -> JSONValue {
+            .object(["id": .string(id), "type": .string("userMessage"),
+                     "content": .array([.object(["type": .string("text"), "text": .string(text)])])])
+        }
+        func asks(_ id: String, _ title: String) -> JSONValue {
+            .object(["id": .string(id), "type": .string("agentMessage"), "text": .string(title),
+                     "phase": .string("final_answer"), "delivery": .string("async"),
+                     "questions": .array([.object(["title": .string(title), "options": .array([.string("Yes"), .string("No")])])])])
+        }
+        func reply(to id: String, _ title: String, _ answer: String) -> String {
+            CodexAsyncQuestionReply.message([.init(questionItemID: CodexAsyncQuestionReply.itemID(messageID: id, index: 0),
+                                                   question: title, answer: answer)])
+        }
+        let decoder = CodexTaskDecoder()
+        var thread = try XCTUnwrap(decoder.thread(from: .object(["id": .string("thread-quotes")])))
+        thread.turns = try [
+            .object(["id": .string("t1"), "status": .string("completed"),
+                     "items": .array([user("u1", "Download the archive here"), asks("q1", "Signed in to Google yet?")])]),
+            .object(["id": .string("t2"), "status": .string("completed"), "startedAt": .integer(1_800_000_200),
+                     "items": .array([user("u2", reply(to: "q1", "Signed in to Google yet?", "Yes")),
+                                      asks("q2", "Delete the old archive too?")])]),
+            .object(["id": .string("t3"), "status": .string("completed"), "items": .array([user("u3", TaskMessage(
+                senderID: UUID().uuidString, senderName: "Cleanup", body: reply(to: "q2", "Delete the old archive too?", "Yes")
+            ).text(in: .yardlet))])])
+        ].map { try XCTUnwrap(decoder.turn(from: $0, fallbackID: "turn")) }
+
+        let fixture = try Fixture(codexState: CodexTaskState(thread: thread), callerTranscript: builder.entries)
+        defer { fixture.tearDown() }
+        let model = fixture.model
+        let time = ISO8601DateFormatter()
+        time.formatOptions = [.withInternetDateTime]
+        time.timeZone = .current
+        // Each sends to a task whose conversation the test does not read: the caller to the Codex task, which reads
+        // its own conversation first; the Codex task to the caller's sibling.
+        func send(_ arguments: [String: Any], from sender: SessionRecord) async -> AgentToolResult {
+            let receiver = sender.id == fixture.caller.id ? fixture.codex : fixture.sibling
+            var all: [String: Any] = ["task_id": receiver.id.uuidString, "message": "Go ahead."]
+            all.merge(arguments) { $1 }
+            return await call(model, "send_message_to_task", all, from: sender)
+        }
+        func quotes(_ arguments: [String: Any], from sender: SessionRecord, file: StaticString = #filePath,
+                    line: UInt = #line) async throws -> (result: String, sent: String, quotes: [TaskMessage.Quote]) {
+            let result = await send(arguments, from: sender)
+            XCTAssertFalse(result.isError, result.text, file: file, line: line)
+            let delivered = sender.id == fixture.caller.id ? await fixture.codexAdapter.codexSubmissions.map(\.0.text)
+                : await fixture.adapter.prompts(for: fixture.sibling.id)
+            let sent = try XCTUnwrap(delivered.last, file: file, line: line)
+            let read = try XCTUnwrap(TaskMessage.parse(sent), sent, file: file, line: line)
+            return (result.text, sent, read.quotes)
+        }
+        let deploy = "Question: Deploy to production now?\nAnswer: Yes, deploy"
+
+        // A Codex reply the person sent is their answer, with the question it names; another task's message that
+        // holds a reply is that task's.
+        let codex = try await quotes(["quote_latest_person_message": true], from: fixture.codex)
+        XCTAssertEqual(codex.quotes, [TaskMessage.Quote(text: "Question: Signed in to Google yet?\nAnswer: Yes",
+                                                        sentAt: time.string(from: Date(timeIntervalSince1970: 1_800_000_200)),
+                                                        isAnswer: true)])
+        let refused = await send(["person_quotes": ["Delete the old archive"]], from: fixture.codex)
+        XCTAssertTrue(refused.isError && refused.text.contains("do not hold \"Delete the old archive\""), refused.text)
+
+        // The turn another task's message started: the person's latest message before it, then the answer they gave
+        // in it, with when the result recorded it; not the answer of the turn before, nor the message sent into this
+        // one, which the result names.
+        let latest = try await quotes(["quote_latest_person_message": true], from: fixture.caller)
+        XCTAssertEqual(latest.quotes, [TaskMessage.Quote(text: "Ship the release tonight.", sentAt: latest.quotes.first?.sentAt),
+                                       TaskMessage.Quote(text: deploy, sentAt: time.string(from: answeredAt), isAnswer: true)])
+        XCTAssertTrue(latest.sent.contains("\n\n" + TaskMessage.answerLead + fixture.caller.id.uuidString + ", sent "
+            + time.string(from: answeredAt) + ":\n> Question: Deploy to production now?\n> Answer: Yes, deploy"), latest.sent)
+        XCTAssertTrue(latest.result.contains("\nQuoted the person's answer sent \(time.string(from: answeredAt)): "
+            + "\"Question: Deploy to production now? Answer: Yes, deploy\""), latest.result)
+        XCTAssertNotNil(latest.quotes.first?.sentAt)
+        XCTAssertTrue(latest.result.contains("\nNot quoted: the person sent a message after this turn began."), latest.result)
+        XCTAssertTrue(latest.result.hasSuffix(": \"Wait for CI first.\""), latest.result)
+
+        // A phrase from an answer, its question's or its own, passes on the whole answer: picks, then own words.
+        let phrase = try await quotes(["person_quotes": ["Which channel gets the release"]], from: fixture.caller)
+        XCTAssertEqual(phrase.quotes.map(\.text), ["Question: Which channel gets the release?\nAnswer: Stable, after 6 pm"])
+        XCTAssertEqual(phrase.quotes.map(\.isAnswer), [true])
+
+        // Nor is a question whose record holds no answer, nor another task's message; nothing is sent for them.
+        let delivered = await fixture.codexAdapter.codexSubmissions.count
+        for elsewhere in ["Tag the release as latest", "The build is ready"] {
+            let refused = await send(["person_quotes": [elsewhere]], from: fixture.caller)
+            XCTAssertTrue(refused.isError && refused.text.contains("do not hold \"\(elsewhere)\""), refused.text)
+        }
+        let after = await fixture.codexAdapter.codexSubmissions.count
+        XCTAssertEqual(after, delivered)
+        await model.shutdown()
+    }
+
     /// A Claude task that runs without asking reads Yardlet's envelope (the CLI would hold the peer one):
     /// from the task that started it, the parent's sentence; from its own child, another task's.
     func testAClaudeTaskThatRunsWithoutAskingReadsYardletsSentenceForEitherDirection() async throws {

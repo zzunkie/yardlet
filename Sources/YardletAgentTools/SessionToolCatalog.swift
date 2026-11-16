@@ -83,15 +83,16 @@ package enum SessionToolCatalog {
     private static let personQuotes: ToolJSON = .object([
         "type": .string("array"),
         "items": .object(["type": .string("string")]),
-        "description": .string("Phrases copied from the person's own messages in this task, each at least "
-            + "\(minimumPersonQuoteLength) characters or a whole message. After yours, Yardlet sends the message "
-            + "that holds each (a long one's paragraphs around it) as the person wrote it, with when they sent it. "
-            + "A phrase it cannot find, or finds in several messages, stops the message. At most \(maximumPersonQuotes).")
+        "description": .string("Phrases copied from the person's own messages in this task, or from their answers "
+            + "on question cards, each at least \(minimumPersonQuoteLength) characters or a whole message. After yours, "
+            + "Yardlet sends the message that holds each (a long one's paragraphs around it) as the person wrote it, "
+            + "or the whole answer with its questions, with when they sent it. A phrase it cannot find, or finds in "
+            + "several messages, stops the message. At most \(maximumPersonQuotes).")
     ])
     private static let quoteLatestPersonMessage = property("boolean", "true also sends, after yours, the person's "
         + "message that started this turn (their latest before it, when another task's message or a schedule started "
-        + "it), as they wrote it, with when they sent it. What they sent after the turn began is not sent; the result "
-        + "names it, for person_quotes.")
+        + "it), as they wrote it, and their answers on this turn's question cards, with when they sent each. What they "
+        + "sent after the turn began is not sent; the result names it, for person_quotes.")
 
     package static let tools: [AgentToolDefinition] = [
         AgentToolDefinition(

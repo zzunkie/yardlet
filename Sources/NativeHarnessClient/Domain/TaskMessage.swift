@@ -10,8 +10,8 @@ import Foundation
 /// receiver nothing about what to do with it, as a Codex agent's own `followup_task` and
 /// `send_message` reach their target with the sender, the recipient and the text alone; what the
 /// receiver may do is its own permission setting's, which the harness enforces. After it come the
-/// person's own messages the sender asked to pass on (`Quote`), each as Yardlet found it in the
-/// sending task's conversation, with when the person sent it.
+/// person's own messages, and answers on question cards, the sender asked to pass on (`Quote`), each
+/// as Yardlet found it in the sending task's conversation, with when the person sent it.
 ///
 /// Claude Code is no exception, its first message or a later one. Its own peer envelope,
 /// `<cross-session-message from="…" from-name="…">` (CLI 2.1.291–2.1.299), would have the CLI add its
@@ -36,13 +36,16 @@ struct TaskMessage: Equatable, Sendable {
     var quotes: [Quote] = []
 
     /// One of the person's own messages in the sending task as they typed it, or the paragraphs of a
-    /// long one, which Yardlet found there before sending (`send_message_to_task`'s and `create_task`'s
-    /// `person_quotes` and `quote_latest_person_message`).
+    /// long one, or their answer on a question card there, which Yardlet found before sending
+    /// (`send_message_to_task`'s and `create_task`'s `person_quotes` and `quote_latest_person_message`).
     struct Quote: Equatable, Sendable {
         var text: String
         /// When the person sent that message, as written (ISO 8601 with the sender's offset); nil when
         /// the conversation holds no time for it.
         var sentAt: String?
+        /// The person's answer to questions the sending task's agent asked them: `text` reads each
+        /// question, in the agent's words, over the person's answer (`AppModel.answeredText`).
+        var isAnswer = false
 
         /// What the receiving conversation draws under the words: whose they are and when.
         var label: String {
@@ -130,12 +133,14 @@ struct TaskMessage: Equatable, Sendable {
     }
 
     static let quoteLead = "Yardlet found these words in the person's own message in task "
+    /// An answer's lead, which says the question is the agent's and the answer the person's.
+    static let answerLead = "Yardlet found the person's answer to a question the agent asked them in task "
 
     /// One quote after the sentence: where and when the person wrote it, then their words as quoted lines.
     static func quoteBlock(_ quote: Quote, senderID: String) -> String {
         let when = quote.sentAt.map { ", sent \($0)" } ?? ""
         let lines = quote.text.split(separator: "\n", omittingEmptySubsequences: false).map { "> " + $0 }
-        return quoteLead + senderID + when + ":\n" + lines.joined(separator: "\n")
+        return (quote.isAnswer ? answerLead : quoteLead) + senderID + when + ":\n" + lines.joined(separator: "\n")
     }
 
     /// The quotes after the sentence, `rest` being what follows it; nil when it is anything else.
@@ -146,8 +151,9 @@ struct TaskMessage: Equatable, Sendable {
         for block in rest.dropFirst(2).components(separatedBy: "\n\n") {
             var lines = block.components(separatedBy: "\n")
             let head = lines.removeFirst()
-            guard head.hasPrefix(quoteLead + senderID), head.hasSuffix(":"), !lines.isEmpty else { return nil }
-            let place = head.dropFirst(quoteLead.count + senderID.count).dropLast()
+            guard let lead = [quoteLead, answerLead].first(where: { head.hasPrefix($0 + senderID) }),
+                  head.hasSuffix(":"), !lines.isEmpty else { return nil }
+            let place = head.dropFirst(lead.count + senderID.count).dropLast()
             let sentAt: String?
             if place.isEmpty {
                 sentAt = nil
@@ -166,7 +172,7 @@ struct TaskMessage: Equatable, Sendable {
                     return nil
                 }
             }
-            quotes.append(Quote(text: text.joined(separator: "\n"), sentAt: sentAt))
+            quotes.append(Quote(text: text.joined(separator: "\n"), sentAt: sentAt, isAnswer: lead == answerLead))
         }
         return quotes
     }

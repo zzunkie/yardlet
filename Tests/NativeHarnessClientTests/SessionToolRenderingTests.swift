@@ -26,7 +26,9 @@ final class SessionToolRenderingTests: XCTestCase {
     func testAMessageFromAnotherTaskReadsAsThatTasksAndLinksToIt() throws {
         let message = TaskMessage(senderID: Self.sender.uuidString, senderName: "Rewrite upload queue",
                                   body: "The queue rewrite is done. Can you run the retry tests on this branch once?",
-                                  quotes: [TaskMessage.Quote(text: "Run the retry tests too", sentAt: "2026-10-24T06:12:05+09:00")])
+                                  quotes: [TaskMessage.Quote(text: "Run the retry tests too", sentAt: "2026-10-24T06:12:05+09:00"),
+                                           TaskMessage.Quote(text: "Question: Run them on staging first?\nAnswer: Yes, staging",
+                                                             sentAt: "2026-10-24T06:14:30+09:00", isAnswer: true)])
         let entries = transcript([
             .user(text: "Write up the upload limits doc"),
             .assistant(text: "I wrote the limits and retry intervals in docs/uploads.md.", isStreaming: false),
@@ -46,7 +48,10 @@ final class SessionToolRenderingTests: XCTestCase {
             let texts = drawing.elements.map(\.description).joined(separator: "\n")
             XCTAssertTrue(texts.contains(L10n.format("Sent from %@", "Rewrite upload queue")), texts)
             XCTAssertTrue(texts.contains("run the retry tests on this branch"), texts)
-            XCTAssertFalse(texts.contains("cross-session-message"), "The envelope never shows:\n\(texts)")
+            XCTAssertTrue(texts.contains("Answer: Yes, staging"), "An answer quotes as the person's words do:\n\(texts)")
+            for envelope in ["cross-session-message", TaskMessage.yardletTag, TaskMessage.answerLead] {
+                XCTAssertFalse(texts.contains(envelope), "The envelope never shows:\n\(texts)")
+            }
         }
     }
 
