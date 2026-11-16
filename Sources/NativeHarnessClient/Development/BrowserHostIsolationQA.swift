@@ -51,6 +51,7 @@ final class BrowserHostIsolationQA {
         if CommandLine.arguments.contains("--ui-fixture-isolation-sign-ins") {
             record["storage"] = .string(profiles.storage.rawValue)
             await keepsEveryAccount()
+            await takesAProfileForScriptsOnlyWhereTheyMaySignIn()
             return await finish()
         }
         // `--ui-fixture-isolation-shapes` runs only the check that the cleanup removes the old copy's domain cookies.
@@ -180,6 +181,7 @@ final class BrowserHostIsolationQA {
 
         await copiesCookiesAsStored()
         await keepsEveryAccount()
+        await takesAProfileForScriptsOnlyWhereTheyMaySignIn()
         await removesTheOldCopysDomainCookies()
         let earlier = await sharesEarlierProfiles()
         let kept = Set([a] + (earlier.map { [$0.kept, $0.moved] } ?? []))
@@ -477,6 +479,73 @@ final class BrowserHostIsolationQA {
             _ = try? await start.devTools.send("Network.deleteCookies", ["name": .string(name), "domain": .string("localhost")])
         }
         start.close()
+    }
+
+    // MARK: Page scripts
+
+    /// A script can sign in without typing into a field, so a task's agent running one on a page with a password or
+    /// one-time code field, in any of its frames, first gives its task a profile of its own; on any other page the task
+    /// stays in the default profile, with the person's later sign-ins (docs/BROWSER_SESSION_ISOLATION.md 3). Task S runs
+    /// a script on the QA server's `/frames` (a frame from this origin, one from another origin of this site holding one
+    /// from another site, a card field and a field in an open shadow root), then on `/login-frame`, whose password field
+    /// is only in a frame from another site; task T runs one on `/login`, and again once it has its profile.
+    private func takesAProfileForScriptsOnlyWhereTheyMaySignIn() async {
+        let broker = MacAgentToolService.shared.broker
+        func tools(_ task: UUID) -> ((String, [String: ToolJSON]) async -> AgentToolResult)? {
+            guard let launch = broker.agentToolServer(for: task, workspaceRoots: []) else { return nil }
+            let token = launch.environment[AgentToolEnvironment.token] ?? ""
+            return { tool, arguments in
+                await broker.handle(AgentToolCall(token: token, session: task.uuidString, tool: tool, arguments: .object(arguments)))
+            }
+        }
+        let s = UUID(), t = UUID()
+        guard let callS = tools(s), let callT = tools(t) else {
+            return check("page scripts: the broker issues the tasks their tools", false, "no launch")
+        }
+        let script: [String: ToolJSON] = ["function": .string("() => document.title")]
+
+        let frames = base + "frames"
+        _ = await callS(AgentToolCatalog.navigate, ["url": .string(frames)])
+        guard let firstS = client.tab(forSession: s) else { return check("page scripts: the agent's tab opens", false, "no tab") }
+        // How long the script takes with the look through each frame for a sign-in field before it.
+        let started = ContinuousClock.now
+        let plain = await callS(AgentToolCatalog.evaluate, script)
+        record["pageScriptOnFramesSeconds"] = .number((ContinuousClock.now - started) / .seconds(1))
+        let remoteFrames = firstS.devTools.frameSessions.count
+        check("page scripts: a script on a page with no password or code field in any of its frames runs in the default "
+              + "profile",
+              !plain.isError && plain.text.contains("Frames") && remoteFrames >= 1 && !profiles.hasOwnProfile(s)
+                && client.tab(forSession: s) === firstS,
+              "\(plain.text), \(remoteFrames) frames from another site")
+
+        let framed = base + "login-frame?src=" + base.replacingOccurrences(of: "localhost", with: "127.0.0.1") + "login"
+        _ = await callS(AgentToolCatalog.navigate, ["url": .string(framed)])
+        guard let framedS = client.tab(forSession: s) else { return check("page scripts: the agent's tab opens", false, "no tab") }
+        let framedRemote = framedS.devTools.frameSessions.count
+        let inFrame = await callS(AgentToolCatalog.evaluate, script)
+        let reopenedS = await reopened(s, from: framedS, framed)
+        check("page scripts: a script on a page whose password field is in a frame from another site first gives the task "
+              + "a profile of its own, and does not run",
+              framedRemote >= 1 && inFrame.isError && inFrame.text.contains("profile of its own")
+                && inFrame.text.contains("did not run") && reopenedS != nil && profiles.hasOwnProfile(s),
+              "\(inFrame.text), \(framedRemote) frames from another site")
+
+        let login = base + "login"
+        _ = await callT(AgentToolCatalog.navigate, ["url": .string(login)])
+        guard let firstT = client.tab(forSession: t) else { return check("page scripts: the agent's tab opens", false, "no tab") }
+        let onLogin = await callT(AgentToolCatalog.evaluate, script)
+        let reopenedT = await reopened(t, from: firstT, login)
+        let again = reopenedT == nil ? nil : await callT(AgentToolCatalog.evaluate, script)
+        let logged = ((try? String(contentsOf: MacBrowserHost.shared.paths.log.deletingLastPathComponent()
+            .appending(path: "sign-ins.log"), encoding: .utf8)) ?? "")
+            .split(separator: "\n").filter { $0.contains("(page script)") }
+        check("page scripts: a script on a sign-in page first gives the task a profile of its own, and runs there when "
+              + "called again; the log names both tasks",
+              onLogin.isError && onLogin.text.contains("profile of its own") && reopenedT != nil && profiles.hasOwnProfile(t)
+                && again?.isError == false && again?.text.contains("Login") == true
+                && [s, t].allSatisfy { task in logged.contains { $0.contains("task \(task.uuidString.prefix(8))") } },
+              "\(onLogin.text) / \(again?.text ?? "not called again") / \(logged.count) page script lines")
+        for task in [s, t] { client.closeTabs(forSession: task) }
     }
 
     // MARK: The old copy's domain cookies

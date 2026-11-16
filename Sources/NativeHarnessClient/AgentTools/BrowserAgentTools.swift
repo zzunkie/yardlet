@@ -74,10 +74,10 @@ final class BrowserAgentTools {
     var loadTimeout: Duration = .seconds(30)
     /// The vault `browser_fill_credential` asks (design docs/BROWSER_VAULT_DESIGN.md); nil leaves the tool refusing.
     var vault: VaultCenter?
-    /// Just before the task's agent signs in to a site itself, or runs its first page script: the task takes a browser
-    /// profile of its own and its tabs open again there, so the sign-in changes no other task's
-    /// (docs/BROWSER_SESSION_ISOLATION.md 3). Given the task, the page's host and what the agent was about to do; true
-    /// when it did. Nil (tests) takes none.
+    /// Just before the task's agent signs in to a site itself, or runs a page script on a page with a password or
+    /// one-time code field: the task takes a browser profile of its own and its tabs open again there, so the sign-in
+    /// changes no other task's (docs/BROWSER_SESSION_ISOLATION.md 3). Given the task, the page's host and what the agent
+    /// was about to do; true when it did. Nil (tests) takes none.
     var takesOwnProfile: (@MainActor (UUID, String, String) -> Bool)?
     /// The two-factor setups the QR codes in a picture hold (Vision on macOS): a screenshot does not hand over a
     /// picture of one while the vault is on, and a code fill on a page showing one asks the person to keep it; nil
@@ -1491,9 +1491,12 @@ final class BrowserAgentTools {
             throw BrowserAgentToolError(refusal, Self.vaultBoundary)
         }
         // A script can sign in too, without typing into a field: a task in the default profile takes one of its own
-        // before its first script runs.
-        try await takeOwnProfile(sessionID, on: page, what: "what its page scripts do", how: "page script",
-                                 undone: "the function did not run", again: "call browser_evaluate again")
+        // before a script runs on a page that may be signing in, by a password or code field in any of its frames.
+        if sessionID != nil, takesOwnProfile != nil,
+           await VaultPageScripts.holdsSignInField(page.cdp, timeout: commandTimeout) {
+            try await takeOwnProfile(sessionID, on: page, what: "what its page scripts do", how: "page script",
+                                     undone: "the function did not run", again: "call browser_evaluate again")
+        }
         // A later fill of this document, of one a linked tab shows, or of one they load while either shows such a
         // document, asks the person first.
         let document = try? await send(page, "Page.getFrameTree")["frameTree"]?["frame"]?["loaderId"]?.stringValue

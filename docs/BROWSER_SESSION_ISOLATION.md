@@ -14,8 +14,8 @@ of its own must not sign the person out, or in as someone else, in the other tas
 
 With Settings › General "Keep cookies" set to "Per task" (the default), tasks share the default profile
 (`~/Library/Application Support/Yardlet/Browser/Default`), as the Codex app's threads share one browser. Just before a
-task's agent signs in to a site itself or runs its first page script, the task takes a profile of its own, a copy of the
-default profile's cookies, and its sign-ins stay there (section 3). Credentials stay shared through the vault (passwords, TOTP, Yardlet passkeys)
+task's agent signs in to a site itself, or runs a page script on a page with a password or one-time code field, the
+task takes a profile of its own, a copy of the default profile's cookies, and its sign-ins stay there (section 3). Credentials stay shared through the vault (passwords, TOTP, Yardlet passkeys)
 and Touch ID passkeys. With "Shared by all tasks", every task uses the default profile, agents' sign-ins included.
 
 ## 2. How the two apps and other browsers do it
@@ -41,7 +41,7 @@ These are the rules of "Per task". Why sign-ins are not copied between profiles 
 | Question | Rule | Reason |
 |---|---|---|
 | Which profile a task uses | The default profile, until the task takes one of its own. No folder is made for it | The person's sign-ins reach every task as they are made, with nothing copied, and a site's accounts stay in one set of cookies |
-| When a task takes a profile of its own | Just before its agent signs in to a site itself: a `browser_fill_credential` fill (a password, a one-time code, a passkey) on a site the vault has an item for, or of a new password on any site, `browser_type` into a password field or a field that looks like a one-time code field (the vault's `looksLikeCodeField`), or a `browser_press_key` that puts a character or a paste into a password field (`VaultPageScripts.focusMayBePassword`, which also counts a focused field in a frame of another origin). And just before its first `browser_evaluate`, because a script can sign in too without typing into a field. The call stops without filling, typing, pressing the key or running the function, and says to take a new snapshot and call again. Other tasks keep the default profile | The sign-in then changes only that task's cookies. A sign-in made before the switch would already be in the default profile |
+| When a task takes a profile of its own | Just before its agent signs in to a site itself: a `browser_fill_credential` fill (a password, a one-time code, a passkey) on a site the vault has an item for, or of a new password on any site, `browser_type` into a password field or a field that looks like a one-time code field (the vault's `looksLikeCodeField`), or a `browser_press_key` that puts a character or a paste into a password field (`VaultPageScripts.focusMayBePassword`, which also counts a focused field in a frame of another origin). And just before a `browser_evaluate` on a page that may be signing in, because a script can sign in too without typing into a field: one of the page's frames, from any origin, holds a password field or shows a field that looks like a one-time code field (`VaultPageScripts.holdsSignInField`). A script on any other page runs in the default profile. The call stops without filling, typing, pressing the key or running the function, and says to take a new snapshot and call again. Other tasks keep the default profile | The sign-in then changes only that task's cookies. A sign-in made before the switch would already be in the default profile |
 | What the profile starts with | A copy of the default profile's cookies at that moment (`Browser/Task-<key>`, the `cache_path` of `CefRequestContext`, directly under the root cache, because Chromium opens only such a folder as a disk profile; section 7). localStorage and IndexedDB are not copied | The task keeps the person's sign-ins it had, so its agent signs in only where it means to |
 | The task's tabs | A tab's request context is fixed once it opens, so each of the task's tabs opens again in its place at its page, once, in the new profile (`BrowserHostClient.reopenTabs`). The agent's tools name the new tab for the old tab's ID with a note. A restored tab that has not loaded opens there when it does | Tabs of one task share one profile |
 | After that | The task stays on its profile, across restarts (`TaskProfiles.json`), and none of its sites follow the default profile: the person's later sign-ins elsewhere do not reach it, and a sign-in the person makes in that task stays there | Any copy into a profile replaces the sessions it lacks (section 11). A profile that is never written by Yardlet never loses an account |
@@ -76,7 +76,7 @@ These are the rules of "Per task". Why sign-ins are not copied between profiles 
 - **Yardlet:** `BrowserTaskProfiles` keeps which tasks have profiles of their own (`own` in `Browser/TaskProfiles.json`,
   each with the parent profile a new folder starts from), the child tasks that stay in the default profile, the setting
   and cleanup. `BrowserAgentTools` asks for a profile of its own (`takesOwnProfile`) before a fill, a typed sign-in or
-  the first page script; `MacBrowserHost.takeOwnProfile` records it, writes a line in `Browser/Logs/sign-ins.log` (the
+  a page script on a page with a password or code field; `MacBrowserHost.takeOwnProfile` records it, writes a line in `Browser/Logs/sign-ins.log` (the
   site's host, the task and the sign-in or script it was about to make; never a value or an account) and opens the
   task's tabs again (`BrowserHostClient.reopenTabs`, departure cause `ownProfile`). `BrowserHostClient` attaches the
   profile every time it opens a task's tab (`BrowserTaskProfiles.opening`, where a child task's first tab decides).
@@ -114,8 +114,13 @@ These are the rules of "Per task". Why sign-ins are not copied between profiles 
 - An agent's sign-in with the person's own account also stays in its task: the other tasks do not get it. A sign-in
   the agent makes without a password or code field (a "Sign in with Google" click on an account the default profile
   holds, a sign-in link) is no sign-in of its own, and stays in the default profile, as the person's would, unless
-  the task ran a page script before. A one-time code pressed key by key (`browser_press_key`) is not taken as one
-  either: only a password field is checked there.
+  the task ran a page script on a page with a password or code field before. A one-time code pressed key by key
+  (`browser_press_key`) is not taken as one either: only a password field is checked there.
+- A page script on a page with no password or one-time code field runs in the default profile, so a script that signs
+  in there by other means (setting a token in storage or a cookie, calling a site's sign-in API) changes the sign-in of
+  every task that shares that profile. The agent cannot read saved passwords, which keeps this rare. A main frame that
+  cannot be read counts as one with such a field; another frame that cannot be read does not. A task that already has
+  a profile of its own keeps it.
 - Partitioned cookies (CHIPS: cookies that a page embedded in another site keeps only under that top-level site) are not
   copied into a new profile. CEF's cookie manager does not take a partition key, so inserting one would make a cookie
   that every top-level site receives (section 8). In a new profile, embedded widgets start as if seen for the first time.
@@ -158,7 +163,11 @@ cookies of one session. Task G's agent then signs in through the Yardlet tools a
 (`browser_navigate`, `browser_snapshot`, `browser_type`): typing into the password field returns the "profile of its
 own" result with nothing typed, G's tab opens again once, and G takes the profile; typing again signs in there without
 another reload, G holding the person's two accounts and its own, while A, B and the default profile hold the person's
-two. The sign-ins log has one line for G, naming how it was about to sign in, with no value.
+two. The sign-ins log has one line for G, naming how it was about to sign in, with no value. Task S's agent then runs a
+script (`browser_evaluate`) on `/frames` (frames from this origin, from another origin of this site and from another
+site, with no password or code field), which runs in the default profile, and on `/login-frame`, whose password field
+is only in a frame from another site, which gives S a profile of its own first and runs nothing. Task T's script on
+`/login` does the same and runs when called again, and the log has a page script line for S and T.
 
 The one-time cleanup (section 8): the QA server's `/shapes/login`, opened as `qa.localhost` (Chromium keeps domain
 cookies of a `*.localhost` host, not of `localhost`), stays on a passwordless sign-in while a request carries `qa_npw`,

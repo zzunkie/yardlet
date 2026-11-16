@@ -4,9 +4,10 @@ import Foundation
 /// default, tasks share the default profile, as the Codex app's threads share one browser: the person's sign-ins reach
 /// every task as they are made, and a site that keeps several accounts in one set of cookies (Google) keeps them all.
 /// A task takes a profile of its own (`<root cache>/Task-<key>`; Chromium opens a profile on disk only in a direct
-/// child of its root cache) just before its agent signs in to a site itself or runs its first page script, starting as
-/// a copy of the default profile's cookies, so its sign-in changes no other task's. A child task of such a task starts with a copy of its
-/// parent's. The vault's sign-ins stay shared. With shared storage every tab uses the default profile.
+/// child of its root cache) just before its agent signs in to a site itself or runs a page script where it may (a page
+/// with a password or one-time code field), starting as a copy of the default profile's cookies, so its sign-in changes
+/// no other task's. A child task of such a task starts with a copy of its parent's. The vault's sign-ins stay shared.
+/// With shared storage every tab uses the default profile.
 @MainActor
 final class BrowserTaskProfiles {
     /// Settings › General "Keep cookies", as the Claude app's (`launchPreviewStorage`: per session or shared).
@@ -129,9 +130,9 @@ final class BrowserTaskProfiles {
     }
 
     /// The task's agent is about to sign in to a site itself (a fill from the password manager, typing into a password
-    /// or one-time code field) or to run its first page script: the task takes a profile of its own, which starts as a
-    /// copy of the default profile's cookies, so that sign-in changes no other task's. False when the task has one already, or every task
-    /// shares the default profile (the setting).
+    /// or one-time code field) or to run a page script on a page with such a field: the task takes a profile of its own,
+    /// which starts as a copy of the default profile's cookies, so that sign-in changes no other task's. False when the
+    /// task has one already, or every task shares the default profile (the setting).
     func takeOwnProfile(for session: UUID) -> Bool {
         guard storage == .perTask, !Self.taskless.contains(session) else { return false }
         var key = key(for: session)

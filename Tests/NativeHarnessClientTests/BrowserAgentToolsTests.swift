@@ -706,15 +706,20 @@ final class BrowserAgentToolsTests: XCTestCase {
     }
 
     /// A sign-in can also go in key by key, or through a script with no field typed into: a task in the default profile
-    /// takes one of its own before a character goes into a password field, and before its first script runs.
-    func testKeysIntoAPasswordFieldAndTheFirstScriptGiveTheTaskAProfileOfItsOwnFirst() async {
+    /// takes one of its own before a character goes into a password field, and before a script runs on a page with a
+    /// password or code field. A script on any other page leaves it in the default profile, with the person's sign-ins.
+    func testKeysIntoAPasswordFieldAndAScriptOnASignInPageGiveTheTaskAProfileOfItsOwnFirst() async {
         let focused = Box("password")
+        let signInField = Box(false)
         cdp.responders["Page.getFrameTree"] = { _ in
             .object(["frameTree": .object(["frame": .object(["id": .string("main"), "securityOrigin": .string("https://www.example.com")])])])
         }
         cdp.responders["Page.createIsolatedWorld"] = { _ in .object(["executionContextId": .integer(7)]) }
         cdp.responders["Runtime.evaluate"] = { params in
-            if params["contextId"] == .integer(7) { return ScriptedCDP.value(.string(focused.value)) }
+            if params["contextId"] == .integer(7) {
+                let scan = params["expression"]?.stringValue?.contains("looksLikeCodeField") == true
+                return ScriptedCDP.value(scan ? .bool(signInField.value) : .string(focused.value))
+            }
             if params["objectGroup"] != nil { return .object(["result": .object(["type": .string("object"), "objectId": .string("none")])]) }
             return ScriptedCDP.value(.integer(1))
         }
@@ -746,6 +751,11 @@ final class BrowserAgentToolsTests: XCTestCase {
         owns = false
         taken = []
         func scripts() -> Int { cdp.params(of: "Runtime.evaluate").filter { $0["awaitPromise"] == .bool(true) }.count }
+        let elsewhereScript = await run(AgentToolCatalog.evaluate, ["function": .string("() => 1")])
+        XCTAssertFalse(elsewhereScript.isError, elsewhereScript.text)
+        XCTAssertEqual(taken, [], "a page with no password or code field keeps the default profile")
+
+        signInField.value = true
         let before = scripts()
         let script = await run(AgentToolCatalog.evaluate, ["function": .string("() => 1")])
         XCTAssertTrue(script.isError)

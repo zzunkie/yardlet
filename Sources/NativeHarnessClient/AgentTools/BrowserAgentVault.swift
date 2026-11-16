@@ -908,11 +908,12 @@ enum VaultPageScripts {
         return BrowserURLPolicy.sameAddress(tree?["frameTree"]?["frame"]?["url"]?.stringValue, page)
     }
 
-    /// A context in the vault's isolated world of the tab's main frame.
-    static func vaultWorld(_ cdp: any BrowserAgentCDP, frame: String, timeout: Duration) async throws -> Int64 {
+    /// A context in the vault's isolated world of a frame: the tab's main frame, or one on `session`.
+    static func vaultWorld(_ cdp: any BrowserAgentCDP, frame: String, session: String? = nil,
+                           timeout: Duration) async throws -> Int64 {
         let world = try await cdp.send("Page.createIsolatedWorld", [
             "frameId": .string(frame), "worldName": .string(BrowserAgentTools.vaultWorldName)
-        ], timeout: timeout)
+        ], session: session, timeout: timeout)
         guard let context = world["executionContextId"]?.integerValue else { throw BrowserAgentToolError("no context") }
         return context
     }
@@ -1013,6 +1014,59 @@ enum VaultPageScripts {
               ], timeout: timeout) else { return false }
         return found["result"]?["value"]?.boolValue == true
     }
+
+    /// Whether the page may be where a sign-in happens: one of its frames holds a password field, also one the page
+    /// has since turned into a text field (`__yardletWasPassword`), or shows a field for a one-time code
+    /// (`looksLikeCodeField`), open shadow roots included. Each frame is read in its own vault world, a frame from
+    /// another site on its own session (`frameSessions`). A main frame that cannot be read may be; another frame that
+    /// cannot be read is left out.
+    static func holdsSignInField(_ cdp: any BrowserAgentCDP, timeout: Duration = .seconds(10)) async -> Bool {
+        let sessions = cdp.frameSessions
+        let remote = Set(sessions.map(\.frameID))
+        let frameTimeout = min(timeout, .seconds(5))
+        let order: [String?] = [nil] + sessions.map { $0.id }
+        for session in order {
+            guard let top = try? await cdp.send("Page.getFrameTree", [:], session: session,
+                                                timeout: session == nil ? timeout : frameTimeout)["frameTree"],
+                  let topID = top["frame"]?["id"]?.stringValue else {
+                if session == nil { return true }
+                continue
+            }
+            // The session's frame and those below it in its process; a frame from another site has a session of its own.
+            var frames = [topID]
+            var pending = top["childFrames"]?.arrayValue ?? []
+            while let child = pending.popLast() {
+                guard let id = child["frame"]?["id"]?.stringValue, !remote.contains(id) else { continue }
+                frames.append(id)
+                pending += child["childFrames"]?.arrayValue ?? []
+            }
+            for frame in frames {
+                let main = session == nil && frame == topID
+                let wait = main ? timeout : frameTimeout
+                guard let context = try? await vaultWorld(cdp, frame: frame, session: session, timeout: wait),
+                      let found = try? await cdp.send("Runtime.evaluate", [
+                          "expression": .string(signInFieldScript), "contextId": .integer(context), "returnByValue": .bool(true)
+                      ], session: session, timeout: wait),
+                      let holds = found["result"]?["value"]?.boolValue else {
+                    if main { return true }
+                    continue
+                }
+                if holds { return true }
+            }
+        }
+        return false
+    }
+
+    private static let signInFieldScript = """
+        (() => {
+          \(codeFieldTests)
+          const shownAsText = window.__yardletWasPassword;
+          const holds = root => Array.from(root.querySelectorAll('input')).some(e => e.type === 'password'
+              || (shownAsText && shownAsText.has(e)) || (looksLikeCodeField(e) && e.getBoundingClientRect().width > 0))
+            || Array.from(root.querySelectorAll('*')).some(e => e.shadowRoot && holds(e.shadowRoot));
+          return holds(document);
+        })()
+        """
 
     /// Whether the field with the keyboard may be a password field, read in the vault's world: the focused element,
     /// through open shadow roots and frames of the page's own origin. One in a frame of another origin may be, and so may
@@ -1561,9 +1615,9 @@ extension BrowserAgentTools {
     // MARK: Pieces
 
     /// The page's main frame as the browser reports it: its ID, the document it shows, and its origin.
-    /// Before the task's agent signs in to a site itself, or runs its first page script (`takesOwnProfile`): once the
-    /// task took a profile of its own, the page the agent read has opened again there, so the call stops and says what
-    /// to do again. `what` is what then stays the task's own.
+    /// Before the task's agent signs in to a site itself, or runs a page script where it may (`takesOwnProfile`): once
+    /// the task took a profile of its own, the page the agent read has opened again there, so the call stops and says
+    /// what to do again. `what` is what then stays the task's own.
     func takeOwnProfile(_ sessionID: UUID?, on page: BrowserAgentPage, what: String = "the sign-in it makes here",
                         how: String, undone: String, again: String) async throws {
         guard let sessionID, let takesOwnProfile else { return }
