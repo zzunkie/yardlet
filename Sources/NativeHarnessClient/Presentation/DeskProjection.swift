@@ -133,6 +133,34 @@ enum DeskTodayItem: Equatable, Identifiable, Sendable {
     }
 }
 
+/// A block of today's time axis: one of today's timed lines, or the runs of one hour that already ran, folded into
+/// one block (`Desk.axisItems`).
+enum DeskAxisItem: Equatable, Identifiable, Sendable {
+    case line(DeskTodayItem)
+    case ran(start: Date, end: Date, count: Int)
+
+    var id: String {
+        switch self {
+        case let .line(item): item.id
+        case let .ran(start, _, _): "ran \(start.timeIntervalSinceReferenceDate)"
+        }
+    }
+
+    var start: Date {
+        switch self {
+        case let .line(item): item.start
+        case let .ran(start, _, _): start
+        }
+    }
+
+    var end: Date {
+        switch self {
+        case let .line(item): item.end
+        case let .ran(_, end, _): end
+        }
+    }
+}
+
 /// What the desk ("Now", the home's first view) shows: what waits on the person, what runs and what
 /// just finished, and today. Nothing here is new state: it is `TaskAttentionProjection`'s attention,
 /// the pull request lookup's checks, the schedules' runs and the mailbox's inboxes, arranged.
@@ -172,6 +200,25 @@ struct Desk: Equatable, Sendable {
         showsRan ? todayItems : todayItems.filter { item in
             if case let .run(run) = item { run.kind != .ran } else { true }
         }
+    }
+
+    /// Today's timed lines as the time axis places them: the runs that already ran fold into one block for each hour
+    /// they ran in unless `showsRan`, as the list folds them into one line. A block starts at its hour and ends with
+    /// its last run, at the hour's end at most, so the blocks of two hours never stand side by side.
+    func axisItems(showsRan: Bool, calendar: Calendar = .current) -> [DeskAxisItem] {
+        let timed = todayItems.filter { !$0.isAllDay }
+        guard !showsRan else { return timed.map(DeskAxisItem.line) }
+        var lines: [DeskAxisItem] = []
+        var hours: [Date: (end: Date, count: Int)] = [:]
+        for item in timed {
+            guard case let .run(run) = item, run.kind == .ran else { lines.append(.line(item)); continue }
+            let hour = calendar.dateInterval(of: .hour, for: run.at) ?? DateInterval(start: run.at, duration: 3_600)
+            let end = min(item.end, hour.end)
+            let folded = hours[hour.start]
+            hours[hour.start] = (max(folded?.end ?? end, end), (folded?.count ?? 0) + 1)
+        }
+        return (lines + hours.map { DeskAxisItem.ran(start: $0.key, end: $0.value.end, count: $0.value.count) })
+            .sorted { $0.start != $1.start ? $0.start < $1.start : $0.id < $1.id }
     }
 
     /// Puts today's events on the desk.

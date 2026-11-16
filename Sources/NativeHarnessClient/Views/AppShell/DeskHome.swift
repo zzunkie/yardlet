@@ -395,7 +395,8 @@ struct DeskHome<Switch: View, Bottom: View>: View {
 
     private func todayZone(_ desk: Desk, onAxis: Bool = false) -> some View {
         DeskTodayZone(items: onAxis ? desk.todayItems : desk.listedToday(showsRan: showsRanToday),
-                      ran: onAxis ? 0 : desk.ranToday, showsRan: showsRanToday,
+                      axis: onAxis ? desk.axisItems(showsRan: showsRanToday) : [],
+                      ran: desk.ranToday, showsRan: showsRanToday,
                       left: desk.remainingToday, countsEvents: desk.showsEvents, now: activity.now,
                       onAxis: onAxis,
                       highlighted: focus.wrappedValue == .desk ? keyboard.highlightedEntry : nil,
@@ -436,9 +437,14 @@ struct DeskHome<Switch: View, Bottom: View>: View {
         return waiting + (standsInZones(desk) ? finished + running : running + finished) + today(desk)
     }
 
-    /// Today's lines in the keyboard's order: the axis's or the list's, then the list's line of runs that ran.
+    /// Today's lines in the keyboard's order: on the axis its all-day lines, "Show less" while the runs that ran show,
+    /// then its blocks; in the list its lines, then the line of runs that ran.
     private func today(_ desk: Desk) -> [NewTaskHomeListKeyboard.Entry] {
-        if standsInZones(desk) { return desk.todayItems.map { .row(.desk(.today), $0.id) } }
+        if standsInZones(desk) {
+            return desk.todayItems.filter(\.isAllDay).map { .row(.desk(.today), $0.id) }
+                + (showsRanToday && desk.ranToday > 0 ? [.toggle(.desk(.today))] : [])
+                + desk.axisItems(showsRan: showsRanToday).map { .row(.desk(.today), $0.id) }
+        }
         return desk.listedToday(showsRan: showsRanToday).map { .row(.desk(.today), $0.id) }
             + (desk.ranToday > 0 ? [.toggle(.desk(.today))] : [])
     }
@@ -476,7 +482,10 @@ struct DeskHome<Switch: View, Bottom: View>: View {
                 switch desk.todayItems.first(where: { $0.id == id }) {
                 case let .run(run): onAction(.openSchedule(run.schedule.id))
                 case let .event(event): onAction(.openEvent(event))
-                case nil: return .ignored
+                case nil:
+                    // An hour of runs that ran, folded on the axis.
+                    guard case .ran = desk.axisItems(showsRan: showsRanToday).first(where: { $0.id == id }) else { return .ignored }
+                    showsRanToday = true
                 }
             }
             return .handled
@@ -893,6 +902,8 @@ struct DeskFinishedRow: View, @MainActor Equatable {
 /// timed events stand at their times.
 struct DeskTodayZone: View {
     let items: [DeskTodayItem]
+    /// The time axis's blocks, with `onAxis`: the timed lines, the runs that ran folded by the hour unless `showsRan`.
+    var axis: [DeskAxisItem] = []
     /// How many runs already ran, which `items` leaves out unless `showsRan`: the folded line's count.
     var ran = 0
     var showsRan = false
@@ -918,8 +929,10 @@ struct DeskTodayZone: View {
                 title
                 if !mail.isEmpty { mailBlock(mail, compact: true) }
                 ForEach(items.filter(\.isAllDay)) { line($0, colors: colors) }
-                DeskTimeAxis(items: items.filter { !$0.isAllDay }, colors: colors, minute: Calendar.current.startOfMinute(now),
-                             day: day, highlighted: highlightedID, onOpenEvent: onOpenEvent, onOpenSchedule: onOpenSchedule)
+                if showsRan, ran > 0 { ranLine }
+                DeskTimeAxis(items: axis, colors: colors, minute: Calendar.current.startOfMinute(now),
+                             day: day, highlighted: highlightedID, onOpenEvent: onOpenEvent, onOpenSchedule: onOpenSchedule,
+                             onShowRan: onToggleRan)
                     .equatable()
                     .padding(.leading, 10)
                     .padding(.top, 10)

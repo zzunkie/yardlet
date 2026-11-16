@@ -121,8 +121,9 @@ calendar while the calendar is on.
   its calendar's color, its title, and whether it ended, is under way or starts soon ("in 1 hour"). An invitation not
   answered yet says "Not replied", kept when the line is too narrow for the rest. The runs that already ran ask nothing,
   so the list folds them into one line after the others ("12 already ran"), which lists them when chosen, as "Show
-  more" does under the results just finished; the time axis below keeps every run at its time. The header's and the
-  zone's count of what is left today counts the runs to come and the timed events that have not ended.
+  more" does under the results just finished; the time axis folds them the same way, one block for each hour. The
+  header's and the zone's count of what is left today counts the runs to come and the timed events that have not
+  ended.
 - With the calendar on and the home at least 1,200 points wide (`DeskLayout.zones`), the desk stands as three zones:
   what waits with what just finished under it, what runs, and today on a time axis (`DeskTimeAxis`). While both fit,
   the results stand right under what waits; when they do not, they keep their lines at the column's foot, up to half
@@ -131,8 +132,12 @@ calendar while the calendar is on.
   them in its middle rather than stretching their lines (`DeskColumnsPlacement`). Unread mail folds to one line
   above it and all-day events stay lines. The axis spans 9:00 to 23:00, widened to today's earliest and latest items;
   events sit at their times in their calendars' colors, side by side where they overlap; an invitation not answered
-  yet is outlined dashed; runs are dashed with a clock; a red line marks the time now. A column too short for it
-  scrolls, opening at the time now.
+  yet is outlined dashed; runs are dashed with a clock; a red line marks the time now. The runs that already ran fold
+  into one block for their hour ("4 already ran"), and choosing one lays them all out at their times again, with "Show
+  less" above the axis to fold them back; events and the runs to come are never folded. The axis opens an hour before
+  now, with the earlier hours above it to scroll up to, and spreads the rest of the day over the column: over at least
+  six hours, and no less than 44 points an hour, so a few hours left at night do not stretch to fill a tall column. It
+  keeps that opening, and wherever the person scrolled, while it shows, as the time moves and the window changes size.
 - Choosing an event shows it on the calendar, chosen; choosing a run opens its scheduled task. The keyboard goes
   through today's lines after the desk's other lines.
 - The axis is drawn again only when what it shows changes, to the minute, so the time line moving draws no other part
