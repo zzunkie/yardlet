@@ -26,6 +26,10 @@ final class MainWindow {
     private let content = Border()
     private var sidebar: TaskSidebar?
     private var actions: TaskActions?
+    /// A task's header above its conversation and composer (`taskPane`), as the Mac's title bar heads a task.
+    private let taskFrame = Grid()
+    private var header: TaskHeader?
+    private var keys: TaskKeys?
     private let timeline = ConversationTimeline()
     /// The shown task's composer, as the Mac's.
     private let composer: TaskComposer
@@ -97,13 +101,38 @@ final class MainWindow {
         sidebar.onNewTaskInProject = { [weak self] folder in self?.showNewTask(in: folder) }
         sidebar.onAddProject = { [weak self] in self?.addProject() }
         self.sidebar = sidebar
+        let header = TaskHeader(actions: actions)
+        self.header = header
+        for height in [GridLength(value: 0, gridUnitType: .auto), GridLength(value: 1, gridUnitType: .star)] {
+            let row = RowDefinition()
+            row.height = height
+            taskFrame.rowDefinitions.append(row)
+        }
+        taskFrame.children.append(header.view)
+        try? Grid.setRow(taskPane, 1)
+        taskFrame.children.append(taskPane)
+        let keys = TaskKeys(model: model, sidebar: sidebar, actions: actions)
+        keys.shown = { [weak self] in
+            guard let self, self.shown == .task, let session = self.selectedSession else { return (.home, nil) }
+            return (.session(session.id), session)
+        }
+        keys.activate = { [weak self] item in
+            switch item {
+            case .home: self?.showHome()
+            case let .session(id): self?.show(.task(id))
+            case .split: break
+            }
+        }
+        keys.newTask = { [weak self] in self?.showHome() }
+        keys.install(on: root)
+        self.keys = keys
         SidebarStyle.columns(root, [SidebarStyle.auto, SidebarStyle.star])
         root.children.append(sidebar.view)
         content.background = Self.layerFill.brush
         content.borderBrush = SettingsCard.stroke.brush
         content.borderThickness = Thickness(left: 1, top: 1, right: 0, bottom: 0)
         content.cornerRadius = CornerRadius(topLeft: 8, topRight: 0, bottomRight: 0, bottomLeft: 0)
-        content.child = taskPane
+        content.child = taskFrame
         try? Grid.setColumn(content, 1)
         root.children.append(content)
         WindowChrome.frame(window, title: YardletProduct.name, content: root)
@@ -135,7 +164,7 @@ final class MainWindow {
             // Showing a task reads it, as the Mac's window does when its selection changes or it comes back to Tasks;
             // choosing the task already shown leaves a mark the person put back with Mark as unread.
             let reads = shown != .task || shownSessionID != id
-            content.child = taskPane
+            content.child = taskFrame
             shown = .task
             choose(id)
             if reads { Task { await model.store.markRead(id: id) } }
@@ -217,6 +246,7 @@ final class MainWindow {
                 self.showHome()
             }
         }
+        header?.show(session)
         if session?.id != shownSessionID {
             shownSessionID = session?.id
             if let session { log.write("showing: \(session.title)") }
