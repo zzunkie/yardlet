@@ -307,6 +307,68 @@ final class CodexApprovalParityTests: XCTestCase {
         XCTAssertEqual(answered, [.object(["action": .string("decline")])])
         let methods = await transport.requestMethods
         XCTAssertFalse(methods.contains("turn/interrupt"))
+
+        // Pressed again, Stop and the card's answer find nothing left to do: no failure, nothing sent.
+        try await adapter.interrupt(handle)
+        try await adapter.respond(to: "i:3", response: .mcpElicitation(action: .accept), in: handle)
+        let sentAfter = await transport.sentResponses.count
+        XCTAssertEqual(sentAfter, 1)
+        let state = try await adapter.presentationState(for: handle)
+        XCTAssertEqual(state.serverRequestsByID["i:3"]?.resolution, .resolved(.object(["action": .string("decline")])))
+        // A request the task never had is still refused.
+        do {
+            try await adapter.respond(to: "i:99", response: .mcpElicitation(action: .accept), in: handle)
+            XCTFail("An unknown request was answered")
+        } catch {}
+        await adapter.close(handle)
+    }
+
+    /// "Deny and stop" answers `cancel`, which ends the turn in Codex at once, so a Stop right after
+    /// it, or one sent as the turn ended, finds no turn running. That is the stop's outcome; only a
+    /// stop Codex refused for another reason is a failure.
+    func testAStopThatArrivesAfterTheTurnEndedIsNotAFailure() async throws {
+        let transport = FakeCodexTransport(responses: [
+            "initialize": [.object(["platformOs": .string("macos")])],
+            "thread/start": [.object(["thread": .object(["id": .string("thread-late")])])],
+            "turn/start": ["turn-1", "turn-2", "turn-3"].map { .object(["turn": .object(["id": .string($0)])]) }
+        ], errorResponses: ["turn/interrupt": [
+            .object(["code": .integer(-32600), "message": .string("no active turn to interrupt")]),
+            .object(["code": .integer(-32600), "message": .string("expected active turn id turn-3 but found turn-4")])
+        ]])
+        let adapter = CodexAdapter(executableURL: URL(filePath: "/tmp/codex"), transport: transport)
+        let handle = try await adapter.createSession(CreateHarnessSessionRequest(
+            localSessionID: UUID(), workspaceURL: URL(filePath: "/tmp/w"), initialPrompt: nil))
+        try await adapter.send("run it", to: handle)
+        await transport.emitServerRequest(id: .integer(4), method: "item/commandExecution/requestApproval", params: .object([
+            "threadId": .string("thread-late"), "turnId": .string("turn-1"), "command": .string("sleep 60"),
+            "availableDecisions": .array([.string("accept"), .string("cancel")])
+        ]))
+        try await waitUntil { (try? await adapter.presentationState(for: handle))?.serverRequestsByID["i:4"] != nil }
+        try await adapter.respond(to: "i:4", response: .command(.cancel), in: handle)
+        await transport.emit(method: "turn/completed", params: .object([
+            "threadId": .string("thread-late"),
+            "turn": .object(["id": .string("turn-1"), "status": .string("interrupted"), "error": .null, "items": .array([])])
+        ]))
+        try await waitUntil { await adapter.activeTurnID(for: handle) == nil }
+
+        try await adapter.interrupt(handle)
+        try await adapter.respond(to: "i:4", response: .command(.cancel), in: handle)
+        let interrupts = await transport.requestMethods.filter { $0 == "turn/interrupt" }
+        XCTAssertTrue(interrupts.isEmpty)
+        let answers = await transport.sentResponses.count
+        XCTAssertEqual(answers, 1)
+
+        // The turn ends while the stop is on its way.
+        try await adapter.send("again", to: handle)
+        try await adapter.interrupt(handle)
+        // A stop Codex refuses because another turn runs is still reported.
+        try await adapter.send("once more", to: handle)
+        do {
+            try await adapter.interrupt(handle)
+            XCTFail("A refused stop was not reported")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("expected active turn id"))
+        }
         await adapter.close(handle)
     }
 }

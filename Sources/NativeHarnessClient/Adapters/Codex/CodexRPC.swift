@@ -157,6 +157,13 @@ struct CodexRPCRequestFailure: LocalizedError, Equatable, Sendable {
     var isThreadWriterConflict: Bool {
         payload["message"]?.stringValue?.contains("already has an active writer") == true
     }
+
+    /// `turn/interrupt` reached the App Server after the turn ended: `-32600 "no active turn to
+    /// interrupt"` (0.169.0). A turn ID that names another running turn is answered differently
+    /// ("expected active turn id … but found …") and stays a failure.
+    var isNoActiveTurn: Bool {
+        payload["message"]?.stringValue?.hasPrefix("no active turn") == true
+    }
 }
 
 /// A Codex thread that another App Server is writing, such as the one the ChatGPT app runs, cannot

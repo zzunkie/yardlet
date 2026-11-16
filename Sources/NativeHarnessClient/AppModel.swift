@@ -2668,8 +2668,11 @@ final class AppModel {
         do {
             try await provider.respond(to: serverRequestID, response: response, in: handle)
             guard store.sessions.contains(where: { $0.id == session.id }) else { return }
+            // The card shows the answer before the provider's state does. A second answer to a card
+            // already answered reached nothing, so the card keeps the first.
             if var state = codexPresentationBySessionID[session.id],
                let request = state.serverRequestsByID[serverRequestID],
+               request.resolution == .pending,
                let result = response.result(for: request.method),
                CodexTaskReducer().resolveServerRequest(
                    id: serverRequestID,

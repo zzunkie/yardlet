@@ -468,23 +468,38 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
     /// on the task is answered no first, then the turn is interrupted. An MCP server that asked
     /// (Computer Use's "Allow … to use Whale?") hears decline rather than waiting on a card whose
     /// turn has ended, and the card reads as denied at once.
+    ///
+    /// A stop that finds no turn running has nothing to stop, and that is no failure: the turn ended
+    /// first, on its own or because the person denied a request with "Deny and stop" (`cancel`,
+    /// which Codex takes as an interrupt). The same holds when the turn ends while the request is on
+    /// its way and the App Server answers that no turn is active.
     func interrupt(_ session: HarnessSessionHandle) async throws {
         try requireRegistered(session)
         let declined = await declinePendingServerRequests(for: session.localSessionID)
         guard let turnID = resolvedActiveTurnID(for: session.localSessionID) else {
-            if declined {
-                emitPostServerResponseStatus(for: session.localSessionID)
-                return
-            }
-            throw HarnessAdapterError.capabilityUnavailable("No active Codex turn to interrupt")
+            if declined { emitPostServerResponseStatus(for: session.localSessionID) }
+            return
         }
-        _ = try await transport.request(
-            CodexProtocol.interruptTurn(
-                id: takeRequestID(),
-                threadID: session.providerSessionID,
-                turnID: turnID
+        do {
+            _ = try await transport.request(
+                CodexProtocol.interruptTurn(
+                    id: takeRequestID(),
+                    threadID: session.providerSessionID,
+                    turnID: turnID
+                )
             )
-        )
+        } catch let failure as CodexRPCRequestFailure where failure.isNoActiveTurn {
+            return
+        }
+    }
+
+    /// A request this task no longer waits on: already answered, by an earlier answer to the same
+    /// card or by the end of its turn. Another answer to it has nothing left to do.
+    private func isAnswered(_ requestID: String, in localSessionID: UUID) -> Bool {
+        guard serverRequestContexts[requestID] == nil,
+              let request = presentationStateByLocalSessionID[localSessionID]?.serverRequestsByID[requestID]
+        else { return false }
+        return request.resolution != .pending
     }
 
     func respond(
@@ -495,6 +510,7 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
         try requireRegistered(session)
         guard let context = serverRequestContexts[permissionRequestID],
               context.localSessionID == session.localSessionID else {
+            if isAnswered(permissionRequestID, in: session.localSessionID) { return }
             throw HarnessAdapterError.invalidProviderEvent(
                 "Unknown or already-resolved permission request"
             )
@@ -543,6 +559,7 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
         try requireRegistered(session)
         guard let context = serverRequestContexts[serverRequestID],
               context.localSessionID == session.localSessionID else {
+            if isAnswered(serverRequestID, in: session.localSessionID) { return }
             throw HarnessAdapterError.invalidProviderEvent(
                 "Unknown or already-resolved Codex server request"
             )
