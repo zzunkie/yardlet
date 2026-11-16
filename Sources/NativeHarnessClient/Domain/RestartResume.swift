@@ -302,8 +302,8 @@ enum TurnCut: String, Codable, Equatable, Sendable {
     /// The provider could not reach its API, or lost it mid-response, and ended the turn on its own
     /// connection error (`ConnectionResumePolicy`).
     case connection
-    /// The same, because the Mac slept mid-response: Claude Code's "Connection lost while your
-    /// computer was asleep".
+    /// The same, because the Mac slept mid-response: Claude Code's `api_error` "computer_slept" ("Your
+    /// computer went to sleep mid-response", "Connection lost while your computer was asleep").
     case sleep
 }
 

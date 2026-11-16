@@ -355,12 +355,14 @@ final class RestartResumeTests: XCTestCase {
             .stringValue, "auto-continuation")
 
         // Which ended turns are a lost connection, by Claude Code 2.1.299's own result: its connection
-        // words, an API error without an HTTP status. Nothing else continues.
-        func result(_ text: String, status: JSONValue? = nil, reason: String? = "api_error") -> JSONValue {
+        // words, an API error without an HTTP status; and 2.1.325's sleep, typed in `api_error` whatever
+        // its words. Nothing else continues: not a stream that stalled, broke or met a server error.
+        func result(_ text: String, status: JSONValue? = nil, reason: String? = "api_error", kind: String? = nil) -> JSONValue {
             var object: [String: JSONValue] = ["type": .string("result"), "subtype": .string("success"),
                                                "is_error": .bool(true), "result": .string(text)]
             if let reason { object["terminal_reason"] = .string(reason) }
             if let status { object["api_error_status"] = status }
+            if let kind { object["api_error"] = .string(kind) }
             return .object(object)
         }
         let cuts: [(JSONValue, TurnCut?)] = [
@@ -371,6 +373,21 @@ final class RestartResumeTests: XCTestCase {
             (result("API Error: Request timed out. Check your internet connection and proxy settings"), .connection),
             (result("API Error: Connection to the API was lost (EPIPE). This is usually temporary — try again."), .connection),
             (result("API Error: Connection lost while your computer was asleep"), .sleep),
+            (result("API Error: Connection lost while your computer was asleep", kind: "computer_slept"), .sleep),
+            (result("API Error: Your computer went to sleep mid-response. The response above may be incomplete.",
+                    kind: "computer_slept"), .sleep),
+            (result("API Error: Your computer went to sleep before a response was produced. Try again.",
+                    kind: "computer_slept"), .sleep),
+            (result("API Error: Connection lost mid-response. The response above may be incomplete.",
+                    kind: "connection_failed"), .connection),
+            (result("API Error: Connection lost before a response was produced. Try again."), .connection),
+            (result("API Error: The response stopped arriving. The response above may be incomplete.",
+                    kind: "stream_idle_timeout"), nil),
+            (result("API Error: The response stalled before a response was produced. Try again.",
+                    kind: "stream_idle_timeout"), nil),
+            (result("API Error: Server error mid-response. The response above may be incomplete."), nil),
+            (result("API Error: Part of the response never arrived. The response above may be incomplete."), nil),
+            (result("API Error: The response stream was malformed. The response above may be incomplete."), nil),
             (result("API Error: Unable to connect to API", reason: nil), .connection),
             (result("API Error: Unable to connect to API: SSL certificate has expired"), nil),
             (result("API Error: 500 Internal server error", status: .number(500)), nil),
@@ -395,6 +412,7 @@ final class RestartResumeTests: XCTestCase {
             (result("API Error: 500 Internal server error", status: .number(500)), true),
             (result("API Error: Repeated 529 Overloaded errors", status: .number(529)), true),
             (result("API Error: 429 Too many requests"), true),
+            (result("API Error: Server error mid-response. The response above may be incomplete."), true),
             (result("Failed to authenticate. API Error: 401"), false),
             (result("API Error: 403 Request not allowed", status: .number(403)), false),
             (result("Prompt is too long", status: .number(400)), false),

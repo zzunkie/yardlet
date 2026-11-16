@@ -576,8 +576,14 @@ enum ClaudeProtocol {
     /// check your internet or DNS (ENOTFOUND)", "Connection dropped (ECONNRESET)", "Unable to connect to
     /// API. Check your internet connection", "Request timed out. …", "Connection lost while your computer
     /// was asleep", …); the Claude app 3.1623.3 continues the same set by the same words (`TZe`). An SSL
-    /// certificate error is no lost connection. `.sleep` for the Mac's sleep, `.connection` otherwise;
-    /// nil for anything else: a stop, a plan limit, a sign-in or server error, a failed tool.
+    /// certificate error is no lost connection. A stream cut once it began has its own words (2.1.322:
+    /// "Connection lost mid-response. …", "… before a response was produced. Try again."); only the
+    /// connection's are a lost connection, not a stalled, malformed or server-cut stream, as the Claude
+    /// app 5.1231 reads them. The Mac's sleep is `.sleep`: the result's `api_error` "computer_slept", sent
+    /// with the sleep words old and new ("Your computer went to sleep mid-response. …") and what the
+    /// Claude app 5.1231 continues by, or the older words alone from a CLI that sends no `api_error`.
+    /// `.connection` for another lost connection; nil for anything else: a stop, a plan limit, a sign-in
+    /// or server error, a failed tool.
     static func turnCut(ofResult value: JSONValue) -> TurnCut? {
         guard value["type"]?.stringValue == "result",
               value["parent_tool_use_id"]?.stringValue?.isEmpty != false,
@@ -585,7 +591,9 @@ enum ClaudeProtocol {
               value["terminal_reason"].map({ $0.stringValue == "api_error" }) ?? true,
               value["api_error_status"] == nil || value["api_error_status"] == .null,
               let text = value["result"]?.stringValue else { return nil }
-        if text.contains("while your computer was asleep") { return .sleep }
+        if value["api_error"]?.stringValue == "computer_slept" || text.contains("while your computer was asleep") {
+            return .sleep
+        }
         if text.contains("Unable to connect to API:") || text.localizedCaseInsensitiveContains("certificate") { return nil }
         return connectionWordings.contains { text.contains($0) } ? .connection : nil
     }
