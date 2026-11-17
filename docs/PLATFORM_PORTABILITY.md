@@ -195,7 +195,21 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   only when what they show changes, not for every event a turn streams. As in the Mac's composer and the harnesses'
   own apps, Enter sends and Shift+Enter starts a new line (`WinUI/ComposerKeys.swift`); New task and a host's window
   have the same field and Send. New task, under Home (`WinUI/NewTaskPane.swift`), is the Mac's home and starts a task
-  as the Mac's does, from the Mac's home draft: over it the recent tasks with Import conversation…, and at its foot
+  as the Mac's does, from the Mac's home draft. Over it are the projects as the Mac's home lists them
+  (`WinUI/NewTaskHomeLists.swift`, from the engine's `NewTaskHomeListsProjection` and `NewTaskHomeListsLayout` over
+  `AppModel.newTaskHomeActivity`), side by side in as many columns as fit: each project, then the chats, with the
+  tasks that wait on the person, run or hold an unread result, then its latest tasks with their latest answer's first
+  line; its open pull requests as the Claude app's pill, looked up with the person's own `gh` as on the Mac
+  (`TaskPullRequestMonitor`); what its folder is on and what finished today; and the projects left alone for a while
+  that still hold unfinished work. A project's name starts the new task there, Ctrl-click opens a pull request, and
+  an unread result's or a left project's ✕ marks it read or sets it aside. A task that needs the person is answered
+  in the composer's place, in its own conversation and composer under a line naming it
+  (`WinUI/NewTaskHomeReply.swift`), until the person sends or answers there and the next task that needs them takes
+  its place; Escape or Close preview gives the new task its composer back, and a double-click, like any other task's
+  line, opens the task. Each panel is drawn again only when what
+  it shows changes. While no project has anything to show, the recent tasks are there instead; Import conversation…
+  stands over either, since Windows has no File menu. The Mac's worktree rows, token usage band, schedules and the
+  chosen folder's rows over the title are the Mac's alone. At its foot are
   the Mac's large title (`NewTaskHeroTitleKind`), whose project name opens the project menu, the chip that chooses
   where a task without a project starts, and the composer card, whose bottom row holds the harness with its mark (a
   harness whose CLI Yardlet found), the account, the permission and the model, and Start task. Where the task works

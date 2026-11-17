@@ -27,6 +27,13 @@ struct LocalGitHubCLI: GitHubCLIRunning {
     /// Where Homebrew, MacPorts and a manual install put it. A GUI launch does not inherit the shell's
     /// PATH, so these are looked at directly, as `GitExecutableLocator` looks for Git.
     static let standardPaths = ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/opt/local/bin/gh"]
+    /// On Windows, where GitHub CLI's installer (and winget's, which runs it) puts it for everyone, and where Scoop
+    /// puts it, under the variable that names each folder; `gh.exe` in `Path` is looked for first.
+    static let windowsInstallPaths = [
+        ("ProgramFiles", "GitHub CLI\\gh.exe"),
+        ("ProgramFiles(x86)", "GitHub CLI\\gh.exe"),
+        ("USERPROFILE", "scoop\\apps\\gh\\current\\bin\\gh.exe")
+    ]
 
     /// What keeps `gh` from waiting on a person: no prompt, pager, colour, spinner or update notice.
     static let environment = [
@@ -46,8 +53,14 @@ struct LocalGitHubCLI: GitHubCLIRunning {
         homeURL: URL = FileManager.default.homeDirectoryForCurrentUser,
         isExecutableFile: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
     ) -> URL? {
+        #if os(Windows)
+        let paths = GitExecutableLocator.windowsCandidates(named: "gh.exe", installPaths: windowsInstallPaths,
+                                                           environment: ProcessInfo.processInfo.environment)
+        return paths.first(where: GitExecutableLocator.isExecutableFile).map { URL(filePath: $0) }
+        #else
         let paths = candidates + [homeURL.appending(path: ".local/bin/gh").path(percentEncoded: false)]
         return paths.first(where: isExecutableFile).map { URL(filePath: $0) }
+        #endif
     }
 
     func run(_ arguments: [String], in directory: URL, timeout: Duration) async throws -> GitHubCLIOutput {

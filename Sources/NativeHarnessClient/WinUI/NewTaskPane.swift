@@ -25,6 +25,10 @@ final class NewTaskPane {
     var onOpenTask: ((SessionRecord.ID) -> Void)?
     /// Opens Import conversation, from the link over the recent tasks.
     var onImportConversation: (() -> Void)?
+    /// Answers a task that needs the person in the composer's place; without it, choosing such a task opens it.
+    var reply: NewTaskHomeReplyPane? {
+        didSet { attachReply() }
+    }
 
     private let model: AppModel
     private let log: QAEventLog
@@ -40,6 +44,9 @@ final class NewTaskPane {
     private let lists: NewTaskHomeListsView
     /// The scroll view over the composer, whose width sets the area's.
     private let listScroll = ScrollViewer()
+    private let bottom = StackPanel()
+    /// The title, where the task starts and the composer, which a task answered here takes the place of.
+    private let hero = StackPanel()
     private let title = StackPanel()
     private let destination = Grid()
     private let sendButton = ComposerParts.sendButton(name: L10n.string("Start task"))
@@ -65,6 +72,10 @@ final class NewTaskPane {
     private var listsSize: (columns: Int, rowLimit: Int) = (1, 3)
     /// Draws the times again each minute while the home shows.
     private var ticking: Task<Void, Never>?
+    /// The task the composer's place answers now, and the one the person just answered there, which the next task
+    /// that needs them replaces.
+    private var replyTaskID: SessionRecord.ID?
+    private var answeredTaskID: SessionRecord.ID?
     private var shownTitle: [String]?
     private var shownControls: Controls?
 
@@ -135,19 +146,19 @@ final class NewTaskPane {
         }
         view.children.append(listScroll)
 
-        let bottom = StackPanel()
         bottom.maxWidth = 760 + 2 * 28
         bottom.horizontalAlignment = .stretch
         bottom.padding = Thickness(left: 28, top: 14, right: 28, bottom: 20)
         title.orientation = .horizontal
         title.horizontalAlignment = .center
-        bottom.children.append(title)
+        hero.children.append(title)
         destination.horizontalAlignment = .center
         destination.margin = Thickness(left: 0, top: 8, right: 0, bottom: 0)
-        bottom.children.append(destination)
+        hero.children.append(destination)
         let composer = card.view
         composer.margin = Thickness(left: 0, top: 20, right: 0, bottom: 0)
-        bottom.children.append(composer)
+        hero.children.append(composer)
+        bottom.children.append(hero)
         try? Grid.setRow(bottom, 1)
         view.children.append(bottom)
         // The title fits the window: smaller where the window is narrow, as the Mac's steps down; the projects stand
@@ -155,6 +166,7 @@ final class NewTaskPane {
         view.sizeChanged.addHandler { [weak self] _, _ in
             guard let self else { return }
             self.fitTitle()
+            self.reply?.setHeight(self.replyHeight)
             if self.measureLists() { self.redrawLists() }
         }
 
@@ -226,12 +238,14 @@ final class NewTaskPane {
         }
     }
 
-    /// The window shows something else: the home stops following the tasks until it is shown again.
+    /// The window shows something else: the home stops following the tasks until it is shown again, and comes back
+    /// with the new task's composer.
     func hide() {
         followGeneration += 1
         ticking?.cancel()
         ticking = nil
         lists.hide()
+        if replyTaskID != nil { placeReply(nil) }
     }
 
     /// The times the lists show ("3 min ago", "12 min so far") read again each minute.
@@ -265,7 +279,7 @@ final class NewTaskPane {
     private func follow() {
         followGeneration += 1
         let current = followGeneration
-        let (recent, heading, controls, text, carried, projects) = withObservationTracking {
+        let (recent, heading, controls, text, carried, (projects, sessions)) = withObservationTracking {
             (recentShown(), titleShown(), controlsShown(), draft.text, draft.attachments, listsShown())
         } onChange: { [weak self] in
             Task { @MainActor in
@@ -278,6 +292,10 @@ final class NewTaskPane {
             if card.field.text != text { card.field.text = text }
         }
         lists.show(projects)
+        // The task answered here was archived or removed.
+        if let id = replyTaskID, !sessions.contains(where: { $0.id == id }) {
+            Task { @MainActor [weak self] in self?.showReply(nil, markingRead: false) }
+        }
         // The recent tasks while no project has anything to show, as on the Mac.
         let showsRecent = projects.isEmpty
         if recent != shownRecent || showsRecent != shownRecentRows {
@@ -304,15 +322,17 @@ final class NewTaskPane {
         }
     }
 
-    /// The projects over the composer, read from the model's tasks as the Mac's home reads them.
-    private func listsShown() -> NewTaskHomeListsView.Reading {
+    /// The projects over the composer, read from the model's tasks as the Mac's home reads them, and the tasks they
+    /// read.
+    private func listsShown() -> (NewTaskHomeListsView.Reading, [SessionRecord]) {
         var activity = model.newTaskHomeActivity()
         // Windows runs no schedules and has no Scheduled tasks to open one in.
         activity.schedules = []
         activity.stoppedSchedules = []
-        return lists.read(activity: activity, selectedProjectID: draft.startsChat ? nil : selectedProjectID,
-                          startsChat: draft.startsChat, replyTaskID: nil, columns: listsSize.columns,
-                          rowLimit: listsSize.rowLimit)
+        let reading = lists.read(activity: activity, selectedProjectID: draft.startsChat ? nil : selectedProjectID,
+                                 startsChat: draft.startsChat, replyTaskID: replyTaskID, columns: listsSize.columns,
+                                 rowLimit: listsSize.rowLimit)
+        return (reading, activity.sessions)
     }
 
     /// The project the new task starts in: the draft's, or the one that holds its folder.
@@ -413,12 +433,18 @@ final class NewTaskPane {
     // MARK: The projects' lines
 
     /// What a line of the projects does, as the Mac's home does it: a project's name starts the new task there and
-    /// gives the composer the keyboard; a task opens.
+    /// gives the composer the keyboard; a task that needs the person is answered in the composer's place, and any
+    /// other task opens.
     private func perform(_ action: NewTaskHomeAction) {
         switch action {
-        case let .openTask(id), let .reply(id):
+        case let .openTask(id):
+            if replyTaskID == id { showReply(nil, markingRead: false) }
             onOpenTask?(id)
+        case let .reply(id):
+            guard let reply else { return perform(.openTask(id)) }
+            if replyTaskID == id { reply.focus() } else { showReply(id) }
         case let .chooseProject(id):
+            if replyTaskID != nil { showReply(nil) }
             guard let project = visibleProjects.first(where: { $0.id == id }) else { return }
             draft.projectID = project.id
             draft.workspaceURL = project.primaryRoot
@@ -426,6 +452,7 @@ final class NewTaskPane {
             refreshSettings()
             _ = try? card.field.focus(.programmatic)
         case .chooseChat:
+            if replyTaskID != nil { showReply(nil) }
             draft.chooseChat()
             log.write("new task place: chat")
             refreshSettings()
@@ -436,6 +463,65 @@ final class NewTaskPane {
         case .useNewWorktree, .openSchedule, .openEvent:
             // Worktrees, Scheduled tasks and the calendar are the Mac's; the lists here offer none of them.
             break
+        }
+    }
+
+    // MARK: Answering a task here
+
+    private func attachReply() {
+        guard let reply else { return }
+        reply.view.visibility = .collapsed
+        reply.windowHandle = windowHandle
+        reply.onOpen = { [weak self] id in self?.perform(.openTask(id)) }
+        reply.onClose = { [weak self] in self?.showReply(nil) }
+        reply.onReplied = { [weak self] in self?.replied() }
+        bottom.children.append(reply.view)
+    }
+
+    /// Half the home's height, at least room for a request card and the composer, as the Mac's reply stands.
+    private var replyHeight: Double {
+        Double(NewTaskHomeLayout.replyHeight(CGFloat(view.actualHeight)))
+    }
+
+    /// Answers `id` in the composer's place, or with nil gives the new task its composer back, its draft as it was.
+    /// The task left reads as read when its result was unread and it waits on nothing, as the Mac's home marks it once
+    /// the person moves on.
+    private func showReply(_ id: SessionRecord.ID?, markingRead: Bool = true) {
+        guard id != replyTaskID else { return }
+        if markingRead, let old = replyTaskID, let session = model.store.sessions.first(where: { $0.id == old }),
+           session.hasUnreadUpdate {
+            let status = SidebarTaskIndicatorProjection.status(
+                of: session, detail: model.taskAttentionDetails[old], isShellBusy: model.shellBusySessionIDs.contains(old))
+            if status != .awaitingApproval, status != .needsInput { Task { await model.store.markRead(ids: [old]) } }
+        }
+        placeReply(id)
+        if id == nil { _ = try? card.field.focus(.programmatic) } else { reply?.focus() }
+        // The answered task's line is marked in the lists.
+        redrawLists()
+    }
+
+    /// The task's conversation and composer in the new task's place, or the new task's own.
+    private func placeReply(_ id: SessionRecord.ID?) {
+        replyTaskID = id
+        guard let reply else { return }
+        reply.setHeight(replyHeight)
+        reply.show(id)
+        reply.view.visibility = id == nil ? .collapsed : .visible
+        hero.visibility = id == nil ? .visible : .collapsed
+    }
+
+    /// The person sent or answered in the task's composer: after that send's own work, the next task that needs them
+    /// takes its place (the one "Next task needing attention" would open), else the new task does.
+    private func replied() {
+        let answered = replyTaskID
+        answeredTaskID = answered
+        Task { @MainActor [weak self] in
+            guard let self, let answered, self.answeredTaskID == answered else { return }
+            self.answeredTaskID = nil
+            guard self.replyTaskID == answered else { return }
+            self.showReply(TaskAttentionProjection.nextSession(
+                in: self.model.sidebarSessions, excluding: answered, details: self.model.taskAttentionDetails,
+                shellBusy: self.model.shellBusySessionIDs))
         }
     }
 

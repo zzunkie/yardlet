@@ -38,11 +38,18 @@ enum GitExecutableLocator {
     /// when `Path` does not reach it (`windowsInstallPaths`). A relative folder in `Path` would be read from wherever
     /// Yardlet runs Git, a task's folder among them, so it is not looked in.
     static func windowsCandidates(environment: [String: String], lookup: ExecutableLookup = .windows()) -> [String] {
+        windowsCandidates(named: "git.exe", installPaths: windowsInstallPaths, environment: environment, lookup: lookup)
+    }
+
+    /// On Windows: the program `name` in the absolute folders of `Path`, then where its installers put it
+    /// (`installPaths`, each under the variable that names its folder), as Git is looked for.
+    static func windowsCandidates(named name: String, installPaths: [(String, String)], environment: [String: String],
+                                  lookup: ExecutableLookup = .windows()) -> [String] {
         let rules = PathRules.windows
         let inPath = lookup.folders(in: lookup.searchPath(in: environment))
             .filter(rules.isAbsolute)
-            .map { join($0, "git.exe") }
-        let installed = windowsInstallPaths.compactMap { name, rest in
+            .map { join($0, name) }
+        let installed = installPaths.compactMap { name, rest in
             lookup.value(of: name, in: environment).flatMap { rules.isAbsolute($0) ? join($0, rest) : nil }
         }
         var seen = Set<String>()
@@ -87,7 +94,7 @@ enum GitExecutableLocator {
         folder.hasSuffix("\\") || folder.hasSuffix("/") ? folder + name : folder + "\\" + name
     }
 
-    private static func isExecutableFile(_ path: String) -> Bool {
+    static func isExecutableFile(_ path: String) -> Bool {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), !isDirectory.boolValue else {
             return false

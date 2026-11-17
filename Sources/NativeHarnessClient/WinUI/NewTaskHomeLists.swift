@@ -128,10 +128,12 @@ final class NewTaskHomeListsView {
                                                                     shellBusy: activity.shellBusy, now: activity.now)
         let words = Words(now: activity.now, pullRequest: pullRequest, replyTaskID: replyTaskID)
         var drawing = Drawing(columns: layout.columns)
-        drawing.panels = layout.items.map { item in
+        drawing.panels = layout.items.map { item -> PanelDrawing in
             switch item {
-            case let .project(panel): .project(words.panel(panel, git: panel.summary.project.flatMap { projectGit[$0.id] }))
-            case let .idle(idle): .idle(words.idle(idle))
+            case let .project(panel):
+                return .project(words.panel(panel, git: panel.summary.project.flatMap { projectGit[$0.id] }))
+            case let .idle(idle):
+                return .idle(words.idle(idle))
             }
         }
         if layout.hiddenProjects > 0 || layout.showsAllProjects {
@@ -325,7 +327,7 @@ final class NewTaskHomeListsView {
                     count: summary.pullRequests.count - 1,
                     help: summary.pullRequests.dropFirst().map { "#\($0.pullRequest.number) \($0.pill.title)" }
                         .joined(separator: "\n")) : nil,
-                lines: panel.tasks.map { .task(task($0)) } + panel.upcoming.compactMap(upcoming),
+                lines: panel.tasks.map { Line.task(task($0)) } + panel.upcoming.compactMap(upcoming),
                 toggle: panel.hidden > 0 || panel.isExpanded
                     ? (panel.isExpanded ? L10n.string("Show less") : L10n.format("Show %lld more", panel.hidden)) : nil)
         }
@@ -766,11 +768,11 @@ final class NewTaskHomeListsView {
     /// The Mac's colors for a pull request's state (`TaskPullRequestBadgeView.color`), and their fill at 12%.
     private static func toneColors(_ tone: TaskPullRequestBadge.Tone) -> (text: ThemeColor, fill: ThemeColor) {
         switch tone {
-        case .neutral: (WindowsTheme.secondaryText, WindowsTheme.subtleFill)
-        case .success: (SidebarStyle.green, greenFill)
-        case .pending: (SidebarStyle.orange, orangeFill)
-        case .failure: (SidebarStyle.red, redFill)
-        case .merged: (purple, purpleFill)
+        case .neutral: return (text: WindowsTheme.secondaryText, fill: WindowsTheme.subtleFill)
+        case .success: return (text: SidebarStyle.green, fill: greenFill)
+        case .pending: return (text: SidebarStyle.orange, fill: orangeFill)
+        case .failure: return (text: SidebarStyle.red, fill: redFill)
+        case .merged: return (text: purple, fill: purpleFill)
         }
     }
 

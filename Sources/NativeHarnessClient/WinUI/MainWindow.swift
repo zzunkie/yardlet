@@ -94,6 +94,12 @@ final class MainWindow {
             guard let self else { return }
             self.importPane?.present(over: self.root.xamlRoot)
         }
+        // A task that needs the person is answered in New task's composer's place, in its own conversation and
+        // composer, read and answered as the window's own are.
+        newTask.reply = NewTaskHomeReplyPane(
+            model: model, log: log, signIn: signIn,
+            presentation: { [weak self] session in self?.presentation(of: session) },
+            answer: { [weak self] request, response, session in self?.answer(request, response, in: session) })
         self.newTask = newTask
         timeline.respond = { [weak self] request, response in self?.answer(request, response) }
         timeline.retry = { [weak self] turnID in self?.retry(turnID) }
@@ -148,13 +154,20 @@ final class MainWindow {
         try? Grid.setColumn(content, 1)
         root.children.append(content)
         WindowChrome.frame(window, title: YardletProduct.name, content: root)
-        // As on the Mac, the shown task's folder is looked at again when the app comes to the front.
-        window.activated.addHandler { [weak self] _, _ in self?.composer.refreshFolder() }
+        // As on the Mac, the shown task's folder is looked at again when the app comes to the front, and the pull
+        // requests of the tasks on screen are looked up only while it is there.
+        window.activated.addHandler { [weak self] _, args in
+            guard let self else { return }
+            self.model.pullRequests.setApplicationActive(args?.windowActivationState != .deactivated)
+            self.composer.refreshFolder()
+        }
         try? window.activate()
 
         Task {
             await model.restoreIndex()
             log.write("tasks: \(model.store.sessions.count)")
+            // The pull requests New task's projects name, looked up with the person's own `gh` as on the Mac.
+            model.startPullRequestLookups()
             // The task chosen last, as the Mac opens on it; with no task, New task, as the Mac opens its home.
             if let id = model.store.selectedSessionID ?? model.store.listedSessions.first?.id {
                 show(.task(id))
@@ -303,6 +316,10 @@ final class MainWindow {
     /// answer comes with the route the card made of what was entered.
     private func answer(_ request: ConversationRequest, _ response: ConversationRequestResponse) {
         guard let session = selectedSession else { return }
+        answer(request, response, in: session)
+    }
+
+    private func answer(_ request: ConversationRequest, _ response: ConversationRequestResponse, in session: SessionRecord) {
         log.write("answered: \(response.title)")
         Task {
             switch response.route {

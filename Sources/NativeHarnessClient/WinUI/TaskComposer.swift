@@ -37,6 +37,7 @@ final class TaskComposer {
     private let followUpButton: Button
     private let followUpCount = TextBlock()
     private var sessionID: SessionRecord.ID?
+    private let answersInHome: Bool
     /// The text as it last went to the task's draft or came from it, which tells the person's typing from a message
     /// the model put back in the draft.
     private var textInDraft: String?
@@ -44,6 +45,11 @@ final class TaskComposer {
     private var generation = 0
     private var shown: Shown?
     private var shownDraftNotice: String?
+
+    /// While New task answers the task in its composer's place (`NewTaskHomeReplyPane`): each message sent tells it,
+    /// and Escape goes back to New task's composer rather than stopping the turn, as the Mac's reply composer does.
+    var onSent: (() -> Void)?
+    var onEscape: (() -> Void)?
 
     /// The window "+"'s dialogs belong to, as an `HWND`'s value.
     var windowHandle: () -> UInt64 {
@@ -64,9 +70,12 @@ final class TaskComposer {
         var missingFolder: String?
     }
 
-    init(model: AppModel, log: QAEventLog) {
+    /// `answersInHome`: the composer of a task New task answers in its composer's place, which takes the keyboard when
+    /// it is shown there and does not stand for the window being ready.
+    init(model: AppModel, log: QAEventLog, answersInHome: Bool = false) {
         self.model = model
         self.log = log
+        self.answersInHome = answersInHome
         sendButton = ComposerParts.sendButton(name: L10n.string("Send"))
         stopButton = ComposerParts.stopButton(name: L10n.string("Stop"))
         try? ToolTipService.setToolTip(stopButton, "\(L10n.string("Stop")) (Esc)")
@@ -93,7 +102,7 @@ final class TaskComposer {
 
         let field = card.field
         field.loaded.addHandler { [weak self] _, _ in
-            guard let self else { return }
+            guard let self, !self.answersInHome else { return }
             _ = try? field.focus(.programmatic)
             self.log.write("ready")
         }
@@ -143,6 +152,11 @@ final class TaskComposer {
     }
 
     // MARK: Following the task
+
+    /// Gives the text the keyboard.
+    func focus() {
+        _ = try? card.field.focus(.programmatic)
+    }
 
     /// Shows `id`'s composer, or an empty one with no task.
     func show(_ id: SessionRecord.ID?) {
@@ -583,6 +597,10 @@ final class TaskComposer {
     /// Escape while the turn runs: a waiting tool approval is denied first, as the Codex app's Escape denies one;
     /// otherwise the turn stops.
     private func escape() -> Bool {
+        if let onEscape {
+            onEscape()
+            return true
+        }
         guard shown?.isRunning == true else { return false }
         if answersWaitingApproval(allowing: false) { return true }
         stop()
@@ -611,6 +629,7 @@ final class TaskComposer {
         let draft = model.composerDrafts.tasks.draft(for: session.id)
         draft.text = text
         guard let sending = model.sendDraft(of: session, action: action) else { return }
+        onSent?()
         let noticeAsSent = draft.notice
         textInDraft = draft.text
         if card.field.text != draft.text { card.field.text = draft.text }
