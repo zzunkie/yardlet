@@ -53,6 +53,8 @@ final class TaskSidebar {
     private var shownProjectKeys: [String] = []
     private let footer = SidebarList()
     private var rows: [UUID: SidebarTaskRow] = [:]
+    /// The lines under collapsed families, by the task at the top of each.
+    private var summaries: [UUID: SidebarFamilySummaryRow] = [:]
     /// Where each of the footer's rows goes.
     private var footerPlaces: [String: SidebarPlace] = [:]
 
@@ -236,8 +238,25 @@ final class TaskSidebar {
     }
 
     private func pickTask(_ key: String) {
+        // The line under a collapsed family shows the family again; the task shown stays chosen.
+        if key.hasPrefix("family:") {
+            disclosure.toggle(key)
+            markChosen()
+            return
+        }
         guard key.hasPrefix("task:"), let id = UUID(uuidString: String(key.dropFirst(5))) else { return }
         pick(.task(id))
+    }
+
+    /// What a task's row menu offers for its family, as the Mac's row menu reads it when it opens: Hide or Show nested
+    /// sessions for a task with tasks nested under it, and its moves among the families of its list.
+    private func family(of id: UUID) -> TaskActions.Family {
+        let key = SidebarProjection.familyKey(for: id)
+        let hasFamily = layout.rows.contains { $0.id == .session(id) && $0.hasFamily }
+        return TaskActions.Family(
+            isCollapsed: hasFamily ? disclosure.isCollapsed(key) : nil,
+            toggle: { [weak self] in self?.disclosure.toggle(key) },
+            nesting: TaskNesting.options(for: id, in: layout))
     }
 
     // MARK: Following the tasks
@@ -248,16 +267,22 @@ final class TaskSidebar {
             let key: String
             let group: WorkspaceGroup
             let isCollapsed: Bool
-            let rows: [(id: UUID, state: SidebarTaskRow.State)]
+            let rows: [Entry]
             let hiddenRowCount: Int
             let showsEmptyState: Bool
             /// A collapsed project's most urgent task's state.
             let status: SidebarTaskStatus?
         }
 
+        /// A row of a list: a task, or the line under a collapsed family, under the task at its top.
+        enum Entry: Equatable {
+            case task(UUID, SidebarTaskRow.State)
+            case familySummary(UUID, SidebarFamilySummaryRow.State)
+        }
+
         var layout = SidebarProjection.Layout()
-        var pinned: [(id: UUID, state: SidebarTaskRow.State)] = []
-        var chats: [(id: UUID, state: SidebarTaskRow.State)] = []
+        var pinned: [Entry] = []
+        var chats: [Entry] = []
         var chatsHidden = 0
         var projects: [Project] = []
         var isRestoring = false
@@ -303,15 +328,24 @@ final class TaskSidebar {
             isFiltering: query != nil, disclosure: disclosure.disclosure, selection: selection, waiting: waiting,
             archivedParents: model.store.archivedParentIDs)
 
-        func states(_ rows: [SidebarRow], title: (SidebarRow, SessionRecord) -> String)
-            -> [(id: UUID, state: SidebarTaskRow.State)] {
-            rows.flatMap(\.rowsWithChildren).compactMap { row in
-                guard case let .session(session) = row.content else { return nil }
-                let status = SidebarTaskIndicatorProjection.status(
-                    of: session, detail: details[session.id], isShellBusy: shellBusy.contains(session.id))
-                return (id: session.id, state: SidebarTaskRow.State(
-                    title: title(row, session), harness: session.harness, isUnread: session.hasUnreadUpdate,
-                    status: status, depth: row.familyPlace?.depth ?? 0))
+        // Each task, the tasks nested under it, and, while its family is collapsed, the line counting what it hides.
+        func states(_ rows: [SidebarRow], title: (SidebarRow, SessionRecord) -> String) -> [Drawing.Entry] {
+            rows.flatMap { family -> [Drawing.Entry] in
+                var entries: [Drawing.Entry] = family.rowsWithChildren.compactMap { row in
+                    guard case let .session(session) = row.content else { return nil }
+                    let status = SidebarTaskIndicatorProjection.status(
+                        of: session, detail: details[session.id], isShellBusy: shellBusy.contains(session.id))
+                    return .task(session.id, SidebarTaskRow.State(
+                        title: title(row, session), harness: session.harness, isUnread: session.hasUnreadUpdate,
+                        status: status, place: row.familyPlace))
+                }
+                if !family.hiddenChildren.isEmpty, case let .session(top) = family.content {
+                    entries.append(.familySummary(top.id, SidebarFamilySummaryRow.State(
+                        counts: SidebarFamilySummary.counts(of: family.hiddenChildren, details: details,
+                                                            shellBusy: shellBusy),
+                        showsMore: !family.children.isEmpty)))
+                }
+                return entries
             }
         }
 
@@ -338,13 +372,25 @@ final class TaskSidebar {
     private func draw(_ drawing: Drawing) {
         layout = drawing.layout
         var listed = Set<UUID>()
-        func items(_ entries: [(id: UUID, state: SidebarTaskRow.State)]) -> [(key: String, item: ListViewItem)] {
+        var summarized = Set<UUID>()
+        func items(_ entries: [Drawing.Entry]) -> [(key: String, item: ListViewItem)] {
             entries.map { entry in
-                listed.insert(entry.id)
-                let row = rows[entry.id] ?? SidebarTaskRow(id: entry.id, actions: actions)
-                rows[entry.id] = row
-                row.show(entry.state)
-                return (key: Self.key(entry.id), item: row.item)
+                switch entry {
+                case let .task(id, state):
+                    listed.insert(id)
+                    let row = rows[id] ?? SidebarTaskRow(id: id, actions: actions) { [weak self] in
+                        self?.family(of: id)
+                    }
+                    rows[id] = row
+                    row.show(state)
+                    return (key: Self.key(id), item: row.item)
+                case let .familySummary(top, state):
+                    summarized.insert(top)
+                    let line = summaries[top] ?? SidebarFamilySummaryRow()
+                    summaries[top] = line
+                    line.show(state)
+                    return (key: SidebarProjection.familyKey(for: top), item: line.item)
+                }
             }
         }
 
@@ -371,6 +417,7 @@ final class TaskSidebar {
         for plan in changed { plan.list.fill(plan.rows) }
         projects = projects.filter { keptKeys.contains($0.key) }
         rows = rows.filter { listed.contains($0.key) }
+        summaries = summaries.filter { summarized.contains($0.key) }
 
         let projectKeys = sections.map(\.key)
         if projectKeys != shownProjectKeys {

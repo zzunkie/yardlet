@@ -155,11 +155,13 @@ final class MainWindow {
         root.children.append(content)
         WindowChrome.frame(window, title: YardletProduct.name, content: root)
         // As on the Mac, the shown task's folder is looked at again when the app comes to the front, and the pull
-        // requests of the tasks on screen are looked up only while it is there.
+        // requests of the tasks on screen are looked up only while it is there; so is Windows' animation effects
+        // setting, which the working dots follow.
         window.activated.addHandler { [weak self] _, args in
             guard let self else { return }
             self.model.pullRequests.setApplicationActive(args?.windowActivationState != .deactivated)
             self.composer.refreshFolder()
+            SidebarBlink.shared.refresh()
         }
         try? window.activate()
 

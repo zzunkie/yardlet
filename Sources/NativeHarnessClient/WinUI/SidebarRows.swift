@@ -1,5 +1,7 @@
 import Foundation
 import UWP
+import WinAppSDK
+import WindowsFoundation
 import WinUI
 
 /// The sidebar's measures and colors, as the Mac's (`SidebarMetrics`, `SidebarTaskStatusView`).
@@ -12,8 +14,15 @@ enum SidebarStyle {
     static let rowInset: Double = 4
     /// The column a row's mark sits in, where every row's words start after it.
     static let gutterWidth: Double = 32
-    /// How far a task started from another sits in from it.
+    /// How far a task started from another sits in from it, and the guide joining them (the Claude app's
+    /// `.df-family:after`): 10 across, its corner rounded at 6.
     static let familyIndent: Double = 20
+    static let familyGuideLength: Double = 10
+    static let familyGuideRadius: Double = 6
+    /// The guide's line, stronger than a separator, as the Mac's `SidebarFamilyGuide.color`.
+    static let familyGuide = ThemeColor(light: .ink(0.22), dark: .paper(0.22))
+    /// The "Show more" and family summary lines.
+    static let secondaryLineHeight: Double = 28
     static let rowTrailingPadding: Double = 8
     static let titleFontSize: Double = 13
     /// Section and project labels' text starts here, from the sidebar's edge.
@@ -197,8 +206,8 @@ final class SidebarList {
 }
 
 /// A task's row, as the Mac's: its harness's mark, its title on one line (semibold while its result is unread), a
-/// level further in for each task it was started through, and its state at the end
-/// (`SidebarTaskIndicatorProjection`). Its menu is the Mac's row menu (`TaskActions.rowMenu`).
+/// level further in for each task it was started through with the family's guide leading to it, and its state at the
+/// end (`SidebarTaskIndicatorProjection`). Its menu is the Mac's row menu (`TaskActions.rowMenu`).
 @MainActor
 final class SidebarTaskRow {
     struct State: Equatable {
@@ -206,21 +215,25 @@ final class SidebarTaskRow {
         var harness: HarnessKind
         var isUnread: Bool
         var status: SidebarTaskStatus?
-        /// How many levels in it sits under the task it was started from.
-        var depth: Int
+        /// Where it sits in the family it is nested in; nil at the top level.
+        var place: SidebarFamilyPlace?
     }
 
     let item = ListViewItem()
     private let grid = Grid()
+    private let guides = Grid()
     private let mark = Border()
     private let title = TextBlock()
     private let end = Grid()
     private var drawn: State?
 
-    init(id: UUID, actions: TaskActions) {
+    init(id: UUID, actions: TaskActions, family: @escaping @MainActor () -> TaskActions.Family?) {
         SidebarList.shape(item)
         grid.height = SidebarStyle.rowHeight
         SidebarStyle.columns(grid, [SidebarStyle.auto, SidebarStyle.star, SidebarStyle.auto])
+        guides.isHitTestVisible = false
+        try? Grid.setColumnSpan(guides, 3)
+        grid.children.append(guides)
         mark.width = SidebarStyle.gutterWidth
         grid.children.append(mark)
         title.fontSize = SidebarStyle.titleFontSize
@@ -238,7 +251,7 @@ final class SidebarTaskRow {
         try? Grid.setColumn(end, 2)
         grid.children.append(end)
         item.content = grid
-        item.contextFlyout = actions.rowMenu(for: id)
+        item.contextFlyout = actions.rowMenu(for: id, family: family)
     }
 
     /// Draws `state`, changing only what differs from what the row shows.
@@ -249,8 +262,10 @@ final class SidebarTaskRow {
         if before?.harness != state.harness {
             mark.child = HarnessIcon.element(for: state.harness)
         }
-        if before?.depth != state.depth {
-            mark.margin = Thickness(left: Double(state.depth) * SidebarStyle.familyIndent, top: 0, right: 0, bottom: 0)
+        if before?.place != state.place {
+            let depth = Double(state.place?.depth ?? 0)
+            mark.margin = Thickness(left: depth * SidebarStyle.familyIndent, top: 0, right: 0, bottom: 0)
+            SidebarFamilyGuide.draw(state.place, in: guides, height: SidebarStyle.rowHeight)
         }
         if before?.title != state.title {
             title.text = state.title
@@ -280,7 +295,7 @@ enum SidebarStatusMark {
         case .waitingInBrowser: symbol("\u{E774}", SidebarStyle.orange)
         case .failed: symbol("\u{E7BA}", SidebarStyle.red)
         case .usageLimit: symbol("\u{EC4A}", SidebarStyle.orange)
-        case .running: dot(WindowsTheme.secondaryText)
+        case .running: SidebarBlink.shared.blinking(dot(WindowsTheme.secondaryText))
         case .reconnecting: symbol("\u{E895}", WindowsTheme.secondaryText)
         case .unread: dot(WindowsTheme.accent)
         }
@@ -301,5 +316,185 @@ enum SidebarStatusMark {
         icon.horizontalAlignment = .center
         icon.verticalAlignment = .center
         return icon
+    }
+}
+
+/// The lines joining a nested task to its family, as the Mac's `SidebarFamilyGuide` draws them (the Claude app's
+/// `.df-family:after`): at the task's level, down from the row above, then across toward the task's mark round a
+/// corner, carried on down when more of that level follows; at each level further out whose line runs on to a later
+/// row, straight through (`SidebarFamilyPlace.continuingLevels`). Each line is a level's, under the middle of the mark
+/// of the row a level out, and starts a point above the row, across the gap between rows.
+@MainActor
+enum SidebarFamilyGuide {
+    static func draw(_ place: SidebarFamilyPlace?, in guides: Grid, height: Double) {
+        guides.children.clear()
+        guard let place else { return }
+        let middle = (height / 2).rounded(.down)
+        for level in place.continuingLevels.sorted() where level < place.depth {
+            guides.children.append(line(x: x(level), top: -1, height: nil))
+        }
+        // Down to the corner and across: a box whose left and bottom edges are the line, its corner rounded.
+        let elbow = Border()
+        elbow.horizontalAlignment = .left
+        elbow.verticalAlignment = .top
+        elbow.width = SidebarStyle.familyGuideLength + 1
+        elbow.height = middle + 2
+        elbow.margin = Thickness(left: x(place.depth), top: -1, right: 0, bottom: 0)
+        elbow.borderBrush = SidebarStyle.familyGuide.brush
+        elbow.borderThickness = Thickness(left: 1, top: 0, right: 0, bottom: 1)
+        elbow.cornerRadius = CornerRadius(topLeft: 0, topRight: 0, bottomRight: 0,
+                                          bottomLeft: SidebarStyle.familyGuideRadius)
+        guides.children.append(elbow)
+        if place.continuingLevels.contains(place.depth) {
+            guides.children.append(line(x: x(place.depth), top: middle - SidebarStyle.familyGuideRadius, height: nil))
+        }
+    }
+
+    /// Where a level's line runs down, from the row's start: under the middle of the mark of the row a level out
+    /// (level 1 under the family's top task), as the Mac's `SidebarRowLeading.guideX`.
+    private static func x(_ level: Int) -> Double {
+        Double(level - 1) * SidebarStyle.familyIndent + SidebarStyle.gutterWidth / 2
+    }
+
+    private static func line(x: Double, top: Double, height: Double?) -> Rectangle {
+        let line = Rectangle()
+        line.width = 1
+        line.horizontalAlignment = .left
+        line.verticalAlignment = .stretch
+        line.margin = Thickness(left: x, top: top, right: 0, bottom: 0)
+        line.fill = SidebarStyle.familyGuide.brush
+        return line
+    }
+}
+
+/// The line under a collapsed family, as the Mac's `SidebarFamilySummaryLine` (the Claude app's `df-family-stub`):
+/// how many nested tasks it hides, "more" when some stay listed, and of those how many failed, have something new
+/// (after the unread dot) and are working, with the warning at its end when one failed. Choosing it shows them again.
+@MainActor
+final class SidebarFamilySummaryRow {
+    struct State: Equatable {
+        var counts: SidebarFamilySummary
+        /// Some nested tasks are still listed above the line.
+        var showsMore: Bool
+    }
+
+    let item = ListViewItem()
+    private let grid = Grid()
+    private let words = TextBlock()
+    private let end = Grid()
+    private var drawn: State?
+
+    init() {
+        SidebarList.shape(item)
+        grid.height = SidebarStyle.secondaryLineHeight
+        SidebarStyle.columns(grid, [SidebarStyle.star, SidebarStyle.auto])
+        let guides = Grid()
+        guides.isHitTestVisible = false
+        try? Grid.setColumnSpan(guides, 2)
+        SidebarFamilyGuide.draw(SidebarFamilyPlace(depth: 1), in: guides, height: SidebarStyle.secondaryLineHeight)
+        grid.children.append(guides)
+        words.fontSize = SidebarStyle.labelFontSize
+        words.foreground = WindowsTheme.secondaryText.brush
+        words.textWrapping = .noWrap
+        words.textTrimming = .characterEllipsis
+        words.maxLines = 1
+        words.verticalAlignment = .center
+        // Its words start where a nested task's mark does.
+        words.margin = Thickness(left: SidebarStyle.familyIndent + (SidebarStyle.gutterWidth - 16) / 2, top: 0,
+                                 right: 4, bottom: 0)
+        grid.children.append(words)
+        end.width = 14
+        end.height = 14
+        end.verticalAlignment = .center
+        try? Grid.setColumn(end, 1)
+        grid.children.append(end)
+        item.content = grid
+    }
+
+    /// Draws `state` when it differs from what the line shows.
+    func show(_ state: State) {
+        guard state != drawn else { return }
+        drawn = state
+        let counts = state.counts
+        let details = SidebarFamilySummary.detailTexts(counts)
+        words.inlines.clear()
+        func add(_ text: String, color: ThemeColor? = nil, size: Double? = nil) {
+            let run = Run()
+            run.text = text
+            if let color { run.foreground = color.brush }
+            if let size { run.fontSize = size }
+            words.inlines.append(run)
+        }
+        add(SidebarFamilySummary.sessionsText(counts.sessions, more: state.showsMore))
+        if let failed = details.failed { add(" · " + failed) }
+        if let new = details.new {
+            add(" · ")
+            add("\u{25CF}", color: WindowsTheme.accent, size: 7)
+            add(" " + new)
+        }
+        if let working = details.working { add(" · " + working) }
+        end.children.clear()
+        if counts.failed > 0 { end.children.append(SidebarStatusMark.view(.failed)) }
+        try? AutomationProperties.setName(item, SidebarFamilySummary.accessibilityLabel(counts, more: state.showsMore))
+        try? ToolTipService.setToolTip(item, SidebarFamilySummary.help(counts, more: state.showsMore))
+    }
+}
+
+/// The working dot's fade, as the Mac's `BlinkingDot`: to 30% and back every 1.2 s. One fade serves every dot: it
+/// runs on a property of its own on Windows' compositor, and each dot's opacity is bound to that property, so every
+/// working dot fades together, off the window's thread, and a list of working tasks costs the window nothing per
+/// frame. With Windows' animation effects off (Settings › Accessibility › Visual effects) the dots hold still, as the
+/// Mac's do with Reduce Motion; the setting is read again when the window comes to the front.
+@MainActor
+final class SidebarBlink {
+    static let shared = SidebarBlink()
+
+    private let settings = UWP.UISettings()
+    private var compositor: WinAppSDK.Compositor?
+    private var fade: WinAppSDK.CompositionPropertySet?
+    private var binding: WinAppSDK.ExpressionAnimation?
+    private var isMoving = false
+
+    /// `dot`, its opacity following the shared fade.
+    func blinking(_ dot: FrameworkElement) -> FrameworkElement {
+        if let visual = try? ElementCompositionPreview.getElementVisual(dot), let binding = binding(visual.compositor) {
+            try? visual.startAnimation("Opacity", binding)
+        }
+        return dot
+    }
+
+    /// Starts or stops the fade as Windows' animation effects are set now.
+    func refresh() {
+        guard let compositor, let fade else { return }
+        let moves = settings.animationsEnabled
+        guard moves != isMoving else { return }
+        isMoving = moves
+        QAEventLog.shared.write(moves ? "working dots fade" : "working dots hold still")
+        if moves {
+            guard let fading = try? compositor.createScalarKeyFrameAnimation() else { return }
+            try? fading.insertKeyFrame(0, 1)
+            try? fading.insertKeyFrame(0.5, 0.3)
+            try? fading.insertKeyFrame(1, 1)
+            fading.duration = WindowsFoundation.TimeSpan(duration: 12_000_000)
+            fading.iterationBehavior = .forever
+            try? fade.startAnimation("Opacity", fading)
+        } else {
+            try? fade.stopAnimation("Opacity")
+            try? fade.insertScalar("Opacity", 1)
+        }
+    }
+
+    /// The expression that reads the shared fade, made with the first dot's compositor, the window's.
+    private func binding(_ compositor: WinAppSDK.Compositor?) -> WinAppSDK.ExpressionAnimation? {
+        if let binding { return binding }
+        guard let compositor, let fade = try? compositor.createPropertySet(),
+              let binding = try? compositor.createExpressionAnimation("fade.Opacity") else { return nil }
+        try? fade.insertScalar("Opacity", 1)
+        try? binding.setReferenceParameter("fade", fade)
+        self.compositor = compositor
+        self.fade = fade
+        self.binding = binding
+        refresh()
+        return binding
     }
 }

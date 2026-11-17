@@ -1730,54 +1730,11 @@ struct SidebarFamilySummaryLine: View {
     @Environment(\.shellBusyTaskIDs) private var shellBusyTaskIDs
     @Environment(\.taskAttentionDetails) private var attentionDetails
 
-    struct Counts: Equatable {
-        var sessions = 0
-        var failed = 0
-        var new = 0
-        var working = 0
-    }
-
-    static func counts(of hidden: [SessionRecord], details: [UUID: TaskAttentionDetail] = [:],
-                       shellBusy: Set<UUID> = []) -> Counts {
-        var counts = Counts(sessions: hidden.count)
-        for session in hidden {
-            switch SidebarTaskIndicatorProjection.status(of: session, detail: details[session.id],
-                                                         isShellBusy: shellBusy.contains(session.id)) {
-            case .failed?: counts.failed += 1
-            case .running?: counts.working += 1
-            default: break
-            }
-            if session.hasUnreadUpdate { counts.new += 1 }
-        }
-        return counts
-    }
-
-    /// "3 nested sessions", or "3 more nested sessions" when some are still listed.
-    static func sessionsText(_ count: Int, more: Bool) -> String {
-        if more {
-            return count == 1 ? L10n.string("1 more nested session") : L10n.format("%lld more nested sessions", count)
-        }
-        return count == 1 ? L10n.string("1 nested session") : L10n.format("%lld nested sessions", count)
-    }
-
-    /// The parts after the count, in the Claude app's order.
-    static func detailTexts(_ counts: Counts) -> (failed: String?, new: String?, working: String?) {
-        (counts.failed > 0 ? L10n.format("%lld failed", counts.failed) : nil,
-         counts.new > 0 ? L10n.format("%lld new", counts.new) : nil,
-         counts.working > 0 ? L10n.format("%lld working", counts.working) : nil)
-    }
-
-    /// What the line says to assistive apps: Claude's "Show {sessions}, {news}".
-    static func accessibilityLabel(_ counts: Counts, more: Bool) -> String {
-        let sessions = sessionsText(counts.sessions, more: more)
-        guard let new = detailTexts(counts).new else { return L10n.format("Show %@", sessions) }
-        return L10n.format("Show %@, %@", sessions, new)
-    }
-
     /// One line of text, so it is cut once at its end: the count first, then the details, with the
     /// unread dot before what is new.
-    private func summaryText(counts: Counts, details: (failed: String?, new: String?, working: String?)) -> Text {
-        var text = Text(Self.sessionsText(counts.sessions, more: showsMore))
+    private func summaryText(counts: SidebarFamilySummary, details: (failed: String?, new: String?, working: String?))
+        -> Text {
+        var text = Text(SidebarFamilySummary.sessionsText(counts.sessions, more: showsMore))
         if let failed = details.failed { text = text + Text(verbatim: " · ") + Text(failed) }
         if let new = details.new {
             text = text + Text(verbatim: " · ")
@@ -1790,8 +1747,8 @@ struct SidebarFamilySummaryLine: View {
     }
 
     var body: some View {
-        let counts = Self.counts(of: hidden, details: attentionDetails, shellBusy: shellBusyTaskIDs)
-        let details = Self.detailTexts(counts)
+        let counts = SidebarFamilySummary.counts(of: hidden, details: attentionDetails, shellBusy: shellBusyTaskIDs)
+        let details = SidebarFamilySummary.detailTexts(counts)
         Button(action: onExpand) {
             HStack(spacing: 5) {
                 summaryText(counts: counts, details: details)
@@ -1821,10 +1778,9 @@ struct SidebarFamilySummaryLine: View {
         .buttonStyle(.borderless)
         .parityPointer()
         .onRestingHover { isHovering = $0 }
-        .help(([Self.sessionsText(counts.sessions, more: showsMore)]
-               + [details.failed, details.new, details.working].compactMap { $0 }).joined(separator: " · "))
+        .help(SidebarFamilySummary.help(counts, more: showsMore))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Self.accessibilityLabel(counts, more: showsMore))
+        .accessibilityLabel(SidebarFamilySummary.accessibilityLabel(counts, more: showsMore))
         .accessibilityAddTraits(.isButton)
     }
 }

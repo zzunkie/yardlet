@@ -151,11 +151,11 @@ final class TaskLineageTests: XCTestCase {
         XCTAssertEqual(layout.sections[0].allRows.flatMap(\.familySessions).count, 5,
                        "A collapsed project summarizes every nested task")
 
-        let counts = SidebarFamilySummaryLine.counts(of: family.hiddenChildren)
+        let counts = SidebarFamilySummary.counts(of: family.hiddenChildren)
         XCTAssertEqual(counts, .init(sessions: 2, failed: 1, new: 1, working: 1))
-        XCTAssertEqual(SidebarFamilySummaryLine.sessionsText(2, more: true), L10n.format("%lld more nested sessions", 2))
-        XCTAssertEqual(SidebarFamilySummaryLine.sessionsText(1, more: false), L10n.string("1 nested session"))
-        XCTAssertEqual(SidebarFamilySummaryLine.accessibilityLabel(counts, more: true),
+        XCTAssertEqual(SidebarFamilySummary.sessionsText(2, more: true), L10n.format("%lld more nested sessions", 2))
+        XCTAssertEqual(SidebarFamilySummary.sessionsText(1, more: false), L10n.string("1 nested session"))
+        XCTAssertEqual(SidebarFamilySummary.accessibilityLabel(counts, more: true),
                        L10n.format("Show %@, %@", L10n.format("%lld more nested sessions", 2), L10n.format("%lld new", 1)))
 
         // Expanded again, or searched: everything nested shows.

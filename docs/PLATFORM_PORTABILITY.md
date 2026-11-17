@@ -161,11 +161,15 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   since XAML does not load a `file:` URI from a folder whose path holds characters beyond ASCII. The window's sidebar
   (`WinUI/TaskSidebar.swift`) is the Mac's: Home and Search tasks at the top, then Pinned, Chats and Projects, each
   project under its name, which collapses it and opens its menu, listing five tasks until Show more, and each task
-  nested under the task it was started from, with its harness's mark, its title (semibold while unread, until the
-  window shows it) and its state at the end. What it lists, in what order and with what state is the Mac's reading
-  (`SidebarProjection`, `SidebarTaskIndicatorProjection`), followed through Observation; a row whose state changes is
-  redrawn in place and a list is filled again only when its rows change. A task's and a project's menus are the Mac's,
-  with Show in File Explorer for Show in Finder (`WinUI/TaskActions.swift`); the search narrows by titles and project
+  nested under the task it was started from, joined to it by the Mac's family guide, with its harness's mark, its
+  title (semibold while unread, until the window shows it) and its state at the end; a collapsed family ends in the
+  Mac's line counting what it hides (`SidebarFamilySummary`), which opens it again. A working task's dot fades as the
+  Mac's does, all dots with one animation on Windows' compositor (`SidebarBlink`), and holds still with Windows'
+  animation effects off, as the Mac's does with Reduce Motion. What it lists, in what order and with what state is the
+  Mac's reading (`SidebarProjection`, `SidebarTaskIndicatorProjection`), followed through Observation; a row whose
+  state changes is redrawn in place and a list is filled again only when its rows change. A task's and a project's
+  menus are the Mac's, with Show in File Explorer for Show in Finder and the row menu's Hide or Show nested sessions
+  and moves among the families (`WinUI/TaskActions.swift`, `TaskNesting`); the search narrows by titles and project
   names. With no task the window opens New task, as the Mac opens its home. Above a task's conversation, its header
   (`WinUI/TaskHeader.swift`) is the Mac's: the title, which opens the task's menu, the harness, and a progress ring
   while it works. The Mac's Task menu keys work with Ctrl for ⌘ and Alt for ⌥ wherever the focus is, a composer's

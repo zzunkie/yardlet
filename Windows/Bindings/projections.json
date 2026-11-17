@@ -91,6 +91,11 @@
     "Microsoft.UI.Xaml.Input.KeyboardAccelerator",
     "Microsoft.UI.Xaml.Shapes.Ellipse",
     "Microsoft.UI.Xaml.Shapes.Rectangle",
+    "Microsoft.UI.Xaml.Hosting.ElementCompositionPreview",
+    "Microsoft.UI.Composition.CompositionPropertySet",
+    "Microsoft.UI.Composition.ScalarKeyFrameAnimation",
+    "Microsoft.UI.Composition.ExpressionAnimation",
+    "Windows.UI.ViewManagement.UISettings",
     "Windows.Storage.StorageFile",
     "Windows.Storage.Streams.InMemoryRandomAccessStream",
     "Windows.Storage.Streams.DataWriter"

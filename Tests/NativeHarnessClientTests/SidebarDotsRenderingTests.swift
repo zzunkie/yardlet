@@ -222,7 +222,7 @@ final class SidebarDotsRenderingTests: XCTestCase {
         XCTAssertTrue(spoken.contains { $0.contains("Rebuild the index") && $0.contains(L10n.string("Nested session")) },
                       spoken.description)
         XCTAssertFalse(spoken.contains { $0.contains("Coordinate the migration") && $0.contains(L10n.string("Nested session")) })
-        let more = SidebarFamilySummaryLine.accessibilityLabel(
+        let more = SidebarFamilySummary.accessibilityLabel(
             .init(sessions: 3, failed: 1, new: 1, working: 1), more: true)
         XCTAssertTrue(spoken.contains { $0.contains(more) }, spoken.description)
         XCTAssertTrue(spoken.contains { $0.contains(L10n.format("Show %@", L10n.format("%lld nested sessions", 3))) },

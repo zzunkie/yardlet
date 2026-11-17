@@ -8,7 +8,7 @@ import WinUI
 /// and the Mac's questions before what cannot be undone, in its words, as Windows' own dialogs. The sidebar's row
 /// menus, the task header's title menu and the window's keys all act through it, so a task's actions are the same
 /// wherever they are chosen. The Mac's items that open a task elsewhere (a new tab, a split view, the side panel) and
-/// those for worktrees and nesting are the Mac's alone.
+/// those for worktrees are the Mac's alone.
 @MainActor
 final class TaskActions {
     private let model: AppModel
@@ -31,8 +31,18 @@ final class TaskActions {
 
     // MARK: A task's menu
 
-    /// A task row's menu, as the Mac's row menu lists it: Pin, Rename…, Mark as read or unread, Archive and Delete.
-    func rowMenu(for id: UUID) -> MenuFlyout {
+    /// What a task's row menu offers for the sidebar's families, read as the menu opens.
+    struct Family {
+        /// Whether the tasks nested under it are hidden, for a task with some; nil for one with none.
+        var isCollapsed: Bool?
+        var toggle: @MainActor () -> Void = {}
+        /// Its moves among the families of its list (`TaskNesting`).
+        var nesting = TaskNesting.Options.none
+    }
+
+    /// A task row's menu, as the Mac's row menu lists it: Pin, Rename…, Mark as read or unread, Hide or Show nested
+    /// sessions, the moves among the families (`family`), Archive and Delete.
+    func rowMenu(for id: UUID, family: @escaping @MainActor () -> Family?) -> MenuFlyout {
         menu { [weak self] menu in
             guard let self, let session = self.session(id) else { return }
             menu.items.append(Self.item(L10n.string(session.isPinned ? "Unpin" : "Pin")) { [weak self] in
@@ -44,9 +54,42 @@ final class TaskActions {
             } else {
                 menu.items.append(Self.item(L10n.string("Mark task as unread")) { [weak self] in self?.markUnread(id) })
             }
+            if let family = family() { self.appendFamily(family, of: id, to: menu) }
             menu.items.append(MenuFlyoutSeparator())
             menu.items.append(Self.item(L10n.string("Archive")) { [weak self] in self?.archive(id) })
             menu.items.append(Self.item(L10n.string("Delete task")) { [weak self] in self?.delete(id) })
+        }
+    }
+
+    /// The Mac's row menu items for a task's family (`SidebarFamilyToggle`, `SidebarNestMenuItems`): Hide or Show
+    /// nested sessions for a task with tasks nested under it, Move up one level for a task listed under one that is
+    /// itself nested, Detach to top level for any nested task, and Move under task with the tasks of its list it can
+    /// go under.
+    private func appendFamily(_ family: Family, of id: UUID, to menu: MenuFlyout) {
+        if let isCollapsed = family.isCollapsed {
+            let toggle = family.toggle
+            menu.items.append(Self.item(L10n.string(isCollapsed ? "Show nested sessions" : "Hide nested sessions")) {
+                toggle()
+            })
+        }
+        let options = family.nesting
+        if let levelUp = options.levelUp {
+            menu.items.append(Self.item(L10n.string("Move up one level")) { [weak self] in
+                self?.nest(id, under: levelUp)
+            })
+        }
+        if options.isNested {
+            menu.items.append(Self.item(L10n.string("Detach to top level")) { [weak self] in
+                self?.nest(id, under: nil)
+            })
+        }
+        if !options.parents.isEmpty {
+            let parents = MenuFlyoutSubItem()
+            parents.text = L10n.string("Move under task")
+            for parent in options.parents {
+                parents.items.append(Self.item(parent.title) { [weak self] in self?.nest(id, under: parent.id) })
+            }
+            menu.items.append(parents)
         }
     }
 
@@ -95,6 +138,13 @@ final class TaskActions {
     }
 
     // MARK: A task's actions
+
+    /// Moves a task under another, or to the top level for nil, as the Mac's row menu and drags do.
+    func nest(_ id: UUID, under parent: UUID?) {
+        guard let session = session(id) else { return }
+        log.write("nested: \(session.title) under \(parent.flatMap { self.session($0)?.title } ?? "top level")")
+        Task { await model.nest(id, under: parent) }
+    }
 
     func togglePinned(_ id: UUID) {
         guard let session = session(id) else { return }
