@@ -24,6 +24,7 @@ enum ConversationImages {
             let image = Image()
             image.source = bitmap
             image.stretch = .uniformToFill
+            Self.centerCrop(image)
             let frame = framed(image, corner: 8, name: picture.name)
             frame.width = side
             frame.height = side
@@ -60,6 +61,7 @@ enum ConversationImages {
             let image = Image()
             image.source = bitmap
             image.stretch = .uniformToFill
+            Self.centerCrop(image)
             image.height = 24
             image.minWidth = 12
             image.maxWidth = 44
@@ -101,6 +103,13 @@ enum ConversationImages {
 
     /// A picture in a ring with rounded corners, on the subtle fill while it is read, named for assistive apps and on
     /// hover.
+    /// Has a picture that fills more than its frame keep its middle: Windows lays out a picture larger than its place
+    /// from the place's top left unless it is centered, so it would keep its left or top part.
+    private static func centerCrop(_ image: Image) {
+        image.horizontalAlignment = .center
+        image.verticalAlignment = .center
+    }
+
     private static func framed(_ image: Image, corner: Double, name: String) -> Border {
         let frame = Border()
         frame.cornerRadius = ConversationStyle.corners(corner)
