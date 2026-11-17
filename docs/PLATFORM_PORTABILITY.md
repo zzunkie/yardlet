@@ -196,7 +196,7 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   own apps, Enter sends and Shift+Enter starts a new line (`WinUI/ComposerKeys.swift`); New task and a host's window
   have the same field and Send. New task, under Home (`WinUI/NewTaskPane.swift`), is the Mac's home and starts a task
   as the Mac's does, from the Mac's home draft. Over it are the projects as the Mac's home lists them
-  (`WinUI/NewTaskHomeLists.swift`, from the engine's `NewTaskHomeListsProjection` and `NewTaskHomeListsLayout` over
+  (`WinUI/NewTaskHomeListsView.swift`, from the engine's `NewTaskHomeListsProjection` and `NewTaskHomeListsLayout` over
   `AppModel.newTaskHomeActivity`), side by side in as many columns as fit: each project, then the chats, with the
   tasks that wait on the person, run or hold an unread result, then its latest tasks with their latest answer's first
   line; its open pull requests as the Claude app's pill, looked up with the person's own `gh` as on the Mac
