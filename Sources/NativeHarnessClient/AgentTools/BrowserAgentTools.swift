@@ -41,6 +41,27 @@ extension AgentToolResult {
     }
 }
 
+/// What `BrowserAgentTools.scrub(_:)` hides, as it stood when taken. A tool's result and a page's text go through it
+/// away from the main actor, since its expressions take time in proportion to the text.
+struct BrowserAgentScrub: Sendable {
+    var vault: VaultScrubList
+    var hidesCredentials: Bool
+
+    func callAsFunction(_ text: String) -> String {
+        let text = vault.scrub(text)
+        return hidesCredentials ? CredentialText.scrub(text) : text
+    }
+
+    @concurrent func text(_ text: String) async -> String { self(text) }
+
+    @concurrent func texts(_ texts: [String]) async -> [String] { texts.map(callAsFunction) }
+
+    /// Each text of a tool's result, which also loses a two-factor setup address (`VaultSetupText`).
+    @concurrent func result(_ result: AgentToolResult) async -> AgentToolResult {
+        result.mappingText { VaultSetupText.scrub(self($0)) }
+    }
+}
+
 /// Runs the browser tools against a task's pages over CDP. Input is trusted CDP input
 /// (`Input.dispatchMouseEvent`, `Input.dispatchKeyEvent`, `Input.insertText`), so pages see it as
 /// the user's own. A tool acts on the tab its `tabId` names, else on the task's active tab; the tab
@@ -173,16 +194,18 @@ final class BrowserAgentTools {
         } else {
             result = await runNamingTab(tool, arguments, sessionID: sessionID).result
         }
-        return result.mappingText { VaultSetupText.scrub(scrub($0)) }
+        return await resultScrub.result(result)
     }
 
     /// What no result may carry: the values the vault filled lately, and text shaped like a key or token
     /// (`CredentialText`) unless the person turned that off. A tool that cuts a page's text scrubs it first, since a cut
     /// could leave part of one.
     func scrub(_ text: String) -> String {
-        let text = vaultScrub.scrub(text)
-        return hidesCredentials ? CredentialText.scrub(text) : text
+        resultScrub(text)
     }
+
+    /// `scrub(_:)` as it stands now, for a text that can be long.
+    var resultScrub: BrowserAgentScrub { BrowserAgentScrub(vault: vaultScrub, hidesCredentials: hidesCredentials) }
 
     /// Whether keys and tokens stay out of results and pictures: unless the person turned that off in Settings.
     var hidesCredentials: Bool { vault?.hidesCredentials ?? true }
@@ -706,7 +729,7 @@ final class BrowserAgentTools {
         case AgentToolCatalog.selectOption: try await selectOption(arguments, on: page)
         case AgentToolCatalog.waitFor: try await waitFor(arguments, on: page)
         case AgentToolCatalog.screenshot: try await screenshot(arguments, on: page)
-        case AgentToolCatalog.consoleMessages: consoleMessages(arguments, on: page)
+        case AgentToolCatalog.consoleMessages: await consoleMessages(arguments, on: page)
         case AgentToolCatalog.evaluate: try await evaluate(arguments, on: page, sessionID: sessionID)
         case AgentToolCatalog.handleDialog: try handleDialog(arguments, on: page, sessionID: sessionID)
         case AgentToolCatalog.fileUpload: try await fileUpload(arguments, on: page)
@@ -1162,7 +1185,7 @@ final class BrowserAgentTools {
             loaded = state[2] == "complete"
             lines.append("The page is at \(state[0]) (“\(state[1])”)" + (loaded ? " and has loaded." : ", still loading."))
         }
-        let shown = scrub(text)
+        let shown = await resultScrub.text(text)
         if vaultObservationRefusal(page, AgentToolCatalog.waitFor) != nil {
             lines.append("The page holds a password or code, so its text is not shown here.")
         } else if let disappears, let range = shown.range(of: Self.collapsed(disappears), options: .caseInsensitive) {
@@ -1441,7 +1464,7 @@ final class BrowserAgentTools {
         }
     }
 
-    private func consoleMessages(_ arguments: JSONValue, on page: BrowserAgentPage) -> AgentToolResult {
+    private func consoleMessages(_ arguments: JSONValue, on page: BrowserAgentPage) async -> AgentToolResult {
         let onlyErrors = arguments["onlyErrors"]?.boolValue == true
         var lines: [String] = []
         // What a document the vault filled logged stays out: its scripts had the values, in whatever form they log
@@ -1482,7 +1505,7 @@ final class BrowserAgentTools {
         }
         let note = withheld == 0 ? "" : "\n(\(withheld) messages from pages that held a password or code are left out.)"
         guard !lines.isEmpty else { return .text((onlyErrors ? "No errors." : "No console messages.") + note) }
-        let recent = lines.suffix(200).map(scrub).map { $0.count > 2_000 ? String($0.prefix(2_000)) + "…" : $0 }
+        let recent = await resultScrub.texts(Array(lines.suffix(200))).map { $0.count > 2_000 ? String($0.prefix(2_000)) + "…" : $0 }
         let header = lines.count > recent.count ? "Last \(recent.count) of \(lines.count) messages:\n" : ""
         return .text(header + recent.joined(separator: "\n") + note)
     }
@@ -1528,7 +1551,7 @@ final class BrowserAgentTools {
             let message = details["exception"]?["description"]?.stringValue ?? details["text"]?.stringValue ?? "The function threw."
             throw BrowserAgentToolError("The function threw: \(message)")
         }
-        let text = scrub(Self.valueText(result["result"]))
+        let text = await resultScrub.text(Self.valueText(result["result"]))
         return .text(text.count > 50_000 ? String(text.prefix(50_000)) + "\n… (cut at 50,000 characters)" : text)
     }
 

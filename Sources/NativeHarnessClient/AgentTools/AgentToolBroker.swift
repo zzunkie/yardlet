@@ -254,7 +254,7 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         if SessionToolCatalog.definition(named: call.tool) != nil || SettingsToolCatalog.definition(named: call.tool) != nil,
            let sessions {
             // Keys and tokens in another task's title, conversation or answer are hidden as the browser tools hide them.
-            return hidingCredentials(await sessions.callSessionTool(named: call.tool, arguments: call.arguments,
+            return await hidingCredentials(sessions.callSessionTool(named: call.tool, arguments: call.arguments,
                                                                     callerID: sessionID))
         }
         if TerminalToolCatalog.definition(named: call.tool) != nil, let sessions {
@@ -262,7 +262,7 @@ final class AgentToolBroker: AgentToolLaunchProviding {
                 return .error("The person stopped sharing the terminal in Yardlet's settings, so it was not read.")
             }
             // Keys and tokens a command printed are hidden as the browser tools hide them.
-            return hidingCredentials(await sessions.callSessionTool(named: call.tool, arguments: call.arguments,
+            return await hidingCredentials(sessions.callSessionTool(named: call.tool, arguments: call.arguments,
                                                                     callerID: sessionID))
         }
         if ScheduleToolCatalog.definition(named: call.tool) != nil, let schedules {
@@ -276,8 +276,13 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     }
 
     /// The result with the keys and tokens in its text hidden (`CredentialText`), unless the person turned that off.
-    private func hidingCredentials(_ result: AgentToolResult) -> AgentToolResult {
+    private func hidingCredentials(_ result: AgentToolResult) async -> AgentToolResult {
         guard vault?.hidesCredentials ?? true else { return result }
+        return await Self.hidingCredentials(in: result)
+    }
+
+    /// Away from the main actor: a terminal or a conversation can be long.
+    @concurrent private static func hidingCredentials(in result: AgentToolResult) async -> AgentToolResult {
         var hidden = result
         hidden.content = result.content.map { content in
             guard case let .text(text) = content else { return content }

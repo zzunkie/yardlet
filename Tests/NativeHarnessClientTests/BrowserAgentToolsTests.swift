@@ -1507,6 +1507,12 @@ final class BrowserAgentToolsTests: XCTestCase {
         let started = ContinuousClock.now
         XCTAssertEqual(CredentialText.scrub(joined + "key"), joined + "key")
         XCTAssertLessThan(ContinuousClock.now - started, .seconds(2), "A long run of joined words is read once")
+        // A long page or console log is read once for what the shapes look for, and each key in it is hidden.
+        let long = String(repeating: "요청을 처리했습니다, the request went through.\n", count: 50_000)
+        let longStarted = ContinuousClock.now
+        XCTAssertEqual(CredentialText.scrub(long + keys[4].0 + "\n" + long + keys[4].0), long + "ghp_[hidden credential]\n" + long
+            + "ghp_[hidden credential]")
+        XCTAssertLessThan(ContinuousClock.now - longStarted, .seconds(1), "A long text is read once for the shapes' anchors")
 
         // A screenshot's page finds them with the same expressions in JavaScript (`CredentialText.pageShapes`).
         let context = try XCTUnwrap(JSContext())

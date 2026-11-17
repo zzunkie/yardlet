@@ -72,13 +72,27 @@ enum CredentialText {
     private static let valueEnd = #"[^\s"'`\\<>,;&()|\[\].]"#
 
     static func scrub(_ text: String) -> String {
+        let held = anchors(in: text)
+        guard !held.isEmpty else { return text }
         var text = text
-        for shape in shapes where shape.anchors.contains(where: { text.contains($0) }) {
+        for shape in shapes where shape.anchors.contains(where: held.contains) {
             text = shape.pattern.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text),
                                                           withTemplate: shape.template)
         }
         return text
     }
+
+    /// The anchors the text holds, looked for in its UTF-8 bytes: they are ASCII, and every match of a shape holds one of
+    /// its own byte for byte. A replacement keeps the text around a match and adds the marker, which joins no anchor, so
+    /// the text before the first replacement holds every anchor a later shape can match.
+    private static func anchors(in text: String) -> Set<String> {
+        var text = text
+        text.makeContiguousUTF8()
+        let bytes = Data(text.utf8)
+        return Set(anchorBytes.filter { bytes.range(of: $0.bytes) != nil }.map(\.text))
+    }
+
+    private static let anchorBytes = Set(shapes.flatMap(\.anchors)).map { (text: $0, bytes: Data($0.utf8)) }
 }
 
 // MARK: Captures

@@ -1109,10 +1109,24 @@ enum VaultSetupText {
         + "((?:[^&\\s\"'<>%]|%(?!26)[0-9A-Fa-f]{2})+)", options: [.caseInsensitive])
 
     static func scrub(_ text: String) -> String {
-        guard text.range(of: "otpauth", options: .caseInsensitive) != nil else { return text }
+        guard mentionsSetup(text) else { return text }
         return address.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text),
                                                 withTemplate: "$1[saved value]")
     }
+
+    /// Whether the text holds `otpauth` in any case, read in one pass over its UTF-8: every address the expression finds
+    /// does, as no letter outside ASCII folds to one of its letters. A text whose UTF-8 cannot be read in place holds it.
+    private static func mentionsSetup(_ text: String) -> Bool {
+        var text = text
+        text.makeContiguousUTF8()
+        return text.utf8.withContiguousStorageIfAvailable { bytes in
+            bytes.indices.contains { start in
+                start + scheme.count <= bytes.count && scheme.indices.allSatisfy { bytes[start + $0] | 0x20 == scheme[$0] }
+            }
+        } ?? true
+    }
+
+    private static let scheme = Array("otpauth".utf8)
 }
 
 extension AgentToolResult {
