@@ -67,7 +67,7 @@ struct ImportConversationSheet: View {
     /// Claude Code, Codex and Antigravity CLI, then the other ACP agents installed, in the catalog's order.
     private var harnesses: [HarnessKind] {
         [.claudeCode, .codex, .antigravityCLI] + HarnessCatalog.builtIns.map(\.id).filter {
-            ACPSessionHistory.reads($0) && model.runtimeSelections.selectedURL(for: $0) != nil
+            ACPSessionHistory.reads($0) && model.runtimeSelections.knownURL(for: $0) != nil
         }
     }
 

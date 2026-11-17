@@ -34,15 +34,30 @@ final class RuntimeSelectionStore {
     private let discoversRuntimes: Bool
     private let candidates: @Sendable (HarnessKind) -> [URL]
     private let versions: RuntimeVersionCache
+    /// The runtime each harness's selection led to when its file was last looked at (`knownURL(for:)`), by the
+    /// selection looked at, and when that look began.
+    private var found: [HarnessKind: Found] = [:]
+    @ObservationIgnored private var foundAt: [HarnessKind: ContinuousClock.Instant] = [:]
+    /// When `knownURL(for:)` last had the files looked at again, and whether that look is still underway.
+    @ObservationIgnored private var lookedAgainAt = ContinuousClock.now
+    @ObservationIgnored private var isLookingAgain = false
+    private let lookAgainInterval: Duration
+
+    private struct Found: Equatable {
+        var selection: URL
+        var runtime: URL?
+    }
 
     init(
         defaults: UserDefaults = .yardlet,
         discoversRuntimes: Bool = true,
         loadsPersistedSelections: Bool = true,
         candidates: @escaping @Sendable (HarnessKind) -> [URL] = { RuntimeSelectionStore.defaultCandidates(for: $0) },
-        versions: RuntimeVersionCache? = nil
+        versions: RuntimeVersionCache? = nil,
+        lookAgainInterval: Duration = .seconds(5)
     ) {
         self.defaults = defaults
+        self.lookAgainInterval = lookAgainInterval
         self.discoversRuntimes = discoversRuntimes
         self.candidates = candidates
         let versions = versions ?? RuntimeVersionCache(defaults: defaults)
@@ -82,20 +97,78 @@ final class RuntimeSelectionStore {
         }
         self.selectedURLs = selections
         self.chosen = chosen
+        lookAtNewSelections()
     }
 
+    /// The harness's runtime now, its file looked at: for whatever starts the harness's CLI or asks it something. What
+    /// runs often on the main thread, a view or the remote's snapshot, reads `knownURL(for:)` instead.
     func selectedURL(for harness: HarnessKind) -> URL? {
-        if let remoteRuntimes {
-            guard let runtime = remoteRuntimes[harness], runtime.installed else { return nil }
-            let name = HarnessCatalog.descriptor(for: harness)?.executableName ?? harness.rawValue
-            return URL(filePath: name)
-        }
-        guard let url = selectedURLs[harness], Self.isCompatibleRuntime(url, for: harness) else { return nil }
+        if let remoteRuntimes { return Self.remoteURL(for: harness, in: remoteRuntimes) }
+        guard let url = selectedURLs[harness] else { return nil }
+        let start = ContinuousClock.now
+        let runtime = Self.runtime(selecting: url, for: harness)
+        note(runtime, selecting: url, for: harness, lookedAt: start)
+        return runtime
+    }
+
+    /// The harness's runtime as `selectedURL(for:)` last found it, without looking at the file: what a view, the
+    /// remote's snapshot and `connectedDescriptors` read. The files are looked at again away from the main thread at
+    /// most every `lookAgainInterval` while this is read, so a runtime removed, moved or put back while Yardlet runs
+    /// shows here soon after; a new selection is looked at when it is made.
+    func knownURL(for harness: HarnessKind) -> URL? {
+        if let remoteRuntimes { return Self.remoteURL(for: harness, in: remoteRuntimes) }
+        guard let url = selectedURLs[harness] else { return nil }
+        lookAgainIfDue()
+        guard let found = found[harness], found.selection == url else { return selectedURL(for: harness) }
+        return found.runtime
+    }
+
+    private static func remoteURL(for harness: HarnessKind, in runtimes: [HarnessKind: RemoteHarnessRuntime]) -> URL? {
+        guard let runtime = runtimes[harness], runtime.installed else { return nil }
+        return URL(filePath: HarnessCatalog.descriptor(for: harness)?.executableName ?? harness.rawValue)
+    }
+
+    /// The runtime a selection of `url` leads to now. A desktop app that replaced the runtime it bundles while Yardlet
+    /// ran (Claude Desktop deletes the previous version on update) leads to the new one, as on the next launch.
+    nonisolated private static func runtime(selecting url: URL, for harness: HarnessKind) -> URL? {
+        guard isCompatibleRuntime(url, for: harness) else { return nil }
         if ExecutableLookup.current.isProgram(url) { return url }
-        // A desktop app replaced the runtime it bundles while Yardlet ran (Claude Desktop deletes the
-        // previous version on update): the choice follows it, as on the next launch.
-        guard let moved = RuntimeRelocation.successor(of: url, for: harness), Self.isCompatibleRuntime(moved, for: harness) else { return nil }
+        guard let moved = RuntimeRelocation.successor(of: url, for: harness), isCompatibleRuntime(moved, for: harness) else { return nil }
         return moved
+    }
+
+    /// Keeps what a look at a selection's file found, unless a look that began later already told.
+    private func note(_ runtime: URL?, selecting url: URL, for harness: HarnessKind, lookedAt start: ContinuousClock.Instant) {
+        guard foundAt[harness].map({ $0 <= start }) ?? true else { return }
+        foundAt[harness] = start
+        let entry = Found(selection: url, runtime: runtime)
+        if found[harness] != entry { found[harness] = entry }
+    }
+
+    /// Looks at the files of the selections not looked at yet: at launch and after discovery changed them.
+    private func lookAtNewSelections() {
+        for (harness, url) in selectedURLs where found[harness]?.selection != url { _ = selectedURL(for: harness) }
+    }
+
+    private func lookAgainIfDue() {
+        guard !isLookingAgain, ContinuousClock.now - lookedAgainAt >= lookAgainInterval else { return }
+        isLookingAgain = true
+        let selections = selectedURLs, start = ContinuousClock.now
+        Task { [weak self] in
+            let runtimes = await Self.runtimes(selecting: selections)
+            guard let self else { return }
+            isLookingAgain = false
+            lookedAgainAt = .now
+            guard remoteRuntimes == nil else { return }
+            for (harness, url, runtime) in runtimes where selectedURLs[harness] == url {
+                note(runtime, selecting: url, for: harness, lookedAt: start)
+            }
+        }
+    }
+
+    @concurrent private static func runtimes(selecting selections: [HarnessKind: URL]) async
+        -> [(harness: HarnessKind, url: URL, runtime: URL?)] {
+        selections.map { ($0.key, $0.value, runtime(selecting: $0.value, for: $0.key)) }
     }
 
     func isChosen(_ harness: HarnessKind) -> Bool {
@@ -127,7 +200,7 @@ final class RuntimeSelectionStore {
     }
 
     var connectedDescriptors: [HarnessDescriptor] {
-        HarnessCatalog.builtIns.filter { selectedURL(for: $0.id) != nil }
+        HarnessCatalog.builtIns.filter { knownURL(for: $0.id) != nil }
     }
 
     /// The person's choice: kept until they choose another, whatever newer install appears.
@@ -190,6 +263,7 @@ final class RuntimeSelectionStore {
                 selectedURLs[harness] = only
             }
         }
+        lookAtNewSelections()
         let versions = self.versions
         let read = await withTaskGroup(of: (URL, String?).self) { group in
             for url in Set(lookups.values.flatMap(\.installs)) {
@@ -214,6 +288,7 @@ final class RuntimeSelectionStore {
                 selectedURLs[harness] = newest
             }
         }
+        lookAtNewSelections()
     }
 
     private static func key(for harness: HarnessKind) -> String {

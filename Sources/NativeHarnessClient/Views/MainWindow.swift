@@ -2276,7 +2276,7 @@ struct MainWindow: View {
 
     private var personalLoadKey: String {
         guard sidebarSection == .personalAgents else { return "tasks" }
-        return personalDraftKey + "|" + (model.runtimeSelections.selectedURL(for: .codex)?.path() ?? "")
+        return personalDraftKey + "|" + (model.runtimeSelections.knownURL(for: .codex)?.path() ?? "")
     }
 
     private var personalDraftKey: String {

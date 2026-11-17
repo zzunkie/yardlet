@@ -220,7 +220,10 @@ the older flat path and completed packages that have a regular `.verified` marke
 linked directories are excluded. The helper knows only the layouts of desktop apps that bundle a runtime (the Claude app
 for Claude Code, the ChatGPT app for Codex); a user-managed CLI that disappeared is not guessed. When such an app
 replaces its runtime while Yardlet runs (the Claude app deletes the previous version when it updates),
-`RuntimeSelectionStore.selectedURL` returns the successor path right away, as the next launch would.
+`RuntimeSelectionStore.selectedURL` returns the successor path right away, as the next launch would. It looks at the
+file each time, so whatever starts a CLI or asks it something uses it; what reads the runtime often on the main thread
+(the screens, the remote's snapshot) reads the one last found (`knownURL`), which a new selection, discovery and each
+`selectedURL` update, and which is looked at again away from the main thread at most every five seconds while it is read.
 
 A task runs on its harness's current runtime each time its runtime starts (`AppModel.runtime(of:)`): the one the person
 chose in Settings › Harnesses, or else the newest install found, as the Claude app and the Codex app open every

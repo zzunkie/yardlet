@@ -211,7 +211,7 @@ struct AccountList: View {
         let catalog = HarnessCatalog.builtIns.map(\.id)
         return AccountHarnessScope.available(
             catalog: catalog,
-            installed: Set(catalog.filter { runtimeSelections.selectedURL(for: $0) != nil }),
+            installed: Set(catalog.filter { runtimeSelections.knownURL(for: $0) != nil }),
             savedAccounts: Set(store.connections.map(\.harness)),
             signedInDefaults: Set(store.defaultSnapshots.values.filter { $0.state == .signedIn }.map(\.harness))
         )

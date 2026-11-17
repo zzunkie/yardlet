@@ -44,7 +44,7 @@ final class RuntimeSelectionStoreTests: XCTestCase {
         XCTAssertEqual(store.connectedDescriptors.map(\.id), [.codex, .claudeCode])
     }
 
-    func testDeletedSelectedRuntimeCannotRemainAvailable() throws {
+    func testDeletedSelectedRuntimeCannotRemainAvailable() async throws {
         let fileManager = FileManager.default
         let root = fileManager.temporaryDirectory
             .appending(path: "nhc-missing-runtime-\(UUID().uuidString)", directoryHint: .isDirectory)
@@ -61,13 +61,26 @@ final class RuntimeSelectionStoreTests: XCTestCase {
         let defaults = try XCTUnwrap(
             UserDefaults(suiteName: testDefaultsSuite("NativeHarnessClientTests"))
         )
-        let store = RuntimeSelectionStore(defaults: defaults)
+        let store = RuntimeSelectionStore(defaults: defaults, lookAgainInterval: .milliseconds(50))
         store.select(executable, for: .pi)
         XCTAssertEqual(store.selectedURL(for: .pi), executable.standardizedFileURL)
+        XCTAssertEqual(store.knownURL(for: .pi), executable.standardizedFileURL)
 
         try fileManager.removeItem(at: executable)
 
+        // What reads the runtime often does not look at the file; it follows a look away from the main thread.
+        XCTAssertEqual(store.knownURL(for: .pi), executable.standardizedFileURL)
+        try await waitUntil { store.knownURL(for: .pi) == nil }
+        XCTAssertFalse(store.connectedDescriptors.contains { $0.id == .pi })
+
+        // Whatever starts the CLI looks at the file, and what the screens read follows it at once.
+        XCTAssertTrue(fileManager.createFile(atPath: executable.path, contents: Data()))
+        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        XCTAssertEqual(store.selectedURL(for: .pi), executable.standardizedFileURL)
+        XCTAssertEqual(store.knownURL(for: .pi), executable.standardizedFileURL)
+        try fileManager.removeItem(at: executable)
         XCTAssertNil(store.selectedURL(for: .pi))
+        XCTAssertNil(store.knownURL(for: .pi))
     }
 
     func testAntigravityRejectsLegacyIDELauncherAndAcceptsOfficialAgyCLI() throws {

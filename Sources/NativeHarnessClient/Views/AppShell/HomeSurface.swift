@@ -681,7 +681,7 @@ private struct NewTaskComposer: View {
         availableHarnesses.map(\.id.rawValue)
     }
     private var runtimeURL: URL? {
-        draft.harness.flatMap { runtimeSelections.selectedURL(for: $0) }
+        draft.harness.flatMap { runtimeSelections.knownURL(for: $0) }
     }
     private var canCreate: Bool {
         guard draft.canCreate(runtimeURL: runtimeURL) else { return false }
@@ -747,7 +747,7 @@ private struct NewTaskComposer: View {
             ComposerSessionControls(options: options, placement: placement, isDisabled: draft.isCreating,
                 onChoose: { choose($0, for: harness) },
                 onPrepare: {
-                    guard let models, let runtimeURL else { return }
+                    guard let models, let runtimeURL = runtimeSelections.selectedURL(for: harness) else { return }
                     await models.load(harness, runtimeURL, selectedConnection, draft.workspaceURL)
                 })
         }
@@ -981,7 +981,8 @@ private struct NewTaskComposer: View {
     private func create() {
         guard canCreate else { return }
         guard !draft.refusesAttachments(options: sessionOptions) else { return }
-        guard let begun = draft.beginSubmission(runtimeURL: runtimeURL,
+        // The runtime's file is looked at as the task starts; the screen reads what was last found (`knownURL(for:)`).
+        guard let begun = draft.beginSubmission(runtimeURL: draft.harness.flatMap { runtimeSelections.selectedURL(for: $0) },
             connection: draft.harness.flatMap { connections?.selected(for: $0) },
             startsInNewWorktree: startsInNewWorktree) else { return }
         let picksAccount = startsOnAutomaticAccount ? accounts?.pick : nil

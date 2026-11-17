@@ -230,7 +230,7 @@ final class AppModelRemoteBridge: RemoteBridge {
 
     /// The harness the Mac's new-task composer starts on now, when it can start one.
     static func newTaskHarness(in model: AppModel) -> HarnessKind? {
-        guard let harness = model.composerDrafts.home.harness, model.runtimeSelections.selectedURL(for: harness) != nil else {
+        guard let harness = model.composerDrafts.home.harness, model.runtimeSelections.knownURL(for: harness) != nil else {
             return nil
         }
         return harness

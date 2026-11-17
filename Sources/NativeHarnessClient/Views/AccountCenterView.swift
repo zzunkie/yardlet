@@ -490,7 +490,7 @@ struct ConnectionCenterContent: View {
         HarnessCatalog.builtIns.filter {
             HarnessCenterListingProjection.matches($0, snapshot: connections.defaultSnapshots[$0.id], query: searchText,
                 filter: .all)
-                && (filter == .all || (filter == .connected) == (runtimeSelections.selectedURL(for: $0.id) != nil))
+                && (filter == .all || (filter == .connected) == (runtimeSelections.knownURL(for: $0.id) != nil))
         }
     }
 
@@ -583,7 +583,7 @@ struct ConnectionCenterContent: View {
     }
 
     private func harnessRow(_ descriptor: HarnessDescriptor) -> some View {
-        let installed = runtimeSelections.selectedURL(for: descriptor.id) != nil
+        let installed = runtimeSelections.knownURL(for: descriptor.id) != nil
         let status = L10n.string(installed ? "Installed" : "Not installed")
         return Button { selectedHarness = descriptor.id } label: {
             HStack(spacing: 12) {
@@ -699,7 +699,7 @@ struct ConnectionCenterContent: View {
                 .parityCard()
 
                 HStack(spacing: 12) {
-                    Label(L10n.string(runtimeSelections.selectedURL(for: descriptor.id) == nil ? "Runtime unavailable" : "Runtime ready"), systemImage: "terminal")
+                    Label(L10n.string(runtimeSelections.knownURL(for: descriptor.id) == nil ? "Runtime unavailable" : "Runtime ready"), systemImage: "terminal")
                     Spacer()
                     Text(HarnessConnectionCapabilities.capabilities(for: descriptor.id).access.title)
                         .foregroundStyle(.secondary)
@@ -898,7 +898,7 @@ struct ConnectionCenterContent: View {
     }
 
     private func runtimeSection(_ descriptor: HarnessDescriptor) -> some View {
-        let runtime = runtimeSelections.selectedURL(for: descriptor.id)
+        let runtime = runtimeSelections.knownURL(for: descriptor.id)
         let remote = runtimeSelections.remoteRuntimes?[descriptor.id]
         let compatibility = HarnessRuntimeVersionNote.compatibility(for: descriptor.id)
         return VStack(alignment: .leading, spacing: 9) {

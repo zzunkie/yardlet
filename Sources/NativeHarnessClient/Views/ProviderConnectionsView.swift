@@ -64,7 +64,7 @@ struct ProviderConnectionPicker: View {
                 .padding(16).frame(width: 610)
         }
         // Again when the runtime changes: one only the login shell's `PATH` finds comes after launch.
-        .task(id: [harness.rawValue, runtimeSelections.selectedURL(for: harness)?.path(percentEncoded: false) ?? ""]) {
+        .task(id: [harness.rawValue, runtimeSelections.knownURL(for: harness)?.path(percentEncoded: false) ?? ""]) {
             await store.checkNewTaskAccounts(for: harness, runtimeSelections: runtimeSelections)
         }
     }
@@ -129,7 +129,7 @@ struct AddProviderConnectionView: View {
             if initialHarness == nil && existingChoice == nil {
                 Picker(L10n.string("Harness"), selection: $harness) {
                     ForEach(HarnessCatalog.builtIns.filter { HarnessConnectionCapabilities.capabilities(for: $0.id).supportsSeparateHome
-                        && runtimeSelections.selectedURL(for: $0.id) != nil }) { Text($0.displayName).tag($0.id) }
+                        && runtimeSelections.knownURL(for: $0.id) != nil }) { Text($0.displayName).tag($0.id) }
                 }
             } else { HarnessIdentityLabel(harness: harness) }
             if harness == .pi { PiConnectionProviderPicker(selection: $provider) }
@@ -154,7 +154,7 @@ struct AddProviderConnectionView: View {
                 Spacer()
                 Button(L10n.string(home == nil ? "Continue to sign in" : "Use this account")) { add() }
                     .parityProminentButton()
-                    .disabled(runtimeSelections.selectedURL(for: harness) == nil || (harness == .pi && provider.isEmpty && home == nil))
+                    .disabled(runtimeSelections.knownURL(for: harness) == nil || (harness == .pi && provider.isEmpty && home == nil))
                     .keyboardShortcut(.defaultAction)
             }
             Spacer(minLength: 0)
