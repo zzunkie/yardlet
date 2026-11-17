@@ -191,6 +191,13 @@ read nothing in it, whatever mode the files inside have.
   own feature flag enables the pause. A Codex task asks for a prediction after a turn only while it is on screen or was
   within the last three hours. The setting stays the switch for all of it.
 - Per-file drafts in Files are stored in app-owned workspace preferences.
+- **A task whose harness did not start:** a task that came to exist but whose harness did not start (a schedule's run,
+  a child task, a new task) keeps the message it was made with and the reason in its conversation, as a message that
+  could not be sent does, so they are in the read cache after Yardlet opens again. A Codex conversation is drawn from
+  the thread the task's next message starts, which never had that message, so a Codex task also keeps it in its
+  follow-up queue, failed with the reason, as a Codex message that could not be sent waits there. The composer lists a
+  failed message even when another task or a schedule sent it, with Retry and Remove but no Edit; Retry sends it at
+  once to a task with no runtime, so it opens the task's thread.
 - **Why a task lost its runtime, and what ended its turn:** `~/.yardlet/logs/task-coordination.log` (one JSON object a
   line, 0600, the newest half kept past 512 KiB) gets a line each time Yardlet takes a runtime off a task
   (`AppModel.detachRuntime`): the time, the task's ID, its harness and the reason (`RuntimeDetachReason`: the task was

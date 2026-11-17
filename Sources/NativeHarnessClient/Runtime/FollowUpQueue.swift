@@ -105,6 +105,10 @@ struct QueuedFollowUp: Codable, Equatable, Identifiable, Sendable {
     /// queue only while one of theirs waits.
     var isFromAnotherTask: Bool { TaskMessage.parse(draft.text) != nil }
 
+    /// A row above the composer: the person's message, or another task's that could not be sent, which
+    /// nothing sends again unless the person retries it (a schedule's run whose task did not start).
+    var isListedInComposer: Bool { !isFromAnotherTask || state == .failed }
+
     /// The message held by Yardlet again, unsent: the provider that held it let it go unread. It
     /// was written to be read in the running turn, and keeps that place (2026-10-23: after an update
     /// restart, a message another task sent before the quit reached its parent after one sent after).

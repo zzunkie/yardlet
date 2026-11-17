@@ -935,12 +935,19 @@ final class AppModel {
     /// A task that came to exist but whose harness did not start keeps what was asked and why in its
     /// conversation, as a message that could not be sent does (`send`), there again after Yardlet opens: the
     /// reason is otherwise only in memory. A failure after the message reached `send` is that path's own.
+    /// A Codex conversation is drawn from its thread once one starts, and that thread never had the message,
+    /// so the message also waits in the task's queue, failed with the reason, as one `submitCodex` could not
+    /// send does: the next message starts the thread without erasing it, and Retry sends it there.
     private func recordUnstartedMessage(_ text: String?, attachments: [CodexUserInput], error: String,
                                         for sessionID: UUID) {
         if let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let input = HarnessUserInput.projecting(CodexComposerDraft(inputs: [.text(text)] + attachments)).input
+            let draft = CodexComposerDraft(inputs: [.text(text)] + attachments)
+            let input = HarnessUserInput.projecting(draft).input
             mutateTranscript(for: sessionID, publishImmediately: true) { builder in
                 builder.appendUser(input.promptText, images: input.transcriptImages)
+            }
+            if store.sessions.first(where: { $0.id == sessionID })?.harness == .codex {
+                followUps.append(QueuedFollowUp(draft: draft, state: .failed, failureMessage: error), to: sessionID)
             }
         }
         recordLocalError(error, for: sessionID)
@@ -1713,9 +1720,16 @@ final class AppModel {
         followUps.move(itemID, in: session.id, to: index, policy: policy)
     }
 
-    /// A failed message waits to be sent again, and goes once no turn is running.
+    /// A failed message waits to be sent again, and goes once no turn is running. A task with no runtime
+    /// runs no turn and drains nothing, so the first message goes now, as Send now sends it: a task whose
+    /// harness did not start sends the message it was made with.
     func retryQueued(_ itemID: UUID, for session: SessionRecord) {
         guard followUps.retry(itemID, in: session.id) else { return }
+        if handlesBySessionID[session.id] == nil, !followUps.isPaused(session.id),
+           followUps.queue(for: session.id).first?.id == itemID {
+            Task { await sendQueuedNow(itemID, for: session) }
+            return
+        }
         scheduleFollowUpDrain(for: session.id)
     }
 

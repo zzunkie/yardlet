@@ -449,7 +449,9 @@ final class AppModelTests: XCTestCase {
 
     /// A task that came to exist but whose harness did not start keeps the message it was started with and why in
     /// its conversation, which the transcript keeps after Yardlet opens again, as a message that could not be sent
-    /// stays; the task's error alone is held in memory.
+    /// stays; the task's error alone is held in memory. A Codex conversation is drawn from the thread its next
+    /// message starts, which never had that message, so the message also waits in the queue, failed with the
+    /// reason, and Retry sends it as the thread's first message.
     func testATaskWhoseHarnessDidNotStartKeepsItsMessageAndWhyInItsConversation() async throws {
         let adapter = FakeHarnessAdapter(kind: .codex)
         let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("NativeHarnessClientTests.notStarted")))
@@ -471,6 +473,16 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(turn.prompt.map(\.kind), [.userMessage(text: "Fix the tests", images: [])])
         guard case let .error(error) = turn.outcome else { return XCTFail("The conversation says why: \(turn)") }
         XCTAssertTrue(error.message.contains("CODEX_HOME names no folder"), error.message)
+
+        let unsent = try XCTUnwrap(model.followUps.queue(for: task.id).first)
+        XCTAssertEqual(model.followUps.queue(for: task.id).count, 1)
+        XCTAssertEqual(unsent.draft.text, "Fix the tests")
+        XCTAssertEqual(unsent.state, .failed)
+        XCTAssertTrue(unsent.failureMessage?.contains("CODEX_HOME names no folder") == true, "\(unsent)")
+        model.retryQueued(unsent.id, for: task)
+        try await waitUntil { model.followUps.queue(for: task.id).isEmpty }
+        let sent = await adapter.sentPrompts
+        XCTAssertEqual(sent, ["Fix the tests"])
         await model.shutdown()
     }
 

@@ -36,9 +36,9 @@ struct PromptComposer: View {
     /// The task's follow-up queue: Codex's, or Claude's, whose sent messages Claude Code holds
     /// until it reads them.
     let codexQueue: [CodexQueuedSubmission]
-    /// The queue's messages the person wrote, without the ones other tasks sent.
+    /// The queue's messages the person wrote, and those other tasks sent that could not be sent.
     private var personQueue: [CodexQueuedSubmission] {
-        codexQueue.filter { !$0.isFromAnotherTask }
+        codexQueue.filter(\.isListedInComposer)
     }
     let isCodexQueuePaused: Bool
     /// The task's folders, searched by a typed `@` mention.
@@ -349,10 +349,11 @@ struct PromptComposer: View {
             // Queued messages, one full-width row each above the text, as the Codex and Claude
             // apps list them: a long message shortens and its actions stay in view.
             // A message another task sent waits here only until the provider reads it; it is not
-            // the person's to manage, so it shows in the conversation once read, not in this list.
+            // the person's to manage, so it shows in the conversation once read, not in this list,
+            // unless it could not be sent: then only the person can send it again or remove it.
             if let followUp = options.followUp, !personQueue.isEmpty {
                 VStack(spacing: 4) {
-                    ForEach(Array(codexQueue.enumerated()).filter { !$0.element.isFromAnotherTask },
+                    ForEach(Array(codexQueue.enumerated()).filter { $0.element.isListedInComposer },
                             id: \.element.id) { index, item in
                         queueChip(item, chip: ComposerQueueChip.make(policy: followUp.policy, queue: codexQueue,
                                                                      at: index, canSend: actions.sendQueuedNow != nil),

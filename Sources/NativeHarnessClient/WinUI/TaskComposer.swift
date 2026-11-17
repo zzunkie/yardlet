@@ -329,9 +329,10 @@ final class TaskComposer {
 
     // MARK: The queue
 
-    /// The queue's messages the person wrote; one another task sent waits only until the harness reads it.
+    /// The queue's messages the person wrote; one another task sent waits only until the harness reads it,
+    /// unless it could not be sent.
     private var personQueue: [QueuedFollowUp] {
-        (shown?.queue ?? []).filter { !$0.isFromAnotherTask }
+        (shown?.queue ?? []).filter(\.isListedInComposer)
     }
 
     /// The queued messages, one row each above the text as the Codex and Claude apps list them, and above them that
@@ -350,7 +351,7 @@ final class TaskComposer {
             })
             rows += 1
         }
-        for (index, item) in shown.queue.enumerated() where !item.isFromAnotherTask {
+        for (index, item) in shown.queue.enumerated() where item.isListedInComposer {
             let chip = ComposerQueueChip.make(policy: followUp.policy, queue: shown.queue, at: index, canSend: true)
             card.top.children.append(queueRow(item, chip: chip, at: index))
             rows += 1

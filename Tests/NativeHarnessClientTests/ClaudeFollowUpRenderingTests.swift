@@ -4,9 +4,9 @@ import XCTest
 @testable import NativeHarnessClient
 
 /// Renders Claude's follow-up queue offscreen into `.build/claude-followup-qa`: a message Claude
-/// Code holds, one Yardlet holds and a failed one, running and paused; and a follow-up Claude read
-/// in the middle of a turn, as the conversation shows it. No provider, window server interaction or
-/// app launch is involved.
+/// Code holds, one Yardlet holds, a failed one and a failed one another task sent (a schedule's run
+/// whose task did not start), running and paused; and a follow-up Claude read in the middle of a
+/// turn, as the conversation shows it. No provider, window server interaction or app launch is involved.
 @MainActor
 final class ClaudeFollowUpRenderingTests: XCTestCase {
     func testClaudesQueueShowsWhatClaudeHoldsWhatWaitsAndThePause() throws {
@@ -16,7 +16,11 @@ final class ClaudeFollowUpRenderingTests: XCTestCase {
                                   providerMessageID: UUID().uuidString.lowercased()),
             CodexQueuedSubmission(draft: CodexComposerDraft(inputs: [.text("Then update the README")])),
             CodexQueuedSubmission(draft: CodexComposerDraft(inputs: [.text("And bump the version")]), state: .failed,
-                                  failureMessage: "Claude Code did not take this message.")
+                                  failureMessage: "Claude Code did not take this message."),
+            CodexQueuedSubmission(draft: CodexComposerDraft(inputs: [.text(TaskMessage(
+                senderID: UUID().uuidString, senderName: "Release notes", body: "Publish the notes for this week",
+                relation: .parent).text(in: .yardlet))]), state: .failed,
+                                  failureMessage: "Connection to Codex ended.")
         ]
         for (paused, appearance) in [(false, ColorScheme.light), (true, .dark), (false, .dark)] {
             let composer = PromptComposer(
@@ -31,7 +35,7 @@ final class ClaudeFollowUpRenderingTests: XCTestCase {
             .frame(width: 900)
             .background(ParityTheme.canvas)
             .environment(\.colorScheme, appearance)
-            let bitmap = try render(composer, size: NSSize(width: 900, height: 220))
+            let bitmap = try render(composer, size: NSSize(width: 900, height: 260))
             let name = "composer-queue-\(paused ? "paused" : "running")-\(appearance == .dark ? "dark" : "light").png"
             try WindowlessRender.writePNG(bitmap, to: directory.appending(path: name))
         }
