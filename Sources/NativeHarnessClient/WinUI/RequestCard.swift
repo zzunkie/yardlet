@@ -565,25 +565,25 @@ final class RequestCard {
     /// Skip where the provider allows it, then Next, or on the last question the answers. Next waits for an
     /// answer or a skip.
     private func stepButtons(_ step: ConversationQuestionStep, stepper: ConversationQuestionStepper,
-                             steps: [ConversationQuestionStep]) -> StackPanel {
-        let row = Self.buttonRow()
+                             steps: [ConversationQuestionStep]) -> UIElement {
+        var buttons: [Button] = []
         if step.canSkip {
-            row.children.append(ConversationStyle.grayButton(L10n.string("Skip")) { [weak self] in
+            buttons.append(ConversationStyle.grayButton(L10n.string("Skip")) { [weak self] in
                 guard let self else { return }
                 self.input.skip(step)
                 self.goOn(from: step, steps: steps)
             })
         }
         if stepper.isLast {
-            for response in responses { row.children.append(answerButton(response)) }
+            buttons += responses.map { answerButton($0) }
         } else {
             let next = ConversationStyle.prominentButton(L10n.string("Next")) { [weak self] in
                 self?.goOn(from: step, steps: steps)
             }
             refreshers.append { [unowned self] in next.isEnabled = self.input.isSettled(step) }
-            row.children.append(next)
+            buttons.append(next)
         }
-        return row
+        return Self.buttonRow(buttons)
     }
 
     private func move(to index: Int) {
@@ -785,10 +785,8 @@ final class RequestCard {
     // MARK: - Answers
 
     /// The answers in one row, the prominent one last.
-    private func answerRow(_ responses: [ConversationRequestResponse]) -> StackPanel {
-        let row = Self.buttonRow()
-        for response in responses { row.children.append(answerButton(response)) }
-        return row
+    private func answerRow(_ responses: [ConversationRequestResponse]) -> UIElement {
+        Self.buttonRow(responses.map { answerButton($0) })
     }
 
     /// An answer, on only while the form can be sent with it: the prominent one in Yardlet's accent, the others gray.
@@ -887,12 +885,32 @@ final class RequestCard {
         return rule
     }
 
-    /// The answers in one row on the right, the prominent one last.
-    private static func buttonRow() -> StackPanel {
+    /// `buttons` in one row on the right, or where they do not fit side by side, stacked on the right, as the Mac's
+    /// card stacks its answers. The buttons keep their own widths either way, which is what the row is measured by.
+    private static func buttonRow(_ buttons: [Button]) -> Grid {
         let row = StackPanel()
         row.orientation = .horizontal
         row.spacing = 8
         row.horizontalAlignment = .right
-        return row
+        for button in buttons {
+            button.horizontalAlignment = .right
+            row.children.append(button)
+        }
+        let holder = Grid()
+        holder.children.append(row)
+        let stacked = Stacked()
+        holder.sizeChanged.addHandler { sender, _ in
+            guard let width = (sender as? FrameworkElement)?.actualWidth else { return }
+            let needed = buttons.reduce(0) { $0 + $1.actualWidth } + 8 * Double(max(0, buttons.count - 1))
+            guard (needed > width) != stacked.value else { return }
+            stacked.value = needed > width
+            row.orientation = stacked.value ? .vertical : .horizontal
+            row.spacing = stacked.value ? 6 : 8
+        }
+        return holder
+    }
+
+    private final class Stacked {
+        var value = false
     }
 }
