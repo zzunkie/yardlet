@@ -193,7 +193,7 @@ final class ConnectToMacSection {
         note.text = L10n.string("The link works once, for 5 minutes. Pair once while both Macs are together; from then on this Mac connects on the same network, over Tailscale or through the Yardlet server.")
         note.textWrapping = .wrap
         note.fontSize = 12
-        note.foreground = WindowsTheme.tertiaryText.brush
+        note.foreground = WindowsTheme.secondaryText.brush
         note.margin = Thickness(left: 36, top: 0, right: 0, bottom: 0)
         content.children.append(note)
         view.children.append(SettingsCard.card(content))

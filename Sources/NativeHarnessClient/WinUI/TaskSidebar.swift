@@ -68,16 +68,23 @@ final class TaskSidebar {
 
     /// Shows `place` chosen, as the window shows it, without telling `onChoose`.
     func choose(_ place: SidebarPlace?) {
+        let isNew = place != chosen
         chosen = place
-        places.choose(place == .home ? Self.homeKey : nil)
-        let taskKey: String? = if case let .task(id) = place { Self.key(id) } else { nil }
-        for list in taskLists { list.choose(taskKey) }
-        footer.choose(footerPlaces.first { $0.value == place }?.key)
+        markChosen()
         // A task chosen elsewhere (a notification, the window's keys) in a collapsed project opens it, as on the Mac.
-        if case let .task(id) = place, let key = SidebarProjection.disclosureKey(holding: .session(id), in: layout),
-           disclosure.isCollapsed(key) {
+        // The project of the task already shown stays collapsed when the person collapses it.
+        if isNew, case let .task(id) = place,
+           let key = SidebarProjection.disclosureKey(holding: .session(id), in: layout), disclosure.isCollapsed(key) {
             disclosure.expand(key)
         }
+    }
+
+    /// Marks the chosen place's row in the lists.
+    private func markChosen() {
+        places.choose(chosen == .home ? Self.homeKey : nil)
+        let taskKey: String? = if case let .task(id) = chosen { Self.key(id) } else { nil }
+        for list in taskLists { list.choose(taskKey) }
+        footer.choose(footerPlaces.first { $0.value == chosen }?.key)
     }
 
     private func pick(_ place: SidebarPlace) {
@@ -392,7 +399,7 @@ final class TaskSidebar {
         status.text = note
         status.visibility = note.isEmpty ? .collapsed : .visible
         // The rows are chosen again as the window shows them; a list filled again has none chosen.
-        choose(chosen)
+        markChosen()
     }
 
     private func makeProject(_ key: String) -> SidebarProjectSection {

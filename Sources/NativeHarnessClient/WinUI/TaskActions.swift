@@ -72,9 +72,11 @@ final class TaskActions {
         }
     }
 
-    /// A menu whose items are made as it opens, from the task or project as it is then.
+    /// A menu whose items are made again as it opens, from the task or project as it is then. It holds them from the
+    /// start too: Windows does not open a menu with no items, so one filled only as it opens would never open.
     private func menu(_ fill: @escaping @MainActor (MenuFlyout) -> Void) -> MenuFlyout {
         let menu = MenuFlyout()
+        fill(menu)
         menu.opening.addHandler { [weak menu] _, _ in
             guard let menu else { return }
             menu.items.clear()
