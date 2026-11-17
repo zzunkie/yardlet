@@ -48,6 +48,8 @@ final class NewTaskPane {
     /// The title, where the task starts and the composer, which a task answered here takes the place of.
     private let hero = StackPanel()
     private let title = StackPanel()
+    /// The title's words before the project's name when a space followed them.
+    private var spacedText: TextBlock?
     private let destination = Grid()
     private let sendButton = ComposerParts.sendButton(name: L10n.string("Start task"))
     private let starting = ProgressRing()
@@ -539,7 +541,16 @@ final class NewTaskPane {
         let parts = kind.parts
         title.children.clear()
         titleTexts = []
-        if !parts.before.isEmpty { title.children.append(heroText(parts.before)) }
+        // A TextBlock leaves a space it ends with out of its width, so the space before the project's name ("build in
+        // ") is kept as a margin as wide as one.
+        var before = parts.before
+        while before.last?.isWhitespace == true { before.removeLast() }
+        spacedText = nil
+        if !before.isEmpty {
+            let text = heroText(before)
+            if before.count < parts.before.count { spacedText = text }
+            title.children.append(text)
+        }
         if let project = parts.project {
             // The project's name is the project menu, underlined as the Codex app's is.
             let name = Button()
@@ -590,6 +601,8 @@ final class NewTaskPane {
     private func fitTitle() {
         let size: Double = view.actualWidth > 0 && view.actualWidth < 640 ? 22 : 28
         for text in titleTexts where text.fontSize != size { text.fontSize = size }
+        // A space in Segoe UI is about 0.27 of its size.
+        spacedText?.margin = Thickness(left: 0, top: 0, right: (size * 0.27).rounded(), bottom: 0)
     }
 
     /// The project menu (`NewTaskDestinationMenuItems`): Choose project…, Chat (no project), then the projects, the
