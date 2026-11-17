@@ -132,9 +132,13 @@ final class MainWindow {
         case .home:
             showHome()
         case let .task(id):
+            // Showing a task reads it, as the Mac's window does when its selection changes or it comes back to Tasks;
+            // choosing the task already shown leaves a mark the person put back with Mark as unread.
+            let reads = shown != .task || shownSessionID != id
             content.child = taskPane
             shown = .task
             choose(id)
+            if reads { Task { await model.store.markRead(id: id) } }
         case .importConversation:
             guard let importPane else { return }
             content.child = importPane.view

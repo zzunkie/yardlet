@@ -161,13 +161,13 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   since XAML does not load a `file:` URI from a folder whose path holds characters beyond ASCII. The window's sidebar
   (`WinUI/TaskSidebar.swift`) is the Mac's: Home and Search tasks at the top, then Pinned, Chats and Projects, each
   project under its name, which collapses it and opens its menu, listing five tasks until Show more, and each task
-  nested under the task it was started from, with its harness's mark, its title (semibold while unread) and its state
-  at the end. What it lists, in what order and with what state is the Mac's reading (`SidebarProjection`,
-  `SidebarTaskIndicatorProjection`), followed through Observation; a row whose state changes is redrawn in place and a
-  list is filled again only when its rows change. A task's and a project's menus are the Mac's, with Show in File
-  Explorer for Show in Finder (`WinUI/TaskActions.swift`); the search narrows by titles and project names. With no
-  task the window opens New task, as the Mac opens its home. Beside the sidebar is the task's composer as the Mac's
-  (`WinUI/TaskComposer.swift`, `WinUI/ComposerParts.swift`): a
+  nested under the task it was started from, with its harness's mark, its title (semibold while unread, until the
+  window shows it) and its state at the end. What it lists, in what order and with what state is the Mac's reading
+  (`SidebarProjection`, `SidebarTaskIndicatorProjection`), followed through Observation; a row whose state changes is
+  redrawn in place and a list is filled again only when its rows change. A task's and a project's menus are the Mac's,
+  with Show in File Explorer for Show in Finder (`WinUI/TaskActions.swift`); the search narrows by titles and project
+  names. With no task the window opens New task, as the Mac opens its home. Beside the sidebar is the task's composer
+  as the Mac's (`WinUI/TaskComposer.swift`, `WinUI/ComposerParts.swift`): a
   rounded card at most as wide as the conversation, its text above a bottom row with the task's session controls
   (the mode or Codex's Plan indicator, the permissions and the model menu, from `ComposerSessionOptionsProjection`,
   in Windows' own menus, `WinUI/ComposerOptionChips.swift`), the context ring where the harness reports its window,
