@@ -21,7 +21,8 @@ Authenticator's export QR code with two TOTP accounts and one counter-based one,
 two-step dialog shaped like Instagram's, whose code field only a label after it names, checked against RFC 6238's test
 key), /vault/otp/decoys (fields that are not code fields: search, phone, a card's, postal code, promo code, birth year
 and password), /vault/otp/cases (fields of other sites and languages, each with what the code field rule should say of
-it), /isolation (a blank page whose cookies and localStorage the QA reads and sets), /vault/reveal (a password field with a show button), /vault/step (a first step with the email only), /vault/signup (a
+it), /isolation (a blank page whose cookies and localStorage the QA reads and sets), /cacheable/<any> (2 MiB of
+random bytes that any cache may keep for a day, so each address fills a profile's HTTP cache by that much), /vault/reveal (a password field with a show button), /vault/step (a first step with the email only), /vault/signup (a
 sign-up form whose new password and confirmation fields carry passwordrules; ?slow keeps the page busy as the password
 goes in), /vault/change (a password change form for person@example.test: current, new and confirmation fields, none
 marked, the current one told apart by its label), /vault/change-dialog (VAULT_CHANGE_DIALOG below), /vault/recover (a
@@ -1628,6 +1629,9 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         headers = {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store'}
+        if self.path.startswith('/cacheable/'):
+            return self.send(secrets.token_bytes(2 << 20), {'Content-Type': 'application/octet-stream',
+                                                            'Cache-Control': 'public, max-age=86400'})
         if self.path.startswith('/cookie-check/'):
             return self.cookie_check()
         if self.path.startswith('/follow/'):

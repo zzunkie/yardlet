@@ -2348,11 +2348,26 @@ static void disable_features(cef_command_line_t *command_line) {
     p_cef_string_utf16_clear(&value);
 }
 
+// Chromium sizes each profile's disk caches from the free disk space: on macOS up to 1280 MiB of HTTP cache, 320 MiB
+// of JavaScript and 480 MiB of WebAssembly code cache per profile (disk_cache::PreferredCacheSize), so the browser's
+// folder grew with every task that took a profile of its own. Chrome's --disk-cache-size sets the local state pref
+// kDiskCacheSize, which every profile's HTTP, shared dictionary and code caches take as their size; CEF has no
+// setting of its own for it. 80 MiB is Chromium's base size (disk_cache::kDefaultCacheSize). Chromium evicts the
+// least recently used entries to stay under it; cookies and site storage are no cache and stay
+// (docs/BROWSER_SESSION_ISOLATION.md 5).
+static const char kDiskCacheSize[] = "83886080";
+
 static void CEF_CALLBACK app_on_before_command_line_processing(cef_app_t *self,
                                                                const cef_string_t *process_type,
                                                                cef_command_line_t *command_line) {
     (void)self;
     if (process_type == NULL || process_type->length == 0) {
+        cef_string_t name = {0}, value = {0};
+        set_string(&name, "disk-cache-size");
+        set_string(&value, kDiskCacheSize);
+        command_line->append_switch_with_value(command_line, &name, &value);
+        p_cef_string_utf16_clear(&name);
+        p_cef_string_utf16_clear(&value);
         // The host adds use-mock-keychain here unless it is Developer ID signed (CookieKeychain).
         append_extra_switches(command_line);
         disable_features(command_line);

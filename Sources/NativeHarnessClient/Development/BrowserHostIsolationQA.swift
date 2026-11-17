@@ -54,6 +54,12 @@ final class BrowserHostIsolationQA {
             await takesAProfileForScriptsOnlyWhereTheyMaySignIn()
             return await finish()
         }
+        // `--ui-fixture-isolation-cache` runs only the check that each profile's disk cache stays under its cap.
+        if CommandLine.arguments.contains("--ui-fixture-isolation-cache") {
+            record["storage"] = .string(profiles.storage.rawValue)
+            await boundsEachProfilesCache()
+            return await finish()
+        }
         // `--ui-fixture-isolation-shapes` runs only the check that the cleanup removes the old copy's domain cookies.
         if CommandLine.arguments.contains("--ui-fixture-isolation-shapes") {
             record["storage"] = .string(profiles.storage.rawValue)
@@ -183,6 +189,7 @@ final class BrowserHostIsolationQA {
         await keepsEveryAccount()
         await takesAProfileForScriptsOnlyWhereTheyMaySignIn()
         await removesTheOldCopysDomainCookies()
+        await boundsEachProfilesCache()
         let earlier = await sharesEarlierProfiles()
         let kept = Set([a] + (earlier.map { [$0.kept, $0.moved] } ?? []))
         let unkept = Set(([c] + more).map(profiles.key(for:)))
@@ -264,6 +271,91 @@ final class BrowserHostIsolationQA {
                 && ownerCookies.contains("after=A"),
               "gone \(openWent), deleted \(deleted), owner \(ownerCookies)")
         client.closeTabs(forSession: owner)
+    }
+
+    // MARK: Disk cache
+
+    /// The cap the host gives each profile's disk caches (`kDiskCacheSize` in YardletCEFBridge.c).
+    private static let cacheCap: Int64 = 80 << 20
+
+    /// Each profile's disk caches stay under the host's cap (docs/BROWSER_SESSION_ISOLATION.md 5): the default profile
+    /// and two tasks' profiles of their own each load twice the cap of responses any cache may keep, the last of which
+    /// is then answered from the cache, and keep the cookie and localStorage item set before. A default profile an
+    /// earlier run filled past the cap comes under it with these writes.
+    private func boundsEachProfilesCache() async {
+        let page = base + "isolation"
+        let defaultFolder = MacBrowserHost.shared.paths.profile
+        let earlier = Self.allocatedBytes(in: defaultFolder.appending(path: "Cache"))
+        let a = UUID(), b = UUID()
+        guard let baseline = try? client.openTab(url: page, viewport: .offscreenDefault), await loaded(baseline, page),
+              let tabA = await ownTab(a, page), let tabB = await ownTab(b, page),
+              profiles.hasOwnProfile(a), profiles.hasOwnProfile(b) else {
+            return check("cache: the default profile's and two task profiles' pages load", false, "no tab")
+        }
+        let tabs: [(name: String, tab: BrowserTab, folder: URL)] = [
+            ("default", baseline, defaultFolder), ("A", tabA, profiles.folder(for: profiles.key(for: a))),
+            ("B", tabB, profiles.folder(for: profiles.key(for: b)))
+        ]
+        let run = UUID().uuidString.prefix(8)
+        for (name, tab, _) in tabs {
+            _ = await value(tab, "document.cookie = 'qa_cache=\(name)-\(run); path=/; max-age=3600'; "
+                            + "localStorage.setItem('qa_cache', '\(name)-\(run)'); 1")
+        }
+        let responses = Int(Self.cacheCap * 2 / (2 << 20))
+        var fetched: [String] = []
+        for (name, tab, _) in tabs {
+            let result = try? await tab.devTools.send("Runtime.evaluate", [
+                "expression": .string("""
+                    (async () => {
+                      let bytes = 0;
+                      for (let i = 0; i < \(responses); i++) {
+                        bytes += (await (await fetch('/cacheable/\(run)/\(name)/' + i)).arrayBuffer()).byteLength;
+                      }
+                      const last = await fetch('/cacheable/\(run)/\(name)/\(responses - 1)', {cache: 'only-if-cached', mode: 'same-origin'});
+                      return bytes + ' ' + last.status;
+                    })()
+                    """),
+                "awaitPromise": .bool(true), "returnByValue": .bool(true)
+            ], timeout: .seconds(120))
+            fetched.append("\(name) \(result?["result"]?["value"]?.stringValue ?? "failed")")
+        }
+        // Chromium evicts on its cache thread once an entry's write takes the cache past 95% of its cap.
+        _ = await waitUntil(.seconds(20)) {
+            tabs.allSatisfy { Self.allocatedBytes(in: $0.folder.appending(path: "Cache")) <= Self.cacheCap }
+        }
+        let sizes = tabs.map { ($0.name, Self.allocatedBytes(in: $0.folder.appending(path: "Cache")),
+                                Self.allocatedBytes(in: $0.folder.appending(path: "Code Cache"))) }
+        let described = sizes.map { "\($0.0) Cache \($0.1 >> 20) MiB, Code Cache \($0.2 >> 20) MiB" }
+        record["cache"] = .object([
+            "capMiB": .number(Double(Self.cacheCap >> 20)), "defaultCacheBeforeMiB": .number(Double(earlier >> 20)),
+            "afterMiB": .object(Dictionary(uniqueKeysWithValues: sizes.map { ($0.0, .number(Double($0.1 >> 20))) }))
+        ])
+        let full = Int64(responses) * (2 << 20)
+        check("cache: each profile loads twice the cap of responses any cache may keep, the last answered from the cache, "
+              + "and its disk cache stays under the cap",
+              fetched.allSatisfy { $0.hasSuffix("\(full) 200") } && sizes.allSatisfy { $0.1 <= Self.cacheCap },
+              "default profile's cache before \(earlier >> 20) MiB; fetched \(fetched); \(described)")
+        var kept: [String] = []
+        for (name, tab, _) in tabs {
+            let stored = await value(tab, "document.cookie + ' ' + localStorage.getItem('qa_cache')")?.stringValue ?? ""
+            kept.append("\(name) \(stored.contains("qa_cache=\(name)-\(run)") && stored.hasSuffix(" \(name)-\(run)"))")
+        }
+        check("cache: each profile keeps its cookie and localStorage through the cache's eviction",
+              kept.allSatisfy { $0.hasSuffix("true") }, kept.joined(separator: ", "))
+        baseline.close()
+        for task in [a, b] { client.closeTabs(forSession: task) }
+    }
+
+    /// The bytes the files in `folder` take on disk.
+    private nonisolated static func allocatedBytes(in folder: URL) -> Int64 {
+        let keys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey, .isRegularFileKey]
+        guard let files = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: Array(keys)) else { return 0 }
+        var total: Int64 = 0
+        for case let file as URL in files {
+            guard let values = try? file.resourceValues(forKeys: keys), values.isRegularFile == true else { continue }
+            total += Int64(values.totalFileAllocatedSize ?? 0)
+        }
+        return total
     }
 
     // MARK: Cookies copied as stored

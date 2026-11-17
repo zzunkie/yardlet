@@ -102,6 +102,16 @@ These are the rules of "Per task". Why sign-ins are not copied between profiles 
 - **Memory (measured by the isolation QA with windowless tabs on the same page):** a profile of its own costs about
   6 MiB over the default profile, most of it in the browser process (per-profile services). There is one renderer per
   tab either way. Tasks that share the default profile add no profile.
+- **Disk:** every profile, the default one and each task's own, has disk caches of its own, which Chromium sizes from
+  the free disk space: on macOS up to 1280 MiB of HTTP cache, 320 MiB of JavaScript and 480 MiB of WebAssembly code
+  cache per profile (`disk_cache::PreferredCacheSize`). So the browser's folder grew with every task that took a
+  profile of its own. The host caps each of these caches at 80 MiB, Chromium's base cache size
+  (`disk_cache::kDefaultCacheSize`), with Chrome's `--disk-cache-size` switch: it sets the local state pref
+  `kDiskCacheSize`, which every profile's HTTP, shared dictionary and code caches take as their size (CEF has no cache
+  size setting of its own). Chromium evicts the least recently used entries to stay under it as it writes to a cache,
+  so a profile whose cache grew larger before keeps it until it next writes there, or until its folder goes with its
+  task (section 4). Cookies, localStorage, IndexedDB, Cache Storage and service worker scripts are a site's data, not
+  a cache, and stay as they are; the cap does not bound them.
 - **Limits:** the bridge's browser and context tables ([BROWSER_HOST](BROWSER_HOST.md) section 3, "Number of tabs").
   One browser process handles them.
 - A task that takes a profile of its own reloads its tabs once: a form the agent had filled in on another of its tabs
@@ -176,6 +186,12 @@ first `qa_prb` it receives is not the one it set last. With the earlier copy's d
 profile through DevTools, the button and the sign-in fail; after the host ends and the cleanup runs again, the page
 shows its password field and signs in, and only the site's host-only `qa_prb` is left. Adding
 `--ui-fixture-isolation-shapes` runs only this check.
+
+The disk cache (section 5): the default profile and two tasks' profiles of their own each load twice the cap of
+responses that the QA server lets any cache keep (`/cacheable/…`, 2 MiB each), and the last one then comes from the
+cache. Each profile's `Cache` stays under the cap, and the cookie and localStorage item set before stay. `result.json`
+records the default profile's cache before the check, so a run after a build without the cap in the same QA home shows
+a cache that grew larger coming under the cap. Adding `--ui-fixture-isolation-cache` runs only this check.
 
 The earlier task profiles (section 7): task X's profile counts as one that had signed in itself and task Y's as one of
 copies, Y holding a cookie of `only.qa-earlier.test`, which the default profile has none of, and both a cookie of
