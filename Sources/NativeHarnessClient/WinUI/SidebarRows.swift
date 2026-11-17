@@ -434,7 +434,7 @@ final class SidebarFamilySummaryRow {
         }
         if let working = details.working { add(" · " + working) }
         end.children.clear()
-        if counts.failed > 0 { end.children.append(SidebarStatusMark.view(.failed)) }
+        if counts.failed > 0 { end.children.append(SidebarStatusMark.view(.failed(message: nil))) }
         try? AutomationProperties.setName(item, SidebarFamilySummary.accessibilityLabel(counts, more: state.showsMore))
         try? ToolTipService.setToolTip(item, SidebarFamilySummary.help(counts, more: state.showsMore))
     }
