@@ -77,8 +77,10 @@ final class TaskActions {
     private func menu(_ fill: @escaping @MainActor (MenuFlyout) -> Void) -> MenuFlyout {
         let menu = MenuFlyout()
         fill(menu)
-        menu.opening.addHandler { [weak menu] _, _ in
-            guard let menu else { return }
+        // The menu as the event passes it: the Swift wrapper made here is gone once the row holds the menu, so a weak
+        // reference to it would be nil by the time the menu opens and the menu would keep the items it was made with.
+        menu.opening.addHandler { sender, _ in
+            guard let menu = sender as? MenuFlyout else { return }
             menu.items.clear()
             fill(menu)
         }
