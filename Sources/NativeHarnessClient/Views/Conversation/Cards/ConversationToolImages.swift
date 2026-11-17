@@ -56,38 +56,31 @@ struct ConversationToolImage: Sendable {
     }
 }
 
-extension ConversationTool {
-    /// The call's images in order: the ones it looked at, made or returned, then its MCP result's.
-    var previewImages: [ConversationToolImage] {
-        let own = images.map { image in
-            ConversationToolImage(key: image.url?.absoluteString ?? "", name: image.name ?? L10n.string("Image"),
-                                  source: image.url.map { .url($0) })
+extension ConversationToolImage {
+    /// The engine's picture (`ConversationPicture`), as the image viewer opens it.
+    init(_ picture: ConversationPicture) {
+        let source: ImageViewerItem.Source? = switch picture.source {
+        case let .url(url)?: .url(url)
+        case let .data(data)?: .data(data)
+        case nil: nil
         }
-        return own + (mcpResult?.previewImages ?? [])
+        self.init(key: picture.key, name: picture.name, source: source)
     }
+}
+
+extension ConversationTool {
+    /// The call's images in order (`ConversationTool.pictures`).
+    var previewImages: [ConversationToolImage] { pictures.map(ConversationToolImage.init) }
 }
 
 extension CodexMCPResultProjection {
     /// The result's images, in order.
-    var previewImages: [ConversationToolImage] {
-        blocks.compactMap { block in
-            guard case let .image(id, data, _) = block else { return nil }
-            return ConversationToolImage(key: Self.previewKey(block: id, data: data),
-                                         name: L10n.string("Tool result image"), source: .data(data))
-        }
-    }
-
-    /// An image block's key in the preview cache: the block, which names the call, and its length.
-    static func previewKey(block id: String, data: Data) -> String {
-        "\(id):\(data.count)"
-    }
+    var previewImages: [ConversationToolImage] { pictures.map(ConversationToolImage.init) }
 }
 
 extension ConversationItem {
     /// A call's images (`ConversationTool.previewImages`); none for anything else.
-    var toolPreviewImages: [ConversationToolImage] {
-        if case let .tool(tool) = kind { tool.previewImages } else { [] }
-    }
+    var toolPreviewImages: [ConversationToolImage] { toolPictures.map(ConversationToolImage.init) }
 }
 
 /// A call's images at the end of a folded line (the Claude app's `size: "sm"`): the last three, each

@@ -235,7 +235,17 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   italic, code, struck and linked words, lists, quotes, code blocks with their language, Copy and the Mac's colors
   (`TranscriptCodeSyntax`), tables and rules; code is in Cascadia Mono, or Consolas where it is missing. A message's
   copy shows while the pointer is over it or the keyboard's focus is in it. A file's change opens to the Mac's diff box
-  (`WinUI/FileChangeView.swift`). Sizes are the Mac's, except that none goes under 12, Windows' Caption size.
+  (`WinUI/FileChangeView.swift`). Pictures are drawn as the Mac draws them (`WinUI/ConversationImages.swift`): a sent
+  message's images as squares above its bubble, and a call's pictures (`ConversationTool.pictures`: its own, then its
+  MCP result's) small at the end of its folded line and whole when it opens; one that cannot be read shows its name,
+  and a click opens nothing yet, where the Mac opens its image viewer. A compaction is the Mac's marker between two
+  rules, and a plan limit's card offers what the Mac's does from the same actions (`AppModel.providerNotices`):
+  continuing under another account, continuing on its own when the limit resets, or Resume; the Mac's list of the
+  limit's windows and its banked resets stay on the Mac (`WinUI/ConversationNotices.swift`). A turn's sent message
+  offers Edit message where the turn can be edited (`ConversationTurnActions`), which starts the engine's edit in the
+  composer (`AppModel.beginCodexEdit`, `AppModel.beginClaudeEdit`) with the Mac's banner and Cancel edit above it,
+  and a failed turn's error card offers Edit request, which puts its request back in the composer. Sizes are the
+  Mac's, except that none goes under 12, Windows' Caption size.
 - **Requests.** `WinUI/RequestCard.swift` draws the `ConversationRequest` the Mac's request card draws, in its look,
   waiting or answered where it happened in the work: the request's mark on a tile in its state's color, the state over
   the title, what the request would do (an edit's diff, a file's new contents or a command,

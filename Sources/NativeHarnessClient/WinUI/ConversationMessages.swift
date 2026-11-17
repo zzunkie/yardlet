@@ -12,8 +12,10 @@ import WinUI
 enum ConversationMessages {
     // MARK: - What was sent
 
-    /// A sent message: the person's bubble, or on the left what another sender sent in their place.
-    static func sent(_ item: ConversationItem, text: String, images: [TranscriptImageAttachment]) -> UIElement {
+    /// A sent message: the person's bubble, or on the left what another sender sent in their place. `edit` is the
+    /// turn's Edit message where the task can edit it now (`ConversationTurnActions`), offered beside its copy.
+    static func sent(_ item: ConversationItem, text: String, images: [TranscriptImageAttachment],
+                     edit: (@MainActor () -> Void)? = nil) -> UIElement {
         if let notice = item.backgroundTaskNotice {
             // A background command's notice that started the turn: one line on the left, as the conversation's own
             // lines read.
@@ -39,7 +41,8 @@ enum ConversationMessages {
             try? AutomationProperties.setName(stack, message.senderLabel)
             return stack
         }
-        return bubble(text, images: images, clip: .sentMessage, label: nil, accessibleName: L10n.string("You"))
+        return bubble(text, images: images, clip: .sentMessage, label: nil, accessibleName: L10n.string("You"),
+                      edit: edit)
     }
 
     /// A message a schedule sent in the person's place: a Codex app automation's as a bubble under "Sent by
@@ -60,9 +63,10 @@ enum ConversationMessages {
                       accessibleName: L10n.string("Scheduled task"))
     }
 
-    /// The bubble on the right, its images' names above it and its copy under it.
+    /// The bubble on the right, its images above it and its copy and edit under it.
     private static func bubble(_ text: String, images: [TranscriptImageAttachment], clip: ConversationMessageClip,
-                               label: UIElement?, accessibleName: String) -> UIElement {
+                               label: UIElement?, accessibleName: String,
+                               edit: (@MainActor () -> Void)? = nil) -> UIElement {
         let column = StackPanel()
         column.spacing = 6
         column.horizontalAlignment = .right
@@ -71,7 +75,7 @@ enum ConversationMessages {
             if let element = label as? FrameworkElement { element.horizontalAlignment = .right }
             column.children.append(label)
         }
-        if !images.isEmpty { column.children.append(imageNames(images)) }
+        if !images.isEmpty { column.children.append(ConversationImages.sent(images)) }
         if !text.isEmpty || images.isEmpty {
             let bubble = Border()
             bubble.background = WindowsTheme.selectedFill.brush
@@ -86,11 +90,21 @@ enum ConversationMessages {
         // A fill, clear as it is, so the pointer is over the message across the row, as on the Mac.
         area.background = ConversationStyle.clear.brush
         area.children.append(column)
-        if !text.isEmpty {
-            let copy = ConversationStyle.copyButton(L10n.string("Copy message")) { text }
-            copy.horizontalAlignment = .right
-            column.children.append(copy)
-            ConversationStyle.revealOnHover(copy, in: area)
+        var actions: [UIElement] = []
+        if !text.isEmpty { actions.append(ConversationStyle.copyButton(L10n.string("Copy message")) { text }) }
+        if let edit {
+            actions.append(ConversationStyle.plainButton(ConversationStyle.row([
+                ConversationStyle.icon(ConversationStyle.Glyph.edit, size: 12),
+                ConversationStyle.text(L10n.string("Edit message"), size: ConversationStyle.captionSize, tone: .secondary,
+                                       selectable: false, wraps: false)
+            ], spacing: 5), name: L10n.string("Edit message"), action: edit))
+        }
+        if !actions.isEmpty {
+            // As on the Mac, the message's actions show while the pointer is over it or the focus is in it.
+            let row = ConversationStyle.row(actions, spacing: 12)
+            row.horizontalAlignment = .right
+            column.children.append(row)
+            ConversationStyle.revealOnHover(row, in: area)
         }
         try? AutomationProperties.setName(area, accessibleName)
         return area
@@ -130,27 +144,6 @@ enum ConversationMessages {
         ], spacing: 4)
         label.margin = Thickness(left: 4, top: 2, right: 4, bottom: 2)
         return label
-    }
-
-    /// The names of a message's images, each beside a picture mark, as the Mac names an image it cannot show.
-    private static func imageNames(_ images: [TranscriptImageAttachment]) -> UIElement {
-        let row = StackPanel()
-        row.orientation = .horizontal
-        row.spacing = 6
-        row.horizontalAlignment = .right
-        for image in images {
-            let chip = Border()
-            chip.background = WindowsTheme.subtleFill.brush
-            chip.cornerRadius = ConversationStyle.corners(12)
-            chip.padding = Thickness(left: 10, top: 4, right: 10, bottom: 4)
-            chip.child = ConversationStyle.row([
-                ConversationStyle.icon(ConversationStyle.Glyph.picture, size: 12),
-                ConversationStyle.text(image.name ?? L10n.string("Image"), size: ConversationStyle.captionSize,
-                                       tone: .secondary, wraps: false)
-            ])
-            row.children.append(chip)
-        }
-        return row
     }
 
     /// A sent message's words, clipped as the Codex app clips them (`ConversationMessageClip`): past its lines it
@@ -226,10 +219,10 @@ enum ConversationMessages {
     // MARK: - The error card
 
     /// The turn's error card (the Mac's `TranscriptErrorCard`): its mark, a plain heading, the error's summary or
-    /// what to do next, the actions the turn offers (`signIn` placed where they go, and Retry), and the whole error
-    /// under "Error details" with its copy.
+    /// what to do next, the actions the turn offers (`signIn` placed where they go, Retry, and Edit request, which puts
+    /// the request back in the composer without sending it), and the whole error under "Error details" with its copy.
     static func errorCard(_ error: ConversationTurnError, harness: HarnessKind, retry: (@MainActor () -> Void)?,
-                          signIn: SignInRow?) -> UIElement {
+                          editRequest: (@MainActor () -> Void)? = nil, signIn: SignInRow?) -> UIElement {
         let heading = ConversationStyle.text(
             TranscriptRecoveryProjection.errorCardTitle(error.title, message: error.message, harness: harness),
             size: ConversationStyle.calloutSize, semibold: true
@@ -258,10 +251,14 @@ enum ConversationMessages {
         card.spacing = 10
         card.children.append(top)
         if let signIn { signIn.place(in: card) }
-        if let retry {
-            let row = ConversationStyle.row([ConversationStyle.grayButton(L10n.string("Retry"), action: retry)], spacing: 8)
-            card.children.append(row)
+        var buttons: [UIElement] = []
+        if let retry { buttons.append(ConversationStyle.grayButton(L10n.string("Retry"), action: retry)) }
+        if let editRequest {
+            let edit = ConversationStyle.grayButton(L10n.string("Edit request"), action: editRequest)
+            try? ToolTipService.setToolTip(edit, L10n.string("Restore this request to the composer without sending"))
+            buttons.append(edit)
         }
+        if !buttons.isEmpty { card.children.append(ConversationStyle.row(buttons, spacing: 8)) }
         card.children.append(errorDetails(error))
 
         let frame = Border()

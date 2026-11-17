@@ -91,7 +91,9 @@
     "Microsoft.UI.Xaml.Input.KeyboardAccelerator",
     "Microsoft.UI.Xaml.Shapes.Ellipse",
     "Microsoft.UI.Xaml.Shapes.Rectangle",
-    "Windows.Storage.StorageFile"
+    "Windows.Storage.StorageFile",
+    "Windows.Storage.Streams.InMemoryRandomAccessStream",
+    "Windows.Storage.Streams.DataWriter"
   ],
   "exclude": []
 }

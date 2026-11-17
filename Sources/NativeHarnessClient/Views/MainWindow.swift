@@ -1380,55 +1380,6 @@ struct MainWindow: View {
         splitToArchive = split
     }
 
-    /// A Claude task's retries, limit warning and limit-card actions, which other harnesses do not
-    /// report, a Codex task's limit-card resets, and for any task that Yardlet continued it after a
-    /// restart.
-    private func providerNotices(for session: SessionRecord) -> TaskProviderNotices? {
-        let resumedAfterRestart = model.restartResumeNoticeSessionIDs.contains(session.id)
-        let reconnecting = model.connectionResumes[session.id]?.isWaiting == true
-        let canContinue = session.status != .running && session.status != .waitingForApproval
-            && !model.isHeld(session, by: TaskBlocker.holdingOffActions)
-        // Read when a limit card draws, so it names the account the task runs under now.
-        let usageReset: @MainActor () -> (choice: AccountChoice, context: UsageResetContext)? = {
-            (model.connections.choice(for: session.harness, connection: session.connection),
-             UsageResetContext(store: model.connections, runtimeSelections: model.runtimeSelections))
-        }
-        if session.harness == .codex {
-            return TaskProviderNotices(
-                resumedAfterRestart: resumedAfterRestart, reconnecting: reconnecting, canContinue: canContinue,
-                refreshAccounts: {
-                    await model.connections.check(model.connections.choice(for: .codex, connection: session.connection),
-                        runtimeSelections: model.runtimeSelections)
-                },
-                usageReset: usageReset)
-        }
-        guard session.harness == .claudeCode else {
-            return resumedAfterRestart || reconnecting
-                ? TaskProviderNotices(resumedAfterRestart: resumedAfterRestart, reconnecting: reconnecting) : nil
-        }
-        return TaskProviderNotices(
-            retry: model.providerRetryBySessionID[session.id],
-            limitWarning: model.rateLimitWarningBySessionID[session.id],
-            resumedAfterRestart: resumedAfterRestart,
-            reconnecting: reconnecting,
-            autoContinueResetsAt: model.usageLimitAutoContinue[session.id]?.resetsAt,
-            canContinue: canContinue,
-            switchError: model.usageLimitSwitchErrorBySessionID[session.id],
-            accounts: { model.usageLimitAccountOptions(for: session) },
-            refreshAccounts: { await model.refreshUsageLimitAccounts(for: session) },
-            continueWithAccount: { connection in
-                Task { await model.continueAfterUsageLimit(using: connection, for: session) }
-            },
-            setAutoContinue: { enabled, resetsAt in
-                model.setUsageLimitAutoContinue(enabled, resetsAt: resetsAt, for: session)
-            },
-            continueAfterReset: { entryID in
-                Task { await model.continueAfterUsageLimitReset(entryID: entryID, for: session) }
-            },
-            usageReset: usageReset
-        )
-    }
-
     /// How the task's subagent cards and background-task rows name their harness and model: in the
     /// composer's names, from the lists the harness last advertised for the task's account, and for
     /// a Codex task its thread's model, which a child thread spawned without one inherits.
@@ -1721,7 +1672,7 @@ struct MainWindow: View {
             ),
             showHarnessSettings: { presentHarnessSettings(session) },
             signIn: signInRecovery(for: session),
-            providerNotices: providerNotices(for: session),
+            providerNotices: model.providerNotices(for: session),
             readSubtask: { activity in
                 try await model.readClaudeSubtask(activityID: activity.id, from: session)
             },

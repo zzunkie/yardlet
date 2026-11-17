@@ -38,6 +38,14 @@ final class ConversationTimeline {
     var signIn: HarnessSignIn?
     /// The task's folder, which a file change's paths are read against; nil for another computer's task.
     var workspaceURL: URL?
+    /// Puts a request back in the composer without sending it, as the Mac's error card's Edit request does.
+    var restoreRequest: (@MainActor (CodexComposerDraft) -> Void)?
+    /// Starts editing a turn's message in the composer, as the Mac's Edit message under a sent message does.
+    var editMessage: (@MainActor (ConversationTurn) -> Void)?
+    /// The shown task's notices and limit-card actions (`AppModel.providerNotices`), set before it is shown.
+    var notices: TaskProviderNotices?
+    /// What the limit card last drew of the notices, so a change to them draws the latest turn again.
+    private var limitState: LimitState?
 
     init() {
         stack.spacing = ConversationStyle.turnSpacing
@@ -117,11 +125,18 @@ final class ConversationTimeline {
         opensAtEnd = false
         let noteChanged = requestNote != self.requestNote
         self.requestNote = requestNote
-        let context = turnContext(harness: presentation.harness)
+        var context = turnContext(harness: presentation.harness)
+        context.notices = notices
+        context.limitCardEntryID = presentation.limitCardEntryID
+        let limit = LimitState(context.notices, card: presentation.limitCardEntryID)
+        let limitChanged = limit != limitState
+        limitState = limit
         var next: [String: ConversationTurnElement] = [:]
         for turn in presentation.turns {
             if let element = drawn[turn.id] {
-                if noteChanged || !(turn.isUnchanged(from: element.turn) || turn == element.turn) {
+                // The limit card the task continues from is the latest turn's.
+                let limitRedraws = limitChanged && turn.id == presentation.turns.last?.id
+                if noteChanged || limitRedraws || !(turn.isUnchanged(from: element.turn) || turn == element.turn) {
                     element.update(turn, context: context)
                 }
                 next[turn.id] = element
@@ -163,7 +178,7 @@ final class ConversationTimeline {
             card: { [weak self] request, turn in
                 self?.card(for: request, in: turn) ?? RequestCard(request: request, respond: nil, note: nil)
             },
-            retry: retry, signIn: signIn
+            retry: retry, signIn: signIn, restoreRequest: restoreRequest, editMessage: editMessage
         )
     }
 
@@ -177,6 +192,22 @@ final class ConversationTimeline {
         let card = RequestCard(request: request, respond: respond, note: requestNote, workspaceURL: workspaceURL)
         cards[key] = card
         return card
+    }
+}
+
+/// What a limit card draws of the task's notices: whether it can act, what its switch waits for, and why a continue
+/// was refused.
+private struct LimitState: Equatable {
+    let card: UUID?
+    let canContinue: Bool
+    let autoContinueResetsAt: Date?
+    let switchError: String?
+
+    init(_ notices: TaskProviderNotices?, card: UUID?) {
+        self.card = card
+        canContinue = notices?.canContinue == true
+        autoContinueResetsAt = notices?.autoContinueResetsAt
+        switchError = notices?.switchError
     }
 }
 

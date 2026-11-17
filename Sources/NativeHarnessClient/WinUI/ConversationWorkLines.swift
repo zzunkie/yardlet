@@ -27,10 +27,12 @@ enum ConversationWorkLines {
     // MARK: - Status line
 
     /// One status line (the Mac's `ConversationStatusLine`): each of `words` on a line of its own, the first with
-    /// `trailing` marks and, when the line holds `detail`, the caret that opens it, and `actions` at its far end.
+    /// `trailing` marks and, when the line holds `detail`, the caret that opens it, and at its far end its
+    /// `pictures`, small while it is folded, and `actions`.
     static func statusLine(words: [ConversationLineWords], phase: ConversationItemPhase, name: String,
                            size: Double = ConversationStyle.statusLineSize,
                            startsOpen: Bool, trailing: [UIElement] = [], actions: [UIElement] = [],
+                           pictures: [ConversationPicture] = [],
                            detail: (@MainActor () -> UIElement)?,
                            onToggle: (@MainActor (Bool) -> Void)? = nil) -> UIElement {
         let lines = words.isEmpty ? [ConversationLineWords(verb: name)] : words
@@ -66,6 +68,7 @@ enum ConversationWorkLines {
         panel.spacing = 4
         panel.children.append(header)
         let accessibleName = lines.map(\.text).joined(separator: ", ")
+        let thumbnails = ConversationImages.thumbnails(pictures)
         if let detail {
             let detailPanel = StackPanel()
             detailPanel.margin = Thickness(left: 4, top: 0, right: 0, bottom: 4)
@@ -78,6 +81,8 @@ enum ConversationWorkLines {
                     detailPanel.children.append(detail())
                 }
                 detailPanel.visibility = open ? .visible : .collapsed
+                // Opened, the details show the pictures whole.
+                thumbnails?.visibility = open ? .collapsed : .visible
             }
             let toggle = ConversationStyle.disclosure(labels, name: accessibleName, isOpen: isOpen) { open in
                 show(open)
@@ -91,7 +96,12 @@ enum ConversationWorkLines {
             try? AutomationProperties.setName(labels, accessibleName)
             header.children.append(labels)
         }
-        let actionRow = ConversationStyle.row(actions, spacing: 2)
+        var end: [UIElement] = actions
+        if let thumbnails {
+            thumbnails.margin = Thickness(left: 6, top: 0, right: actions.isEmpty ? 0 : 4, bottom: 0)
+            end.insert(thumbnails, at: 0)
+        }
+        let actionRow = ConversationStyle.row(end, spacing: 2)
         actionRow.verticalAlignment = .top
         try? Grid.setColumn(actionRow, 1)
         header.children.append(actionRow)
@@ -135,6 +145,7 @@ enum ConversationWorkLines {
         let showsSpinner = { (open: Bool) in spinner.visibility = phase == .running && !open ? .visible : .collapsed }
         showsSpinner(startsOpen)
         return statusLine(words: [title], phase: phase, name: title.text, startsOpen: startsOpen, trailing: [spinner],
+                          pictures: items.flatMap(\.toolPictures),
                           detail: { box(items.map { line(for: $0, context: context) }) }) { open in
             showsSpinner(open)
             onToggle(open)
@@ -186,6 +197,12 @@ enum ConversationWorkLines {
         var pieces: [UIElement] = [mark, activity, detail]
         let caret = ConversationStyle.caret(isOpen: startsOpen && !live.items.isEmpty)
         if !live.items.isEmpty { pieces.append(caret) }
+        // Folded, the line shows its calls' pictures, as a summary line does.
+        let thumbnails = live.items.isEmpty ? nil : ConversationImages.thumbnails(live.items.flatMap(\.toolPictures))
+        if let thumbnails {
+            thumbnails.margin = Thickness(left: 4, top: 0, right: 0, bottom: 0)
+            pieces.append(thumbnails)
+        }
         let label = ConversationStyle.row(pieces)
         label.minHeight = ConversationStyle.statusLineHeight
         guard !live.items.isEmpty else {
@@ -204,6 +221,7 @@ enum ConversationWorkLines {
                 cells.children.append(box(live.items.map { line(for: $0, context: context) }))
             }
             cells.visibility = open ? .visible : .collapsed
+            thumbnails?.visibility = open ? .collapsed : .visible
         }
         panel.children.append(ConversationStyle.disclosure(label, name: live.activity.text, isOpen: startsOpen) { open in
             show(open)
@@ -351,10 +369,8 @@ enum ConversationWorkLines {
                                  startsOpen: Bool, actions: [UIElement],
                                  record: @escaping @MainActor (Bool) -> Void) -> UIElement {
         let texts = [tool.input, tool.output, tool.detail, tool.errorMessage].compactMap { $0 }.filter { !$0.isEmpty }
-        let mcpTexts = tool.mcpResult?.blocks.compactMap { block -> String? in
-            if case let .text(_, text) = block { return text }
-            return nil
-        } ?? []
+        let mcpBlocks = tool.mcpResult?.blocks ?? []
+        let pictures = tool.pictures
         var trailing: [UIElement] = []
         if let counts = tool.lineCounts { trailing.append(FileChangeView.counts(counts, size: 13)) }
         if item.phase == .running {
@@ -363,7 +379,8 @@ enum ConversationWorkLines {
             trailing.append(failed())
         }
         if tool.isApproved { trailing.append(allowedMark()) }
-        let hasDetail = !texts.isEmpty || !mcpTexts.isEmpty || tool.diff != nil || !tool.diffs.isEmpty
+        let hasDetail = !texts.isEmpty || !mcpBlocks.isEmpty || tool.diff != nil || !tool.diffs.isEmpty
+            || !tool.images.isEmpty
         let words = tool.kind.wordedLines
             ?? [ConversationLineWording.tool(tool, phase: item.phase, harness: context.harness,
                                              workspaceURL: context.workspaceURL)]
@@ -379,7 +396,24 @@ enum ConversationWorkLines {
                 }
                 if let detail = tool.detail, !detail.isEmpty { stack.children.append(outputBox(detail)) }
                 if let error = tool.errorMessage, !error.isEmpty { stack.children.append(errorText(error)) }
-                for text in mcpTexts { stack.children.append(outputBox(text)) }
+                // The call's own pictures, then its MCP result as it came: its words and its pictures in order.
+                if let own = ConversationImages.details(Array(pictures.prefix(tool.images.count))) {
+                    stack.children.append(own)
+                }
+                let resultPictures = pictures.dropFirst(tool.images.count)
+                for block in mcpBlocks {
+                    switch block {
+                    case let .text(_, text):
+                        stack.children.append(outputBox(text))
+                    case let .image(id, data, _):
+                        let key = CodexMCPResultProjection.previewKey(block: id, data: data)
+                        if let picture = resultPictures.first(where: { $0.key == key }) {
+                            stack.children.append(ConversationImages.tile(picture, isOneOfSeveral: resultPictures.count > 1))
+                        }
+                    case .resourceLink:
+                        break
+                    }
+                }
                 if let diff = tool.diff {
                     let row = ConversationFileChangeProjection.row(for: diff, phase: item.phase, workspaceURL: workspaceURL)
                     if row.canExpand { stack.children.append(FileChangeView.diffBox(row, title: row.displayPath)) }
@@ -393,7 +427,8 @@ enum ConversationWorkLines {
             }
         }
         return statusLine(words: words, phase: item.phase, name: tool.name.isEmpty ? tool.kind.label : tool.name,
-                          startsOpen: startsOpen, trailing: trailing, actions: actions, detail: detail, onToggle: record)
+                          startsOpen: startsOpen, trailing: trailing, actions: actions, pictures: pictures,
+                          detail: detail, onToggle: record)
     }
 
     // MARK: - Pieces

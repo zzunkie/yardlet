@@ -77,8 +77,12 @@ final class MainWindow {
         grid.rowDefinitions.append(noticeRow)
         grid.rowDefinitions.append(composerRow)
         grid.children.append(timeline.view)
-        try? Grid.setRow(composer.noticeView, 1)
-        grid.children.append(composer.noticeView)
+        // Above the composer: a message being edited, then the composer's notice.
+        let aboveComposer = StackPanel()
+        aboveComposer.children.append(composer.editBanner)
+        aboveComposer.children.append(composer.noticeView)
+        try? Grid.setRow(aboveComposer, 1)
+        grid.children.append(aboveComposer)
         try? Grid.setRow(composer.view, 2)
         grid.children.append(composer.view)
         composer.windowHandle = { [weak self] in self?.windowHandle ?? 0 }
@@ -87,6 +91,8 @@ final class MainWindow {
         self.newTask = newTask
         timeline.respond = { [weak self] request, response in self?.answer(request, response) }
         timeline.retry = { [weak self] turnID in self?.retry(turnID) }
+        timeline.restoreRequest = { [weak self] draft in self?.restoreRequest(draft) }
+        timeline.editMessage = { [weak self] turn in self?.editMessage(turn) }
         timeline.signIn = signIn
         let importPane = ImportConversationPane(model: model, log: log) { [weak self] in self?.windowHandle ?? 0 }
         importPane.onImported = { [weak self] in self?.showSelectedTask() }
@@ -229,10 +235,10 @@ final class MainWindow {
     private func showConversation() {
         conversationGeneration += 1
         let generation = conversationGeneration
-        let (session, presentation, error, hasTasks) = withObservationTracking {
+        let (session, presentation, error, hasTasks, notices) = withObservationTracking {
             let session = selectedSession
             return (session, session.map(presentation(of:)), session.flatMap { model.errorBySessionID[$0.id] },
-                    !model.store.sessions.isEmpty)
+                    !model.store.sessions.isEmpty, session.flatMap { model.providerNotices(for: $0) })
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self, generation == self.conversationGeneration else { return }
@@ -255,6 +261,7 @@ final class MainWindow {
         }
         let placeholder = session != nil ? error : hasTasks ? L10n.string("Choose a task") : L10n.string("No tasks")
         timeline.workspaceURL = session?.workspaceURL
+        timeline.notices = notices
         timeline.show(presentation, conversationID: session?.id.uuidString, placeholder: placeholder)
         if let latest = presentation?.turns.last.flatMap({ Self.latestText(of: $0) }) {
             let line = "answer\(latest.isStreaming ? " streaming" : ""): \(latest.text.prefix(80))"
@@ -312,6 +319,32 @@ final class MainWindow {
         guard let session = selectedSession else { return }
         log.write("retry: \(turnID)")
         Task { await model.retryTurn(turnID, in: session) }
+    }
+
+    /// Puts a failed turn's request back in the composer without sending it, as the Mac's error card's Edit request
+    /// does: the composer follows the task's draft.
+    private func restoreRequest(_ draft: CodexComposerDraft) {
+        guard let session = selectedSession else { return }
+        log.write("edit request")
+        model.composerDrafts.tasks.draft(for: session.id).restore(draft)
+        model.composerDrafts.persistNow()
+    }
+
+    /// Starts editing a turn's message in the composer, as the Mac's Edit message does (`AppModel.beginCodexEdit`,
+    /// `AppModel.beginClaudeEdit`): Codex's request of its latest turn, Claude Code's latest message. Sending the
+    /// composer then sends the edit in its place; its banner cancels it.
+    private func editMessage(_ turn: ConversationTurn) {
+        guard let session = selectedSession else { return }
+        log.write("edit message: \(turn.id)")
+        if session.harness == .codex,
+           let codexTurn = model.codexPresentationBySessionID[session.id]?.thread?.turns.first(where: { $0.id == turn.id }) {
+            model.beginCodexEdit(codexTurn, in: session)
+        } else if let target = turn.actions.editLatest {
+            Task { await model.beginClaudeEdit(target.text, in: session) }
+        } else if let draft = turn.actions.editDraft {
+            // A request the harness cannot rewind to goes back to the composer, as the Mac's does.
+            restoreRequest(draft)
+        }
     }
 
     // MARK: New task

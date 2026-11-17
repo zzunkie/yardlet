@@ -19,6 +19,11 @@ import WinUI
 final class TaskComposer {
     /// Above the card: that the task's folder is gone, as the Mac's banner says it.
     let noticeView = TextBlock()
+    /// Above the card while a sent message is being edited (the Mac's `ConversationEditBanner`): "Editing message" and
+    /// Cancel edit, or once the provider has taken the edit, that sending it continues the conversation.
+    let editBanner = Grid()
+    private var editCancel = Button()
+    private let editTaken = TextBlock()
     /// The card in its gutter.
     let view: FrameworkElement
 
@@ -84,6 +89,7 @@ final class TaskComposer {
         noticeView.horizontalAlignment = .stretch
         noticeView.margin = Thickness(left: 39, top: 8, right: 39, bottom: 0)
         noticeView.visibility = .collapsed
+        makeEditBanner()
 
         let field = card.field
         field.loaded.addHandler { [weak self] _, _ in
@@ -172,14 +178,15 @@ final class TaskComposer {
         guard let id = sessionID else {
             card.field.placeholderText = L10n.string("Choose a task")
             card.showNotice(nil)
+            showEdit(nil)
             attachments.redraw([])
             showNotice("")
             ComposerParts.setEnabled(sendButton, false)
             return
         }
         let draft = model.composerDrafts.tasks.draft(for: id)
-        let (state, text, notice, carried) = withObservationTracking {
-            (read(id), draft.text, draft.notice, draft.attachments)
+        let (state, text, notice, carried, edit) = withObservationTracking {
+            (read(id), draft.text, draft.notice, draft.attachments, draft.editState)
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self, self.generation == current else { return }
@@ -196,6 +203,7 @@ final class TaskComposer {
             if let notice, !notice.isEmpty { log.write("notice: \(notice)") }
         }
         attachments.redraw(carried)
+        showEdit(edit)
         guard let state else { return }
         let previous = shown
         shown = state
@@ -234,6 +242,52 @@ final class TaskComposer {
                      isHeld: model.isHeld(session, by: TaskBlocker.holdingOffActions),
                      queue: model.followUps.queue(for: id), isQueuePaused: model.followUps.isPaused(id),
                      missingFolder: model.missingTaskFolders[id]?.localizedDescription)
+    }
+
+    /// The banner of a message being edited: Cancel edit while the provider has not taken the edit yet.
+    private func showEdit(_ edit: ConversationEditState?) {
+        editBanner.visibility = edit == nil ? .collapsed : .visible
+        let canCancel = edit?.preparedProviderSessionID == nil
+        editCancel.visibility = canCancel ? .visible : .collapsed
+        editTaken.visibility = canCancel ? .collapsed : .visible
+    }
+
+    private func makeEditBanner() {
+        for width in [GridLength(value: 1, gridUnitType: .star), GridLength(value: 0, gridUnitType: .auto)] {
+            let column = ColumnDefinition()
+            column.width = width
+            editBanner.columnDefinitions.append(column)
+        }
+        editBanner.maxWidth = WindowsTheme.contentWidth
+        editBanner.margin = Thickness(left: 39, top: 6, right: 39, bottom: 0)
+        editBanner.visibility = .collapsed
+        let label = ConversationStyle.row([
+            ConversationStyle.icon(ConversationStyle.Glyph.edit, size: 12),
+            ConversationStyle.text(L10n.string("Editing message"), size: ConversationStyle.captionSize, selectable: false,
+                                   wraps: false)
+        ], spacing: 6)
+        label.verticalAlignment = .center
+        editBanner.children.append(label)
+        editCancel = ConversationStyle.plainButton(
+            ConversationStyle.text(L10n.string("Cancel edit"), size: ConversationStyle.captionSize, selectable: false,
+                                   wraps: false),
+            name: L10n.string("Cancel edit")
+        ) { [weak self] in self?.cancelEdit() }
+        editTaken.text = L10n.string("Conversation changed. Send the edited message to continue.")
+        editTaken.fontSize = ConversationStyle.captionSize
+        editTaken.foreground = WindowsTheme.secondaryText.brush
+        editTaken.verticalAlignment = .center
+        for trailing in [editCancel as FrameworkElement, editTaken] {
+            try? Grid.setColumn(trailing, 1)
+            editBanner.children.append(trailing)
+        }
+    }
+
+    /// Cancel edit: the composer gets back what it held before the edit (`AppModel.cancelConversationEdit`).
+    private func cancelEdit() {
+        guard let session else { return }
+        log.write("cancel edit")
+        model.cancelConversationEdit(in: session)
     }
 
     private func showNotice(_ text: String) {

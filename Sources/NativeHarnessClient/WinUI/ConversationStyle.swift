@@ -308,6 +308,11 @@ enum ConversationStyle {
         static let message = "\u{E8BD}"
         static let circle = "\u{EA3A}"
         static let circleFill = "\u{EA3B}"
+        static let edit = "\u{E70F}"
+        /// Arrows drawn inward, for a conversation's context compacted (the Mac's `rectangle.compress.vertical`).
+        static let compact = "\u{E73F}"
+        /// A gauge at its top, for a plan limit reached (the Mac's `gauge.with.dots.needle.100percent`).
+        static let gauge = "\u{EC4A}"
     }
 }
 

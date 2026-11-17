@@ -3,7 +3,7 @@ import UWP
 import WinUI
 
 /// What a turn draws from the conversation around it: its harness and folder, the request cards the timeline keeps,
-/// and what the task can do about it (retry a turn, sign in).
+/// and what the task can do about it (retry a turn, sign in, edit a message, continue past a plan limit).
 @MainActor
 struct ConversationTurnContext {
     let harness: HarnessKind
@@ -13,6 +13,14 @@ struct ConversationTurnContext {
     /// Retries a turn by its ID, where the task can (`AppModel.retryTurn`).
     let retry: (@MainActor (String) -> Void)?
     let signIn: HarnessSignIn?
+    /// Puts a request back in the composer without sending it (the error card's Edit request); nil where it cannot.
+    var restoreRequest: (@MainActor (CodexComposerDraft) -> Void)? = nil
+    /// Starts editing the turn's message in the composer (its Edit message); nil where the task cannot.
+    var editMessage: (@MainActor (ConversationTurn) -> Void)? = nil
+    /// The task's notices and its limit card's actions (`AppModel.providerNotices`).
+    var notices: TaskProviderNotices? = nil
+    /// The limit card the task continues from (`ConversationPresentation.limitCardEntryID`).
+    var limitCardEntryID: UUID? = nil
 }
 
 /// One turn, laid out as the Mac's `ConversationTurnView` lays it out for every harness: what was sent, the provider's
@@ -37,6 +45,8 @@ final class ConversationTurnElement {
     /// The live line's steps and time, counted on each second while the turn runs.
     private var liveDetail: (text: TextBlock, steps: Int)?
     private var ticker: Task<Void, Never>?
+    /// Draws the turn again when its limit card's reset comes, so its switch gives way to Resume.
+    private var limitReset: Task<Void, Never>?
     private var signInRow: SignInRow?
 
     init(turn: ConversationTurn, context: ConversationTurnContext) {
@@ -62,11 +72,14 @@ final class ConversationTurnElement {
     private func draw() {
         view.children.clear()
         liveDetail = nil
+        limitReset?.cancel()
+        limitReset = nil
         let foldsWork = turn.foldsWork
         let workShows = !foldsWork || showsWorkDetails
         let live = ConversationLiveWork.make(turn, harness: context.harness, workspaceURL: context.workspaceURL)
 
-        for item in turn.prompt + turn.notices { add(item) }
+        for item in turn.prompt { add(item, offersEdit: true) }
+        for item in turn.notices { add(item) }
         if turn.drawsHeader(foldsWork: foldsWork) { view.children.append(header(foldsWork: foldsWork)) }
         if workShows {
             if let plan = turn.plan { view.children.append(planCard(plan)) }
@@ -87,16 +100,19 @@ final class ConversationTurnElement {
         followTime()
     }
 
-    /// An item of the turn: an answered request by its card, an earlier error by its card, a call by its line,
-    /// a message by its card.
-    private func add(_ item: ConversationItem) {
+    /// An item of the turn: an answered request by its card, an earlier error by its card, a compaction by its
+    /// marker, a call by its line, a message by its card; the message the turn was sent with offers its edit.
+    private func add(_ item: ConversationItem, offersEdit: Bool = false) {
         switch item.kind {
         case let .request(request):
             context.card(request, turn).place(in: view)
         case let .outcome(outcome):
             view.children.append(outcomeCard(outcome, isTurnOutcome: false))
         case let .userMessage(text, images):
-            view.children.append(ConversationMessages.sent(item, text: text, images: images))
+            view.children.append(ConversationMessages.sent(item, text: text, images: images,
+                                                           edit: offersEdit ? editMessage : nil))
+        case let .compaction(compaction):
+            view.children.append(ConversationNotices.compaction(compaction))
         case let .scheduledTaskMessage(message):
             view.children.append(ConversationMessages.scheduled(message))
         case let .answer(text, isStreaming):
@@ -253,7 +269,8 @@ final class ConversationTurnElement {
     // MARK: - Cards
 
     /// The error card of the turn's own outcome, which offers what the turn can do about it, or of an earlier error
-    /// the turn went on past, which only reports it. A plan limit reads as its message.
+    /// the turn went on past, which only reports it. A plan limit's card offers to continue past it where it is the
+    /// one the task continues from (`ConversationNotices.limitCard`).
     private func outcomeCard(_ outcome: ConversationTurnOutcome, isTurnOutcome: Bool) -> UIElement {
         switch outcome {
         case let .error(error):
@@ -267,28 +284,35 @@ final class ConversationTurnElement {
                 kept.show(context.harness)
                 row = kept
             }
-            return ConversationMessages.errorCard(error, harness: context.harness, retry: retry, signIn: row)
-        case let .usageLimit(limit, _):
-            // Which limit stopped the turn, in the Mac's words; continuing past it is the Mac's for now.
-            let words = StackPanel()
-            words.spacing = 5
-            words.children.append(ConversationStyle.text(ProviderNoticeText.limitHeadline(limit),
-                                                         size: ConversationStyle.calloutSize, semibold: true))
-            if let message = limit.message, !message.isEmpty {
-                words.children.append(ConversationStyle.text(message, size: ConversationStyle.calloutSize, tone: .secondary))
+            var editRequest: (@MainActor () -> Void)?
+            if isTurnOutcome, turn.status.isTerminal, let draft = turn.actions.failedRequestDraft,
+               let restore = context.restoreRequest {
+                editRequest = { restore(draft) }
             }
-            let mark = ConversationStyle.icon(ConversationStyle.Glyph.clock, size: 15,
-                                              brush: ConversationStyle.orange.solid.brush)
-            mark.verticalAlignment = .top
-            let frame = Border()
-            frame.padding = Thickness(left: 14, top: 14, right: 14, bottom: 14)
-            frame.cornerRadius = ConversationStyle.corners(11)
-            frame.background = ConversationStyle.orange.opacity(0.05).brush
-            frame.borderBrush = ConversationStyle.orange.opacity(0.24).brush
-            frame.borderThickness = Thickness(left: 1, top: 1, right: 1, bottom: 1)
-            frame.child = ConversationStyle.row([mark, words], spacing: 10)
-            return frame
+            return ConversationMessages.errorCard(error, harness: context.harness, retry: retry, editRequest: editRequest,
+                                                  signIn: row)
+        case let .usageLimit(limit, entryID):
+            let made = ConversationNotices.limitCard(limit, entryID: entryID, isLatest: entryID == context.limitCardEntryID,
+                                                     notices: context.notices)
+            if let resetsAt = made.resetsAt {
+                limitReset = Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .seconds(max(1, resetsAt.timeIntervalSinceNow)))
+                    guard !Task.isCancelled, let self else { return }
+                    self.draw()
+                }
+            }
+            return made.card
         }
+    }
+
+    /// The turn's Edit message (the Mac's `ConversationTurnAction`): Codex puts the request of its latest turn back in
+    /// the composer to send again in its place, Claude Code edits its latest message; nil where the turn offers none.
+    private var editMessage: (@MainActor () -> Void)? {
+        let actions = turn.actions
+        guard (actions.editsTurnInComposer && actions.canEdit) || actions.editLatest != nil,
+              let edit = context.editMessage else { return nil }
+        let turn = self.turn
+        return { edit(turn) }
     }
 
     /// The turn's plan as its steps, each with its state (the Mac's `CodexPlanCard`).
