@@ -307,6 +307,8 @@ struct AccountListSection: View {
 
     private func row(_ choice: AccountChoice, style: AccountRow.Style) -> some View {
         let canChoose = canChooseAccounts && AccountListProjection.canChoose(choice, mode: mode)
+        // A harness automatic assignment never uses has nothing to include or leave out.
+        let managesAssignment = mode == .manage && ProviderConnectionStore.allowsAutomaticAssignment(choice.harness)
         return AccountRow(choice: choice, style: style, memberTitle: group.memberTitle(choice),
             selected: AccountListProjection.isSelected(choice, mode: mode, store: store),
             canChoose: canChoose,
@@ -315,13 +317,13 @@ struct AccountListSection: View {
             showsHarness: showsHarness,
             freshness: style == .account ? freshness : nil,
             usage: style == .account ? group : nil,
-            automaticAssignment: mode == .manage ? store.isInAutomaticAssignment(choice) : nil,
+            automaticAssignment: managesAssignment ? store.isInAutomaticAssignment(choice) : nil,
             taskMove: mode == .manage ? choice.connection.flatMap { store.taskMoves[$0.id] } : nil,
             onSelect: { if canChoose { onChoose(choice) } },
             onConnect: onConnect.flatMap { connect in
                 AccountListProjection.offersConnect(choice, mode: mode) ? { connect(choice) } : nil
             },
-            onSetAutomaticAssignment: mode == .manage && canChooseAccounts ? { store.setInAutomaticAssignment($0, for: choice) } : nil,
+            onSetAutomaticAssignment: managesAssignment && canChooseAccounts ? { store.setInAutomaticAssignment($0, for: choice) } : nil,
             onShare: sharing(choice),
             onRemove: removals(choice),
             onSignOut: signOuts(choice))

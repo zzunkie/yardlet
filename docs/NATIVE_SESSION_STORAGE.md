@@ -66,6 +66,10 @@ started under a Claude account folder whose `projects` links to the default `~/.
 account folders do, therefore stays in the same history whichever account it uses, and the account switch above still
 works for it. A Codex, Kimi Code or Grok Build sign-in in a separate folder (`CODEX_HOME`, `KIMI_CODE_HOME`,
 `GROK_HOME`) has its own history, so it is not used until the person includes it. An account whose tasks are moving to another of its folders before it leaves the list is not used either.
+Antigravity CLI's accounts are never used, whatever Yardlet has stored, because Antigravity's consumer terms don't
+support automated account rotation (`HarnessConnectionCapabilities.allowsAutomaticAssignment`): its tasks start on the
+account the person chose for new tasks, its new-task account menu offers no Automatic, Settings › Harness Accounts has
+no item to include its accounts, an agent may name only that account, and nothing moves its tasks to another account.
 Of those, only an account that offers the task's model is picked: one whose own model list, as its CLI last reported
 it, leaves out a model another account's list names is passed over however much room it has (see
 [AGENT_BROWSER_TOOLS.md](AGENT_BROWSER_TOOLS.md), "Models one plan offers"); a schedule's run and a task moving off a

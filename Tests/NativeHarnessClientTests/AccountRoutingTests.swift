@@ -179,14 +179,15 @@ import XCTest
 
     /// By default automatic assignment uses the default login and the accounts that keep their
     /// conversations with it; a login with its own history stays out until the person includes it, and an
-    /// answer equal to the default is forgotten.
+    /// answer equal to the default is forgotten. Antigravity CLI's accounts are never in it.
     func testAccountsSharingTheDefaultLoginsHistoryAreInByDefaultAndThePersonDecidesTheRest() throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "account-routing-\(UUID().uuidString)")
         roots.append(root)
         let native = root.appending(path: "native")
         try FileManager.default.createDirectory(at: native.appending(path: "projects"), withIntermediateDirectories: true)
         let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("account-routing")))
-        let store = ProviderConnectionStore(defaults: defaults)
+        let file = root.appending(path: "provider-connections.json")
+        let store = ProviderConnectionStore(fileURL: file, defaults: defaults)
         store.defaultLoginEnvironment = ["CLAUDE_CONFIG_DIR": native.path]
         func account(_ name: String, harness: HarnessKind = .claudeCode, linked: Bool) throws -> AccountChoice {
             let home = root.appending(path: name)
@@ -218,6 +219,29 @@ import XCTest
         XCTAssertFalse(store.isInAutomaticAssignment(shared))
         let reopened = ProviderConnectionStore(defaults: defaults)
         XCTAssertEqual(reopened.automaticAssignment, ["codex-other": true, "shared": false])
+
+        // Antigravity's consumer terms don't support automated account rotation: no Antigravity CLI account is
+        // ever in automatic assignment, with two signed in and an answer stored from before, and none is kept.
+        try store.save(ProviderConnection(id: "agy-work", name: "agy-work", harness: .antigravityCLI, providerID: nil,
+                                          homePath: nil, credentialSelector: nil))
+        defaults.set(["codex-other": true, "shared": false, "agy-work": true, AccountChoice.nativeID(for: .antigravityCLI): true],
+                     forKey: ProviderConnectionStore.automaticAssignmentKey)
+        let barred = ProviderConnectionStore(fileURL: file, defaults: defaults)
+        func signedIn(_ id: String) -> HarnessAccountSnapshot {
+            HarnessAccountSnapshot(id: id, harness: .antigravityCLI, providerID: nil, state: .signedIn, accountLabel: "\(id)@example.test",
+                                   detail: "", credentialOwner: "", checkedAt: now, usage: [], canLogin: false, canLogout: false)
+        }
+        barred.publishDefaults([signedIn("antigravity-cli")])
+        barred.publish(signedIn("agy-work"), for: try XCTUnwrap(barred.connections(for: .antigravityCLI).first))
+        let antigravity = barred.choices(for: [.antigravityCLI])
+        XCTAssertEqual(antigravity.filter { $0.snapshot?.state == .signedIn }.count, 2)
+        XCTAssertFalse(antigravity.contains(where: barred.isInAutomaticAssignment))
+        XCTAssertFalse(barred.offersAutomaticNewTaskAccount(for: .antigravityCLI), "No Automatic to start new tasks on")
+        XCTAssertEqual(defaults.dictionary(forKey: ProviderConnectionStore.automaticAssignmentKey) as? [String: Bool],
+                       ["codex-other": true, "shared": false], "What was stored for Antigravity CLI is forgotten")
+        for choice in antigravity { barred.setInAutomaticAssignment(true, for: choice) }
+        XCTAssertFalse(antigravity.contains(where: barred.isInAutomaticAssignment))
+        XCTAssertEqual(barred.automaticAssignment, ["codex-other": true, "shared": false])
 
         store.setInAutomaticAssignment(true, for: shared)
         store.setInAutomaticAssignment(false, for: codex)

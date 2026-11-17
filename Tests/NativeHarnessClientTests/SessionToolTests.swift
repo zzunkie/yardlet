@@ -2755,11 +2755,43 @@ final class SessionToolTests: XCTestCase {
         let onUnknownModel = await call(model, "list_accounts", ["harness": "antigravity-cli"], from: fixture.caller)
         XCTAssertTrue(onUnknownModel.text.contains("Every Antigravity CLI account is nearly out."), onUnknownModel.text)
 
+        // Antigravity's consumer terms don't support automated account rotation. With a second Antigravity CLI
+        // account signed in and roomier, tasks still start on the account the person chose for new tasks, and an
+        // agent may name only that one.
+        let agyWork = ProviderConnection(id: "agy-work", name: "agy-work", harness: .antigravityCLI, providerID: nil,
+                                         homePath: nil, credentialSelector: nil)
+        try store.save(agyWork)
+        store.publish(HarnessAccountSnapshot(id: "agy-work", harness: .antigravityCLI, providerID: nil, state: .signedIn,
+            accountLabel: "work@example.test", detail: "", credentialOwner: "", checkedAt: now,
+            usage: [limit("Gemini · 7 day limit", used: 0, group: "Gemini")], canLogin: false, canLogout: false), for: agyWork)
+        XCTAssertTrue(model.automaticAssignmentCandidates(harness: .antigravityCLI, model: nil).isEmpty)
+        let bothAntigravity = await call(model, "list_accounts", ["harness": "antigravity-cli"], from: fixture.caller)
+        XCTAssertTrue(bothAntigravity.text.contains(#""automaticChoice":"native:antigravity-cli""#), bothAntigravity.text)
+        XCTAssertTrue(bothAntigravity.text.contains("the account new tasks start on"), bothAntigravity.text)
+        XCTAssertFalse(bothAntigravity.text.contains(#""automaticAssignment":true"#), bothAntigravity.text)
+        let namedOther = await call(model, "create_task", ["prompt": "Port it", "harness": "antigravity-cli", "account": "agy-work"],
+                                    from: fixture.caller)
+        XCTAssertTrue(namedOther.isError, namedOther.text)
+        XCTAssertTrue(namedOther.text.contains("Antigravity CLI tasks start only on the account the person chose for new tasks"),
+                      namedOther.text)
+        store.choose(try XCTUnwrap(store.choices(for: [.antigravityCLI]).first { $0.connection == agyWork }))
+        let chosenAntigravity = await call(model, "list_accounts", ["harness": "antigravity-cli"], from: fixture.caller)
+        XCTAssertTrue(chosenAntigravity.text.contains(#""automaticChoice":"agy-work""#), chosenAntigravity.text)
+        XCTAssertFalse(store.offersAutomaticNewTaskAccount(for: .antigravityCLI))
+        store.choose(try XCTUnwrap(store.choices(for: [.antigravityCLI]).first { $0.connection == nil }))
+
         store.setInAutomaticAssignment(false, for: try XCTUnwrap(store.choices(for: [.codex]).first))
         let withoutCodex = await call(model, "list_accounts", [:], from: fixture.caller)
         XCTAssertTrue(withoutCodex.text.contains(#"Room elsewhere: Antigravity CLI (Claude and GPT · 7 day limit 0% used).""#),
                       withoutCodex.text)
-        store.setInAutomaticAssignment(false, for: try XCTUnwrap(store.choices(for: [.antigravityCLI]).first))
+        // Automatic assignment never uses an Antigravity CLI account and the person cannot include or leave one
+        // out: its room is the account its new tasks start on, named until that one is nearly out too.
+        let antigravity = try XCTUnwrap(store.choices(for: [.antigravityCLI]).first)
+        store.setInAutomaticAssignment(false, for: antigravity)
+        let stillAntigravity = await call(model, "list_accounts", [:], from: fixture.caller)
+        XCTAssertTrue(stillAntigravity.text.contains(#"Room elsewhere: Antigravity CLI (Claude and GPT · 7 day limit 0% used).""#),
+                      stillAntigravity.text)
+        store.publishDefaults([snapshot(.antigravityCLI, [limit("Claude and GPT · 7 day limit", used: 0.95, group: "Claude and GPT")])])
         let withoutAny = await call(model, "list_accounts", [:], from: fixture.caller)
         XCTAssertFalse(withoutAny.text.contains("roomElsewhere"), "Nowhere to name, nothing to say")
 

@@ -18,6 +18,10 @@ enum ModelAccessKind: String, Codable, Sendable {
 struct HarnessConnectionCapabilities: Sendable {
     let access: ModelAccessKind
     let supportsSeparateHome: Bool
+    /// Whether Yardlet may choose among the harness's accounts by itself: automatic assignment, the
+    /// Automatic new-task account and moving tasks to an account with room. Antigravity's consumer terms
+    /// don't support automated account rotation, so its tasks start only on the account the person chose.
+    let allowsAutomaticAssignment: Bool
 
     static func capabilities(for harness: HarnessKind) -> Self {
         let external: Set<HarnessKind> = [.pi, .openCode, .hermes]
@@ -27,7 +31,8 @@ struct HarnessConnectionCapabilities: Sendable {
         return Self(
             access: external.contains(harness) ? .externalProvider
                 : [.codex, .claudeCode].contains(harness) ? .configuredProvider : .includedService,
-            supportsSeparateHome: separate.contains(harness)
+            supportsSeparateHome: separate.contains(harness),
+            allowsAutomaticAssignment: harness != .antigravityCLI
         )
     }
 }
@@ -382,6 +387,7 @@ final class ProviderConnectionStore {
                 errorMessage = ProviderConnectionError.unreadableStore.localizedDescription
             }
         }
+        forgetBarredAssignmentAnswers()
         restoreRememberedReadings()
         restoreTaskMoves()
     }
@@ -615,10 +621,7 @@ final class ProviderConnectionStore {
         confirmedAt[connection.id] = nil
         cache.forget(connection.id)
         if selection[connection.harness] == connection.id { selection[connection.harness] = nil }
-        if automaticAssignment.removeValue(forKey: connection.id) != nil {
-            if automaticAssignment.isEmpty { defaults?.removeObject(forKey: Self.automaticAssignmentKey) }
-            else { defaults?.set(automaticAssignment, forKey: Self.automaticAssignmentKey) }
-        }
+        if automaticAssignment.removeValue(forKey: connection.id) != nil { saveAutomaticAssignment() }
         // A move to this account is over too; the account it came from takes new tasks again.
         let underway = movesUnderway
         taskMoves = taskMoves.filter { $0.key != connection.id && $0.value.target.id != connection.id }
@@ -772,9 +775,15 @@ final class ProviderConnectionStore {
 
     // MARK: - Automatic assignment
 
-    /// Whether Yardlet may start an agent's task on this account by itself.
+    /// Whether Yardlet may start an agent's task on this account by itself. Never for a harness that
+    /// rules it out (`HarnessConnectionCapabilities.allowsAutomaticAssignment`), whatever is stored.
     func isInAutomaticAssignment(_ choice: AccountChoice) -> Bool {
-        automaticAssignment[choice.id] ?? isInAutomaticAssignmentByDefault(choice)
+        guard Self.allowsAutomaticAssignment(choice.harness) else { return false }
+        return automaticAssignment[choice.id] ?? isInAutomaticAssignmentByDefault(choice)
+    }
+
+    static func allowsAutomaticAssignment(_ harness: HarnessKind) -> Bool {
+        HarnessConnectionCapabilities.capabilities(for: harness).allowsAutomaticAssignment
     }
 
     /// Unless the person said otherwise, automatic assignment uses the harness's default login and
@@ -796,16 +805,31 @@ final class ProviderConnectionStore {
     /// The person includes an account in automatic assignment or leaves it out. An answer the same as
     /// the default is forgotten, so the default applies again.
     func setInAutomaticAssignment(_ included: Bool, for choice: AccountChoice) {
+        guard Self.allowsAutomaticAssignment(choice.harness) else { return }
         if let onRemoteSetAutomaticAssignment {
             onRemoteSetAutomaticAssignment(choice, included)
             return
         }
         automaticAssignment[choice.id] = included == isInAutomaticAssignmentByDefault(choice) ? nil : included
+        saveAutomaticAssignment()
+    }
+
+    private func saveAutomaticAssignment() {
         if automaticAssignment.isEmpty {
             defaults?.removeObject(forKey: Self.automaticAssignmentKey)
         } else {
             defaults?.set(automaticAssignment, forKey: Self.automaticAssignmentKey)
         }
+    }
+
+    /// Forgets the answers kept for accounts of a harness automatic assignment never uses, so none lingers.
+    private func forgetBarredAssignmentAnswers() {
+        let barred = Set(HarnessCatalog.builtIns.map(\.id).filter { !Self.allowsAutomaticAssignment($0) }
+            .map(AccountChoice.nativeID(for:)))
+            .union(connections.filter { !Self.allowsAutomaticAssignment($0.harness) }.map(\.id))
+        guard automaticAssignment.keys.contains(where: barred.contains) else { return }
+        automaticAssignment = automaticAssignment.filter { !barred.contains($0.key) }
+        saveAutomaticAssignment()
     }
 
     // MARK: - Automatic account for new tasks
