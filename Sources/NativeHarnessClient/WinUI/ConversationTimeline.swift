@@ -20,6 +20,8 @@ final class ConversationTimeline {
     private var drawn: [String: ConversationTurnElement] = [:]
     private var order: [String] = []
     private var placeholder: String?
+    /// A conversation just shown opens at its latest turn, as the Mac opens one.
+    private var opensAtEnd = false
     /// The request cards, by turn and request, so what a form holds stays while its turn redraws.
     private var cards: [String: RequestCard] = [:]
     private var requestNote: String?
@@ -64,6 +66,7 @@ final class ConversationTimeline {
               requestNote: String? = nil) {
         if conversationID != self.conversationID {
             self.conversationID = conversationID
+            opensAtEnd = true
             window = ConversationTurnWindow()
             turnsPanel.children.clear()
             drawn = [:]
@@ -110,7 +113,8 @@ final class ConversationTimeline {
     }
 
     private func draw(_ presentation: ConversationPresentation, requestNote: String?) {
-        let followsEnd = isAtEnd
+        let followsEnd = opensAtEnd || isAtEnd
+        opensAtEnd = false
         let noteChanged = requestNote != self.requestNote
         self.requestNote = requestNote
         let context = turnContext(harness: presentation.harness)
@@ -139,7 +143,14 @@ final class ConversationTimeline {
         }
         drawn = next
         order = ids
-        if followsEnd { _ = try? view.changeView(nil, 1_000_000, nil) }
+        if followsEnd { scrollToEnd() }
+    }
+
+    /// The view at the end of what was just drawn. Laid out first: asked before the new turns are laid out, the view
+    /// stops at the end it had, above them.
+    private func scrollToEnd() {
+        try? view.updateLayout()
+        _ = try? view.changeView(nil, view.scrollableHeight, nil, true)
     }
 
     private var isAtEnd: Bool {

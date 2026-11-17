@@ -215,7 +215,8 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   Mac's error card offers them. The grouping, the summaries, the live line, the fold and where each line starts are the
   engine's (`ConversationWorkGrouping`, `ConversationWorkSummary`, `ConversationLiveWork`, `ConversationWorkDisclosure`,
   `ConversationTurn.drawsHeader`), and what the person opened stays open as a turn redraws. A line that opens is a
-  toggle, which tells assistive apps whether it is open. A turn that did not change keeps what it drew. As on the Mac,
+  toggle, which tells assistive apps whether it is open. A conversation opens at its latest turn and follows its end
+  while the view is there. A turn that did not change keeps what it drew. As on the Mac,
   only the latest turns are drawn (`ConversationTurnWindow`, 10 at first) and Load more history draws 10 more, so what
   an update compares and draws in the window is bounded by those turns however long the history. Answers draw their
   Markdown from the engine's reading of it (`WinUI/MarkdownView.swift`, `TranscriptMarkdownDocument`): bold,
