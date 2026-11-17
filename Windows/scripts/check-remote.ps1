@@ -97,8 +97,12 @@ function Find-InApp([string] $text, $type) {
     return $null
 }
 
-function Find-Typed($root, $type) {
-    $root.FindFirst($Scope::Descendants, (New-Object System.Windows.Automation.PropertyCondition($UIA::ControlTypeProperty, $type)))
+# The composer: a text field other than the sidebar's search.
+function Find-Field($root) {
+    $root.FindFirst($Scope::Descendants, (New-Object System.Windows.Automation.AndCondition(
+        (New-Object System.Windows.Automation.PropertyCondition($UIA::ControlTypeProperty, [System.Windows.Automation.ControlType]::Edit)),
+        (New-Object System.Windows.Automation.NotCondition((New-Object System.Windows.Automation.PropertyCondition(
+            $UIA::NameProperty, 'Search tasks')))))))
 }
 
 # A list item whose text contains $text, as a sidebar row's name is its title.
@@ -229,7 +233,7 @@ if (-not $item) { Finish "no task named $Task" }
 if (-not (Wait-For { (Read-Events) -contains "remote showing: $Task" } 20)) { Finish 'task not shown' }
 Start-Sleep -Seconds 2
 Save-Screen 'task'
-$composer = Wait-For { Find-Typed $hostWindow ([System.Windows.Automation.ControlType]::Edit) } 10
+$composer = Wait-For { Find-Field $hostWindow } 10
 if (-not $composer) { Finish 'no composer' }
 $composer.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Message)
 [void][RemoteDesktop]::BringForward([IntPtr]$hostWindow.Current.NativeWindowHandle)
@@ -333,7 +337,7 @@ $summary.newTaskControls = (@('Harness', 'Model', 'Effort', 'Permissions', 'New 
     Find-Named $hostWindow $_ ([System.Windows.Automation.ControlType]::Button) -or
     Find-Named $hostWindow $_ ([System.Windows.Automation.ControlType]::CheckBox) }) -join ', '
 Save-Screen 'new-task'
-$field = Wait-For { Find-Typed $hostWindow ([System.Windows.Automation.ControlType]::Edit) } 10
+$field = Wait-For { Find-Field $hostWindow } 10
 if (-not $field) { Finish 'no new task composer' }
 $field.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($NewTask)
 $start = Wait-For { $found = Find-Named $hostWindow 'Start task' ([System.Windows.Automation.ControlType]::Button)
