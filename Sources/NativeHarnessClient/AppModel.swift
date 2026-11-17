@@ -702,7 +702,7 @@ final class AppModel {
                 fallbackSessionID: store.selectedSessionID
             )
             composerDrafts.retainSessions(Set(store.sessions.map(\.id)))
-            loadPersistedTranscripts()
+            await loadPersistedTranscripts()
             await loadSavedContextUsage()
             await loadPersistedGrokSessionMetadata()
             loadPersistedFollowUps()
@@ -7125,21 +7125,28 @@ final class AppModel {
         return transcriptTurns.turns(entries, of: id)
     }
 
-    private func loadPersistedTranscripts() {
-        for session in store.sessions {
-            var entries = transcriptSnapshots.load(for: session.id)
-            if session.harness == .grokBuild,
-               let providerSessionID = session.providerSessionID,
-               let repaired = GrokTranscriptSnapshotProjection.repairedEntries(
-                   providerSessionID: providerSessionID,
-                   existing: entries,
-                   grokSessionsRoot: ProviderSessionTitlePaths.live().forAccount(session.connection).grokSessionsRoot
-               ) {
-                transcriptSnapshots.saveNow(repaired, for: session.id)
-                entries = repaired
+    /// The saved conversations, read and made ready off the main thread and shown together.
+    private func loadPersistedTranscripts() async {
+        // A Grok task's snapshot is repaired from the session Grok saved.
+        var grokSessions: [UUID: (providerSessionID: String, root: URL)] = [:]
+        for session in store.sessions where session.harness == .grokBuild {
+            guard let providerSessionID = session.providerSessionID else { continue }
+            grokSessions[session.id] = (providerSessionID,
+                                        ProviderSessionTitlePaths.live().forAccount(session.connection).grokSessionsRoot)
+        }
+        let restored = await transcriptSnapshots.restore(store.sessions.map(\.id)) { [grokSessions] id, saved in
+            var repaired: [TranscriptEntry]?
+            if let grok = grokSessions[id] {
+                repaired = GrokTranscriptSnapshotProjection.repairedEntries(
+                    providerSessionID: grok.providerSessionID, existing: saved, grokSessionsRoot: grok.root
+                )
             }
-            guard !entries.isEmpty else { continue }
-            let builder = TranscriptBuilder(entries: entries)
+            let entries = repaired ?? saved
+            return (entries.isEmpty ? nil : TranscriptBuilder(entries: entries), repaired)
+        }
+        // A task that has its conversation already, read from its harness meanwhile, keeps it.
+        for session in store.sessions where transcriptBuilders[session.id] == nil {
+            guard let builder = restored[session.id] else { continue }
             transcriptBuilders[session.id] = builder
             transcripts[session.id] = builder.entries
         }

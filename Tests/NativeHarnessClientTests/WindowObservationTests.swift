@@ -138,6 +138,31 @@ final class WindowObservationPerformanceTests: XCTestCase {
         XCTAssertFalse(repository.load(for: session.id).isEmpty, "Quitting saved the thread")
         XCTAssertLessThan(longestGap, .milliseconds(250), "Quitting held the main thread while it wrote")
     }
+
+    /// Launch reads the saved conversations off the main thread: decoding every one there held it
+    /// for most of a second with a long history, and longer the more tasks were kept.
+    func testLaunchReadsSavedConversationsWithoutHoldingTheMainThread() async throws {
+        let repository = SlowTranscriptRepository(delay: 0, loadDelay: 0.1)
+        let sessions = (0..<4).map { index in
+            SessionRecord(harness: .codex, workspaceURL: URL(filePath: "/tmp/launch-\(index)"),
+                          runtimeExecutableURL: URL(filePath: "/tmp/codex"), title: "Launch \(index)")
+        }
+        for session in sessions { repository.save([TranscriptEntry(content: .user(text: session.title))], for: session.id) }
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("WindowObservation.Launch")))
+        let model = AppModel(store: SessionStore(repository: InMemorySessionRepository(sessions: sessions)),
+            runtimeSelections: RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false),
+            registry: HarnessRegistry { _, _ in FakeHarnessAdapter(kind: .codex) }, transcriptRepository: repository)
+
+        let lag = MainActorGapProbe()
+        await lag.start()
+        await model.restoreIndex()
+        let longestGap = await lag.stop()
+        print("[window] longest main-thread gap while launching: \(longestGap)")
+        XCTAssertEqual(sessions.map { model.transcriptBySessionID[$0.id]?.map(\.content) },
+                       sessions.map { [.user(text: $0.title)] }, "Launch showed every saved conversation")
+        XCTAssertLessThan(longestGap, .milliseconds(250), "Launch held the main thread while it read")
+        await model.shutdown()
+    }
 }
 
 // MARK: - Fixture
@@ -270,18 +295,25 @@ private extension XCTestCase {
     }
 }
 
-/// A transcript store whose writes take `delay` seconds, as a long conversation's do.
+/// A transcript store whose writes take `delay` seconds and reads `loadDelay`, as a long conversation's do.
 private final class SlowTranscriptRepository: TranscriptRepository, @unchecked Sendable {
     private let lock = NSLock()
     private var entries: [UUID: [TranscriptEntry]] = [:]
     private var saveCount = 0
     private let delay: TimeInterval
+    private let loadDelay: TimeInterval
 
-    init(delay: TimeInterval) { self.delay = delay }
+    init(delay: TimeInterval, loadDelay: TimeInterval = 0) {
+        self.delay = delay
+        self.loadDelay = loadDelay
+    }
 
     var saves: Int { lock.withLock { saveCount } }
 
-    func load(for sessionID: UUID) -> [TranscriptEntry] { lock.withLock { entries[sessionID] ?? [] } }
+    func load(for sessionID: UUID) -> [TranscriptEntry] {
+        if loadDelay > 0 { Thread.sleep(forTimeInterval: loadDelay) }
+        return lock.withLock { entries[sessionID] ?? [] }
+    }
 
     func save(_ entries: [TranscriptEntry], for sessionID: UUID) {
         Thread.sleep(forTimeInterval: delay)

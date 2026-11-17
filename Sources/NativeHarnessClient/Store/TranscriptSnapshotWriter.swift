@@ -52,6 +52,43 @@ final class TranscriptSnapshotWriter {
         return queue.sync { repository.base.load(for: sessionID) }
     }
 
+    /// Reads the snapshots of `sessionIDs` without holding the main thread, in order with the writes,
+    /// and gives each to `restore` on the queue too: decoding every saved conversation at launch took
+    /// the main thread most of a second (2026-11-17). Tasks are read one step at a time, so a write
+    /// the main thread waits for meanwhile (`saveNow`, `remove`) waits for one task's read, not all of
+    /// them. `restore` makes what the caller keeps of a task's snapshot, and entries it gives as
+    /// `repaired` are saved in place of the snapshot read.
+    func restore<Value: Sendable>(
+        _ sessionIDs: [UUID],
+        _ restore: @escaping @Sendable (_ id: UUID, _ saved: [TranscriptEntry])
+            -> (value: Value?, repaired: [TranscriptEntry]?)
+    ) async -> [UUID: Value] {
+        let repository = repository, queue = queue, restoring = Restoring<Value>(sessionIDs)
+        return await withCheckedContinuation { (done: CheckedContinuation<[UUID: Value], Never>) in
+            // The person waits for these at launch, on a queue otherwise kept for background writes.
+            @Sendable func step() {
+                queue.async(qos: .userInitiated, flags: .enforceQoS) {
+                    guard let id = restoring.remaining.popFirst() else {
+                        done.resume(returning: restoring.values)
+                        return
+                    }
+                    let restored = restore(id, repository.base.load(for: id))
+                    if let repaired = restored.repaired { repository.base.save(repaired, for: id) }
+                    restoring.values[id] = restored.value
+                    step()
+                }
+            }
+            step()
+        }
+    }
+
+    /// What `restore` has left to read and has read, touched only on the serial queue, one step after another.
+    private final class Restoring<Value>: @unchecked Sendable {
+        var remaining: ArraySlice<UUID>
+        var values: [UUID: Value] = [:]
+        init(_ ids: [UUID]) { remaining = ids[...] }
+    }
+
     /// Keeps `entries` as the task's next snapshot and writes it once the current burst ends.
     func scheduleSave(_ entries: [TranscriptEntry], for sessionID: UUID) {
         pending[sessionID] = entries
