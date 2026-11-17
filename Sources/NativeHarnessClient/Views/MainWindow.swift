@@ -1820,33 +1820,7 @@ struct MainWindow: View {
             onImportFromOtherApps: { rememberShellFocus(); isPresentingOtherAppImport = true },
             projectName: { projects.displayName(for: $0) },
             taskProjectName: { projects.displayName(for: $0) },
-            activity: NewTaskHomeActivity(
-                sessions: sidebarSessions, details: model.taskAttentionDetails,
-                shellBusy: model.shellBusySessionIDs, placeName: model.taskPlaceNames(),
-                groups: projects.visibleGroups(sessions: sidebarSessions),
-                chats: projects.chats(sessions: sidebarSessions),
-                agents: { model.railAgentRuns(hostedBy: $0).filter { !$0.state.isFinished }.count },
-                schedules: model.scheduledTasks.schedules.compactMap { schedule in
-                    model.scheduledTasks.nextRun(of: schedule).map { (schedule, $0) }
-                },
-                stoppedSchedules: model.scheduledTasks.schedules.filter(\.hasStoppedItself),
-                isSuggestionOpen: { model.taskSuggestions.resolution(of: $0.id, in: $1) == nil },
-                notices: {
-                    NewTaskHomeListsProjection.usageNotices(
-                        choices: model.connections.menuBarUsageChoices(for: HarnessCatalog.builtIns.map(\.id)))
-                },
-                usage: model.tokenUsage.isEnabled ? { model.tokenUsageOverview() } : nil,
-                onOpenUsage: { presentSettings(.usage) },
-                now: model.scheduledTasks.displayNow,
-                windowHeight: windowSize.height > 0 ? windowSize.height : nil,
-                onMarkRead: { ids in Task { await model.store.markRead(ids: ids) } },
-                onOpenSchedule: showSchedule,
-                onOpenEvent: showEvent,
-                onSetAside: { projects.setAside($0, through: $1) },
-                answerLine: { model.answerLineBySessionID[$0] },
-                latestTurn: { model.latestTurnBySessionID[$0] },
-                archivedParents: model.store.archivedParentTaskIDs,
-                requestLine: { AppModelRemoteBridge.requestLine(of: $0, in: model) }),
+            activity: newTaskHomeActivity,
             reply: NewTaskHomeReplyServices(
                 content: { session, hooks in AnyView(homeReplyContent(session, hooks: hooks)) },
                 isShownElsewhere: { model.splits.activeSplit?.pane(hosting: $0) != nil },
@@ -1870,6 +1844,22 @@ struct MainWindow: View {
                 await model.checkUsageAccounts(policy: .ifOlderThan(TokenUsagePace.span))
             }
         }
+    }
+
+    /// The home's reading of the tasks (`AppModel.newTaskHomeActivity`), with what is this window's own: the
+    /// notice line's limits, the usage band, the window's height, and Scheduled tasks and the calendar.
+    private var newTaskHomeActivity: NewTaskHomeActivity {
+        var activity = model.newTaskHomeActivity()
+        activity.notices = {
+            NewTaskHomeListsProjection.usageNotices(
+                choices: model.connections.menuBarUsageChoices(for: HarnessCatalog.builtIns.map(\.id)))
+        }
+        activity.usage = model.tokenUsage.isEnabled ? { model.tokenUsageOverview() } : nil
+        activity.onOpenUsage = { presentSettings(.usage) }
+        activity.windowHeight = windowSize.height > 0 ? windowSize.height : nil
+        activity.onOpenSchedule = showSchedule
+        activity.onOpenEvent = showEvent
+        return activity
     }
 
     /// Settings › Usage: the counts and limits the app reads anew in the page's body. A visual fixture

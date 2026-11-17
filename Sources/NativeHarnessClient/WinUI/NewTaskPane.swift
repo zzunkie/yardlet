@@ -6,10 +6,11 @@ import UWP
 import WinUI
 import YardletRemote
 
-/// New task, which is Yardlet's home, as the Mac's (`NewTaskHome`): over it the recent tasks with Import
-/// conversation…, and at its foot the large title ("What should we build?", or "…in {project}?", whose project
-/// name opens the project menu), under a title without a project the chip that chooses where the task starts, and the
-/// composer card, whose bottom row holds "+" (`ComposerAttachments`), the harness with its mark, the account, the
+/// New task, which is Yardlet's home, as the Mac's (`NewTaskHome`): over it the projects with what their tasks need
+/// (`NewTaskHomeListsView`), or while no project has anything to show, the recent tasks; Import conversation… over
+/// either, since Windows has no File menu to hold it; and at its foot the large title ("What should we build?", or
+/// "…in {project}?", whose project name opens the project menu), under a title without a project the chip that chooses
+/// where the task starts, and the composer card, whose bottom row holds "+" (`ComposerAttachments`), the harness with its mark, the account, the
 /// permission and the model, and Start. The choices are the Mac's home draft (`ComposerDrafts.home`), so they are remembered as the Mac remembers
 /// them, and the menus are the ones the Mac's new-task controls read (`ComposerSessionOptionsProjection.newTask`), as a
 /// paired computer's new task chooses them (`AppModelRemoteBridge.choosing`). A choice the Mac asks about first, such
@@ -33,8 +34,11 @@ final class NewTaskPane {
     private let card = ComposerCard(metrics: .newTask)
     private let chips = ComposerOptionChips()
     private let attachments: ComposerAttachments
+    /// Over the composer: Import conversation…, then the recent tasks or the projects.
+    private let over = StackPanel()
     private let recent = StackPanel()
-    /// The recent tasks' scroll view, whose width sets theirs.
+    private let lists: NewTaskHomeListsView
+    /// The scroll view over the composer, whose width sets the area's.
     private let listScroll = ScrollViewer()
     private let title = StackPanel()
     private let destination = Grid()
@@ -56,6 +60,11 @@ final class NewTaskPane {
     private var titleTexts: [TextBlock] = []
     /// What each part last drew, so a change redraws only its part: the tasks change with every turn's status.
     private var shownRecent: [String]?
+    private var shownRecentRows: Bool?
+    /// The columns and lines per project the window's size gives the projects.
+    private var listsSize: (columns: Int, rowLimit: Int) = (1, 3)
+    /// Draws the times again each minute while the home shows.
+    private var ticking: Task<Void, Never>?
     private var shownTitle: [String]?
     private var shownControls: Controls?
 
@@ -79,6 +88,7 @@ final class NewTaskPane {
         signInRow = SignInRow(signIn: signIn, inline: true)
         self.windowHandle = windowHandle
         attachments = ComposerAttachments(log: log)
+        lists = NewTaskHomeListsView(model: model, log: log)
         make()
     }
 
@@ -105,17 +115,23 @@ final class NewTaskPane {
         view.rowDefinitions.append(listsRow)
         view.rowDefinitions.append(bottomRow)
 
-        // Over the composer: the recent tasks with Import conversation…, as the Mac's home lists them.
-        // The list's width is set from the view's rather than stretched up to a maximum: the scroll view places its
-        // content by the width the content asks for, so a stretched list stood to the right of the middle, its
-        // Import conversation… past the window's edge (as `ConversationTimeline.fitColumn`).
-        recent.horizontalAlignment = .center
-        recent.margin = Thickness(left: 28, top: 28, right: 28, bottom: 16)
+        // Over the composer: the projects, or the recent tasks with Import conversation…, as the Mac's home lists them.
+        // The area's width comes from the view's, capped by its widest, rather than stretched up to it: the scroll view
+        // places its content by the width the content asks for, so a stretched area stood to the right of the middle,
+        // its Import conversation… past the window's edge (as `ConversationTimeline.fitColumn`).
+        over.maxWidth = Double(NewTaskHomeLayout.composerWidth)
+        over.horizontalAlignment = .center
+        over.margin = Thickness(left: 28, top: 28, right: 28, bottom: 16)
         recent.spacing = 2
-        listScroll.content = recent
+        over.children.append(recent)
+        lists.view.visibility = .collapsed
+        over.children.append(lists.view)
+        lists.onAction = { [weak self] action in self?.perform(action) }
+        lists.onRedraw = { [weak self] in self?.redrawLists() }
+        listScroll.content = over
         listScroll.sizeChanged.addHandler { [weak self] _, _ in
             guard let self else { return }
-            self.recent.width = min(760, max(0, self.listScroll.actualWidth - 56))
+            self.over.width = max(0, self.listScroll.actualWidth - 56)
         }
         view.children.append(listScroll)
 
@@ -134,8 +150,13 @@ final class NewTaskPane {
         bottom.children.append(composer)
         try? Grid.setRow(bottom, 1)
         view.children.append(bottom)
-        // The title fits the window: smaller where the window is narrow, as the Mac's steps down.
-        view.sizeChanged.addHandler { [weak self] _, _ in self?.fitTitle() }
+        // The title fits the window: smaller where the window is narrow, as the Mac's steps down; the projects stand
+        // in as many columns as fit, with as many lines as the window's height gives them.
+        view.sizeChanged.addHandler { [weak self] _, _ in
+            guard let self else { return }
+            self.fitTitle()
+            if self.measureLists() { self.redrawLists() }
+        }
 
         let field = card.field
         ComposerKeys.prepare(field, send: { [weak self] in self?.startTask() })
@@ -188,9 +209,13 @@ final class NewTaskPane {
         }
         // Drawn whole each time it is shown; while it shows, only what changes.
         shownRecent = nil
+        shownRecentRows = nil
         shownTitle = nil
         shownControls = nil
+        lists.reset()
+        _ = measureLists()
         follow()
+        tick()
         refreshSettings()
         // The installs are looked for once, when the list first comes up empty.
         guard descriptors.isEmpty, !lookedForRuntimes else { return }
@@ -201,12 +226,47 @@ final class NewTaskPane {
         }
     }
 
+    /// The window shows something else: the home stops following the tasks until it is shown again.
+    func hide() {
+        followGeneration += 1
+        ticking?.cancel()
+        ticking = nil
+        lists.hide()
+    }
+
+    /// The times the lists show ("3 min ago", "12 min so far") read again each minute.
+    private func tick() {
+        ticking?.cancel()
+        ticking = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(60))
+                guard !Task.isCancelled else { return }
+                self?.redrawLists()
+            }
+        }
+    }
+
+    /// Reads and draws the home again, as a change it follows would.
+    private func redrawLists() {
+        follow()
+    }
+
+    /// The columns and lines per project for the window's size now; true when they changed.
+    private func measureLists() -> Bool {
+        let height = view.xamlRoot.map { Double($0.size.height) } ?? view.actualHeight
+        let size = (columns: NewTaskHomeLayout.columns(width: CGFloat(view.actualWidth)),
+                    rowLimit: NewTaskHomeListsProjection.rowLimit(windowHeight: CGFloat(height)))
+        guard size != listsSize else { return false }
+        listsSize = size
+        return true
+    }
+
     /// Follows the draft, the accounts and the tasks through Observation while the home shows, and draws them.
     private func follow() {
         followGeneration += 1
         let current = followGeneration
-        let (recent, heading, controls, text, carried) = withObservationTracking {
-            (recentShown(), titleShown(), controlsShown(), draft.text, draft.attachments)
+        let (recent, heading, controls, text, carried, projects) = withObservationTracking {
+            (recentShown(), titleShown(), controlsShown(), draft.text, draft.attachments, listsShown())
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self, self.followGeneration == current else { return }
@@ -217,10 +277,17 @@ final class NewTaskPane {
             textInDraft = text
             if card.field.text != text { card.field.text = text }
         }
-        if recent != shownRecent {
+        lists.show(projects)
+        // The recent tasks while no project has anything to show, as on the Mac.
+        let showsRecent = projects.isEmpty
+        if recent != shownRecent || showsRecent != shownRecentRows {
             shownRecent = recent
-            showRecent()
+            shownRecentRows = showsRecent
+            showRecent(withRows: showsRecent)
+            lists.view.visibility = showsRecent ? .collapsed : .visible
         }
+        let width = Double(listsSize.columns > 1 ? NewTaskHomeLayout.gridWidth : NewTaskHomeLayout.composerWidth)
+        if over.maxWidth != width { over.maxWidth = width }
         if heading != shownTitle {
             shownTitle = heading
             showTitle()
@@ -235,6 +302,24 @@ final class NewTaskPane {
             [session.id.uuidString, session.title, session.status.displayName, model.projects.displayName(for: session)]
                 .joined(separator: "\u{1F}")
         }
+    }
+
+    /// The projects over the composer, read from the model's tasks as the Mac's home reads them.
+    private func listsShown() -> NewTaskHomeListsView.Reading {
+        var activity = model.newTaskHomeActivity()
+        // Windows runs no schedules and has no Scheduled tasks to open one in.
+        activity.schedules = []
+        activity.stoppedSchedules = []
+        return lists.read(activity: activity, selectedProjectID: draft.startsChat ? nil : selectedProjectID,
+                          startsChat: draft.startsChat, replyTaskID: nil, columns: listsSize.columns,
+                          rowLimit: listsSize.rowLimit)
+    }
+
+    /// The project the new task starts in: the draft's, or the one that holds its folder.
+    private var selectedProjectID: UUID? {
+        let projects = visibleProjects
+        return (draft.projectID.flatMap { id in projects.first { $0.id == id } }
+            ?? draft.workspaceURL.flatMap { folder in projects.first { $0.contains(root: folder) } })?.id
     }
 
     private func titleShown() -> [String] {
@@ -256,8 +341,9 @@ final class NewTaskPane {
 
     // MARK: Over the composer
 
-    /// "Recent tasks" with Import conversation… beside it, then the latest tasks, each opening its task.
-    private func showRecent() {
+    /// "Recent tasks" with Import conversation… beside it, then the latest tasks, each opening its task; while the
+    /// projects show, Import conversation… alone.
+    private func showRecent(withRows: Bool) {
         recent.children.clear()
         let header = Grid()
         let wide = ColumnDefinition()
@@ -267,13 +353,14 @@ final class NewTaskPane {
         links.width = GridLength(value: 0, gridUnitType: .auto)
         header.columnDefinitions.append(links)
         header.margin = Thickness(left: 10, top: 0, right: 0, bottom: 6)
-        header.children.append(ComposerParts.label(L10n.string("Recent tasks"), size: 12, weight: 600))
+        if withRows { header.children.append(ComposerParts.label(L10n.string("Recent tasks"), size: 12, weight: 600)) }
         let link = ComposerParts.control(title: L10n.string("Import conversation…"), name: L10n.string("Import conversation"))
         try? ToolTipService.setToolTip(link, L10n.string("Continue a conversation started in another app or CLI."))
         link.click.addHandler { [weak self] _, _ in self?.onImportConversation?() }
         try? Grid.setColumn(link, 1)
         header.children.append(link)
         recent.children.append(header)
+        guard withRows else { return }
         for session in model.store.listedSessions.prefix(6) {
             recent.children.append(recentRow(session))
         }
@@ -321,6 +408,35 @@ final class NewTaskPane {
         let id = session.id
         button.click.addHandler { [weak self] _, _ in self?.onOpenTask?(id) }
         return button
+    }
+
+    // MARK: The projects' lines
+
+    /// What a line of the projects does, as the Mac's home does it: a project's name starts the new task there and
+    /// gives the composer the keyboard; a task opens.
+    private func perform(_ action: NewTaskHomeAction) {
+        switch action {
+        case let .openTask(id), let .reply(id):
+            onOpenTask?(id)
+        case let .chooseProject(id):
+            guard let project = visibleProjects.first(where: { $0.id == id }) else { return }
+            draft.projectID = project.id
+            draft.workspaceURL = project.primaryRoot
+            log.write("new task place: \(project.name)")
+            refreshSettings()
+            _ = try? card.field.focus(.programmatic)
+        case .chooseChat:
+            draft.chooseChat()
+            log.write("new task place: chat")
+            refreshSettings()
+            _ = try? card.field.focus(.programmatic)
+        case let .draft(prompt):
+            draft.insertPrompt(prompt)
+            _ = try? card.field.focus(.programmatic)
+        case .useNewWorktree, .openSchedule, .openEvent:
+            // Worktrees, Scheduled tasks and the calendar are the Mac's; the lists here offer none of them.
+            break
+        }
     }
 
     // MARK: The title and where the task starts

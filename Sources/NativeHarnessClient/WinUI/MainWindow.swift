@@ -176,11 +176,13 @@ final class MainWindow {
             // Showing a task reads it, as the Mac's window does when its selection changes or it comes back to Tasks;
             // choosing the task already shown leaves a mark the person put back with Mark as unread.
             let reads = shown != .task || shownSessionID != id
+            newTask?.hide()
             content.child = taskFrame
             shown = .task
             choose(id)
             if reads { Task { await model.store.markRead(id: id) } }
         case .settings:
+            newTask?.hide()
             let pane = settings ?? makeSettings()
             content.child = pane.view
             shown = .other

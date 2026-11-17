@@ -15,18 +15,20 @@ enum RelativeTime {
         #endif
     }
 
-    /// How long before `now` the date was, abbreviated: "11 hr. ago".
-    static func ago(_ date: Date, relativeTo now: Date, locale: Locale = .current) -> String {
+    /// How long before `now` the date was, abbreviated: "11 hr. ago", or with `named`, "yesterday" where the
+    /// language has a word for it, as the Mac's home says a task's last activity.
+    static func ago(_ date: Date, relativeTo now: Date, named: Bool = false, locale: Locale = .current) -> String {
         #if canImport(Darwin)
         let formatter = RelativeDateTimeFormatter()
         formatter.locale = locale
-        formatter.dateTimeStyle = .numeric
+        formatter.dateTimeStyle = named ? .named : .numeric
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: now)
         #else
         // The anchor is the date said; the formatted input is the moment it is said from.
-        return Date.AnchoredRelativeFormatStyle(anchor: date, presentation: .numeric, unitsStyle: .abbreviated,
-                                                locale: locale, capitalizationContext: .middleOfSentence).format(now)
+        return Date.AnchoredRelativeFormatStyle(anchor: date, presentation: named ? .named : .numeric,
+                                                unitsStyle: .abbreviated, locale: locale,
+                                                capitalizationContext: .middleOfSentence).format(now)
         #endif
     }
 }

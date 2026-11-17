@@ -67,11 +67,6 @@ struct NewTaskHomeLists: View {
     /// This screen's own set of tasks in the pull request lookup (a split view can show several).
     @State private var screenID = UUID()
 
-    /// Lines a project shows before "Show {count} more" (the Claude app's projects show three, `pU`).
-    static let projectLines = 3
-    /// The folder's rows over the composer: the same-folder warning first, then one that starts something.
-    static let folderLines = 2
-
     private func pullRequest(_ id: UUID) -> TaskPullRequest? { pullRequests?.pullRequest(for: id) }
 
     private var idleCandidates: [(project: Project, latest: SessionRecord)] {
@@ -116,115 +111,16 @@ struct NewTaskHomeLists: View {
     }
 
     private func isChosen(_ summary: NewTaskProjectSummary) -> Bool {
-        switch summary.place {
-        case let .project(project): !startsChat && project.id == selectedProjectID
-        case .chats: startsChat
-        }
+        Layout.isChosen(summary, selectedProjectID: selectedProjectID, startsChat: startsChat)
     }
 
     /// What the part shows now, in the keyboard's order.
-    private struct Layout {
-        struct Panel {
-            let summary: NewTaskProjectSummary
-            let isChosen: Bool
-            let tasks: [NewTaskProjectTask]
-            let upcoming: [NewTaskUpcomingRow]
-            let hidden: Int
-            let isExpanded: Bool
-
-            var section: NewTaskHomeSection { .project(summary.id) }
-
-            var entries: [NewTaskHomeListKeyboard.Entry] {
-                [.row(section, NewTaskHomeListKeyboard.headerID)]
-                    + tasks.map { .row(section, $0.id.uuidString) }
-                    + upcoming.map { .row(section, $0.id) }
-                    + (hidden > 0 || isExpanded ? [.toggle(section)] : [])
-            }
-        }
-
-        /// The projects left alone for a while, as one more panel among the projects.
-        struct Idle {
-            let projects: [NewTaskIdleProject]
-            let hidden: Int
-            let isExpanded: Bool
-
-            var entries: [NewTaskHomeListKeyboard.Entry] {
-                projects.map { .row(.idle, $0.id.uuidString) } + (hidden > 0 || isExpanded ? [.toggle(.idle)] : [])
-            }
-        }
-
-        enum Item: Identifiable {
-            case project(Panel)
-            case idle(Idle)
-
-            var id: String {
-                switch self {
-                case let .project(panel): panel.summary.id
-                case .idle: "idle"
-                }
-            }
-
-            var entries: [NewTaskHomeListKeyboard.Entry] {
-                switch self {
-                case let .project(panel): panel.entries
-                case let .idle(idle): idle.entries
-                }
-            }
-        }
-
-        var panels: [Panel] = []
-        var idle: Idle?
-        /// How many projects stand side by side; the idle panel follows their first row.
-        var columns = 1
-        /// Projects past the screen's share, behind "Show {count} more".
-        var hiddenProjects = 0
-        var showsAllProjects = false
-        var folderRows: [NewTaskFolderRow] = []
-
-        /// The panels in the order they are dealt into the columns: the first row of projects, the
-        /// projects left alone for a while, then the rest, so what needs the person keeps the top and
-        /// what was left stays in sight.
-        var items: [Item] {
-            var items = panels.map(Item.project)
-            if let idle { items.insert(.idle(idle), at: min(columns, items.count)) }
-            return items
-        }
-
-        var entries: [NewTaskHomeListKeyboard.Entry] {
-            items.flatMap(\.entries)
-                + (hiddenProjects > 0 || showsAllProjects ? [.toggle(.moreProjects)] : [])
-                + folderRows.map { .row(.folder, $0.id) }
-        }
-    }
-
-    /// Projects left alone for a while the panel names before "Show {count} more".
-    static let idleLines = 3
+    private typealias Layout = NewTaskHomeListsLayout
 
     private func layout(_ summaries: [NewTaskProjectSummary], idle: [NewTaskIdleProject] = []) -> Layout {
-        guard part == .projects else { return Layout(folderRows: Array(folderRows.prefix(Self.folderLines))) }
-        let idleExpanded = expanded.contains(.idle)
-        let idlePanel = idle.isEmpty ? nil : Layout.Idle(
-            projects: idleExpanded ? idle : Array(idle.prefix(Self.idleLines)),
-            hidden: idleExpanded ? 0 : max(0, idle.count - Self.idleLines),
-            isExpanded: idleExpanded && idle.count > Self.idleLines)
-        /// A project's tasks and then what comes up there, `projectLines` of them before "Show more".
-        func panel(_ summary: NewTaskProjectSummary) -> Layout.Panel {
-            let isExpanded = expanded.contains(.project(summary.id))
-            let total = summary.tasks.count + summary.upcoming.count
-            let shown = isExpanded ? total : min(total, Self.projectLines)
-            let tasks = Array(summary.tasks.prefix(shown))
-            return Layout.Panel(summary: summary, isChosen: isChosen(summary), tasks: tasks,
-                                upcoming: Array(summary.upcoming.prefix(shown - tasks.count)),
-                                hidden: total - shown, isExpanded: isExpanded && total > Self.projectLines)
-        }
-        // As many projects as the window's height gives each column lines for (the Claude app's
-        // section limit, `dU`), the rest behind "Show more".
-        let share = rowLimit * max(1, columns)
-        let showsAll = expanded.contains(.moreProjects)
-        let shown = showsAll ? summaries : Array(summaries.prefix(share))
-        return Layout(panels: shown.map(panel), idle: idlePanel, columns: max(1, columns),
-                      hiddenProjects: summaries.count - shown.count,
-                      showsAllProjects: showsAll && summaries.count > share)
+        guard part == .projects else { return Layout(folderRows: Array(folderRows.prefix(Layout.folderLines))) }
+        return Layout.projects(summaries, idle: idle, expanded: expanded, rowLimit: rowLimit, columns: columns,
+                               isChosen: isChosen)
     }
 
     var body: some View {
@@ -360,7 +256,7 @@ struct NewTaskHomeLists: View {
                     if NSEvent.modifierFlags.contains(.command), let pr = project.pullRequests.first {
                         openURL(pr.pullRequest.url)
                     } else {
-                        onAction(Self.action(project, opens: (NSApp.currentEvent?.clickCount ?? 1) > 1))
+                        onAction(Layout.action(project, opens: (NSApp.currentEvent?.clickCount ?? 1) > 1))
                     }
                 }) {
                     idleLine(project)
@@ -419,25 +315,25 @@ struct NewTaskHomeLists: View {
                 if NSEvent.modifierFlags.contains(.command), let pr = summary.pullRequests.first {
                     openURL(pr.pullRequest.url)
                 } else {
-                    onAction(Self.choose(summary))
+                    onAction(Layout.choose(summary))
                 }
             }) {
                 header(summary, isChosen: panel.isChosen)
             }
-            .help(Self.chooseHelp(summary))
+            .help(Layout.chooseHelp(summary))
             .accessibilityValue(panel.isChosen ? L10n.string("New tasks start here") : "")
             ForEach(panel.tasks) { task in
-                let answers = Self.answersInPlace(task)
+                let answers = Layout.answersInPlace(task)
                 NewTaskHomeRow(isHighlighted: isHighlighted(.row(section, task.id.uuidString)),
                                isAnswering: replyTaskID == task.id,
                                symbol: answers ? "arrowshape.turn.up.left" : "chevron.right",
-                               markRead: Self.canMarkRead(task) ? { activity.onMarkRead([task.id]) } : nil,
+                               markRead: Layout.canMarkRead(task) ? { activity.onMarkRead([task.id]) } : nil,
                                action: {
                     // ⌘-click opens the task's pull request on GitHub; a double-click opens the task.
                     if NSEvent.modifierFlags.contains(.command), let pr = pullRequest(task.id), pr.hasState {
                         openURL(pr.url)
                     } else {
-                        onAction(Self.action(task, opens: (NSApp.currentEvent?.clickCount ?? 1) > 1))
+                        onAction(Layout.action(task, opens: (NSApp.currentEvent?.clickCount ?? 1) > 1))
                     }
                 }) {
                     taskLine(task)
@@ -446,7 +342,7 @@ struct NewTaskHomeLists: View {
             }
             ForEach(panel.upcoming) { row in
                 NewTaskHomeRow(isHighlighted: isHighlighted(.row(section, row.id)),
-                               action: { onAction(Self.action(row)) }) {
+                               action: { onAction(Layout.action(row)) }) {
                     upcomingLine(row)
                 }
             }
@@ -501,20 +397,10 @@ struct NewTaskHomeLists: View {
     /// What the project's folder is on, when it is not the default branch, and what finished today.
     /// The chosen project's folder is the one the composer read.
     private func facts(_ summary: NewTaskProjectSummary, isChosen: Bool) -> String? {
-        var parts: [String] = []
-        if let project = summary.project {
-            let state = isChosen && folder.map({ Project.isSamePath($0, project.primaryRoot) }) == true
-                ? git : projectGit[project.id]
-            if let state, let branch = state.branch, !state.isDefaultBranch {
-                parts.append(branch)
-                if let count = state.uncommittedFiles, count > 0 {
-                    parts.append(count == 1 ? L10n.string("1 uncommitted file")
-                                 : L10n.format("%lld uncommitted files", count))
-                }
-            }
+        let state = summary.project.flatMap { project in
+            isChosen && folder.map({ Project.isSamePath($0, project.primaryRoot) }) == true ? git : projectGit[project.id]
         }
-        if summary.finishedToday > 0 { parts.append(L10n.format("%lld finished today", summary.finishedToday)) }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        return Layout.facts(summary, git: state)
     }
 
     @ViewBuilder
@@ -605,7 +491,7 @@ struct NewTaskHomeLists: View {
                 .lineLimit(1)
                 .layoutPriority(1)
             Spacer(minLength: 8)
-            Text(Self.nextRunText(nextRun, now: activity.now))
+            Text(Layout.nextRunText(nextRun, now: activity.now))
                 .font(.system(size: 11.5).monospacedDigit())
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -717,45 +603,6 @@ struct NewTaskHomeLists: View {
         }
     }
 
-    // MARK: - Words
-
-    /// "Today 3:00 PM" or "Tomorrow 9:00 AM": a schedule's next run within the coming day.
-    static func nextRunText(_ date: Date, now: Date, calendar: Calendar = .current) -> String {
-        let time = date.formatted(date: .omitted, time: .shortened)
-        if calendar.isDate(date, inSameDayAs: now) { return L10n.format("Today %@", time) }
-        if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now), calendar.isDate(date, inSameDayAs: tomorrow) {
-            return L10n.format("Tomorrow %@", time)
-        }
-        return date.formatted(date: .abbreviated, time: .shortened)
-    }
-
-    static func chooseHelp(_ summary: NewTaskProjectSummary) -> String {
-        summary.project == nil ? L10n.string("Start a chat with no project") : L10n.format("Start a task in %@", summary.name)
-    }
-
-    // MARK: - Choosing
-
-    static func choose(_ summary: NewTaskProjectSummary) -> NewTaskHomeAction {
-        summary.project.map { .chooseProject($0.id) } ?? .chooseChat
-    }
-
-    static func canMarkRead(_ task: NewTaskProjectTask) -> Bool {
-        if case let .attention(row) = task { return row.canMarkRead }
-        return false
-    }
-
-    /// A task that waits on the person or holds an unread result is answered in the composer's place.
-    static func answersInPlace(_ task: NewTaskProjectTask) -> Bool {
-        if case .attention = task { return true }
-        return false
-    }
-
-    /// What choosing a task's line does: one that needs the person is answered in the composer's
-    /// place unless `opens` (a double-click, or Return on the line already answered); any other opens.
-    static func action(_ task: NewTaskProjectTask, opens: Bool) -> NewTaskHomeAction {
-        answersInPlace(task) && !opens ? .reply(task.id) : .openTask(task.id)
-    }
-
     private func isHighlighted(_ entry: NewTaskHomeListKeyboard.Entry) -> Bool {
         focus.wrappedValue == part && keyboard.highlightedEntry == entry
     }
@@ -793,28 +640,14 @@ struct NewTaskHomeLists: View {
         case .moreProjects, .desk:
             return nil
         case .idle:
-            return layout.idle?.projects.first { $0.id.uuidString == id }.map { Self.action($0, opens: false) }
+            return layout.idle?.projects.first { $0.id.uuidString == id }.map { Layout.action($0, opens: false) }
         case let .project(projectID):
             guard let panel = layout.panels.first(where: { $0.summary.id == projectID }) else { return nil }
-            if id == NewTaskHomeListKeyboard.headerID { return Self.choose(panel.summary) }
+            if id == NewTaskHomeListKeyboard.headerID { return Layout.choose(panel.summary) }
             if let task = panel.tasks.first(where: { $0.id.uuidString == id }) {
-                return Self.action(task, opens: task.id == replyTaskID)
+                return Layout.action(task, opens: task.id == replyTaskID)
             }
-            return panel.upcoming.first { $0.id == id }.map(Self.action)
-        }
-    }
-
-    /// A project left alone for a while: choosing it starts the new task there, as a project's name
-    /// does; `opens` (a double-click) opens the task it was left at.
-    static func action(_ idle: NewTaskIdleProject, opens: Bool) -> NewTaskHomeAction {
-        opens ? .openTask(idle.latestTask.id) : .chooseProject(idle.project.id)
-    }
-
-    /// A schedule opens Scheduled tasks; a suggestion opens the task whose conversation shows its chip.
-    static func action(_ row: NewTaskUpcomingRow) -> NewTaskHomeAction {
-        switch row {
-        case let .schedule(schedule, _): .openSchedule(schedule.id)
-        case let .suggestion(_, task): .openTask(task.id)
+            return panel.upcoming.first { $0.id == id }.map(Layout.action)
         }
     }
 }
@@ -826,30 +659,6 @@ extension NewTaskHomeListKeyboard.Entry {
         case .row(.folder, _), .toggle(.folder): .folder
         case .row(.desk, _), .toggle(.desk): .desk
         default: .projects
-        }
-    }
-}
-
-extension SidebarTaskStatus {
-    /// The state's name on a waiting task's line: the sidebar's words, shorter for a failed turn and a
-    /// plan limit, whose error or reset follows the title (`homeDetail`).
-    var homeName: String {
-        switch self {
-        case .failed: L10n.string("Failed")
-        case .usageLimit: L10n.string("Usage limit")
-        default: accessibilityName
-        }
-    }
-
-    var homeDetail: String? {
-        switch self {
-        case let .failed(message?):
-            let summary = TranscriptRecoveryProjection.errorSummary(message)
-            return summary.isEmpty ? nil : ConversationLineWording.oneLine(summary)
-        case let .usageLimit(limit):
-            return ProviderNoticeText.limitReset(limit)
-        default:
-            return nil
         }
     }
 }
@@ -894,11 +703,7 @@ struct NewTaskHomeElapsed: View {
     }
 
     static func duration(from start: Date, to end: Date) -> String {
-        let formatter = DateComponentsFormatter()
-        formatter.allowedUnits = end.timeIntervalSince(start) < 3600 ? [.minute] : [.hour, .minute]
-        formatter.unitsStyle = .abbreviated
-        formatter.maximumUnitCount = 2
-        return formatter.string(from: max(60, end.timeIntervalSince(start))) ?? ""
+        NewTaskHomeListsLayout.duration(from: start, to: end)
     }
 }
 

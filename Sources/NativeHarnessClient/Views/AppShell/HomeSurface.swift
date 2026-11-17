@@ -17,64 +17,6 @@ struct NewTaskAccountSource {
     let pick: @MainActor (HarnessKind, String?) async -> AppModel.AccountStart?
 }
 
-/// What the new-task screen's lists read beside the draft: the tasks the sidebar lists and their
-/// attention (`TaskAttentionProjection`, the definition `⌥⌘A`, the Dock badge and the sidebar marks
-/// share), where each task sits, the schedules, what is wrong, and how tall the window is. All of it
-/// is what Yardlet already keeps; nothing here asks a harness or a model.
-struct NewTaskHomeActivity {
-    /// Every task the sidebar can list (`AppModel.sidebarSessions`).
-    var sessions: [SessionRecord] = []
-    var details: [UUID: TaskAttentionDetail] = [:]
-    var shellBusy: Set<UUID> = []
-    /// The project, or "Chats", a task is listed under (`AppModel.taskPlaceNames`).
-    var placeName: (SessionRecord) -> String = { $0.workspaceURL.lastPathComponent }
-    /// The sidebar's groups of those tasks, and the chats with no project.
-    var groups: [WorkspaceGroup] = []
-    var chats: [SessionRecord] = []
-    /// How many agents a task's `run_agent` calls are running (`AppModel.railAgentRuns`).
-    var agents: (UUID) -> Int = { _ in 0 }
-    /// Each schedule with its next run (`ScheduledTaskCenter.nextRun`).
-    var schedules: [(schedule: ScheduledTask, nextRun: Date)] = []
-    /// The schedules that turned themselves off (`ScheduledTask.hasStoppedItself`), which a project
-    /// left alone for a while names.
-    var stoppedSchedules: [ScheduledTask] = []
-    /// A suggested task neither started nor dismissed (`TaskSuggestionStore.resolution`).
-    var isSuggestionOpen: (TaskAttentionSuggestion, UUID) -> Bool = { _, _ in true }
-    /// The accounts nearly out of their limits. Read by the notice line in its own body: the readings
-    /// change with every plan-limit report a running turn makes, which must not redraw the home.
-    var notices: () -> [NewTaskHomeNotice] = { [] }
-    /// Token usage counted from this Mac's transcripts, while Settings › Usage counts it; nil leaves
-    /// the band out. The band reads it in its own body, so a new count redraws the band alone.
-    var usage: (() -> TokenUsageOverview)? = nil
-    /// Opens Settings › Usage.
-    var onOpenUsage: () -> Void = {}
-    /// The time "today" and next runs are read against.
-    var now = Date()
-    /// The window's height, which sets how many rows each list shows. Nil uses the screen's own.
-    var windowHeight: CGFloat? = nil
-    /// "Mark all as read" and a row's mark-as-read.
-    var onMarkRead: ([UUID]) -> Void = { _ in }
-    /// Opens a schedule in Scheduled tasks.
-    var onOpenSchedule: (UUID) -> Void = { _ in }
-    /// Shows a calendar event on the calendar, chosen.
-    var onOpenEvent: (CalendarEvent) -> Void = { _ in }
-    /// Sets a project left alone for a while aside until it is active after the date
-    /// (`ProjectStore.setAside`).
-    var onSetAside: (UUID, Date) -> Void = { _, _ in }
-    /// A task's latest finished message's first line (`AppModel.answerLineBySessionID`).
-    var answerLine: (UUID) -> String? = { _ in nil }
-    /// When a task's latest turn started and what it suggested (`AppModel.latestTurnBySessionID`).
-    var latestTurn: (UUID) -> TaskLatestTurn? = { _ in nil }
-    /// The tasks an archived task was started from (`SessionStore.archivedParentTaskIDs`), which the desk
-    /// counts as coordinators.
-    var archivedParents: Set<UUID> = []
-    /// What a waiting task's newest request asks, on one line: the question, or the command to approve.
-    var requestLine: (SessionRecord) -> String? = { _ in nil }
-    /// Each task's pull request where it comes with the tasks (a remote window, from the host's list); nil
-    /// asks this Mac's pull request lookup.
-    var pullRequest: ((UUID) -> TaskPullRequest?)?
-}
-
 /// The new-task screen, which is Yardlet's home: the projects with what their tasks need, then the
 /// title and composer at the bottom, where the Claude app's Code landing and the Codex app's home put
 /// theirs and where a task's composer is. The project's name in the title is its menu, and choosing a
@@ -468,27 +410,6 @@ struct NewTaskHomeNoticeLine: View {
             .help(notices.map(\.text).joined(separator: "\n"))
             .accessibilityElement(children: .combine)
         }
-    }
-}
-
-/// The new-task screen's measures: the composer as wide as a conversation, and the projects in as
-/// many columns of at least `columnWidth` as fit, up to three.
-enum NewTaskHomeLayout {
-    static let composerWidth: CGFloat = 760
-    static let gridWidth: CGFloat = 1360
-    static let columnWidth: CGFloat = 400
-    static let columnSpacing: CGFloat = 40
-    static let inset: CGFloat = 28
-
-    /// How tall the answered task's conversation and composer stand: half the screen, at least room
-    /// for a request card and the composer, and never so tall that the projects lose their first lines.
-    static func replyHeight(_ height: CGFloat) -> CGFloat {
-        max(min(height * 0.5, 560), min(320, height - 260))
-    }
-
-    static func columns(width: CGFloat) -> Int {
-        let room = min(width - 2 * inset, gridWidth)
-        return max(1, min(3, Int((room + columnSpacing) / (columnWidth + columnSpacing))))
     }
 }
 
