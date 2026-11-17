@@ -10,17 +10,23 @@ extension View {
     ///
     /// The field's font and style must reach it from outside this modifier, as environment values
     /// (`.font`, `.textFieldStyle` applied after it): the height of `lines` lines is the height a
-    /// field in that font and style takes for them.
-    func scrollsPastLines(_ lines: Int) -> some View {
-        modifier(TextFieldScrolling(lines: lines))
+    /// field in that font and style takes for them. Its least lines (`leastLines`) come from here
+    /// too, not from a `lineLimit` of its own, so that it can take more while an input method composes.
+    func scrollsPastLines(_ lines: Int, atLeast leastLines: Int = 1) -> some View {
+        modifier(TextFieldScrolling(lines: lines, leastLines: leastLines))
     }
 }
 
 private struct TextFieldScrolling: ViewModifier {
     let lines: Int
+    let leastLines: Int
     /// The field takes the height of the most lines, so it may scroll: only then can its scroller show.
     @State private var isFull = false
     @State private var heights = Heights()
+    /// The lines the field's editor shows while an input method composes: the field sizes itself to
+    /// its committed text, and composed text that runs onto another line would otherwise scroll its
+    /// first line out of view inside the field until the commit grows it.
+    @State private var composedLines: Int?
 
     /// The scroll view's height and the most lines' height, read by the geometry actions without
     /// redrawing the field.
@@ -32,7 +38,14 @@ private struct TextFieldScrolling: ViewModifier {
     func body(content: Content) -> some View {
         TextFieldScrollingLayout {
             ScrollView(.vertical) {
-                content.background { TextFieldCaretFollower().accessibilityHidden(true) }
+                content
+                    .lineLimit(max(leastLines, composedLines ?? 0)...)
+                    .background {
+                        TextFieldCaretFollower { lines in
+                            if lines != composedLines { composedLines = lines }
+                        }
+                        .accessibilityHidden(true)
+                    }
             }
             .scrollBounceBehavior(.basedOnSize)
             // A growing field lays out its taller text a moment before the scroll view takes the new
@@ -83,11 +96,17 @@ private struct TextFieldScrollingLayout: Layout {
 /// editor scrolls only the clip view inside the field, which now shows all of it, so the caret
 /// leaving the scroll view (typing on past its bottom, arrows, a click near its edge, the field
 /// growing under it) has to move the scroll view from here. It sits behind the field, as tall.
+/// It also tells how many lines the editor shows while an input method composes (`composedLines`).
 private struct TextFieldCaretFollower: NSViewRepresentable {
+    let onComposedLines: (Int?) -> Void
+
     func makeNSView(context: Context) -> FollowerView { FollowerView() }
-    func updateNSView(_ view: FollowerView, context: Context) {}
+    func updateNSView(_ view: FollowerView, context: Context) { view.onComposedLines = onComposedLines }
 
     final class FollowerView: NSView {
+        var onComposedLines: (Int?) -> Void = { _ in }
+        private var isComposing = false
+
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
         override func viewDidMoveToWindow() {
@@ -100,8 +119,25 @@ private struct TextFieldCaretFollower: NSViewRepresentable {
 
         @objc private func selectionChanged(_ notification: Notification) {
             guard let editor = notification.object as? NSTextView, edits(editor) else { return }
+            noteComposition(in: editor)
             // Once the field has taken its new height.
             DispatchQueue.main.async { [weak self] in self?.revealCaret() }
+        }
+
+        /// Composed text is in the editor but not yet in the field's text, which sizes the field: the
+        /// field takes the editor's lines until the composition is committed or cancelled.
+        private func noteComposition(in editor: NSTextView) {
+            guard editor.hasMarkedText() else {
+                guard isComposing else { return }
+                isComposing = false
+                onComposedLines(nil)
+                return
+            }
+            isComposing = true
+            guard let layout = editor.textLayoutManager, let caret = Self.caretRect(in: editor), caret.height > 0
+            else { return }
+            layout.ensureLayout(for: layout.documentRange)
+            onComposedLines(Int((layout.usageBoundsForTextContainer.height / caret.height).rounded()))
         }
 
         override func setFrameSize(_ newSize: NSSize) {

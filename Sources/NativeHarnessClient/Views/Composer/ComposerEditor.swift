@@ -207,12 +207,13 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
                         .padding(.horizontal, 6)
                         .padding(.vertical, 1)
                         .background(ParityTheme.accent.opacity(0.12), in: Capsule())
+                        .lineLimit(1)
                         .help(L10n.string("Run as a shell command"))
                         .accessibilityHidden(true)
                 }
                 textField
             }
-            .scrollsPastLines(metrics.lineLimit.upperBound)
+            .scrollsPastLines(metrics.lineLimit.upperBound, atLeast: metrics.lineLimit.lowerBound)
             .textFieldStyle(.plain)
             .font(isBashMode
                 ? .system(size: 13 * interfaceScale, design: .monospaced)
@@ -316,10 +317,9 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
     }
 
     private var textField: some View {
-        // It grows with its text; past the line limit's upper bound the editor scrolls it
-        // (`scrollsPastLines`), which also gives it its font and style.
+        // It grows with its text from the line limit's lower bound; past its upper bound the editor
+        // scrolls it (`scrollsPastLines`), which also gives it its font and style.
         TextField(suggestion ?? placeholder, text: $draft.text, axis: .vertical)
-            .lineLimit(metrics.lineLimit.lowerBound...)
             .frame(minHeight: metrics.minTextHeight, alignment: .topLeading)
             .focused(isFocused)
             .accessibilityLabel(placeholder)

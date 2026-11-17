@@ -838,6 +838,29 @@ final class ComposerEditorTests: XCTestCase {
         }
         XCTAssertEqual(task.draft.text, line + "lorem\n" + line)
         XCTAssertGreaterThan(scroll.frame.height, start, "The first line wrapped onto a new one")
+
+        // Text an input method composes is in the field's editor before it is in the draft, which sizes
+        // the field. Composed past the end of a line, it grows the composer as typed text does, at once
+        // and with the first line still in view, and its commit leaves the height as it is.
+        task.draft.text = line + "\n" + line + "lorem"
+        composer.host.settle()
+        let typed = scroll.frame.height
+        task.draft.text = line + "\n" + line
+        composer.host.settle()
+        editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
+        let composed = try heights(of: scroll) {
+            editor.setMarkedText("lorem", selectedRange: NSRange(location: 5, length: 0),
+                                 replacementRange: NSRange(location: NSNotFound, length: 0))
+            composer.host.settle()
+        }
+        XCTAssertEqual(composed, [typed], "Composing onto a new line grows the composer once, as typing does")
+        XCTAssertLessThanOrEqual(try XCTUnwrap(editor.superview).bounds.minY, 0, "The first line stays in view")
+        let committed = try heights(of: scroll) {
+            editor.insertText("lorem", replacementRange: NSRange(location: NSNotFound, length: 0))
+            composer.host.settle()
+        }
+        XCTAssertEqual(task.draft.text, line + "\n" + line + "lorem")
+        XCTAssertEqual(committed, [], "The commit leaves the height")
     }
 
     /// Every height `view` takes while `action` runs, in order.
