@@ -183,7 +183,7 @@ final class RemoteNewTaskPane {
         accountLine.visibility = .collapsed
         card.extras.children.append(accountLine)
 
-        worktree.content = ComposerParts.label(L10n.string("New worktree"), size: 12)
+        worktree.content = ComposerParts.label(L10n.string("New worktree"), size: 12, color: WindowsTheme.text, weight: 400)
         worktree.minWidth = 0
         worktree.verticalAlignment = .center
         worktree.margin = Thickness(left: 4, top: 0, right: 2, bottom: 0)
@@ -508,7 +508,7 @@ final class RemoteNewTaskPane {
     /// A setting the host names no role for, as the Mac's host window draws it: its choice, and a menu of its choices.
     private func settingControl(_ setting: RemoteSetting, value: String) -> Button {
         let control = ComposerParts.control(title: setting.choices.first { $0.value == value }?.name ?? value,
-                                            chevron: true, name: setting.name)
+                                            chevron: true, tint: WindowsTheme.text, name: setting.name)
         try? ToolTipService.setToolTip(control, setting.name)
         let menu = MenuFlyout()
         menu.placement = .top

@@ -75,7 +75,9 @@ final class NewTaskTitle {
 
     private func text(_ words: String) -> TextBlock {
         let text = TextBlock()
-        text.text = words
+        // A text block leaves its trailing space out of its width, which ran "…work on in" into the project's name; a
+        // word joiner after the space keeps it.
+        text.text = words.last?.isWhitespace == true ? words + "\u{2060}" : words
         text.fontSize = 28
         text.fontWeight = UWP.FontWeight(weight: 600)
         text.foreground = WindowsTheme.text.brush
