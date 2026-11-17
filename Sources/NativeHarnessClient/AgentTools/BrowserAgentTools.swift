@@ -1115,17 +1115,20 @@ final class BrowserAgentTools {
         }
         let timeout = min(max(arguments["timeout"]?.doubleValue ?? 10, 0), 60)
         let deadline = ContinuousClock.now + .milliseconds(Int(timeout * 1000))
+        let wanted = [appears, disappears].compactMap { $0 }
+        var reading: PageTextReading?
         while true {
-            let text = try await pageText(page)
-            let appeared = appears.map { Self.shows($0, in: text) } ?? true
-            let gone = disappears.map { !Self.shows($0, in: text) } ?? true
+            let read = try await readPageText(page, showing: wanted, after: reading)
+            reading = read
+            let appeared = appears == nil || read.shown.first == true
+            let gone = disappears == nil || read.shown.last == false
             if appeared && gone {
                 let parts = [appears.map { "\"\($0)\" appeared" }, disappears.map { "\"\($0)\" is gone" }].compactMap { $0 }
                 return .text(parts.joined(separator: " and ") + ".")
             }
             guard ContinuousClock.now < deadline else {
                 throw await unmetWait(appears: appeared ? nil : appears, disappears: gone ? nil : disappears, after: timeout,
-                                      text: text, on: page)
+                                      text: read.text, on: page)
             }
             try? await Task.sleep(for: pollInterval)
         }
@@ -1133,8 +1136,13 @@ final class BrowserAgentTools {
 
     /// What `browser_wait_for` and `browser_handoff` watch: the visible text (`innerText`) of the page and of the frames
     /// in it from its own origin, which a script of the page can read. A frame from another origin is not in it.
-    static let pageTextExpression = """
-        (() => {
+    ///
+    /// Called with the signature the page gave at the last look (`seen`, null at the first), it answers
+    /// `[signature, text]`, or `[signature]` when the text is the same: a wait looks every fraction of a second, and
+    /// sending, decoding and matching a long page's text at each look kept Yardlet's main thread busy. The signature
+    /// is the text's length and a 53-bit hash of it (cyrb53).
+    static let pageTextFunction = """
+        (seen) => {
           const texts = [];
           const visit = (doc, depth) => {
             if (!doc || !doc.body || depth > 5) return;
@@ -1147,26 +1155,57 @@ final class BrowserAgentTools {
             }
           };
           visit(document, 0);
-          return texts.join('\\n');
-        })()
+          const text = texts.join('\\n');
+          let a = 0xdeadbeef, b = 0x41c6ce57;
+          for (let i = 0; i < text.length; i++) {
+            const c = text.charCodeAt(i);
+            a = Math.imul(a ^ c, 2654435761);
+            b = Math.imul(b ^ c, 1597334677);
+          }
+          a = Math.imul(a ^ (a >>> 16), 2246822507) ^ Math.imul(b ^ (b >>> 13), 3266489909);
+          b = Math.imul(b ^ (b >>> 16), 2246822507) ^ Math.imul(a ^ (a >>> 13), 3266489909);
+          const signature = text.length + ':' + (4294967296 * (2097151 & b) + (a >>> 0));
+          return signature === seen ? [signature] : [signature, text];
+        }
         """
 
     /// How the text waits read the page, for their results and the tool's description.
     static let pageTextRule = "the visible text of the page and of its frames from the same origin, ignoring case and "
         + "runs of spaces"
 
-    /// The page's text the waits match (`pageTextExpression`), each run of whitespace one space.
-    private func pageText(_ page: BrowserAgentPage) async throws -> String {
-        Self.collapsed(try await evaluateValue(page, Self.pageTextExpression).stringValue ?? "")
+    /// The page's text as a text wait matches it, each run of whitespace one space, and which of the texts the wait
+    /// looks for it shows (`shows(_:in:)`), in their order.
+    private struct PageTextReading: Sendable {
+        /// The page's signature of the text (`pageTextFunction`); nil when the page gave none.
+        let signature: String?
+        let text: String
+        let shown: [Bool]
     }
 
-    private static func collapsed(_ text: String) -> String {
+    /// Reads the page's text (`pageTextFunction`) and which of `wanted` it shows. The page sends the text only when it
+    /// changed since `last`, and a changed text is matched off the main actor.
+    private func readPageText(_ page: BrowserAgentPage, showing wanted: [String],
+                              after last: PageTextReading?) async throws -> PageTextReading {
+        let seen = last?.signature.flatMap { try? JSONEncoder().encode($0) }.map { String(decoding: $0, as: UTF8.self) }
+        let parts = try await evaluateValue(page, "(\(Self.pageTextFunction))(\(seen ?? "null"))").arrayValue ?? []
+        let signature = parts.first?.stringValue
+        if let last, signature != nil, signature == last.signature, parts.count == 1 { return last }
+        return await Self.reading(parts.count > 1 ? parts[1].stringValue ?? "" : "", signature: signature, showing: wanted)
+    }
+
+    @concurrent
+    private static func reading(_ text: String, signature: String?, showing wanted: [String]) async -> PageTextReading {
+        let text = collapsed(text)
+        return PageTextReading(signature: signature, text: text, shown: wanted.map { shows($0, in: text) })
+    }
+
+    nonisolated private static func collapsed(_ text: String) -> String {
         text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 
     /// Whether the page's text shows `wanted`, as Playwright's text matching reads it: a part of the text, ignoring case
     /// and runs of whitespace.
-    static func shows(_ wanted: String, in pageText: String) -> Bool {
+    nonisolated static func shows(_ wanted: String, in pageText: String) -> Bool {
         let wanted = collapsed(wanted)
         return wanted.isEmpty || pageText.range(of: wanted, options: .caseInsensitive) != nil
     }
@@ -1420,6 +1459,7 @@ final class BrowserAgentTools {
             handoffs?.handoffStarted(session: sessionID, tabKey: page.tabKey, reason: started.handoff.reason, notice: notice)
         }
         let start = ContinuousClock.now
+        var reading: PageTextReading?
         func waited() -> String { Self.format(Double((ContinuousClock.now - start).components.seconds)) + " seconds" }
         func end() {
             page.endHandoff()
@@ -1451,10 +1491,13 @@ final class BrowserAgentTools {
             case nil:
                 break
             }
-            if let text, page.dialog == nil, let shown = try? await pageText(page), Self.shows(text, in: shown) {
-                end()
-                return .text("“\(text)” appeared on the page after \(waited()), so the person's part is done; the tab is "
-                    + "yours again.")
+            if let text, page.dialog == nil, let read = try? await readPageText(page, showing: [text], after: reading) {
+                reading = read
+                if read.shown[0] {
+                    end()
+                    return .text("“\(text)” appeared on the page after \(waited()), so the person's part is done; the tab "
+                        + "is yours again.")
+                }
             }
             if ContinuousClock.now - start >= timeout {
                 return .text("The person has not answered after \(waited()). The tab stays handed to them, with its bar in "

@@ -45,15 +45,24 @@ final class ScriptedCDP: BrowserAgentCDP {
                     + (expression.contains("readyState") ? [.string("complete")] : [])))
             }
             if expression == "devicePixelRatio" { return Self.value(.number(pixelRatio)) }
-            if expression.contains("innerText") {
+            if expression.hasPrefix("(\(BrowserAgentTools.pageTextFunction))") {
                 let text = bodyTexts.count > 1 ? bodyTexts.removeFirst() : bodyTexts.first ?? ""
-                return Self.value(.string(text))
+                return Self.value(Self.evaluate(expression, onPageShowing: text))
             }
             if expression.contains("scrollX") {
                 return Self.value(.array([.integer(0), .integer(400), .integer(1280), .integer(5000)]))
             }
         }
         return .object([:])
+    }
+
+    /// What `expression` gives in a page whose body shows `text`, run in JavaScriptCore as the page would.
+    static func evaluate(_ expression: String, onPageShowing text: String) -> JSONValue {
+        let context = JSContext()!
+        context.setObject(text, forKeyedSubscript: "shownText" as NSString)
+        context.evaluateScript("var document = { body: { innerText: shownText }, querySelectorAll: () => [] };")
+        let json = context.evaluateScript("JSON.stringify(\(expression))")?.toString() ?? "null"
+        return (try? JSONDecoder().decode(JSONValue.self, from: Data(json.utf8))) ?? .null
     }
 
     var methods: [String] { sent.map(\.method) }
@@ -851,6 +860,11 @@ final class BrowserAgentToolsTests: XCTestCase {
         cdp.bodyTexts = ["Loading", "Loading", "Saved"]
         let appeared = await run(AgentToolCatalog.waitFor, ["text": .string("Saved")])
         XCTAssertEqual(appeared.text, "\"Saved\" appeared.")
+        // A look sends the signature the page gave at the last one, and the page sends its text only when it changed.
+        let looks = cdp.params(of: "Runtime.evaluate").compactMap { $0["expression"]?.stringValue }
+            .filter { $0.hasPrefix("(\(BrowserAgentTools.pageTextFunction))") }
+        XCTAssertEqual(ScriptedCDP.evaluate(looks[1], onPageShowing: "Loading").arrayValue?.count, 1)
+        XCTAssertEqual(ScriptedCDP.evaluate(looks[1], onPageShowing: "Saved").arrayValue?.count, 2)
 
         // A part of the visible text, ignoring case and runs of spaces, as Playwright's text matching reads it.
         cdp.bodyTexts = ["ORDER\n  saved\u{00A0}today"]
