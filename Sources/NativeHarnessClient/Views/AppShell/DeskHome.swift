@@ -232,8 +232,10 @@ struct DeskHome<Switch: View, Bottom: View>: View {
                 .frame(maxWidth: .infinity)
                 DeskScroll { familiesZone(desk, showsMembers: true).padding(.bottom, 16) }
                     .frame(width: max(280, (columnsWidth * 0.26).rounded()))
+                // Today takes about a quarter, so two events at the same hour each keep room for a short title.
+                // At the narrowest, what waits keeps the width the two columns give it at theirs.
                 todayZone(desk, onAxis: true)
-                    .frame(width: max(210, (columnsWidth * 0.18).rounded()))
+                    .frame(width: max(280, (columnsWidth * 0.24).rounded()))
                     .frame(maxHeight: .infinity, alignment: .top)
             }
             .modifier(DeskColumnsPlacement())
