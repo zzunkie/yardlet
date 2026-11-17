@@ -174,27 +174,31 @@ enum GitWorktreeOriginResolver {
     }
 
     /// The nearest enclosing folder that carries a `.git` entry — the toplevel a task's cwd
-    /// belongs to, whether the cwd is the checkout itself or a folder inside it. The walk stops
-    /// where a folder is no longer an absolute path: on Windows, going up from a drive's root
-    /// (`/C:`) gives a path read from the process's current folder, whose checkout is not the
-    /// task's.
+    /// belongs to, whether the cwd is the checkout itself or a folder inside it.
     private static func repositoryMarker(
         from workspaceURL: URL,
         reader: GitMetadataReader
     ) -> Marker? {
         var current = normalized(workspaceURL)
         for _ in 0..<64 {
-            guard PathRules.current.isAbsolute(current) else { return nil }
             let gitPath = current == "/" ? "/.git" : current + "/.git"
             if let kind = reader.kind(gitPath) {
                 return Marker(toplevel: current, gitPath: gitPath, kind: kind)
             }
-            guard current != "/" else { return nil }
-            current = normalized(
-                URL(filePath: current, directoryHint: .isDirectory).deletingLastPathComponent()
-            )
+            guard let parent = parentFolder(of: current) else { return nil }
+            current = parent
         }
         return nil
+    }
+
+    /// The folder above `path`, taken from its names alone, or nil at the top: `/`, and on Windows
+    /// a drive's root (`/C:`). A file URL made for a drive's root on Windows reads as a folder of
+    /// the process's current folder, and `/` there is the current folder's drive, so going up
+    /// through either would look in a checkout that is not the task's.
+    private static func parentFolder(of path: String) -> String? {
+        guard path != "/", let slash = path.lastIndex(of: "/") else { return nil }
+        let parent = slash == path.startIndex ? "/" : String(path[..<slash])
+        return PathRules.current.isAbsolute(parent) ? parent : nil
     }
 
     private static func linkedGitDirectory(
