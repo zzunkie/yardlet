@@ -6,27 +6,35 @@ import WindowsFoundation
 import WinUI
 
 /// Another computer's Yardlet in a window of its own (docs/REMOTE_PROTOCOL.md §18), as the Mac's host window
-/// (`RemoteHostWindow`): its title the host's name, with how the host is reached beside it (`RemoteConnectionText`), the
-/// host's tasks in the sidebar as the host lists them, under Home, New task on the host, where the host can start one;
-/// and beside them a line while the host cannot be reached (`RemoteConnectionBanner`) over the chosen task
-/// (`RemoteTaskPane`), New task on the host (`RemoteNewTaskPane`), or while neither is chosen, that the window is
-/// connecting or what to choose. A host this computer no longer pairs with leaves the window saying so. The window
-/// follows its `RemoteHostModel` through Observation; closing it ends the connection.
+/// (`RemoteHostWindow`): its title the host's name, with how the host is reached beside it (`RemoteConnectionText`); the
+/// main window's sidebar (`TaskSidebar`) listing the host's tasks as the host lists them (`RemoteSidebarMirror`), with
+/// Home, New task on the host, while the host can start one, row and project menus that act through the host, and the
+/// host at its foot (`RemoteHostFooter`); and beside it the chosen task's header (`TaskHeader`), a line while the host
+/// cannot be reached (`RemoteConnectionBanner`), and the task (`RemoteTaskPane`), New task on the host
+/// (`RemoteNewTaskPane`), or while neither is chosen, that the window is connecting or what to choose. A host this
+/// computer no longer pairs with leaves the window saying so. The window follows its `RemoteHostModel` through
+/// Observation; closing it ends the connection. The Mac's schedules, archived tasks, activity view, tabs, splits and
+/// host Settings there are the Mac's alone for now.
 @MainActor
 final class RemoteHostWindow {
     private let model: RemoteHostModel
     private let directory: RemoteHostDirectory
     private let log: QAEventLog
     private let window = Window()
-    private let navigation = NavigationView()
+    private let root = Grid()
+    /// Beside the sidebar, as the main window's.
+    private let content = Border()
     /// How the host is reached, after the window's title.
     private let connectionLine = TextBlock()
-    /// Beside the sidebar: the task's header (not drawn yet), the connection's banner, and the task or the placeholder.
+    /// The task's header, the connection's banner, and the task or the placeholder.
     private let detail = Grid()
     private let body = Border()
     private let banner: RemoteConnectionBanner
     private let pane: RemoteTaskPane
     private let newTask: RemoteNewTaskPane
+    private let footer: RemoteHostFooter
+    private var sidebar: TaskSidebar?
+    private var header: TaskHeader?
     /// Each task's unsent words and the message it edits, kept in the host's cache folder.
     private let drafts = RemoteComposerDrafts()
     private let placeholder = StackPanel()
@@ -38,12 +46,8 @@ final class RemoteHostWindow {
     /// What the detail shows now.
     private var showing: Showing?
     private enum Showing { case task, newTask, placeholder, unpaired }
-    private var items: [(item: NavigationViewItem, taskID: String)] = []
-    /// New task on the host, at the top of the list while the host can start one. The sidebar's own Home takes its
-    /// place once the window draws the Mac's sidebar.
-    private var homeItem: NavigationViewItem?
-    /// What the sidebar draws, by section: its name, then each task's ID, title and harness.
-    private var shownRows: [String]?
+    /// How many tasks the sidebar lists, as last logged.
+    private var loggedTaskCount: Int?
     var onClose: (() -> Void)?
 
     init(model: RemoteHostModel, directory: RemoteHostDirectory, log: QAEventLog) {
@@ -53,6 +57,7 @@ final class RemoteHostWindow {
         banner = RemoteConnectionBanner(model: model, directory: directory, log: log)
         pane = RemoteTaskPane(model: model, drafts: drafts, log: log)
         newTask = RemoteNewTaskPane(model: model, drafts: drafts, log: log)
+        footer = RemoteHostFooter(model: model, directory: directory, log: log)
     }
 
     func open() {
@@ -61,20 +66,17 @@ final class RemoteHostWindow {
             self?.drafts.save()
             self?.onClose?()
         }
+        let windowHandle: () -> UInt64 = { [weak self] in self?.window.appWindow.id.value ?? 0 }
 
-        navigation.paneDisplayMode = .left
-        navigation.isSettingsVisible = false
-        navigation.isBackButtonVisible = .collapsed
-        navigation.isPaneToggleButtonVisible = false
-        navigation.openPaneLength = 300
-        navigation.selectionChanged.addHandler { [weak self] _, args in
-            guard let self, let container = args?.selectedItemContainer else { return }
-            if let home = self.homeItem, container == home {
-                self.model.select(.newTask)
-            } else if let taskID = self.items.first(where: { $0.item == container })?.taskID {
-                self.model.select(.task(taskID))
-            }
-        }
+        let actions = TaskActions(source: .remote(model), log: log, host: { [weak self] in self?.root },
+                                  windowHandle: windowHandle)
+        footer.onRemove = { [weak self] in self?.close() }
+        let sidebar = TaskSidebar(source: .remote(model), actions: actions, footer: footer.view)
+        sidebar.onChoose = { [weak self] place in self?.show(place) }
+        sidebar.onNewTaskInProject = { [weak self] folder in self?.showNewTask(in: folder) }
+        self.sidebar = sidebar
+        let header = TaskHeader(actions: actions)
+        self.header = header
 
         for height in [GridLength(value: 0, gridUnitType: .auto), GridLength(value: 0, gridUnitType: .auto),
                        GridLength(value: 1, gridUnitType: .star)] {
@@ -82,21 +84,31 @@ final class RemoteHostWindow {
             row.height = height
             detail.rowDefinitions.append(row)
         }
+        detail.children.append(header.view)
         try? Grid.setRow(banner.view, 1)
         detail.children.append(banner.view)
         try? Grid.setRow(body, 2)
         detail.children.append(body)
         makePlaceholders()
-        navigation.content = detail
-        pane.windowHandle = { [weak self] in self?.window.appWindow.id.value ?? 0 }
-        newTask.windowHandle = { [weak self] in self?.window.appWindow.id.value ?? 0 }
+        pane.windowHandle = windowHandle
+        newTask.windowHandle = windowHandle
         drafts.restore(from: model.cacheFolder)
-        WindowChrome.frame(window, title: model.name, subtitle: connectionLine, content: navigation)
+
+        SidebarStyle.columns(root, [SidebarStyle.auto, SidebarStyle.star])
+        root.children.append(sidebar.view)
+        WindowChrome.styleContent(content)
+        content.child = detail
+        try? Grid.setColumn(content, 1)
+        root.children.append(content)
+        WindowChrome.frame(window, title: model.name, subtitle: connectionLine, content: root)
+        // The working dots follow Windows' animation effects setting, read again as the window comes to the front.
+        window.activated.addHandler { _, _ in SidebarBlink.shared.refresh() }
         try? window.activate()
 
         followConnection()
         followTasks()
         followDetail()
+        followHeader()
     }
 
     func bringForward() {
@@ -120,87 +132,69 @@ final class RemoteHostWindow {
         log.write("remote connection: \(line)")
     }
 
+    /// How many tasks the host lists, logged as it changes once the host's list has come.
     private func followTasks() {
-        let (sidebar, startsTasks) = withObservationTracking {
-            (model.hasSnapshot ? model.sidebar : nil, model.newTask != nil)
+        let count = withObservationTracking {
+            model.hasSnapshot ? model.sidebar.sessions.count : nil
         } onChange: { [weak self] in
             Task { @MainActor in self?.followTasks() }
         }
-        guard let sidebar else { return }
-        // A task's marks and times change as it streams; the sidebar is drawn again only when what it shows does.
-        let sections = Self.sections(of: sidebar)
-        let rows = [startsTasks ? "home" : ""]
-            + sections.flatMap { name, sessions in [name] + sessions.map { "\($0.id)\n\($0.title)\n\($0.harness.rawValue)" } }
-        guard rows != shownRows else { return }
-        shownRows = rows
-        showSidebar(sections, startsTasks: startsTasks)
+        guard let count, count != loggedTaskCount else { return }
+        loggedTaskCount = count
+        log.write("remote tasks: \(count)")
     }
 
-    private static func sections(of sidebar: RemoteSidebarMirror) -> [(name: String, sessions: [SessionRecord])] {
-        sidebar.groups.map { ($0.displayName, $0.sessions) }
-            + (sidebar.chats.isEmpty ? [] : [(L10n.string("Chats"), sidebar.chats)])
-    }
-
-    /// Home, while the host can start a task, then the host's projects with their tasks, then its chats, as the
-    /// host's sidebar lists them.
-    private func showSidebar(_ sections: [(name: String, sessions: [SessionRecord])], startsTasks: Bool) {
-        let taskIDs = Dictionary(model.tasks.map { (RemoteSidebarMirror.sessionID(for: $0.id), $0.id) },
-                                 uniquingKeysWith: { first, _ in first })
-        navigation.menuItems.clear()
-        items = []
-        homeItem = nil
-        if startsTasks {
-            let home = NavigationViewItem()
-            let mark = FontIcon()
-            mark.glyph = "\u{E80F}"
-            home.icon = mark
-            home.content = L10n.string("Home")
-            try? AutomationProperties.setName(home, L10n.string("Home"))
-            navigation.menuItems.append(home)
-            homeItem = home
+    /// Shows what the sidebar chose: New task on the host, or a host's task, by the host's ID for it.
+    private func show(_ place: SidebarPlace) {
+        switch place {
+        case .home:
+            guard model.newTask != nil else { return }
+            model.select(.newTask)
+        case let .task(id):
+            let taskID = model.tasks.first { RemoteSidebarMirror.sessionID(for: $0.id) == id }?.id ?? id.uuidString
+            model.select(.task(taskID))
+        case .settings:
+            break
         }
-        for (name, sessions) in sections {
-            let header = NavigationViewItemHeader()
-            header.content = name
-            navigation.menuItems.append(header)
-            for session in sessions {
-                guard let taskID = taskIDs[session.id] else { continue }
-                let item = NavigationViewItem()
-                item.content = Self.label(title: session.title, detail: session.harness.displayName)
-                try? AutomationProperties.setName(item, session.title)
-                navigation.menuItems.append(item)
-                items.append((item: item, taskID: taskID))
-            }
-        }
-        log.write("remote tasks: \(items.count)")
-        markSelection()
     }
 
-    /// The list's chosen row is what the detail shows: Home for New task, else the task's row.
+    /// New task in a project, from its menu: New task on the host with the project chosen, as the Mac's.
+    private func showNewTask(in folder: URL) {
+        guard model.newTask != nil else { return }
+        drafts.newTaskProjectID = model.sidebar.projectIDs[folder.standardizedFileURL]
+        if showing == .newTask {
+            newTask.hide()
+            newTask.show()
+        } else {
+            model.select(.newTask)
+        }
+    }
+
+    /// The sidebar's chosen row is what the detail shows: Home for New task, else the task's row.
     private func markSelection() {
-        let item: NavigationViewItem? = switch model.selection {
-        case .newTask: homeItem
-        case let .task(id): items.first { $0.taskID == id }?.item
+        let place: SidebarPlace? = switch model.selection {
+        case .newTask: .home
+        case let .task(id): .task(RemoteSidebarMirror.sessionID(for: id))
         default: nil
         }
-        navigation.selectedItem = item
-    }
-
-    private static func label(title: String, detail: String) -> StackPanel {
-        let titleText = TextBlock()
-        titleText.text = title
-        let detailText = TextBlock()
-        detailText.text = detail
-        detailText.fontSize = 12
-        detailText.opacity = 0.6
-        let label = StackPanel()
-        label.children.append(titleText)
-        label.children.append(detailText)
-        return label
+        sidebar?.choose(place)
     }
 
     private var selectedTaskID: String? {
         if case let .task(id) = model.selection { id } else { nil }
+    }
+
+    /// The shown task's header: its title, which opens its menu, its harness, and its state.
+    private func followHeader() {
+        let session = withObservationTracking { () -> SessionRecord? in
+            guard directory.host(model.id) != nil, let taskID = selectedTaskID, model.conversations[taskID] != nil
+            else { return nil }
+            let id = RemoteSidebarMirror.sessionID(for: taskID)
+            return model.sidebar.sessions.first { $0.id == id }
+        } onChange: { [weak self] in
+            Task { @MainActor in self?.followHeader() }
+        }
+        header?.show(session)
     }
 
     // MARK: Detail
@@ -219,8 +213,8 @@ final class RemoteHostWindow {
             if showing != .unpaired {
                 if showing == .newTask { newTask.hide() }
                 showing = .unpaired
-                navigation.isPaneVisible = false
-                navigation.content = unpaired
+                sidebar?.view.visibility = .collapsed
+                content.child = unpaired
                 pane.show(nil)
                 log.write("remote unpaired: \(model.name)")
             }

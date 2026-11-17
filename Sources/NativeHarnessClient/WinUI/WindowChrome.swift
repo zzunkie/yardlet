@@ -36,6 +36,17 @@ enum WindowChrome {
         QAEventLog.shared.write("window chrome: mica, title bar \(title)")
     }
 
+    /// The pane beside a window's sidebar, as Windows 11's apps lay their content over Mica: the layer fill
+    /// (`LayerFillColorDefault`) under a hairline at its top and left edges, rounded at its top left.
+    static func styleContent(_ content: Border) {
+        content.background = layerFill.brush
+        content.borderBrush = SettingsCard.stroke.brush
+        content.borderThickness = Thickness(left: 1, top: 1, right: 0, bottom: 0)
+        content.cornerRadius = CornerRadius(topLeft: 8, topRight: 0, bottomRight: 0, bottomLeft: 0)
+    }
+
+    private static let layerFill = ThemeColor(light: .paper(0.5), dark: UWP.Color(a: 0x4C, r: 0x3A, g: 0x3A, b: 0x3A))
+
     private static func titleBar(_ title: String, subtitle: TextBlock?) -> Grid {
         let bar = Grid()
         let row = StackPanel()

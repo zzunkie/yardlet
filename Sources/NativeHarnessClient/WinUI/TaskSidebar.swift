@@ -142,7 +142,7 @@ final class TaskSidebar {
         lists.children.append(pinned.view)
         lists.children.append(chatsTitle)
         lists.children.append(chats.view)
-        chatsMore.content = Self.moreLabel()
+        Self.showMore(in: chatsMore)
         SidebarStyle.stylePlain(chatsMore)
         chatsMore.margin = Thickness(left: SidebarStyle.rowInset, top: 0, right: SidebarStyle.rowInset, bottom: 0)
         chatsMore.click.addHandler { [weak self] _, _ in self?.disclosure.showMore(SidebarChats.disclosureKey) }
@@ -238,11 +238,13 @@ final class TaskSidebar {
         projectsTitle.children.append(add)
     }
 
-    static func moreLabel() -> TextBlock {
+    /// "Show more" as a list's last row, which `button` shows and is named for.
+    static func showMore(in button: Button) {
         let words = SidebarStyle.label(L10n.string("Show more"), size: SidebarStyle.titleFontSize,
                                        color: WindowsTheme.tertiaryText)
         words.margin = Thickness(left: SidebarStyle.gutterWidth, top: 0, right: 0, bottom: 0)
-        return words
+        button.content = words
+        try? AutomationProperties.setName(button, L10n.string("Show more"))
     }
 
     private func pickTask(_ key: String) {
@@ -548,7 +550,7 @@ final class SidebarProjectSection {
         headerRow.pointerExited.addHandler { [weak self] _, _ in self?.showHoverButtons(false) }
         view.children.append(headerRow)
         view.children.append(list.view)
-        more.content = TaskSidebar.moreLabel()
+        TaskSidebar.showMore(in: more)
         SidebarStyle.stylePlain(more)
         more.margin = Thickness(left: SidebarStyle.rowInset, top: 0, right: SidebarStyle.rowInset, bottom: 0)
         more.click.addHandler { [weak self] _, _ in self?.onShowMore() }

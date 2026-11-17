@@ -153,10 +153,7 @@ final class MainWindow {
         self.keys = keys
         SidebarStyle.columns(root, [SidebarStyle.auto, SidebarStyle.star])
         root.children.append(sidebar.view)
-        content.background = Self.layerFill.brush
-        content.borderBrush = SettingsCard.stroke.brush
-        content.borderThickness = Thickness(left: 1, top: 1, right: 0, bottom: 0)
-        content.cornerRadius = CornerRadius(topLeft: 8, topRight: 0, bottomRight: 0, bottomLeft: 0)
+        WindowChrome.styleContent(content)
         content.child = taskFrame
         try? Grid.setColumn(content, 1)
         root.children.append(content)
@@ -185,9 +182,6 @@ final class MainWindow {
             }
         }
     }
-
-    /// Windows' layer fill for an app's content over Mica (`LayerFillColorDefault`).
-    private static let layerFill = ThemeColor(light: .paper(0.5), dark: UWP.Color(a: 0x4C, r: 0x3A, g: 0x3A, b: 0x3A))
 
     /// Shows what the sidebar chose.
     private func show(_ place: SidebarPlace) {

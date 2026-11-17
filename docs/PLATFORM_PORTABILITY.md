@@ -338,11 +338,17 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   copies in Settings › Remote, as File › Connect to Mac… does on the Mac (docs/REMOTE_PROTOCOL.md, "Yardlet as a
   client"), and lists the paired Macs with Open and Remove…, which forgets the host and asks it to forget this
   computer when it can be reached. `WinUI/RemoteHostWindow.swift` opens each paired host in a window of its own, as the
-  Mac's host window: its title the host's name with how it is reached beside it (`RemoteConnectionText`), the host's
-  tasks as it lists them, an orange line while the host cannot be reached, closed its connection or removed this
-  computer, with Try Again, or Remove to forget the host here (`WinUI/RemoteConnectionBanner.swift`), and with no task
-  chosen, that the window is connecting or to choose one or start a new one; once the host is no longer paired, the
-  window says so. Where the host can start a task, Home heads its list and opens New task on the host
+  Mac's host window: its title the host's name with how it is reached beside it (`RemoteConnectionText`); the main
+  window's sidebar (`WinUI/TaskSidebar.swift`) reading the host's tasks instead of this computer's (`WinUI/TaskSource.swift`,
+  over `RemoteSidebarMirror`), with its search, pinned tasks, chats, projects, nesting and marks, whose row, title and
+  project menus ask the host (pin, archive, mark read, and rename, delete, mark unread, nest and archive a project's
+  chats where the host allows them, `RemoteHostModel.taskActions`) and leave out what changes this computer's projects
+  and folders; the host at the sidebar's foot with Try Again while it is not connected and Remove…
+  (`WinUI/RemoteHostFooter.swift`); the chosen task's header (`WinUI/TaskHeader.swift`); an orange line while the host
+  cannot be reached, closed its connection or removed this computer, with Try Again, or Remove to forget the host here
+  (`WinUI/RemoteConnectionBanner.swift`); and with no task chosen, that the window is connecting or to choose one or
+  start a new one; once the host is no longer paired, the window says so. Where the host can start a task, Home heads
+  its list and opens New task on the host, as does New task in a project's menu with that project chosen
   (`WinUI/RemoteNewTaskPane.swift`), drawn with the main window's New task pieces (`WinUI/NewTaskParts.swift`, the
   composer card and chips, and the home's lists of the host's projects, whose folders and pull requests are not read
   here): the title names the host's project the task starts in, its name the menu of the host's projects and Chat (no
@@ -453,7 +459,8 @@ starts a new line and sends nothing (`Windows/scripts/check-window.ps1`). It the
 started when the step ends, pairs the app with the host through Connect to a Mac, opens a task, sends a message and
 waits for the answer to stream in, captures the host's tasks that wait on an approval or a question, ended on an error
 or a plan limit, finished, or still run, answers the approval on the host from its card (the answer that saves a rule
-asked about first and cancelled, then Allow), starts a task from Home's New task on the host and waits for it to show,
+asked about first and cancelled, then Allow), after showing each project's tasks with Show more and opening the host's
+menu at the sidebar's foot, starts a task from Home's New task on the host and waits for it to show,
 then removes the host with Remove… and its question, which closes its window and
 takes it off the list (`Windows/scripts/check-remote.ps1`, through UI Automation). It installs a
 stand-in harness the way npm installs one (`Windows/scripts/fake-harness/`, whose `kimi.cmd` npm itself writes into
@@ -530,8 +537,8 @@ in a message while it works (`request_user_input_async`); a new task's account, 
 commands; and a browser host. Until the app is installed with a Start menu shortcut, its notifications carry the
 executable's name. A
 connector's program gets a POSIX environment (`Connectors/ConnectorProgram.swift`), and npm's `npx.cmd`, which is not
-one of npm's shims, is refused. A host's window has none of the host's panels, new tasks or Settings, its sidebar is
-a plain list of the host's tasks, and its composer has no @ mentions, slash command list or connectors in "+", as the
+one of npm's shims, is refused. A host's window has none of the host's panels or Settings, its sidebar none of the
+host's schedules, archived tasks, activity view, tabs or splits, and its composer has no @ mentions, slash command list or connectors in "+", as the
 task composer has none. The remote has no relay account to sign in to or link through
 (docs/REMOTE_PROTOCOL.md, "12.1 Linking through an account"), and nothing that keeps the computer awake on power. Until Foundation
 there hands frames over whole (swiftlang/swift-corelibs-foundation#5255), its relay socket cannot tell a frame that

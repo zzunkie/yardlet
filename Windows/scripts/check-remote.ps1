@@ -101,7 +101,7 @@ function Find-Typed($root, $type) {
     $root.FindFirst($Scope::Descendants, (New-Object System.Windows.Automation.PropertyCondition($UIA::ControlTypeProperty, $type)))
 }
 
-# A list item whose text contains $text, as a NavigationViewItem's name is the text of its content.
+# A list item whose text contains $text, as a sidebar row's name is its title.
 function Find-Item($root, [string] $text) {
     $items = $root.FindAll($Scope::Descendants,
         (New-Object System.Windows.Automation.PropertyCondition($UIA::ControlTypeProperty, [System.Windows.Automation.ControlType]::ListItem)))
@@ -201,6 +201,27 @@ try {
 }
 [void][RemoteDesktop]::BringForward([IntPtr]$hostWindow.Current.NativeWindowHandle)
 Save-Screen 'host'
+# Each of the host's projects lists its first tasks until Show more, as the main window's sidebar does; the tasks below
+# are looked for in the whole of each list.
+for ($shown = 0; $shown -lt 6; $shown++) {
+    $more = Find-Named $hostWindow 'Show more' ([System.Windows.Automation.ControlType]::Button)
+    if (-not $more) { break }
+    $more.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Start-Sleep -Milliseconds 500
+}
+# The host at the foot of the sidebar opens its menu: Try Again while it is not connected, and Remove.
+$footer = Wait-For { $hostWindow.FindAll($Scope::Descendants,
+        (New-Object System.Windows.Automation.PropertyCondition($UIA::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button))) |
+    Where-Object { $_.Current.Name -like "$hostName, *" } | Select-Object -First 1 } 10
+$summary.footer = if ($footer) { $footer.Current.Name } else { $null }
+if ($footer) {
+    $footer.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    $summary.footerMenu = [bool](Wait-For { Find-InApp "Remove$([char]0x2026)" ([System.Windows.Automation.ControlType]::MenuItem) } 5)
+    Save-Screen 'host-menu'
+    [void][RemoteDesktop]::BringForward([IntPtr]$hostWindow.Current.NativeWindowHandle)
+    [RemoteDesktop]::Press(0x1B)
+    Start-Sleep -Milliseconds 500
+}
 
 # The task, a message and its answer streaming in.
 $item = Wait-For { $found = Find-Item $hostWindow $Task; if ($found) { Select-Item $found; $true } } 20
