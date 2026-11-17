@@ -2098,6 +2098,7 @@
 "%@ is changing this task. Try again in a moment." = "%@ is changing this task. Try again in a moment.";
 "%@ no longer lists this task." = "%@ no longer lists this task.";
 "%@ removed this Mac. To connect again, pair with a new link from its Settings › Remote." = "%@ removed this Mac. To connect again, pair with a new link from its Settings › Remote.";
+"%@ removed this computer. To connect again, pair with a new link from its Settings › Remote." = "%@ removed this computer. To connect again, pair with a new link from its Settings › Remote.";
 "%@ turned off remote connections." = "%@ turned off remote connections.";
 "Allow and save this rule?" = "Allow and save this rule?";
 "Answer this on %@." = "Answer this on %@.";
@@ -2125,6 +2126,7 @@
 "Nothing is running." = "Nothing is running.";
 "On %@" = "On %@";
 "Pair it again from File › Connect to Mac…." = "Pair it again from File › Connect to Mac….";
+"Pair it again from Settings › Connect to a Mac." = "Pair it again from Settings › Connect to a Mac.";
 "Paired Macs" = "Paired Macs";
 "Press %@ to start the task" = "Press %@ to start the task";
 "Reconnecting…" = "Reconnecting…";

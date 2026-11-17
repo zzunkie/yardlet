@@ -603,4 +603,27 @@ extension ConversationPresentation {
         presentation.pendingRequestIDs.remove(id)
         return presentation
     }
+
+    /// The presentation for a window with no browser panel, which only the Mac's has: a handoff's card offers no Show
+    /// Tab, which would open the handed tab in that panel (§15.25). Only the turns with pending requests are looked at.
+    func withoutShowTab() -> ConversationPresentation {
+        var presentation = self
+        var left = pendingRequestIDs.count
+        for index in turns.indices.reversed() {
+            guard left > 0 else { break }
+            left -= turns[index].requests.count
+            for request in turns[index].requests.indices
+                where turns[index].requests[request].responses.contains(where: \.showsTab) {
+                presentation.turns[index].requests[request].responses.removeAll(where: \.showsTab)
+            }
+        }
+        return presentation
+    }
+}
+
+private extension ConversationRequestResponse {
+    var showsTab: Bool {
+        if case let .providerAction(action) = route { return action.id.hasPrefix(RemoteTurnProjection.Route.showTab) }
+        return false
+    }
 }

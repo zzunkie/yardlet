@@ -11,8 +11,9 @@ import WinUI
 enum WindowChrome {
     static let titleBarHeight: Double = 48
 
-    /// Makes `content`, under the title bar, the window's content, and has the theme follow its appearance.
-    static func frame(_ window: Window, title: String, content: FrameworkElement) {
+    /// Makes `content`, under the title bar, the window's content, and has the theme follow its appearance. `subtitle`
+    /// follows the title in the bar, dimmer, as the Mac's window subtitle follows its title.
+    static func frame(_ window: Window, title: String, subtitle: TextBlock? = nil, content: FrameworkElement) {
         window.title = title
         window.extendsContentIntoTitleBar = true
         window.systemBackdrop = MicaBackdrop()
@@ -24,7 +25,7 @@ enum WindowChrome {
         contentRow.height = GridLength(value: 1, gridUnitType: .star)
         root.rowDefinitions.append(barRow)
         root.rowDefinitions.append(contentRow)
-        let bar = titleBar(title)
+        let bar = titleBar(title, subtitle: subtitle)
         root.children.append(bar)
         try? Grid.setRow(content, 1)
         root.children.append(content)
@@ -35,7 +36,7 @@ enum WindowChrome {
         QAEventLog.shared.write("window chrome: mica, title bar \(title)")
     }
 
-    private static func titleBar(_ title: String) -> Grid {
+    private static func titleBar(_ title: String, subtitle: TextBlock?) -> Grid {
         let bar = Grid()
         let row = StackPanel()
         row.orientation = .horizontal
@@ -56,6 +57,12 @@ enum WindowChrome {
         text.verticalAlignment = .center
         text.foreground = WindowsTheme.text.brush
         row.children.append(text)
+        if let subtitle {
+            subtitle.fontSize = 12
+            subtitle.verticalAlignment = .center
+            subtitle.foreground = WindowsTheme.secondaryText.brush
+            row.children.append(subtitle)
+        }
         bar.children.append(row)
         return bar
     }

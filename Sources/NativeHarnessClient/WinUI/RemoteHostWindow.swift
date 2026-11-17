@@ -5,35 +5,54 @@ import WinAppSDK
 import WindowsFoundation
 import WinUI
 
-/// Another computer's Yardlet in a window of its own (docs/REMOTE_PROTOCOL.md §18), as the Mac opens one from
-/// File › Connect to Mac…: the host's tasks in the sidebar as the host lists them, the chosen task's
-/// conversation as it streams, and the composer, which sends to the host. The window follows its
-/// `RemoteHostModel` through Observation; closing it ends the connection.
+/// Another computer's Yardlet in a window of its own (docs/REMOTE_PROTOCOL.md §18), as the Mac's host window
+/// (`RemoteHostWindow`): its title the host's name, with how the host is reached beside it (`RemoteConnectionText`), the
+/// host's tasks in the sidebar as the host lists them, and beside them a line while the host cannot be reached
+/// (`RemoteConnectionBanner`) over the chosen task (`RemoteTaskPane`), or while none is chosen, that the window is
+/// connecting or what to choose. A host this computer no longer pairs with leaves the window saying so. The window
+/// follows its `RemoteHostModel` through Observation; closing it ends the connection.
 @MainActor
 final class RemoteHostWindow {
     private let model: RemoteHostModel
+    private let directory: RemoteHostDirectory
     private let log: QAEventLog
     private let window = Window()
     private let navigation = NavigationView()
-    private let status = TextBlock()
-    private let timeline = ConversationTimeline()
-    private let composer = TextBox()
-    /// Sends what the composer holds to the host, as Enter does.
-    private var sendButton: Button?
+    /// How the host is reached, after the window's title.
+    private let connectionLine = TextBlock()
+    /// Beside the sidebar: the task's header (not drawn yet), the connection's banner, and the task or the placeholder.
+    private let detail = Grid()
+    private let body = Border()
+    private let banner: RemoteConnectionBanner
+    private let pane: RemoteTaskPane
+    /// Each task's unsent words and the message it edits, kept in the host's cache folder.
+    private let drafts = RemoteComposerDrafts()
+    private let placeholder = StackPanel()
+    private let placeholderText = TextBlock()
+    private let placeholderRefusal = TextBlock()
+    private let unpaired = StackPanel()
+    /// What the detail shows now.
+    private var showing: Showing?
+    private enum Showing { case task, placeholder, unpaired }
     private var items: [(item: NavigationViewItem, taskID: String)] = []
     /// What the sidebar draws, by section: its name, then each task's ID, title and harness.
     private var shownRows: [String]?
-    private var shownTaskID: String?
     var onClose: (() -> Void)?
 
-    init(model: RemoteHostModel, log: QAEventLog) {
+    init(model: RemoteHostModel, directory: RemoteHostDirectory, log: QAEventLog) {
         self.model = model
+        self.directory = directory
         self.log = log
+        banner = RemoteConnectionBanner(model: model, directory: directory, log: log)
+        pane = RemoteTaskPane(model: model, drafts: drafts, log: log)
     }
 
     func open() {
         try? window.appWindow.resize(SizeInt32(width: 1000, height: 680))
-        window.closed.addHandler { [weak self] _, _ in self?.onClose?() }
+        window.closed.addHandler { [weak self] _, _ in
+            self?.drafts.save()
+            self?.onClose?()
+        }
 
         navigation.paneDisplayMode = .left
         navigation.isSettingsVisible = false
@@ -46,49 +65,26 @@ final class RemoteHostWindow {
             self.model.select(.task(taskID))
         }
 
-        let grid = Grid()
-        for height in [GridLength(value: 0, gridUnitType: .auto), GridLength(value: 1, gridUnitType: .star),
-                       GridLength(value: 0, gridUnitType: .auto)] {
+        for height in [GridLength(value: 0, gridUnitType: .auto), GridLength(value: 0, gridUnitType: .auto),
+                       GridLength(value: 1, gridUnitType: .star)] {
             let row = RowDefinition()
             row.height = height
-            grid.rowDefinitions.append(row)
+            detail.rowDefinitions.append(row)
         }
-        status.fontSize = 12
-        status.opacity = 0.6
-        status.margin = Thickness(left: 28, top: 12, right: 28, bottom: 0)
-        grid.children.append(status)
-        try? Grid.setRow(timeline.view, 1)
-        grid.children.append(timeline.view)
-        // The composer with Send beside it, as in the main window.
-        let composerRow = Grid()
-        composerRow.margin = Thickness(left: 28, top: 8, right: 28, bottom: 20)
-        composerRow.columnSpacing = 8
-        let composerColumn = ColumnDefinition()
-        composerColumn.width = GridLength(value: 1, gridUnitType: .star)
-        let buttonColumn = ColumnDefinition()
-        buttonColumn.width = GridLength(value: 0, gridUnitType: .auto)
-        composerRow.columnDefinitions.append(composerColumn)
-        composerRow.columnDefinitions.append(buttonColumn)
-        ComposerKeys.prepare(composer) { [weak self] in self?.send() }
-        composer.textChanged.addHandler { [weak self] _, _ in self?.showSendable() }
-        composerRow.children.append(composer)
-        let sendButton = ComposerKeys.sendButton(L10n.string("Send")) { [weak self] in self?.send() }
-        try? Grid.setColumn(sendButton, 1)
-        composerRow.children.append(sendButton)
-        self.sendButton = sendButton
-        try? Grid.setRow(composerRow, 2)
-        grid.children.append(composerRow)
-        navigation.content = grid
-        WindowChrome.frame(window, title: model.name, content: navigation)
+        try? Grid.setRow(banner.view, 1)
+        detail.children.append(banner.view)
+        try? Grid.setRow(body, 2)
+        detail.children.append(body)
+        makePlaceholders()
+        navigation.content = detail
+        pane.windowHandle = { [weak self] in self?.window.appWindow.id.value ?? 0 }
+        drafts.restore(from: model.cacheFolder)
+        WindowChrome.frame(window, title: model.name, subtitle: connectionLine, content: navigation)
         try? window.activate()
-        timeline.loadEarlier = { [weak self] in
-            guard let self, let taskID = self.selectedTaskID else { return }
-            self.model.loadOlder(taskID)
-        }
 
         followConnection()
         followTasks()
-        followConversation()
+        followDetail()
     }
 
     func bringForward() {
@@ -100,6 +96,7 @@ final class RemoteHostWindow {
         try? window.close()
     }
 
+    /// How the host is reached, beside the window's title as the Mac's window subtitle says it.
     private func followConnection() {
         let connection = withObservationTracking {
             model.connection
@@ -107,7 +104,7 @@ final class RemoteHostWindow {
             Task { @MainActor in self?.followConnection() }
         }
         let line = RemoteConnectionText.line(connection)
-        status.text = line
+        connectionLine.text = line
         log.write("remote connection: \(line)")
     }
 
@@ -174,46 +171,79 @@ final class RemoteHostWindow {
         if case let .task(id) = model.selection { id } else { nil }
     }
 
-    private func followConversation() {
-        let (taskID, presentation, hasSnapshot) = withObservationTracking {
-            let taskID = selectedTaskID
-            return (taskID, taskID.flatMap { model.conversations[$0]?.presentation }, model.hasSnapshot)
+    // MARK: Detail
+
+    /// The chosen task, or with none, that the window connects or what to choose there, as the Mac's detail shows it;
+    /// once the host is no longer paired, only that.
+    private func followDetail() {
+        let (taskID, isPaired, hasSnapshot, refusal) = withObservationTracking {
+            let taskID = selectedTaskID.flatMap { model.conversations[$0] == nil ? nil : $0 }
+            return (taskID, directory.host(model.id) != nil, model.hasSnapshot, model.commandError)
         } onChange: { [weak self] in
-            Task { @MainActor in self?.followConversation() }
+            Task { @MainActor in self?.followDetail() }
         }
-        let placeholder = hasSnapshot ? L10n.string("Choose a task") : L10n.format("Connecting to %@…", model.name)
-        timeline.show(presentation, conversationID: taskID, placeholder: taskID == nil ? placeholder : nil,
-                      requestNote: L10n.format("Answer this on %@.", model.name))
-        if let taskID, let task = model.task(taskID) {
-            composer.placeholderText = L10n.format("Ask %@…", task.harnessName)
-            if taskID != shownTaskID { log.write("remote showing: \(task.title)") }
-            if let answer = presentation?.turns.last?.answers.last, case let .answer(text, isStreaming) = answer.kind {
-                log.write("remote answer\(isStreaming ? " streaming" : ""): \(text.prefix(80))")
+        guard isPaired else {
+            if showing != .unpaired {
+                showing = .unpaired
+                navigation.isPaneVisible = false
+                navigation.content = unpaired
+                pane.show(nil)
+                log.write("remote unpaired: \(model.name)")
             }
+            return
+        }
+        if let taskID {
+            if showing != .task {
+                showing = .task
+                body.child = pane.view
+            }
+            pane.show(taskID)
         } else {
-            composer.placeholderText = L10n.string("Choose a task")
-        }
-        shownTaskID = taskID
-        showSendable()
-    }
-
-    /// Send is on while the composer holds something and a task is chosen to send it to.
-    private func showSendable() {
-        sendButton?.isEnabled = selectedTaskID != nil && ComposerKeys.canSend(composer.text)
-    }
-
-    private func send() {
-        let text = composer.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, let taskID = selectedTaskID else { return }
-        log.write("remote sent: \(text)")
-        composer.text = ""
-        Task {
-            guard await model.perform(.sendMessage(taskID: taskID, text: text)) else {
-                // What did not go stays in the composer, with why.
-                if composer.text.isEmpty { composer.text = text }
-                status.text = model.commandError ?? RemoteConnectionText.line(model.connection)
-                return
+            pane.show(nil)
+            if showing != .placeholder {
+                showing = .placeholder
+                body.child = placeholder
             }
+            placeholderText.text = hasSnapshot ? L10n.string("Choose a task") : L10n.format("Connecting to %@…", model.name)
+            placeholderRefusal.text = refusal ?? ""
+            placeholderRefusal.visibility = (refusal ?? "").isEmpty ? .collapsed : .visible
         }
+    }
+
+    /// The detail with no task chosen, a monitor over what the window waits for, and the window once the host is no
+    /// longer paired, as the Mac's draw them.
+    private func makePlaceholders() {
+        placeholder.spacing = 10
+        placeholder.horizontalAlignment = .center
+        placeholder.verticalAlignment = .center
+        let mark = ConversationStyle.icon("\u{E7F4}", size: 22, brush: WindowsTheme.tertiaryText.brush)
+        mark.horizontalAlignment = .center
+        placeholder.children.append(mark)
+        placeholderText.fontSize = ConversationStyle.calloutSize
+        placeholderText.foreground = WindowsTheme.secondaryText.brush
+        placeholderText.textAlignment = .center
+        placeholder.children.append(placeholderText)
+        placeholderRefusal.fontSize = 12
+        placeholderRefusal.foreground = ComposerParts.orange.brush
+        placeholderRefusal.textWrapping = .wrap
+        placeholderRefusal.textAlignment = .center
+        placeholderRefusal.maxWidth = 420
+        placeholderRefusal.visibility = .collapsed
+        placeholder.children.append(placeholderRefusal)
+
+        unpaired.spacing = 8
+        unpaired.horizontalAlignment = .center
+        unpaired.verticalAlignment = .center
+        let warning = ConversationStyle.icon(ConversationStyle.Glyph.warning, size: 22, brush: WindowsTheme.tertiaryText.brush)
+        warning.horizontalAlignment = .center
+        unpaired.children.append(warning)
+        let title = ConversationStyle.text(L10n.string("This Mac is no longer paired."), size: ConversationStyle.calloutSize,
+                                           semibold: true)
+        title.textAlignment = .center
+        unpaired.children.append(title)
+        let hint = ConversationStyle.text(L10n.string("Pair it again from Settings › Connect to a Mac."),
+                                          size: ConversationStyle.captionSize, tone: .secondary)
+        hint.textAlignment = .center
+        unpaired.children.append(hint)
     }
 }

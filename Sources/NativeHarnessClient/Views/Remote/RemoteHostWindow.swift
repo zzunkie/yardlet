@@ -771,86 +771,6 @@ extension RemoteHostView {
 
 }
 
-/// Each task's unsent words, the message it edits, its find and where the person was reading, kept on this Mac (a
-/// host's own drafts stay there). The words outlast the window in the host's cache folder (`drafts.json`, 0600),
-/// which goes with the host; the rest lasts while the window is open, as the local window keeps it.
-@MainActor
-@Observable
-final class RemoteComposerDrafts {
-    @ObservationIgnored private var drafts: [String: TaskComposerDraft] = [:]
-    @ObservationIgnored private var finds: [String: ConversationFindModel] = [:]
-    @ObservationIgnored private var readings: [String: TranscriptReadingPosition] = [:]
-    @ObservationIgnored private var renders: [String: ConversationRenderState] = [:]
-    /// Where the words are kept: the host's cache folder, nil where nothing is kept (tests).
-    @ObservationIgnored private var file: URL?
-    @ObservationIgnored private var savedWords: [String: String] = [:]
-    private static let newTaskKey = "new-task"
-    @ObservationIgnored let newTask = TaskComposerDraft()
-    var edits: [String: RemoteMessageEdit] = [:]
-    /// The project New task in a project chose, for the new task screen to start in.
-    var newTaskProjectID: String?
-
-    func draft(for taskID: String) -> TaskComposerDraft {
-        if let draft = drafts[taskID] { return draft }
-        let draft = TaskComposerDraft()
-        drafts[taskID] = draft
-        return draft
-    }
-
-    /// The task's find, kept while the window is open as the local task keeps its own.
-    func find(for taskID: String) -> ConversationFindModel {
-        if let find = finds[taskID] { return find }
-        let find = ConversationFindModel()
-        finds[taskID] = find
-        return find
-    }
-
-    /// Where the person was reading the task's conversation, so going back to it comes back there.
-    func readingPosition(for taskID: String) -> TranscriptReadingPosition {
-        if let reading = readings[taskID] { return reading }
-        let reading = TranscriptReadingPosition()
-        readings[taskID] = reading
-        return reading
-    }
-
-    /// The task's drawn conversation, kept so going back to it does not lay it out again.
-    func renderState(for taskID: String) -> ConversationRenderState {
-        if let render = renders[taskID] { return render }
-        let render = ConversationRenderState()
-        renders[taskID] = render
-        return render
-    }
-
-    /// Reads the words kept in `folder`, once, into the drafts that are still empty.
-    func restore(from folder: URL?) {
-        guard file == nil, let folder else { return }
-        file = folder.appending(path: "drafts.json")
-        guard let data = try? Data(contentsOf: file!),
-              let words = try? JSONDecoder().decode([String: String].self, from: data) else { return }
-        savedWords = words
-        for (key, text) in words {
-            let draft = key == Self.newTaskKey ? newTask : draft(for: key)
-            if draft.text.isEmpty { draft.text = text }
-        }
-    }
-
-    /// Keeps the drafts' words, when they changed since they were last kept.
-    func save() {
-        guard let file else { return }
-        var words: [String: String] = [:]
-        for (key, draft) in drafts {
-            let text = RemoteComposerMentionIndex.message(draft.text, mentions: draft.hostMentions)
-            if !text.isEmpty { words[key] = text }
-        }
-        let newText = RemoteComposerMentionIndex.message(newTask.text, mentions: newTask.hostMentions)
-        if !newText.isEmpty { words[Self.newTaskKey] = newText }
-        guard words != savedWords else { return }
-        savedWords = words
-        guard let data = try? JSONEncoder().encode(words) else { return }
-        try? StateFile.write(data, to: file, isPrivate: true)
-    }
-}
-
 /// Keeps the shown draft's words a moment after the person stops typing, without the window drawing again for each key.
 private struct RemoteDraftAutosave: View {
     @Bindable var draft: TaskComposerDraft
@@ -1433,7 +1353,7 @@ struct RemoteTaskView: View {
         actions.openCodexSubagent = { [model] taskID in model.select(.task(taskID)) }
         if model.nextSteps, model.isConnected {
             // As the local task offers them: once the task is idle, with nothing queued and no message being edited.
-            if model.task(conversation.taskID)?.running != true, conversation.queued.isEmpty, editing == nil {
+            if model.offersRetry(in: conversation, isEditing: editing != nil) {
                 actions.retryTurn = { turnID in model.send(.nextStep(taskID: conversation.taskID, turnID: turnID, action: .retry)) }
                 actions.implementCodexPlan = { _ in sendNextStep(.implementPlan, turnID: nextTurnID) }
                 actions.answerQuestion = { sendNextStep(.answer, turnID: nextTurnID, text: $0) }
@@ -1450,44 +1370,8 @@ struct RemoteTaskView: View {
             }, stop: { activity in stopSubtask = activity },
                 isStopping: { stoppingSubtasks.contains($0) }, error: { subtaskErrors[$0] })
         }
-        actions.providerNotices = limitActions
+        actions.providerNotices = model.limitNotices(for: conversation)
         return actions
-    }
-
-    /// What the latest limit card offers, as the host offers it (§15.17): continuing under another account that
-    /// shares the task's history, and continuing once the limit resets.
-    private var limitActions: TaskProviderNotices? {
-        guard let limit = conversation.usageLimit else { return nil }
-        let options = limit.options ?? []
-        guard !options.isEmpty || model.bankedResets else { return nil }
-        let taskID = conversation.taskID
-        var notices = TaskProviderNotices()
-        notices.canContinue = model.isConnected && model.task(taskID)?.running != true
-        if model.nextSteps, options.contains("resumeAfterReset") {
-            notices.continueAfterReset = { _ in
-                model.send(.nextStep(taskID: taskID, turnID: limit.turnId, action: .resumeAfterReset))
-            }
-        }
-        if model.bankedResets {
-            notices.hostUsageReset = { [model] in await model.response(to: .usageReset(taskID: taskID)).usageReset }
-            notices.useHostUsageReset = { [model] token in
-                await model.response(to: .useUsageReset(taskID: taskID, token: token, confirmed: true)).usageReset
-            }
-        }
-        // An armed continue is known by the reset it waits for, as on the host.
-        if limit.autoContinue == true, let resetsAt = limit.resetsAt {
-            notices.autoContinueResetsAt = Date(timeIntervalSince1970: TimeInterval(resetsAt) / 1000)
-        }
-        notices.setAutoContinue = { [model] enabled, _ in model.send(.setAutoContinue(taskID: taskID, enabled: enabled)) }
-        if options.contains("continueWithAccount") {
-            notices.hostAccounts = { [model] in
-                let response = await model.response(to: .limitAccounts(taskID: taskID))
-                return (response.accounts ?? []).filter { $0.available == true }
-                    .map { UsageLimitHostAccount(id: $0.id, name: $0.name, detail: $0.detail) }
-            }
-            notices.continueWithHostAccount = { [model] id in model.send(.continueWithAccount(taskID: taskID, accountID: id)) }
-        }
-        return notices
     }
 
     private func sendNextStep(_ action: RemoteNextStep, turnID: String?, text: String? = nil) {

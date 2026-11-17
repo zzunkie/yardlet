@@ -2098,6 +2098,7 @@
 "%@ is changing this task. Try again in a moment." = "%@에서 이 작업을 바꾸는 중입니다. 잠시 뒤 다시 시도하세요.";
 "%@ no longer lists this task." = "%@에 이 작업이 더 이상 없습니다.";
 "%@ removed this Mac. To connect again, pair with a new link from its Settings › Remote." = "%@에서 이 Mac을 제거했습니다. 다시 연결하려면 그 Mac의 설정 › 원격 연결에서 새 링크로 연결하세요.";
+"%@ removed this computer. To connect again, pair with a new link from its Settings › Remote." = "%@에서 이 컴퓨터를 제거했습니다. 다시 연결하려면 그 Mac의 설정 › 원격 연결에서 새 링크로 연결하세요.";
 "%@ turned off remote connections." = "%@에서 원격 연결을 껐습니다.";
 "Allow and save this rule?" = "허용하고 이 규칙을 저장할까요?";
 "Answer this on %@." = "%@에서 답하세요.";
@@ -2125,6 +2126,7 @@
 "Nothing is running." = "실행 중인 것이 없습니다.";
 "On %@" = "%@에서 실행";
 "Pair it again from File › Connect to Mac…." = "파일 › Mac에 연결…에서 다시 연결하세요.";
+"Pair it again from Settings › Connect to a Mac." = "설정 › Mac에 연결에서 다시 연결하세요.";
 "Paired Macs" = "연결한 Mac";
 "Press %@ to start the task" = "%@ 키를 누르면 작업을 시작합니다";
 "Reconnecting…" = "다시 연결 중…";

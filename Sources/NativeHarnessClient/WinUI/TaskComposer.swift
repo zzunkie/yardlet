@@ -19,11 +19,9 @@ import WinUI
 final class TaskComposer {
     /// Above the card: that the task's folder is gone, as the Mac's banner says it.
     let noticeView = TextBlock()
-    /// Above the card while a sent message is being edited (the Mac's `ConversationEditBanner`): "Editing message" and
-    /// Cancel edit, or once the provider has taken the edit, that sending it continues the conversation.
-    let editBanner = Grid()
-    private var editCancel = Button()
-    private let editTaken = TextBlock()
+    /// Above the card while a sent message is being edited (`ComposerEditBanner`).
+    var editBanner: Grid { edit.view }
+    private lazy var edit = ComposerEditBanner { [weak self] in self?.cancelEdit() }
     /// The card in its gutter.
     let view: FrameworkElement
 
@@ -34,8 +32,7 @@ final class TaskComposer {
     private let attachments: ComposerAttachments
     private let sendButton: Button
     private let stopButton: Button
-    private let followUpButton: Button
-    private let followUpCount = TextBlock()
+    private let followUpButton = ComposerFollowUpButton()
     private var sessionID: SessionRecord.ID?
     private let answersInHome: Bool
     /// The text as it last went to the task's draft or came from it, which tells the person's typing from a message
@@ -79,9 +76,6 @@ final class TaskComposer {
         sendButton = ComposerParts.sendButton(name: L10n.string("Send"))
         stopButton = ComposerParts.stopButton(name: L10n.string("Stop"))
         try? ToolTipService.setToolTip(stopButton, "\(L10n.string("Stop")) (Esc)")
-        followUpButton = ComposerParts.iconButton(ComposerParts.Glyph.queue, name: L10n.string("Queue or steer"),
-                                                  foreground: WindowsTheme.secondaryText, fill: WindowsTheme.subtleFill,
-                                                  radius: ComposerParts.buttonSize / 2)
         let card = ComposerCard(metrics: .task)
         self.card = card
         attachments = ComposerAttachments(log: log)
@@ -98,7 +92,6 @@ final class TaskComposer {
         noticeView.horizontalAlignment = .stretch
         noticeView.margin = Thickness(left: 39, top: 8, right: 39, bottom: 0)
         noticeView.visibility = .collapsed
-        makeEditBanner()
 
         let field = card.field
         field.loaded.addHandler { [weak self] _, _ in
@@ -130,21 +123,6 @@ final class TaskComposer {
         sendButton.click.addHandler { [weak self] _, _ in self?.submit(.automatic) }
         stopButton.click.addHandler { [weak self] _, _ in self?.stop() }
         stopButton.visibility = .collapsed
-        let followUpContent = StackPanel()
-        followUpContent.orientation = .horizontal
-        followUpContent.spacing = 3
-        followUpContent.horizontalAlignment = .center
-        followUpContent.children.append(ComposerParts.glyph(ComposerParts.Glyph.queue, size: 12))
-        followUpCount.fontSize = 10
-        followUpCount.foreground = WindowsTheme.secondaryText.brush
-        followUpCount.verticalAlignment = .center
-        followUpCount.visibility = .collapsed
-        followUpContent.children.append(followUpCount)
-        followUpButton.content = followUpContent
-        followUpButton.minWidth = ComposerParts.buttonSize
-        followUpButton.width = .nan
-        followUpButton.padding = Thickness(left: 6, top: 0, right: 6, bottom: 0)
-        followUpButton.visibility = .collapsed
 
         chips.redraw = { [weak self] in self?.redrawControls() }
         chips.choose = { [weak self] id, value, apply in self?.choose(id, value, apply) }
@@ -259,42 +237,8 @@ final class TaskComposer {
     }
 
     /// The banner of a message being edited: Cancel edit while the provider has not taken the edit yet.
-    private func showEdit(_ edit: ConversationEditState?) {
-        editBanner.visibility = edit == nil ? .collapsed : .visible
-        let canCancel = edit?.preparedProviderSessionID == nil
-        editCancel.visibility = canCancel ? .visible : .collapsed
-        editTaken.visibility = canCancel ? .collapsed : .visible
-    }
-
-    private func makeEditBanner() {
-        for width in [GridLength(value: 1, gridUnitType: .star), GridLength(value: 0, gridUnitType: .auto)] {
-            let column = ColumnDefinition()
-            column.width = width
-            editBanner.columnDefinitions.append(column)
-        }
-        editBanner.maxWidth = WindowsTheme.contentWidth
-        editBanner.margin = Thickness(left: 39, top: 6, right: 39, bottom: 0)
-        editBanner.visibility = .collapsed
-        let label = ConversationStyle.row([
-            ConversationStyle.icon(ConversationStyle.Glyph.edit, size: 12),
-            ConversationStyle.text(L10n.string("Editing message"), size: ConversationStyle.captionSize, selectable: false,
-                                   wraps: false)
-        ], spacing: 6)
-        label.verticalAlignment = .center
-        editBanner.children.append(label)
-        editCancel = ConversationStyle.plainButton(
-            ConversationStyle.text(L10n.string("Cancel edit"), size: ConversationStyle.captionSize, selectable: false,
-                                   wraps: false),
-            name: L10n.string("Cancel edit")
-        ) { [weak self] in self?.cancelEdit() }
-        editTaken.text = L10n.string("Conversation changed. Send the edited message to continue.")
-        editTaken.fontSize = ConversationStyle.captionSize
-        editTaken.foreground = WindowsTheme.secondaryText.brush
-        editTaken.verticalAlignment = .center
-        for trailing in [editCancel as FrameworkElement, editTaken] {
-            try? Grid.setColumn(trailing, 1)
-            editBanner.children.append(trailing)
-        }
+    private func showEdit(_ editing: ConversationEditState?) {
+        edit.show(canCancel: editing.map { $0.preparedProviderSessionID == nil })
     }
 
     /// Cancel edit: the composer gets back what it held before the edit (`AppModel.cancelConversationEdit`).
@@ -341,39 +285,19 @@ final class TaskComposer {
             card.trailing.children.append(ComposerParts.contextRing(summary, compact: compact(options, shown)))
         }
         for control in chips.trailing(options) { card.trailing.children.append(control) }
-        if let followUp = runningFollowUp {
-            followUpButton.flyout = followUpMenu(followUp, canSteer: shown.canSteer)
-            try? ToolTipService.setToolTip(followUpButton, "\(L10n.string("Queue or steer")) · "
-                + followUp.runningPlaceholder(preferred: model.followUpMode, keys: .return))
-            followUpButton.visibility = .visible
-            card.trailing.children.append(followUpButton)
+        if let running = runningFollowUp {
+            followUpButton.button.flyout = ComposerFollowUps.menu(
+                policy: running.policy, returnMode: running.policy.steers ? model.followUpMode : .queue,
+                canSteer: shown.canSteer) { [weak self] mode in self?.submit(mode.action) }
+            try? ToolTipService.setToolTip(followUpButton.button, "\(L10n.string("Queue or steer")) · "
+                + running.runningPlaceholder(preferred: model.followUpMode, keys: .return))
+            followUpButton.button.visibility = .visible
+            card.trailing.children.append(followUpButton.button)
         }
         stopButton.visibility = shown.isRunning ? .visible : .collapsed
         sendButton.visibility = shown.isRunning ? .collapsed : .visible
         card.trailing.children.append(stopButton)
         card.trailing.children.append(sendButton)
-    }
-
-    /// The queue-or-steer menu: each row says where the message goes and its keys, the send key for the follow-up
-    /// setting's way and Ctrl+Enter for the other; steering waits until the turn can take it.
-    private func followUpMenu(_ followUp: ComposerFollowUpOptions, canSteer: Bool) -> MenuFlyout {
-        let menu = MenuFlyout()
-        menu.placement = .top
-        let returnMode: FollowUpMode = followUp.policy.steers ? model.followUpMode : .queue
-        let keys = SendShortcut.return
-        menu.items.append(ComposerParts.menuItem(FollowUpPolicy.afterTurnPhrase, glyph: ComposerParts.Glyph.queue,
-                                                 keys: returnMode == .queue ? keys.sendSymbol : keys.alternateSymbol) {
-            [weak self] in self?.submit(.queue)
-        })
-        if let steer = followUp.policy.steerPhrase {
-            let item = ComposerParts.menuItem(steer, glyph: ComposerParts.Glyph.steer,
-                                              keys: returnMode == .steer ? keys.sendSymbol : keys.alternateSymbol) {
-                [weak self] in self?.submit(.steer)
-            }
-            item.isEnabled = canSteer
-            menu.items.append(item)
-        }
-        return menu
     }
 
     /// The context window's "Compact session": Claude Code's `/compact` as the next message, or Codex's Compact,
@@ -400,8 +324,7 @@ final class TaskComposer {
         let carries = sessionID.map { !model.composerDrafts.tasks.draft(for: $0).attachments.isEmpty } ?? false
         ComposerParts.setEnabled(sendButton, sessionID != nil && !held
             && (ComposerKeys.canSend(card.field.text) || carries))
-        followUpCount.text = personQueue.isEmpty ? "" : "\(personQueue.count)"
-        followUpCount.visibility = personQueue.isEmpty ? .collapsed : .visible
+        followUpButton.show(count: personQueue.count)
     }
 
     // MARK: The queue
@@ -421,7 +344,10 @@ final class TaskComposer {
         }
         var rows = 0
         if shown.isQueuePaused, !shown.queue.isEmpty {
-            card.top.children.append(pausedRow())
+            card.top.children.append(ComposerFollowUps.pausedRow { [weak self] in
+                guard let self, let session = self.session else { return }
+                self.model.resumeQueue(for: session)
+            })
             rows += 1
         }
         for (index, item) in shown.queue.enumerated() where !item.isFromAnotherTask {
@@ -432,119 +358,20 @@ final class TaskComposer {
         card.top.visibility = rows == 0 ? .collapsed : .visible
     }
 
-    private func pausedRow() -> UIElement {
-        let row = Grid()
-        for width in [GridLength(value: 1, gridUnitType: .star), GridLength(value: 0, gridUnitType: .auto)] {
-            let column = ColumnDefinition()
-            column.width = width
-            row.columnDefinitions.append(column)
-        }
-        let words = StackPanel()
-        words.orientation = .horizontal
-        words.spacing = 6
-        words.children.append(ComposerParts.glyph(ComposerParts.Glyph.pause, size: 11))
-        words.children.append(ComposerParts.label(L10n.string("Queue paused because you interrupted"), size: 12,
-                                                  weight: 400))
-        row.children.append(words)
-        let resume = ComposerParts.control(title: L10n.string("Resume"), glyph: ComposerParts.Glyph.play)
-        resume.click.addHandler { [weak self] _, _ in
-            guard let self, let session = self.session else { return }
-            self.model.resumeQueue(for: session)
-        }
-        try? Grid.setColumn(resume, 1)
-        row.children.append(resume)
-        row.margin = Thickness(left: 5, top: 0, right: 0, bottom: 0)
-        return row
-    }
-
-    /// One queued message (`ComposerQueueRow`): what it says, shortened to the row, then where it goes and its
-    /// actions, which keep their size so a long message never pushes them out of view; its menu holds them too, with
-    /// the one that stops the turn for it.
+    /// One queued message's row (`ComposerFollowUps.queueRow`), its actions through the model's queue.
     private func queueRow(_ item: QueuedFollowUp, chip: ComposerQueueChip, at index: Int) -> UIElement {
-        let failed = item.state == .failed
-        let fromTask = TaskMessage.parse(item.draft.text) != nil
-        let tint = failed ? ComposerParts.red : WindowsTheme.secondaryText
-        let row = Grid()
-        row.minHeight = 28
-        row.padding = Thickness(left: 9, top: 0, right: 4, bottom: 0)
-        row.cornerRadius = ComposerParts.corners(8)
-        row.background = WindowsTheme.subtleFill.brush
-        row.columnSpacing = 6
-        for width in [GridLength(value: 0, gridUnitType: .auto), GridLength(value: 1, gridUnitType: .star),
-                      GridLength(value: 0, gridUnitType: .auto), GridLength(value: 0, gridUnitType: .auto)] {
-            let column = ColumnDefinition()
-            column.width = width
-            row.columnDefinitions.append(column)
-        }
-        let icon = ComposerParts.glyph(fromTask && !failed ? ComposerParts.Glyph.fromTask : Self.glyph(chip), size: 11,
-                                       color: tint)
-        row.children.append(icon)
-        let title = ComposerQueueChip.title(of: item.draft)
-        let words = ComposerParts.label(title, size: 12, color: failed ? ComposerParts.red : WindowsTheme.text, weight: 400)
-        try? Grid.setColumn(words, 1)
-        row.children.append(words)
-        let status = ComposerParts.label(chip.status, size: 12, color: tint, weight: 400)
-        try? Grid.setColumn(status, 2)
-        row.children.append(status)
-
-        let actions = StackPanel()
-        actions.orientation = .horizontal
-        actions.spacing = 2
         let id = item.id
-        func button(_ code: String, _ name: String, _ action: @escaping @MainActor () -> Void) {
-            let button = ComposerParts.iconButton(code, name: name, size: 10, foreground: tint, fill: nil, radius: 6)
-            button.width = 24
-            button.height = 24
-            button.click.addHandler { _, _ in action() }
-            actions.children.append(button)
-        }
-        let menu = MenuFlyout()
-        func menuItem(_ title: String, _ action: @escaping @MainActor () -> Void) {
-            menu.items.append(ComposerParts.menuItem(title, action: action))
-        }
-        if chip.canMoveUp {
-            button(ComposerParts.Glyph.arrowUp, L10n.string("Move up")) { [weak self] in self?.move(id, to: index - 1) }
-            menuItem(L10n.string("Move up")) { [weak self] in self?.move(id, to: index - 1) }
-        }
-        if chip.canMoveDown {
-            button(ComposerParts.Glyph.arrowDown, L10n.string("Move down")) { [weak self] in self?.move(id, to: index + 1) }
-            menuItem(L10n.string("Move down")) { [weak self] in self?.move(id, to: index + 1) }
-        }
-        if failed {
-            button(ComposerParts.Glyph.retry, L10n.string("Retry")) { [weak self] in self?.queued(id, .retry) }
-            menuItem(L10n.string("Retry")) { [weak self] in self?.queued(id, .retry) }
-        } else if let send = chip.send {
-            // In words, as the Codex app's queued message offers its Steer: the message goes now and the turn goes on.
-            let sendNow = ComposerParts.control(title: send.label, glyph: ComposerParts.Glyph.steer,
-                                                tint: WindowsTheme.text)
-            try? ToolTipService.setToolTip(sendNow, send.help)
-            sendNow.click.addHandler { [weak self] _, _ in self?.queued(id, .sendNow) }
-            actions.children.append(sendNow)
-            menuItem(send.label) { [weak self] in self?.queued(id, .sendNow) }
-        }
-        if let stop = chip.stopAndSend {
-            menuItem(stop) { [weak self] in self?.queued(id, .stopAndSend) }
-        }
-        if !fromTask {
-            button(ComposerParts.Glyph.edit, L10n.string("Edit message")) { [weak self] in self?.queued(id, .edit) }
-            menuItem(L10n.string("Edit message")) { [weak self] in self?.queued(id, .edit) }
-        }
-        button(ComposerParts.Glyph.remove, chip.removeLabel) { [weak self] in self?.queued(id, .remove) }
-        menuItem(chip.removeLabel) { [weak self] in self?.queued(id, .remove) }
-        try? Grid.setColumn(actions, 3)
-        row.children.append(actions)
-        row.contextFlyout = menu
-        if let help = chip.help { try? ToolTipService.setToolTip(words, help) }
-        try? AutomationProperties.setName(row, "\(L10n.string("Queue")), \(chip.status): \(title)")
-        return row
-    }
-
-    private static func glyph(_ chip: ComposerQueueChip) -> String {
-        switch chip.icon {
-        case "checkmark.circle": ComposerParts.Glyph.delivered
-        case "exclamationmark.circle": ComposerParts.Glyph.failed
-        default: ComposerParts.Glyph.clock
-        }
+        var actions = ComposerFollowUps.RowActions()
+        actions.moveUp = { [weak self] in self?.move(id, to: index - 1) }
+        actions.moveDown = { [weak self] in self?.move(id, to: index + 1) }
+        actions.retry = { [weak self] in self?.queued(id, .retry) }
+        actions.sendNow = { [weak self] in self?.queued(id, .sendNow) }
+        actions.stopAndSend = { [weak self] in self?.queued(id, .stopAndSend) }
+        actions.edit = { [weak self] in self?.queued(id, .edit) }
+        actions.remove = { [weak self] in self?.queued(id, .remove) }
+        return ComposerFollowUps.queueRow(title: ComposerQueueChip.title(of: item.draft), failed: item.state == .failed,
+                                          fromTask: TaskMessage.parse(item.draft.text) != nil, chip: chip,
+                                          actions: actions)
     }
 
     private enum QueuedAction { case sendNow, stopAndSend, retry, edit, remove }

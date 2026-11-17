@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
 import YardletRemote
 
 /// The composer of a host's task: the app's own editor (`ComposerEditor`) with what the host takes from
@@ -46,16 +45,11 @@ struct RemoteComposer: View {
 
     private var canSend: Bool { model.isConnected && !isSending && hasMessage }
 
-    /// The harness's way with a message sent while a turn runs, as the local composer reads it: Codex adds it
-    /// to the running task, Claude Code delivers it at its next step, any other harness when the turn ends.
-    private var policy: FollowUpPolicy {
-        guard task?.steers == true, let task, let policy = FollowUpPolicy(harness: HarnessKind(rawValue: task.harness))
-        else { return .afterTurn }
-        return policy
-    }
+    /// The harness's way with a message sent while a turn runs (`RemoteHostModel.followUpPolicy`).
+    private var policy: FollowUpPolicy { model.followUpPolicy(taskID) }
 
     /// What Return does while a turn runs: the host's setting (§15.15), as this Mac's setting does locally.
-    private var preferred: FollowUpMode { model.followUp == .queue ? .queue : .steer }
+    private var preferred: FollowUpMode { model.preferredFollowUp }
 
     /// Where Return sends while a turn runs; a harness that cannot steer queues.
     private var returnMode: FollowUpMode { policy.steers ? preferred : .queue }
@@ -390,25 +384,15 @@ struct RemoteComposer: View {
     /// One queued message, as the local composer's row: what it says, where it goes, and the actions the
     /// host offers for it (§15.15).
     private func queueRow(_ item: RemoteItem) -> some View {
-        let failed = item.queueFailed == true
-        let offered = item.options ?? []
-        let extended = model.composerExtensions
         let index = queued.firstIndex(where: { $0.id == item.id }) ?? 0
-        let send = offered.contains("sendNow") ? policy.sendLabel.map {
-            ComposerQueueChip.Send(label: $0, icon: "arrow.turn.up.right", help: policy.sendHelp ?? $0)
-        } : nil
-        let chip = ComposerQueueChip(icon: failed ? "exclamationmark.circle" : "clock",
-            status: failed ? L10n.string("Failed") : policy.pendingHelp, help: policy.pendingHelp,
-            send: send, stopAndSend: offered.contains("stopAndSend") ? policy.stopAndSendLabel : nil,
-            removeLabel: policy.removeLabel, canMoveUp: extended && offered.contains("moveUp") && index > 0,
-            canMoveDown: extended && offered.contains("moveDown") && index + 1 < queued.count)
-        return ComposerQueueRow(title: item.text ?? "", failed: failed, fromTask: false, chip: chip,
+        let row = RemoteQueuedRow(item, at: index, of: queued.count, policy: policy, extended: model.composerExtensions)
+        return ComposerQueueRow(title: item.text ?? "", failed: row.failed, fromTask: false, chip: row.chip,
             moveUp: { act("moveUp", itemID: item.id) }, moveDown: { act("moveDown", itemID: item.id) },
-            retry: extended ? { act("retry", itemID: item.id) } : nil,
-            sendNow: offered.contains("sendNow") ? { model.send(.actOnQueued(taskID: taskID, itemID: item.id, action: .sendNow)) } : nil,
-            stopAndSend: offered.contains("stopAndSend") ? { model.send(.actOnQueued(taskID: taskID, itemID: item.id, action: .stopAndSend)) } : nil,
-            edit: extended && offered.contains("edit") ? { beginQueueEdit(item) } : nil,
-            remove: offered.contains("remove") ? { model.send(.actOnQueued(taskID: taskID, itemID: item.id, action: .remove)) } : nil)
+            retry: row.retries ? { act("retry", itemID: item.id) } : nil,
+            sendNow: row.sendsNow ? { model.send(.actOnQueued(taskID: taskID, itemID: item.id, action: .sendNow)) } : nil,
+            stopAndSend: row.stopsAndSends ? { model.send(.actOnQueued(taskID: taskID, itemID: item.id, action: .stopAndSend)) } : nil,
+            edit: row.edits ? { beginQueueEdit(item) } : nil,
+            remove: row.removes ? { model.send(.actOnQueued(taskID: taskID, itemID: item.id, action: .remove)) } : nil)
         .disabled(!model.isConnected)
     }
 
@@ -543,76 +527,5 @@ struct RemoteComposer: View {
             if draft.text.trimmingCharacters(in: .whitespacesAndNewlines) == text { draft.text = "" }
             draft.notice = nil
         }
-    }
-}
-
-/// A host turn's message put back in the composer to edit (its Edit message, §15.23), with what the composer held
-/// before, which comes back when the edit is cancelled.
-struct RemoteMessageEdit: Equatable {
-    let turnID: String
-    let previousText: String
-    let previousAttachments: [CodexUserInput]
-}
-
-/// Pictures and files on their way to a host: a picture the harness takes as one goes as an image (§15.14),
-/// anything else up in parts as a file (§15.20). A pasted picture waits in a private temporary folder until
-/// it is sent or removed.
-@MainActor
-enum RemoteAttachments {
-    static let imageTypes: Set<String> = ["png", "jpg", "jpeg"]
-
-    static func add(_ url: URL, to draft: TaskComposerDraft) {
-        let input: CodexUserInput = imageTypes.contains(url.pathExtension.lowercased())
-            ? .localImage(url) : .mention(name: url.lastPathComponent, path: url)
-        if !draft.attachments.contains(input) { draft.attachments.append(input) }
-    }
-
-    static var folder: URL {
-        FileManager.default.temporaryDirectory.appending(path: "yardlet-remote-attachments", directoryHint: .isDirectory)
-    }
-
-    static func write(_ png: Data) -> URL? {
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        let url = folder.appending(path: "Image \(UUID().uuidString.prefix(8)).png")
-        guard (try? png.write(to: url, options: [.atomic])) != nil else { return nil }
-        return url
-    }
-
-    /// Pasted pictures of a sent message are let go.
-    static func discard(_ attachments: [CodexUserInput]) {
-        for case let .localImage(url, _) in attachments where url.path.hasPrefix(folder.path) {
-            try? FileManager.default.removeItem(at: url)
-        }
-    }
-
-    /// The images and the uploaded files' IDs a message carries; nil when one could not go (the model
-    /// says why).
-    @MainActor
-    static func prepare(_ attachments: [CodexUserInput], for model: RemoteHostModel, acceptsImages: Bool,
-                        acceptsFiles: Bool) async -> (images: [RemoteImage], files: [String])? {
-        var images: [RemoteImage] = []
-        var files: [String] = []
-        for attachment in attachments {
-            let url: URL
-            switch attachment {
-            case let .localImage(path, _), let .image(path, _), let .mention(_, path): url = path
-            default: continue
-            }
-            if acceptsImages, images.count < RemoteProtocol.maxImages, imageTypes.contains(url.pathExtension.lowercased()),
-               let data = try? Data(contentsOf: url), data.count <= RemoteProtocol.maxImageBytes {
-                let type = url.pathExtension.lowercased() == "png" ? "image/png" : "image/jpeg"
-                images.append(RemoteImage(type: type, data: data))
-                continue
-            }
-            guard acceptsFiles else {
-                model.commandError = L10n.string("This task takes no files.")
-                return nil
-            }
-            guard files.count < RemoteProtocol.maxFiles else { break }
-            let mediaType = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-            guard let id = await model.upload(url, mediaType: mediaType) else { return nil }
-            files.append(id)
-        }
-        return (images, files)
     }
 }

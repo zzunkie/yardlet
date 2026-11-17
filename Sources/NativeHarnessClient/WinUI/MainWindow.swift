@@ -398,7 +398,7 @@ final class MainWindow {
             return
         }
         guard let hostModel = directory.model(for: hostID) else { return }
-        let hostWindow = RemoteHostWindow(model: hostModel, log: log)
+        let hostWindow = RemoteHostWindow(model: hostModel, directory: directory, log: log)
         hostWindow.onClose = { [weak self] in
             self?.hostWindows[hostID] = nil
             self?.directory.close(hostID)

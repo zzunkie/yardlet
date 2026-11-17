@@ -194,8 +194,8 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   comes back to it and the card says why, as the line above the card says that the task's folder is gone
   (`TaskFolderMissing`) once the task is shown or the window comes to the front. The composer redraws its controls
   only when what they show changes, not for every event a turn streams. As in the Mac's composer and the harnesses'
-  own apps, Enter sends and Shift+Enter starts a new line (`WinUI/ComposerKeys.swift`); New task and a host's window
-  have the same field and Send. New task, under Home (`WinUI/NewTaskPane.swift`), is the Mac's home and starts a task
+  own apps, Enter sends and Shift+Enter starts a new line (`WinUI/ComposerKeys.swift`); New task has the same field
+  and Send, and a host's window the same card and chips (`WinUI/RemoteComposer.swift`). New task, under Home (`WinUI/NewTaskPane.swift`), is the Mac's home and starts a task
   as the Mac's does, from the Mac's home draft. Over it are the projects as the Mac's home lists them
   (`WinUI/NewTaskHomeListsView.swift`, from the engine's `NewTaskHomeListsProjection` and `NewTaskHomeListsLayout` over
   `AppModel.newTaskHomeActivity`), side by side in as many columns as fit: each project, then the chats, with the
@@ -333,8 +333,23 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
 - **Another computer's Yardlet.** Connect to a Mac, a group of Settings, pairs with the link a host
   copies in Settings › Remote, as File › Connect to Mac… does on the Mac (docs/REMOTE_PROTOCOL.md, "Yardlet as a
   client"), and lists the paired Macs with Open and Remove…, which forgets the host and asks it to forget this
-  computer when it can be reached. `WinUI/RemoteHostWindow.swift` opens each paired host in a window of its own: the host's tasks as it
-  lists them, the chosen task's conversation as it streams, and a composer that sends to the host. The client is the
+  computer when it can be reached. `WinUI/RemoteHostWindow.swift` opens each paired host in a window of its own, as the
+  Mac's host window: its title the host's name with how it is reached beside it (`RemoteConnectionText`), the host's
+  tasks as it lists them, an orange line while the host cannot be reached, closed its connection or removed this
+  computer, with Try Again, or Remove to forget the host here (`WinUI/RemoteConnectionBanner.swift`), and with no task
+  chosen, that the window is connecting or to choose one; once the host is no longer paired, the window says so. The
+  chosen task (`WinUI/RemoteTaskPane.swift`) draws through the main window's `ConversationTimeline` and acts on the
+  host as the Mac's window does (`RemoteHostModel.respond`, docs/REMOTE_PROTOCOL.md §15.13–§15.23): a request card
+  answers there, an answer that leaves a rule behind on the host asked about first; Retry while the task is idle, Edit
+  message under its latest message, which the composer then sends as the host's edit; and the latest limit card's
+  actions (`RemoteHostModel.limitNotices`: another account the host lists, continuing at the reset, Resume). The host's
+  last error and a missing folder stand over the composer, with what the host refused last. The composer
+  (`WinUI/RemoteComposer.swift`) is the task composer's card and chips with the host's settings
+  (`RemoteHostModel.railComposerOptions`) and Compact, files and pictures sent up as the host takes them
+  (`RemoteAttachments`), the host's queue with the actions it offers for each message (`RemoteQueuedRow`), queue or
+  steer and Stop while a turn runs, and a slash command the host runs from elsewhere when typed; each task's words are
+  kept in the host's cache folder (`RemoteComposerDrafts`). A handoff's card offers no Show Tab, which opens the
+  Mac's browser panel (`ConversationPresentation.withoutShowTab`). The client is the
   engine's `RemoteHostDirectory` and `RemoteHostModel`; `Platform/Windows/WindowsRemoteClientKeys.swift` keeps each
   host's key in Credential Manager and the list and cache under `%LOCALAPPDATA%\Yardlet`. Without Bonjour, a host is
   reached at the direct addresses it named, on the same network or over Tailscale, and through its relay. A host's
@@ -426,7 +441,8 @@ starts a new line and sends nothing (`Windows/scripts/check-window.ps1`). It the
 (`Windows/scripts/start-remote-host.ps1`) and, in the same step, since a Windows runner ends the programs a step
 started when the step ends, pairs the app with the host through Connect to a Mac, opens a task, sends a message and
 waits for the answer to stream in, captures the host's tasks that wait on an approval or a question, ended on an error
-or finished, then removes the host with Remove… and its question, which closes its window and
+or a plan limit, finished, or still run, answers the approval on the host from its card (the answer that saves a rule
+asked about first and cancelled, then Allow), then removes the host with Remove… and its question, which closes its window and
 takes it off the list (`Windows/scripts/check-remote.ps1`, through UI Automation). It installs a
 stand-in harness the way npm installs one (`Windows/scripts/fake-harness/`, whose `kimi.cmd` npm itself writes into
 `%APPDATA%\npm`) and opens the app with `YARDLET_QA_HARNESS_CHECK=kimi-code` (`WinUI/QAHarnessCheck.swift`, a QA
@@ -502,8 +518,9 @@ in a message while it works (`request_user_input_async`); a new task's account, 
 commands; and a browser host. Until the app is installed with a Start menu shortcut, its notifications carry the
 executable's name. A
 connector's program gets a POSIX environment (`Connectors/ConnectorProgram.swift`), and npm's `npx.cmd`, which is not
-one of npm's shims, is refused. A host's window shows a request card's words without its answers, and none of the
-host's panels, new tasks or Settings. The remote has no relay account to sign in to or link through
+one of npm's shims, is refused. A host's window has none of the host's panels, new tasks or Settings, its sidebar is
+a plain list of the host's tasks, and its composer has no @ mentions, slash command list or connectors in "+", as the
+task composer has none. The remote has no relay account to sign in to or link through
 (docs/REMOTE_PROTOCOL.md, "12.1 Linking through an account"), and nothing that keeps the computer awake on power. Until Foundation
 there hands frames over whole (swiftlang/swift-corelibs-foundation#5255), its relay socket cannot tell a frame that
 does not decrypt from a piece of one: a paired device that sends such a frame holds the frames after it, other phones'

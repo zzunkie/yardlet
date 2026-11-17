@@ -28,6 +28,21 @@ extension RemoteHostModel {
         return options
     }
 
+    /// The context window's "Compact session" for the task, where the host offers its compact command: available while
+    /// connected and once the task's turn has ended, with why it waits otherwise.
+    func compactOffer(_ taskID: String) -> (isAvailable: Bool, unavailableReason: String)? {
+        guard taskControls, let facts = taskRailFacts[taskID], facts.compactOffered else { return nil }
+        let running = task(taskID)?.running == true
+        return (isConnected && facts.compactAvailable && !running,
+                running ? L10n.format("Available when %@ finishes this turn", task(taskID)?.harnessName ?? name)
+                    : L10n.string("Available when reconnected"))
+    }
+
+    /// Runs the host's compact command for the task.
+    func compact(_ taskID: String) {
+        Task { _ = await runComposerCommand(taskID, name: "compact", arguments: nil) }
+    }
+
     func performRailAction(_ taskID: String, action: String, targetID: String? = nil, confirmed: Bool = false) {
         let key = taskID + ":" + action + ":" + (targetID ?? "")
         guard runningRailActions.insert(key).inserted else { return }

@@ -1,5 +1,6 @@
 # Opens the Windows app, pairs it with a host from -Link through Connect to a Mac in Settings, opens a task in the host's
-# window, sends a message and waits for the answer to stream in, then removes the host from Connect to a Mac. It drives the window through UI Automation
+# window, sends a message and waits for the answer to stream in, captures the host's other tasks, answers an approval
+# on the host from its card, then removes the host from Connect to a Mac. It drives the window through UI Automation
 # and reads the window's own event log (YARDLET_QA_EVENT_LOG); it writes screenshots, the log and a summary
 # to -OutDirectory. The CI host is yardlet-remote-fixture on a local relay (docs/REMOTE_PROTOCOL.md, sections 9 and 14).
 # Runs in Windows PowerShell 5.1, which has UI Automation and System.Drawing; the file stays ASCII because 5.1
@@ -189,6 +190,13 @@ if (-not $connected) { Finish 'not connected' }
 $tasks = Wait-For { Read-Events | Where-Object { $_ -match '^remote tasks: [1-9]' } | Select-Object -Last 1 } 30
 $summary.tasks = "$tasks"
 if (-not $tasks) { Finish 'no tasks' }
+# The window opens below and right of the main one, past the runner's small screen; it is moved to the screen's corner
+# so the captures show all of it.
+try {
+    $hostWindow.GetCurrentPattern([System.Windows.Automation.TransformPattern]::Pattern).Move(0, 0)
+} catch {
+    $summary.hostWindowMoved = "$_"
+}
 [void][RemoteDesktop]::BringForward([IntPtr]$hostWindow.Current.NativeWindowHandle)
 Save-Screen 'host'
 
@@ -212,16 +220,36 @@ if (-not (Wait-For { (Read-Events) -contains "remote sent: $Message" } 10)) {
 }
 if (-not (Wait-For { (Read-Events) -contains "remote sent: $Message" } 10)) { Finish 'not sent' }
 $summary.streamed = [bool](Wait-For { Read-Events | Where-Object { $_ -like 'remote answer streaming: Done.*' } } 40)
+# While the answer streams, Stop stands where Send was.
+$summary.stopWhileStreaming = [bool](Find-Named $hostWindow 'Stop' ([System.Windows.Automation.ControlType]::Button))
+Save-Screen 'streaming'
 $answered = Wait-For { Read-Events | Where-Object { $_ -like 'remote answer: Done.*' } | Select-Object -Last 1 } 40
 $summary.answer = "$answered"
 $summary.answeredSeconds = [math]::Round(((Get-Date) - $started).TotalSeconds, 1)
 if (-not $answered) { Finish 'no answer' }
 Save-Screen 'answered'
 
+# Edit message under the message just sent, as the host offers it (section 15.23): the message goes back into the
+# composer with the edit's banner over it, and Cancel edit gives the composer back what it held.
+$edit = Wait-For { Find-Named $hostWindow 'Edit message' ([System.Windows.Automation.ControlType]::Button) } 10
+if ($edit) {
+    $edit.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    $summary.editStarted = [bool](Wait-For { Read-Events | Where-Object { $_ -like 'remote edit message: *' } } 10)
+    Start-Sleep -Seconds 1
+    Save-Screen 'edit-message'
+    $cancelEdit = Wait-For { Find-Named $hostWindow 'Cancel edit' ([System.Windows.Automation.ControlType]::Button) } 10
+    if ($cancelEdit) { $cancelEdit.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() }
+    $summary.editCancelled = [bool](Wait-For { (Read-Events) -contains 'remote cancel edit' } 10)
+} else {
+    $summary.editStarted = 'no Edit message'
+}
+
 # The host's tasks that wait on the person or ended on an error, each drawn as its card draws it: an approval, a
-# question, a failed turn, and a finished conversation. Only looked at; nothing is answered.
+# question, a failed turn, a finished conversation, a plan limit with its actions, and the release, which runs now and
+# then. Only looked at here.
 $cards = [ordered]@{ approval = 'Approve the index migration'; question = 'Pick the release name';
-    failed = 'Regenerate the screenshots'; history = 'Summarize the crash reports' }
+    failed = 'Regenerate the screenshots'; history = 'Summarize the crash reports'; limit = 'Write the migration guide';
+    running = 'Build the release bundle' }
 foreach ($card in $cards.GetEnumerator()) {
     $found = Wait-For { Find-Item $hostWindow $card.Value } 10
     if (-not $found) { $summary["card $($card.Key)"] = 'not listed'; continue }
@@ -229,7 +257,44 @@ foreach ($card in $cards.GetEnumerator()) {
     $summary["card $($card.Key)"] = [bool](Wait-For { (Read-Events) -contains "remote showing: $($card.Value)" } 10)
     Start-Sleep -Seconds 2
     Save-Screen "card-$($card.Key)"
+    if ($card.Key -eq 'limit') {
+        $summary.limitActions = [bool](Find-Named $hostWindow 'Continue with another account' ([System.Windows.Automation.ControlType]::Button))
+    }
 }
+
+# The approval answered on the host from its card, as the Mac's window answers it: the answer that saves a rule on the
+# host is asked about first, and cancelled; then Allow goes, and the card reads as allowed once the host takes it.
+$approval = 'Approve the index migration'
+$found = Wait-For { Find-Item $hostWindow $approval } 10
+if (-not $found) { Finish 'no approval task' }
+Select-Item $found
+[void](Wait-For { (Read-Events) -contains "remote showing: $approval" } 10)
+$standing = Wait-For { Find-Named $hostWindow 'Always allow in this project (saved to .claude/settings.local.json)' ([System.Windows.Automation.ControlType]::Button) } 10
+if ($standing) {
+    $standing.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    $summary.standingAsked = [bool](Wait-For { Read-Events | Where-Object { $_ -like 'remote asks: *' } } 10)
+    Start-Sleep -Seconds 1
+    Save-Screen 'card-standing-asked'
+    # As for Remove's question below, UI Automation does not always reach the popup a question is in; Escape answers
+    # it with Cancel then, sent only while the question is up, since Escape in the composer stops a running turn.
+    $cancel = Wait-For { Find-InApp 'Cancel' ([System.Windows.Automation.ControlType]::Button) } 10
+    if ($cancel) {
+        $cancel.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    } elseif ($summary.standingAsked) {
+        $summary.cancelledWithEscape = $true
+        [void][RemoteDesktop]::BringForward([IntPtr]$hostWindow.Current.NativeWindowHandle)
+        [RemoteDesktop]::Press(0x1B)
+    }
+    Start-Sleep -Seconds 1
+}
+$allow = Wait-For { Find-Named $hostWindow 'Allow' ([System.Windows.Automation.ControlType]::Button) } 10
+if (-not $allow) { Finish 'no Allow on the approval card' }
+$allow.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+if (-not (Wait-For { (Read-Events) -contains 'remote answered: Allow' } 10)) { Finish 'not answered on the host' }
+$summary.answeredOnHost = $true
+$summary.standingSent = [bool]((Read-Events) | Where-Object { $_ -like 'remote answered: Always allow*' })
+Start-Sleep -Seconds 3
+Save-Screen 'card-approval-answered'
 
 # Remove... on the host under Connect to a Mac in Settings: asked first, then its window closes, the host is forgotten
 # and the list no longer has it. Settings is chosen again until it shows, as for pairing above.

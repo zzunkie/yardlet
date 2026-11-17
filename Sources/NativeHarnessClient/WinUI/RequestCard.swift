@@ -21,6 +21,8 @@ final class RequestCard {
     /// Carries out an answer, with the route the form made; nil where the conversation cannot be answered here,
     /// and then `note` says where it is.
     private var respond: ((ConversationRequest, ConversationRequestResponse) -> Void)?
+    /// Asks before an answer goes, where one needs it; false leaves the card as it was.
+    var confirm: (@MainActor (ConversationRequest, ConversationRequestResponse) async -> Bool)?
     private var note: String?
     /// The task's folder, which a previewed edit's path is read against.
     private let workspaceURL: URL?
@@ -799,13 +801,24 @@ final class RequestCard {
         return button
     }
 
-    /// Sends `response` by the route the form makes of it. One answer per request: the card stops taking clicks,
-    /// and draws again once the task takes the answer.
+    /// Sends `response` by the route the form makes of it, once the person agreed where `confirm` asks. One answer per
+    /// request: the card stops taking clicks, and draws again once the task takes the answer.
     private func send(_ response: ConversationRequestResponse) {
-        guard let respond, let route = request.route(for: response, input: input) else { return }
-        if response.route == .structured, request.form?.questionSteps.isEmpty == false { sent = input }
+        guard respond != nil, let route = request.route(for: response, input: input) else { return }
+        let recordsForm = response.route == .structured && request.form?.questionSteps.isEmpty == false
         var answer = response
         answer.route = route
+        guard let confirm else { return carryOut(answer, recordsForm: recordsForm) }
+        let request = request
+        Task { @MainActor [weak self] in
+            guard await confirm(request, answer), let self, self.request.id == request.id else { return }
+            self.carryOut(answer, recordsForm: recordsForm)
+        }
+    }
+
+    private func carryOut(_ answer: ConversationRequestResponse, recordsForm: Bool) {
+        guard let respond else { return }
+        if recordsForm { sent = input }
         view.isHitTestVisible = false
         content.opacity = 0.6
         respond(request, answer)

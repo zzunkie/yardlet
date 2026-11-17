@@ -28,11 +28,14 @@ final class ConversationTimeline {
     /// Carries out the answer a request's card sent, with the route its form made, where the conversation can be
     /// answered here; without it a request shows `requestNote` instead of its answers.
     var respond: ((ConversationRequest, ConversationRequestResponse) -> Void)?
+    /// Asks the person before an answer goes, where one needs it (an answer that leaves a rule behind on another
+    /// computer); false leaves the card as it was.
+    var confirmAnswer: (@MainActor (ConversationRequest, ConversationRequestResponse) async -> Bool)?
     /// Asks the provider or the host for the turns before the loaded ones, once the window shows every loaded turn.
     var loadEarlier: (() -> Void)?
     /// Retries a turn by its ID, as the Mac's error card offers it for a turn its provider says can pass; without it
     /// the card offers no Retry.
-    var retry: (@MainActor (String) -> Void)?
+    var retry: (@MainActor (String) -> Void)? { didSet { actionsChanged = true } }
     /// Signs in to the harness of a turn that failed for its sign-in, as the Mac's error card offers it; without
     /// it the failure only says so.
     var signIn: HarnessSignIn?
@@ -41,7 +44,10 @@ final class ConversationTimeline {
     /// Puts a request back in the composer without sending it, as the Mac's error card's Edit request does.
     var restoreRequest: (@MainActor (CodexComposerDraft) -> Void)?
     /// Starts editing a turn's message in the composer, as the Mac's Edit message under a sent message does.
-    var editMessage: (@MainActor (ConversationTurn) -> Void)?
+    var editMessage: (@MainActor (ConversationTurn) -> Void)? { didSet { actionsChanged = true } }
+    /// What the task can do about its turns changed since they were drawn (another computer's task offers Retry only
+    /// while it is idle), so the shown turns draw again.
+    private var actionsChanged = false
     /// The shown task's notices and limit-card actions (`AppModel.providerNotices`), set before it is shown.
     var notices: TaskProviderNotices?
     /// What the limit card last drew of the notices, so a change to them draws the latest turn again.
@@ -123,8 +129,9 @@ final class ConversationTimeline {
     private func draw(_ presentation: ConversationPresentation, requestNote: String?) {
         let followsEnd = opensAtEnd || isAtEnd
         opensAtEnd = false
-        let noteChanged = requestNote != self.requestNote
+        let redrawsAll = requestNote != self.requestNote || actionsChanged
         self.requestNote = requestNote
+        actionsChanged = false
         var context = turnContext(harness: presentation.harness)
         context.notices = notices
         context.limitCardEntryID = presentation.limitCardEntryID
@@ -136,7 +143,7 @@ final class ConversationTimeline {
             if let element = drawn[turn.id] {
                 // The limit card the task continues from is the latest turn's.
                 let limitRedraws = limitChanged && turn.id == presentation.turns.last?.id
-                if noteChanged || limitRedraws || !(turn.isUnchanged(from: element.turn) || turn == element.turn) {
+                if redrawsAll || limitRedraws || !(turn.isUnchanged(from: element.turn) || turn == element.turn) {
                     element.update(turn, context: context)
                 }
                 next[turn.id] = element
@@ -187,9 +194,11 @@ final class ConversationTimeline {
         let key = turn.id + "\n" + request.id
         if let card = cards[key] {
             card.update(request, respond: respond, note: requestNote)
+            card.confirm = confirmAnswer
             return card
         }
         let card = RequestCard(request: request, respond: respond, note: requestNote, workspaceURL: workspaceURL)
+        card.confirm = confirmAnswer
         cards[key] = card
         return card
     }

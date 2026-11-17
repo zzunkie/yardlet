@@ -18,6 +18,8 @@ final class ComposerAttachments {
     var windowHandle: () -> UInt64 = { 0 }
     /// The draft "+" and a paste add to, and what its harness takes; nil while there is none.
     var target: () -> (draft: any ComposerDraftEditing, policy: HarnessComposerInputPolicy)? = { nil }
+    /// "+" offers Add folder; another computer's task takes files and pictures only, as the Mac's host window offers.
+    var offersFolders = true
 
     private let chips = StackPanel()
     private let log: QAEventLog
@@ -55,9 +57,11 @@ final class ComposerAttachments {
         menu.items.append(ComposerParts.menuItem(
             policy.carriesImages ? L10n.string("Add files or photos") : L10n.string("Add files"),
             glyph: ComposerParts.Glyph.attach) { [weak self] in self?.choose(folders: false) })
-        menu.items.append(ComposerParts.menuItem(L10n.string("Add folder"), glyph: ComposerParts.Glyph.folder) {
-            [weak self] in self?.choose(folders: true)
-        })
+        if offersFolders {
+            menu.items.append(ComposerParts.menuItem(L10n.string("Add folder"), glyph: ComposerParts.Glyph.folder) {
+                [weak self] in self?.choose(folders: true)
+            })
+        }
         plusButton.flyout = menu
     }
 

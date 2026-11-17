@@ -99,6 +99,8 @@ enum ConversationNotices {
             var actions: [UIElement] = []
             if let accounts = notices.accounts(), !accounts.others.isEmpty {
                 actions.append(accountMenu(accounts.others, choose: notices.continueWithAccount))
+            } else if let hostAccounts = notices.hostAccounts {
+                actions.append(hostAccountMenu(load: hostAccounts, choose: notices.continueWithHostAccount))
             }
             if let resetsAt = limit.resetsAt, resetsAt > now {
                 actions.append(autoContinueSwitch(isOn: isArmed) { notices.setAutoContinue($0, resetsAt) })
@@ -139,6 +141,10 @@ enum ConversationNotices {
             item.click.addHandler { _, _ in choose(account) }
             menu.items.append(item)
         }
+        return menuButton(menu)
+    }
+
+    private static func menuButton(_ menu: MenuFlyout) -> UIElement {
         let title = ConversationStyle.text(L10n.string("Continue with another account"), size: ConversationStyle.calloutSize,
                                            selectable: false, wraps: false)
         let caret = ConversationStyle.icon(ConversationStyle.Glyph.chevronDown, size: 8)
@@ -146,6 +152,34 @@ enum ConversationNotices {
                                                    name: L10n.string("Continue with another account")) {}
         button.flyout = menu
         return button
+    }
+
+    /// "Continue with another account ⌄" for another computer's task: the accounts that computer can continue it under,
+    /// read as the card is drawn (`TaskProviderNotices.hostAccounts`), by name and plan.
+    private static func hostAccountMenu(load: @escaping @MainActor () async -> [UsageLimitHostAccount],
+                                        choose: @escaping @MainActor (String) -> Void) -> UIElement {
+        let menu = MenuFlyout()
+        menu.items.append(disabledItem(L10n.string("Loading…")))
+        Task { @MainActor in
+            let accounts = await load()
+            menu.items.clear()
+            for account in accounts {
+                let item = MenuFlyoutItem()
+                item.text = [account.name, account.detail].compactMap { $0 }.joined(separator: " · ")
+                let id = account.id
+                item.click.addHandler { _, _ in choose(id) }
+                menu.items.append(item)
+            }
+            if accounts.isEmpty { menu.items.append(disabledItem(L10n.string("No other account can continue this task."))) }
+        }
+        return menuButton(menu)
+    }
+
+    private static func disabledItem(_ text: String) -> MenuFlyoutItem {
+        let item = MenuFlyoutItem()
+        item.text = text
+        item.isEnabled = false
+        return item
     }
 
     /// "Auto-continue when limits reset", as a small switch. The switch's state is kept apart from the switch, which a
