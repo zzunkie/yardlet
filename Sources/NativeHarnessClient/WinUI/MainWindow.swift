@@ -110,10 +110,10 @@ final class MainWindow {
         importPane.onImported = { [weak self] in self?.showSelectedTask() }
         self.importPane = importPane
 
-        let actions = TaskActions(model: model, log: log, host: { [weak self] in self?.root },
+        let actions = TaskActions(source: .local(model), log: log, host: { [weak self] in self?.root },
                                   windowHandle: { [weak self] in self?.windowHandle ?? 0 })
         self.actions = actions
-        let sidebar = TaskSidebar(model: model, actions: actions)
+        let sidebar = TaskSidebar(source: .local(model), actions: actions)
         sidebar.onChoose = { [weak self] place in self?.show(place) }
         sidebar.onNewTaskInProject = { [weak self] folder in self?.showNewTask(in: folder) }
         sidebar.onAddProject = { [weak self] in self?.addProject() }

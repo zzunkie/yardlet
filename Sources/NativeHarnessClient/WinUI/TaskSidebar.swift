@@ -11,13 +11,14 @@ enum SidebarPlace: Equatable {
     case settings
 }
 
-/// The main window's sidebar, as the Mac's (`TaskSidebar`): Home and "Search tasks" at the top; then the pinned tasks,
-/// the chats and the projects, each project under its name, which collapses it and opens its menu, listing its first
-/// five tasks until "Show more"; each task nested under the task it was started from; and Settings at the bottom.
-/// What it lists, in what order and with what state is the Mac's own reading of the tasks (`SidebarProjection`,
-/// `SidebarTaskIndicatorProjection`), followed through Observation; only the drawing is Windows'. The search narrows
-/// the lists by the tasks' titles and the projects' names. The Mac's split views, activity view, grouping by state,
-/// hover cards and drags are the Mac's alone.
+/// A window's sidebar, as the Mac's (`TaskSidebar`): Home and "Search tasks" at the top; then the pinned tasks, the
+/// chats and the projects, each project under its name, which collapses it and opens its menu, listing its first five
+/// tasks until "Show more"; each task nested under the task it was started from; and Settings at the bottom, or the
+/// window's own footer. What it lists, in what order and with what state is the Mac's own reading of the tasks
+/// (`SidebarProjection`, `SidebarTaskIndicatorProjection`), followed through Observation; only the drawing is Windows'.
+/// The tasks are this computer's or another computer's (`TaskSource`), as the Mac's host window draws the same sidebar
+/// from its host's mirror. The search narrows the lists by the tasks' titles and the projects' names. The Mac's split
+/// views, activity view, grouping by state, hover cards and drags are the Mac's alone.
 @MainActor
 final class TaskSidebar {
     let view = Grid()
@@ -30,9 +31,11 @@ final class TaskSidebar {
     /// The rows as last drawn, in order, which the window's keys move through.
     private(set) var layout = SidebarProjection.Layout()
 
-    private let model: AppModel
+    private let source: TaskSource
     private let actions: TaskActions
-    private let disclosure = SidebarDisclosureStore()
+    /// Which projects and families are collapsed: kept across launches for this computer's tasks, and only while the
+    /// window is open for another computer's, which leaves nothing of its projects here.
+    private let disclosure: SidebarDisclosureStore
     private var query: String?
     private var chosen: SidebarPlace?
     private var generation = 0
@@ -58,10 +61,13 @@ final class TaskSidebar {
     /// Where each of the footer's rows goes.
     private var footerPlaces: [String: SidebarPlace] = [:]
 
-    init(model: AppModel, actions: TaskActions) {
-        self.model = model
+    /// - Parameter footer: what the sidebar ends in, in place of Settings: another computer's window names that
+    ///   computer there, as the Mac's does.
+    init(source: TaskSource, actions: TaskActions, footer: FrameworkElement? = nil) {
+        self.source = source
         self.actions = actions
-        make()
+        disclosure = source.managesProjects ? SidebarDisclosureStore() : SidebarDisclosureStore(defaults: nil)
+        make(footer: footer)
         follow()
     }
 
@@ -103,7 +109,7 @@ final class TaskSidebar {
 
     // MARK: Making
 
-    private func make() {
+    private func make(footer custom: FrameworkElement?) {
         view.width = WindowsTheme.sidebarWidth
         for height in [GridLength(value: 0, gridUnitType: .auto), GridLength(value: 0, gridUnitType: .auto),
                        GridLength(value: 1, gridUnitType: .star), GridLength(value: 0, gridUnitType: .auto)] {
@@ -165,7 +171,7 @@ final class TaskSidebar {
         footerFrame.borderBrush = WindowsTheme.separator.brush
         footerFrame.borderThickness = Thickness(left: 0, top: 1, right: 0, bottom: 0)
         footerFrame.padding = Thickness(left: 0, top: 4, right: 0, bottom: 4)
-        footerFrame.child = footer.view
+        footerFrame.child = custom ?? footer.view
         try? Grid.setRow(footerFrame, 3)
         view.children.append(footerFrame)
     }
@@ -226,6 +232,8 @@ final class TaskSidebar {
         try? AutomationProperties.setName(add, L10n.string("Add project"))
         try? ToolTipService.setToolTip(add, L10n.string("Add project"))
         add.click.addHandler { [weak self] _, _ in self?.onAddProject() }
+        // Another computer's projects are added there, as the Mac's host window offers no +.
+        add.visibility = source.managesProjects ? .visible : .collapsed
         try? Grid.setColumn(add, 1)
         projectsTitle.children.append(add)
     }
@@ -286,6 +294,8 @@ final class TaskSidebar {
         var chatsHidden = 0
         var projects: [Project] = []
         var isRestoring = false
+        /// Home heads the list: always here, and for another computer while it can start a task.
+        var showsHome = true
     }
 
     /// The lists drawn now and again whenever what they read changes: the tasks, their state, the projects, which are
@@ -305,15 +315,15 @@ final class TaskSidebar {
     }
 
     private func read() -> Drawing {
-        let listed = model.store.listedSessions
-        let groups = model.projects.visibleGroups(sessions: listed)
-        let allChats = model.projects.chats(sessions: listed)
-        let details = model.taskAttentionDetails
-        let shellBusy = model.shellBusySessionIDs
+        let lists = source.lists()
+        let groups = lists.groups
+        let allChats = lists.chats
+        let details = lists.details
+        let shellBusy = lists.shellBusy
+        let listed = groups.flatMap(\.sessions) + allChats
         let noConversation: (SessionRecord.ID, String) -> Bool = { _, _ in false }
         let visibleGroups = query.map {
-            TaskNavigationProjection.filteredGroups(in: groups, query: $0,
-                                                    projectNames: model.projects.projectNames(for: groups),
+            TaskNavigationProjection.filteredGroups(in: groups, query: $0, projectNames: lists.projectNames,
                                                     conversationMatches: noConversation)
         } ?? groups
         let visibleChats = query.map {
@@ -326,7 +336,7 @@ final class TaskSidebar {
         let layout = SidebarProjection.layout(
             visibleGroups: visibleGroups, allGroups: groups, chats: visibleChats, allChats: allChats, splits: [],
             isFiltering: query != nil, disclosure: disclosure.disclosure, selection: selection, waiting: waiting,
-            archivedParents: model.store.archivedParentIDs)
+            archivedParents: lists.archivedParents)
 
         // Each task, the tasks nested under it, and, while its family is collapsed, the line counting what it hides.
         func states(_ rows: [SidebarRow], title: (SidebarRow, SessionRecord) -> String) -> [Drawing.Entry] {
@@ -349,7 +359,7 @@ final class TaskSidebar {
             }
         }
 
-        var drawing = Drawing(layout: layout, isRestoring: model.isRestoringIndex)
+        var drawing = Drawing(layout: layout, isRestoring: lists.isRestoring, showsHome: source.startsTasks)
         drawing.pinned = states(layout.pinned) { _, session in session.title }
         if let chats = layout.chats {
             drawing.chats = states(chats.rows) { row, _ in SidebarProjection.chatRowTitle(for: row) }
@@ -371,6 +381,7 @@ final class TaskSidebar {
     /// another (a task pinned, moved to a project) is never in two.
     private func draw(_ drawing: Drawing) {
         layout = drawing.layout
+        places.view.visibility = drawing.showsHome ? .visible : .collapsed
         var listed = Set<UUID>()
         var summarized = Set<UUID>()
         func items(_ entries: [Drawing.Entry]) -> [(key: String, item: ListViewItem)] {

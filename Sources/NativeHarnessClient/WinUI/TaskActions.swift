@@ -3,30 +3,39 @@ import UWP
 // WinRT's async operations are not marked Sendable; a dialog's answer comes back on the window's thread.
 @preconcurrency import WindowsFoundation
 import WinUI
+import YardletRemote
 
 /// What a task's and a project's menus do, as the Mac's sidebar, task header and Task menu do it: the same model calls,
 /// and the Mac's questions before what cannot be undone, in its words, as Windows' own dialogs. The sidebar's row
 /// menus, the task header's title menu and the window's keys all act through it, so a task's actions are the same
-/// wherever they are chosen. The Mac's items that open a task elsewhere (a new tab, a split view, the side panel) and
-/// those for worktrees are the Mac's alone.
+/// wherever they are chosen. Another computer's tasks (`TaskSource.remote`) are acted on by asking that computer, as
+/// the Mac's host window does, and the items it does not allow, or that change this computer's projects and folders,
+/// are left out or off, as there. The Mac's items that open a task elsewhere (a new tab, a split view, the side panel)
+/// and those for worktrees are the Mac's alone.
 @MainActor
 final class TaskActions {
-    private let model: AppModel
+    private let source: TaskSource
     private let log: QAEventLog
     /// The window's content, whose root a dialog shows over.
     private let host: () -> UIElement?
     /// The window's handle, which owns the folder dialog.
     private let windowHandle: () -> UInt64
 
-    init(model: AppModel, log: QAEventLog, host: @escaping () -> UIElement?, windowHandle: @escaping () -> UInt64) {
-        self.model = model
+    init(source: TaskSource, log: QAEventLog, host: @escaping () -> UIElement?,
+         windowHandle: @escaping () -> UInt64) {
+        self.source = source
         self.log = log
         self.host = host
         self.windowHandle = windowHandle
     }
 
     private func session(_ id: UUID) -> SessionRecord? {
-        model.store.sessions.first { $0.id == id }
+        source.session(id)
+    }
+
+    /// This computer's model, for what only its own tasks and projects offer.
+    private var model: AppModel? {
+        if case let .local(model) = source { model } else { nil }
     }
 
     // MARK: A task's menu
@@ -48,16 +57,22 @@ final class TaskActions {
             menu.items.append(Self.item(L10n.string(session.isPinned ? "Unpin" : "Pin")) { [weak self] in
                 self?.togglePinned(id)
             })
-            menu.items.append(Self.item(L10n.string("Rename…")) { [weak self] in self?.rename(id) })
+            let manages = self.source.managesTasks
+            if manages { menu.items.append(Self.item(L10n.string("Rename…")) { [weak self] in self?.rename(id) }) }
             if session.hasUnreadUpdate {
                 menu.items.append(Self.item(L10n.string("Mark task as read")) { [weak self] in self?.markRead(id) })
-            } else {
+            } else if manages {
                 menu.items.append(Self.item(L10n.string("Mark task as unread")) { [weak self] in self?.markUnread(id) })
             }
-            if let family = family() { self.appendFamily(family, of: id, to: menu) }
+            if var family = family() {
+                if !manages { family.nesting = .none }
+                self.appendFamily(family, of: id, to: menu)
+            }
             menu.items.append(MenuFlyoutSeparator())
             menu.items.append(Self.item(L10n.string("Archive")) { [weak self] in self?.archive(id) })
-            menu.items.append(Self.item(L10n.string("Delete task")) { [weak self] in self?.delete(id) })
+            if manages {
+                menu.items.append(Self.item(L10n.string("Delete task")) { [weak self] in self?.delete(id) })
+            }
         }
     }
 
@@ -94,24 +109,28 @@ final class TaskActions {
     }
 
     /// The task header's title menu, as the Mac's title menu lists it: the account the task runs on, Rename task, Pin,
-    /// Archive, and the task's folder in File Explorer.
+    /// Archive, and the task's folder in File Explorer, which another computer's task does not offer.
     func titleMenu(for id: UUID) -> MenuFlyout {
         menu { [weak self] menu in
             guard let self, let session = self.session(id) else { return }
-            if let name = session.connection?.name {
+            if let name = self.source.accountName(of: session) {
                 let account = Self.item(L10n.format("Account: %@", name)) {}
                 account.isEnabled = false
                 menu.items.append(account)
                 menu.items.append(MenuFlyoutSeparator())
             }
-            menu.items.append(Self.item(L10n.string("Rename task")) { [weak self] in self?.rename(id) })
+            if self.source.managesTasks {
+                menu.items.append(Self.item(L10n.string("Rename task")) { [weak self] in self?.rename(id) })
+            }
             menu.items.append(Self.item(L10n.string(session.isPinned ? "Unpin" : "Pin")) { [weak self] in
                 self?.togglePinned(id)
             })
             menu.items.append(Self.item(L10n.string("Archive")) { [weak self] in self?.archive(id) })
-            menu.items.append(MenuFlyoutSeparator())
-            let folder = session.workspaceURL
-            menu.items.append(Self.item(L10n.string("Show in File Explorer")) { WindowsFileExplorer.reveal(folder) })
+            if self.source.managesProjects {
+                menu.items.append(MenuFlyoutSeparator())
+                let folder = session.workspaceURL
+                menu.items.append(Self.item(L10n.string("Show in File Explorer")) { WindowsFileExplorer.reveal(folder) })
+            }
         }
     }
 
@@ -143,29 +162,45 @@ final class TaskActions {
     func nest(_ id: UUID, under parent: UUID?) {
         guard let session = session(id) else { return }
         log.write("nested: \(session.title) under \(parent.flatMap { self.session($0)?.title } ?? "top level")")
-        Task { await model.nest(id, under: parent) }
+        switch source {
+        case let .local(model): Task { await model.nest(id, under: parent) }
+        case let .remote(model): model.taskAction(session, .init(.nest, value: parent?.uuidString))
+        }
     }
 
     func togglePinned(_ id: UUID) {
         guard let session = session(id) else { return }
         log.write("\(session.isPinned ? "unpinned" : "pinned"): \(session.title)")
-        Task { await model.togglePinned(session) }
+        switch source {
+        case let .local(model): Task { await model.togglePinned(session) }
+        case let .remote(model): model.send(.setPinned(taskID: session.id.uuidString, pinned: !session.isPinned))
+        }
     }
 
     func markRead(_ id: UUID) {
         log.write("marked read: \(session(id)?.title ?? "")")
-        Task { await model.store.markRead(id: id) }
+        switch source {
+        case let .local(model): Task { await model.store.markRead(id: id) }
+        case let .remote(model): model.send(.markRead(taskID: id.uuidString))
+        }
     }
 
     func markUnread(_ id: UUID) {
-        log.write("marked unread: \(session(id)?.title ?? "")")
-        Task { await model.store.markUnread(id: id) }
+        guard let session = session(id) else { return }
+        log.write("marked unread: \(session.title)")
+        switch source {
+        case let .local(model): Task { await model.store.markUnread(id: id) }
+        case let .remote(model): model.taskAction(session, .init(.markUnread))
+        }
     }
 
     func archive(_ id: UUID) {
         guard let session = session(id) else { return }
         log.write("archived: \(session.title)")
-        Task { await model.archive(session) }
+        switch source {
+        case let .local(model): Task { await model.archive(session) }
+        case let .remote(model): model.send(.archiveTask(taskID: session.id.uuidString))
+        }
     }
 
     /// The Mac's rename: the title in a field, chosen whole, saved by Rename.
@@ -184,27 +219,32 @@ final class TaskActions {
             let title = field.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard let self, !title.isEmpty, let session = self.session(id) else { return }
             self.log.write("renamed: \(title)")
-            await self.model.rename(session, to: title)
+            switch self.source {
+            case let .local(model): await model.rename(session, to: title)
+            case let .remote(model): model.taskAction(session, .init(.rename, value: title))
+            }
         }
     }
 
     /// The Mac's question before a task is deleted, which says more for a Codex task still attached to the Codex app.
     func delete(_ id: UUID) {
         guard let session = session(id) else { return }
-        let key = session.harness == .codex && model.isAttached(session.id)
-            ? "Delete attached Codex task confirmation" : "Delete task confirmation"
+        let key = source.isAttached(session) ? "Delete attached Codex task confirmation" : "Delete task confirmation"
         ask(title: L10n.string("Delete task?"), content: Self.text(L10n.format(key, session.title)),
             confirm: L10n.string("Delete task")) { [weak self] in
             guard let self, let session = self.session(id) else { return }
             self.log.write("deleted: \(session.title)")
-            await self.model.delete(session)
+            switch self.source {
+            case let .local(model): await model.delete(session)
+            case let .remote(model): model.taskAction(session, .init(.delete, confirmed: true))
+            }
         }
     }
 
     // MARK: A project's menu and actions
 
     /// A project's menu, as the Mac's project menu lists it, with New task in project, which the Mac shows beside the
-    /// project's name.
+    /// project's name. Another computer's project offers only Pin, New task and Archive chats, the rest off, as there.
     func projectMenu(for group: @escaping @MainActor () -> WorkspaceGroup?, newTask: @escaping @MainActor () -> Void) -> MenuFlyout {
         menu { [weak self] menu in
             guard let self, let group = group() else { return }
@@ -212,29 +252,37 @@ final class TaskActions {
             let pin = Self.item(L10n.string(isPinned ? "Unpin project" : "Pin project")) { [weak self] in
                 self?.togglePinned(group)
             }
-            pin.isEnabled = group.project != nil
+            let ownsProjects = self.source.managesProjects
+            pin.isEnabled = group.project != nil && (ownsProjects || self.source.managesTasks)
             menu.items.append(pin)
             let edit = Self.item(L10n.string("Edit project")) { [weak self] in self?.edit(group) }
-            edit.isEnabled = group.project != nil
+            edit.isEnabled = group.project != nil && ownsProjects
             menu.items.append(edit)
             menu.items.append(Self.item(L10n.string("New task in project"), action: newTask))
             menu.items.append(MenuFlyoutSeparator())
             let folder = group.workspaceURL
-            menu.items.append(Self.item(L10n.string("Show in File Explorer")) { WindowsFileExplorer.reveal(folder) })
+            let reveal = Self.item(L10n.string("Show in File Explorer")) { WindowsFileExplorer.reveal(folder) }
+            reveal.isEnabled = ownsProjects
+            menu.items.append(reveal)
             menu.items.append(MenuFlyoutSeparator())
             let archive = Self.item(L10n.string("Archive chats")) { [weak self] in self?.archiveChats(group) }
-            archive.isEnabled = !group.sessions.isEmpty
+            archive.isEnabled = !group.sessions.isEmpty && self.source.managesTasks
             menu.items.append(archive)
             menu.items.append(MenuFlyoutSeparator())
             let remove = Self.item(L10n.string("Remove project")) { [weak self] in self?.remove(group) }
-            remove.isEnabled = group.project != nil
+            remove.isEnabled = group.project != nil && ownsProjects
             menu.items.append(remove)
         }
     }
 
     func togglePinned(_ group: WorkspaceGroup) {
-        guard let id = group.project?.id else { return }
-        model.projects.togglePinned(id)
+        guard let project = group.project else { return }
+        switch source {
+        case let .local(model): model.projects.togglePinned(project.id)
+        case let .remote(model):
+            guard let id = model.sidebar.projectIDs[group.workspaceURL.standardizedFileURL] else { return }
+            model.send(.projectAction(projectID: id, pinned: !project.isPinned, archive: false))
+        }
     }
 
     func archiveChats(_ group: WorkspaceGroup) {
@@ -242,14 +290,19 @@ final class TaskActions {
         content.spacing = 8
         content.children.append(Self.text(L10n.format("Archive project chats confirmation", group.displayName,
                                                       group.sessions.count)))
-        if group.sessions.contains(where: { $0.harness == .codex && model.isAttached($0.id) }) {
+        if group.sessions.contains(where: { source.isAttached($0) }) {
             content.children.append(Self.text(L10n.string("Archive attached Codex tasks confirmation")))
         }
         ask(title: L10n.string("Archive project chats?"), content: content, confirm: L10n.string("Archive chats")) {
             [weak self] in
             guard let self else { return }
             self.log.write("archived chats: \(group.displayName)")
-            _ = await self.model.archive(group.sessions)
+            switch self.source {
+            case let .local(model): _ = await model.archive(group.sessions)
+            case let .remote(model):
+                guard let id = model.sidebar.projectIDs[group.workspaceURL.standardizedFileURL] else { return }
+                model.send(.projectAction(projectID: id, pinned: nil, archive: true))
+            }
         }
     }
 
@@ -258,15 +311,15 @@ final class TaskActions {
         ask(title: L10n.string("Remove project?"),
             content: Self.text(L10n.format("Remove project confirmation", group.displayName)),
             confirm: L10n.string("Remove project")) { [weak self] in
-            guard let self, let id = group.project?.id else { return }
+            guard let self, let model = self.model, let id = group.project?.id else { return }
             self.log.write("removed project: \(group.displayName)")
-            self.model.projects.hide(id)
-            let draft = self.model.composerDrafts.home
+            model.projects.hide(id)
+            let draft = model.composerDrafts.home
             if draft.workspaceURL?.standardizedFileURL == group.workspaceURL.standardizedFileURL {
                 draft.workspaceURL = nil
             }
-            if self.model.store.selectedSession?.workspaceURL == group.workspaceURL {
-                self.model.store.selectedSessionID = nil
+            if model.store.selectedSession?.workspaceURL == group.workspaceURL {
+                model.store.selectedSessionID = nil
             }
         }
     }
@@ -274,7 +327,7 @@ final class TaskActions {
     /// The Mac's project editor in a dialog: the name, saved by Done, and the folders, changed as they are chosen:
     /// one more from Windows' folder dialog, another made the primary one, or one removed.
     func edit(_ group: WorkspaceGroup) {
-        guard let id = group.project?.id, let project = model.projects.project(id: id) else { return }
+        guard let model, let id = group.project?.id, let project = model.projects.project(id: id) else { return }
         let content = StackPanel()
         content.spacing = 12
         content.minWidth = 420
@@ -310,16 +363,16 @@ final class TaskActions {
             Task { @MainActor in
                 guard let self, let folder = WindowsFolderPicker.chooseFolder(
                     window: self.windowHandle(), title: L10n.string("Add folder")) else { return }
-                _ = self.model.projects.addRoot(folder.standardizedFileURL, to: id)
+                _ = model.projects.addRoot(folder.standardizedFileURL, to: id)
                 showFolders()
             }
         }
         showFolders()
         ask(title: L10n.string("Edit project"), content: content, confirm: L10n.string("Done"), isDefault: true,
-            cancels: false) { [weak self] in
+            cancels: false) {
             let words = name.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let self, !words.isEmpty else { return }
-            self.model.projects.rename(id, to: words)
+            guard !words.isEmpty else { return }
+            model.projects.rename(id, to: words)
         }
     }
 
@@ -349,7 +402,7 @@ final class TaskActions {
             let makePrimary = Button()
             makePrimary.content = L10n.string("Make primary")
             makePrimary.click.addHandler { [weak self] _, _ in
-                _ = self?.model.projects.setPrimaryRoot(root, for: id)
+                _ = self?.model?.projects.setPrimaryRoot(root, for: id)
                 changed()
             }
             try? Grid.setColumn(makePrimary, 1)
@@ -357,7 +410,7 @@ final class TaskActions {
             let remove = Button()
             remove.content = L10n.string("Remove folder")
             remove.click.addHandler { [weak self] _, _ in
-                _ = self?.model.projects.removeRoot(root, from: id)
+                _ = self?.model?.projects.removeRoot(root, from: id)
                 changed()
             }
             try? Grid.setColumn(remove, 2)
