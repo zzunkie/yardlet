@@ -7,6 +7,9 @@ import WinUI
 /// of ⌥: Ctrl+N New task, Ctrl+Shift+[ and ] the previous and next task, Ctrl+Alt+A the next task needing attention,
 /// Ctrl+Alt+P Pin, Ctrl+Shift+U Mark as unread and Ctrl+Shift+A Archive, Ctrl+Shift+M the model menu, which the Mac
 /// gives Control+Shift+M, and F2 Rename, Windows' own key for renaming what is chosen. What each acts on is the Mac's (`TaskCommandTargets`): a key with nothing to act on does nothing.
+/// The keys are read on their way down to the focused element (PreviewKeyDown), as the Mac's menu keys come before the
+/// field being typed in: a keyboard accelerator comes after the field, which keeps Ctrl+Shift+A for itself, and
+/// Ctrl+Shift with [ or ] never reaches one.
 /// The right Alt key is AltGr, which types characters on many keyboards, so Ctrl+Alt keys pressed with it are left to
 /// the field being typed in.
 @MainActor
@@ -29,42 +32,59 @@ final class TaskKeys {
         self.actions = actions
     }
 
-    /// Puts the keys on `element`, the window's content, where they work wherever the focus is in the window.
+    /// Reads the keys on `element`, the window's content, where they work wherever the focus is in the window.
     func install(on element: UIElement) {
-        element.keyboardAcceleratorPlacementMode = .hidden
-        let control = UWP.VirtualKeyModifiers.control
-        let shift = UWP.VirtualKeyModifiers.shift
-        let alt = UWP.VirtualKeyModifiers.menu
-        add(.n, [control], to: element) { [weak self] in self?.newTask() }
-        add(UWP.VirtualKey(rawValue: 219), [control, shift], to: element) { [weak self] in
-            self?.go(\.previousRow)
+        element.previewKeyDown.addHandler { [weak self] _, args in
+            guard let self, let args, let action = self.action(for: args.key) else { return }
+            args.handled = true
+            action()
         }
-        add(UWP.VirtualKey(rawValue: 221), [control, shift], to: element) { [weak self] in
-            self?.go(\.nextRow)
-        }
-        add(.a, [control, alt], to: element) { [weak self] in
-            guard let self, let id = self.targets().sessionNeedingAttention else { return }
-            self.activate(.session(id))
-        }
-        add(.p, [control, alt], to: element) { [weak self] in
-            guard let self, case let .session(id, _)? = self.targets().pin else { return }
-            self.actions.togglePinned(id)
-        }
-        add(.u, [control, shift], to: element) { [weak self] in
-            guard let self, let id = self.targets().markUnread else { return }
-            self.actions.markUnread(id)
-        }
-        add(.a, [control, shift], to: element) { [weak self] in
-            guard let self, let id = self.targets().archive else { return }
-            self.actions.archive(id)
-        }
-        add(.m, [control, shift], to: element) { [weak self] in
-            guard let self, self.shown().session != nil else { return }
-            self.openModelMenu()
-        }
-        add(.f2, [], to: element) { [weak self] in
-            guard let self, let id = self.targets().archive else { return }
-            self.actions.rename(id)
+    }
+
+    /// What `key` does with the modifiers held now, or nil for a key that is not one of these.
+    private func action(for key: UWP.VirtualKey) -> (@MainActor () -> Void)? {
+        let control = Self.isDown(VK_CONTROL), shift = Self.isDown(VK_SHIFT), alt = Self.isDown(VK_MENU)
+        // AltGr reaches Windows as Ctrl and the right Alt; with it the keys type, not act.
+        if alt, Self.isDown(VK_RMENU) { return nil }
+        switch (key.rawValue, control, shift, alt) {
+        case (UWP.VirtualKey.n.rawValue, true, false, false):
+            return { [weak self] in self?.newTask() }
+        case (219, true, true, false):
+            return { [weak self] in self?.go(\.previousRow) }
+        case (221, true, true, false):
+            return { [weak self] in self?.go(\.nextRow) }
+        case (UWP.VirtualKey.a.rawValue, true, false, true):
+            return { [weak self] in
+                guard let self, let id = self.targets().sessionNeedingAttention else { return }
+                self.activate(.session(id))
+            }
+        case (UWP.VirtualKey.p.rawValue, true, false, true):
+            return { [weak self] in
+                guard let self, case let .session(id, _)? = self.targets().pin else { return }
+                self.actions.togglePinned(id)
+            }
+        case (UWP.VirtualKey.u.rawValue, true, true, false):
+            return { [weak self] in
+                guard let self, let id = self.targets().markUnread else { return }
+                self.actions.markUnread(id)
+            }
+        case (UWP.VirtualKey.a.rawValue, true, true, false):
+            return { [weak self] in
+                guard let self, let id = self.targets().archive else { return }
+                self.actions.archive(id)
+            }
+        case (UWP.VirtualKey.m.rawValue, true, true, false):
+            return { [weak self] in
+                guard let self, self.shown().session != nil else { return }
+                self.openModelMenu()
+            }
+        case (UWP.VirtualKey.f2.rawValue, false, false, false):
+            return { [weak self] in
+                guard let self, let id = self.targets().archive else { return }
+                self.actions.rename(id)
+            }
+        default:
+            return nil
         }
     }
 
@@ -82,18 +102,7 @@ final class TaskKeys {
         activate(item)
     }
 
-    private func add(_ key: UWP.VirtualKey, _ modifiers: [UWP.VirtualKeyModifiers], to element: UIElement,
-                     action: @escaping @MainActor () -> Void) {
-        let accelerator = KeyboardAccelerator()
-        accelerator.key = key
-        accelerator.modifiers = UWP.VirtualKeyModifiers(rawValue: modifiers.reduce(0) { $0 | $1.rawValue })
-        let usesAlt = modifiers.contains { $0.rawValue == UWP.VirtualKeyModifiers.menu.rawValue }
-        accelerator.invoked.addHandler { _, args in
-            // AltGr reaches Windows as Ctrl and the right Alt; with it the keys type, not act.
-            if usesAlt, GetKeyState(VK_RMENU) < 0 { return }
-            args?.handled = true
-            action()
-        }
-        element.keyboardAccelerators.append(accelerator)
+    private static func isDown(_ key: Int32) -> Bool {
+        GetKeyState(key) < 0
     }
 }

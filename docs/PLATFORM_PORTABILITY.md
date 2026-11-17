@@ -168,7 +168,8 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   with Show in File Explorer for Show in Finder (`WinUI/TaskActions.swift`); the search narrows by titles and project
   names. With no task the window opens New task, as the Mac opens its home. Above a task's conversation, its header
   (`WinUI/TaskHeader.swift`) is the Mac's: the title, which opens the task's menu, the harness, and a progress ring
-  while it works. The Mac's Task menu keys work with Ctrl for ⌘ and Alt for ⌥ (`WinUI/TaskKeys.swift`): Ctrl+N,
+  while it works. The Mac's Task menu keys work with Ctrl for ⌘ and Alt for ⌥ wherever the focus is, a composer's
+  field included, as they are read before the field (`WinUI/TaskKeys.swift`): Ctrl+N,
   Ctrl+Shift+[ and ], Ctrl+Alt+A, Ctrl+Alt+P, Ctrl+Shift+U, Ctrl+Shift+A and Ctrl+Shift+M, the Mac's Control+Shift+M
   for the model menu, and F2 renames the shown task as Windows renames what is chosen; Ctrl+Alt keys pressed with AltGr
   are left to typing. Below the conversation is the task's
