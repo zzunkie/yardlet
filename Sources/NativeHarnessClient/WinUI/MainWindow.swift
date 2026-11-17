@@ -141,7 +141,14 @@ final class MainWindow {
             }
         }
         keys.newTask = { [weak self] in self?.showHome() }
-        keys.openModelMenu = { [weak self] in self?.composer.openModelMenu() }
+        keys.openModelMenu = { [weak self] in
+            guard let self else { return }
+            switch self.shown {
+            case .task: self.composer.openModelMenu()
+            case .newTask: self.newTask?.openModelMenu()
+            case .other: break
+            }
+        }
         keys.install(on: root)
         self.keys = keys
         SidebarStyle.columns(root, [SidebarStyle.auto, SidebarStyle.star])

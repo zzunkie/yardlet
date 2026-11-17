@@ -175,7 +175,7 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   while it works. The Mac's Task menu keys work with Ctrl for ⌘ and Alt for ⌥ wherever the focus is, a composer's
   field included, as they are read before the field (`WinUI/TaskKeys.swift`): Ctrl+N,
   Ctrl+Shift+[ and ], Ctrl+Alt+A, Ctrl+Alt+P, Ctrl+Shift+U, Ctrl+Shift+A and Ctrl+Shift+M, the Mac's Control+Shift+M
-  for the model menu, and F2 renames the shown task as Windows renames what is chosen; Ctrl+Alt keys pressed with AltGr
+  for the model menu of the task's composer or New task's, and F2 renames the shown task as Windows renames what is chosen; Ctrl+Alt keys pressed with AltGr
   are left to typing. Below the conversation is the task's
   composer as the Mac's (`WinUI/TaskComposer.swift`, `WinUI/ComposerParts.swift`): a
   rounded card at most as wide as the conversation, its text above a bottom row with the task's session controls

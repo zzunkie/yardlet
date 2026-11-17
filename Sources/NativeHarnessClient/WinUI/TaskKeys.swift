@@ -19,7 +19,7 @@ final class TaskKeys {
     /// Shows a row of the sidebar.
     var activate: (WindowItem) -> Void = { _ in }
     var newTask: () -> Void = {}
-    /// Opens the shown task's model menu.
+    /// Opens the model menu of the composer shown: the task's, or New task's, as the Mac's key opens its home's.
     var openModelMenu: () -> Void = {}
 
     private let model: AppModel
@@ -74,10 +74,7 @@ final class TaskKeys {
                 self.actions.archive(id)
             }
         case (UWP.VirtualKey.m.rawValue, true, true, false):
-            return { [weak self] in
-                guard let self, self.shown().session != nil else { return }
-                self.openModelMenu()
-            }
+            return { [weak self] in self?.openModelMenu() }
         case (UWP.VirtualKey.f2.rawValue, false, false, false):
             return { [weak self] in
                 guard let self, let id = self.targets().archive else { return }

@@ -207,6 +207,11 @@ final class NewTaskPane {
         chips.prepare = { [weak self] in await self?.readModels() }
     }
 
+    /// Opens the model menu, as the Mac's Control+Shift+M does on its home.
+    func openModelMenu() {
+        chips.openModelMenu()
+    }
+
     /// Fills the home from the draft and the harnesses found, when it is shown.
     func show() {
         let descriptors = model.runtimeSelections.connectedDescriptors
