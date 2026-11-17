@@ -190,7 +190,7 @@ final class ConnectToMacSection {
         connectStatus.visibility = .collapsed
         content.children.append(connectStatus)
         let note = TextBlock()
-        note.text = L10n.string("The link works once, for 5 minutes. Pair once while both Macs are together; from then on this Mac connects on the same network, over Tailscale or through the Yardlet server.")
+        note.text = L10n.string("The link works once, for 5 minutes. Pair once while both computers are together; from then on this computer connects on the same network, over Tailscale or through the Yardlet server.")
         note.textWrapping = .wrap
         note.fontSize = 12
         note.foreground = WindowsTheme.secondaryText.brush
