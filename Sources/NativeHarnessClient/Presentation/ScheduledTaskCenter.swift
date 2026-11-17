@@ -4,7 +4,8 @@ import Observation
 /// What starting one run did, and the account it went to instead of its own, when it did.
 enum ScheduleStartResult: Equatable, Sendable {
     case started(taskID: UUID, account: AccountAssignment? = nil)
-    case failed(String)
+    /// Why it could not start, and the task it made when the task came to exist but did not start.
+    case failed(String, taskID: UUID? = nil)
 }
 
 /// Yardlet's schedules and the one loop that runs them while Yardlet is open.
@@ -211,9 +212,9 @@ final class ScheduledTaskCenter {
         case let .started(taskID, account):
             record(ScheduledTaskRun(slot: slot, at: at, trigger: trigger, outcome: .started, taskID: taskID,
                                     mode: schedule.destination.mode, account: account), for: schedule.id)
-        case let .failed(message):
-            record(ScheduledTaskRun(slot: slot, at: at, trigger: trigger, outcome: .failed, failure: message),
-                   for: schedule.id)
+        case let .failed(message, taskID):
+            record(ScheduledTaskRun(slot: slot, at: at, trigger: trigger, outcome: .failed, failure: message,
+                                    taskID: taskID), for: schedule.id)
         }
     }
 

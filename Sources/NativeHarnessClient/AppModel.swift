@@ -765,7 +765,7 @@ final class AppModel {
             try submission.connection?.validate(for: submission.harness)
             let chatFolder = try ChatWorkspaces.makeFolder(in: projects.chatRoot)
             let created = await createSession(
-                harness: submission.harness, workspaceURL: chatFolder,
+                id: submission.taskID, harness: submission.harness, workspaceURL: chatFolder,
                 runtimeExecutableURL: submission.runtimeURL, title: submission.title,
                 titleOrigin: submission.titleOrigin,
                 initialPrompt: submission.prompt, initialAttachments: submission.attachments,
@@ -783,7 +783,7 @@ final class AppModel {
         }
         guard submission.startsInNewWorktree, !isVisualFixture else {
             return await createSession(
-                harness: submission.harness, workspaceURL: folder,
+                id: submission.taskID, harness: submission.harness, workspaceURL: folder,
                 runtimeExecutableURL: submission.runtimeURL, title: submission.title,
                 titleOrigin: submission.titleOrigin,
                 initialPrompt: submission.prompt, initialAttachments: submission.attachments,
@@ -798,7 +798,7 @@ final class AppModel {
         let project = projectForNewTask(workspaceURL: folder, projectID: submission.projectID)
         let worktree = try await worktrees.create(from: folder, prompt: submission.prompt)
         let created = await createSession(
-            harness: submission.harness, workspaceURL: worktree.workspaceURL,
+            id: submission.taskID, harness: submission.harness, workspaceURL: worktree.workspaceURL,
             runtimeExecutableURL: submission.runtimeURL, title: submission.title,
             titleOrigin: submission.titleOrigin,
             initialPrompt: submission.prompt, initialAttachments: submission.attachments,
@@ -827,6 +827,7 @@ final class AppModel {
     /// runtime attaches and nothing is sent until `startHeldTask` (a child that waits for room).
     @discardableResult
     func createSession(
+        id: UUID = UUID(),
         harness: HarnessKind,
         workspaceURL: URL,
         runtimeExecutableURL: URL,
@@ -876,6 +877,7 @@ final class AppModel {
         do {
             try connection?.validate(for: harness)
             let session = try await store.createSession(
+                id: id,
                 harness: harness,
                 workspaceURL: workspaceURL,
                 runtimeExecutableURL: runtimeExecutableURL,

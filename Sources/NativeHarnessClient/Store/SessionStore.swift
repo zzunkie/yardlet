@@ -101,6 +101,7 @@ final class SessionStore {
 
     @discardableResult
     func createSession(
+        id: UUID = UUID(),
         harness: HarnessKind,
         workspaceURL: URL,
         runtimeExecutableURL: URL,
@@ -130,6 +131,7 @@ final class SessionStore {
         let origin = resolved.isWorktree ? resolved : (knownOrigin ?? resolved)
         let now = Date()
         let session = SessionRecord(
+            id: id,
             harness: harness,
             workspaceURL: workspaceURL,
             runtimeExecutableURL: runtimeExecutableURL,

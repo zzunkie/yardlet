@@ -152,6 +152,9 @@ final class NewTaskDraft {
 
     struct Submission {
         let id = UUID()
+        /// The ID its task gets, so a start that made the task but could not start its harness still names
+        /// it (`AppModel.errorBySessionID` holds why). Each submission starts one task.
+        let taskID = UUID()
         let originalText: String
         let attachments: [CodexUserInput]
         let harness: HarnessKind

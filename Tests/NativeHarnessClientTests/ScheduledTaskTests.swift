@@ -5,8 +5,8 @@ import XCTest
 /// Schedules in the app: a run is a task started through the new-task path (with a stand-in
 /// harness, so no runtime or model is contacted), skipped while the previous run still works,
 /// sent to its task when it continues one, announced when it was missed, kept off an account that is
-/// nearly spent, paused and resumed, turned off after failed starts, kept across a relaunch, and
-/// imported once.
+/// nearly spent, paused and resumed, turned off after failed starts, naming the task that did not start
+/// and why, kept across a relaunch, and imported once.
 @MainActor
 final class ScheduledTaskTests: XCTestCase {
     private var root: URL!
@@ -106,6 +106,28 @@ final class ScheduledTaskTests: XCTestCase {
         XCTAssertEqual(prompts, ["Summarize the open issues."])
         XCTAssertEqual(model.scheduledTasks.schedule(startedTask: task.id)?.id, schedule.id)
         XCTAssertEqual(model.scheduledTasks.scheduledTaskIDs, [task.id])
+        await model.shutdown()
+    }
+
+    func testARunWhoseTaskDidNotStartNamesTheTaskAndWhy() async throws {
+        let reason = "OpenCode could not start: the stand-in refused."
+        let clock = Clock(date(16, 20))
+        let model = makeModel(adapter: SuggestionRecordingAdapter(startFailure: reason), clock: clock)
+        let project = model.projects.ensureProject(forRoot: try folder("issues"), name: "Issues")
+        model.scheduledTasks.create(dailySchedule(project: project))
+
+        clock.now = date(17, 9, 0, 30)
+        await model.scheduledTasks.checkDue()
+
+        let schedule = try XCTUnwrap(model.scheduledTasks.schedules.first)
+        let run = try XCTUnwrap(schedule.state.runs.first)
+        XCTAssertEqual(run.outcome, .failed)
+        XCTAssertEqual(run.failure, reason, "The run keeps the reason the task shows, not a generic line")
+        let task = try XCTUnwrap(model.store.sessions.first { $0.id == run.taskID }, "The run names the task it made")
+        XCTAssertTrue(task.title.hasPrefix("Issue digest · "), task.title)
+        let row = try XCTUnwrap(ScheduledRunRow.rows(for: schedule) { id in model.store.sessions.first { $0.id == id } }.first)
+        XCTAssertEqual(row.taskID, task.id, "Its line opens the task, as a started run's does")
+        XCTAssertEqual(row.stateText, ScheduleText.couldNotStart(reason))
         await model.shutdown()
     }
 

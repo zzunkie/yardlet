@@ -936,14 +936,21 @@ actor SuggestionRecordingAdapter: HarnessAdapter {
     nonisolated let kind: HarnessKind = .openCode
     private(set) var prompts: [String] = []
     private var streams: [UUID: AsyncStream<HarnessEventEnvelope>.Continuation] = [:]
+    /// Set, the harness does not start, with this reason.
+    private let startFailure: String?
+
+    init(startFailure: String? = nil) {
+        self.startFailure = startFailure
+    }
 
     func probeRuntime() async throws -> HarnessRuntimeDescriptor {
         HarnessRuntimeDescriptor(harness: kind, executableURL: URL(filePath: "/tmp/stub"), version: "stub",
                                  capabilities: .unavailable, fingerprint: "stub")
     }
     func createSession(_ request: CreateHarnessSessionRequest) async throws -> HarnessSessionHandle {
-        HarnessSessionHandle(harness: kind, localSessionID: request.localSessionID,
-                             providerSessionID: UUID().uuidString.lowercased(), workspaceURL: request.workspaceURL)
+        if let startFailure { throw HarnessAdapterError.capabilityUnavailable(startFailure) }
+        return HarnessSessionHandle(harness: kind, localSessionID: request.localSessionID,
+                                    providerSessionID: UUID().uuidString.lowercased(), workspaceURL: request.workspaceURL)
     }
     func resumeSession(providerSessionID: String, localSessionID: UUID, workspaceURL: URL) async throws -> HarnessSessionHandle {
         HarnessSessionHandle(harness: kind, localSessionID: localSessionID, providerSessionID: providerSessionID,

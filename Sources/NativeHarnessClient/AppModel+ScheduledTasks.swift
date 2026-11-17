@@ -76,6 +76,13 @@ extension AppModel {
             let previousError = bootstrapError
             do {
                 guard let created = try await createTask(submission) else {
+                    // A task that came to exist but whose harness did not start: the run names it and says
+                    // why, in the words its conversation shows.
+                    let taskID = submission.taskID
+                    if store.sessions.contains(where: { $0.id == taskID }) {
+                        return .failed(errorBySessionID[taskID] ?? L10n.string("The task could not start."),
+                                       taskID: taskID)
+                    }
                     let error = bootstrapError != previousError ? bootstrapError : nil
                     return .failed(error ?? L10n.string("The task could not start."))
                 }
