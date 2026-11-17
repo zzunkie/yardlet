@@ -55,6 +55,9 @@ enum ComposerKeys {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// Ctrl is held, as a click that does more than choose reads it (⌘ on the Mac).
+    static var isControlDown: Bool { isDown(VK_CONTROL) }
+
     private static func isDown(_ key: Int32) -> Bool {
         GetKeyState(key) < 0
     }

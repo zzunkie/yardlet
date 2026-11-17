@@ -1,6 +1,5 @@
 import Foundation
 import UWP
-import WinSDK
 import WinUI
 
 /// New task's projects over the composer, as the Mac's home lists them (`NewTaskHomeLists`): each project, then the
@@ -498,7 +497,7 @@ final class NewTaskHomeListsView {
         let url = panel.pill?.url
         button.click.addHandler { [weak self] _, _ in
             // Ctrl-click opens the project's pull request on GitHub, as ⌘-click does on the Mac.
-            if Self.isControlDown, let url {
+            if ComposerKeys.isControlDown, let url {
                 WindowsBrowser.open(url)
             } else {
                 self?.onAction(action)
@@ -582,7 +581,7 @@ final class NewTaskHomeListsView {
         let url = task.pullRequestURL
         button.click.addHandler { [weak self] _, _ in
             // Ctrl-click opens the task's pull request on GitHub; a double-click opens the task.
-            if Self.isControlDown, let url {
+            if ComposerKeys.isControlDown, let url {
                 WindowsBrowser.open(url)
             } else {
                 self?.onAction(reply ? .reply(id) : .openTask(id))
@@ -686,7 +685,7 @@ final class NewTaskHomeListsView {
         let open = project.open
         let url = project.pullRequestURL
         button.click.addHandler { [weak self] _, _ in
-            if Self.isControlDown, let url {
+            if ComposerKeys.isControlDown, let url {
                 WindowsBrowser.open(url)
             } else {
                 self?.onAction(choose)
@@ -781,9 +780,6 @@ final class NewTaskHomeListsView {
     private static let orangeFill = ThemeColor(light: .tint(1.00, 0.58, 0.00), dark: .tint(1.00, 0.62, 0.04))
     private static let redFill = ThemeColor(light: .tint(1.00, 0.23, 0.19), dark: .tint(1.00, 0.27, 0.23))
     private static let purpleFill = ThemeColor(light: .tint(0.69, 0.32, 0.87), dark: .tint(0.75, 0.35, 0.95))
-
-    /// Ctrl is held: a click opens the pull request, as ⌘ does on the Mac.
-    private static var isControlDown: Bool { GetKeyState(VK_CONTROL) < 0 }
 }
 
 private extension UWP.Color {
