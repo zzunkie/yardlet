@@ -122,13 +122,13 @@ final class TokenUsageLedgerTests: XCTestCase {
     }
 
     func testCodexCountsItsRunningTotalsLeavingOutReplayedHistory() async throws {
-        func count(_ ordinal: Int, input: Int64, cached: Int64, output: Int64) throws -> String {
+        func count(_ ordinal: Int, input: Int64, cached: Int64, written: Int64 = 0, output: Int64) throws -> String {
             try line(["timestamp": timestamp(3), "ordinal": ordinal, "type": "event_msg",
                       "payload": ["type": "token_count", "info": [
                           "total_token_usage": ["input_tokens": input, "cached_input_tokens": cached,
-                                                "cache_write_input_tokens": 0, "output_tokens": output],
+                                                "cache_write_input_tokens": written, "output_tokens": output],
                           "last_token_usage": ["input_tokens": input, "cached_input_tokens": cached,
-                                               "cache_write_input_tokens": 0, "output_tokens": output]]]])
+                                               "cache_write_input_tokens": written, "output_tokens": output]]]])
         }
         let rollout = codexRoot.appending(path: "2026/11/03/rollout-2026-11-03T10-00-00-thread-1.jsonl")
         try write(try line(["timestamp": timestamp(10), "ordinal": 0, "type": "session_meta",
@@ -138,12 +138,15 @@ final class TokenUsageLedgerTests: XCTestCase {
                           "payload": ["id": "parent", "cwd": "/elsewhere"]])
                   + count(2, input: 900_000, cached: 800_000, output: 9_000)
                   + line(["timestamp": timestamp(9), "ordinal": 5, "type": "turn_context",
-                          "payload": ["model": "gpt-6-astra", "cwd": "/work/app"]])
-                  + count(6, input: 900_000 + 100_000, cached: 800_000 + 90_000, output: 9_000 + 1_000)
+                          "payload": ["model": "gpt-6.2-astra", "cwd": "/work/app"]])
+                  // Exactly 272K input tokens (fresh, cached and written) still pays Standard prices.
+                  + count(6, input: 1_172_000, cached: 1_060_000, written: 2_000, output: 10_000)
                   // A count that only refreshed the limits repeats the totals.
-                  + count(7, input: 900_000 + 100_000, cached: 800_000 + 90_000, output: 9_000 + 1_000)
-                  // A long prompt: over 272K input tokens pays the long-context prices.
-                  + count(8, input: 1_000_000 + 300_000, cached: 890_000 + 290_000, output: 10_000 + 2_000),
+                  + count(7, input: 1_172_000, cached: 1_060_000, written: 2_000, output: 10_000)
+                  // A model switch and one token over the threshold use the new model's long-context prices.
+                  + line(["timestamp": timestamp(3), "ordinal": 8, "type": "turn_context",
+                          "payload": ["model": "gpt-6.2-sol", "cwd": "/work/app"]])
+                  + count(9, input: 1_444_001, cached: 1_320_001, written: 4_000, output: 12_000),
                   to: rollout)
 
         let ledger = TokenUsageLedger(directory: root.appending(path: "usage"), roots: roots, resolve: { _ in
@@ -153,14 +156,16 @@ final class TokenUsageLedgerTests: XCTestCase {
         let counted = box.counted
         XCTAssertEqual(counted.requests, 2)
         XCTAssertEqual(counted.freshInput, 10_000 + 10_000)
-        XCTAssertEqual(counted.cacheRead, 90_000 + 290_000)
+        XCTAssertEqual(counted.cacheRead, 260_000 + 260_001)
+        XCTAssertEqual(counted.cacheWrite, 4_000)
         XCTAssertEqual(counted.output, 1_000 + 2_000)
-        // GPT-6 Astra: $10 input, $1 cached, $50 output; over 272K, $20, $2 and $75.
-        let standard: Double = 10_000 * 10 + 90_000 * 1 + 1_000 * 50
-        let long: Double = 10_000 * 20 + 290_000 * 2 + 2_000 * 75
+        // Astra at Standard prices, then Sol at long-context prices, including 30-minute cache writes.
+        let standard: Double = 10_000 * 8 + 260_000 * 0.4 + 2_000 * 10 + 1_000 * 40
+        let long: Double = 10_000 * 4 + 260_001 * 0.2 + 2_000 * 5 + 2_000 * 15
         XCTAssertEqual(try XCTUnwrap(counted.cost), (standard + long) / 1e6, accuracy: 1e-9)
         let models = box.summaries.last?.groups[.month]?[.model] ?? [:]
-        XCTAssertEqual(Set(models.keys.map { (key: TokenUsageSummary.Key) in key.value }), ["gpt-6-astra"])
+        XCTAssertEqual(Set(models.keys.map { (key: TokenUsageSummary.Key) in key.value }),
+                       ["gpt-6.2-astra", "gpt-6.2-sol"])
         await ledger.stop()
     }
 

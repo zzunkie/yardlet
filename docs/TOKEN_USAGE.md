@@ -72,8 +72,9 @@ The API-equivalent cost uses the providers' public prices, copied into Yardlet w
 - Anthropic, <https://platform.claude.com/docs/en/about-claude/pricing>, 2026-11-10: input, 5-minute and 1-hour cache
   writes, cache reads and output per model; Claude Haiku 5.5's prices over 100,000 prompt tokens; fast mode at twice
   the rates on the models that have it; US-only inference at 1.1 times.
-- OpenAI, <https://developers.openai.com/api/docs/pricing>, 2026-11-03: the GPT-6 family's Standard tier, with the
-  long-context prices over 272K input tokens; a cache write at the 30-minute write price.
+- OpenAI, <https://developers.openai.com/api/docs/pricing>, 2026-11-18: the GPT-6 family, including GPT-6.2 Astra and
+  GPT-6.2 Sol, at the Standard tier, with long-context prices over 272K input tokens; a cache write at the 30-minute
+  write price. Codex's Fast and Ultrafast premiums are not included in this estimate.
 
 A model missing from the table is counted in tokens only and named "No price" by model. A subscription does not pay
 these dollars, as the page says under the numbers; it pays in plan limits.

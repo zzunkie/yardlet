@@ -38,7 +38,7 @@ enum TokenUsagePrices {
     static let anthropic = Table(provider: "Anthropic", source: "https://platform.claude.com/docs/en/about-claude/pricing",
                                  copied: "2026-11-10")
     static let openAI = Table(provider: "OpenAI", source: "https://developers.openai.com/api/docs/pricing",
-                              copied: "2026-11-03")
+                              copied: "2026-11-18")
     static let tables = [anthropic, openAI]
 
     private static func rates(_ input: Double, _ write5m: Double, _ write1h: Double, _ read: Double,
@@ -73,6 +73,10 @@ enum TokenUsagePrices {
         "claude-3-5-haiku": Model(rates: rates(0.8, 1, 1.6, 0.08, 4)),
         // OpenAI's Standard tier; a write is priced as its 30-minute write. Over 272K input tokens a
         // request pays the long-context prices.
+        "gpt-6.2-astra": Model(rates: rates(8, 10, 10, 0.4, 40), longPrompt: rates(16, 20, 20, 0.8, 60),
+                               longPromptOver: 272_000),
+        "gpt-6.2-sol": Model(rates: rates(2, 2.5, 2.5, 0.1, 10), longPrompt: rates(4, 5, 5, 0.2, 15),
+                             longPromptOver: 272_000),
         "gpt-6-astra": Model(rates: rates(10, 12.5, 12.5, 1, 50), longPrompt: rates(20, 25, 25, 2, 75),
                              longPromptOver: 272_000),
         "gpt-6.1-sol": Model(rates: rates(2, 2.5, 2.5, 0.1, 10), longPrompt: rates(4, 5, 5, 0.2, 15),
