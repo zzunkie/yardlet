@@ -152,6 +152,11 @@ final class TaskComposer {
 
     /// Looks at the task's folder again, which the line above the card names when it is gone: when the task is shown
     /// and when the window comes to the front, as on the Mac.
+    /// Opens the task's model menu, as the Mac's Control+Shift+M does in its composer.
+    func openModelMenu() {
+        chips.openModelMenu()
+    }
+
     func refreshFolder() {
         guard let sessionID else { return }
         Task { await model.refreshTaskFolder(sessionID) }

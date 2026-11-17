@@ -124,6 +124,7 @@ final class MainWindow {
             }
         }
         keys.newTask = { [weak self] in self?.showHome() }
+        keys.openModelMenu = { [weak self] in self?.composer.openModelMenu() }
         keys.install(on: root)
         self.keys = keys
         SidebarStyle.columns(root, [SidebarStyle.auto, SidebarStyle.star])

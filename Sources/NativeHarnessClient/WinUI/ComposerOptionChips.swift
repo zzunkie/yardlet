@@ -27,6 +27,8 @@ final class ComposerOptionChips {
     private var isPreparing = false
     /// The control to open once its choices are read.
     private var opensAfterPreparing: String?
+    /// Opens the model menu last drawn.
+    private var openModel: (() -> Void)?
 
     /// The controls after + : the mode or Plan indicator, the permissions, and while choices are read, a spinner.
     func leading(_ options: ComposerSessionOptions) -> [UIElement] {
@@ -104,15 +106,31 @@ final class ComposerOptionChips {
 
     /// The controls before the queue and Send: the model menu, beside Send as both reference apps place it.
     func trailing(_ options: ComposerSessionOptions) -> [UIElement] {
+        openModel = nil
         guard let slot = options.model else { return [] }
         let menu = slot.menu
         let control = ComposerParts.control(title: menu.triggerTitle, detail: menu.triggerDetail, chevron: true,
                                             name: L10n.string("Model"))
         try? ToolTipService.setToolTip(control, L10n.string("Select model"))
-        attach(key: "model", to: control, canChoose: menu.canChoose && !menu.isEmpty) { [weak self] in
+        let canChoose = menu.canChoose && !menu.isEmpty
+        attach(key: "model", to: control, canChoose: canChoose) { [weak self] in
             self?.modelMenu(menu, apply: slot.apply, anchor: control)
         }
+        openModel = { [weak self] in
+            guard control.isEnabled else { return }
+            if let flyout = control.flyout {
+                try? flyout.showAt(control)
+            } else if !canChoose {
+                self?.prepareThenOpen("model")
+            }
+        }
         return [control]
+    }
+
+    /// Opens the model menu as a click on it does, for the Mac's Open Model Menu key
+    /// (`TaskCommandShortcut.openModelMenu`); nothing when the composer has no model menu.
+    func openModelMenu() {
+        openModel?()
     }
 
     // MARK: Menus

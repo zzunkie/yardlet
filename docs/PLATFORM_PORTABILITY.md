@@ -169,8 +169,9 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   names. With no task the window opens New task, as the Mac opens its home. Above a task's conversation, its header
   (`WinUI/TaskHeader.swift`) is the Mac's: the title, which opens the task's menu, the harness, and a progress ring
   while it works. The Mac's Task menu keys work with Ctrl for ⌘ and Alt for ⌥ (`WinUI/TaskKeys.swift`): Ctrl+N,
-  Ctrl+Shift+[ and ], Ctrl+Alt+A, Ctrl+Alt+P, Ctrl+Shift+U and Ctrl+Shift+A, and F2 renames the shown task as Windows
-  renames what is chosen; Ctrl+Alt keys pressed with AltGr are left to typing. Below the conversation is the task's
+  Ctrl+Shift+[ and ], Ctrl+Alt+A, Ctrl+Alt+P, Ctrl+Shift+U, Ctrl+Shift+A and Ctrl+Shift+M, the Mac's Control+Shift+M
+  for the model menu, and F2 renames the shown task as Windows renames what is chosen; Ctrl+Alt keys pressed with AltGr
+  are left to typing. Below the conversation is the task's
   composer as the Mac's (`WinUI/TaskComposer.swift`, `WinUI/ComposerParts.swift`): a
   rounded card at most as wide as the conversation, its text above a bottom row with the task's session controls
   (the mode or Codex's Plan indicator, the permissions and the model menu, from `ComposerSessionOptionsProjection`,

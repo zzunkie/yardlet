@@ -5,8 +5,8 @@ import WinUI
 
 /// The Mac's Task menu keys (`TaskCommandShortcut`) in the Windows window, with Ctrl in place of ⌘ and Alt in place
 /// of ⌥: Ctrl+N New task, Ctrl+Shift+[ and ] the previous and next task, Ctrl+Alt+A the next task needing attention,
-/// Ctrl+Alt+P Pin, Ctrl+Shift+U Mark as unread and Ctrl+Shift+A Archive, and F2 Rename, Windows' own key for renaming
-/// what is chosen. What each acts on is the Mac's (`TaskCommandTargets`): a key with nothing to act on does nothing.
+/// Ctrl+Alt+P Pin, Ctrl+Shift+U Mark as unread and Ctrl+Shift+A Archive, Ctrl+Shift+M the model menu, which the Mac
+/// gives Control+Shift+M, and F2 Rename, Windows' own key for renaming what is chosen. What each acts on is the Mac's (`TaskCommandTargets`): a key with nothing to act on does nothing.
 /// The right Alt key is AltGr, which types characters on many keyboards, so Ctrl+Alt keys pressed with it are left to
 /// the field being typed in.
 @MainActor
@@ -16,6 +16,8 @@ final class TaskKeys {
     /// Shows a row of the sidebar.
     var activate: (WindowItem) -> Void = { _ in }
     var newTask: () -> Void = {}
+    /// Opens the shown task's model menu.
+    var openModelMenu: () -> Void = {}
 
     private let model: AppModel
     private let sidebar: TaskSidebar
@@ -55,6 +57,10 @@ final class TaskKeys {
         add(.a, [control, shift], to: element) { [weak self] in
             guard let self, let id = self.targets().archive else { return }
             self.actions.archive(id)
+        }
+        add(.m, [control, shift], to: element) { [weak self] in
+            guard let self, self.shown().session != nil else { return }
+            self.openModelMenu()
         }
         add(.f2, [], to: element) { [weak self] in
             guard let self, let id = self.targets().archive else { return }
