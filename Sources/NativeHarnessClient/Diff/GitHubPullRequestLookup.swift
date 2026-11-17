@@ -49,17 +49,35 @@ struct LocalGitHubCLI: GitHubCLIRunning {
     }
 
     static func locate(
-        candidates: [String] = standardPaths,
+        candidates: [String] = defaultCandidates(),
         homeURL: URL = FileManager.default.homeDirectoryForCurrentUser,
-        isExecutableFile: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
+        isExecutableFile: (String) -> Bool = isProgram
     ) -> URL? {
         #if os(Windows)
-        let paths = GitExecutableLocator.windowsCandidates(named: "gh.exe", installPaths: windowsInstallPaths,
-                                                           environment: ProcessInfo.processInfo.environment)
-        return paths.first(where: GitExecutableLocator.isExecutableFile).map { URL(filePath: $0) }
+        let paths = candidates
         #else
         let paths = candidates + [homeURL.appending(path: ".local/bin/gh").path(percentEncoded: false)]
+        #endif
         return paths.first(where: isExecutableFile).map { URL(filePath: $0) }
+    }
+
+    /// This platform's places to look, in order: on Windows `gh.exe` in `Path`, then where it is installed
+    /// (`windowsInstallPaths`), as Git is looked for.
+    static func defaultCandidates() -> [String] {
+        #if os(Windows)
+        return GitExecutableLocator.windowsCandidates(named: "gh.exe", installPaths: windowsInstallPaths,
+                                                      environment: ProcessInfo.processInfo.environment)
+        #else
+        return standardPaths
+        #endif
+    }
+
+    /// A program: on Windows, which keeps no execute permission, a file with a program's extension.
+    static func isProgram(_ path: String) -> Bool {
+        #if os(Windows)
+        return GitExecutableLocator.isExecutableFile(path)
+        #else
+        return FileManager.default.isExecutableFile(atPath: path)
         #endif
     }
 
