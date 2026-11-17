@@ -103,20 +103,23 @@ struct DecodedImage: @unchecked Sendable {
 
 /// A PDF's pages one under another at the panel's width, each drawn by PDFKit as it scrolls into view.
 /// PDFKit's own `PDFView` draws only in a window on screen, so the panel could not be checked unshown.
+/// The document lives on `PDFPageRenderer`, off the main thread: a long PDF takes a while to read,
+/// each page to draw, and its objects a large part of a second to free.
 private struct FilePDFView: View {
     let url: URL
-    @State private var document: PDFDocument?
+    @State private var pages: PDFPages?
     @State private var isUnavailable = false
 
     var body: some View {
         Group {
-            if let document {
+            if let pages {
                 GeometryReader { proxy in
                     ScrollView {
                         LazyVStack(spacing: 12) {
-                            ForEach(0..<document.pageCount, id: \.self) { index in
-                                if let page = document.page(at: index) {
-                                    PDFPageImage(page: page, width: max(1, proxy.size.width - 32))
+                            ForEach(pages.sizes.indices, id: \.self) { index in
+                                if let size = pages.sizes[index] {
+                                    PDFPageImage(renderer: pages.renderer, index: index, size: size,
+                                                 width: max(1, proxy.size.width - 32))
                                 }
                             }
                         }
@@ -131,26 +134,97 @@ private struct FilePDFView: View {
             }
         }
         .task(id: url) {
-            document = PDFDocument(url: url)
-            isUnavailable = document == nil || document?.pageCount == 0
+            close()
+            isUnavailable = false
+            let renderer = PDFPageRenderer(url: url)
+            let sizes = await renderer.open()
+            guard !Task.isCancelled, !sizes.isEmpty else {
+                isUnavailable = !Task.isCancelled
+                return await renderer.close()
+            }
+            pages = PDFPages(renderer: renderer, sizes: sizes)
         }
+        .onDisappear { close() }
+    }
+
+    /// Lets the document go on its renderer rather than wherever the view's state is released.
+    private func close() {
+        guard let renderer = pages?.renderer else { return }
+        pages = nil
+        Task { await renderer.close() }
     }
 }
 
+private struct PDFPages {
+    let renderer: PDFPageRenderer
+    /// Each page's size in points as it is shown; nil for a page PDFKit cannot read.
+    let sizes: [CGSize?]
+}
+
+/// One page, drawn by the renderer at the size it is shown and let go once it scrolls out of view.
 private struct PDFPageImage: View {
-    let page: PDFPage
+    let renderer: PDFPageRenderer
+    let index: Int
+    let size: CGSize
     let width: CGFloat
     @Environment(\.displayScale) private var displayScale
+    @State private var image: CGImage?
 
     var body: some View {
-        let bounds = page.bounds(for: .cropBox)
-        // A page turned a quarter is as wide as it is tall unturned.
-        let turned = page.rotation % 180 != 0
-        let height = width * (turned ? bounds.width : bounds.height) / max(1, turned ? bounds.height : bounds.width)
-        Image(nsImage: page.thumbnail(of: NSSize(width: width * displayScale, height: height * displayScale), for: .cropBox))
-            .resizable()
-            .frame(width: width, height: height)
-            .shadow(color: .black.opacity(0.18), radius: 2, y: 1)
+        let height = width * size.height / max(1, size.width)
+        let pixels = CGSize(width: (width * displayScale).rounded(), height: (height * displayScale).rounded())
+        Group {
+            if let image {
+                Image(decorative: image, scale: displayScale).resizable()
+            } else {
+                Color.white
+            }
+        }
+        .frame(width: width, height: height)
+        .shadow(color: .black.opacity(0.18), radius: 2, y: 1)
+        // The page drawn before stays, stretched, while one at the new width is drawn.
+        .task(id: pixels) {
+            if let drawn = await renderer.image(of: index, pixels: pixels), !Task.isCancelled { image = drawn }
+        }
+        .onDisappear { image = nil }
+    }
+}
+
+/// Reads, draws and frees a PDF off the main thread; PDFKit's objects never leave it.
+actor PDFPageRenderer {
+    private let url: URL
+    private var document: PDFDocument?
+    init(url: URL) { self.url = url }
+
+    /// Opens the file and gives each page's size in points as it is shown; none when it cannot be read.
+    func open() -> [CGSize?] {
+        autoreleasepool {
+            guard let document = PDFDocument(url: url) else { return [] }
+            self.document = document
+            return (0..<document.pageCount).map { index in
+                document.page(at: index).map { page in
+                    let bounds = page.bounds(for: .cropBox)
+                    // A page turned a quarter is as wide as it is tall unturned.
+                    return page.rotation % 180 == 0 ? bounds.size : CGSize(width: bounds.height, height: bounds.width)
+                }
+            }
+        }
+    }
+
+    /// The page drawn `pixels` in size; nil once closed, or when the view no longer wants it.
+    /// PDFKit's thumbnail rather than a bitmap context of the renderer's own: the panel kept two
+    /// copies of every page drawn into such a context until it closed, and none of the thumbnail's.
+    func image(of index: Int, pixels: CGSize) -> CGImage? {
+        guard !Task.isCancelled, let page = document?.page(at: index) else { return nil }
+        return autoreleasepool {
+            var rect = CGRect(origin: .zero, size: pixels)
+            return page.thumbnail(of: pixels, for: .cropBox).cgImage(forProposedRect: &rect, context: nil, hints: nil)
+        }
+    }
+
+    /// Frees the document here: a long PDF's objects take a large part of a second to free.
+    func close() {
+        autoreleasepool { document = nil }
     }
 }
 

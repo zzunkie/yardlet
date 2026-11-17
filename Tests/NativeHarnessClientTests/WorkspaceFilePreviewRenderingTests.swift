@@ -52,10 +52,15 @@ final class WorkspaceFilePreviewRenderingTests: XCTestCase {
             state.open(file, in: root)
             let deadline = Date().addingTimeInterval(20)
             while state.isLoading, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
-            // An image is decoded after the panel shows it.
+            // An image is decoded, and a PDF's page drawn, off the main thread after the panel shows it.
             host.settle(passes: state.media == nil ? 6 : 20)
             try check(state)
-            let bitmap = try host.capture().bitmap
+            var bitmap = try host.capture().bitmap
+            let drawn = Date().addingTimeInterval(testWaitLimitSeconds)
+            while state.media != nil, ink(in: bitmap, rows: 0.35...0.55) <= minimumInk, Date() < drawn {
+                host.settle(passes: 1)
+                bitmap = try host.capture().bitmap
+            }
             // Text is drawn on the lines below the first too, not only where the view laid out first.
             XCTAssertGreaterThan(ink(in: bitmap, rows: 0.35...0.55), minimumInk, "\(name) \(appearance)")
             try WindowlessRender.writePNG(bitmap, to: directory.appending(path: "\(name)-\(appearance.suffix).png"))
