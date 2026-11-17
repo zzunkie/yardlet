@@ -22,25 +22,22 @@ final class NewTaskDraft {
     var hostMentions: [WorkspaceFileMatch] = []
     var attachments: [CodexUserInput] = [] { didSet { if attachments != oldValue { onChange?() } } }
     var notice: String?
-    var workspaceURL: URL? {
-        didSet {
-            // Choosing a folder or a project is choosing not to start a chat.
-            if workspaceURL != nil { startsChat = false }
-            if workspaceURL != oldValue { onChange?() }
-        }
-    }
+    /// The folder the task starts in. Choosing a folder or a project is choosing not to start a chat.
+    var workspaceURL: URL? { didSet { if workspaceURL != oldValue { onChange?() } } }
     /// The project whose primary folder seeds `workspaceURL`. A folder chosen directly leaves
     /// this nil, and the task still joins the project that owns that folder.
     var projectID: UUID? { didSet { if projectID != oldValue { onChange?() } } }
     /// The task starts as a chat with no project, in a new folder made for it when it starts
-    /// (`ChatWorkspaces`), as the Codex app starts a chat. There is then no folder to choose.
-    private(set) var startsChat = false { didSet { if startsChat != oldValue { onChange?() } } }
+    /// (`ChatWorkspaces`), as the Codex app starts a chat: whenever no folder is chosen once the
+    /// draft has its destination (`hasPreparedWorkspace`), whether the person chose Chat, removed the
+    /// project, or there was none to start in. Only an untouched draft waits for its first project.
+    var startsChat: Bool { workspaceURL == nil && hasPreparedWorkspace }
 
     /// Starts the next task as a chat instead of in a project's folder.
     func chooseChat() {
         workspaceURL = nil
         projectID = nil
-        startsChat = true
+        hasPreparedWorkspace = true
     }
     var harness: HarnessKind? { didSet { if harness != oldValue { onChange?() } } }
     var connectionSelection: [HarnessKind: String] = [:] {
@@ -115,6 +112,8 @@ final class NewTaskDraft {
     /// draft, such as Git refusing to make the worktree.
     private(set) var creationError: String?
     private var pendingSubmission: Submission?
+    /// The draft has its destination: the first project was offered when it was first prepared, or
+    /// the person chose one, or Chat, before that.
     private var hasPreparedWorkspace = false { didSet { if hasPreparedWorkspace != oldValue { onChange?() } } }
 
     var snapshot: HomeDraftSnapshot {
@@ -138,13 +137,13 @@ final class NewTaskDraft {
         notice = nil
         workspaceURL = snapshot.workspaceURL
         projectID = snapshot.projectID
-        startsChat = snapshot.workspaceURL == nil && snapshot.startsChat == true
         harness = snapshot.harness
         connectionSelection = snapshot.connectionSelection ?? [:]
         worktreeProjectIDs = snapshot.worktreeProjectIDs ?? []
         modelChoices = snapshot.modelChoices ?? [:]
         suggestion = snapshot.suggestion
-        hasPreparedWorkspace = snapshot.hasPreparedWorkspace
+        // A chat chosen before the draft was first prepared keeps it from taking the first project.
+        hasPreparedWorkspace = snapshot.hasPreparedWorkspace || snapshot.startsChat == true
         wasRestored = !text.isEmpty
         onChange = callback
     }
@@ -230,7 +229,7 @@ final class NewTaskDraft {
             if snapshot != previous { onPreparation?() }
         }
         if !hasPreparedWorkspace {
-            if workspaceURL == nil, !startsChat {
+            if workspaceURL == nil {
                 workspaceURL = defaultWorkspaceURL
                 projectID = defaultProjectID
             }

@@ -108,7 +108,7 @@ final class NewTaskDraftTests: XCTestCase {
         XCTAssertEqual(draft.harness, .codex)
         XCTAssertNil(draft.workspaceURL)
         XCTAssertEqual(draft.text, "Keep my input")
-        XCTAssertNil(draft.beginSubmission(runtimeURL: runtime))
+        XCTAssertTrue(draft.startsChat, "With no project to start in, the task starts as a chat")
         draft.workspaceURL = firstProject
         draft.text = " \n "
         XCTAssertNil(draft.beginSubmission(runtimeURL: runtime))

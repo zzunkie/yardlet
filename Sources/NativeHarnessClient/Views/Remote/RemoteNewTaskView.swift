@@ -131,9 +131,8 @@ struct RemoteNewTaskView: View {
     private var newTask: some View {
         VStack(spacing: 0) {
             NewTaskHeroTitle(kind: heroKind) { destinationMenuItems }
-            if projectID == nil || isChat {
-                NewTaskDestinationButton(title: L10n.string(isChat ? "Chat (no project)" : "Choose project"),
-                                         systemName: isChat ? "bubble.left" : "folder") {
+            if isChat {
+                NewTaskDestinationButton(title: L10n.string("Chat (no project)"), systemName: "bubble.left") {
                     destinationMenuItems
                 }
                 .padding(.top, 8)
@@ -270,7 +269,9 @@ struct RemoteNewTaskView: View {
         }
     }
 
-    private var isChat: Bool { projects.first { $0.id == projectID }?.kind == .chats }
+    /// The new task starts as a chat: Chats chosen, or no project to start in, as on the local home
+    /// (`NewTaskDraft.startsChat`).
+    private var isChat: Bool { projectID == nil || projects.first { $0.id == projectID }?.kind == .chats }
 
     /// The title over the composer, as the local home's: what to work on in the chosen project, its name the menu of
     /// the host's projects and Chats.
@@ -297,7 +298,7 @@ struct RemoteNewTaskView: View {
     }
 
     private var canStart: Bool {
-        model.isConnected && !isStarting && optionReadID == nil && projectID != nil
+        model.isConnected && !isStarting && optionReadID == nil
             && (!draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draft.hostMentions.isEmpty)
     }
 
@@ -375,7 +376,7 @@ struct RemoteNewTaskView: View {
     }
 
     private var editorCommands: ComposerEditorCommands? {
-        guard model.composerExtensions, chosenHarness?.harness == HarnessKind.claudeCode.rawValue, projectID != nil, !isChat else { return nil }
+        guard model.composerExtensions, chosenHarness?.harness == HarnessKind.claudeCode.rawValue, !isChat else { return nil }
         return ComposerEditorCommands(commands: commandRows, isLoading: loadingCommands, choose: insertCommand)
     }
 
@@ -392,7 +393,7 @@ struct RemoteNewTaskView: View {
             }
             .buttonStyle(.borderless).parityPointer()
             .accessibilityLabel(L10n.string("Slash commands"))
-            .disabled(projectID == nil || isChat || isStarting)
+            .disabled(isChat || isStarting)
             .popover(isPresented: $showsCommands) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(L10n.string("Slash commands")).font(.callout.weight(.semibold))
@@ -457,7 +458,8 @@ struct RemoteNewTaskView: View {
     }
 
     private func start() {
-        guard canStart, let projectID else { return }
+        guard canStart else { return }
+        let projectID = projectID ?? RemoteTaskProjection.chatsProjectID
         if let setting = options?.settings?.first(where: { setting in
             setting.choices.first { $0.value == setting.value }?.confirm != nil
                 && confirmedChoices[setting.id] != setting.value

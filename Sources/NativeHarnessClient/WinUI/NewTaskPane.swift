@@ -152,9 +152,8 @@ final class NewTaskPane {
         harnesses = descriptors.map(\.id)
         let projects = visibleProjects
         draft.prepare(defaultProject: projects.first, availableHarnesses: harnesses)
+        // With no project to start in, the task starts as a chat (`NewTaskDraft.startsChat`).
         draft.dropUnavailableProject(visible: projects)
-        // With no project to start in, a task starts as a chat, as it did before projects could be chosen here.
-        if draft.workspaceURL == nil, !draft.startsChat { draft.chooseChat() }
         if let harness = draft.harness, !harnesses.contains(harness) { draft.harness = harnesses.first }
 
         isFilling = true

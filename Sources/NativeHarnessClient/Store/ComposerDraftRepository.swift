@@ -21,8 +21,9 @@ struct HomeDraftSnapshot: Codable, Equatable {
     var text = ""
     var workspaceURL: URL?
     var projectID: UUID?
-    /// The next task starts as a chat, with no folder chosen. Absent, as in drafts saved before
-    /// it existed, it starts in the chosen folder.
+    /// The next task starts as a chat, with no folder chosen. A prepared draft with no folder starts
+    /// one either way (`NewTaskDraft.startsChat`); this keeps a chat chosen before the draft was first
+    /// prepared from taking the first project.
     var startsChat: Bool?
     var harness: HarnessKind?
     var hasPreparedWorkspace = false

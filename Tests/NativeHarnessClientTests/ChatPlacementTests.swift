@@ -82,6 +82,15 @@ final class ChatPlacementTests: XCTestCase {
         draft.workspaceURL = project
         XCTAssertFalse(draft.startsChat)
         XCTAssertFalse(NewTaskDraft().startsChat)
+
+        // With no project chosen the home starts a chat: the project removed, or none to start in.
+        draft.workspaceURL = nil
+        XCTAssertTrue(draft.startsChat)
+        let empty = NewTaskDraft()
+        empty.prepare(defaultWorkspaceURL: nil, availableHarnesses: [.claudeCode])
+        empty.text = "Plan the weekend trip"
+        XCTAssertTrue(empty.startsChat)
+        XCTAssertNil(try XCTUnwrap(empty.beginSubmission(runtimeURL: URL(filePath: "/usr/bin/true"))).workspaceURL)
     }
 
     // MARK: - App model
