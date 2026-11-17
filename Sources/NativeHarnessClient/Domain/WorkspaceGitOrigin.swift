@@ -174,13 +174,17 @@ enum GitWorktreeOriginResolver {
     }
 
     /// The nearest enclosing folder that carries a `.git` entry — the toplevel a task's cwd
-    /// belongs to, whether the cwd is the checkout itself or a folder inside it.
+    /// belongs to, whether the cwd is the checkout itself or a folder inside it. The walk stops
+    /// where a folder is no longer an absolute path: on Windows, going up from a drive's root
+    /// (`/C:`) gives a path read from the process's current folder, whose checkout is not the
+    /// task's.
     private static func repositoryMarker(
         from workspaceURL: URL,
         reader: GitMetadataReader
     ) -> Marker? {
         var current = normalized(workspaceURL)
         for _ in 0..<64 {
+            guard PathRules.current.isAbsolute(current) else { return nil }
             let gitPath = current == "/" ? "/.git" : current + "/.git"
             if let kind = reader.kind(gitPath) {
                 return Marker(toplevel: current, gitPath: gitPath, kind: kind)
