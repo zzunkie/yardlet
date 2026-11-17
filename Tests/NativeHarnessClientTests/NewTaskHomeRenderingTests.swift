@@ -666,7 +666,8 @@ final class NewTaskHomeRenderingTests: XCTestCase {
     /// The desk with the calendar on: three zones with today on a time axis in a wide window (1,800 × 1,125 less
     /// 351 pt), two columns in the same window with the calendar off, and two columns whose today lists the events
     /// with the runs at 1,280 × 820 less 240 pt, in both appearances, into `.build/desk-qa/<language>/calendar-*`.
-    /// The calendar is read for today while the desk shows, and not before or once the Projects view replaces it.
+    /// The axis opens on the hour before now as the calendar's lines load above it. The calendar is read for today
+    /// while the desk shows, and not before or once the Projects view replaces it.
     func testTheDeskLaysTodayOnATimeAxisWithTheCalendarOn() async throws {
         let language = (Locale.preferredLanguages.first ?? "en").hasPrefix("ko") ? "ko" : "en"
         let directory = try WindowlessRender.directory("desk-qa/\(language)")
@@ -678,7 +679,7 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         defer { DeskPreview.hide() }
         XCTAssertEqual(service.reads, 0, "Nothing is read before a screen shows the calendar")
         let w = Self.words
-        let meeting = w("투자사 통화", "Investor call")
+        let meeting = w("투자사 통화", "Investor call"), teamMeeting = w("팀 주간 회의", "Weekly team meeting")
         let wide = NSSize(width: 1_449, height: 1_125), regular = NSSize(width: 1_040, height: 820)
         let scenes: [(name: String, calendar: CalendarCenter, size: NSSize)] = [
             ("calendar-zones-1449", center, wide), ("calendar-off-1449", off, wide), ("calendar-two-1040", center, regular),
@@ -696,6 +697,20 @@ final class NewTaskHomeRenderingTests: XCTestCase {
                 } else {
                     host.settle(passes: 10)
                 }
+                // How far under the axis's top the team meeting starts, at 14:00, the hour before now, against a
+                // quarter of its hour. The axis opens on that hour and keeps it as the lines above it load, which
+                // shorten its column after it appeared.
+                func openingHour() -> (gap: CGFloat, quarter: CGFloat)? {
+                    guard let block = controls(in: host).first(where: { $0.label.hasPrefix(teamMeeting) }),
+                          let axis = controls(in: host, role: .scrollArea).first(where: {
+                              $0.frame.minX <= block.frame.minX && block.frame.maxX <= $0.frame.maxX
+                          })
+                    else { return nil }
+                    return (block.frame.minY - axis.frame.minY, block.frame.height / 4)
+                }
+                if scene.name == "calendar-zones-1449" {
+                    await host.settle(until: { openingHour().map { 0 <= $0.gap && $0.gap < $0.quarter } ?? false })
+                }
                 try WindowlessRender.writePNG(try host.capture().bitmap,
                                               to: directory.appending(path: "\(scene.name)-\(appearance.suffix).png"))
                 guard appearance == .light else { continue }
@@ -708,6 +723,9 @@ final class NewTaskHomeRenderingTests: XCTestCase {
                     // Two runs to come and the invitation; the meeting ended.
                     XCTAssertTrue(shows(L10n.format("%lld left today with the calendar", 3)), report)
                     XCTAssertTrue(axis, "Today on a time axis: \(report)")
+                    let opening = try XCTUnwrap(openingHour(), report)
+                    XCTAssertTrue(0 <= opening.gap && opening.gap < opening.quarter,
+                                  "The axis opens on the hour before now, at its top: \(opening)")
                     XCTAssertTrue(elements.contains { $0.label.hasPrefix(meeting) && $0.value == L10n.string("Not replied") },
                                   "The invitation not answered: \(report)")
                     XCTAssertTrue(shows(w("0.12 출시 목표", "0.12 release target")), "The all-day event as a line")

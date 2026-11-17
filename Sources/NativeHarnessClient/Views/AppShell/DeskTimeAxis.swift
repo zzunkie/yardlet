@@ -26,8 +26,9 @@ struct DeskTimeAxis: View, @MainActor Equatable {
     /// The hour at the axis's top: the one it opened on, then where the person scrolled. A column that grows or
     /// shrinks, whose hours change height with it, keeps it at the top.
     @State private var topHour: Int?
-    /// The axis asked to scroll and the scroll view has not taken it yet: what it scrolls meanwhile is not the person.
-    @State private var settling = false
+    /// The scrolls the axis asked for that have not run yet: what the scroll view scrolls meanwhile is not the person.
+    /// A count, not a flag: a scroll that runs while the column changes again asks for another one before it ends.
+    @State private var pendingScrolls = 0
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.items == rhs.items && lhs.colors == rhs.colors && lhs.minute == rhs.minute && lhs.day == rhs.day
@@ -75,7 +76,7 @@ struct DeskTimeAxis: View, @MainActor Equatable {
                     if old.column != new.column {
                         // A taller or shorter column, whose hours change height: the same hour at the top.
                         scroll(proxy, to: topHour ?? opening)
-                    } else if !settling {
+                    } else if pendingScrolls == 0 {
                         let hourHeight = Self.hourHeight(column: new.column, rest: rest)
                         topHour = hours.lowerBound + Int((new.offset / hourHeight).rounded())
                     }
@@ -93,11 +94,11 @@ struct DeskTimeAxis: View, @MainActor Equatable {
     /// Scrolls once this update is over and the column has its size, so the scroll view does not cut the offset
     /// short to the height it had.
     private func scroll(_ proxy: ScrollViewProxy, to hour: Int) {
-        settling = true
+        pendingScrolls += 1
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
                 proxy.scrollTo(hour, anchor: .top)
-                settling = false
+                pendingScrolls -= 1
             }
         }
     }
