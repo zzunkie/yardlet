@@ -1068,13 +1068,15 @@ enum QAWindowWatcher {
     private static var textReads: [ObjectIdentifier: Int] = [:]
 
     private static func accessibilityText(_ element: Any, depth: Int) -> String {
-        guard depth < 14, let object = element as? NSObject else { return "" }
-        func value(_ attribute: NSAccessibility.Attribute) -> Any? { object.accessibilityAttributeValue(attribute) }
+        guard depth < 14, let element = element as? NSAccessibilityProtocol else { return "" }
         var parts: [String] = []
-        let role = value(.role) as? String ?? ""
-        let words = [value(.title), value(.description), value(.value)].compactMap { $0 as? String }.filter { !$0.isEmpty }
+        let role = element.accessibilityRole()?.rawValue ?? ""
+        // Each string once: an AppKit window or button also gives its title as its label.
+        var seen = Set<String>()
+        let words = [element.accessibilityTitle(), element.accessibilityLabel(), element.accessibilityValue() as? String]
+            .compactMap { $0 }.filter { !$0.isEmpty && seen.insert($0).inserted }
         if !words.isEmpty { parts.append(String(repeating: "  ", count: depth) + role + " " + words.joined(separator: " | ")) }
-        for child in value(.children) as? [Any] ?? [] {
+        for child in element.accessibilityChildren() ?? [] {
             let text = accessibilityText(child, depth: depth + 1)
             if !text.isEmpty { parts.append(text) }
         }
