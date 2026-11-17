@@ -50,7 +50,7 @@ extension AppModel {
             )
             codexTimelineItems.moveCards(from: UserDefaultsCodexTimelineItemRepository(defaults: defaults))
             // One record of the versions runtimes reported, for choosing among installs and for
-            // the way a runtime runs (Antigravity CLI over ACP or in print mode).
+            // whether a runtime can run (an Antigravity CLI before `agy acp` cannot).
             let runtimeVersions = RuntimeVersionCache(defaults: defaults)
             let runtimeSelections = RuntimeSelectionStore(defaults: defaults, versions: runtimeVersions)
             // Only the app itself cleans Antigravity's folder, here and not in anything a view or a test

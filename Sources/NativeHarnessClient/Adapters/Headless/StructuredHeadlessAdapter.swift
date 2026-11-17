@@ -1,6 +1,7 @@
 import Foundation
 
-actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, HarnessModelCatalogReporting {
+/// Cursor Agent's print mode: one `cursor-agent --print --output-format stream-json` per turn.
+actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding {
     nonisolated let kind: HarnessKind
 
     private let executableURL: URL
@@ -20,18 +21,11 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, Ha
     private var activitiesBySessionID: [UUID: [String: HarnessActivity]] = [:]
     private var optionsByLocalSessionID: [UUID: StructuredHeadlessSessionOptions] = [:]
     private var modelChoicesByLocalSessionID: [UUID: [ProviderCapabilityChoice]] = [:]
-    private var agentChoicesByLocalSessionID: [UUID: [ProviderCapabilityChoice]] = [:]
-    /// What Antigravity CLI last reported for the account, shared by this runtime's tasks so each
-    /// one does not start three more processes: its models, agents and whether `--mode auto` is
-    /// on for the account.
-    private var antigravityCatalog: AntigravityCatalogRead?
-    private let catalogLifetime: Duration
 
     init(
         kind: HarnessKind,
         executableURL: URL,
-        cursorChatTimeout: Duration = .seconds(30),
-        catalogLifetime: Duration = .seconds(300)
+        cursorChatTimeout: Duration = .seconds(30)
     ) {
         guard let flavor = StructuredHeadlessFlavor(harness: kind) else {
             preconditionFailure("Unsupported structured headless harness: \(kind.rawValue)")
@@ -41,7 +35,6 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, Ha
         self.flavor = flavor
         self.projector = StructuredHeadlessEventProjector(flavor: flavor)
         self.cursorChatTimeout = cursorChatTimeout
-        self.catalogLifetime = catalogLifetime
     }
 
     func probeRuntime() async throws -> HarnessRuntimeDescriptor {
@@ -70,8 +63,6 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, Ha
                 hasStructuredActivities: true,
                 hasPlans: false,
                 acceptsImages: false,
-                // Antigravity's `subagent_info` step arrives as an ordinary activity; no
-                // subagent events are projected, matching the compatibility manifest.
                 hasSubagents: false
             ),
             fingerprint: fingerprint
@@ -80,14 +71,7 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, Ha
 
     func createSession(_ request: CreateHarnessSessionRequest) async throws
         -> HarnessSessionHandle {
-        let providerSessionID: String
-        if flavor == .cursor {
-            providerSessionID = try await createCursorChat(in: request.workspaceURL)
-        } else {
-            // Antigravity assigns a conversation ID only when the first prompt runs. Until it
-            // reports one, the local ID stands in and is saved like any provider identity.
-            providerSessionID = request.localSessionID.uuidString.lowercased()
-        }
+        let providerSessionID = try await createCursorChat(in: request.workspaceURL)
         let handle = HarnessSessionHandle(
             harness: kind,
             localSessionID: request.localSessionID,
@@ -152,17 +136,12 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, Ha
         let stderrPipe = Pipe()
         let providerSessionID = handles[session.localSessionID]?.providerSessionID
             ?? session.providerSessionID
-        // The stand-in identity means no provider conversation exists yet, including for a
-        // session restored before its first prompt ran.
-        let firstTurn = UUID(uuidString: providerSessionID) == session.localSessionID
         process.executableURL = executableURL
         process.currentDirectoryURL = session.workspaceURL
         process.arguments = flavor.arguments(
             prompt: prompt,
             providerSessionID: providerSessionID,
-            isFirstTurn: firstTurn,
-            options: optionsByLocalSessionID[session.localSessionID] ?? .init(),
-            catalog: modelCatalog(for: session.localSessionID)
+            options: optionsByLocalSessionID[session.localSessionID] ?? .init()
         )
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
@@ -230,21 +209,6 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, Ha
         for session: HarnessSessionHandle
     ) async throws -> ProviderCapabilityState {
         try requireRegistered(session)
-        if flavor == .antigravity {
-            let read = await readAntigravityCatalog(workspaceURL: session.workspaceURL)
-            guard handles[session.localSessionID] != nil else { return capabilityState(for: session.localSessionID, errors: []) }
-            if let models = read.models {
-                modelChoicesByLocalSessionID[session.localSessionID] = models
-            } else {
-                modelChoicesByLocalSessionID.removeValue(forKey: session.localSessionID)
-            }
-            if let agents = read.agents {
-                agentChoicesByLocalSessionID[session.localSessionID] = agents
-            } else {
-                agentChoicesByLocalSessionID.removeValue(forKey: session.localSessionID)
-            }
-            return capabilityState(for: session.localSessionID, errors: read.errors)
-        }
         var errors: [String] = []
         do {
             modelChoicesByLocalSessionID[session.localSessionID] = try catalogChoices(
@@ -258,37 +222,6 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, Ha
         return capabilityState(for: session.localSessionID, errors: errors)
     }
 
-    /// `agy models`, `agy agents` and a model-free `/model` with `--mode auto` (which warns on
-    /// stderr when the account does not have Auto mode), read side by side and kept for a while.
-    private func readAntigravityCatalog(workspaceURL: URL) async -> AntigravityCatalogRead {
-        if let cached = antigravityCatalog, ContinuousClock.now - cached.readAt < catalogLifetime {
-            return cached
-        }
-        let executable = executableURL
-        async let models = Self.runCatalogCommand(executable, ["models"], workspaceURL: workspaceURL)
-        async let agents = Self.runCatalogCommand(executable, ["agents"], workspaceURL: workspaceURL)
-        async let auto = Self.runCatalogCommand(
-            executable, ["--print", "/model", "--mode", AntigravityPermissionMode.auto, "--output-format", "stream-json"],
-            workspaceURL: workspaceURL)
-        var errors: [String] = []
-        var read = AntigravityCatalogRead(readAt: .now)
-        switch await models {
-        case let .success(output): read.models = Self.catalogChoices(in: output.stdout)
-        case let .failure(error): errors.append(L10n.format("Model catalog unavailable: %@", error.localizedDescription))
-        }
-        switch await agents {
-        case let .success(output): read.agents = Self.catalogChoices(in: output.stdout)
-        case let .failure(error): errors.append(L10n.format("Agent catalog unavailable: %@", error.localizedDescription))
-        }
-        if case let .success(output) = await auto {
-            read.autoModeAvailable = !output.stderr.contains("--mode auto is not available")
-        }
-        read.errors = errors
-        // A failed read is not kept, so opening the menu again tries again.
-        if errors.isEmpty { antigravityCatalog = read }
-        return read
-    }
-
     func setProviderOption(
         id: String,
         value: String,
@@ -297,30 +230,7 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, Ha
         try requireRegistered(session)
         var options = optionsByLocalSessionID[session.localSessionID] ?? .init()
         switch (flavor, id) {
-        case (.antigravity, StructuredHeadlessOptionID.model):
-            if value == "default" {
-                options.model = nil
-                options.reasoningEffort = nil
-                break
-            }
-            if modelChoicesByLocalSessionID[session.localSessionID]?.isEmpty != false {
-                _ = try await providerCapabilities(for: session)
-            }
-            guard let catalog = modelCatalog(for: session.localSessionID),
-                  let model = catalog.model(for: value) else {
-                throw HarnessAdapterError.capabilityUnavailable(
-                    L10n.string("That model is not available from the current runtime")
-                )
-            }
-            options.model = model.id
-            // A variant saved before the list was folded names its effort too.
-            if let carried = catalog.effort(carriedBy: value) {
-                options.reasoningEffort = carried
-            } else if let effort = options.reasoningEffort, !model.efforts.contains(where: { $0.value == effort }) {
-                options.reasoningEffort = nil
-            }
-
-        case (_, StructuredHeadlessOptionID.model):
+        case (.cursor, StructuredHeadlessOptionID.model):
             if value == "default" {
                 options.model = nil
                 break
@@ -357,68 +267,6 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, Ha
             guard ["default", "enabled"].contains(value) else {
                 throw HarnessAdapterError.capabilityUnavailable(
                     L10n.string("That Cursor sandbox mode is not available")
-                )
-            }
-            options.sandbox = value == "default" ? nil : value
-
-        case (.antigravity, StructuredHeadlessOptionID.permissionMode),
-             (.antigravity, StructuredHeadlessOptionID.executionMode):
-            if value == AntigravityPermissionMode.auto, antigravityCatalog?.autoModeAvailable == nil {
-                _ = try await providerCapabilities(for: session)
-            }
-            let offered = AntigravityPermissionMode.values(
-                includesAuto: antigravityCatalog?.autoModeAvailable == true)
-            guard offered.contains(value) else {
-                throw HarnessAdapterError.capabilityUnavailable(
-                    L10n.string("That Antigravity permission mode is not available")
-                )
-            }
-            options.mode = value == AntigravityPermissionMode.standard ? nil : value
-
-        case (.antigravity, StructuredHeadlessOptionID.reasoningEffort):
-            if value == "default" {
-                options.reasoningEffort = nil
-                break
-            }
-            // With a model chosen, the effort is one of its variants; without one (or without a
-            // list), any level the CLI's `--effort` names, as before.
-            if let catalog = modelCatalog(for: session.localSessionID),
-               let model = catalog.model(for: options.model) {
-                guard model.efforts.contains(where: { $0.value == value }) else {
-                    throw HarnessAdapterError.capabilityUnavailable(
-                        L10n.string("That Antigravity reasoning effort is not available")
-                    )
-                }
-            } else {
-                guard AntigravityModelCatalog.effortLevels.contains(value) else {
-                    throw HarnessAdapterError.capabilityUnavailable(
-                        L10n.string("That Antigravity reasoning effort is not available")
-                    )
-                }
-            }
-            options.reasoningEffort = value
-
-        case (.antigravity, StructuredHeadlessOptionID.agent):
-            if value == "default" {
-                options.agent = nil
-                break
-            }
-            if agentChoicesByLocalSessionID[session.localSessionID]?.isEmpty != false {
-                _ = try await providerCapabilities(for: session)
-            }
-            guard agentChoicesByLocalSessionID[session.localSessionID]?.contains(where: {
-                $0.value == value
-            }) == true else {
-                throw HarnessAdapterError.capabilityUnavailable(
-                    L10n.string("That Antigravity agent is not available")
-                )
-            }
-            options.agent = value
-
-        case (.antigravity, StructuredHeadlessOptionID.sandbox):
-            guard ["default", "enabled"].contains(value) else {
-                throw HarnessAdapterError.capabilityUnavailable(
-                    L10n.string("That Antigravity sandbox mode is not available")
                 )
             }
             options.sandbox = value == "default" ? nil : value
@@ -460,7 +308,6 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, Ha
         activitiesBySessionID.removeValue(forKey: session.localSessionID)
         optionsByLocalSessionID.removeValue(forKey: session.localSessionID)
         modelChoicesByLocalSessionID.removeValue(forKey: session.localSessionID)
-        agentChoicesByLocalSessionID.removeValue(forKey: session.localSessionID)
         eventChannel.close(session.localSessionID)
     }
 
@@ -670,9 +517,6 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, Ha
         errors: [String]
     ) -> ProviderCapabilityState {
         let options = optionsByLocalSessionID[localSessionID] ?? .init()
-        if flavor == .antigravity {
-            return antigravityCapabilityState(for: localSessionID, options: options, errors: errors)
-        }
         var selectors: [ProviderCapabilitySelector] = []
         if let models = modelChoicesByLocalSessionID[localSessionID], !models.isEmpty {
             let choices = [choice("default", L10n.string("Default"))] + models
@@ -715,8 +559,6 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, Ha
                 ),
                 sandboxSelector(currentValue: options.sandbox)
             ])
-        case .antigravity:
-            break
         }
         return ProviderCapabilityState(
             selectors: selectors,
@@ -726,82 +568,6 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, Ha
             ],
             errors: errors
         )
-    }
-
-    /// Antigravity's controls: the folded model list and the chosen model's efforts (no effort
-    /// control for a model that takes none, since the CLI refuses `--effort` there), the
-    /// permission mode (ahead of the sandbox, so the composer's permission control is the mode),
-    /// the agent and the sandbox.
-    private func antigravityCapabilityState(
-        for localSessionID: UUID,
-        options: StructuredHeadlessSessionOptions,
-        errors: [String]
-    ) -> ProviderCapabilityState {
-        var selectors: [ProviderCapabilitySelector] = []
-        let catalog = modelCatalog(for: localSessionID)
-        if let catalog, !catalog.models.isEmpty {
-            let current = catalog.model(for: options.model)
-            selectors.append(ProviderCapabilitySelector(
-                id: StructuredHeadlessOptionID.model,
-                name: L10n.string("Model"),
-                description: L10n.string("Choose a model reported by the installed runtime."),
-                category: "model",
-                currentValue: current?.id ?? "default",
-                choices: [choice("default", L10n.string("Default"))]
-                    + catalog.models.map { choice($0.id, $0.name) }
-            ))
-            if let current, !current.efforts.isEmpty {
-                selectors.append(ProviderCapabilitySelector(
-                    id: StructuredHeadlessOptionID.reasoningEffort,
-                    name: L10n.string("Reasoning effort"),
-                    description: L10n.string("Applied to each subsequent Antigravity invocation."),
-                    category: "thought_level",
-                    currentValue: options.reasoningEffort.flatMap { effort in
-                        current.efforts.contains { $0.value == effort } ? effort : nil
-                    } ?? "default",
-                    choices: [choice("default", L10n.string("Default"))]
-                        + current.efforts.map { choice($0.value, CodexReasoningLabel.name($0.value)) }
-                ))
-            }
-        }
-        selectors.append(AntigravityPermissionMode.selector(
-            current: options.mode, includesAuto: antigravityCatalog?.autoModeAvailable == true))
-        if let agents = agentChoicesByLocalSessionID[localSessionID], !agents.isEmpty {
-            selectors.append(ProviderCapabilitySelector(
-                id: StructuredHeadlessOptionID.agent,
-                name: L10n.string("Agent"),
-                description: L10n.string("Choose an agent reported by Antigravity CLI."),
-                category: "mode",
-                currentValue: options.agent ?? "default",
-                choices: [choice("default", L10n.string("Default"))] + agents
-            ))
-        }
-        selectors.append(sandboxSelector(currentValue: options.sandbox))
-        return ProviderCapabilityState(
-            selectors: selectors,
-            notes: [
-                L10n.string("Headless settings are passed as official CLI flags on the next prompt."),
-                L10n.string("Bypass permissions asks first and then passes --dangerously-skip-permissions.")
-            ],
-            errors: errors
-        )
-    }
-
-    /// Antigravity's folded list, once it has been read, for the new-task screen and for tasks
-    /// that have not listed it yet.
-    func advertisedModels(for localSessionID: UUID) async -> [HarnessModelOption]? {
-        guard let catalog = modelCatalog(for: localSessionID) else { return nil }
-        return catalog.models.map {
-            HarnessModelOption(value: $0.id, name: $0.name, effortLevels: $0.efforts.map(\.value))
-        }
-    }
-
-    /// The folded list for a task's model choice, from what the runtime last reported for it.
-    private func modelCatalog(for localSessionID: UUID) -> AntigravityModelCatalog? {
-        guard flavor == .antigravity,
-              let choices = modelChoicesByLocalSessionID[localSessionID] ?? antigravityCatalog?.models,
-              !choices.isEmpty else { return nil }
-        return AntigravityModelCatalog(choices: choices)
     }
 
     private func sandboxSelector(currentValue: String?) -> ProviderCapabilitySelector {
@@ -920,14 +686,4 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, Ha
     ) {
         eventChannel.emit(payload, for: localSessionID, rawProviderEvent: rawData)
     }
-}
-
-/// One read of what Antigravity CLI offers the account. `nil` lists could not be read.
-struct AntigravityCatalogRead: Sendable {
-    let readAt: ContinuousClock.Instant
-    var models: [ProviderCapabilityChoice]?
-    var agents: [ProviderCapabilityChoice]?
-    /// Whether `--mode auto` runs for the account; nil when it could not be told.
-    var autoModeAvailable: Bool?
-    var errors: [String] = []
 }

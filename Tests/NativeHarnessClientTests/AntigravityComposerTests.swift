@@ -138,14 +138,12 @@ final class AntigravityComposerTests: XCTestCase {
 
     // MARK: - Review renders
 
-    /// An Antigravity task as `agy` 1.4.0's stream draws it — a command with its parameters and
-    /// output, a denied command, the "not run without approval" row and the answer — and its
-    /// composer with the folded model menu and the bypass on, in both appearances.
+    /// An Antigravity task — a command with its parameters and output, a failed command and the
+    /// answers — and its composer with the folded model menu and the bypass on, in both appearances.
     /// Review images: `.build/antigravity-qa/`.
     func testReviewRenders() throws {
         let directory = try WindowlessRender.directory("antigravity-qa")
         let entries = Self.streamedConversation()
-        XCTAssertTrue(entries.contains { if case let .activity(activity, _) = $0.content { activity.kind == "denied_actions" } else { false } })
         for appearance in WindowlessRender.Appearance.allCases {
             let drawing = try ConversationDrawing.draw(
                 TaskConversationView(harness: .antigravityCLI, workspaceURL: Fixtures.workspace, entries: entries,
@@ -193,41 +191,21 @@ final class AntigravityComposerTests: XCTestCase {
 
     // MARK: - Fixtures
 
-    /// The adapter's events for two turns of `agy` 1.4.0 (shapes from the sandbox turns, values made
-    /// up): a command that ran with its output and an answer, then a command the headless run
-    /// refused, after which the CLI stopped without a word, as the sandbox turns did.
+    /// Two turns of an Antigravity task (values made up): a command that ran with its output and an
+    /// answer, then a command that failed and the answer about it.
     private static func streamedConversation() -> [TranscriptEntry] {
-        let projector = StructuredHeadlessEventProjector(flavor: .antigravity)
-        let turns: [(String, [String])] = [
-            ("Build the package.", [
-                #"{"event":"init","conversation_id":"agy-review","init":{"model":"gemini-3.8-flash-low","cwd":"/tmp/composer-unify-project","tools":["run_command"],"permission_mode":"request-review"}}"#,
-                #"{"event":"step_update","step_update":{"conversation_id":"agy-review","step_index":0,"state":"DONE","step_type":"user_input"}}"#,
-                #"{"event":"step_update","step_update":{"conversation_id":"agy-review","step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"swift build"}}}}"#,
-                #"{"event":"step_update","step_update":{"conversation_id":"agy-review","step_index":2,"state":"DONE","step_type":"tool","tool_name":"run_command","duration_seconds":12.5,"tool_info":{"name":"run_command","parameters":{"CommandLine":"swift build"},"output":"Build complete! (12.40s)"}}}"#,
-                #"{"event":"step_update","step_update":{"conversation_id":"agy-review","step_index":3,"state":"ACTIVE","step_type":"agent_response","text_delta":"The package builds."}}"#,
-                #"{"event":"result","result":{"conversation_id":"agy-review","status":"SUCCESS","response":"The package builds.","duration_seconds":14,"num_turns":1,"usage":{"input_tokens":4200,"output_tokens":20,"thinking_tokens":40,"cache_read_tokens":0,"total_tokens":4260}}}"#
-            ]),
-            ("Run its tests.", [
-                #"{"event":"init","conversation_id":"agy-review","init":{"model":"gemini-3.8-flash-low","cwd":"/tmp/composer-unify-project","tools":["run_command"],"permission_mode":"request-review"}}"#,
-                #"{"event":"step_update","step_update":{"conversation_id":"agy-review","step_index":4,"state":"DONE","step_type":"user_input"}}"#,
-                #"{"event":"step_update","step_update":{"conversation_id":"agy-review","step_index":6,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"swift test"}}}}"#,
-                #"{"event":"step_update","step_update":{"conversation_id":"agy-review","step_index":6,"state":"ERROR","step_type":"tool","tool_name":"run_command","duration_seconds":0.1,"tool_info":{"name":"run_command","parameters":{"CommandLine":"swift test"},"error":{"type":"TOOL_ERROR","message":"Permission to run this command was not granted in a headless run."}}}}"#,
-                #"{"event":"result","result":{"conversation_id":"agy-review","status":"SUCCESS","response":"","duration_seconds":2,"num_turns":1,"usage":{"input_tokens":4300,"output_tokens":10,"thinking_tokens":0,"cache_read_tokens":4000,"total_tokens":4310},"denied_actions":[{"action":"command","display_name":"Run command"}]}}"#
-            ])
-        ]
         var builder = TranscriptBuilder()
-        for (request, lines) in turns {
-            builder.appendUser(request)
-            var hasText = false
-            for line in lines {
-                let value = try! JSONDecoder().decode(JSONValue.self, from: Data(line.utf8))
-                for payload in projector.project(value, hasAssistantText: hasText).payloads {
-                    if case .assistantDelta = payload { hasText = true }
-                    builder.apply(payload)
-                }
-            }
-            builder.apply(.sessionStatusChanged(.ready))
-        }
+        builder.appendUser("Build the package.")
+        builder.apply(.activityCompleted(HarnessActivity(id: "agy-review-2", kind: "run_command", title: "run command",
+                                                         input: "swift build", output: "Build complete! (12.40s)")))
+        builder.apply(.assistantMessageCompleted("The package builds."))
+        builder.apply(.turnCompleted)
+        builder.appendUser("Run its tests.")
+        builder.apply(.activityCompleted(HarnessActivity(id: "agy-review-6", kind: "run_command", title: "run command",
+                                                         outcome: .failed, input: "swift test",
+                                                         output: "error: no tests found")))
+        builder.apply(.assistantMessageCompleted("The package has no tests yet."))
+        builder.apply(.turnCompleted)
         return builder.entries
     }
 

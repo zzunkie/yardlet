@@ -875,14 +875,14 @@ Yardlet removes there is the CLI's extra copies of Yardlet's tool schemas, descr
   the process can let go of what it keeps for that session, such as its MCP servers; the last task to leave a process
   ends it. Another ACP agent that advertises `sessionCapabilities.close` is treated alike, and one that does not keeps
   such sessions until its process ends. Tasks in Bypass permissions share a second process,
-  `agy acp --dangerously-skip-permissions` (see Saved options). The version the runtime reported decides (`AntigravityTransport`;
-  `--version` runs again only when the file changes). An earlier version, or one whose version could not be read, keeps
-  print mode: one `agy --print --output-format stream-json` per turn. Print mode chosen because the version could not be
-  read serves only the task that asked; the next task to start reads the version again.
-- **One store either way:** `agy acp` keeps its sessions with the CLI's own conversations, so a task's provider session
-  ID is the conversation ID that `agy --conversation <id>` and `/resume` continue in a terminal, and a task print mode
-  started continues over ACP with nothing moved. A print-mode task that never ran a turn kept its local ID as a stand-in;
-  over ACP it starts a conversation instead.
+  `agy acp --dangerously-skip-permissions` (see Saved options). Antigravity turns run only over ACP. An earlier version
+  starts no conversation: its tasks say to update the CLI (Settings › CLI Updates or `agy update`), and the next request
+  reads the version again (`AntigravityTransport`; `--version` runs again only when the file changes). A version that
+  could not be read runs over ACP, and a CLI that cannot serve it shows its own error.
+- **One store:** `agy acp` keeps its sessions with the CLI's own conversations, so a task's provider session ID is the
+  conversation ID that `agy --conversation <id>` and `/resume` continue in a terminal. A task an earlier Yardlet started
+  in print mode (`agy --print`) continues over ACP with nothing moved; one that never ran a turn kept its local ID as a
+  stand-in, and over ACP it starts a conversation instead.
 - **What running over ACP leaves:** `session/new` creates the conversation when the task attaches, before its first
   message, as the CLI does for any ACP client; a task removed without a message leaves an empty conversation, which
   `/resume` does not list. Each `agy acp` process writes a small file in `implicit/`, and a session given the Yardlet MCP

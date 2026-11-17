@@ -447,8 +447,8 @@ actor ACPAdapter:
         return presented(state, for: session.localSessionID)
     }
 
-    /// The session's controls as Yardlet shows them: Antigravity's under the names its print mode
-    /// and Yardlet's menus use, with its permission mode (`AntigravityACPOptions`).
+    /// The session's controls as Yardlet shows them: Antigravity's under the names its tasks keep and
+    /// Yardlet's menus use, with its permission mode (`AntigravityACPOptions`).
     private func presented(_ state: ProviderCapabilityState, for localSessionID: UUID) -> ProviderCapabilityState {
         guard kind == .antigravityCLI else { return state }
         return AntigravityACPOptions.project(state, permissionMode: antigravityPermissionModeByLocalSessionID[localSessionID])

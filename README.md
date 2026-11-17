@@ -182,9 +182,8 @@ Three helpers in the app bundle do work outside the main process:
   videos; WebM video (VP9, AV1) plays. The Intel version uses CEF's own Chromium build, which leaves
   those codecs out; the Apple silicon version has them.
 - Connectors, browser tools and session tools reach Codex, Claude Code and the agents that use ACP
-  (OpenCode, Antigravity CLI 1.4.11 or later, Kimi Code, Grok Build, Hermes). Cursor Agent, Pi,
-  Muse Code and earlier Antigravity CLI versions have no way to add an MCP server to one session,
-  so their tasks run without them.
+  (OpenCode, Antigravity CLI, Kimi Code, Grok Build, Hermes). Cursor Agent, Pi and Muse Code have
+  no way to add an MCP server to one session, so their tasks run without them.
 - Scheduled tasks run only while Yardlet is open. A run missed while it was closed runs once when it
   opens again, within 7 days. A one-time continuation waits for a busy task to become available,
   for up to 24 hours after its scheduled time. Repeating and manual runs skip busy tasks.

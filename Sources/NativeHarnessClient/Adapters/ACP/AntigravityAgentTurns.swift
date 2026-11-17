@@ -125,8 +125,8 @@ struct AntigravityAgentTurnFollower: Sendable {
 
     /// A turn quiet for `quietLimit` leaves the task ready. One stopped on a tool call that has no
     /// result, where a step can wait for approval, ends as any turn does, which also tells a task
-    /// waiting on this one that it has stopped, with a row saying why, as print mode lists what it
-    /// could not ask about (`denied_actions`). It is no failure: the step may only be slow.
+    /// waiting on this one that it has stopped, with a row saying why. It is no failure: the step may
+    /// only be slow.
     private mutating func settleIfQuiet(at now: ContinuousClock.Instant) -> [HarnessEventPayload] {
         guard isRunning, lastLine.duration(to: now) >= quietLimit else { return [] }
         guard stepsWaitForApproval, let call = callsWithoutResult.first else {

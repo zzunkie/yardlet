@@ -34,7 +34,6 @@ struct YardletInstructionsDelivery: Hashable, Sendable {
 ///   2026-11-02. The CLI keeps the text a conversation started with in that conversation and sends it
 ///   on every later turn, and a text given on `session/load` comes on top of it for that process, so
 ///   Yardlet sends it on `session/new` only and a loaded conversation has the text it began with, once.
-///   Print mode, before 1.4.11, has no such flag, and its `--add-dir` route was removed on purpose.
 /// - None: OpenCode (`opencode acp` has no option; its per-process `OPENCODE_CONFIG_CONTENT` would
 ///   do, but one OpenCode process serves the tasks of every folder and reads it once, so it could
 ///   follow neither a project's text nor its switch), `muse serve` (only an internal evaluation

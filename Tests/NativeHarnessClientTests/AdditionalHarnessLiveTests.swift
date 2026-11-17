@@ -54,9 +54,8 @@ final class AdditionalHarnessLiveTests: XCTestCase {
             throw XCTSkip("Set NHC_ANTIGRAVITY_LIVE_BINARY for the bounded Antigravity ACP smoke (three short turns)")
         }
         let executable = URL(filePath: binaryPath)
-        let routing = HarnessRegistry(versions: RuntimeVersionCache(defaults: nil))
-        let servesACP = await routing.servesACP(.antigravityCLI, executableURL: executable)
-        XCTAssertTrue(servesACP, "This runtime's version runs over ACP")
+        let version = await RuntimeVersionCache(defaults: nil).version(of: executable)
+        XCTAssertFalse(AntigravityTransport.isTooOld(version), "This runtime's version runs over ACP")
 
         let rootURL = try makeTemporaryRoot(named: "antigravity")
         defer { try? FileManager.default.removeItem(at: rootURL) }

@@ -1699,13 +1699,13 @@ final class LegacyHarnessProtocolBridgeTests: XCTestCase {
     }
 
     func testStructuredHeadlessBridgePreservesLifecycleAndConforms() async throws {
-        let fixture = try makeAntigravityFixture()
+        let fixture = try makeCursorFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let adapter = StructuredHeadlessAdapter(
-            kind: .antigravityCLI,
+            kind: .cursorAgent,
             executableURL: fixture.executable
         )
-        let manifest = HarnessProtocolCompatibilityManifest.structuredHeadless(.antigravityCLI)
+        let manifest = HarnessProtocolCompatibilityManifest.structuredHeadless(.cursorAgent)
         let bridge = LegacyHarnessProtocolBridge(
             adapter: adapter,
             manifest: manifest,
@@ -1765,10 +1765,9 @@ final class LegacyHarnessProtocolBridgeTests: XCTestCase {
             HarnessProtocolSessionOptionCatalog.self,
             from: try XCTUnwrap(optionsResponse.result)
         )
-        // The effort is the chosen model's own, so it shows once a model with efforts is chosen.
         XCTAssertEqual(
             Set(options.options.map(\.id)),
-            ["model", "agent", "permissionMode", "sandbox"]
+            ["model", "executionMode", "reviewPolicy", "sandbox"]
         )
         _ = try await bridge.handle(
             HarnessProtocolRequest(
@@ -1777,18 +1776,18 @@ final class LegacyHarnessProtocolBridgeTests: XCTestCase {
                 typedParams: HarnessProtocolSessionOptionSetParams(
                     localSessionID: localSessionID,
                     optionID: "model",
-                    value: "agy-pro"
+                    value: "cursor-pro"
                 )
             )
         )
         let setResponse = try await bridge.handle(
             HarnessProtocolRequest(
-                id: "headless-reasoning-set",
+                id: "headless-mode-set",
                 method: .compatibilityOptionsSet,
                 typedParams: HarnessProtocolSessionOptionSetParams(
                     localSessionID: localSessionID,
-                    optionID: "reasoningEffort",
-                    value: "high"
+                    optionID: "executionMode",
+                    value: "plan"
                 )
             )
         )
@@ -1797,8 +1796,8 @@ final class LegacyHarnessProtocolBridgeTests: XCTestCase {
             from: try XCTUnwrap(setResponse.result)
         )
         XCTAssertEqual(
-            updatedOptions.options.first(where: { $0.id == "reasoningEffort" })?.currentValue,
-            "high"
+            updatedOptions.options.first(where: { $0.id == "executionMode" })?.currentValue,
+            "plan"
         )
 
         let recorder = ProtocolEventRecorder()
@@ -1885,7 +1884,7 @@ final class LegacyHarnessProtocolBridgeTests: XCTestCase {
                 method: .sessionResume,
                 typedParams: HarnessProtocolResumeSessionParams(
                     localSessionID: resumedID,
-                    providerSessionID: "agy-existing",
+                    providerSessionID: "cursor-existing",
                     config: config
                 )
             )
@@ -1894,7 +1893,7 @@ final class LegacyHarnessProtocolBridgeTests: XCTestCase {
             HarnessProtocolSessionDescriptor.self,
             from: try XCTUnwrap(resumeResponse.result)
         )
-        XCTAssertEqual(resumed.providerSessionID, "agy-existing")
+        XCTAssertEqual(resumed.providerSessionID, "cursor-existing")
         _ = try await bridge.handle(
             HarnessProtocolRequest(
                 id: "close-resumed",
@@ -1904,7 +1903,9 @@ final class LegacyHarnessProtocolBridgeTests: XCTestCase {
         )
     }
 
-    private func makeAntigravityFixture() throws -> (root: URL, executable: URL) {
+    /// A Cursor Agent stand-in whose turns name another session than `create-chat` gave, so the bridge
+    /// reports the provider identity changing once.
+    private func makeCursorFixture() throws -> (root: URL, executable: URL) {
         let root = FileManager.default.temporaryDirectory
             .appending(path: "yardlet-yhp-headless-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -1915,25 +1916,22 @@ final class LegacyHarnessProtocolBridgeTests: XCTestCase {
           printf '%s\\n' 'fixture 1.0.0'
           exit 0
         fi
-        if [ "$1" = "models" ]; then
-          printf '%s\\n' 'agy-pro-high Antigravity Pro (High)' 'agy-pro-low Antigravity Pro (Low)'
+        if [ "$1" = "create-chat" ]; then
+          printf '%s\\n' '00000000-0000-0000-0000-000000000901'
           exit 0
         fi
-        if [ "$1" = "agents" ]; then
-          printf '%s\\n' 'reviewer Review Agent'
+        if [ "$1" = "--list-models" ]; then
+          printf '%s\\t%s\\n' 'cursor-pro' 'Cursor Pro'
           exit 0
         fi
-        if [ "$2" = "/model" ]; then
-          printf '%s\\n' '{"event":"result","result":{"conversation_id":"","status":"SUCCESS","response":""}}'
-          exit 0
-        fi
-        if [ "$2" = "slow" ]; then
+        for prompt; do :; done
+        if [ "$prompt" = "slow" ]; then
           trap 'exit 130' INT TERM
           while :; do sleep 1; done
         fi
-        printf '%s\\n' '{"event":"init","conversation_id":"agy-conversation","init":{"cwd":"/tmp"}}'
-        printf '%s\\n' '{"event":"step_update","step_update":{"conversation_id":"agy-conversation","step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"ready"}}'
-        printf '%s\\n' '{"event":"result","result":{"conversation_id":"agy-conversation","status":"SUCCESS","response":"ready"}}'
+        printf '%s\\n' '{"type":"system","subtype":"init","session_id":"00000000-0000-0000-0000-000000000902"}'
+        printf '%s\\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"ready"}]}}'
+        printf '%s\\n' '{"type":"result","subtype":"success","result":"ready","session_id":"00000000-0000-0000-0000-000000000902"}'
         """
         try Data(script.utf8).write(to: executable)
         try FileManager.default.setAttributes(

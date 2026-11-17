@@ -3,14 +3,17 @@ import Foundation
 actor UnsupportedHarnessAdapter: HarnessAdapter {
     nonisolated let kind: HarnessKind
     private let executableURL: URL
+    /// Why this runtime cannot run tasks, when Yardlet knows (a version too old, say).
+    private let reason: String?
 
-    init(kind: HarnessKind, executableURL: URL) {
+    init(kind: HarnessKind, executableURL: URL, reason: String? = nil) {
         self.kind = kind
         self.executableURL = executableURL.standardizedFileURL
+        self.reason = reason
     }
 
     func probeRuntime() async throws -> HarnessRuntimeDescriptor {
-        guard !HarnessCatalog.retired.contains(kind) else { throw unavailable() }
+        guard !HarnessCatalog.retired.contains(kind), reason == nil else { throw unavailable() }
         throw HarnessAdapterError.capabilityUnavailable(
             L10n.format(
                 "%@ adapter is not implemented yet for %@",
@@ -55,7 +58,9 @@ actor UnsupportedHarnessAdapter: HarnessAdapter {
 
     func close(_ session: HarnessSessionHandle) async {}
 
-    private func unavailable() -> HarnessAdapterError { Self.unavailable(kind) }
+    private func unavailable() -> HarnessAdapterError {
+        reason.map { .capabilityUnavailable($0) } ?? Self.unavailable(kind)
+    }
 
     /// A harness Yardlet took out of its list (a saved task of it still opens) is no longer
     /// supported; any other has no adapter yet.

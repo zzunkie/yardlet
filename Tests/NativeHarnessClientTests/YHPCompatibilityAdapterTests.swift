@@ -128,34 +128,41 @@ final class YHPCompatibilityAdapterTests: XCTestCase {
         )
         XCTAssertTrue(legacyClaude is ClaudeAdapter)
 
-        // Antigravity CLI runs over ACP from the version that serves `agy acp`, in print mode before
-        // it, and in print mode when no version was read.
+        // Antigravity CLI runs only over ACP: from the version that serves `agy acp`, and when no
+        // version was read. A version before it starts nothing and says to update.
         let agy = FileManager.default.temporaryDirectory.appending(path: "yardlet-routing-agy-\(UUID().uuidString)")
         FileManager.default.createFile(atPath: agy.path(percentEncoded: false), contents: Data())
         defer { try? FileManager.default.removeItem(at: agy) }
-        for (version, servesACP) in [("1.4.12", true), ("1.4.11", true), ("1.4.10", false), (nil, false)] {
+        for version in ["1.4.12", "1.4.11", nil] {
             let registry = HarnessRegistry(routingPolicy: .legacy,
                                            versions: RuntimeVersionCache(defaults: nil, read: { _ in version }))
             let adapter = await registry.adapter(for: .antigravityCLI, executableURL: agy)
-            XCTAssertEqual(adapter is ACPAdapter, servesACP, version ?? "unread")
-            XCTAssertEqual(adapter is StructuredHeadlessAdapter, !servesACP, version ?? "unread")
+            XCTAssertTrue(adapter is ACPAdapter, version ?? "unread")
         }
 
-        // Print mode chosen because the version could not be read is not kept: the next request
-        // reads the version again and runs over ACP once it is known.
+        // The refusal is not kept: after an update the next request reads the version again and runs over ACP.
         let reads = OSAllocatedUnfairLock(initialState: 0)
         let registry = HarnessRegistry(routingPolicy: .legacy, versions: RuntimeVersionCache(defaults: nil, read: { _ in
             reads.withLock { reads in
                 reads += 1
-                return reads == 1 ? nil : "1.5.7"
+                return reads == 1 ? "1.4.10" : "1.5.7"
             }
         }))
-        let unread = await registry.adapter(for: .antigravityCLI, executableURL: agy)
-        XCTAssertTrue(unread is StructuredHeadlessAdapter)
-        let read = await registry.adapter(for: .antigravityCLI, executableURL: agy)
-        XCTAssertTrue(read is ACPAdapter)
+        let old = await registry.adapter(for: .antigravityCLI, executableURL: agy)
+        XCTAssertTrue(old is UnsupportedHarnessAdapter)
+        do {
+            _ = try await old.createSession(CreateHarnessSessionRequest(localSessionID: UUID(), workspaceURL: agy,
+                                                                       initialPrompt: nil))
+            XCTFail("A version before agy acp starts no conversation")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, AntigravityTransport.updateMessage(version: "1.4.10"))
+        }
+        // The version cache keeps a version until the file changes; this file changes as an update would.
+        FileManager.default.createFile(atPath: agy.path(percentEncoded: false), contents: Data("updated".utf8))
+        let updated = await registry.adapter(for: .antigravityCLI, executableURL: agy)
+        XCTAssertTrue(updated is ACPAdapter)
         let kept = await registry.adapter(for: .antigravityCLI, executableURL: agy)
-        XCTAssertTrue(kept === read)
+        XCTAssertTrue(kept === updated)
         XCTAssertEqual(reads.withLock { $0 }, 2)
     }
 

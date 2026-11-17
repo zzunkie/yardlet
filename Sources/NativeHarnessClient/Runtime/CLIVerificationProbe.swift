@@ -42,7 +42,10 @@ struct CLIVerificationProbe: CLIVerifying {
             let version = await CLIProcess.run(CLICommand(executable: executable, arguments: ["--version"],
                                                           timeout: CLIUpdatePlan.versionTimeout))
             let reported = version.succeeded ? CLIVersion.parse(version.stdout + "\n" + version.stderr) : nil
-            guard AntigravityTransport.servesACP(version: reported) else { return .passed }
+            // Its tasks run only over `agy acp`, so a version before it cannot run them.
+            if let reported, AntigravityTransport.isTooOld(reported) {
+                return .failed(AntigravityTransport.updateMessage(version: reported))
+            }
             return await acp(executable, arguments: HarnessCatalog.descriptor(for: .antigravityCLI)?.launchArguments ?? ["acp"],
                              environment: Self.antigravityCheckEnvironment)
         default:

@@ -8,10 +8,9 @@ enum LegacyHarnessProtocolBridgeError: Error, Equatable, Sendable {
 
 enum HarnessProtocolCompatibilityManifest {
     static func structuredHeadless(_ kind: HarnessKind) -> HarnessAdapterManifest {
-        precondition(kind == .cursorAgent || kind == .antigravityCLI)
+        precondition(kind == .cursorAgent)
         var capabilities = Array(HarnessAdapterManifestValidator.requiredCapabilities)
-        // Antigravity's stream-json carries `init`, `step_update` and `result` events with no
-        // plan payload, so no headless flavor declares plans.
+        // Cursor's stream-json carries no plan payload, so the headless adapter declares no plans.
         capabilities += [.sessionResume, .turnInterrupt, .structuredActivities]
         return HarnessAdapterManifest(
             adapterID: "com.yardlet.compat.structured-headless.\(kind.rawValue)",

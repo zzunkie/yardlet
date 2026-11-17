@@ -19,7 +19,7 @@ extension AppModel {
                 databaseURL: storageRootURL.appending(path: "session-index.sqlite3")
             )
             // One record of the versions runtimes reported, for choosing among installs and for
-            // the way a runtime runs (Antigravity CLI over ACP or in print mode).
+            // whether a runtime can run (an Antigravity CLI before `agy acp` cannot).
             let runtimeVersions = RuntimeVersionCache(defaults: defaults)
             let model = AppModel(
                 store: SessionStore(repository: repository),

@@ -99,7 +99,7 @@ final class HarnessCatalogTests: XCTestCase {
     func testStructuredHeadlessHarnessesUseYHPV1ProviderRouteByDefault() async {
         let registry = HarnessRegistry()
 
-        for kind in [HarnessKind.cursorAgent, .antigravityCLI] {
+        for kind in [HarnessKind.cursorAgent] {
             let adapter = await registry.adapter(
                 for: kind,
                 executableURL: URL(filePath: "/tmp/\(kind.rawValue)")

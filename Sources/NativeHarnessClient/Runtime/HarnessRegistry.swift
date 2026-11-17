@@ -77,9 +77,8 @@ actor HarnessRegistry {
     private let routingPolicy: HarnessRoutingPolicy
     /// The earlier CLI version to start in place of an install whose update failed Yardlet's check.
     private let runtimeOverrides: CLIRuntimeOverrides?
-    /// The versions runtimes reported, read again only when a file changes. Antigravity CLI runs
-    /// over ACP from the version that serves it and in print mode before (`AntigravityTransport`);
-    /// without this, it keeps print mode.
+    /// The versions runtimes reported, read again only when a file changes. Antigravity CLI runs over
+    /// ACP, and a version before the one that serves it starts nothing (`AntigravityTransport`).
     private let versions: RuntimeVersionCache?
     /// Where Antigravity's `agy acp` processes leave schema copies that go once they exit
     /// (`AntigravitySchemaCopies`). The app passes the CLI's own folder; without it nothing is removed.
@@ -126,16 +125,13 @@ actor HarnessRegistry {
         let harness = key.harness
         // The key names the runtime asked for; an earlier version held in its place is what starts.
         let started = startedExecutable(for: harness, requested: key.executableURL)
-        var antigravityPrintMode = false
-        var keeps = true
-        if factory == nil, harness == .antigravityCLI {
-            let version = await versions?.version(of: started)
-            antigravityPrintMode = !AntigravityTransport.servesACP(version: version)
-            // A version that could not be read (`--version` failed or ran out of time, as on a Mac
-            // busy right after login) is not kept by the cache, and the print mode chosen without it
-            // is not kept either: it serves this request alone, and the next one reads the version
-            // again.
-            keeps = version != nil || versions == nil
+        if factory == nil, harness == .antigravityCLI, let version = await versions?.version(of: started),
+           AntigravityTransport.isTooOld(version) {
+            // A version before `agy acp` starts no conversation. This is not kept, so the next request
+            // reads the version again, after an update say. One that could not be read (`--version`
+            // failed or ran out of time, as on a Mac busy right after login) runs over ACP.
+            return UnsupportedHarnessAdapter(kind: harness, executableURL: started,
+                                             reason: AntigravityTransport.updateMessage(version: version))
         }
         // Another request may have made it while the version was read.
         if let adapter = adapters[key] {
@@ -146,23 +142,10 @@ actor HarnessRegistry {
                 harness: harness,
                 executableURL: started,
                 environmentScope: key.environmentScope,
-                connection: key.connection,
-                antigravityPrintMode: antigravityPrintMode
+                connection: key.connection
             )
-        if keeps {
-            adapters[key] = adapter
-        }
+        adapters[key] = adapter
         return adapter
-    }
-
-    /// Whether `harness` at `executableURL` runs over ACP, from the version the runtime reported
-    /// (`--version` runs only when the file changed since it was last read). Antigravity CLI does
-    /// from `AntigravityTransport.acpMinimum`; every other harness keeps its catalog transport.
-    func servesACP(_ harness: HarnessKind, executableURL: URL) async -> Bool {
-        guard HarnessCatalog.descriptor(for: harness)?.transport == .acp else { return false }
-        guard harness == .antigravityCLI else { return true }
-        let started = startedExecutable(for: harness, requested: executableURL)
-        return AntigravityTransport.servesACP(version: await versions?.version(of: started))
     }
 
     /// The CLI a request for `requested` starts: the earlier version Yardlet holds while an update
@@ -198,8 +181,7 @@ actor HarnessRegistry {
         harness: HarnessKind,
         executableURL: URL,
         environmentScope: SessionEnvironmentScope,
-        connection: ProviderConnection?,
-        antigravityPrintMode: Bool
+        connection: ProviderConnection?
     ) -> any HarnessAdapter {
         if harness == .codex {
             let legacy = CodexAdapter(
@@ -253,7 +235,7 @@ actor HarnessRegistry {
                 )
             }
         }
-        if HarnessCatalog.descriptor(for: harness)?.transport == .acp, !antigravityPrintMode {
+        if HarnessCatalog.descriptor(for: harness)?.transport == .acp {
             let legacy = ACPAdapter(kind: harness, executableURL: executableURL,
                 launchArguments: ACPLaunchConfiguration.arguments(for: harness, connection: connection),
                 launchEnvironmentOverrides: connection?.environment,
@@ -283,7 +265,7 @@ actor HarnessRegistry {
                 )
             }
         }
-        if harness == .cursorAgent || harness == .antigravityCLI {
+        if harness == .cursorAgent {
             let legacy = StructuredHeadlessAdapter(kind: harness, executableURL: executableURL)
             switch routingPolicy.route(for: harness) {
             case .legacy:

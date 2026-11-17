@@ -346,7 +346,7 @@ enum AntigravityTranscriptParser {
                         kind: name,
                         title: name.replacingOccurrences(of: "_", with: " "),
                         detail: call["args"]?["toolSummary"]?.stringValue,
-                        input: StructuredHeadlessEventProjector.antigravityToolInput(call["args"]))
+                        input: toolInput(call["args"]))
                     pendingToolEntryIndices.append(entries.count)
                     entries.append(TranscriptEntry(id: id("tool-\(index)"), createdAt: createdAt,
                                                    content: .activity(activity, state: .completed)))
@@ -424,6 +424,19 @@ enum AntigravityTranscriptParser {
     private static func nonEmpty(_ value: String?) -> String? {
         guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else { return nil }
         return trimmed
+    }
+
+    /// A command's own line where the call has one (`run_command`'s `CommandLine`), otherwise the
+    /// arguments as JSON without the summary fields the CLI adds for its own display.
+    private static func toolInput(_ value: JSONValue?) -> String? {
+        guard let value else { return nil }
+        if let command = value["CommandLine"]?.stringValue, !command.isEmpty { return command }
+        if case var .object(object) = value {
+            object.removeValue(forKey: "toolAction")
+            object.removeValue(forKey: "toolSummary")
+            return JSONValue.object(object).readableText
+        }
+        return value.readableText
     }
 
     private static func isoDate(_ value: String) -> Date? {

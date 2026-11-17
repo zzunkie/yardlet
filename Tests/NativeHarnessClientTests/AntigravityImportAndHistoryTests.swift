@@ -338,8 +338,7 @@ final class AntigravityImportAndHistoryTests: XCTestCase {
             HarnessModelOption(value: "fixture-pro", name: "Fixture Pro")
         ])
         let lines = try String(contentsOf: log, encoding: .utf8).split(separator: "\n").map(String.init)
-        XCTAssertFalse(lines.contains { $0.hasPrefix("--print") && !$0.hasPrefix("--print /model") },
-                       "Only the CLI's own listing commands ran: \(lines)")
+        XCTAssertFalse(lines.contains { $0.hasPrefix("--print") }, "Only the CLI's own listing command ran: \(lines)")
 
         let detached = try XCTUnwrap(model.composerProviderCapabilities(for: task))
         XCTAssertEqual(detached.selectors.first { $0.id == "model" }?.currentValue, "fixture-flash")

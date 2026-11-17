@@ -70,7 +70,7 @@ final class AgentToolInjectionTests: XCTestCase {
     func testTheAdaptersTheAppRoutesThroughAcceptTheServer() async {
         let registry = HarnessRegistry()
         let executable = URL(filePath: "/tmp/yardlet-agent-tool-routing-fixture")
-        for harness in [HarnessKind.codex, .claudeCode, .openCode, .kimiCode, .grokBuild, .hermes] {
+        for harness in [HarnessKind.codex, .claudeCode, .openCode, .antigravityCLI, .kimiCode, .grokBuild, .hermes] {
             let routed = await registry.adapter(for: harness, executableURL: executable)
             XCTAssertNotNil(routed as? any HarnessAgentToolConfiguring,
                             "\(harness) reaches the app through a wrapper that has to carry the server")

@@ -532,9 +532,8 @@ not kept.
 
 ### Antigravity
 
-Antigravity CLI from 1.4.11 runs over ACP (`agy acp`) and gets connectors as the other ACP agents do, through
-`mcpServers` of `session/new` and `session/load`. An earlier version runs in print mode, which takes no MCP server, so its
-tasks run without them.
+Antigravity CLI runs over ACP (`agy acp`, from 1.4.11) and gets connectors as the other ACP agents do, through
+`mcpServers` of `session/new` and `session/load`.
 
 One `agy acp` process serves several tasks, and it names their servers across the whole process: the first spec named
 `yardlet` keeps the name, and a spec that differs under the same name (each task's token and ID are in its environment)

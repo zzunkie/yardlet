@@ -567,18 +567,11 @@ final class CLIUpdateTests: XCTestCase {
         result = await quick.verify(.claudeCode, executable: silent)
         XCTAssertEqual(result, .failed(L10n.string("Timed out")))
 
-        // agy's own updater stays off while it is checked: it would replace the version under check.
-        let agy = try script("agy", #"""
-            [ "$1" = models ] || exit 2
-            [ "$AGY_CLI_DISABLE_AUTO_UPDATE" = true ] || exit 6
-            printf 'gemini-3.8-flash-low\tGemini 3.8 Flash (low)\n'
-            """#)
-        result = await probe.verify(.antigravityCLI, executable: agy)
-        XCTAssertEqual(result, .passed)
         let signedOut = try script("agy-signed-out", "echo 'not signed in' >&2; exit 1")
         result = await probe.verify(.antigravityCLI, executable: signedOut)
         XCTAssertEqual(result, .failed("not signed in"))
-        // From the version Yardlet runs over ACP, `agy acp` has to answer `initialize` too.
+        // `agy acp` has to answer `initialize` too, as its tasks run over it. agy's own updater stays off
+        // while it is checked: it would replace the version under check.
         let agyACP = try script("agy-acp", #"""
             if [ "$1" = --version ]; then echo 1.4.12; exit 0; fi
             [ "$AGY_CLI_DISABLE_AUTO_UPDATE" = true ] || exit 6
@@ -590,6 +583,14 @@ final class CLIUpdateTests: XCTestCase {
             """#)
         result = await probe.verify(.antigravityCLI, executable: agyACP)
         XCTAssertEqual(result, .passed)
+        // A version before `agy acp` cannot run tasks.
+        let agyOld = try script("agy-old", #"""
+            if [ "$1" = --version ]; then echo 1.4.10; exit 0; fi
+            if [ "$1" = models ]; then printf 'gemini-3.8-flash-low\tGemini 3.8 Flash (low)\n'; exit 0; fi
+            exit 2
+            """#)
+        result = await probe.verify(.antigravityCLI, executable: agyOld)
+        XCTAssertEqual(result, .failed(AntigravityTransport.updateMessage(version: "1.4.10")))
         let agyWithoutACP = try script("agy-without-acp", #"""
             if [ "$1" = --version ]; then echo 1.4.12; exit 0; fi
             if [ "$1" = models ]; then printf 'gemini-3.8-flash-low\tGemini 3.8 Flash (low)\n'; exit 0; fi

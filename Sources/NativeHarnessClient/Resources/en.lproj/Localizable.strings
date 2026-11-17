@@ -872,7 +872,6 @@
 "Grok credential status could not be read safely." = "Grok credential status could not be read safely.";
 "Grok Build credential store" = "Grok Build credential store";
 "Model catalog unavailable: %@" = "Model catalog unavailable: %@";
-"Agent catalog unavailable: %@" = "Agent catalog unavailable: %@";
 "That model is not available in the current Muse catalog" = "That model is not available in the current Muse catalog";
 "That Muse approval mode is not available" = "That Muse approval mode is not available";
 "That Muse reasoning effort is not available" = "That Muse reasoning effort is not available";
@@ -904,9 +903,6 @@
 "That Cursor execution mode is not available" = "That Cursor execution mode is not available";
 "That Cursor review policy is not available" = "That Cursor review policy is not available";
 "That Cursor sandbox mode is not available" = "That Cursor sandbox mode is not available";
-"That Antigravity reasoning effort is not available" = "That Antigravity reasoning effort is not available";
-"That Antigravity agent is not available" = "That Antigravity agent is not available";
-"That Antigravity sandbox mode is not available" = "That Antigravity sandbox mode is not available";
 "This headless runtime does not expose that setting" = "This headless runtime does not expose that setting";
 "This headless runtime does not expose session actions" = "This headless runtime does not expose session actions";
 "The setting will apply to the next prompt" = "The setting will apply to the next prompt";
@@ -918,8 +914,6 @@
 "Smart Auto reviews tool calls before they run." = "Smart Auto reviews tool calls before they run.";
 "Smart Auto" = "Smart Auto";
 "Agent" = "Agent";
-"Choose an agent reported by Antigravity CLI." = "Choose an agent reported by Antigravity CLI.";
-"Applied to each subsequent Antigravity invocation." = "Applied to each subsequent Antigravity invocation.";
 "Headless settings are passed as official CLI flags on the next prompt." = "Headless settings are passed as official CLI flags on the next prompt.";
 "Yardlet never offers force or dangerously-skip-permissions modes." = "Yardlet never offers force or dangerously-skip-permissions modes.";
 "Use the runtime default or explicitly enable its sandbox." = "Use the runtime default or explicitly enable its sandbox.";
@@ -2024,11 +2018,6 @@
 "Turn the sidebar activity view on or off" = "Turn the sidebar activity view on or off";
 "5h" = "5h";
 "Weekly" = "Weekly";
-"Antigravity CLI cannot ask for approval when Yardlet runs it, so actions that need approval are not run unless the mode allows them." = "Antigravity CLI cannot ask for approval when Yardlet runs it, so actions that need approval are not run unless the mode allows them.";
-"Not run without approval" = "Not run without approval";
-"Antigravity CLI refused these without asking in this permission mode. To let it run commands, choose Bypass permissions." = "Antigravity CLI refused these without asking in this permission mode. To let it run commands, choose Bypass permissions.";
-"That Antigravity permission mode is not available" = "That Antigravity permission mode is not available";
-"Bypass permissions asks first and then passes --dangerously-skip-permissions." = "Bypass permissions asks first and then passes --dangerously-skip-permissions.";
 "Antigravity will change files and run commands without asking." = "Antigravity will change files and run commands without asking.";
 "Antigravity asks before actions that need approval. Bypass permissions approves every request without asking." = "Antigravity asks before actions that need approval. Bypass permissions approves every request without asking.";
 "A step may be waiting for approval. Antigravity asks only while it answers a message, so send a message to continue." = "A step may be waiting for approval. Antigravity asks only while it answers a message, so send a message to continue.";
@@ -3970,6 +3959,7 @@
 "Sign in, then send your message again." = "Sign in, then send your message again.";
 "Models unavailable" = "Models unavailable";
 "Sign in to %@ to start a task here." = "Sign in to %@ to start a task here.";
+"Antigravity CLI %1$@ is older than Yardlet supports. Update it to %2$@ or later in Settings › CLI Updates or with agy update." = "Antigravity CLI %1$@ is older than Yardlet supports. Update it to %2$@ or later in Settings › CLI Updates or with agy update.";
 "Finish signing in to %@ in your browser." = "Finish signing in to %@ in your browser.";
 "Finish signing in to %@ in the window that opened." = "Finish signing in to %@ in the window that opened.";
 "Signed in to %@." = "Signed in to %@.";
