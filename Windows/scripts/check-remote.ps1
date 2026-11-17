@@ -1,8 +1,9 @@
 # Opens the Windows app, pairs it with a host from -Link through Connect to a Mac in Settings, opens a task in the host's
 # window, sends a message and waits for the answer to stream in, captures the host's other tasks, answers an approval
-# on the host from its card, then removes the host from Connect to a Mac. It drives the window through UI Automation
-# and reads the window's own event log (YARDLET_QA_EVENT_LOG); it writes screenshots, the log and a summary
-# to -OutDirectory. The CI host is yardlet-remote-fixture on a local relay (docs/REMOTE_PROTOCOL.md, sections 9 and 14).
+# on the host from its card, starts a task from New task on the host, then removes the host from Connect to a Mac. It
+# drives the window through UI Automation and reads the window's own event log (YARDLET_QA_EVENT_LOG); it writes
+# screenshots, the log and a summary to -OutDirectory. The CI host is yardlet-remote-fixture on a local relay
+# (docs/REMOTE_PROTOCOL.md, sections 9 and 14).
 # Runs in Windows PowerShell 5.1, which has UI Automation and System.Drawing; the file stays ASCII because 5.1
 # reads a script without a byte order mark in the system code page.
 param(
@@ -10,7 +11,8 @@ param(
     [Parameter(Mandatory)] [string] $Link,
     [Parameter(Mandatory)] [string] $OutDirectory,
     [string] $Task = 'Fix the footer links',
-    [string] $Message = 'Point the links at the docs'
+    [string] $Message = 'Point the links at the docs',
+    [string] $NewTask = 'Tidy the release checklist'
 )
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
@@ -295,6 +297,40 @@ $summary.answeredOnHost = $true
 $summary.standingSent = [bool]((Read-Events) | Where-Object { $_ -like 'remote answered: Always allow*' })
 Start-Sleep -Seconds 3
 Save-Screen 'card-approval-answered'
+
+# New task on the host, from Home at the top of its list (section 15.5): the host's projects over the composer, the
+# title naming the project the task starts in, and the host's harness and new-task settings in the bottom row. A
+# message started there becomes the host's task, which the window then shows with its row chosen.
+$homeItem = Wait-For { $found = Find-Item $hostWindow 'Home'; if ($found) { Select-Item $found; $true } } 10
+if (-not $homeItem) { Finish 'no Home' }
+if (-not (Wait-For { (Read-Events) -contains 'remote new task' } 10)) { Finish 'new task not shown' }
+$ready = Wait-For { Read-Events | Where-Object { $_ -like 'remote new task ready: *' } | Select-Object -Last 1 } 20
+$summary.newTaskReady = "$ready"
+if (-not $ready) { Finish 'new task not ready' }
+Start-Sleep -Seconds 2
+$summary.newTaskControls = (@('Harness', 'Model', 'Effort', 'Permissions', 'New worktree') | Where-Object {
+    Find-Named $hostWindow $_ ([System.Windows.Automation.ControlType]::Button) -or
+    Find-Named $hostWindow $_ ([System.Windows.Automation.ControlType]::CheckBox) }) -join ', '
+Save-Screen 'new-task'
+$field = Wait-For { Find-Typed $hostWindow ([System.Windows.Automation.ControlType]::Edit) } 10
+if (-not $field) { Finish 'no new task composer' }
+$field.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($NewTask)
+$start = Wait-For { $found = Find-Named $hostWindow 'Start task' ([System.Windows.Automation.ControlType]::Button)
+    if ($found -and $found.Current.IsEnabled) { $found } } 10
+if (-not $start) { Finish 'Start task not enabled' }
+Save-Screen 'new-task-typed'
+$start.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+if (-not (Wait-For { (Read-Events) -contains "remote new task start: $NewTask" } 10)) { Finish 'new task not started' }
+if (-not (Wait-For { (Read-Events) -contains "remote showing: $NewTask" } 30)) { Finish 'started task not shown' }
+$summary.newTaskStarted = $true
+# The host answers the task's first message, as the window's log says after it showed the task.
+$summary.newTaskAnswered = [bool](Wait-For { $events = @(Read-Events)
+    $at = [array]::LastIndexOf($events, "remote showing: $NewTask")
+    $at -ge 0 -and @($events | Select-Object -Skip ($at + 1) | Where-Object { $_ -like 'remote answer: *' }).Count -gt 0 } 30)
+$summary.newTaskRowChosen = [bool](Wait-For { $item = Find-Item $hostWindow $NewTask
+    $item -and $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Current.IsSelected } 10)
+Start-Sleep -Seconds 2
+Save-Screen 'new-task-started'
 
 # Remove... on the host under Connect to a Mac in Settings: asked first, then its window closes, the host is forgotten
 # and the list no longer has it. Settings is chosen again until it shows, as for pairing above.

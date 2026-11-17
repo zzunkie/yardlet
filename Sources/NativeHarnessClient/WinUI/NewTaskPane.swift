@@ -47,10 +47,7 @@ final class NewTaskPane {
     private let bottom = StackPanel()
     /// The title, where the task starts and the composer, which a task answered here takes the place of.
     private let hero = StackPanel()
-    private let title = StackPanel()
-    /// The title's words before the project's name when a space followed them.
-    private var spacedText: TextBlock?
-    private let destination = Grid()
+    private let heroTitle = NewTaskTitle()
     private let sendButton = ComposerParts.sendButton(name: L10n.string("Start task"))
     private let starting = ProgressRing()
     private let guidance = TextBlock()
@@ -65,8 +62,6 @@ final class NewTaskPane {
     private var followGeneration = 0
     private var isInRepository = false
     private var repositoryFolder: URL?
-    /// The title's words, which the window's width sizes.
-    private var titleTexts: [TextBlock] = []
     /// What each part last drew, so a change redraws only its part: the tasks change with every turn's status.
     private var shownRecent: [String]?
     private var shownRecentRows: Bool?
@@ -101,7 +96,7 @@ final class NewTaskPane {
         signInRow = SignInRow(signIn: signIn, inline: true)
         self.windowHandle = windowHandle
         attachments = ComposerAttachments(log: log)
-        lists = NewTaskHomeListsView(model: model, log: log)
+        lists = NewTaskHomeListsView(pullRequests: model.pullRequests, log: log)
         make()
     }
 
@@ -151,12 +146,7 @@ final class NewTaskPane {
         bottom.maxWidth = 760 + 2 * 28
         bottom.horizontalAlignment = .stretch
         bottom.padding = Thickness(left: 28, top: 14, right: 28, bottom: 20)
-        title.orientation = .horizontal
-        title.horizontalAlignment = .center
-        hero.children.append(title)
-        destination.horizontalAlignment = .center
-        destination.margin = Thickness(left: 0, top: 8, right: 0, bottom: 0)
-        hero.children.append(destination)
+        hero.children.append(heroTitle.view)
         let composer = card.view
         composer.margin = Thickness(left: 0, top: 20, right: 0, bottom: 0)
         hero.children.append(composer)
@@ -389,52 +379,11 @@ final class NewTaskPane {
         recent.children.append(header)
         guard withRows else { return }
         for session in model.store.listedSessions.prefix(6) {
-            recent.children.append(recentRow(session))
+            let id = session.id
+            recent.children.append(NewTaskParts.recentRow(session, place: model.projects.displayName(for: session)) {
+                [weak self] in self?.onOpenTask?(id)
+            })
         }
-    }
-
-    /// A recent task (`RecentTaskButton`): its harness's mark, its title over its project and harness, its state.
-    private func recentRow(_ session: SessionRecord) -> UIElement {
-        let button = Button()
-        ComposerParts.styleFlat(button, radius: 8)
-        button.horizontalAlignment = .stretch
-        button.horizontalContentAlignment = .stretch
-        button.padding = Thickness(left: 10, top: 6, right: 10, bottom: 6)
-        button.minHeight = 48
-        let row = Grid()
-        row.columnSpacing = 11
-        for width in [GridLength(value: 24, gridUnitType: .pixel), GridLength(value: 1, gridUnitType: .star),
-                      GridLength(value: 0, gridUnitType: .auto), GridLength(value: 0, gridUnitType: .auto)] {
-            let column = ColumnDefinition()
-            column.width = width
-            row.columnDefinitions.append(column)
-        }
-        if let icon = HarnessIcon.element(for: session.harness) {
-            icon.verticalAlignment = .center
-            icon.horizontalAlignment = .center
-            row.children.append(icon)
-        }
-        let words = StackPanel()
-        words.spacing = 2
-        words.verticalAlignment = .center
-        words.children.append(ComposerParts.label(session.title, size: 14, color: WindowsTheme.text))
-        words.children.append(ComposerParts.label(
-            "\(model.projects.displayName(for: session)) · \(session.harness.displayName)", size: 12, weight: 400))
-        try? Grid.setColumn(words, 1)
-        row.children.append(words)
-        let state = ComposerParts.label(session.status.displayName, size: 12,
-                                        color: session.status == .failed ? ComposerParts.red : WindowsTheme.secondaryText,
-                                        weight: 400)
-        try? Grid.setColumn(state, 2)
-        row.children.append(state)
-        let chevron = ComposerParts.glyph("\u{E76C}", size: 10, color: WindowsTheme.tertiaryText)
-        try? Grid.setColumn(chevron, 3)
-        row.children.append(chevron)
-        button.content = row
-        try? AutomationProperties.setName(button, session.title)
-        let id = session.id
-        button.click.addHandler { [weak self] _, _ in self?.onOpenTask?(id) }
-        return button
     }
 
     // MARK: The projects' lines
@@ -543,71 +492,16 @@ final class NewTaskPane {
         let kind = NewTaskHeroTitleKind(startsChat: draft.startsChat, workspaceURL: draft.workspaceURL,
                                         isInRepository: isInRepository,
                                         projectName: { [model] in model.projects.displayName(for: $0) })
-        let parts = kind.parts
-        title.children.clear()
-        titleTexts = []
-        // A TextBlock leaves a space it ends with out of its width, so the space before the project's name ("build in
-        // ") is kept as a margin as wide as one.
-        var before = parts.before
-        while before.last?.isWhitespace == true { before.removeLast() }
-        spacedText = nil
-        if !before.isEmpty {
-            let text = heroText(before)
-            if before.count < parts.before.count { spacedText = text }
-            title.children.append(text)
-        }
-        if let project = parts.project {
-            // The project's name is the project menu, underlined as the Codex app's is.
-            let name = Button()
-            ComposerParts.styleFlat(name, pointerOver: ComposerParts.clear, pressed: ComposerParts.clear, radius: 0)
-            name.padding = Thickness(left: 0, top: 0, right: 0, bottom: 0)
-            let text = heroText(project)
-            text.foreground = WindowsTheme.text.brush
-            let underline = Border()
-            underline.borderBrush = WindowsTheme.tertiaryText.brush
-            underline.borderThickness = Thickness(left: 0, top: 0, right: 0, bottom: 1.5)
-            underline.child = text
-            name.content = underline
-            name.flyout = destinationMenu()
-            try? AutomationProperties.setName(name, L10n.string("Project"))
-            try? ToolTipService.setToolTip(name, L10n.string("Project"))
-            title.children.append(name)
-        }
-        if !parts.after.isEmpty { title.children.append(heroText(parts.after)) }
-        try? AutomationProperties.setName(title, kind.sentence)
+        let chip: (title: String, glyph: String)? = draft.workspaceURL != nil ? nil
+            : draft.startsChat ? (L10n.string("Chat (no project)"), "\u{E8BD}")
+            : (L10n.string("Choose project"), ComposerParts.Glyph.folder)
+        heroTitle.show(kind, chip: chip) { [weak self] in self?.destinationMenu() ?? MenuFlyout() }
         fitTitle()
-
-        destination.children.clear()
-        if draft.workspaceURL == nil {
-            let label = draft.startsChat ? L10n.string("Chat (no project)") : L10n.string("Choose project")
-            let chip = ComposerParts.control(title: label, glyph: draft.startsChat ? "\u{E8BD}" : ComposerParts.Glyph.folder,
-                                             chevron: true, name: L10n.string("Project"))
-            chip.flyout = destinationMenu()
-            destination.children.append(chip)
-            destination.visibility = .visible
-        } else {
-            destination.visibility = .collapsed
-        }
-    }
-
-    private func heroText(_ words: String) -> TextBlock {
-        let text = TextBlock()
-        text.text = words
-        text.fontSize = 28
-        text.fontWeight = UWP.FontWeight(weight: 600)
-        text.foreground = WindowsTheme.text.brush
-        text.textWrapping = .noWrap
-        text.verticalAlignment = .bottom
-        titleTexts.append(text)
-        return text
     }
 
     /// 28 points where the window has room, 22 where it is narrow.
     private func fitTitle() {
-        let size: Double = view.actualWidth > 0 && view.actualWidth < 640 ? 22 : 28
-        for text in titleTexts where text.fontSize != size { text.fontSize = size }
-        // A space in Segoe UI is about 0.27 of its size.
-        spacedText?.margin = Thickness(left: 0, top: 0, right: (size * 0.27).rounded(), bottom: 0)
+        heroTitle.fit(width: view.actualWidth)
     }
 
     /// The project menu (`NewTaskDestinationMenuItems`): Choose project…, Chat (no project), then the projects, the
@@ -714,37 +608,10 @@ final class NewTaskPane {
     /// The harness with its mark (`NewTaskHarnessControl`), whose menu lists the harnesses Yardlet found.
     private func harnessControl() -> Button {
         let harness = chosenHarness
-        let button = Button()
-        ComposerParts.styleFlat(button)
-        button.height = ComposerParts.controlHeight
-        button.padding = Thickness(left: 7, top: 0, right: 7, bottom: 0)
-        button.verticalAlignment = .center
-        let row = StackPanel()
-        row.orientation = .horizontal
-        row.spacing = 5
-        if let harness, let icon = HarnessIcon.element(for: harness) {
-            icon.verticalAlignment = .center
-            row.children.append(icon)
+        return NewTaskParts.harnessControl(harness, name: harness?.displayName,
+                                           choices: harnesses.map { (kind: $0, name: $0.displayName) }) { [weak self] in
+            self?.choose($0)
         }
-        row.children.append(ComposerParts.label(harness?.displayName ?? L10n.string("Choose harness"),
-                                                color: WindowsTheme.text))
-        row.children.append(ComposerParts.glyph(ComposerParts.Glyph.chevronDown, size: 8, color: WindowsTheme.text))
-        button.content = row
-        try? AutomationProperties.setName(button, L10n.string("Harness"))
-        try? ToolTipService.setToolTip(button, harness?.displayName ?? L10n.string("No available harnesses"))
-        let menu = MenuFlyout()
-        menu.placement = .top
-        for kind in harnesses {
-            let item = RadioMenuFlyoutItem()
-            item.text = kind.displayName
-            item.groupName = "harness"
-            item.isChecked = kind == harness
-            if let icon = HarnessIcon.element(for: kind) { item.icon = icon }
-            item.click.addHandler { [weak self] _, _ in self?.choose(kind) }
-            menu.items.append(item)
-        }
-        if !harnesses.isEmpty { button.flyout = menu }
-        return button
     }
 
     private func choose(_ harness: HarnessKind) {

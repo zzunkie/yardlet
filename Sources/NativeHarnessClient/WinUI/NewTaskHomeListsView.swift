@@ -10,7 +10,9 @@ import WinUI
 /// (`NewTaskHomeLayout.columns`), the one that needs the person most first, and keep their places while the home shows.
 /// What it lists, in what order and with what words is the engine's (`NewTaskHomeListsProjection`,
 /// `NewTaskHomeListsLayout`), read from the model's tasks (`AppModel.newTaskHomeActivity`) and the pull request lookup
-/// (`TaskPullRequestMonitor`), which asks about the tasks it reads while it shows, as a sidebar row's task is asked.
+/// (`TaskPullRequestMonitor`), which asks about the tasks it reads while it shows, as a sidebar row's task is asked. A
+/// host's New task lists the host's tasks (`RemoteHostModel.newTaskHomeActivity`) as the Mac's host window does: the
+/// host's folders and pull requests are the host's, so nothing here reads them.
 ///
 /// Choosing a project's name starts the new task there; choosing a task that needs the person answers it in the
 /// composer's place (`onAction` with `.reply`), and a double-click opens it; any other task opens. Ctrl-click opens the
@@ -24,7 +26,10 @@ final class NewTaskHomeListsView {
     /// Asks the home to read and draw again: a folder's reading came back, or a section opened.
     var onRedraw: () -> Void = {}
 
-    private let model: AppModel
+    /// The pull request lookup, nil where the tasks are another computer's.
+    private let pullRequests: TaskPullRequestMonitor?
+    /// The projects' folders are on this computer, so their branches and what they left are read.
+    private let readsFolders: Bool
     private let log: QAEventLog
     private let columnsGrid = Grid()
     private let moreProjects = Button()
@@ -51,8 +56,9 @@ final class NewTaskHomeListsView {
     /// This home's own set of tasks in the pull request lookup.
     private let screenID = UUID()
 
-    init(model: AppModel, log: QAEventLog) {
-        self.model = model
+    init(pullRequests: TaskPullRequestMonitor?, readsFolders: Bool = true, log: QAEventLog) {
+        self.pullRequests = pullRequests
+        self.readsFolders = readsFolders
         self.log = log
         view.spacing = 20
         columnsGrid.columnSpacing = Double(NewTaskHomeLayout.columnSpacing)
@@ -82,7 +88,7 @@ final class NewTaskHomeListsView {
         stopReading()
         if !pullRequestTargets.isEmpty {
             pullRequestTargets = []
-            model.pullRequests.showHome([], screen: screenID)
+            pullRequests?.showHome([], screen: screenID)
         }
     }
 
@@ -105,8 +111,8 @@ final class NewTaskHomeListsView {
               columns: Int, rowLimit: Int) -> Reading {
         markRead = activity.onMarkRead
         setAside = activity.onSetAside
-        let pullRequests = model.pullRequests
-        let pullRequest: (UUID) -> TaskPullRequest? = { pullRequests.pullRequest(for: $0) }
+        let pullRequests = pullRequests
+        let pullRequest: (UUID) -> TaskPullRequest? = { pullRequests?.pullRequest(for: $0) }
         let leftWork = leftWork
         let idle = NewTaskHomeListsProjection.idleProjects(
             groups: activity.groups, details: activity.details, shellBusy: activity.shellBusy,
@@ -154,10 +160,12 @@ final class NewTaskHomeListsView {
         places = NewTaskHomeListsProjection.places(places, listing: reading.summaryIDs)
         if reading.targets != pullRequestTargets {
             pullRequestTargets = reading.targets
-            model.pullRequests.showHome(reading.targets, screen: screenID)
+            pullRequests?.showHome(reading.targets, screen: screenID)
         }
-        readGit(reading.gitRoots)
-        readLeftWork(reading.idleRoots)
+        if readsFolders {
+            readGit(reading.gitRoots)
+            readLeftWork(reading.idleRoots)
+        }
         if let summary = reading.facts.summary, summary != loggedFacts {
             loggedFacts = summary
             log.write("home lists: \(summary)")

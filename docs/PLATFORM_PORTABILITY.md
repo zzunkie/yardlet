@@ -341,7 +341,14 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   Mac's host window: its title the host's name with how it is reached beside it (`RemoteConnectionText`), the host's
   tasks as it lists them, an orange line while the host cannot be reached, closed its connection or removed this
   computer, with Try Again, or Remove to forget the host here (`WinUI/RemoteConnectionBanner.swift`), and with no task
-  chosen, that the window is connecting or to choose one; once the host is no longer paired, the window says so. The
+  chosen, that the window is connecting or to choose one or start a new one; once the host is no longer paired, the
+  window says so. Where the host can start a task, Home heads its list and opens New task on the host
+  (`WinUI/RemoteNewTaskPane.swift`), drawn with the main window's New task pieces (`WinUI/NewTaskParts.swift`, the
+  composer card and chips, and the home's lists of the host's projects, whose folders and pull requests are not read
+  here): the title names the host's project the task starts in, its name the menu of the host's projects and Chat (no
+  project), and the bottom row holds New worktree where the host can make one, the host's harnesses, accounts and
+  new-task settings, and Start. The choices, their reading from the host and the start are the engine's
+  `RemoteNewTaskForm`, which the Mac's host window uses too; once the host started the task, the window shows it. The
   chosen task (`WinUI/RemoteTaskPane.swift`) draws through the main window's `ConversationTimeline` and acts on the
   host as the Mac's window does (`RemoteHostModel.respond`, docs/REMOTE_PROTOCOL.md §15.13–§15.23): a request card
   answers there, an answer that leaves a rule behind on the host asked about first; Retry while the task is idle, Edit
@@ -446,7 +453,8 @@ starts a new line and sends nothing (`Windows/scripts/check-window.ps1`). It the
 started when the step ends, pairs the app with the host through Connect to a Mac, opens a task, sends a message and
 waits for the answer to stream in, captures the host's tasks that wait on an approval or a question, ended on an error
 or a plan limit, finished, or still run, answers the approval on the host from its card (the answer that saves a rule
-asked about first and cancelled, then Allow), then removes the host with Remove… and its question, which closes its window and
+asked about first and cancelled, then Allow), starts a task from Home's New task on the host and waits for it to show,
+then removes the host with Remove… and its question, which closes its window and
 takes it off the list (`Windows/scripts/check-remote.ps1`, through UI Automation). It installs a
 stand-in harness the way npm installs one (`Windows/scripts/fake-harness/`, whose `kimi.cmd` npm itself writes into
 `%APPDATA%\npm`) and opens the app with `YARDLET_QA_HARNESS_CHECK=kimi-code` (`WinUI/QAHarnessCheck.swift`, a QA

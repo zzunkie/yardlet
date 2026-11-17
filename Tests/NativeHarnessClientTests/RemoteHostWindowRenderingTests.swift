@@ -1346,7 +1346,7 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
         let paired = try await hosts.pair(link: link.absoluteString)
         let model = try XCTUnwrap(hosts.model(for: paired.id))
         try await waitUntil { model.hasSnapshot }
-        let remote = RemoteNewTaskView(model: model, draft: TaskComposerDraft(), chosenProjectID: .constant(nil)).activity
+        let remote = model.newTaskHomeActivity()
         let local = NewTaskHomeActivity(
             sessions: host.sidebarSessions, details: host.taskAttentionDetails,
             groups: host.projects.visibleGroups(sessions: host.sidebarSessions),
