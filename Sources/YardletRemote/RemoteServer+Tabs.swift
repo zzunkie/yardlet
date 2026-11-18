@@ -26,19 +26,31 @@ struct RemoteServerTabs {
         var toldNoPicture = false
         /// The log said how large the watch's first picture is.
         var toldPicture = false
+        /// How many frames may wait for their acknowledgement at once (`framesInFlight`).
+        var framesInFlight = 1
     }
 
     /// One connection's frames, kept across its watches until it closes, so watching again neither skips an
     /// acknowledgement nor starts a capture beside one still running, nor comes sooner than the pace allows.
     struct Flow {
-        /// The last frame sent, and when, while the client has yet to acknowledge it.
+        /// The last frame's number.
         var frame = 0
-        var sentAt: Date?
+        /// The frames sent that the client has yet to acknowledge, oldest first, and when each went.
+        var unacknowledged: [(frame: Int, sentAt: Date)] = []
         var capturing = false
         /// How long after a capture the next may come: short after a change or input, longer while the picture stays.
         var interval: TimeInterval
         var nextCaptureAt: Date
+        /// When the last look began.
+        var lookedAt: Date?
         var timer: Task<Void, Never>?
+
+        /// When enough of the unacknowledged frames are overdue for another to go while at most `allowed` wait; nil when
+        /// one may go now as far as acknowledgements go.
+        func roomAt(allowing allowed: Int, timeout: TimeInterval) -> Date? {
+            guard unacknowledged.count >= allowed else { return nil }
+            return unacknowledged[unacknowledged.count - allowed].sentAt.addingTimeInterval(timeout)
+        }
     }
 
     var watches: [UUID: Watch] = [:]
@@ -58,9 +70,10 @@ struct RemoteServerTabs {
     var auditedWatches: [String: Date] = [:]
 }
 
-/// A task's browser tabs on a connection (§15.25): `watchTab` lists them and starts the watched tab's frames, each frame
-/// waits for the one before it to be acknowledged (or for `tabFrameAckTimeout`), a frame goes only when the tab drew
-/// something new and at most every `tabFrameInterval` (a tab that draws the same picture again is looked at less and
+/// A task's browser tabs on a connection (§15.25): `watchTab` lists them and starts the watched tab's frames, a frame goes
+/// only while fewer than the watch's `framesInFlight` (one, or two when it asks) wait for their acknowledgement (or for
+/// `tabFrameAckTimeout`), only when the tab drew something new, and at most every `tabFrameInterval` from the last
+/// look's start (a tab that draws the same picture again is looked at less and
 /// less often, up to `tabFrameIdleInterval`), and this pace belongs to the connection, whatever it watches. `tabInput`
 /// reaches only the watched tab, in order, under a permit the watch's end revokes. Everything stops when the
 /// connection lets the tab go, watches another, or closes; the bridge is told what is watched, so a tab nobody watches
@@ -69,7 +82,7 @@ extension RemoteServer {
     static let inputAuditWindow: TimeInterval = 60
 
     func watchTab(_ requestID: String, taskID: String, tabID: String?, maxWidth: Int?, maxHeight: Int?,
-                  viewport: RemoteTabViewport?, listOnly: Bool = false, on id: UUID) async {
+                  viewport: RemoteTabViewport?, listOnly: Bool = false, framesInFlight: Int = 1, on id: UUID) async {
         let device = connections[id]?.deviceID
         let listed: [RemoteBrowserTab]
         switch listOnly ? await bridge.browserTabList(taskID: taskID) : await bridge.browserTabs(taskID: taskID) {
@@ -99,7 +112,7 @@ extension RemoteServer {
             maxHeight: min(maxHeight ?? RemoteProtocol.defaultTabFrameHeight, RemoteProtocol.maxTabFrameSide),
             viewport: viewport, listed: listed, generation: tabs.generation,
             lastImage: sameTab ? previous?.lastImage : nil, permit: sameTab ? previous?.permit ?? RemoteTabPermit() : RemoteTabPermit(),
-            listOnly: listOnly)
+            listOnly: listOnly, framesInFlight: framesInFlight)
         // The pace stays the connection's; only a look scheduled for the last watch is redone for this one.
         if tabs.flows[id] == nil {
             tabs.flows[id] = RemoteServerTabs.Flow(interval: configuration.tabFrameInterval, nextCaptureAt: now())
@@ -121,10 +134,11 @@ extension RemoteServer {
         respond(RemoteResponse(re: requestID), to: id)
     }
 
-    /// Any frame of the connection's, by its number: one sent under a watch it has since replaced counts too.
+    /// Any frame of the connection's, by its number: one sent under a watch it has since replaced counts too. The client
+    /// has the frames sent before it as well: they came first on the connection.
     func acknowledgeTabFrame(_ requestID: String, taskID: String, tabID: String, frame: Int, on id: UUID) {
-        if var flow = tabs.flows[id], flow.sentAt != nil, flow.frame == frame {
-            flow.sentAt = nil
+        if var flow = tabs.flows[id], let index = flow.unacknowledged.firstIndex(where: { $0.frame == frame }) {
+            flow.unacknowledged.removeFirst(index + 1)
             // A look waiting for this acknowledgement can come now.
             flow.timer?.cancel()
             flow.timer = nil
@@ -172,11 +186,13 @@ extension RemoteServer {
             : RemoteError(.notAllowed, "The watch ended")
         respond(error.map { .failure(requestID, $0) } ?? RemoteResponse(re: requestID), to: id)
         auditInput(device: device, task: taskID, kind: input.kind.rawValue, result: error?.code.rawValue ?? "ok")
-        // What the input does shows soon: the next look comes at the short interval again.
+        // What the input does shows soon: the next look comes the short interval after the last one began, at once when
+        // that has passed, rather than after a wait for a picture that stayed the same.
         guard error == nil, tabs.watches[id]?.tabID == tabID, var flow = tabs.flows[id] else { return }
         flow.interval = configuration.tabFrameInterval
-        flow.nextCaptureAt = min(flow.nextCaptureAt, now().addingTimeInterval(configuration.tabFrameInterval))
-        if flow.timer != nil, !flow.capturing, flow.sentAt == nil {
+        flow.nextCaptureAt = min(flow.nextCaptureAt, (flow.lookedAt ?? now()).addingTimeInterval(configuration.tabFrameInterval))
+        if flow.timer != nil, !flow.capturing,
+           flow.roomAt(allowing: tabs.watches[id]?.framesInFlight ?? 1, timeout: configuration.tabFrameAckTimeout) == nil {
             flow.timer?.cancel()
             flow.timer = nil
         }
@@ -207,13 +223,15 @@ extension RemoteServer {
         }
     }
 
-    /// Looks at the tab again once the last frame is acknowledged (or its acknowledgement is overdue), the tab drew
-    /// since, and the connection's interval passed.
+    /// Looks at the tab again once fewer frames than the watch allows wait for their acknowledgement (or theirs is
+    /// overdue), the tab drew since, and the connection's interval passed.
     private func scheduleTabFrame(on id: UUID) {
         guard let watch = tabs.watches[id], watch.tabID != nil, watch.painted, let flow = tabs.flows[id], !flow.capturing,
               flow.timer == nil else { return }
         var wakeAt = flow.nextCaptureAt
-        if let sentAt = flow.sentAt { wakeAt = max(wakeAt, sentAt.addingTimeInterval(configuration.tabFrameAckTimeout)) }
+        if let room = flow.roomAt(allowing: watch.framesInFlight, timeout: configuration.tabFrameAckTimeout) {
+            wakeAt = max(wakeAt, room)
+        }
         let delay = max(0, wakeAt.timeIntervalSince(now()))
         let generation = watch.generation
         tabs.flows[id]?.timer = Task { [weak self] in
@@ -227,17 +245,21 @@ extension RemoteServer {
         tabs.flows[id]?.timer = nil
         guard var watch = tabs.watches[id], watch.generation == generation, let tabID = watch.tabID,
               var flow = tabs.flows[id], !flow.capturing else { return }
-        if let sentAt = flow.sentAt {
+        // A frame whose acknowledgement is overdue no longer holds the next back (a client that lost it).
+        let looking = now()
+        flow.unacknowledged.removeAll { looking >= $0.sentAt.addingTimeInterval(configuration.tabFrameAckTimeout) }
+        guard flow.unacknowledged.count < watch.framesInFlight else {
             // Still due: an acknowledgement reschedules; otherwise this look waits out the timeout.
-            guard now() >= sentAt.addingTimeInterval(configuration.tabFrameAckTimeout) else {
-                scheduleTabFrame(on: id)
-                return
-            }
-            flow.sentAt = nil
+            tabs.flows[id] = flow
+            scheduleTabFrame(on: id)
+            return
         }
         flow.capturing = true
-        // The slot is taken when the look begins, whatever comes of it, so no watch looks again sooner.
-        flow.nextCaptureAt = now().addingTimeInterval(configuration.tabFrameInterval)
+        // The slot is taken when the look begins, whatever comes of it, so no watch looks again sooner; the look's own
+        // time counts toward the pace.
+        let began = now()
+        flow.lookedAt = began
+        flow.nextCaptureAt = began.addingTimeInterval(configuration.tabFrameInterval)
         watch.painted = false
         tabs.flows[id] = flow
         tabs.watches[id] = watch
@@ -258,10 +280,10 @@ extension RemoteServer {
             pace.nextCaptureAt = time.addingTimeInterval(pace.interval)
         case let .success(frame):
             pace.frame += 1
-            pace.sentAt = time
+            pace.unacknowledged.append((pace.frame, time))
             current.lastImage = frame.image
             pace.interval = configuration.tabFrameInterval
-            pace.nextCaptureAt = time.addingTimeInterval(pace.interval)
+            pace.nextCaptureAt = began.addingTimeInterval(pace.interval)
             var event = RemoteEvent(.tabFrame)
             event.taskId = current.taskID
             event.tabId = tabID

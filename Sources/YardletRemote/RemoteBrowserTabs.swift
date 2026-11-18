@@ -21,6 +21,9 @@ extension RemoteProtocol {
     public static let tabViewportHeights = 200...2_560
     /// A frame not acknowledged within this long no longer holds back the next (a client that lost it).
     public static let tabFrameAckTimeout: TimeInterval = 10
+    /// The most frames a watch may ask to have sent before the oldest is acknowledged (`framesInFlight`): two keep a
+    /// link busy while the last frame's acknowledgement comes back, more would only queue on a slow one.
+    public static let maxTabFramesInFlight = 2
     /// A connection's input that waits for the input before it: more is refused (`rateLimited`).
     public static let maxPendingTabInputs = 32
     /// The longest text a page's copy brings to the client (`tabCopied`), in UTF-8 bytes: a quarter of the largest

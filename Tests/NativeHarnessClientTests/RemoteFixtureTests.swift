@@ -385,6 +385,7 @@ final class RemoteFixtureTests: XCTestCase {
 
         let snapshot = try await ask("snapshot")
         XCTAssertEqual(snapshot.browserTabs, true)
+        XCTAssertEqual(snapshot.tabFramesInFlight, true, "the server paces any bridge's frames, two in flight when asked")
         let conversation = try await ask("subscribeTask", #","taskId":"\#(ID.handoff)""#)
         XCTAssertEqual(conversation.items?.last?.tabId, RemoteFixtureTabs.signInTab, "the handoff names its tab")
         let watching = try await ask("watchTab", #","taskId":"\#(ID.handoff)","maxWidth":640"#)

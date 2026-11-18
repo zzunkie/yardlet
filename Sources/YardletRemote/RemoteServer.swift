@@ -428,9 +428,9 @@ public actor RemoteServer {
         public var macKey: Data?
         /// Where files a phone sends are kept (§15.20).
         public var uploadDirectory = RemoteUploadStore.defaultDirectory
-        /// How soon a watched tab's next frame may follow one that changed, and how long a tab that drew the same
-        /// picture again waits at most before the next look (§15.25).
-        public var tabFrameInterval: TimeInterval = 0.25
+        /// How soon a watched tab's next look may follow the last one's start (ten a second, as often as a phone sends
+        /// scrolling), and how long a tab that drew the same picture again waits at most before the next look (§15.25).
+        public var tabFrameInterval: TimeInterval = 0.1
         public var tabFrameIdleInterval: TimeInterval = 2
         public var tabFrameAckTimeout: TimeInterval = RemoteProtocol.tabFrameAckTimeout
 
@@ -1926,9 +1926,9 @@ public actor RemoteServer {
             }
         case .openTerminal, .terminalInput, .terminalResize, .closeTerminal, .terminalOutputAck, .terminalStatus:
             await handleTerminal(envelope.id, request: request, on: id)
-        case let .watchTab(taskID, tabID, maxWidth, maxHeight, viewport, listOnly):
+        case let .watchTab(taskID, tabID, maxWidth, maxHeight, viewport, listOnly, framesInFlight):
             await watchTab(envelope.id, taskID: taskID, tabID: tabID, maxWidth: maxWidth, maxHeight: maxHeight,
-                           viewport: viewport, listOnly: listOnly, on: id)
+                           viewport: viewport, listOnly: listOnly, framesInFlight: framesInFlight ?? 1, on: id)
         case let .unwatchTab(taskID):
             unwatchTab(envelope.id, taskID: taskID, on: id)
         case let .tabFrameAck(taskID, tabID, frame):
@@ -2111,6 +2111,8 @@ public actor RemoteServer {
             response.tabPermissions = published?.tabPermissions == true ? true : nil
             response.tabCopy = published?.tabCopy == true ? true : nil
             response.tabLists = published?.tabLists == true ? true : nil
+            // The server paces a watch's frames itself, for any bridge with tabs.
+            response.tabFramesInFlight = published?.browserTabs == true ? true : nil
             response.hostSettings = published?.hostSettings == true ? true : nil
             response.hostAccounts = published?.hostAccounts == true ? true : nil
             response.suggestionOptions = published?.suggestionOptions == true ? true : nil

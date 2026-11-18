@@ -358,14 +358,30 @@ final class RemoteTabBridge {
             let pixelRatio = max(ratio, 0.1)
             // Image pixels per CSS pixel: as many as fit, at most the page's own.
             let fit = min(Double(maxWidth) / width, Double(maxHeight) / height, pixelRatio)
-            let shot = try await tab.devTools.send("Page.captureScreenshot", [
-                "format": .string("jpeg"), "quality": .integer(Self.jpegQuality),
-                "clip": .object([
-                    "x": .number(visual?["pageX"]?.doubleValue ?? 0), "y": .number(visual?["pageY"]?.doubleValue ?? 0),
-                    "width": .number(width), "height": .number(height), "scale": .number(fit / pixelRatio)
-                ])
-            ], timeout: Self.captureTimeout)
-            guard let data = shot["data"]?.stringValue.flatMap({ Data(base64Encoded: $0) }) else {
+            func shoot(clipped: Bool) async throws -> Data? {
+                var parameters: [String: JSONValue] = ["format": .string("jpeg"), "quality": .integer(Self.jpegQuality)]
+                if clipped {
+                    parameters["clip"] = .object([
+                        "x": .number(visual?["pageX"]?.doubleValue ?? 0), "y": .number(visual?["pageY"]?.doubleValue ?? 0),
+                        "width": .number(width), "height": .number(height), "scale": .number(fit / pixelRatio)
+                    ])
+                }
+                let shot = try await tab.devTools.send("Page.captureScreenshot", parameters, timeout: Self.captureTimeout)
+                return shot["data"]?.stringValue.flatMap { Data(base64Encoded: $0) }
+            }
+            // At the page's own pixels the picture is the view as drawn now. A clip names where the page was when it
+            // was measured, so a page scrolled since showed a band of nothing where the clip left the view. A smaller
+            // picture, a pinch-zoomed page, or a view wider than the picture allows (its scrollbars) is clipped.
+            var size = (width: Int((width * fit).rounded()), height: Int((height * fit).rounded()),
+                        viewportWidth: width, viewportHeight: height)
+            var picture: Data?
+            if fit >= pixelRatio, (visual?["scale"]?.doubleValue ?? 1) == 1, let whole = try await shoot(clipped: false),
+               let pixels = Self.jpegSize(whole), pixels.width <= maxWidth, pixels.height <= maxHeight {
+                picture = whole
+                size = (pixels.width, pixels.height, Double(pixels.width) / pixelRatio, Double(pixels.height) / pixelRatio)
+            }
+            if picture == nil { picture = try await shoot(clipped: true) }
+            guard let data = picture else {
                 return .failure(RemoteError(.internal, "The browser returned no image"))
             }
             // The page or one of its frames went elsewhere while it was pictured, even if it came back: that picture
@@ -376,8 +392,8 @@ final class RemoteTabBridge {
             for file in navigatedFiles {
                 if let refusal = await outsideFiles(file, taskID: taskID, in: tab) { return .failure(refusal) }
             }
-            return .success(RemoteTabFrame(image: data, mediaType: "image/jpeg", width: Int((width * fit).rounded()),
-                                           height: Int((height * fit).rounded()), viewportWidth: width, viewportHeight: height))
+            return .success(RemoteTabFrame(image: data, mediaType: "image/jpeg", width: size.width, height: size.height,
+                                           viewportWidth: size.viewportWidth, viewportHeight: size.viewportHeight))
         } catch {
             return .failure(RemoteError(.unavailable, error.localizedDescription))
         }
@@ -385,6 +401,29 @@ final class RemoteTabBridge {
 
     static let captureTimeout: Duration = .seconds(5)
     static let jpegQuality: Int64 = 60
+
+    /// A JPEG's size in pixels, from its frame header (the first start-of-frame segment); nil for anything else.
+    static func jpegSize(_ data: Data) -> (width: Int, height: Int)? {
+        data.withUnsafeBytes { bytes -> (width: Int, height: Int)? in
+            guard bytes.count > 4, bytes[0] == 0xFF, bytes[1] == 0xD8 else { return nil }
+            var index = 2
+            while index + 9 <= bytes.count, bytes[index] == 0xFF {
+                let marker = bytes[index + 1]
+                // Padding before a marker.
+                if marker == 0xFF {
+                    index += 1
+                    continue
+                }
+                // Every start of frame (C0–CF) but the table and arithmetic coding segments (C4, C8, CC): length,
+                // precision, height, width.
+                if (0xC0...0xCF).contains(marker), ![0xC4, 0xC8, 0xCC].contains(marker) {
+                    return (Int(bytes[index + 7]) << 8 | Int(bytes[index + 8]), Int(bytes[index + 5]) << 8 | Int(bytes[index + 6]))
+                }
+                index += 2 + (Int(bytes[index + 2]) << 8 | Int(bytes[index + 3]))
+            }
+            return nil
+        }
+    }
 
     // MARK: - Address and tab controls
 

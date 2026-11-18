@@ -286,7 +286,9 @@ final class RemoteProtocolTests: XCTestCase {
              .watchTab(taskID: "4C1F…", tabID: nil, maxWidth: 1170, maxHeight: nil,
                        viewport: RemoteTabViewport(width: 390, height: 844, mobile: true))),
             (#"{"id": "52", "type": "watchTab", "taskId": "4C1F…", "listOnly": true}"#,
-             .watchTab(taskID: "4C1F…", tabID: nil, maxWidth: nil, maxHeight: nil, listOnly: true))
+             .watchTab(taskID: "4C1F…", tabID: nil, maxWidth: nil, maxHeight: nil, listOnly: true)),
+            (#"{"id": "54", "type": "watchTab", "taskId": "4C1F…", "maxWidth": 1170, "framesInFlight": 2}"#,
+             .watchTab(taskID: "4C1F…", tabID: nil, maxWidth: 1170, maxHeight: nil, framesInFlight: 2))
         ]
         for (json, request) in requests {
             let envelope = try decode(json)
@@ -303,7 +305,9 @@ final class RemoteProtocolTests: XCTestCase {
                      #"{"id":"48","type":"tabInput","taskId":"T","tabId":"K","input":{"kind":"swipe"}}"#,
                      #"{"id":"50","type":"watchTab","taskId":"T","viewport":{"width":120,"height":844}}"#,
                      #"{"id":"51","type":"watchTab","taskId":"T","viewport":{"width":390,"height":9000}}"#,
-                     #"{"id":"53","type":"watchTab","taskId":"T","tabId":"K","listOnly":true}"#] {
+                     #"{"id":"53","type":"watchTab","taskId":"T","tabId":"K","listOnly":true}"#,
+                     #"{"id":"55","type":"watchTab","taskId":"T","framesInFlight":3}"#,
+                     #"{"id":"56","type":"watchTab","taskId":"T","framesInFlight":0}"#] {
             guard case let .failure(failure) = RemoteRequestEnvelope.decode(Data(json.utf8)) else { return XCTFail(json) }
             XCTAssertEqual(failure.error.code, .badRequest, json)
         }

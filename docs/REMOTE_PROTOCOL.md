@@ -1735,8 +1735,9 @@ permission prompt in the watched tab (below); browsing outside a task stays on t
 
 - The snapshot carries `browserTabs: true` when the Mac answers the requests below (it has a browser engine). A phone
   offers a task's browser only then. It also carries `tabLists: true` when `watchTab` takes `listOnly` (below),
-  `tabPermissions: true` when the Mac answers `answerTabPermission` (below), and `tabCopy: true` when it sends what the
-  watched page copies (`tabCopied`) and takes ⌘C and ⌘X (below).
+  `tabPermissions: true` when the Mac answers `answerTabPermission` (below), `tabCopy: true` when it sends what the
+  watched page copies (`tabCopied`) and takes ⌘C and ⌘X (below), and `tabFramesInFlight: true` when `watchTab` takes
+  `framesInFlight` (below).
 - ```json
   {"id": "40", "type": "watchTab", "taskId": "4C1F…", "maxWidth": 1080, "maxHeight": 2000,
    "viewport": {"width": 390, "height": 844, "mobile": true}}
@@ -1758,7 +1759,11 @@ permission prompt in the watched tab (below); browsing outside a task stays on t
   (optional) is the size the phone asks the tab to be drawn at while it watches, in CSS pixels: `width` 200 to 1,920,
   `height` 200 to 2,560 (another is `badRequest`), and `mobile` (when absent, true under 768 wide) draws it as a phone:
   a mobile viewport, touch, and a phone's user agent and client hints, as the agent's `browser_resize` does. Without
-  it the tab keeps the size it has (Yardlet on another computer asks for its panel's size, with `mobile` false). One watch per connection: watching another
+  it the tab keeps the size it has (Yardlet on another computer asks for its panel's size, with `mobile` false).
+  `framesInFlight` (hosts advertising `tabFramesInFlight`; 1 or 2, 1 when absent, another is `badRequest`) is how many
+  of the connection's frames may wait for their acknowledgement at once: with 2 the next frame goes while the last
+  one's acknowledgement is still on its way back, which through the relay nearly doubles the frames a second. A client
+  asks for 2 only when it shows frames in the order they came, whatever order they finish decoding in. One watch per connection: watching another
   tab or task replaces it. With `listOnly: true` (hosts advertising `tabLists`; no `tabId` or `viewport`, else
   `badRequest`) the watch follows the task's list alone, as for a task with no tab, whatever tabs it has: `tabId` is
   absent, no tab paints, takes a size or sends frames or input for it, and tabs saved before Yardlet restarted, or lost
@@ -1777,9 +1782,10 @@ permission prompt in the watched tab (below); browsing outside a task stays on t
   tab's visible page. `image` is JPEG from the Mac (the fixture sends PNG), `width` by `height` pixels, scaled to fit the
   watch's largest picture and never past the page's own pixels; `viewportWidth` by `viewportHeight` is the visible page
   in CSS pixels (the phone's own size while the tab is drawn at it), the space `tabInput` counts in. The first comes at
-  once. A frame comes only after the phone acknowledged the one before it (`tabFrameAck`), or 10 s after it was sent,
-  only when the page drew something different, and at most about four a second; a page that keeps drawing the same
-  picture sends nothing. This pace is the connection's: watching again, the same tab or another, does not start a frame
+  once. A frame comes only while fewer of the connection's frames than the watch's `framesInFlight` (1 unless it asks
+  for 2) wait for their acknowledgement (`tabFrameAck`; a frame sent 10 s ago no longer waits), only when the page drew
+  something different, and at most about ten a second (a tenth of a second after the last picture began); a page that
+  keeps drawing the same picture sends nothing. This pace is the connection's: watching again, the same tab or another, does not start a frame
   sooner. A page under a dialog or one of Chromium's windows, whose renderer ended, or a `file:` page outside the task's
   files (below) sends nothing until it can be pictured.
 - `{"type": "tabFrameAck", "taskId": "4C1F…", "tabId": "9B21…", "frame": 3}`: the phone has the frame (send it once the
@@ -1934,8 +1940,10 @@ permission prompt in the watched tab (below); browsing outside a task stays on t
     would use), with `mobile` true; send it again with the new size when the phone turns. `maxWidth` and `maxHeight`
     are the same screen in pixels.
   - Watch only while the browser screen is on screen, `unwatchTab` when it leaves, and `watchTab` again after
-    reconnecting. A frame arrives about a quarter of a second after the page changes on the same network; through the
-    relay, each frame waits for the one before it, so a slow link means fewer frames, never a queue.
+    reconnecting. A frame arrives about a tenth of a second after the page changes on the same network; through the
+    relay, each frame waits for the acknowledgement of the one before it (with `framesInFlight` 2, of the one before
+    that), so a slow link means fewer frames, never a queue longer than one frame. From a host advertising
+    `tabFramesInFlight`, ask for 2 and show frames in the order they came: one decoded late never replaces a newer one.
   - With `requestId` on the watched tab, show the handoff's `reason` and its Done and Decline (`answerHandoff`, §15.18)
     above the picture, as the Mac's panel does. From a host advertising `tabPermissions`, with `permission` on the
     watched tab, show the permission bar below it (both when both are up): who asks and for what, and Block, Allow
@@ -2852,7 +2860,7 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   it, and what the page copies after the panel's click or key lands there too; secure keyboard entry is on while the
   page's password field has the keyboard). The
   page lays out at the panel's size (`viewport`, never as a phone), and follows the panel once it rests 200 ms at a new
-  size. From a host advertising `tabLists`, the window follows the list of the
+  size; from a host advertising `tabFramesInFlight` the window asks for two frames in flight. From a host advertising `tabLists`, the window follows the list of the
   task it shows (`listOnly`) whenever its panel shows none of the task's tabs, so the host's tabs are the panel's tabs
   from the start, as the local task's engine tabs are its panel's: the title bar's side-panel button and ⌘4 reopen
   them as they reopen the local task's tabs, the host's front tab first. A file page the task's conversation names

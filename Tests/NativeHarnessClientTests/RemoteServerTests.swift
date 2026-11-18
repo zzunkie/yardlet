@@ -1879,6 +1879,28 @@ final class RemoteServerTests: XCTestCase {
         XCTAssertEqual(reached, 1, "nothing queued behind it went on")
     }
 
+    /// A watch that asks for two frames in flight gets the next frame before the last one is acknowledged, never a third;
+    /// an acknowledgement makes room again (§15.25).
+    func testAWatchCanHaveTwoFramesInFlight() async throws {
+        let harness = try await ServerHarness()
+        let phone = try await harness.authenticatedPhone()
+        await harness.send(#"{"id":"1","type":"watchTab","taskId":"A","tabId":"T1","framesInFlight":2}"#, on: phone)
+        _ = try await phone.response("1")
+        let first = try await phone.event(.tabFrame)
+        await harness.bridge.setPicture(Data("two".utf8))
+        await harness.bridge.signal(.tabPainted(taskID: "A", tabID: "T1"))
+        let second = try await phone.event(.tabFrame, after: first.seq ?? 0)
+        XCTAssertEqual([first.frame, second.frame], [1, 2], "the second went before the first was acknowledged")
+        await harness.bridge.setPicture(Data("three".utf8))
+        await harness.bridge.signal(.tabPainted(taskID: "A", tabID: "T1"))
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(phone.events(.tabFrame).count, 2, "never a third while two wait")
+        await harness.send(#"{"id":"2","type":"tabFrameAck","taskId":"A","tabId":"T1","frame":1}"#, on: phone)
+        let third = try await phone.event(.tabFrame, after: second.seq ?? 0)
+        XCTAssertEqual(third.frame, 3)
+        XCTAssertEqual(third.image, Data("three".utf8))
+    }
+
     /// Watching again while a look runs does not let the next look come sooner than the connection's pace (§15.25).
     func testWatchingAgainDoesNotSpeedUpTheLooks() async throws {
         let harness = try await ServerHarness { $0.tabFrameInterval = 0.5; $0.tabFrameIdleInterval = 1 }

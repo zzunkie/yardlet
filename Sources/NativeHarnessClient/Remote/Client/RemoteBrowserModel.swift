@@ -62,6 +62,9 @@ final class RemoteBrowserModel {
     private(set) var answeredPrompt: Int?
     /// The host follows a task's list without a watched tab (`listOnly`).
     @ObservationIgnored var listsTabs = false
+    /// The host sends the next frame while the last one's acknowledgement is on its way (`tabFramesInFlight`): frames
+    /// show in the order they come, so the window asks for two.
+    @ObservationIgnored var takesFramesInFlight = false
     /// The task the window shows, whose list is followed while the panel shows none of its tabs.
     @ObservationIgnored private(set) var followedTaskID: String?
 
@@ -186,7 +189,7 @@ final class RemoteBrowserModel {
         if tabID != self.tabID { frame = nil }
         self.tabID = tabID
         send(.watchTab(taskID: taskID, tabID: tabID, maxWidth: pictureSize.width, maxHeight: pictureSize.height,
-                       viewport: viewport)) { [weak self] response in
+                       viewport: viewport, framesInFlight: takesFramesInFlight ? 2 : nil)) { [weak self] response in
             guard let self, self.taskID == taskID, self.watchRevision == revision else { return }
             if response.ok {
                 self.tabs = response.tabs ?? []

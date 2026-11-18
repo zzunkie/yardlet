@@ -413,6 +413,7 @@ final class RemoteHostModel: Identifiable {
             browser.answersPermissions = response.tabPermissions == true
             browser.copiesFromPage = response.browserTabs == true && response.tabCopy == true
             browser.listsTabs = response.browserTabs == true && response.tabLists == true
+            browser.takesFramesInFlight = response.browserTabs == true && response.tabFramesInFlight == true
             offersHostAccounts = response.hostAccounts == true
             hasSnapshot = true
             hostTakesPresence = response.presence == true

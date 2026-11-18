@@ -1444,7 +1444,7 @@ final class RemoteHostModelTests: XCTestCase {
         let browser = RemoteBrowserModel()
         var viewports: [RemoteTabViewport?] = []
         browser.send = { request, _ in
-            if case let .watchTab(_, _, _, _, viewport, _) = request { viewports.append(viewport) }
+            if case let .watchTab(_, _, _, _, viewport, _, _) = request { viewports.append(viewport) }
         }
         browser.setPanelSize(width: 687, height: 827, scale: 2)
         browser.show(taskID: "task", tabID: "tab")

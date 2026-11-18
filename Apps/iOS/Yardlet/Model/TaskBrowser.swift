@@ -60,6 +60,9 @@ final class TaskBrowser {
     private(set) var answersPermissions = false
     /// It sends what the page copies after the phone's own input (`tabCopy`).
     @ObservationIgnored private var copiesFromPage = false
+    /// It sends the next frame while the last one's acknowledgement is on its way (`tabFramesInFlight`): frames show in
+    /// the order they came, so the phone asks for two.
+    @ObservationIgnored private var takesFramesInFlight = false
 
     /// Sends a request in the order of the ones before it; `HostSession` sets it.
     @ObservationIgnored var transport: (RemoteRequest, ((RemoteResponse) -> Void)?) -> Void = { _, _ in }
@@ -123,6 +126,7 @@ final class TaskBrowser {
         controlsTabs = isOffered && snapshot.tabControls == true
         answersPermissions = isOffered && snapshot.tabPermissions == true
         copiesFromPage = isOffered && snapshot.tabCopy == true
+        takesFramesInFlight = isOffered && snapshot.tabFramesInFlight == true
     }
 
     // MARK: - Watching
@@ -240,7 +244,7 @@ final class TaskBrowser {
         watchRevision += 1
         let revision = watchRevision
         send(.watchTab(taskID: taskID, tabID: tabID, maxWidth: size.maxWidth, maxHeight: size.maxHeight,
-                       viewport: size.viewport)) { [weak self] response in
+                       viewport: size.viewport, framesInFlight: takesFramesInFlight ? 2 : nil)) { [weak self] response in
             guard let self, self.taskID == taskID, self.watchRevision == revision else { return }
             if response.ok {
                 self.watched(taskID, response)
