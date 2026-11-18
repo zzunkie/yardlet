@@ -18,6 +18,8 @@ import XCTest
 ///   project's, on the same card.
 /// - `setting-approval-card-*`, `setting-changed-*`: `update_setting` waiting on the person's card, and the
 ///   change it made as a row in the folded turn.
+/// - `simulator-approval-card-*`, `device-approval-card-*`: `simulator_attach` waiting on the person's card for a
+///   simulator, and for a real device with what it can reach.
 @MainActor
 final class SessionToolRenderingTests: XCTestCase {
     private static let workspace = URL(filePath: "/work/uploader", directoryHint: .isDirectory)
@@ -245,6 +247,42 @@ final class SessionToolRenderingTests: XCTestCase {
             XCTAssertFalse(texts.contains("update_setting"), "Not a tool line:\n\(texts)")
         }
         XCTAssertTrue(opened.isEmpty)
+    }
+
+    /// The first use of a device asks on the task's card, whatever its permission mode: a simulator's card says the
+    /// approval holds for every task; a real device's says what an agent can reach on it and that it holds for this
+    /// task alone.
+    func testASimulatorsFirstUseAsksOnTheTasksCard() throws {
+        let caller = UUID()
+        let devices = [
+            ("simulator-approval-card", SimulatorDevice(identity: .iOSSimulator(udid: UUID().uuidString), name: "iPhone 17",
+                                                        state: .on, osName: "iOS 27.2", osVersion: "27.2")),
+            ("device-approval-card", SimulatorDevice(identity: .androidDevice(serialNumber: "R5CR10ABCDE"),
+                                                     name: "Galaxy S21+", state: .on, osName: "Android 15", osVersion: "15"))
+        ]
+        for (name, device) in devices {
+            let card = SimulatorApprovalCard(device: device)
+            let approval = SessionToolApproval(
+                id: SessionToolApproval.idPrefix + name, taskID: caller,
+                request: PermissionRequest(id: SessionToolApproval.idPrefix + name, title: card.title, detail: card.detail,
+                                           command: nil))
+            let asking = transcript([
+                .user(text: "Open the sign-up screen in the simulator and check the error message"),
+                .activity(HarnessActivity(id: "toolu_attach", kind: "mcp__yardlet__simulator_attach",
+                                          title: "mcp__yardlet__simulator_attach",
+                                          input: #"{"device":"\#(device.name)"}"#), state: .running)
+            ])
+            let drawn = try draw(name, height: 460) {
+                ConversationTimeline(source: .transcript(entries: asking, harness: .claudeCode, status: .running,
+                                                         latestTurnIsComplete: false),
+                                     actions: ConversationActions(heldRequests: [approval.conversationRequest]))
+            }
+            for drawing in drawn {
+                let texts = drawing.elements.map(\.description).joined(separator: "\n")
+                XCTAssertTrue(texts.contains(card.title), texts)
+                for line in card.detail.split(separator: "\n") { XCTAssertTrue(texts.contains(line), "\(line)\n\(texts)") }
+            }
+        }
     }
 
     // MARK: - Fixtures

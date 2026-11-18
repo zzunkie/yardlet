@@ -16,6 +16,8 @@ host's structure is in [BROWSER_HOST](BROWSER_HOST.md).
   from then on get no browser tools. The server still goes in, with the task suggestion tools (`spawn_task` and
   `dismiss_task`, section 2, "Task suggestion tools"), the session tools (section 2, "Session tools"), the settings tools
   (section 2, "Settings tools") and the tools of connected connectors.
+- The same server carries the simulator tools (`simulator_*`), which see and drive the simulator or emulator a task
+  attached, under the same rule with Settings → General → Simulator (section 2, "Simulator tools").
 
 ## 2. Tools
 
@@ -291,6 +293,15 @@ They start no model turn and change no files or harness.
   Claude app's `spawn_task` (`mcp__ccd_session__spawn_task`) in a conversation imported from the Claude app does not
   become a chip. When a connector tool's name clashes with `spawn_task` or `dismiss_task`, it is left out of the list
   and calls go to the Yardlet tool.
+
+### Simulator tools
+
+Eight tools, `simulator_list`, `simulator_attach`, `simulator_detach`, `simulator_screenshot`, `simulator_tap`,
+`simulator_swipe`, `simulator_type` and `simulator_press`, see and drive the iOS simulator or Android emulator the task
+attached, the one its Simulator tab shows (`SimulatorToolCatalog`). They are listed while Settings → General → Simulator
+was on as the session started or resumed and a platform's devices can be used, and are not in the fallback list built
+into the server. Their arguments, the person's approval of each device, the coordinates and the limits are in
+[SIMULATOR](SIMULATOR.md), "Agent tools".
 
 ### Session tools
 
@@ -762,6 +773,9 @@ removes the pending record. A successful retry replaces that record with `starte
 | `Sources/NativeHarnessClient/Views/Conversation/Cards/TaskSuggestionCard.swift` | Chip view | macOS UI |
 | `Sources/YardletAgentTools/VaultToolCatalog.swift` | Definition of `browser_fill_credential` | Engine (Foundation only) |
 | `Sources/YardletAgentTools/TerminalToolCatalog.swift` | Definition of `read_terminal` | Engine (Foundation only) |
+| `Sources/YardletAgentTools/SimulatorToolCatalog.swift` | Definitions of the simulator tools and their limits | Engine (Foundation only) |
+| `Sources/NativeHarnessClient/AgentTools/SimulatorAgentTools.swift`, `Simulator/SimulatorApprovals.swift`, `Simulator/SimulatorDeviceDriving.swift` | The simulator tools' checks, approvals and results, and the platform-neutral device driver they call | Engine |
+| `Sources/NativeHarnessClient/Platform/macOS/Simulator/MacIOSSimulatorDriver.swift` | The iOS simulators' screenshots and input through the simulator host, and their clipboard through `simctl` | macOS |
 | `Sources/NativeHarnessClient/AppModel+TerminalTool.swift` | `read_terminal`'s answer and `TerminalSharingPreference` | Engine |
 | `Sources/YardletAgentTools/SettingsToolCatalog.swift` | Definitions of `list_settings` and `update_setting`, the change's result line | Engine (Foundation only) |
 | `Sources/NativeHarnessClient/Domain/YardletSettings.swift` | Settings' sections and the settings catalog (`YardletSettingCatalog`) its rows and the tools read | Engine |
@@ -779,7 +793,8 @@ removes the pending record. A successful retry replaces that record with `starte
   file, so a call must also come from under the task's harness process (section 4).
 - Tool approval belongs to the harness (Claude's `can_use_tool` card, Codex's own policy). Yardlet asks on its own
   card only where this document says so: a `file:` address outside the task's folders, the session, settings and
-  scheduled-task tools' cards, and the vault's Touch ID.
+  scheduled-task tools' cards, a simulator tool's first use of a device ([SIMULATOR](SIMULATOR.md), "Agent tools"), and
+  the vault's Touch ID.
 - `browser_evaluate` runs arbitrary JS in the page. There is no resident REPL like the Codex app's.
 - The snapshot reads iframes (including those of other sites and the ones inside them) and shadow DOM (open and
   closed). When one frame does not answer within 5 seconds, only that frame is left out. Unnamed
