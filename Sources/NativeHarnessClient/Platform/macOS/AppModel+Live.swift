@@ -98,6 +98,7 @@ extension AppModel {
             model.accountAssignments = AccountAssignmentLog(
                 fileURL: storageRootURL.appending(path: AccountAssignmentLog.fileName))
             model.personalAgentReadings = PersonalAgentReadings(cache: PersonalAgentCacheFiles.live)
+            model.simulators = SimulatorCenter(backends: [MacIOSSimulatorBackend()], record: simulatorStartRecord())
             model.coordinationLog.fileURL = storageRootURL.appending(path: "logs/task-coordination.log")
             model.followRuntimeChoices()
             return model
@@ -105,5 +106,16 @@ extension AppModel {
             return storageUnavailable(error, codexEnvironmentManager: codexEnvironmentManager,
                                       applicationAttention: MacApplicationAttention(), browserClient: macBrowserClient)
         }
+    }
+
+    /// Where the simulators Yardlet started are written down: in Yardlet's Application Support folder, which nothing
+    /// creates until a device starts. A QA run keeps its own in memory, as it shares the folder with the person's
+    /// Yardlet and must never stop the devices that one started.
+    private static func simulatorStartRecord() -> any SimulatorBootRecordStore {
+        guard !QABackground.isOn else { return InMemorySimulatorBootRecord() }
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Application Support")
+        return SimulatorBootRecordFile(url: support.appending(
+            path: "\(YardletProduct.applicationSupportDirectoryName)/Simulator/started-devices.json"))
     }
 }

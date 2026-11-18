@@ -118,6 +118,8 @@ struct TaskWorkspaceSnapshot: Codable, Equatable {
     /// Which panel rules the saved panels were kept under: nil before the side panel opened to its
     /// launcher, when a panel that had never been used opened to Review on its own.
     var panelsRevision: Int?
+    /// The device the task attached for its simulator panel and its agent's simulator tools.
+    var simulator: SimulatorDeviceIdentity?
 
     static let launcherPanelsRevision = 2
     /// Each browser tab is a side-panel tab of its own (2026-10-23).
@@ -217,6 +219,8 @@ final class TaskWorkspaceState {
     var sideChatSessionID: UUID?
     /// The session rail's folds for this task, kept with its panels.
     var railFolds: SessionRailFolds { didSet { if railFolds != oldValue { onChange?() } } }
+    /// The device the task attached (`SimulatorCenter`), kept with its panels.
+    var simulator: SimulatorDeviceIdentity? { didSet { if simulator != oldValue { onChange?() } } }
     /// What the side panel shows over its tabs for an agent or a background task. Never saved.
     private(set) var panelDetail: TaskPanelDetail?
     /// Whether a Git repository holds one of the task's folders, read as its side panel shows, which
@@ -277,6 +281,7 @@ final class TaskWorkspaceState {
         isExpanded = snapshot.layout.isExpanded
         review = snapshot.review ?? .init()
         railFolds = snapshot.railFolds ?? SessionRailFolds()
+        simulator = snapshot.simulator
         files = WorkspaceFilesState(preferences: snapshot.files ?? .init())
         browserTabs = TaskBrowserTabs(pages: snapshot.browser?.pages ?? [], visited: snapshot.browser?.visited ?? [])
         // A Claude subtask is not restored; a saved panel list opens the tab it leads to.
@@ -479,7 +484,8 @@ final class TaskWorkspaceState {
                                      files: files.preferences == .init() ? nil : files.preferences,
                                      browser: browserTabs.preferences(order: browserKeys, latest: latestBrowser),
                                      railFolds: railFolds.isDefault ? nil : railFolds,
-                                     panelsRevision: TaskWorkspaceSnapshot.browserTabsPanelsRevision)
+                                     panelsRevision: TaskWorkspaceSnapshot.browserTabsPanelsRevision,
+                                     simulator: simulator)
     }
 
     func setPanels(_ value: TaskSurfaceNavigationProjection.PanelState) {
@@ -687,6 +693,12 @@ final class TaskWorkspaceStore {
     static let mailID = UUID(uuidString: "6D61696C-426F-7800-8000-000000000001")!
 
     var mail: TaskWorkspaceState { state(for: Self.mailID) }
+
+    /// The device the task attached, read from its saved workspace when it is not loaded, so asking loads nothing.
+    func simulatorAttachment(of id: UUID) -> SimulatorDeviceIdentity? {
+        if let state = states[id] { return state.simulator }
+        return repository.load(for: id)?.simulator
+    }
 
     /// The task started from the new-task screen takes over its panels and its terminal's shell.
     func handOffDraft(to taskID: UUID) {

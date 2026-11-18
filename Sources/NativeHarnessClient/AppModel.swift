@@ -472,6 +472,9 @@ final class AppModel {
     /// Which account each task an agent started runs on, and why (`AppModel+AccountRouting`). The
     /// app keeps it in a file; tests and fixtures in memory.
     var accountAssignments = AccountAssignmentLog()
+    /// The simulator panel's and tools' devices (`SimulatorCenter`). The Mac app hands in its iOS simulators; tests and
+    /// other platforms keep one with no platform, and none runs anything until the Simulator switch turns it on.
+    var simulators = SimulatorCenter() { didSet { wireSimulators() } }
 
     init(
         store: SessionStore,
@@ -635,9 +638,11 @@ final class AppModel {
             self?.noteMemorySaverScreen()
         }
         watchSessionTools()
+        wireSimulators()
         store.onStatusChange = { [weak self] id in
             self?.continuations.restartRecordMayHaveChanged()
             self?.taskMayHaveSettled(id)
+            self?.simulators.taskStatusChanged(id)
         }
         taskWorkspaces.onSideChatClose = { [weak self] id in self?.endSideChat(of: id) }
         self.connections.onSignedIn = { [weak self] harness, connection, isFirstReading in
@@ -3123,6 +3128,7 @@ final class AppModel {
             }
             composerDrafts.remove(for: session.id)
             taskWorkspaces.remove(for: session.id)
+            simulators.taskRemoved(session.id)
             pullRequestDetails.forget(session.id)
             withdrawApprovalNotifications(for: session.id)
             eventsBySessionID.removeValue(forKey: session.id)
@@ -5496,6 +5502,8 @@ final class AppModel {
         taskWorkspaces.persistNow()
         splits.persistNow()
         await StateFileWriter.shared.flushed()
+        // The devices Yardlet started stop with it, as the harness processes it started do.
+        await simulators.stopForQuit()
         let attachments = handlesBySessionID.compactMap { localSessionID, handle in
             adaptersBySessionID[localSessionID].map { ($0, handle) }
         }
