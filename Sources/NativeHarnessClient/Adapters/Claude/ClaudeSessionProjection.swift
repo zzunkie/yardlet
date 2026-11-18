@@ -136,6 +136,7 @@ struct ClaudeSessionProjection: Sendable {
                 var completed = previous.map { TranscriptBuilder.merging($0, with: activity) } ?? activity
                 if let report = agentReport(in: frame, for: completed) { completed.output = report }
                 if let applied = appliedFileChange(in: frame, for: completed) { completed.diff = applied }
+                if let returned = typedOutput(in: frame, for: completed) { completed.output = returned }
                 // A question call keeps what it asked and the answers its result recorded, which its
                 // answered card reads, live and when the conversation is read back.
                 if let tool = toolInputs[completed.id], tool.name == ClaudeAnswerableTool.askUserQuestion,
@@ -457,6 +458,18 @@ struct ClaudeSessionProjection: Sendable {
             lines += body.compactMap(\.stringValue)
         }
         return HarnessActivityDiff(path: diff.path, unified: lines.joined(separator: "\n") + "\n")
+    }
+
+    /// What a call returned, from its typed result, when its own result holds no text: in Code Mode
+    /// a script's calls are recorded each with an empty result, the model having read the script's
+    /// output instead, and what each returned stays in the typed form (CLI 2.1.327): a command's
+    /// `stdout` and `stderr`, a read file's `file.content`.
+    private func typedOutput(in frame: JSONValue, for activity: HarnessActivity) -> String? {
+        guard activity.outcome == nil, activity.output?.isEmpty != false,
+              let typed = typedResult(in: frame, for: activity.id) else { return nil }
+        let texts = [typed["file"]?["content"], typed["stdout"], typed["stderr"]].compactMap { $0?.stringValue }
+            .filter { !$0.isEmpty }
+        return texts.isEmpty ? nil : texts.joined(separator: "\n")
     }
 
     private func replacing(_ activity: HarnessActivity, title: String) -> HarnessActivity {

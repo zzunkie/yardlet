@@ -161,6 +161,39 @@ final class ClaudeSubagentTranscriptReaderTests: XCTestCase {
         XCTAssertFalse(snapshot.entries.contains { $0.content == .user(text: "Abandoned request") })
     }
 
+    /// A Code Mode turn as CLI 2.1.327 saves it: the script (`REPL`) and its output, then each call the
+    /// script made as a record of its own (`isVirtual`) whose result is empty and whose typed result
+    /// holds what the call returned. The script reads as its code, and each call with what it returned.
+    func testACodeModeScriptAndTheCallsItMadeReadWithWhatEachReturned() throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try mainLog(root, [
+            #"{"type":"user","uuid":"u1","parentUuid":null,"message":{"role":"user","content":"Read notes.txt, count its lines and change apple pie to apple tart"}}"#,
+            #"{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"role":"assistant","model":"claude-opus-5-5","content":[{"type":"tool_use","id":"toolu_repl","name":"REPL","input":{"code":"const t = await file('notes.txt').text();\nconst wc = await $`wc -l notes.txt`.text();\nconst r = await edit('notes.txt', 'apple pie', 'apple tart', {all:true, soft:true});\n({t, wc, r})"}}]}}"#,
+            #"{"type":"user","uuid":"r1","parentUuid":"a1","message":{"role":"user","content":[{"tool_use_id":"toolu_repl","type":"tool_result","content":"<repl-output>\n<tools-used-before-summary>Bash, Edit, Read</tools-used-before-summary>\n<result>{ wc: '       2 notes.txt', r: { ok: true, replacements: 1 } }</result>\n</repl-output>","is_error":false}]},"toolUseResult":{"code":"…","result":"{ wc: '       2 notes.txt', r: { ok: true, replacements: 1 } }","stdout":"","stderr":""}}"#,
+            #"{"type":"assistant","uuid":"v1","parentUuid":"r1","isVirtual":true,"message":{"role":"assistant","model":"<synthetic>","content":[{"type":"tool_use","id":"repl_read","name":"Read","input":{"file_path":"/tmp/code-mode/notes.txt"}}]}}"#,
+            #"{"type":"user","uuid":"v2","parentUuid":"v1","isVirtual":true,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"repl_read","content":"","is_error":false}]},"toolUseResult":{"type":"text","file":{"filePath":"/tmp/code-mode/notes.txt","content":"apple pie\nbanana bread\n"}}}"#,
+            #"{"type":"assistant","uuid":"v3","parentUuid":"v2","isVirtual":true,"message":{"role":"assistant","model":"<synthetic>","content":[{"type":"tool_use","id":"repl_bash","name":"Bash","input":{"command":"wc -l notes.txt"}}]}}"#,
+            #"{"type":"user","uuid":"v4","parentUuid":"v3","isVirtual":true,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"repl_bash","content":"","is_error":false}]},"toolUseResult":{"stdout":"       2 notes.txt","stderr":"","interrupted":false}}"#,
+            #"{"type":"assistant","uuid":"v5","parentUuid":"v4","isVirtual":true,"message":{"role":"assistant","model":"<synthetic>","content":[{"type":"tool_use","id":"repl_edit","name":"Edit","input":{"file_path":"/tmp/code-mode/notes.txt","old_string":"apple pie","new_string":"apple tart","replace_all":true}}]}}"#,
+            #"{"type":"user","uuid":"v6","parentUuid":"v5","isVirtual":true,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"repl_edit","content":"","is_error":false}]},"toolUseResult":{"filePath":"/tmp/code-mode/notes.txt","oldString":"apple pie","newString":"apple tart","structuredPatch":[{"oldStart":1,"oldLines":2,"newStart":1,"newLines":2,"lines":["-apple pie","+apple tart"," banana bread"]}]}}"#,
+            #"{"type":"assistant","uuid":"a2","parentUuid":"v6","message":{"role":"assistant","model":"claude-opus-5-5","content":[{"type":"text","text":"notes.txt has 2 lines; apple pie is now apple tart."}]}}"#
+        ])
+        let snapshot = try XCTUnwrap(ClaudeSubagentTranscriptReader(configDirectory: root).readConversation(sessionID: parent))
+        let cards = snapshot.entries.compactMap { entry -> (HarnessActivity, TranscriptActivityState)? in
+            if case let .activity(activity, state) = entry.content { return (activity, state) }
+            return nil
+        }
+        XCTAssertEqual(cards.map(\.0.kind), ["REPL", "Read", "Bash", "Edit"])
+        XCTAssertEqual(cards.map(\.1), [.completed, .completed, .completed, .completed])
+        XCTAssertTrue(cards[0].0.input?.hasPrefix("const t = await file('notes.txt').text();\nconst wc") == true,
+                      "The script reads as its code: \(cards[0].0.input ?? "")")
+        XCTAssertEqual(cards[1].0.output, "apple pie\nbanana bread\n")
+        XCTAssertEqual(cards[2].0.output, "       2 notes.txt")
+        XCTAssertEqual(cards[3].0.diff, HarnessActivityDiff(path: "/tmp/code-mode/notes.txt",
+                                                            unified: "@@ -1,2 +1,2 @@\n-apple pie\n+apple tart\n banana bread\n"))
+    }
+
     func testSavedAgentCallRestoresAsItsSubagentCard() throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }

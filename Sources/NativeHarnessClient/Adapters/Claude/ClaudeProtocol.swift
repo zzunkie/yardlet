@@ -1299,7 +1299,9 @@ struct ClaudeEventProjector: Sendable {
         "WebFetch": ["url", "prompt"],
         "WebSearch": ["query", "allowed_domains", "blocked_domains"],
         "Agent": ["prompt", "subagent_type", "description", "model"],
-        "Task": ["prompt", "subagent_type", "description", "model"]
+        "Task": ["prompt", "subagent_type", "description", "model"],
+        // Code Mode's script: the JavaScript that calls the tools.
+        "REPL": ["code", "description", "timeout"]
     ]
 
     /// The call's arguments, each shown once: the leading field as it is, then every other field

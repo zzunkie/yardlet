@@ -259,6 +259,13 @@ use stable native UUIDs, and the reading anchor moves only on a unique content m
 preserved, and on failure the cache and ID stay. There is no automatic import, session move or model input, and no copy
 of credentials or homes.
 
+A conversation Claude Code ran in its experimental Code Mode (`CLAUDE_CODE_EXPERIMENTAL_CODE_MODE`) reads the same way.
+Each script is a `REPL` call, which reads as its code. Each call the script made follows it as a record of its own,
+which CLI 2.1.327 saves with an empty result and with what the call returned in its typed result (`toolUseResult`);
+the call's line shows that. Claude Code turns Code Mode on only in its own interactive terminal, so a session Yardlet
+starts never runs in it, and resuming a Code Mode conversation in Yardlet fails with the CLI's own words, which give
+the terminal command that resumes it.
+
 **Codex.** Opening a detached Codex task reads the saved thread through that task's App Server (same account and storage
 scope) with `thread/read`, so commands and file changes show too (YHP `yardlet.codex.thread.read`). It reads only the
 metadata (`includeTurns: false`) and one page of the newest turns, and reads earlier pages on scroll ("Reading long
