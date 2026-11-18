@@ -28,6 +28,7 @@ on:
       - 'Package.resolved'
       - 'Windows/**'
       - 'relay/**'
+      - 'scripts/source-times.py'
       - '.github/workflows/windows-app.yml'
       - '!**/*.md'
   pull_request:
@@ -63,6 +64,23 @@ jobs:
       - name: Generate the WinUI bindings
         shell: pwsh
         run: Windows/scripts/generate-bindings.ps1
+      # The run starts from main's latest release build (the build-cache job below), as windows-engine.yml's
+      # debug build does: the dependencies and the generated bindings it compiled are reused, while the app's
+      # own module, optimized whole, compiles again whenever it changed. A tag's run, whose gathered app a
+      # release packs, builds from scratch.
+      - name: Name the toolchain
+        id: toolchain
+        shell: pwsh
+        run: '"id=${env:ImageOS}-${env:ImageVersion}-swift-6.4.1" | Add-Content $env:GITHUB_OUTPUT'
+      - name: Start from main's build
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .build
+          key: windows-release-${{ steps.toolchain.outputs.id }}-${{ github.sha }}
+          restore-keys: windows-release-${{ steps.toolchain.outputs.id }}-
+      - name: Date the sources by their content
+        run: python -I scripts/source-times.py Windows/Bindings/Generated
       # Swift 6.4.1's build sometimes stops while it plans on a Windows runner: it waits for the clang processes that
       # report the compiler's macros (`clang -v -E -dM`), and they wait for it to read their output. A rerun plans
       # as usual, so each build step ends at a limit well above its usual time (about 30 minutes here, one minute for
@@ -217,3 +235,54 @@ jobs:
             window-check
             build.log
           if-no-files-found: ignore
+
+  # main's release build of the app and the fixture host, kept for each commit that reaches main for the job above
+  # to start from, in a job of its own so that nothing the checks leave in the build folder is kept. By hand on a
+  # branch, it keeps that branch's build.
+  build-cache:
+    name: Keep main's release build
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/'))
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Allow long paths
+        run: git config --global core.longpaths true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Swift 6.4.1
+        shell: pwsh
+        run: Windows/scripts/install-swift.ps1 -Version 6.4.1
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: Windows/Bindings/.work/swift-winrt-*
+          key: swift-winrt-${{ hashFiles('Windows/Bindings/swift-winrt.json', 'Windows/Bindings/swift-winrt-patches/**') }}
+      - name: Generate the WinUI bindings
+        shell: pwsh
+        run: Windows/scripts/generate-bindings.ps1
+      - name: Name the toolchain
+        id: toolchain
+        shell: pwsh
+        run: '"id=${env:ImageOS}-${env:ImageVersion}-swift-6.4.1" | Add-Content $env:GITHUB_OUTPUT'
+      - name: Start from the last build kept
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .build
+          key: windows-release-${{ steps.toolchain.outputs.id }}-${{ github.sha }}
+          restore-keys: windows-release-${{ steps.toolchain.outputs.id }}-
+      - name: Date the sources by their content
+        run: python -I scripts/source-times.py Windows/Bindings/Generated
+      # The two builds the job above makes, in its order; its limits are the ones it explains.
+      - name: Build
+        timeout-minutes: 60
+        shell: pwsh
+        run: |
+          swift build -c release --product NativeHarnessClient --force-resolved-versions
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          swift build -c release --product yardlet-remote-fixture --force-resolved-versions
+          exit $LASTEXITCODE
+      - name: Keep the build
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .build
+          key: windows-release-${{ steps.toolchain.outputs.id }}-${{ github.sha }}

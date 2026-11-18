@@ -148,6 +148,22 @@ jobs:
       - name: Generate the WinUI bindings
         shell: pwsh
         run: Windows/scripts/generate-bindings.ps1 2>&1 | Tee-Object -FilePath generate.log
+      # As in ci.yml, the run starts from main's latest build of the app and its tests (the build-cache job
+      # below) and compiles what changed since then. The tracked sources and the generated bindings are
+      # dated by their content (scripts/source-times.py); the runner's image and Swift's version name the
+      # build, so an image with another Windows SDK builds from scratch.
+      - name: Name the toolchain
+        id: toolchain
+        shell: pwsh
+        run: '"id=${env:ImageOS}-${env:ImageVersion}-swift-6.4.1" | Add-Content $env:GITHUB_OUTPUT'
+      - name: Start from main's build
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .build
+          key: windows-debug-${{ steps.toolchain.outputs.id }}-${{ github.sha }}
+          restore-keys: windows-debug-${{ steps.toolchain.outputs.id }}-
+      - name: Date the sources by their content
+        run: python -I scripts/source-times.py Windows/Bindings/Generated
       - name: Build
         shell: pwsh
         run: |
@@ -188,3 +204,53 @@ jobs:
             Report 'Test failures' (Select-String -Path test.log -Pattern 'error|failed' | ForEach-Object { $_.Line.Trim() } | Select-Object -First 100)
             Report 'Test log' (Get-Content test.log -Tail 60)
           }
+
+  # main's debug build of the Windows app and its tests, kept for each commit that reaches main for the app
+  # job above to start from, as ci.yml keeps the Mac's. By hand, it keeps the build of the branch it ran on.
+  build-cache:
+    name: Keep main's build of the Windows app
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Allow long paths
+        run: git config --global core.longpaths true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Swift 6.4.1
+        shell: pwsh
+        run: Windows/scripts/install-swift.ps1 -Version 6.4.1
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: Windows/Bindings/.work/swift-winrt-*
+          key: swift-winrt-${{ hashFiles('Windows/Bindings/swift-winrt.json', 'Windows/Bindings/swift-winrt-patches/**') }}
+      - name: Generate the WinUI bindings
+        shell: pwsh
+        run: Windows/scripts/generate-bindings.ps1
+      - name: Name the toolchain
+        id: toolchain
+        shell: pwsh
+        run: '"id=${env:ImageOS}-${env:ImageVersion}-swift-6.4.1" | Add-Content $env:GITHUB_OUTPUT'
+      - name: Start from the last build kept
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .build
+          key: windows-debug-${{ steps.toolchain.outputs.id }}-${{ github.sha }}
+          restore-keys: windows-debug-${{ steps.toolchain.outputs.id }}-
+      - name: Date the sources by their content
+        run: python -I scripts/source-times.py Windows/Bindings/Generated
+      # The two builds the app job makes, in its order.
+      - name: Build
+        shell: pwsh
+        run: |
+          swift build --product NativeHarnessClient --force-resolved-versions
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:YARDLET_WINDOWS_TESTS = '1'
+          swift build --build-tests --force-resolved-versions
+          exit $LASTEXITCODE
+      - name: Keep the build
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .build
+          key: windows-debug-${{ steps.toolchain.outputs.id }}-${{ github.sha }}
