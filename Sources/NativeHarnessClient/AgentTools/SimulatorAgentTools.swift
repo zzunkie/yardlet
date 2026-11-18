@@ -171,10 +171,10 @@ final class SimulatorAgentTools {
         let center = center()
         guard let identity = center.attachment(of: task) else { return await notAttached(task) }
         if let invalid = Self.checkWithoutScreen(tool, arguments) { return invalid }
-        await center.refreshDevices()
-        if let device = center.device(identity), let declined = await approval(of: device, for: task) {
-            return declined
-        }
+        // Asked before the device is read again and started if it shut down, which `prepareAttachedDevice` does.
+        let known = center.device(identity)
+            ?? SimulatorDevice(identity: identity, name: identity.value, state: .off, osName: "", osVersion: "")
+        if let declined = await approval(of: known, for: task) { return declined }
         let attachment: SimulatorAttachment
         switch await center.prepareAttachedDevice(for: task) {
         case let .attached(prepared): attachment = prepared
