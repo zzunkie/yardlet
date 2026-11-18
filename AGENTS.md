@@ -34,9 +34,11 @@ Maintainers keep working notes outside this repository, in the ignored folder `d
 - A test that checks something happened in its own time waits for it with `waitUntil`
   (`Tests/NativeHarnessClientTests/Support/WaitUntil.swift`), not a fixed sleep: CI runs slower than
   a Mac. A sleep is only for checking that something did not happen.
-- Run `swift test --build-system native --filter <test>` for the contract you changed and
-  `scripts/test-fast.sh` before a pull request. CI runs the build and `scripts/test-fast.sh` on every
-  pull request that changes more than documents.
+- Before a pull request, build (`swift build --build-system native`) and run
+  `swift test --build-system native --filter <test>` for the contract you changed. CI runs the build
+  and `scripts/test-fast.sh` on every pull request that changes more than documents, so leave the
+  whole run to it; run `scripts/test-fast.sh` yourself to reproduce a failure CI found, or when a
+  change has to reach `main` without a pull request.
 - Launch and bundle commands are in the [README](README.md#development). Building, opening a
   development bundle and replacing the installed app are different actions; use only the ones the
   task needs.
