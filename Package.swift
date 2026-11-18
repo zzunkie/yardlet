@@ -55,6 +55,13 @@ let linuxHost = !engineOnly
 #else
 let linuxHost = false
 #endif
+// The simulator host: the Mac's helper that shows and drives iOS simulators through Xcode's
+// SimulatorKit, which it opens at run time, and the typed protocol Yardlet speaks to it.
+#if os(macOS)
+let simulatorHost = true
+#else
+let simulatorHost = false
+#endif
 let macOSLayers = ["Views", "Browser", "Development", "Platform/macOS", "NativeHarnessClientApp.swift"]
 let windowsLayers = ["WinUI", "Platform/Windows"]
 let linuxLayers = ["Platform/Linux"]
@@ -163,6 +170,7 @@ let appTarget: Target = windowsApp
             "YardletLidSleep",
             "YardletRemote",
             .target(name: "YardletSurfacePort", condition: .when(platforms: [.macOS])),
+            .target(name: "YardletSimulatorHostProtocol", condition: .when(platforms: [.macOS])),
             .product(name: "Crypto", package: "swift-crypto"),
             .product(name: "Markdown", package: "swift-markdown"),
             .product(name: "SwiftTerm", package: "SwiftTerm"),
@@ -208,7 +216,10 @@ let package = Package(
         // The remote protocol and its client, for the phone app (Apps/iOS), which also runs the fixture Mac
         // in its demo.
         .library(name: "YardletRemote", targets: ["YardletRemote", "YardletRemoteFixtureSupport"])
-    ] + (cefDirectory == nil ? [] : [
+    ] + (simulatorHost ? [
+        // build-app.sh places it in Contents/Helpers as Yardlet Simulator Host.app.
+        .executable(name: "YardletSimulatorHost", targets: ["YardletSimulatorHost"])
+    ] : []) + (cefDirectory == nil ? [] : [
         .executable(name: "YardletCEFHelper", targets: ["YardletCEFHelper"]),
         .executable(name: "YardletBrowserHost", targets: ["YardletBrowserHost"])
     ]),
@@ -261,7 +272,15 @@ let package = Package(
         // CEF accessibility output → the browser host contract's smaller shape. Foundation only, so
         // the browser host uses it and the tests check it against recorded CEF output without CEF.
         .target(name: "YardletCEFAccessibility")
-    ]) + [
+    ]) + (simulatorHost ? [
+        // The commands and events Yardlet and the simulator host exchange. Foundation only.
+        .target(name: "YardletSimulatorHostProtocol"),
+        .executableTarget(
+            name: "YardletSimulatorHost",
+            dependencies: ["YardletSimulatorHostProtocol", "YardletSurfacePort"],
+            linkerSettings: [.linkedFramework("Metal"), .linkedFramework("MetalPerformanceShaders")]
+        )
+    ] : []) + [
         // The MCP protocol, the tool catalog, and the local connection shared by the app and
         // yardlet-mcp. Foundation only outside Platform/, like the app's engine.
         .target(name: "YardletAgentTools"),
@@ -335,6 +354,7 @@ let package = Package(
                 "YardletRemoteFixtureSupport",
                 "CSQLite",
                 "YardletCEFAccessibility",
+                "YardletSimulatorHostProtocol",
                 .product(name: "SwiftTerm", package: "SwiftTerm")
             ],
             // Recorded fixtures are read from the source tree, so the target keeps no resource

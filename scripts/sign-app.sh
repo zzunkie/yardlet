@@ -1,9 +1,9 @@
 #!/bin/zsh
 # Signs an assembled Yardlet bundle from the inside out (docs/BROWSER_HOST.md §7): the CEF
 # framework's libraries, the framework, the helper apps, the browser host, Sparkle's helpers and
-# framework, the MCP server, the lid helper, then the app. Each bundle keeps the identifier in its own
-# Info.plist, so a QA copy under another identifier (scripts/browser-host-qa/prepare-qa.sh) signs the
-# same way.
+# framework, the MCP server, the lid helper, the simulator host, then the app. Each bundle keeps the
+# identifier in its own Info.plist, so a QA copy under another identifier
+# (scripts/browser-host-qa/prepare-qa.sh) signs the same way.
 #
 #   YARDLET_SIGNING_IDENTITY          "-" (default) signs ad-hoc as before. Any other value is a
 #                                     codesigning identity (its name, part of it, or its SHA-1):
@@ -41,6 +41,7 @@ CEF_FRAMEWORK="$HOST_FRAMEWORKS/Chromium Embedded Framework.framework"
 CEF_BINARY="$CEF_FRAMEWORK/Versions/A/Chromium Embedded Framework"
 MCP="$APP/Contents/Helpers/yardlet-mcp"
 LID_HELPER="$APP/Contents/Helpers/yardlet-lid-helper"
+SIMULATOR_HOST="$APP/Contents/Helpers/Yardlet Simulator Host.app"
 LAUNCH_DAEMONS="$APP/Contents/Library/LaunchDaemons"
 SPARKLE="$APP/Contents/Frameworks/Sparkle.framework"
 
@@ -71,6 +72,7 @@ if [[ "$IDENTITY" == "-" ]]; then
     [[ -f "$MCP" ]] && sign "$APP_IDENTIFIER.mcp" "$MCP" --identifier "$APP_IDENTIFIER.mcp"
     # The lid helper's identifier is its launchd label, which the app's XPC connection requires.
     [[ -f "$LID_HELPER" ]] && sign "$APP_IDENTIFIER.lid-helper" "$LID_HELPER" --identifier "$APP_IDENTIFIER.lid-helper"
+    [[ -d "$SIMULATOR_HOST" ]] && sign "$(plist_value CFBundleIdentifier "$SIMULATOR_HOST/Contents/Info.plist")" "$SIMULATOR_HOST"
     # Its launch constraint names a team, which an ad-hoc signature has none of: without the
     # property list this build offers no helper (LidSleepHelperIdentity.peerRequirement).
     /bin/rm -rf "$LAUNCH_DAEMONS"
@@ -196,6 +198,9 @@ if [[ -d "$SPARKLE" ]]; then
 fi
 [[ -f "$MCP" ]] && sign_runtime --identifier "$APP_IDENTIFIER.mcp" "$MCP"
 [[ -f "$LID_HELPER" ]] && sign_runtime --identifier "$APP_IDENTIFIER.lid-helper" "$LID_HELPER"
+# The simulator host needs no entitlement: SimulatorKit and CoreSimulator, which it opens from Xcode at run time, are
+# Apple's, so the hardened runtime's library validation takes them.
+[[ -d "$SIMULATOR_HOST" ]] && sign_runtime "$SIMULATOR_HOST"
 # launchd starts the root lid helper only as signed by this team with its identifier (SpawnConstraint
 # in its property list), so a changed executable in the user's bundle does not run as root.
 for daemon in "$LAUNCH_DAEMONS"/*.plist(N); do

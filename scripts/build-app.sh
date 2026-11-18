@@ -112,6 +112,8 @@ swift_build --product NativeHarnessClient
 swift_build --product yardlet-mcp
 # The launch daemon behind "Keep tasks working with the lid closed" (docs/SLEEP_PREVENTION.md).
 swift_build --product yardlet-lid-helper
+# The helper that shows and drives iOS simulators through Xcode's SimulatorKit, which it opens at run time.
+swift_build --product YardletSimulatorHost
 if [[ -n "$CEF_DIR" ]]; then
     swift_build --product YardletCEFHelper
     swift_build --product YardletBrowserHost
@@ -298,6 +300,16 @@ LID_HELPER_LABEL="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$CON
 sed -e "s|@LABEL@|$LID_HELPER_LABEL|g" "$PROJECT_ROOT/Packaging/LidHelper-LaunchDaemon.plist" \
     > "$LAUNCH_DAEMONS_DIR/$LID_HELPER_LABEL.plist"
 /usr/bin/plutil -lint -s "$LAUNCH_DAEMONS_DIR/$LID_HELPER_LABEL.plist"
+# The simulator host, an app of its own with no Dock icon or menu bar (LSBackgroundOnly): SimulatorKit links AppKit.
+SIMULATOR_HOST_APP="$HELPERS_DIR/Yardlet Simulator Host.app"
+rm -rf "$SIMULATOR_HOST_APP"
+mkdir -p "$SIMULATOR_HOST_APP/Contents/MacOS"
+install_executable YardletSimulatorHost "$SIMULATOR_HOST_APP/Contents/MacOS/Yardlet Simulator Host"
+sed -e "s|@BUNDLE_IDENTIFIER@|$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$CONTENTS_DIR/Info.plist").simulator-host|g" \
+    -e "s|@SHORT_VERSION@|$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$CONTENTS_DIR/Info.plist")|g" \
+    -e "s|@BUNDLE_VERSION@|$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$CONTENTS_DIR/Info.plist")|g" \
+    "$PROJECT_ROOT/Packaging/SimulatorHost-Info.plist" > "$SIMULATOR_HOST_APP/Contents/Info.plist"
+/usr/bin/plutil -lint -s "$SIMULATOR_HOST_APP/Contents/Info.plist"
 
 # A previous CEF build must not leave Chromium inside a bundle built without it.
 if [[ -e "$FRAMEWORKS_DIR" ]]; then

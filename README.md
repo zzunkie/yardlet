@@ -285,6 +285,10 @@ idle, streaming, a long Codex history, a long sidebar, browser tabs) in a QA cop
 test suite's benchmarks, compared with the previous run on the same Mac. See
 [docs/PERFORMANCE_BENCH.md](docs/PERFORMANCE_BENCH.md).
 
+`./scripts/simulator-qa/run-check.sh` checks the simulator host (the helper that shows and drives iOS
+simulators) against a simulator it makes for the run, boots without a window and deletes afterwards, also
+when the check fails. It needs Xcode with an iOS simulator runtime and leaves other simulators alone.
+
 Bundles include the in-window browser (Chromium Embedded Framework in a separate browser host
 process). The script uses the CEF distribution pinned for the bundle's architecture in
 `~/Library/Caches/Yardlet/CEF/`, verifies its hash, and stops with the download command when it is
@@ -357,6 +361,12 @@ YARDLET_SIGNING_IDENTITY="Developer ID Application: <name> (<team>)" ./scripts/b
   property list's launch constraint (`SpawnConstraint`), whose team `sign-app.sh` fills in, lets
   launchd start no other executable as root. A build signed ad hoc has no team, so it carries no
   property list and offers no helper.
+- The simulator host (`Contents/Helpers/Yardlet Simulator Host.app`) has no entitlement and the app no
+  `disable-library-validation`: it opens Xcode's SimulatorKit and CoreSimulator at run time, which Apple
+  signed. Yardlet starts it responsible for itself in macOS's privacy system, so it holds none of the
+  permissions the person gave Yardlet; a helper inside Desktop, Documents or Downloads (a development
+  build there) starts from a copy in the temporary folder, so macOS asks for no folder access. The
+  helper never calls `AXIsProcessTrusted`, which would list it under Accessibility in Privacy & Security.
 - A Developer ID identity signs with a secure timestamp (Apple's timestamp server); other identities,
   such as Apple Development for local checks, sign without one unless `YARDLET_SIGNING_TIMESTAMP=1`.
   Only a Developer ID build can be notarized.

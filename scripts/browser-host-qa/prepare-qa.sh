@@ -34,6 +34,7 @@ if [[ -d "$host" ]]; then
     for helper in "$host"/Contents/Frameworks/*.app(N); do rename_and_sign "$helper"; done
     [[ -n "$profile" ]] || rename_and_sign "$host"
 fi
+for helper in "$destination"/Contents/Helpers/*.app(N); do rename_and_sign "$helper"; done
 /usr/libexec/PlistBuddy -c "Set :CFBundleName ${destination:t:r}" "$destination/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName ${destination:t:r}" "$destination/Contents/Info.plist"
 # A QA copy never updates itself: without a feed and key Sparkle stays off (YardletSparkle).
