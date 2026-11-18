@@ -78,6 +78,11 @@ final class ToolRowWordingTests: XCTestCase {
                        "Stopped python3 - <<'PY' print(1) PY")
         XCTAssertEqual(ConversationLineWording.codex(unknown, phase: .failed, localize: en).text,
                        "Ran python3 - <<'PY' print(1) PY")
+        // A long script reads as its first 400 characters on one line, then "…".
+        let script = "python3 - <<'PY'\n" + String(repeating: "x  =\t1\n", count: 50_000) + "PY"
+        XCTAssertEqual(ConversationLineWording.codex(.unknown(command: script), phase: .completed, localize: en),
+                       ConversationLineWords(verb: "Ran", trailing: String(("python3 - <<'PY' "
+                           + String(repeating: "x = 1 ", count: 70)).prefix(400)) + "…"))
         XCTAssertEqual(ConversationLineWording.codex(.unknown(command: "  "), phase: .completed, localize: en).text,
                        "Ran command")
         XCTAssertEqual(ConversationLineWording.codex(.unknown(command: ""), phase: .running, localize: ko).text,

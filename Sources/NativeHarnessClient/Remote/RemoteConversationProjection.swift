@@ -545,8 +545,9 @@ enum RemoteConversationProjection {
 
     // MARK: - Text
 
+    /// The first line that is not empty, read no further: a command's whole script may follow it.
     private static func firstLine(_ text: String) -> String {
-        text.split(whereSeparator: \.isNewline).first.map(String.init) ?? text
+        text.split(maxSplits: 1, whereSeparator: \.isNewline).first.map(String.init) ?? text
     }
 
     private static func oneLine(_ text: String) -> String {

@@ -573,10 +573,11 @@ public struct RemoteItem: Codable, Equatable, Sendable {
 
 /// Text cut to what the protocol allows for a field.
 public enum RemoteText {
-    /// The text and whether it was cut. Cuts at a character boundary.
+    /// The text and whether it was cut. Cuts at a character boundary, reading no further than the limit.
     public static func capped(_ text: String, _ limit: Int) -> (text: String, truncated: Bool) {
-        guard text.count > limit else { return (text, false) }
-        return (String(text.prefix(limit)), true)
+        guard let end = text.index(text.startIndex, offsetBy: max(limit, 0), limitedBy: text.endIndex),
+              end != text.endIndex else { return (text, false) }
+        return (String(text[..<end]), true)
     }
 
     /// Optional text cut to the limit, nil when empty.

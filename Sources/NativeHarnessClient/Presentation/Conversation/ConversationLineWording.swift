@@ -493,11 +493,32 @@ enum ConversationLineWording {
     }
 
     /// Text on one line, as a line that does not wrap shows it: each run of spaces and line breaks
-    /// is one space.
+    /// is one space. Only as much as the line holds is read, so a command of any length words as fast:
+    /// lines are worded again whenever their turn changes.
     static func oneLine(_ text: String) -> String {
-        let collapsed = text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).joined(separator: " ")
-        guard collapsed.count > subjectLimit else { return collapsed }
-        return String(collapsed.prefix(subjectLimit)) + "…"
+        var line = ""
+        // Characters appended so far. A space can join the mark after a line break into one character,
+        // so past the limit the line is counted again.
+        var appended = 0
+        var spaced = false
+        for character in text {
+            if character.isWhitespace || character.isNewline {
+                spaced = !line.isEmpty
+                continue
+            }
+            if spaced {
+                line.append(" ")
+                appended += 1
+                spaced = false
+            }
+            line.append(character)
+            appended += 1
+            if appended > subjectLimit {
+                appended = line.count
+                if appended > subjectLimit { return String(line.prefix(subjectLimit)) + "…" }
+            }
+        }
+        return line
     }
 
     static func firstLine(_ text: String) -> String {
@@ -511,6 +532,9 @@ enum ConversationLineWording {
 struct ClaudeToolArguments {
     private var values: [String: String] = [:]
     private var emptyLists: Set<String> = []
+    /// A known shape's text, whose fields after the leading one are read only when one is asked for:
+    /// most lines name only the leading field, and a `Write`'s whole content follows its path.
+    private var text: (input: String, lead: String, leadText: String?)?
 
     /// `leadText`, when known (a Bash call's command), is the leading field exactly: the fields are
     /// read only after it.
@@ -526,17 +550,25 @@ struct ClaudeToolArguments {
             return
         }
         guard let fields = ClaudeEventProjector.toolInputFields[tool], let lead = fields.first else { return }
-        let blocks: [String]
         if let leadText, !leadText.isEmpty, input.hasPrefix(leadText) {
             values[lead] = ConversationLineWording.firstLine(leadText)
-            blocks = String(input.dropFirst(leadText.count)).components(separatedBy: "\n\n").filter { !$0.isEmpty }
+            text = (input, lead, leadText)
         } else {
-            let all = input.components(separatedBy: "\n\n")
-            values[lead] = all.first.map { ConversationLineWording.firstLine($0) }
-            blocks = Array(all.dropFirst())
+            let end = input.range(of: "\n\n")?.lowerBound ?? input.endIndex
+            values[lead] = ConversationLineWording.firstLine(String(input[..<end]))
+            text = (input, lead, nil)
         }
-        // The named fields close the text, a block of `name: value` lines and a `name:` block for
-        // each value of several lines: read them from the end until a block is neither.
+    }
+
+    /// The named fields that close a known shape's text, a block of `name: value` lines and a `name:`
+    /// block for each value of several lines: read from the end until a block is neither.
+    private static func trailingFields(of input: String, lead: String, leadText: String?) -> [String: String] {
+        let blocks = if let leadText {
+            String(input.dropFirst(leadText.count)).components(separatedBy: "\n\n").filter { !$0.isEmpty }
+        } else {
+            Array(input.components(separatedBy: "\n\n").dropFirst())
+        }
+        var values: [String: String] = [:]
         for block in blocks.reversed() {
             let lines = block.components(separatedBy: "\n")
             if let first = lines.first, first.hasSuffix(":"), lines.count > 1, Self.isFieldName(first.dropLast()) {
@@ -551,13 +583,18 @@ struct ClaudeToolArguments {
             guard named.count == lines.count else { break }
             for (name, value) in named where values[name] == nil && name != lead { values[name] = value }
         }
+        return values
     }
 
     private static func isFieldName(_ text: Substring) -> Bool {
         !text.isEmpty && text.allSatisfy { $0.isASCII && ($0.isLetter || $0 == "_") }
     }
 
-    subscript(_ name: String) -> String? { values[name] }
+    subscript(_ name: String) -> String? {
+        if let value = values[name] { return value }
+        guard let text, name != text.lead else { return nil }
+        return Self.trailingFields(of: text.input, lead: text.lead, leadText: text.leadText)[name]
+    }
 
     func isEmptyList(_ name: String) -> Bool { emptyLists.contains(name) }
 
