@@ -139,10 +139,12 @@ struct SimulatorPane: View {
             switch link {
             case .attaching, nil:
                 ProgressView().controlSize(.small)
-            case let .failed(message):
-                WorkSurfaceEmptyState(title: L10n.string("The simulator's screen can't be shown."), message: message,
+            case let .failed(failure):
+                WorkSurfaceEmptyState(title: L10n.string("The simulator's screen can't be shown."), message: failure.message,
                                       systemName: "iphone.slash") {
-                    Button(L10n.string("Try Again")) { screens.retry(udid) }.controlSize(.small)
+                    if failure.canTryAgain {
+                        Button(L10n.string("Try Again")) { screens.retry(udid) }.controlSize(.small)
+                    }
                 }
                 .background(ParityTheme.canvas)
             case .attached:

@@ -4076,3 +4076,8 @@
 "Allowed for this task only." = "Allowed for this task only.";
 "Once allowed, any task's agent can use it until you take that back in the Simulator tab." = "Once allowed, any task's agent can use it until you take that back in the Simulator tab.";
 "Revoke Agent Access" = "Revoke Agent Access";
+"Yardlet's simulator helper is missing. Reinstall Yardlet to use simulators." = "Yardlet's simulator helper is missing. Reinstall Yardlet to use simulators.";
+"Yardlet's simulator helper couldn't start." = "Yardlet's simulator helper couldn't start.";
+"Yardlet's simulator helper stopped." = "Yardlet's simulator helper stopped.";
+"Yardlet couldn't connect to this simulator." = "Yardlet couldn't connect to this simulator.";
+"The connection to this simulator ended." = "The connection to this simulator ended.";

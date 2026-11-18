@@ -15,8 +15,17 @@ import YardletSurfacePort
 /// or automation permissions the person gave Yardlet, and needs none. It runs in a sandbox (`SimulatorHostSandbox`).
 final class SimulatorHostProcess: @unchecked Sendable {
     static var bundledExecutable: URL {
-        Bundle.main.bundleURL.appending(
-            path: "Contents/Helpers/Yardlet Simulator Host.app/Contents/MacOS/Yardlet Simulator Host")
+        bundledExecutable(in: Bundle.main)
+    }
+
+    /// The helper in an app bundle's Helpers, or, for a build run outside an app bundle (`swift run`), the
+    /// `YardletSimulatorHost` built beside its executable.
+    static func bundledExecutable(in bundle: Bundle) -> URL {
+        guard bundle.bundleURL.pathExtension != "app", let executable = bundle.executableURL else {
+            return bundle.bundleURL.appending(
+                path: "Contents/Helpers/Yardlet Simulator Host.app/Contents/MacOS/Yardlet Simulator Host")
+        }
+        return executable.deletingLastPathComponent().appending(path: "YardletSimulatorHost")
     }
 
     let processIdentifier: Int32

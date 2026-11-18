@@ -5,7 +5,7 @@ import XCTest
 
 /// The Simulator tab drawn in an unshown window with fictional devices: the launcher with Simulator after Browser,
 /// the device list with a device another task uses, what each missing part says, a saved tab whose Xcode is gone,
-/// a device booting, a device that is off, and a screen the helper could not show. Drawn under
+/// a device booting, a device that is off, and a screen the helper could not show, for each reason. Drawn under
 /// `.build/simulator-panel/`, in both appearances. The live screen is checked against a real simulator in
 /// `SimulatorPanelQATests`.
 @MainActor
@@ -91,24 +91,47 @@ final class SimulatorPanelRenderingTests: XCTestCase {
                            showing: [L10n.string("This Xcode isn't supported yet."),
                                      L10n.format("Yardlet can't show simulator screens with Xcode %@ yet.", "27.2")])
 
-            // A device that is on, whose screen the helper could not show: why, with Try Again.
+            // A device that is on, whose screen the helper could not show: why in the person's words, never the
+            // system's error, with Try Again where trying again can help. A helper that ends at once (here `false`)
+            // stopped; one that is not there at all is missing.
             let failing = SimulatorCenter(backends: [PanelFakeBackend()])
             await failing.setEnabled(true)
             _ = await failing.attach(PanelFakeBackend.pro, to: task, by: .person)
-            try await draw(failing, task: task, attached: .iOSSimulator(udid: PanelFakeBackend.pro), titles: titles,
-                           appearance: appearance, to: directory.appending(path: name("screen-failed")),
-                           showing: [L10n.string("The simulator's screen can't be shown."), L10n.string("Try Again"),
-                                     "iPhone 17 Pro"])
+            for (helper, failure) in [("/usr/bin/false", SimulatorScreenFailure.helperEnded),
+                                      ("/nonexistent/Yardlet Simulator Host", .helperMissing)] {
+                try await draw(failing, task: task, attached: .iOSSimulator(udid: PanelFakeBackend.pro), titles: titles,
+                               appearance: appearance, helper: helper,
+                               to: directory.appending(path: name("screen-\(failure)")),
+                               showing: [L10n.string("The simulator's screen can't be shown."), failure.message,
+                                         "iPhone 17 Pro"] + (failure.canTryAgain ? [L10n.string("Try Again")] : [])) { words in
+                    XCTAssertFalse(words.contains { $0.contains("No such file") || $0.contains("파일 또는 디렉토리") },
+                                   "\(words)")
+                }
+            }
         }
+
+        // Each way the helper fails reads as one of the panel's own reasons.
+        let missing = URL(filePath: "/nonexistent/Yardlet Simulator Host")
+        XCTAssertEqual(SimulatorScreenFailure(POSIXError(.ENOENT), executable: missing), .helperMissing)
+        XCTAssertEqual(SimulatorScreenFailure(POSIXError(.EPERM), executable: URL(filePath: "/usr/bin/false")),
+                       .helperDidNotStart)
+        let present = URL(filePath: "/usr/bin/false")
+        XCTAssertEqual(SimulatorScreenFailure(SimulatorHostClient.Failure.helperEnded("signal 9"), executable: missing),
+                       .helperMissing)
+        XCTAssertEqual(SimulatorScreenFailure(SimulatorHostClient.Failure.helperEnded("signal 9"), executable: present),
+                       .helperEnded)
+        XCTAssertEqual(SimulatorScreenFailure(SimulatorHostClient.Failure.device("not booted"), executable: present),
+                       .deviceRefused)
     }
 
     /// The Simulator tab of `task` in the side panel's strip, beside a Files tab, with the + menu's choices, drawn
     /// once it reads out every text of `showing`.
     private func draw(_ center: SimulatorCenter, task: UUID, attached: SimulatorDeviceIdentity?,
-                      titles: [UUID: String], appearance: WindowlessRender.Appearance, to url: URL,
+                      titles: [UUID: String], appearance: WindowlessRender.Appearance,
+                      helper: String = "/nonexistent/Yardlet Simulator Host", to url: URL,
                       showing expected: [String], check: ([String]) -> Void = { _ in }) async throws {
         let screens = MacSimulatorScreens()
-        screens.executable = URL(filePath: "/nonexistent/Yardlet Simulator Host")
+        screens.executable = URL(filePath: helper)
         let services = SimulatorPanelServices(center: center, screens: screens, taskTitle: { titles[$0] })
         let tab = TaskSidePanelTabs.simulatorTab(device: attached.flatMap(center.device))
         let files = try XCTUnwrap(TaskSidePanelTabs.tab("files", selectedFilePath: nil))

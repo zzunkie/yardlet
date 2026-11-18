@@ -129,7 +129,11 @@ Mach port. The tab's layer takes it on the host's pipe queue, in a transaction o
 costs the main thread nothing a frame. While nobody can see a tab (its window covered, minimized, on another
 space, the app hidden, or the tab not shown) it asks for no frames, and a still screen sends none.
 
-When the host cannot attach the device, the tab says "The simulator's screen can't be shown." with Try Again.
+When the host cannot show the device, the tab says "The simulator's screen can't be shown." and why, in its own
+words: the helper is missing from the app (reinstall Yardlet), it couldn't start, it stopped, it couldn't connect to
+the simulator, or the connection ended. Try Again starts the helper again when it is not running; a missing helper
+offers none. The error behind it goes to the log (`NSLog`), not to the tab. A build run outside an app bundle
+(`swift run`) starts the `YardletSimulatorHost` built beside it.
 
 ## Input
 

@@ -33,8 +33,8 @@ final class MacSimulatorScreens: SimulatorHostAttaching {
     enum Link: Equatable {
         case attaching
         case attached(SimulatorScreen)
-        /// The helper could not attach it, or let go of it; `message` says why.
-        case failed(String)
+        /// The helper could not attach it, or let go of it.
+        case failed(SimulatorScreenFailure)
     }
 
     /// Each device's link, while a panel shows it or it waits to be let go.
@@ -148,8 +148,8 @@ final class MacSimulatorScreens: SimulatorHostAttaching {
         case let .attached(screen):
             guard let client = deviceClients[device] else { break }
             return (client, screen)
-        case let .failed(message):
-            throw SimulatorHostClient.Failure.device(message)
+        case let .failed(failure):
+            throw SimulatorHostClient.Failure.device(failure.toolReason)
         case .attaching, nil:
             break
         }
@@ -237,7 +237,9 @@ final class MacSimulatorScreens: SimulatorHostAttaching {
                 if case .unsupportedXcode = error as? SimulatorHostClient.Failure {
                     self.onUnsupported(toolchain)
                 }
-                self.links[device] = .failed(Self.message(for: error))
+                let failure = SimulatorScreenFailure(error, executable: self.executable)
+                NSLog("Yardlet simulator screen of %@: %@", device.uuidString, String(describing: error))
+                self.links[device] = .failed(failure)
             }
         }
     }
@@ -277,7 +279,8 @@ final class MacSimulatorScreens: SimulatorHostAttaching {
             for subscriber in liveSubscribers(of: device) { sendFrames(of: device, to: subscriber) }
         case let .detached(device, reason):
             guard links[device] != nil else { return }
-            links[device] = .failed(reason)
+            NSLog("Yardlet simulator screen of %@ let go: %@", device.uuidString, reason)
+            links[device] = .failed(.lost)
             onDeviceLetGo(device)
         case .commandFailed, .ready, .unsupported, .attached, .deviceFailed, .frame, .screenshot, .requestFailed,
              .diagnosis:
@@ -285,8 +288,58 @@ final class MacSimulatorScreens: SimulatorHostAttaching {
         }
     }
 
-    private static func message(for error: any Error) -> String {
-        if let failure = error as? SimulatorHostClient.Failure { return failure.description }
-        return error.localizedDescription
+}
+
+/// Why a device's screen can't be shown, as the panel tells the person; what went wrong in detail goes to the log.
+enum SimulatorScreenFailure: Equatable {
+    /// The helper is not in the app (a damaged copy, or a build run outside an app bundle without it).
+    case helperMissing
+    /// The helper is there but did not start: no sandbox, or the system refused to start it.
+    case helperDidNotStart
+    /// The helper ended while it showed the device, or before it attached it.
+    case helperEnded
+    /// The helper is running, but the simulator did not let it attach.
+    case deviceRefused
+    /// The helper let go of the device: it shut down, or its screen went away.
+    case lost
+
+    init(_ error: any Error, executable: URL) {
+        // A missing helper fails however it was started: sandbox-exec ends at once, or the spawn finds no file.
+        guard FileManager.default.isExecutableFile(atPath: executable.path(percentEncoded: false)) else {
+            self = .helperMissing
+            return
+        }
+        switch error as? SimulatorHostClient.Failure {
+        case .helperEnded?: self = .helperEnded
+        case .device?: self = .deviceRefused
+        case .request?: self = .lost
+        // Anything else failed while the helper started.
+        case .unsupportedXcode?, nil: self = .helperDidNotStart
+        }
+    }
+
+    /// What the panel says under "The simulator's screen can't be shown."
+    var message: String {
+        switch self {
+        case .helperMissing: L10n.string("Yardlet's simulator helper is missing. Reinstall Yardlet to use simulators.")
+        case .helperDidNotStart: L10n.string("Yardlet's simulator helper couldn't start.")
+        case .helperEnded: L10n.string("Yardlet's simulator helper stopped.")
+        case .deviceRefused: L10n.string("Yardlet couldn't connect to this simulator.")
+        case .lost: L10n.string("The connection to this simulator ended.")
+        }
+    }
+
+    /// Whether trying again can help: it starts the helper again when it is not running.
+    var canTryAgain: Bool { self != .helperMissing }
+
+    /// What the agents' tools are told, in English as the rest of their results: the same reason, untranslated.
+    var toolReason: String {
+        switch self {
+        case .helperMissing: "Yardlet's simulator helper is missing from the app; reinstalling Yardlet restores it"
+        case .helperDidNotStart: "Yardlet's simulator helper couldn't start"
+        case .helperEnded: "Yardlet's simulator helper stopped"
+        case .deviceRefused: "the simulator did not let Yardlet's helper connect to it"
+        case .lost: "the connection to the simulator ended"
+        }
     }
 }

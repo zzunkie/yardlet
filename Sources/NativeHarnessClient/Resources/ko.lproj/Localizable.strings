@@ -4076,3 +4076,8 @@
 "Allowed for this task only." = "이 작업에만 허락합니다.";
 "Once allowed, any task's agent can use it until you take that back in the Simulator tab." = "한 번 허락하면 Simulator 탭에서 거둘 때까지 모든 작업의 에이전트가 쓸 수 있습니다.";
 "Revoke Agent Access" = "에이전트 허락 거두기";
+"Yardlet's simulator helper is missing. Reinstall Yardlet to use simulators." = "Yardlet의 시뮬레이터 도우미가 없습니다. 시뮬레이터를 쓰려면 Yardlet을 다시 설치하세요.";
+"Yardlet's simulator helper couldn't start." = "Yardlet의 시뮬레이터 도우미를 시작하지 못했습니다.";
+"Yardlet's simulator helper stopped." = "Yardlet의 시뮬레이터 도우미가 멈췄습니다.";
+"Yardlet couldn't connect to this simulator." = "이 시뮬레이터에 연결하지 못했습니다.";
+"The connection to this simulator ended." = "이 시뮬레이터와의 연결이 끊어졌습니다.";
