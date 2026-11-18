@@ -210,8 +210,13 @@ enum ComposerParts {
             action.isEnabled = compact.isAvailable
             try? AutomationProperties.setName(action, compact.title)
             if !compact.isAvailable { try? ToolTipService.setToolTip(action, compact.reason) }
-            action.click.addHandler { [weak flyout] _, _ in
-                try? flyout?.hide()
+            // The flyout as its events pass it, held only while it is open: the Swift wrapper made here is gone once
+            // the button holds the flyout, so a weak reference to it would be nil when the action is clicked.
+            var shown: Flyout?
+            flyout.opened.addHandler { sender, _ in shown = sender as? Flyout }
+            flyout.closed.addHandler { _, _ in shown = nil }
+            action.click.addHandler { _, _ in
+                try? shown?.hide()
                 compact.run()
             }
             details.children.append(action)

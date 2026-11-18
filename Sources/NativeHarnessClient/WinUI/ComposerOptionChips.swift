@@ -147,8 +147,9 @@ final class ComposerOptionChips {
         control.flyout = made
         if opensAfterPreparing == key {
             opensAfterPreparing = nil
-            control.loaded.addHandler { [weak control] _, _ in
-                guard let control else { return }
+            // The control as the event passes it: the Swift wrapper here is gone once its row holds it.
+            control.loaded.addHandler { sender, _ in
+                guard let control = sender as? Button else { return }
                 try? control.flyout?.showAt(control)
             }
         }

@@ -61,8 +61,9 @@ enum WindowsTheme {
             WindowsTheme.apply(dark: sender.actualTheme == .dark)
         }
         // An element reads its appearance for certain once it is in the window.
-        root.loaded.addHandler { [weak root] _, _ in
-            guard let root else { return }
+        // The root as the event passes it: the Swift wrapper here is gone once the window holds the root.
+        root.loaded.addHandler { sender, _ in
+            guard let root = sender as? FrameworkElement else { return }
             WindowsTheme.apply(dark: root.actualTheme == .dark)
         }
         apply(dark: root.actualTheme == .dark)
