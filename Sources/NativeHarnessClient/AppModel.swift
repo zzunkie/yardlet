@@ -483,6 +483,13 @@ final class AppModel {
     @ObservationIgnored var endSimulatorScreens: @MainActor () -> Void = {}
     /// The agents' simulator tools, over `simulators` (`AppModel+Simulators`).
     @ObservationIgnored lazy var simulatorTools: SimulatorAgentTools = makeSimulatorTools()
+    /// What the Simulator tab's Install gets, and what Yardlet installed (`SimulatorInstalls`). The Mac app hands in
+    /// its iOS runtime installer; elsewhere nothing is offered.
+    var simulatorInstalls = SimulatorInstalls()
+    /// Asks whether to remove what Yardlet installed for the simulators, as the switch turns off; no by default.
+    @ObservationIgnored var askToRemoveSimulatorInstalls: @MainActor ([SimulatorInstalledItem]) async -> Bool = { _ in false }
+    /// Says what could not be removed, and why.
+    @ObservationIgnored var reportSimulatorRemovalFailures: @MainActor ([(SimulatorInstalledItem, String)]) -> Void = { _ in }
 
     init(
         store: SessionStore,

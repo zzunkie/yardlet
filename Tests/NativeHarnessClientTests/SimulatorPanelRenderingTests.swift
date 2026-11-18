@@ -56,14 +56,19 @@ final class SimulatorPanelRenderingTests: XCTestCase {
                            to: directory.appending(path: name("list-android")),
                            showing: ["iOS 26.4", "Android API 35", "Android API 34", "Pixel 9", "Tablet"])
 
-            // Neither platform can run here: what each one needs, one under the other.
+            // Neither platform can run here: what each one needs, one under the other, each with its Install.
             let neither = SimulatorCenter(backends: [PanelFakeBackend(availability: .xcodeMissing),
                                                      PanelFakeAndroidBackend(availability: .sdkMissing)])
             await neither.setEnabled(true)
             let noXcode = SimulatorUnavailableText(.xcodeMissing), noSDK = SimulatorUnavailableText(.sdkMissing)
-            try await draw(neither, task: task, attached: nil, titles: titles, appearance: appearance,
+            let installs = SimulatorInstalls(installers: [
+                RenderInstaller(offer: .openStore(MacIOSRuntimeInstaller.appStoreURL)),
+                RenderInstaller(offer: .download(name: "Android SDK", bytes: nil, licenses: []), platform: .android),
+            ])
+            try await draw(neither, task: task, attached: nil, titles: titles, appearance: appearance, installs: installs,
                            to: directory.appending(path: name("unavailable-both")),
-                           showing: [noXcode.title, noXcode.message ?? "", noSDK.title, noSDK.message ?? ""])
+                           showing: [noXcode.title, noXcode.message ?? "", L10n.string("Open App Store"),
+                                     noSDK.title, noSDK.message ?? "", L10n.string("Install")])
 
             // A saved tab whose Android SDK is gone says only that, with Close.
             let sdkGone = SimulatorCenter(backends: [PanelFakeBackend(), PanelFakeAndroidBackend(availability: .sdkMissing)])
@@ -148,15 +153,100 @@ final class SimulatorPanelRenderingTests: XCTestCase {
                        .deviceRefused)
     }
 
+    func testInstallShowsWhatItGetsHowLargeAndHowFar() async throws {
+        let directory = try WindowlessRender.directory("simulator-panel")
+        let language = L10n.string("Simulator") == "시뮬레이터" ? "ko" : "en"
+        let task = UUID()
+        let size = Int64(8_321_588_736)
+        let sized = SimulatorMissingPart.size(size)
+        for appearance in WindowlessRender.Appearance.allCases {
+            let name = { (state: String) in "install-\(state)-\(language)-\(appearance.suffix).png" }
+            let draw = { (availability: SimulatorAvailability, installer: RenderInstaller, state: String,
+                          showing: [String]) async throws in
+                let center = SimulatorCenter(backends: [PanelFakeBackend(availability: availability)])
+                await center.setEnabled(true)
+                let installs = SimulatorInstalls(installers: [installer])
+                try await installer.drive(installs, check: center.checks[.iOS]!)
+                try await self.draw(center, task: task, attached: nil, titles: [:], appearance: appearance,
+                                    installs: installs, to: directory.appending(path: name(state)), showing: showing)
+                installs.cancelAll()
+            }
+            let runtime = SimulatorInstallOffer.download(name: "iOS 27.2 Simulator Runtime", bytes: size, licenses: [])
+            // What is missing, with Install; without Xcode, Open App Store; Xcode's setup is the person's.
+            try await draw(.runtimeMissing, RenderInstaller(offer: runtime), "missing",
+                           [L10n.string("No iOS simulator runtime."), L10n.string("Install")])
+            try await draw(.xcodeMissing, RenderInstaller(offer: .openStore(MacIOSRuntimeInstaller.appStoreURL)),
+                           "xcode-missing", [L10n.string("Xcode isn't installed."), L10n.string("Open App Store")])
+            try await draw(.xcodeNotSetUp, RenderInstaller(offer: runtime), "xcode-not-set-up",
+                           [L10n.string("Open Xcode once and finish its setup, which asks for an administrator password, then come back.")])
+            // Install shows the size first; only Download starts it.
+            try await draw(.runtimeMissing, RenderInstaller(offer: runtime, stage: .offered), "offered",
+                           [L10n.format("Install %@?", "iOS 27.2 Simulator Runtime"),
+                            L10n.format("Downloads %@ from %@.", sized, "Apple"), L10n.string("Download"),
+                            L10n.string("Cancel")])
+            try await draw(.runtimeMissing, RenderInstaller(offer: runtime, stage: .installing(0.42)), "downloading",
+                           [L10n.format("Downloading %@…", "iOS 27.2 Simulator Runtime"), L10n.string("Cancel")])
+            try await draw(.runtimeMissing, RenderInstaller(offer: runtime, stage: .failed), "failed",
+                           [L10n.string("The install didn't finish."), "iOS 27.2 is not available for download.",
+                            L10n.string("Try Again")])
+
+            // Android's offer: the size from Google and the licenses to accept, in full.
+            let android = SimulatorInstallOffer.download(
+                name: L10n.string("Android SDK and emulator"), bytes: 2_319_245_000,
+                licenses: [SimulatorLicense(id: "android-sdk-license",
+                                            text: "Terms and Conditions\n\nThis is the Android Software Development Kit License Agreement.")])
+            // Once Install is pressed, that platform's install has the tab, the other's missing part waiting.
+            let installer = RenderInstaller(offer: android, stage: .offered, platform: .android)
+            let installs = SimulatorInstalls(installers: [
+                RenderInstaller(offer: .openStore(MacIOSRuntimeInstaller.appStoreURL)), installer,
+            ])
+            let neither = SimulatorCenter(backends: [PanelFakeBackend(availability: .xcodeMissing),
+                                                     PanelFakeAndroidBackend(availability: .sdkMissing)])
+            await neither.setEnabled(true)
+            try await installer.drive(installs, check: XCTUnwrap(neither.checks[.android]))
+            try await self.draw(neither, task: task, attached: nil, titles: [:], appearance: appearance,
+                                installs: installs, to: directory.appending(path: name("android-license")),
+                                showing: [L10n.format("Install %@?", L10n.string("Android SDK and emulator")),
+                                          L10n.string("Accept and Download"), L10n.string("License")]) { words in
+                XCTAssertFalse(words.contains(L10n.string("Open App Store")), "\(words)")
+            }
+            installs.cancelAll()
+        }
+    }
+
+    func testTheRemovalQuestionListsWhatYardletInstalled() throws {
+        let directory = try WindowlessRender.directory("simulator-panel")
+        let language = L10n.string("Simulator") == "시뮬레이터" ? "ko" : "en"
+        let question = SimulatorRemovalQuestion(items: [
+            .iOSRuntime(identifier: "C27103BD", name: "iOS 27.2 Simulator Runtime", bytes: 8_321_588_736),
+            .androidPackage(sdkRoot: "/Users/me/Library/Android/sdk", path: "emulator", revision: "37.2.13",
+                            name: "Android Emulator", bytes: 416_113_219),
+            .androidAVD(home: "/Users/me/.android/avd", name: "Yardlet_Phone"),
+        ])
+        XCTAssertTrue(question.message.contains("iOS 27.2 Simulator Runtime (\(SimulatorMissingPart.size(8_321_588_736)))"))
+        XCTAssertTrue(question.message.contains(L10n.string("What Xcode, Android Studio or you installed stays.")))
+        // The system draws the alert; an alert never shown draws in the light appearance only.
+        let alert = question.alert()
+        alert.window.appearance = NSAppearance(named: .aqua)
+        alert.layout()
+        let content = try XCTUnwrap(alert.window.contentView)
+        let bitmap = try XCTUnwrap(content.bitmapImageRepForCachingDisplay(in: content.bounds))
+        content.cacheDisplay(in: content.bounds, to: bitmap)
+        try WindowlessRender.writePNG(bitmap, to: directory.appending(path: "removal-question-\(language).png"))
+        XCTAssertEqual(alert.buttons.map(\.title), [L10n.string("Remove"), L10n.string("Keep")])
+    }
+
     /// The Simulator tab of `task` in the side panel's strip, beside a Files tab, with the + menu's choices, drawn
     /// once it reads out every text of `showing`.
     private func draw(_ center: SimulatorCenter, task: UUID, attached: SimulatorDeviceIdentity?,
                       titles: [UUID: String], appearance: WindowlessRender.Appearance,
-                      helper: String = "/nonexistent/Yardlet Simulator Host", to url: URL,
+                      helper: String = "/nonexistent/Yardlet Simulator Host",
+                      installs: SimulatorInstalls? = nil, to url: URL,
                       showing expected: [String], check: ([String]) -> Void = { _ in }) async throws {
         let screens = MacSimulatorScreens()
         screens.executable = URL(filePath: helper)
-        let services = SimulatorPanelServices(center: center, screens: screens, taskTitle: { titles[$0] })
+        let services = SimulatorPanelServices(center: center, screens: screens, taskTitle: { titles[$0] },
+                                              installs: installs)
         let tab = TaskSidePanelTabs.simulatorTab(device: attached.flatMap(center.device))
         let files = try XCTUnwrap(TaskSidePanelTabs.tab("files", selectedFilePath: nil))
         let navigation = WorkSurfaceNavigation(
@@ -284,4 +374,54 @@ private final class PanelFakeBackend: SimulatorBackend, @unchecked Sendable {
         -> SimulatorBootIdentity? {
         nil
     }
+}
+
+/// An installer for drawing: it brings the tab's Install to the stage the test names and holds it there.
+private final class RenderInstaller: SimulatorInstaller, @unchecked Sendable {
+    enum Stage: Equatable {
+        case idle
+        case offered
+        case installing(Double)
+        case failed
+    }
+
+    let offer: SimulatorInstallOffer
+    let stage: Stage
+    let platform: SimulatorPlatform
+
+    init(offer: SimulatorInstallOffer, stage: Stage = .idle, platform: SimulatorPlatform = .iOS) {
+        self.offer = offer
+        self.stage = stage
+        self.platform = platform
+    }
+
+    @MainActor
+    func drive(_ installs: SimulatorInstalls, check: SimulatorPlatformCheck) async throws {
+        guard stage != .idle else { return }
+        installs.prepare(platform, check: check, openURL: { _ in })
+        try await waitUntil { installs.state(of: self.platform) == .offered(self.offer) }
+        guard stage != .offered else { return }
+        installs.confirm(platform, check: check)
+        try await waitUntil {
+            switch (self.stage, installs.state(of: self.platform)) {
+            case (.installing, .installing(_, let progress)): progress.fraction != nil
+            case (.failed, .failed): true
+            default: false
+            }
+        }
+    }
+
+    func offer(for check: SimulatorPlatformCheck) async throws -> SimulatorInstallOffer? { offer }
+
+    func install(_ offer: SimulatorInstallOffer, for check: SimulatorPlatformCheck,
+                 progress: @escaping @Sendable (SimulatorInstallProgress) -> Void) async throws -> [SimulatorInstalledItem] {
+        if case let .installing(fraction) = stage {
+            progress(SimulatorInstallProgress(stage: .downloading, fraction: fraction))
+            try await Task.sleep(for: .seconds(3600))
+        }
+        throw SimulatorInstallError(message: "iOS 27.2 is not available for download.")
+    }
+
+    func isStillInstalled(_ item: SimulatorInstalledItem) async -> Bool { false }
+    func remove(_ item: SimulatorInstalledItem) async throws {}
 }

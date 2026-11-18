@@ -102,6 +102,7 @@ extension AppModel {
                                                record: simulatorStartRecord())
             wireSimulatorScreens(to: model)
             model.simulatorTools.drivers[.iOS] = MacIOSSimulatorDriver(hosts: MacSimulatorScreens.shared)
+            wireSimulatorInstalls(to: model)
             model.coordinationLog.fileURL = storageRootURL.appending(path: "logs/task-coordination.log")
             model.followRuntimeChoices()
             return model
@@ -122,14 +123,39 @@ extension AppModel {
         model.endSimulatorScreens = { screens.endAll() }
     }
 
+    /// The Simulator tab's Install for iOS and Android: what it installed is written down beside the devices Yardlet started, the
+    /// center checks again once it ends, and turning the switch off asks whether to remove it. A QA copy keeps its record
+    /// in memory and asks nothing.
+    static func wireSimulatorInstalls(to model: AppModel) {
+        let record: any SimulatorInstallRecordStore = QABackground.isOn
+            ? InMemorySimulatorInstallRecord() : SimulatorInstallRecordFile(url: simulatorFolder().appending(path: "installed.json"))
+        model.simulatorInstalls = SimulatorInstalls(installers: [MacIOSRuntimeInstaller(), AndroidSDKInstaller()], record: record)
+        model.simulatorInstalls.onInstalled = { [weak model] _ in
+            guard let model else { return }
+            await model.simulators.refreshChecks()
+            await model.simulators.refreshDevices()
+        }
+        guard !QABackground.isOn else { return }
+        model.askToRemoveSimulatorInstalls = { items in
+            SimulatorRemovalQuestion(items: items).alert().runModal() == .alertFirstButtonReturn
+        }
+        model.reportSimulatorRemovalFailures = { failures in
+            _ = SimulatorRemovalQuestion.failureAlert(failures).runModal()
+        }
+    }
+
+    /// Yardlet's simulator folder in Application Support, which nothing creates until something is written in it.
+    private static func simulatorFolder() -> URL {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Application Support")
+        return support.appending(path: "\(YardletProduct.applicationSupportDirectoryName)/Simulator", directoryHint: .isDirectory)
+    }
+
     /// Where the simulators Yardlet started are written down: in Yardlet's Application Support folder, which nothing
     /// creates until a device starts. A QA run keeps its own in memory, as it shares the folder with the person's
     /// Yardlet and must never stop the devices that one started.
     private static func simulatorStartRecord() -> any SimulatorBootRecordStore {
         guard !QABackground.isOn else { return InMemorySimulatorBootRecord() }
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Application Support")
-        return SimulatorBootRecordFile(url: support.appending(
-            path: "\(YardletProduct.applicationSupportDirectoryName)/Simulator/started-devices.json"))
+        return SimulatorBootRecordFile(url: simulatorFolder().appending(path: "started-devices.json"))
     }
 }

@@ -12,6 +12,10 @@ struct SimulatorPanelServices {
     let taskTitle: @MainActor (UUID) -> String?
     /// The devices the person let agents use, which the device menu takes back; nil offers no such item.
     var approvals: SimulatorApprovals? = nil
+    /// What Install gets for a missing part; nil offers no Install.
+    var installs: SimulatorInstalls? = nil
+    /// Opens a store page (Xcode's, in the App Store).
+    var openURL: @MainActor (URL) -> Void = { _ in }
 }
 
 private struct SimulatorPanelKey: EnvironmentKey {
@@ -84,13 +88,12 @@ struct SimulatorPane: View {
     private var content: some View {
         if !center.isEnabled || center.checks.isEmpty || (center.devices.isEmpty && !hasListed) {
             ProgressView().controlSize(.small)
-        } else if let attached, let availability = center.checks[attached.kind.platform]?.availability,
-                  !availability.listsDevices {
-            attachedUnavailable(availability)
+        } else if let attached, let check = center.checks[attached.kind.platform], !check.availability.listsDevices {
+            attachedUnavailable(attached.kind.platform, check)
         } else if let device {
             deviceContent(device)
         } else if listing.isEmpty {
-            SimulatorUnavailableView(availabilities: SimulatorPlatform.allCases.compactMap { center.checks[$0]?.availability })
+            SimulatorUnavailableView(checks: center.checks, installs: services.installs, openURL: services.openURL)
         } else {
             SimulatorDeviceList(task: task, entries: center.entries(for: task), platforms: listing,
                                 taskTitle: services.taskTitle, pick: pick)
@@ -98,17 +101,17 @@ struct SimulatorPane: View {
     }
 
     /// The attached device's platform can't run here: a saved tab whose Xcode or Android SDK is gone says only that;
-    /// otherwise, what is missing and what the person does about it.
+    /// otherwise, what is missing and what the person does about it, with Install where Yardlet can get it.
     @ViewBuilder
-    private func attachedUnavailable(_ availability: SimulatorAvailability) -> some View {
-        if availability == .xcodeMissing || availability == .sdkMissing {
-            WorkSurfaceEmptyState(title: availability == .xcodeMissing ? L10n.string("Xcode can't be found.")
+    private func attachedUnavailable(_ platform: SimulatorPlatform, _ check: SimulatorPlatformCheck) -> some View {
+        if check.availability == .xcodeMissing || check.availability == .sdkMissing {
+            WorkSurfaceEmptyState(title: check.availability == .xcodeMissing ? L10n.string("Xcode can't be found.")
                                       : L10n.string("The Android SDK can't be found."),
                                   systemName: "iphone.slash") {
                 Button(L10n.string("Close"), action: onClose).controlSize(.small)
             }
         } else {
-            SimulatorUnavailableView(availabilities: [availability])
+            SimulatorUnavailableView(checks: [platform: check], installs: services.installs, openURL: services.openURL)
         }
     }
 
@@ -124,8 +127,8 @@ struct SimulatorPane: View {
                 Button(L10n.string("Turn On")) { pick(device.identity) }.controlSize(.small)
             }
         case .on:
-            if device.platform == .iOS, case let .xcodeNotSupportedYet(version) = center.checks[.iOS]?.availability {
-                SimulatorUnavailableView(availabilities: [.xcodeNotSupportedYet(xcodeVersion: version)])
+            if device.platform == .iOS, let check = center.checks[.iOS], case .xcodeNotSupportedYet = check.availability {
+                SimulatorUnavailableView(checks: [.iOS: check])
             } else if let toolchain = center.toolchain(for: device.platform) {
                 liveScreen(device, toolchain: toolchain)
             }
@@ -280,7 +283,7 @@ struct SimulatorUnavailableText: Equatable {
             message = L10n.string("Install Xcode from the App Store to use iOS simulators here.")
         case .xcodeNotSetUp:
             title = L10n.string("Xcode isn't set up yet.")
-            message = L10n.string("Open Xcode once and finish its setup, then come back.")
+            message = L10n.string("Open Xcode once and finish its setup, which asks for an administrator password, then come back.")
         case .runtimeMissing:
             title = L10n.string("No iOS simulator runtime.")
             message = L10n.string("Add an iOS runtime in Xcode › Settings › Components.")
@@ -300,30 +303,50 @@ struct SimulatorUnavailableText: Equatable {
 }
 
 /// What is missing for each platform the tab can't list devices of, one under the other.
+/// What each platform that can't run here lacks and what the person does about it, one under the other, with Install
+/// under each where Yardlet can get it. Once Install is pressed, that platform's install (`SimulatorMissingPart`) has
+/// the tab to itself until it ends or is cancelled.
 struct SimulatorUnavailableView: View {
-    let availabilities: [SimulatorAvailability]
+    /// What the check found for each platform.
+    let checks: [SimulatorPlatform: SimulatorPlatformCheck]
+    var installs: SimulatorInstalls? = nil
+    var openURL: @MainActor (URL) -> Void = { _ in }
 
     var body: some View {
-        let texts = availabilities.map(SimulatorUnavailableText.init).filter { !$0.title.isEmpty }
-        if let first = texts.first, texts.count == 1 {
-            WorkSurfaceEmptyState(title: first.title, message: first.message, systemName: "iphone.slash")
-        } else if let first = texts.first {
-            WorkSurfaceEmptyState(title: first.title, message: first.message, systemName: "iphone.slash") {
-                ForEach(texts.dropFirst(), id: \.title) { text in
-                    VStack(spacing: 9) {
-                        Text(text.title).font(.callout.weight(.semibold)).foregroundStyle(.primary)
-                        if let message = text.message {
-                            Text(message)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: 420)
-                                .fixedSize(horizontal: false, vertical: true)
+        let missing = SimulatorPlatform.allCases.filter { checks[$0].map { $0.availability != .available } ?? false }
+        if let installs, let platform = missing.first(where: { SimulatorMissingPart.isUnderWay(installs.state(of: $0)) }),
+           let check = checks[platform] {
+            SimulatorMissingPart(platform: platform, check: check, installs: installs, openURL: openURL)
+        } else if let first = missing.first, let check = checks[first] {
+            let text = SimulatorUnavailableText(check.availability)
+            WorkSurfaceEmptyState(title: text.title, message: text.message, systemName: "iphone.slash") {
+                installButton(first)
+                ForEach(missing.dropFirst(), id: \.self) { platform in
+                    if let check = checks[platform] {
+                        let text = SimulatorUnavailableText(check.availability)
+                        VStack(spacing: 9) {
+                            Text(text.title).font(.callout.weight(.semibold)).foregroundStyle(.primary)
+                            if let message = text.message {
+                                Text(message)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: 420)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            installButton(platform)
                         }
+                        .multilineTextAlignment(.center)
+                        .padding(.top, 10)
                     }
-                    .multilineTextAlignment(.center)
-                    .padding(.top, 10)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func installButton(_ platform: SimulatorPlatform) -> some View {
+        if let installs, let check = checks[platform] {
+            SimulatorInstallButton(platform: platform, check: check, installs: installs, openURL: openURL)
         }
     }
 }

@@ -32,7 +32,8 @@ only one that offers it. An agent that changes it through Yardlet's settings too
 - On: once the saved tasks are read at launch, Yardlet checks this Mac's Xcode and Android SDK off the main
   thread and lists the devices. Simulator is offered in the side panel's launcher and + menu.
 - Off: Simulator leaves the launcher and the + menu, open Simulator tabs close, the simulator host ends, and
-  the devices Yardlet started shut down. Nothing runs while it is off: no command and no file.
+  the devices Yardlet started shut down, a download stops, and Yardlet asks whether to remove what it installed
+  ("Removing what Yardlet installed"). Nothing runs while it is off: no command and no file.
 
 Simulator stands in the launcher and the + menu after Browser: Review, Terminal, Browser, Simulator, Files,
 Side chat in a task with a repository; Files, Side chat, Browser, Simulator, Terminal in one without. The new
@@ -53,7 +54,7 @@ When something is missing, the tab says what and what to do about it:
 | Missing | The tab says |
 |---|---|
 | Xcode | Xcode isn't installed. Install Xcode from the App Store to use iOS simulators here. |
-| Xcode's first launch or CoreSimulator | Xcode isn't set up yet. Open Xcode once and finish its setup, then come back. |
+| Xcode's first launch or CoreSimulator | Xcode isn't set up yet. Open Xcode once and finish its setup, which asks for an administrator password, then come back. |
 | An iOS runtime | No iOS simulator runtime. Add an iOS runtime in Xcode › Settings › Components. |
 | Support for this Xcode in the simulator host | This Xcode isn't supported yet. Yardlet can't show simulator screens with Xcode 27.2 yet. |
 | The Android SDK | No Android SDK. Install Android Studio and create a virtual device in its Device Manager to use Android emulators here. |
@@ -74,11 +75,54 @@ not connect, pair, turn on or turn off a device.
 The tab lists the devices of each platform that can run here and says nothing of the other; only when neither
 can does it say what each one needs, one under the other. Simulator stays in the launcher and the + menu either
 way; the switch is the way to hide it. A saved Simulator tab whose device is attached while Xcode or the Android
-SDK is gone says only "Xcode can't be found." or "The Android SDK can't be found.", with Close. Yardlet does not
-install Xcode, runtimes, the Android SDK, system images or AVDs.
+SDK is gone says only "Xcode can't be found." or "The Android SDK can't be found.", with Close.
+Where Yardlet can get what is missing, the tab offers it (below).
 
 The check runs when the switch turns on and each time a Simulator tab appears; the tab also reads the devices
 again then. Nothing reads them on a timer.
+
+## Installing what is missing
+
+Where Yardlet can get a missing part, the tab offers it under what is missing. Nothing downloads until the person
+accepts what the tab shows; Cancel stops a download, and a failed one says why with Try Again.
+
+- **No Xcode:** Open App Store opens Xcode's page in the App Store (`macappstore://apps.apple.com/app/xcode/id497799835`),
+  where the person installs it. Yardlet does not install Xcode.
+- **Xcode not set up:** the person opens Xcode once; its first launch installs CoreSimulator and asks for an
+  administrator password, which Yardlet does not ask for.
+- **No iOS runtime:** Install shows the runtime and its size, then Download runs Xcode's own
+  `xcodebuild -downloadPlatform iOS` (with `-architectureVariant arm64` on Apple silicon), showing the percentage it
+  prints. The size comes from Apple's public list of simulator runtimes
+  (`devimages-cdn.apple.com/downloads/xcode/simulators/index2.dvtdownloadableindex`): the runtime build it maps the
+  Xcode's iOS simulator SDK build to (the SDK's `SystemVersion.plist`), preferred first, for the Mac's architecture.
+  When the list can't be read, the tab offers the download without a size.
+- **No Android SDK:** Install reads Google's package lists (`dl.google.com/android/repository/repository2-3.xml` and
+  the Google Play system images' `sys-img2-3.xml`) and offers what is missing on the stable channel: platform-tools,
+  the emulator for the Mac, and, when there is no AVD at all, the newest Google Play system image for the Mac's ABI
+  (unless one is already in the SDK) and an AVD on it named `Yardlet_Phone`. The tab shows the total size and the
+  licenses' full text; Accept and Download starts it. No Java is needed: Yardlet downloads each archive, checks it
+  against the SHA-1 the list gives, unpacks its one folder where sdkmanager would (each holds its
+  `source.properties`, which Android Studio and sdkmanager read), records each license's acceptance as sdkmanager
+  does (the SHA-1 of its text on a line of `licenses/<id>`), and writes the AVD's `<name>.ini` and `config.ini` as
+  Android Studio does. The SDK folder is the existing one the environment, the login shell's `PATH` or Android
+  Studio's place names, else Android Studio's place (`~/Library/Android/sdk`), made then. A failed install removes
+  what it made.
+
+When an install ends, the platform is checked again and its devices are listed.
+
+## Removing what Yardlet installed
+
+Yardlet writes down what it installed (`Simulator/installed.json` in its Application Support folder, gone when
+empty): each iOS runtime by the identifier `simctl runtime list` gives it, each Android package by its folder and
+the revision it unpacked, the AVD, and the SDK folder when Yardlet made it.
+
+Turning Settings › General › Simulator off asks whether to remove them, listing each with its size; Keep leaves them.
+Only what is still as Yardlet left it is listed: a runtime `simctl` still lists as deletable, a package whose
+`source.properties` still names the revision Yardlet unpacked (one Android Studio updated is no longer Yardlet's),
+an AVD still there. Removing runs `xcrun simctl runtime delete <identifier>` for a runtime and deletes the package
+folders and the AVD's files; the SDK folder goes last, only when nothing but the licenses Yardlet accepted is left in
+it. What could not be removed is said with why. What Xcode, Android Studio or the person installed is never listed.
+Finding the switch off at launch asks nothing.
 
 ## Picking a device
 
@@ -100,7 +144,8 @@ Android Studio. An emulator already running, from Android Studio for one, is use
 again. An Android device is shown as it is and never started or stopped, so its device menu has no Shut Down; one
 that goes away, unplugged or out of reach, leaves the list, and its tab lists the devices until it is back.
 
-Yardlet does not create, delete or erase simulators or emulators; that is Xcode's and Android Studio's part.
+Apart from the AVD an Android install makes (above), Yardlet does not create, delete or erase simulators or
+emulators; that is Xcode's and Android Studio's part.
 
 ## Several tasks and one device
 
@@ -281,6 +326,10 @@ automation.
 - `SimulatorPanelRenderingTests` draws each state of the tab with fictional devices (the list, each missing
   part, a saved tab whose Xcode is gone, booting, off, an unsupported Xcode, a screen that could not be shown)
   in both appearances under `.build/simulator-panel/`.
+- `SimulatorInstallTests` checks Install without downloading or installing anything: the iOS runtime's size from a
+  fixture of Apple's list and a fake `xcodebuild` in a fake Xcode, and the Android SDK from fixture archives laid out
+  as Google's, checked against their SHA-1 and unpacked into a temporary home, then removed. The rendering test also
+  draws each Install state and the question the switch asks.
 - `scripts/simulator-qa/run-check.sh` runs `SimulatorHostQATests` and `SimulatorPanelQATests` against a
   simulator it makes, boots without a window and deletes afterwards: the live screen, a click, a trackpad scroll,
   Home and typing, through the helper, and the agent tools' select-all and paste, which puts the device's clipboard
