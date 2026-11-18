@@ -203,9 +203,14 @@ enum ClaudeComposerModelProjection {
     }
 
     /// A readable name for a model Claude Code has not listed: its alias capitalized, or a full
-    /// ID such as `claude-opus-5-5` as "Opus 5.5".
+    /// ID such as `claude-opus-5-5` as "Opus 5.5". A model with the `[1m]` suffix reads as Claude Code
+    /// labels it, "Opus (1M context)".
     static func displayName(_ model: String) -> String {
         if model == defaultModel { return L10n.string("Default") }
+        let longWindow = "[1m]"
+        if model.hasSuffix(longWindow), model.count > longWindow.count {
+            return displayName(String(model.dropLast(longWindow.count))) + " (1M context)"
+        }
         var parts = model.split(separator: "-").map(String.init)
         if parts.first == "claude" { parts.removeFirst() }
         guard let family = parts.first, !family.isEmpty else { return model }

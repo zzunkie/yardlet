@@ -34,6 +34,9 @@ final class HarnessModelLabelTests: XCTestCase {
         XCTAssertEqual(Self.claude.label(model: "sonnet"), L10n.format("%@ · %@", "Claude", "Sonnet 5.5"))
         XCTAssertEqual(Self.claude.label(model: "claude-opus-4-6"), L10n.format("%@ · %@", "Claude", "Opus 4.6"),
                        "A model the list does not carry reads by its ID")
+        XCTAssertEqual(Self.claude.label(model: "claude-opus-4-6[1m]"),
+                       L10n.format("%@ · %@", "Claude", "Opus 4.6 (1M context)"),
+                       "A 1M model the list does not carry reads as Claude Code labels it, not with its suffix")
         XCTAssertEqual(Self.claude.label(model: nil), "Claude", "Nothing reported, nothing guessed")
         XCTAssertEqual(Self.codex.label(model: "gpt-6-luna"), L10n.format("%@ · %@", "Codex", "GPT-6-Luna"))
         XCTAssertEqual(Self.codex.label(model: nil), L10n.format("%@ · %@", "Codex", "GPT-6-Sol"),
