@@ -59,13 +59,28 @@ jobs:
         with:
           persist-credentials: false
       - name: Show the toolchain
+        id: toolchain
         run: |
           sw_vers
           xcodebuild -version
           swift --version
-      # A compiler warning in a product target fails the run. The checkout is fresh, so this build
-      # compiles every product file and prints its warnings; the test target is built by the step
-      # after this one, and its warnings are not counted.
+          echo "id=$({ xcodebuild -version; swift --version; } 2>&1 | shasum -a 256 | cut -c1-16)" >> "$GITHUB_OUTPUT"
+      # The run starts from main's latest build (the build-cache job below), so it compiles what changed
+      # since then rather than every file. The sources are dated by their content, which is how that
+      # build tells a file it compiled from a changed one after a fresh checkout. With no build kept for
+      # this toolchain, the run builds from scratch.
+      - name: Start from main's build
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .build
+          key: macos-debug-${{ steps.toolchain.outputs.id }}-${{ github.sha }}
+          restore-keys: macos-debug-${{ steps.toolchain.outputs.id }}-
+      - name: Date the sources by their content
+        run: python3 -I scripts/source-times.py
+      # A compiler warning in a product target fails the run. This build compiles the product files
+      # that changed since main's build, and those that depend on them, and prints their warnings: the
+      # rest compiled without one when they reached main. The test target is built by the step after
+      # this one, and its warnings are not counted.
       - name: Build
         run: |
           set -o pipefail
@@ -113,3 +128,37 @@ jobs:
             !.build/x86_64-apple-macosx/**
           retention-days: 14
           if-no-files-found: ignore
+
+  # main's build, products and tests, kept in GitHub's cache for each commit that reaches main, for the
+  # runs above to start from. The repository keeps 10 GB of caches and drops the least recently used
+  # first; a pull request's run only reads them. By hand, it keeps the build of the branch it ran on,
+  # which only that branch's runs read.
+  build-cache:
+    name: Keep main's build for pull requests
+    if: github.event_name != 'pull_request'
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Name the toolchain
+        id: toolchain
+        run: echo "id=$({ xcodebuild -version; swift --version; } 2>&1 | shasum -a 256 | cut -c1-16)" >> "$GITHUB_OUTPUT"
+      - name: Start from the last build kept
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .build
+          key: macos-debug-${{ steps.toolchain.outputs.id }}-${{ github.sha }}
+          restore-keys: macos-debug-${{ steps.toolchain.outputs.id }}-
+      - name: Date the sources by their content
+        run: python3 -I scripts/source-times.py
+      - name: Build
+        run: |
+          swift build --build-system native
+          swift build --build-system native --build-tests
+      - name: Keep the build
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .build
+          key: macos-debug-${{ steps.toolchain.outputs.id }}-${{ github.sha }}
