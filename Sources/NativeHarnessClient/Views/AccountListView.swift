@@ -95,7 +95,7 @@ struct AccountList: View {
                     Text(L10n.string("All harnesses")).tag(harnessUsage == nil ? .inUse : AccountHarnessScope.Filter.all)
                     Divider()
                     ForEach(filterHarnesses, id: \.self) { Text($0.displayName).tag(AccountHarnessScope.Filter.harness($0)) }
-                }.labelsHidden().frame(width: 165)
+                }.labelsHidden().fixedSize()
                 TextField(L10n.string("Search accounts"), text: $search).textFieldStyle(.roundedBorder)
             }
             Button { Task { await check(choices: choices, policy: .refresh) } } label: {
