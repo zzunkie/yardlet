@@ -4041,7 +4041,7 @@
 "%lld left for a while" = "한동안 손대지 않은 %lld개";
 "Tasks that need your attention: %lld" = "확인이 필요한 작업 %lld개";
 "Simulator" = "시뮬레이터";
-"Shows iOS simulators in the side panel, where you can watch and use them." = "오른쪽 패널에서 iOS 시뮬레이터를 보고 직접 조작할 수 있습니다.";
+"Shows iOS simulators and Android emulators in the side panel, where you can watch and use them." = "오른쪽 패널에서 iOS 시뮬레이터와 Android 에뮬레이터를 보고 직접 조작할 수 있습니다.";
 "Another task" = "다른 작업";
 "Home (⇧⌘H)" = "홈 (⇧⌘H)";
 "Xcode can't be found." = "Xcode를 찾을 수 없습니다.";
@@ -4081,3 +4081,11 @@
 "Yardlet's simulator helper stopped." = "Yardlet의 시뮬레이터 도우미가 멈췄습니다.";
 "Yardlet couldn't connect to this simulator." = "이 시뮬레이터에 연결하지 못했습니다.";
 "The connection to this simulator ended." = "이 시뮬레이터와의 연결이 끊어졌습니다.";
+"The Android SDK can't be found." = "Android SDK를 찾을 수 없습니다.";
+"No Android SDK." = "Android SDK가 없습니다.";
+"Install Android Studio and create a virtual device in its Device Manager to use Android emulators here." = "Android 에뮬레이터를 쓰려면 Android Studio를 설치하고 Device Manager에서 가상 기기를 만드세요.";
+"Create a virtual device in Android Studio › Device Manager." = "Android Studio › Device Manager에서 가상 기기를 만드세요.";
+"Recents" = "최근 앱";
+"Yardlet's Android screen server is missing. Reinstall Yardlet to use Android emulators." = "Yardlet의 Android 화면 서버가 없습니다. Android 에뮬레이터를 쓰려면 Yardlet을 다시 설치하세요.";
+"Yardlet couldn't connect to this emulator." = "이 에뮬레이터에 연결하지 못했습니다.";
+"The connection to this emulator ended." = "이 에뮬레이터와의 연결이 끊어졌습니다.";

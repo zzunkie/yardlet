@@ -1,4 +1,3 @@
-import AppKit
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -53,7 +52,7 @@ final class AndroidScreenQATests: XCTestCase {
         let client = AndroidScreenClient(serverFile: { setup.server })
         addTeardownBlock { @MainActor in client.stopAll() }
         let ended = Ended()
-        client.onStreamEnded = { _, problem in ended.note(problem) }
+        client.onStreamEnded = { _, end in ended.note(String(describing: end)) }
 
         // The first frame, decoded and shown off the main thread.
         let layer = CALayer()
@@ -113,13 +112,10 @@ final class AndroidScreenQATests: XCTestCase {
         // The on-screen keyboard slides up first.
         try await Task.sleep(for: .seconds(1))
         _ = try await screenshot(client, setup, "5-search")
-        for (character, keyCode) in [("w", UInt16(0x0D)), ("i", 0x22), ("f", 0x03), ("i", 0x22)] {
-            for type in [NSEvent.EventType.keyDown, .keyUp] {
-                client.key(try XCTUnwrap(NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: 0,
-                                                          windowNumber: 0, context: nil, characters: character,
-                                                          charactersIgnoringModifiers: character, isARepeat: false,
-                                                          keyCode: keyCode)), on: target)
-            }
+        for scalar in "wifi".unicodeScalars {
+            let stroke = try XCTUnwrap(SimulatorKeyboard.stroke(for: scalar))
+            client.key(stroke.usage, .down, on: target)
+            client.key(stroke.usage, .up, on: target)
         }
         try await waitUntil(message: "the keys did not type wifi") { try await self.uiTree(target).contains("text=\"wifi\"") }
         _ = try await screenshot(client, setup, "5-typed")
@@ -300,7 +296,7 @@ final class AndroidScreenQATests: XCTestCase {
         private let lock = NSLock()
         private var noted: [String] = []
         var problems: [String] { lock.withLock { noted } }
-        func note(_ problem: String?) { lock.withLock { noted.append(problem ?? "ended") } }
+        func note(_ end: String) { lock.withLock { noted.append(end) } }
     }
 
     /// Each picture packet's arrival, matched in order with the frames the decoder puts out.

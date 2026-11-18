@@ -336,7 +336,7 @@ extension YardletSetting {
     /// (`AppModel.followSimulatorPreference`).
     static let simulator = YardletSetting(
         id: "simulator", section: .general, generalGroup: .app, symbol: "iphone", title: L10n.string("Simulator"),
-        detail: L10n.string("Shows iOS simulators in the side panel, where you can watch and use them."),
+        detail: L10n.string("Shows iOS simulators and Android emulators in the side panel, where you can watch and use them."),
         values: .onOff, storage: .flag(key: SimulatorPreference.key, defaultValue: true), asksEveryTime: true,
         offered: { _ in SimulatorPreference.isOffered })
 

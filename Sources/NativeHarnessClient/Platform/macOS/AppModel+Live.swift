@@ -98,7 +98,8 @@ extension AppModel {
             model.accountAssignments = AccountAssignmentLog(
                 fileURL: storageRootURL.appending(path: AccountAssignmentLog.fileName))
             model.personalAgentReadings = PersonalAgentReadings(cache: PersonalAgentCacheFiles.live)
-            model.simulators = SimulatorCenter(backends: [MacIOSSimulatorBackend()], record: simulatorStartRecord())
+            model.simulators = SimulatorCenter(backends: [MacIOSSimulatorBackend(), AndroidEmulatorBackend()],
+                                               record: simulatorStartRecord())
             wireSimulatorScreens(to: model)
             model.simulatorTools.drivers[.iOS] = MacIOSSimulatorDriver(hosts: MacSimulatorScreens.shared)
             model.coordinationLog.fileURL = storageRootURL.appending(path: "logs/task-coordination.log")

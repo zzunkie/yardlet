@@ -54,7 +54,7 @@ final class SimulatorPanelQATests: XCTestCase {
         // The live screen, fit into the panel with its proportions, the room around it empty.
         await host.settle(until: { self.screenView(in: host.hosting)?.frameDisplay.current != nil })
         let view = try XCTUnwrap(screenView(in: host.hosting))
-        guard case let .attached(screen) = screens.link(of: device) else { return XCTFail("The device is not attached") }
+        guard case let .attached(screen) = screens.link(of: attachment.device.identity) else { return XCTFail("The device is not attached") }
         let rect = view.screenRect
         XCTAssertEqual(Double(rect.width / rect.height), Double(screen.pixelWidth) / Double(screen.pixelHeight), accuracy: 0.01)
         XCTAssertEqual(rect.height, size.height - 42 - 2 * SimulatorScreenView.margin, accuracy: 2, "The screen fills the height")
@@ -65,7 +65,7 @@ final class SimulatorPanelQATests: XCTestCase {
         try write(host, view, output.appending(path: "panel-1-live.png"))
 
         // A click on Settings: a finger down and up there opens it.
-        screens.press(.home, on: device)
+        screens.press(.home, on: attachment.device.identity)
         try await settleFrames(host, view)
         let beforeTap = sample(view.frameDisplay.current)
         try click(view, at: settingsIcon)

@@ -13,6 +13,12 @@ import YardletSimulatorHostProtocol
 /// Simulator out of the launcher, lets the device go and removes the approval. Captures
 /// `{launcher,list,live,settings,approval,tools,off}-{light,dark}.png` and writes `result.json`; the device is never
 /// started or stopped here.
+///
+/// With `YARDLET_SIMULATOR_QA_ANDROID_AVD` instead, run by scripts/simulator-qa/run-android-panel-check.sh against a
+/// throwaway emulator it started, the same for Android: the emulator listed beside the iOS simulators, its live
+/// screen through the bundle's scrcpy server with Back, Home and Recents in the tab's header, Recents and a swipe
+/// through the tab, the screen turned to landscape, and, with the switch off, the tab closed and the stream and the
+/// server on the device ended. Captures `android-{list,live,recents,drawer,turned,off}-{light,dark}.png`.
 @MainActor
 final class SimulatorPanelQA {
     private typealias Navigation = TaskSurfaceNavigationProjection
@@ -43,6 +49,9 @@ final class SimulatorPanelQA {
     private func run() async {
         defer { finish() }
         try? FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        if let avd = ProcessInfo.processInfo.environment["YARDLET_SIMULATOR_QA_ANDROID_AVD"] {
+            return await runAndroid(avd: avd)
+        }
         guard let value = ProcessInfo.processInfo.environment["YARDLET_SIMULATOR_QA_DEVICE"],
               let device = UUID(uuidString: value) else {
             return check("setup: the throwaway device is named", false, "no YARDLET_SIMULATOR_QA_DEVICE")
@@ -86,9 +95,9 @@ final class SimulatorPanelQA {
                 return false }(), "\(attached)")
         let live = await waitUntil(.seconds(30)) { self.screenView(in: window)?.frameDisplay.current != nil }
         check("live: the bundle's helper sends frames into the panel", live,
-              "\(String(describing: MacSimulatorScreens.shared.link(of: device)))")
+              "\(String(describing: MacSimulatorScreens.shared.link(of: identity)))")
         check("tab: the task keeps the device it attached", workspace.simulator == identity, "")
-        MacSimulatorScreens.shared.press(.home, on: device)
+        MacSimulatorScreens.shared.press(.home, on: identity)
         try? await Task.sleep(for: .seconds(2))
         await capture(window, "live")
 
@@ -107,7 +116,7 @@ final class SimulatorPanelQA {
             check("input: a click on Settings reaches the device", moved && center.lastPersonInput(on: identity) != nil, "")
             try? await Task.sleep(for: .seconds(3))
             await capture(window, "settings")
-            MacSimulatorScreens.shared.press(.home, on: device)
+            MacSimulatorScreens.shared.press(.home, on: identity)
         }
 
         await checkAgentTools(identity, window: window, workspace: workspace)
@@ -116,7 +125,7 @@ final class SimulatorPanelQA {
         UserDefaults.yardlet.set(false, forKey: SimulatorPreference.key)
         let closed = await waitUntil(.seconds(20)) {
             !workspace.panels.trailingTabs.contains(Navigation.simulatorID) && !center.isEnabled
-                && MacSimulatorScreens.shared.link(of: device) == nil
+                && MacSimulatorScreens.shared.link(of: identity) == nil
         }
         check("switch off: the tab closes, the center stops, the screen is let go", closed,
               "tabs \(workspace.panels.trailingTabs), enabled \(center.isEnabled)")
@@ -176,6 +185,132 @@ final class SimulatorPanelQA {
         workspace.setPanels(Navigation.showing(Navigation.simulatorID, in: workspace.panels))
         try? await Task.sleep(for: .seconds(2))
         await capture(window, "tools")
+    }
+
+    private func runAndroid(avd: String) async {
+        try? await Task.sleep(for: .seconds(2))
+        guard let window = NSApp.windows.first(where: { $0.canBecomeMain && $0.contentView != nil }) else {
+            return check("setup: the window opens", false, "no window")
+        }
+        var frame = window.frame
+        frame.size = NSSize(width: 1400, height: 900)
+        window.setFrame(frame, display: true)
+        let workspace = model.taskWorkspaces.state(for: session)
+        let screens = MacSimulatorScreens.shared
+
+        // As `AppModel.live()` hands them in: the Mac's iOS simulators and Android emulators.
+        model.simulators = SimulatorCenter(backends: [MacIOSSimulatorBackend(), AndroidEmulatorBackend()])
+        AppModel.wireSimulatorScreens(to: model)
+        model.startSimulators(defaults: .yardlet)
+        let center = model.simulators
+        let checked = await waitUntil(.seconds(60)) { center.isEnabled && center.checks[.android] != nil }
+        check("switch: the center finds the Android SDK", checked && center.checks[.android]?.availability == .available,
+              "\(String(describing: center.checks[.android]))")
+
+        let identity = SimulatorDeviceIdentity.androidEmulator(avd: avd)
+        workspace.setPanels(Navigation.showing(Navigation.simulatorID, in: workspace.panels))
+        let listed = await waitUntil(.seconds(30)) { center.device(identity)?.state == .on }
+        check("list: the throwaway emulator is listed, running", listed,
+              "\(center.devices.map { "\($0.name) \($0.state)" })")
+        await capture(window, "android-list")
+
+        let attached = await center.attach(identity, to: session, by: .person)
+        check("attach: the emulator the person picked is attached and claimed, not started by Yardlet",
+              { if case let .attached(attachment) = attached { return attachment.isClaimed && !attachment.isStartedByYardlet }
+                return false }(), "\(attached)")
+        let live = await waitUntil(.seconds(30)) { self.screenView(in: window)?.frameDisplay.current != nil }
+        check("live: the emulator's stream is decoded into the panel", live,
+              "\(String(describing: screens.link(of: identity)))")
+        guard live, let view = screenView(in: window) else { return }
+        let first = view.frameDisplay.current?.frame
+        check("live: the stream's frames are the device's portrait screen",
+              (first?.pixelHeight ?? 0) > (first?.pixelWidth ?? 0), "\(String(describing: first))")
+        screens.pressNavigation(.home, on: identity)
+        try? await Task.sleep(for: .seconds(2))
+        await capture(window, "android-live")
+
+        // Recents from the header's button path, then Home; a swipe up through the tab opens the app drawer.
+        var before = view.frameDisplay.current?.frame.sequence ?? 0
+        screens.pressNavigation(.recents, on: identity)
+        let recents = await waitUntil(.seconds(10)) { (view.frameDisplay.current?.frame.sequence ?? 0) > before + 5 }
+        check("input: Recents reaches the device", recents, "")
+        try? await Task.sleep(for: .seconds(1))
+        await capture(window, "android-recents")
+        screens.pressNavigation(.home, on: identity)
+        try? await Task.sleep(for: .seconds(2))
+        before = view.frameDisplay.current?.frame.sequence ?? 0
+        drag(view, in: window, from: CGPoint(x: 0.5, y: 0.85), to: CGPoint(x: 0.5, y: 0.3))
+        let swiped = await waitUntil(.seconds(10)) { (view.frameDisplay.current?.frame.sequence ?? 0) > before + 5 }
+        check("input: a swipe through the tab reaches the device", swiped && center.lastPersonInput(on: identity) != nil, "")
+        try? await Task.sleep(for: .seconds(1))
+        await capture(window, "android-drawer")
+        screens.pressNavigation(.home, on: identity)
+
+        // Turned with an app that turns: the tab takes the landscape screen, and the stream its frames.
+        if let serial = center.device(identity)?.adbSerial, let sdk = center.toolchain(for: .android) {
+            let adb = AndroidSDK(toolchain: sdk).adb
+            await adbCommand(adb, serial, ["shell", "settings put system accelerometer_rotation 1; am start -W -a android.settings.SETTINGS"])
+            await adbCommand(adb, serial, ["emu", "rotate"])
+            let turned = await waitUntil(.seconds(20)) {
+                guard case let .attached(screen) = screens.link(of: identity), let frame = view.frameDisplay.current?.frame
+                else { return false }
+                return screen.pixelWidth > screen.pixelHeight && frame.pixelWidth > frame.pixelHeight
+            }
+            let rect = view.screenRect
+            check("rotation: the tab and the stream turn to landscape", turned && rect.width > rect.height, "\(rect)")
+            try? await Task.sleep(for: .seconds(2))
+            await capture(window, "android-turned")
+            for _ in 0..<3 { await adbCommand(adb, serial, ["emu", "rotate"]) }
+            _ = await waitUntil(.seconds(20)) { (view.frameDisplay.current?.frame).map { $0.pixelHeight > $0.pixelWidth } ?? false }
+            screens.pressNavigation(.home, on: identity)
+            try? await Task.sleep(for: .seconds(1))
+
+            // Turned off: the tab closes, the screen is let go, and the server on the device ends with the stream.
+            UserDefaults.yardlet.set(false, forKey: SimulatorPreference.key)
+            let closed = await waitUntil(.seconds(20)) {
+                !workspace.panels.trailingTabs.contains(Navigation.simulatorID) && !center.isEnabled
+                    && screens.link(of: identity) == nil
+            }
+            var serverEnded = false
+            for _ in 0..<100 where !serverEnded {
+                serverEnded = !(await adbCommand(adb, serial, ["shell", "ps -A -o ARGS"]))
+                    .contains("com.genymobile.scrcpy.Server")
+                if !serverEnded { try? await Task.sleep(for: .milliseconds(100)) }
+            }
+            check("switch off: the tab closes, the screen is let go, the server on the device ends", closed && serverEnded,
+                  "tabs \(workspace.panels.trailingTabs), enabled \(center.isEnabled), server ended \(serverEnded)")
+        } else {
+            check("rotation: the emulator's serial and SDK are known", false, "")
+        }
+        workspace.setPanels(Navigation.showing(Navigation.launcherID, in: workspace.panels))
+        try? await Task.sleep(for: .seconds(1))
+        await capture(window, "android-off")
+        UserDefaults.yardlet.removeObject(forKey: SimulatorPreference.key)
+    }
+
+    /// A finger dragged through the screen view over a quarter of a second, between points given as fractions of the
+    /// screen.
+    private func drag(_ view: SimulatorScreenView, in window: NSWindow, from start: CGPoint, to end: CGPoint) {
+        let rect = view.screenRect
+        func event(_ type: NSEvent.EventType, _ fraction: CGPoint) -> NSEvent? {
+            let point = view.convert(NSPoint(x: rect.minX + fraction.x * rect.width, y: rect.minY + fraction.y * rect.height),
+                                     to: nil)
+            return NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0,
+                                      windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
+                                      pressure: type == .leftMouseUp ? 0 : 1)
+        }
+        if let down = event(.leftMouseDown, start) { view.mouseDown(with: down) }
+        for step in 1...15 {
+            let fraction = CGFloat(step) / 15
+            let point = CGPoint(x: start.x + (end.x - start.x) * fraction, y: start.y + (end.y - start.y) * fraction)
+            if let moved = event(.leftMouseDragged, point) { view.mouseDragged(with: moved) }
+        }
+        if let up = event(.leftMouseUp, end) { view.mouseUp(with: up) }
+    }
+
+    @discardableResult
+    private func adbCommand(_ adb: URL, _ serial: String, _ arguments: [String]) async -> String {
+        await CLIProcess.run(CLICommand(executable: adb, arguments: ["-s", serial] + arguments, timeout: .seconds(30))).stdout
     }
 
     private func screenView(in window: NSWindow) -> SimulatorScreenView? {

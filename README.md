@@ -47,8 +47,9 @@ several agents and accounts every day, and it is shared for anyone who doesn't h
   with one sign-in. A connector set up once is offered to the agents you run, and can be turned off
   per task.
 - **Built-in browser.** A Chromium panel the agents can drive through browser tools while you watch.
-- **iOS simulators.** A Simulator tab in the side panel shows a simulator of your own Xcode live and takes
-  your clicks, trackpad and keys, without opening Simulator.app (see [Simulators](docs/SIMULATOR.md)).
+- **iOS simulators and Android emulators.** A Simulator tab in the side panel shows a simulator of your own
+  Xcode or an emulator of your own Android SDK live and takes your clicks, trackpad and keys, without opening
+  Simulator.app or an emulator window (see [Simulators](docs/SIMULATOR.md)).
 - **Personal agents.** Chat with your existing ChatGPT dots alongside coding tasks, with saved drafts
   and native file previews. The account stays with its Codex runtime; no browser needs to stay open
   (see [Personal agents](docs/PERSONAL_AGENTS.md) for current limits).
@@ -293,6 +294,10 @@ when the check fails. It needs Xcode with an iOS simulator runtime and leaves ot
 `./scripts/simulator-qa/run-panel-check.sh` checks the Simulator tab the same way in a QA copy of the app
 launched in the background, and calls the agents' simulator tools through that copy's `yardlet-mcp`
 ([docs/SIMULATOR.md](docs/SIMULATOR.md), "Checking it").
+`./scripts/simulator-qa/run-android-check.sh` and `./scripts/simulator-qa/run-android-panel-check.sh` check the
+Android screen and the Simulator tab with an Android emulator, with an AVD they make in a folder of their own and
+delete afterwards; they need the Android SDK with an installed system image and leave other emulators and the adb
+server alone.
 
 Bundles include the in-window browser (Chromium Embedded Framework in a separate browser host
 process). The script uses the CEF distribution pinned for the bundle's architecture in
@@ -300,6 +305,10 @@ process). The script uses the CEF distribution pinned for the bundle's architect
 missing; `YARDLET_DOWNLOAD_CEF=1` downloads it instead. A debug bundle can be built without it with
 `YARDLET_WITHOUT_CEF=1`; `swift build`, `swift run`, and `swift test` never need CEF and fall back to
 the WebKit preview. See [docs/BROWSER_HOST.md](docs/BROWSER_HOST.md).
+
+Bundles also carry the scrcpy server that shows Android emulators' screens: the script downloads the pinned
+release into `~/Library/Caches/Yardlet/scrcpy/` the first time and checks its SHA-256 on every build
+([docs/SIMULATOR.md](docs/SIMULATOR.md), "The screen").
 
 The bundle is built for the Mac that builds it. `YARDLET_ARCHS=x86_64` builds it for Intel Macs, with
 the Intel CEF build. `YARDLET_ARCHS="arm64 x86_64"` builds a universal bundle, each executable joined

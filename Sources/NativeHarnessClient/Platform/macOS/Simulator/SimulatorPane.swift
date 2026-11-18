@@ -25,8 +25,9 @@ extension EnvironmentValues {
     }
 }
 
-/// A task's Simulator tab: the device the task attached, live, with its Home button and device menu; the list of
-/// devices to pick one from while none is attached; or what is missing to use simulators on this Mac.
+/// A task's Simulator tab: the device the task attached, live, with its platform's buttons and the device menu; the
+/// list of iOS simulators and Android emulators to pick one from while none is attached; or what is missing to use
+/// them on this Mac.
 ///
 /// Picking a device attaches it to the task, claims its input when no task has it, and starts it when it is off,
 /// with progress while it boots. Several tasks' tabs can show the same device; the others offer "Use in This Task"
@@ -43,8 +44,11 @@ struct SimulatorPane: View {
 
     private var center: SimulatorCenter { services.center }
     private var screens: MacSimulatorScreens { services.screens }
-    private var check: SimulatorPlatformCheck? { center.checks[.iOS] }
     private var device: SimulatorDevice? { attached.flatMap(center.device) }
+    /// The platforms whose devices this Mac can list and run.
+    private var listing: [SimulatorPlatform] {
+        SimulatorPlatform.allCases.filter { center.checks[$0]?.availability.listsDevices == true }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -54,12 +58,8 @@ struct SimulatorPane: View {
                 workspaceURL: workspaceURL,
                 onClose: onClose
             ) {
-                if let device, center.state(of: device.identity) == .on, device.platform == .iOS,
-                   let udid = UUID(uuidString: device.identity.value), screens.link(of: udid).isAttached {
-                    ParityIconButton(systemName: "house", help: L10n.string("Home (⇧⌘H)")) {
-                        center.notePersonInput(on: device.identity)
-                        screens.press(.home, on: udid)
-                    }
+                if let device, center.state(of: device.identity) == .on, screens.link(of: device.identity).isAttached {
+                    platformButtons(device)
                 }
                 if device != nil { deviceMenu }
             }
@@ -82,29 +82,33 @@ struct SimulatorPane: View {
 
     @ViewBuilder
     private var content: some View {
-        if !center.isEnabled || check == nil || (center.devices.isEmpty && !hasListed) {
+        if !center.isEnabled || center.checks.isEmpty || (center.devices.isEmpty && !hasListed) {
             ProgressView().controlSize(.small)
-        } else if let check, !check.availability.listsDevices {
-            unavailable(check.availability)
+        } else if let attached, let availability = center.checks[attached.kind.platform]?.availability,
+                  !availability.listsDevices {
+            attachedUnavailable(availability)
         } else if let device {
             deviceContent(device)
+        } else if listing.isEmpty {
+            SimulatorUnavailableView(availabilities: SimulatorPlatform.allCases.compactMap { center.checks[$0]?.availability })
         } else {
-            SimulatorDeviceList(task: task, entries: center.entries(for: task).filter { $0.device.platform == .iOS },
+            SimulatorDeviceList(task: task, entries: center.entries(for: task), platforms: listing,
                                 taskTitle: services.taskTitle, pick: pick)
         }
     }
 
-    /// What is missing to use iOS simulators, and what the person does about it. A saved tab whose Xcode is gone says
-    /// only that.
+    /// The attached device's platform can't run here: a saved tab whose Xcode or Android SDK is gone says only that;
+    /// otherwise, what is missing and what the person does about it.
     @ViewBuilder
-    private func unavailable(_ availability: SimulatorAvailability) -> some View {
-        if attached != nil, availability == .xcodeMissing {
-            WorkSurfaceEmptyState(title: L10n.string("Xcode can't be found."), systemName: "iphone.slash") {
+    private func attachedUnavailable(_ availability: SimulatorAvailability) -> some View {
+        if availability == .xcodeMissing || availability == .sdkMissing {
+            WorkSurfaceEmptyState(title: availability == .xcodeMissing ? L10n.string("Xcode can't be found.")
+                                      : L10n.string("The Android SDK can't be found."),
+                                  systemName: "iphone.slash") {
                 Button(L10n.string("Close"), action: onClose).controlSize(.small)
             }
         } else {
-            let text = SimulatorUnavailableText(availability)
-            WorkSurfaceEmptyState(title: text.title, message: text.message, systemName: "iphone.slash")
+            SimulatorUnavailableView(availabilities: [availability])
         }
     }
 
@@ -120,20 +124,21 @@ struct SimulatorPane: View {
                 Button(L10n.string("Turn On")) { pick(device.identity) }.controlSize(.small)
             }
         case .on:
-            if case let .xcodeNotSupportedYet(version) = check?.availability {
-                let text = SimulatorUnavailableText(.xcodeNotSupportedYet(xcodeVersion: version))
-                WorkSurfaceEmptyState(title: text.title, message: text.message, systemName: "iphone.slash")
-            } else if let udid = UUID(uuidString: device.identity.value), let toolchain = center.toolchain(for: .iOS) {
-                liveScreen(device, udid: udid, toolchain: toolchain)
+            if device.platform == .iOS, case let .xcodeNotSupportedYet(version) = center.checks[.iOS]?.availability {
+                SimulatorUnavailableView(availabilities: [.xcodeNotSupportedYet(xcodeVersion: version)])
+            } else if let toolchain = center.toolchain(for: device.platform) {
+                liveScreen(device, toolchain: toolchain)
             }
         }
     }
 
-    private func liveScreen(_ device: SimulatorDevice, udid: UUID, toolchain: SimulatorToolchain) -> some View {
-        let link = screens.link(of: udid)
+    private func liveScreen(_ device: SimulatorDevice, toolchain: SimulatorToolchain) -> some View {
+        let link = screens.link(of: device.identity)
         return ZStack {
             SimulatorScreenRepresentable(
-                screens: screens, configuration: .init(device: udid, toolchain: toolchain), link: link,
+                screens: screens,
+                configuration: .init(device: device.identity, adbSerial: device.adbSerial, toolchain: toolchain),
+                link: link,
                 onPersonInput: { center.notePersonInput(on: device.identity) },
                 onCloseTab: onClose)
             switch link {
@@ -143,7 +148,7 @@ struct SimulatorPane: View {
                 WorkSurfaceEmptyState(title: L10n.string("The simulator's screen can't be shown."), message: failure.message,
                                       systemName: "iphone.slash") {
                     if failure.canTryAgain {
-                        Button(L10n.string("Try Again")) { screens.retry(udid) }.controlSize(.small)
+                        Button(L10n.string("Try Again")) { screens.retry(device.identity) }.controlSize(.small)
                     }
                 }
                 .background(ParityTheme.canvas)
@@ -157,6 +162,42 @@ struct SimulatorPane: View {
         VStack(spacing: 9) {
             ProgressView().controlSize(.small)
             Text(text).font(.callout).foregroundStyle(.secondary)
+        }
+    }
+
+    /// An iOS simulator's Home button; an Android device's Back, Home and Recents, in the order of its navigation bar.
+    @ViewBuilder
+    private func platformButtons(_ device: SimulatorDevice) -> some View {
+        switch device.platform {
+        case .iOS:
+            ParityIconButton(systemName: "house", help: L10n.string("Home (⇧⌘H)")) {
+                center.notePersonInput(on: device.identity)
+                screens.press(.home, on: device.identity)
+            }
+        case .android:
+            ForEach(AndroidNavigationButton.allCases, id: \.self) { button in
+                ParityIconButton(systemName: Self.symbol(of: button), help: Self.help(of: button)) {
+                    center.notePersonInput(on: device.identity)
+                    screens.pressNavigation(button, on: device.identity)
+                }
+            }
+        }
+    }
+
+    /// Android's own navigation glyphs: a triangle, a circle and a square.
+    static func symbol(of button: AndroidNavigationButton) -> String {
+        switch button {
+        case .back: "arrowtriangle.backward"
+        case .home: "circle"
+        case .recents: "square"
+        }
+    }
+
+    static func help(of button: AndroidNavigationButton) -> String {
+        switch button {
+        case .back: L10n.string("Back")
+        case .home: L10n.string("Home (⇧⌘H)")
+        case .recents: L10n.string("Recents")
         }
     }
 
@@ -176,7 +217,7 @@ struct SimulatorPane: View {
                 Picker(L10n.string("Switch Device"), selection: Binding(
                     get: { attached },
                     set: { identity in if let identity, identity != attached { pick(identity) } })) {
-                    ForEach(menu.devices.filter { $0.device.platform == .iOS }, id: \.device.identity) { entry in
+                    ForEach(menu.devices, id: \.device.identity) { entry in
                         Text(SimulatorDeviceList.menuTitle(entry)).tag(Optional(entry.device.identity))
                     }
                 }
@@ -246,26 +287,60 @@ struct SimulatorUnavailableText: Equatable {
             title = L10n.string("This Xcode isn't supported yet.")
             message = version.map { L10n.format("Yardlet can't show simulator screens with Xcode %@ yet.", $0) }
                 ?? L10n.string("Yardlet can't show simulator screens with this Xcode yet.")
-        case .sdkMissing, .available:
-            // Android's devices are not in the panel yet; an available platform shows its devices.
+        case .sdkMissing:
+            title = L10n.string("No Android SDK.")
+            message = L10n.string("Install Android Studio and create a virtual device in its Device Manager to use Android emulators here.")
+        case .available:
+            // An available platform shows its devices.
             title = ""
             message = nil
         }
     }
 }
 
-/// The devices to pick from: those that are on first, then iOS simulators by runtime. A device another task uses
-/// says which.
+/// What is missing for each platform the tab can't list devices of, one under the other.
+struct SimulatorUnavailableView: View {
+    let availabilities: [SimulatorAvailability]
+
+    var body: some View {
+        let texts = availabilities.map(SimulatorUnavailableText.init).filter { !$0.title.isEmpty }
+        if let first = texts.first, texts.count == 1 {
+            WorkSurfaceEmptyState(title: first.title, message: first.message, systemName: "iphone.slash")
+        } else if let first = texts.first {
+            WorkSurfaceEmptyState(title: first.title, message: first.message, systemName: "iphone.slash") {
+                ForEach(texts.dropFirst(), id: \.title) { text in
+                    VStack(spacing: 9) {
+                        Text(text.title).font(.callout.weight(.semibold)).foregroundStyle(.primary)
+                        if let message = text.message {
+                            Text(message)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: 420)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .multilineTextAlignment(.center)
+                    .padding(.top, 10)
+                }
+            }
+        }
+    }
+}
+
+/// The devices to pick from: those that are on first, then iOS simulators by runtime, then Android emulators by API
+/// level. A device another task uses says which.
 struct SimulatorDeviceList: View {
     let task: UUID
     let entries: [SimulatorListEntry]
+    /// The platforms whose devices are listed, which an empty list says how to add.
+    var platforms: [SimulatorPlatform] = [.iOS]
     let taskTitle: @MainActor (UUID) -> String?
     let pick: (SimulatorDeviceIdentity) -> Void
 
     var body: some View {
         if entries.isEmpty {
             WorkSurfaceEmptyState(title: L10n.string("No simulators"),
-                                  message: L10n.string("Add a simulator in Xcode › Window › Devices and Simulators."),
+                                  message: platforms.map(Self.howToAdd).joined(separator: "\n"),
                                   systemName: "iphone")
         } else {
             ScrollView {
@@ -324,6 +399,13 @@ struct SimulatorDeviceList: View {
             parts.append(L10n.format("Used by “%@”", taskTitle(holder) ?? L10n.string("Another task")))
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    static func howToAdd(_ platform: SimulatorPlatform) -> String {
+        switch platform {
+        case .iOS: L10n.string("Add a simulator in Xcode › Window › Devices and Simulators.")
+        case .android: L10n.string("Create a virtual device in Android Studio › Device Manager.")
+        }
     }
 
     /// A device in the device menu: its name, with its runtime.

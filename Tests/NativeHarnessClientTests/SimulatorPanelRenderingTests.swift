@@ -4,8 +4,9 @@ import XCTest
 @testable import NativeHarnessClient
 
 /// The Simulator tab drawn in an unshown window with fictional devices: the launcher with Simulator after Browser,
-/// the device list with a device another task uses, what each missing part says, a saved tab whose Xcode is gone,
-/// a device booting, a device that is off, and a screen the helper could not show, for each reason. Drawn under
+/// the device list with a device another task uses, iOS simulators and Android emulators listed together, what each
+/// missing part says, both platforms missing at once, a saved tab whose Xcode or Android SDK is gone, a device
+/// booting, a device that is off, and a screen the helper could not show, for each reason. Drawn under
 /// `.build/simulator-panel/`, in both appearances. The live screen is checked against a real simulator in
 /// `SimulatorPanelQATests`.
 @MainActor
@@ -47,6 +48,29 @@ final class SimulatorPanelRenderingTests: XCTestCase {
                            showing: [L10n.string("Running"), "iOS 27.2", "iOS 26.4", "iPhone 16"]) { words in
                 XCTAssertTrue(words.contains { $0.hasPrefix("iPhone 17 Pro") && $0.contains("Build the app") }, "\(words)")
             }
+
+            // iOS simulators and Android emulators together: Android's after iOS's, by API level.
+            let both = SimulatorCenter(backends: [PanelFakeBackend(), PanelFakeAndroidBackend()])
+            await both.setEnabled(true)
+            try await draw(both, task: task, attached: nil, titles: titles, appearance: appearance,
+                           to: directory.appending(path: name("list-android")),
+                           showing: ["iOS 26.4", "Android API 35", "Android API 34", "Pixel 9", "Tablet"])
+
+            // Neither platform can run here: what each one needs, one under the other.
+            let neither = SimulatorCenter(backends: [PanelFakeBackend(availability: .xcodeMissing),
+                                                     PanelFakeAndroidBackend(availability: .sdkMissing)])
+            await neither.setEnabled(true)
+            let noXcode = SimulatorUnavailableText(.xcodeMissing), noSDK = SimulatorUnavailableText(.sdkMissing)
+            try await draw(neither, task: task, attached: nil, titles: titles, appearance: appearance,
+                           to: directory.appending(path: name("unavailable-both")),
+                           showing: [noXcode.title, noXcode.message ?? "", noSDK.title, noSDK.message ?? ""])
+
+            // A saved tab whose Android SDK is gone says only that, with Close.
+            let sdkGone = SimulatorCenter(backends: [PanelFakeBackend(), PanelFakeAndroidBackend(availability: .sdkMissing)])
+            await sdkGone.setEnabled(true)
+            try await draw(sdkGone, task: task, attached: .androidEmulator(avd: "Pixel_9_API_35"), titles: titles,
+                           appearance: appearance, to: directory.appending(path: name("sdk-gone")),
+                           showing: [L10n.string("The Android SDK can't be found."), L10n.string("Close")])
 
             // What each missing part says.
             for availability in [SimulatorAvailability.xcodeMissing, .xcodeNotSetUp, .runtimeMissing] {
@@ -159,6 +183,31 @@ final class SimulatorPanelRenderingTests: XCTestCase {
         XCTAssertEqual(missing, [], "\(url.lastPathComponent) reads out \(words())")
         check(words())
     }
+}
+
+/// Fictional Android emulators, none of them running, with the check's answer chosen by the test.
+private struct PanelFakeAndroidBackend: SimulatorBackend {
+    var availability = SimulatorAvailability.available
+    var platform: SimulatorPlatform { .android }
+
+    func check() async -> SimulatorPlatformCheck {
+        SimulatorPlatformCheck(availability: availability, toolchain: availability.listsDevices
+            ? SimulatorToolchain(directory: "/Users/test/Library/Android/sdk") : nil)
+    }
+
+    func devices(with toolchain: SimulatorToolchain) async throws -> [SimulatorDevice] {
+        [("Pixel_9_API_35", "Pixel 9", "35"), ("Pixel_6_API_34", "Pixel 6", "34"), ("Tablet_API_34", "Tablet", "34")]
+            .map { avd, name, api in
+                SimulatorDevice(identity: .androidEmulator(avd: avd), name: name, state: .off,
+                                osName: "Android API \(api)", osVersion: api)
+            }
+    }
+
+    func boot(_ device: SimulatorDevice, with toolchain: SimulatorToolchain) async throws -> SimulatorBootStart { .started }
+    func waitUntilReady(_ device: SimulatorDevice, with toolchain: SimulatorToolchain) async throws {}
+    func shutDown(_ device: SimulatorDevice, with toolchain: SimulatorToolchain) async throws {}
+    func bootIdentity(of device: SimulatorDeviceIdentity, with toolchain: SimulatorToolchain) async
+        -> SimulatorBootIdentity? { nil }
 }
 
 /// Fictional iOS simulators, with the check's answer chosen by the test. A boot can be held until the test lets it

@@ -634,7 +634,8 @@ private final class PerfBenchRunner {
         await model.simulators.setEnabled(true)
         _ = await model.simulators.attach(.iOSSimulator(udid: device.uuidString), to: PerfBenchFixture.shownTaskID,
                                           by: .person)
-        MacSimulatorScreens.shared.attachWithoutHelper(device, screen: PerfBenchSimulatorBackend.screen,
+        MacSimulatorScreens.shared.attachWithoutHelper(.iOSSimulator(udid: device.uuidString),
+                                                       screen: PerfBenchSimulatorBackend.screen,
                                                        toolchain: PerfBenchSimulatorBackend.toolchain)
         let workspace = model.taskWorkspaces.state(for: PerfBenchFixture.shownTaskID)
         workspace.setPanels(TaskSurfaceNavigationProjection.showing(TaskSurfaceNavigationProjection.simulatorID,

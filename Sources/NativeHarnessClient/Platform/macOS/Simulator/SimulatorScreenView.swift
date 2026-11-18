@@ -5,21 +5,19 @@ import YardletSimulatorHostProtocol
 /// A booted device's screen in a simulator panel, and the person's hands on it.
 ///
 /// The screen is fit into the view, keeping its proportions, with the room around it left empty and no bezel. Its
-/// frames reach the layer from the simulator host's pipe queue without the main thread (`SimulatorFrameDisplay`);
-/// the view only sizes the layer and says which size it shows the screen at. While nobody can see the view (no
-/// window, hidden, its window covered or minimized) it asks for no frames.
+/// frames reach the layer from the simulator host's pipe queue, or an Android stream's decoder, without the main
+/// thread (`SimulatorFrameDisplay`); the view only sizes the layer and says which size it shows the screen at. While
+/// nobody can see the view (no window, hidden, its window covered or minimized) it asks for no frames.
 ///
 /// Input goes to the device as the hardware does: a press, a drag and a release are one finger; a trackpad scroll is
-/// a finger dragged by as much (iOS draws the glide after it), since HID scroll messages are not used; keys go as HID
-/// keys, past the Mac's input method, so the device's own keyboard layout composes text. ⇧⌘H is Home and ⌘L the
-/// lock button, as in Simulator.app, and ⌘W closes the tab; the window's and the menus' keys are Yardlet's first.
+/// a finger dragged by as much (the device draws the glide after it), since HID scroll messages are not used; keys go
+/// by their place on the keyboard, past the Mac's input method, so the device's own keyboard layout composes text.
+/// ⇧⌘H is Home and ⌘L an iOS simulator's lock button, as in Simulator.app, and ⌘W closes the tab; the window's and
+/// the menus' keys are Yardlet's first.
 @MainActor
 final class SimulatorScreenView: NSView, SimulatorScreenSubscriber {
-    /// The device the view shows, with the Xcode that runs it.
-    struct Configuration: Equatable {
-        var device: UUID
-        var toolchain: SimulatorToolchain
-    }
+    /// The device the view shows, with the Xcode or SDK that runs it.
+    typealias Configuration = MacSimulatorScreens.Target
 
     /// Room left around the screen.
     static let margin: CGFloat = 16
@@ -46,7 +44,7 @@ final class SimulatorScreenView: NSView, SimulatorScreenSubscriber {
     var onCloseTab: (() -> Void)?
 
     private let screenLayer = CALayer()
-    private var subscribed: (device: UUID, pixelWidth: Int, pixelHeight: Int)?
+    private var subscribed: (target: Configuration, pixelWidth: Int, pixelHeight: Int)?
     private var windowObservers: [NSObjectProtocol] = []
     /// The finger a press or a scroll puts down, where it is now.
     private var finger: SimulatorPoint?
@@ -161,21 +159,22 @@ final class SimulatorScreenView: NSView, SimulatorScreenSubscriber {
             stopFrames()
             return
         }
-        if let subscribed, subscribed.device != configuration.device { stopFrames() }
+        // Another device, or the same emulator on another serial.
+        if let subscribed, subscribed.target != configuration { stopFrames() }
         let size = screenPixelSize
         if let subscribed, let size, subscribed.pixelWidth == size.width, subscribed.pixelHeight == size.height {
             return
         }
         if subscribed != nil, size == nil { return }
-        screens.show(configuration.device, with: configuration.toolchain, in: self)
-        subscribed = (configuration.device, size?.width ?? 0, size?.height ?? 0)
+        screens.show(configuration, in: self)
+        subscribed = (configuration, size?.width ?? 0, size?.height ?? 0)
     }
 
     /// The panel goes: no more frames for it.
     func stopFrames() {
         guard let subscribed else { return }
         self.subscribed = nil
-        screens.stopShowing(subscribed.device, in: self)
+        screens.stopShowing(subscribed.target.device, in: self)
     }
 
     private func observeWindow() {

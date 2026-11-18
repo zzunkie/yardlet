@@ -4,6 +4,7 @@ import Foundation
 @testable import NativeHarnessClient
 import VideoToolbox
 import XCTest
+import YardletSimulatorHostProtocol
 
 final class AndroidSimulatorTests: XCTestCase {
     func testFindsTheSDKAndListsEmulatorsWithoutTouchingRealDevices() async throws {
@@ -161,6 +162,15 @@ final class AndroidSimulatorTests: XCTestCase {
                        ScrcpyPosition(x: 288, y: 320, screenWidth: 576, screenHeight: 1280))
         XCTAssertEqual(ScrcpyPosition(fractionX: 1, y: .nan, frameWidth: 576, frameHeight: 1280),
                        ScrcpyPosition(x: 575, y: 0, screenWidth: 576, screenHeight: 1280))
+
+        // A key goes by its place on the keyboard, and each event carries the modifiers held, as Android reads them.
+        var keyboard = AndroidKeyboard()
+        let shift = SimulatorKeyboard.leftShift, letterA = try XCTUnwrap(SimulatorKeyUsage(0x04))
+        XCTAssertEqual(keyboard.messages(shift, .down), [.key(.down, keycode: 59, metaState: 0x41)])
+        XCTAssertEqual(keyboard.messages(letterA, .down), [.key(.down, keycode: 29, metaState: 0x41)])
+        XCTAssertEqual(keyboard.messages(shift, .up), [.key(.up, keycode: 59, metaState: 0)])
+        XCTAssertEqual(keyboard.messages(try XCTUnwrap(SimulatorKeyUsage(0x39)), .press).map(\.encoded).count, 2)
+        XCTAssertEqual(keyboard.metaState, 0x10_0000, "Caps Lock stays on until it is pressed again")
 
         // The bundle carries the file the client checks before it pushes one to a device.
         let script = try String(contentsOf: URL(filePath: #filePath).deletingLastPathComponent()
