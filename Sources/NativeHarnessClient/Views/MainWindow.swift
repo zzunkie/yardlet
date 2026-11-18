@@ -1459,6 +1459,7 @@ struct MainWindow: View {
         .environment(\.composerConnectors, composerConnectors(for: session))
         // A side chat's conversation draws no rail of its own.
         .environment(\.sessionRail, conversationOnly ? nil : sessionRailServices(for: session))
+        .environment(\.simulatorPanel, conversationOnly ? nil : simulatorPanelServices)
         // While shown and detached, the conversation follows another app's writes, read-only.
         .task(id: "\(session.id)|\(model.isAttached(session.id))") {
             await model.followDetachedConversation(for: session)
@@ -2432,6 +2433,12 @@ struct MainWindow: View {
     /// in split view) goes away, or comes back beside the conversation or raised over it.
     private func toggleSessionRail() {
         sessionRail.toggle(for: model.store.selectedSessionID)
+    }
+
+    /// What the window gives a task's Simulator tab.
+    private var simulatorPanelServices: SimulatorPanelServices {
+        SimulatorPanelServices(center: model.simulators, screens: .shared,
+                               taskTitle: { [model] id in model.store.sessions.first { $0.id == id }?.title })
     }
 
     /// What the window gives a task's rail.

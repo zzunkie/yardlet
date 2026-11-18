@@ -96,6 +96,12 @@ final class SimulatorCenterTests: XCTestCase {
         XCTAssertFalse(viewing.isClaimed)
         XCTAssertEqual(viewing.claimingTask, first)
         XCTAssertEqual(center.entries(for: second).first { $0.device.identity == a }?.claimingTask, first)
+        // Its tab's device menu offers to take the input, naming the task that has it; a device Yardlet did not
+        // start is not Yardlet's to shut down.
+        let titles = [first: "Build the app"]
+        XCTAssertEqual(SimulatorDeviceMenu.make(for: second, in: center, taskTitle: { titles[$0] }).items,
+                       [.useInThisTask(heldBy: "Build the app"), .disconnect])
+        XCTAssertEqual(SimulatorDeviceMenu.make(for: first, in: center, taskTitle: { titles[$0] }).items, [.disconnect])
 
         // "Use in this task" moves the claim; choosing another device lets go of the first.
         XCTAssertEqual(center.claim(for: second), first)
@@ -153,6 +159,10 @@ final class SimulatorCenterTests: XCTestCase {
         }
         XCTAssertEqual(record.load().count, 3)
         XCTAssertEqual(backend.boots, [phoneA, phoneB, phoneC])
+        // A device Yardlet started can be shut down from its tab, which says Yardlet shuts it down once unused.
+        XCTAssertEqual(SimulatorDeviceMenu.make(for: third, in: center, taskTitle: { _ in nil }).items,
+                       [.disconnect, .shutDown, .startedByYardletNote])
+        XCTAssertEqual(SimulatorDeviceMenu.make(for: UUID(), in: center, taskTitle: { _ in nil }).items, [])
     }
 
     func testYardletStopsOnlyItsOwnBootOnceTheDeviceIsUnused() async throws {

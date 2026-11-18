@@ -155,6 +155,9 @@ final class SimulatorCenter {
     @ObservationIgnored private var idleCheck: Task<Void, Never>?
     /// The Xcode whose screens the simulator host said it cannot show.
     @ObservationIgnored private var unsupportedToolchain: SimulatorToolchain?
+    /// When the person last pressed, typed or scrolled on each device in a simulator panel. Not published: it
+    /// changes with every touch, and only the agent's tools read it, to say a person is using the device.
+    @ObservationIgnored private var personInput: [SimulatorDeviceIdentity: Date] = [:]
 
     init(backends: [any SimulatorBackend] = [],
          record: any SimulatorBootRecordStore = InMemorySimulatorBootRecord(),
@@ -409,6 +412,17 @@ final class SimulatorCenter {
         guard count == 1, let identity = attachments[task] else { return }
         noteUse(identity)
         rescheduleIdleCheck()
+    }
+
+    /// The person pressed, typed or scrolled on the device in a simulator panel, in any task's.
+    func notePersonInput(on identity: SimulatorDeviceIdentity) {
+        personInput[identity] = clock.now
+    }
+
+    /// When the person last pressed, typed or scrolled on the device in a simulator panel; nil when they have not
+    /// since Yardlet started.
+    func lastPersonInput(on identity: SimulatorDeviceIdentity) -> Date? {
+        personInput[identity]
     }
 
     /// An agent's tool acted on the task's device.

@@ -475,6 +475,12 @@ final class AppModel {
     /// The simulator panel's and tools' devices (`SimulatorCenter`). The Mac app hands in its iOS simulators; tests and
     /// other platforms keep one with no platform, and none runs anything until the Simulator switch turns it on.
     var simulators = SimulatorCenter() { didSet { wireSimulators() } }
+    /// Follows Settings › General › Simulator once the app has started (`startSimulators`).
+    @ObservationIgnored var simulatorPreferenceObserver: (any NSObjectProtocol)?
+    /// The switch's value the center last followed.
+    @ObservationIgnored var followedSimulatorPreference: Bool?
+    /// Ends what shows the devices' screens, when the switch turns off: the Mac's simulator host.
+    @ObservationIgnored var endSimulatorScreens: @MainActor () -> Void = {}
 
     init(
         store: SessionStore,

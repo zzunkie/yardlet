@@ -99,6 +99,7 @@ extension AppModel {
                 fileURL: storageRootURL.appending(path: AccountAssignmentLog.fileName))
             model.personalAgentReadings = PersonalAgentReadings(cache: PersonalAgentCacheFiles.live)
             model.simulators = SimulatorCenter(backends: [MacIOSSimulatorBackend()], record: simulatorStartRecord())
+            wireSimulatorScreens(to: model)
             model.coordinationLog.fileURL = storageRootURL.appending(path: "logs/task-coordination.log")
             model.followRuntimeChoices()
             return model
@@ -106,6 +107,17 @@ extension AppModel {
             return storageUnavailable(error, codexEnvironmentManager: codexEnvironmentManager,
                                       applicationAttention: MacApplicationAttention(), browserClient: macBrowserClient)
         }
+    }
+
+    /// The panels' screens tell the simulator center what only the helper sees: an Xcode it cannot show, and a
+    /// device it let go of, most often because it shut down. Turning the Simulator switch off ends the helper.
+    static func wireSimulatorScreens(to model: AppModel) {
+        let screens = MacSimulatorScreens.shared
+        screens.onUnsupported = { [weak model] toolchain in model?.simulators.markNotSupportedYet(toolchain) }
+        screens.onDeviceLetGo = { [weak model] _ in
+            Task { await model?.simulators.refreshDevices() }
+        }
+        model.endSimulatorScreens = { screens.endAll() }
     }
 
     /// Where the simulators Yardlet started are written down: in Yardlet's Application Support folder, which nothing

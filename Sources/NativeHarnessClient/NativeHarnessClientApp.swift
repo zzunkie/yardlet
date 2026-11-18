@@ -650,6 +650,9 @@ struct NativeHarnessClientApp: App {
                         if !QABackground.isOn { model.startMailbox() }
                         // The calendar follows its setting and the connected calendar accounts.
                         if !QABackground.isOn { model.startCalendar() }
+                        // The simulator panel follows Settings › General › Simulator. A QA copy keeps the devices it
+                        // starts in memory, so it never stops the ones the person's Yardlet started.
+                        model.startSimulators(defaults: model.preferences)
                         // Token counting follows Settings › Usage; a visual fixture counts nothing of this Mac's.
                         if !QABackground.isOn, !model.usesVisualFixture {
                             model.startTokenUsage(defaults: model.preferences, watch: TokenUsageWatcher.watch)

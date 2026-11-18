@@ -154,6 +154,7 @@ import XCTest
                 XCTAssertTrue((headings + SettingsSection.allCases.map(\.title)).allSatisfy(labels.contains),
                               labels.description)
                 XCTAssertTrue(labels.contains(YardletSetting.launchAtLogin.title), labels.description)
+                XCTAssertTrue(labels.contains(YardletSetting.simulator.title), "The Simulator switch is in General")
             }
         }
 

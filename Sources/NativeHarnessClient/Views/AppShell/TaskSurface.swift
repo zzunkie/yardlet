@@ -9,6 +9,10 @@ struct TaskDetail: View {
     @Environment(\.composerConnectors) private var composerConnectors
     @Environment(\.taskFolderMissing) private var folderMissing
     @Environment(\.taskAccountMove) private var accountMove
+    /// The Simulator tab's devices and screens; nil where the panel offers none.
+    @Environment(\.simulatorPanel) private var simulatorPanel
+    /// Settings › General › Simulator: off, the panel offers no Simulator tab and closes the one it has.
+    @AppStorage(SimulatorPreference.key) private var simulatorSwitch = true
     /// The header the task's area draws (the title bar, or a split pane's header), which the raised rail
     /// leaves uncovered.
     @Environment(\.taskAreaHeader) private var areaHeader
@@ -162,6 +166,14 @@ struct TaskDetail: View {
                     } else if panelState.trailingSurfaceID == "files" {
                         FilesPane(workspaceURL: session.workspaceURL, state: workspaceState.files,
                                   onClose: { closeSidePanelTab("files") })
+                    } else if panelState.trailingSurfaceID == TaskSurfaceNavigationProjection.simulatorID {
+                        if offersSimulator, let simulatorPanel {
+                            SimulatorPane(task: session.id, workspaceURL: session.workspaceURL, services: simulatorPanel,
+                                          attached: workspaceState.simulator,
+                                          onClose: { closeSidePanelTab(TaskSurfaceNavigationProjection.simulatorID) })
+                        } else {
+                            Color.clear.onAppear { closeSidePanelTab(TaskSurfaceNavigationProjection.simulatorID) }
+                        }
                     } else if panelState.trailingSurfaceID == "sideChat", let sideChat {
                         sideChat
                     } else if panelState.trailingSurfaceID == TaskSurfaceNavigationProjection.terminalID {
@@ -179,6 +191,12 @@ struct TaskDetail: View {
                 SessionRailRaisedLayer(onDismiss: railServices.window.dismissRaised) { railHost(isRaised: true) }
                     .padding(.top, areaHeader?.height ?? 0)
             }
+        }
+        // Settings › General › Simulator turned off closes the Simulator tab, also one a task kept while it was on.
+        .onChange(of: offersSimulator, initial: true) { _, offers in
+            let id = TaskSurfaceNavigationProjection.simulatorID
+            guard !offers, simulatorPanel != nil, panelState.trailingTabs.contains(id) else { return }
+            panelState = TaskSurfaceNavigationProjection.closingTrailingTab(id, in: panelState)
         }
         // The terminal goes where Settings now put it.
         .onChange(of: terminalLocation, initial: true) { _, raw in
@@ -204,6 +222,7 @@ struct TaskDetail: View {
         .onAppear {
             BrowserHostQAFixture.composerDraft = composerDraft
             BrowserHostQAFixture.startIfRequested(session: session.id)
+            SimulatorPanelQA.startIfRequested(session: session.id)
         }
 #endif
     }
@@ -852,7 +871,7 @@ struct TaskDetail: View {
                     return tasks?.record(taskID).map { TaskSidePanelTabs.taskTab($0) }
                 }
                 return TaskSidePanelTabs.tab(id, selectedFilePath: workspaceState.files.preferences.selectedPath,
-                                             browserTabs: workspaceState.browserTabs)
+                                             browserTabs: workspaceState.browserTabs, simulator: simulatorTab)
             },
             activeID: panelState.trailingSurfaceID,
             choices: sidePanelChoices,
@@ -875,7 +894,19 @@ struct TaskDetail: View {
             let lastTurn = presentationPolicy.usesCodexTimeline ? .offered(codexLastTurn) : transcriptLastTurn
             if lastTurn.diff != nil { offersReview = true }
         }
-        return TaskSidePanelTabs.choices(canOpenSideChat: onOpenSideChat != nil, offersReview: offersReview)
+        return TaskSidePanelTabs.choices(canOpenSideChat: onOpenSideChat != nil, offersReview: offersReview,
+                                         offersSimulator: offersSimulator)
+    }
+
+    /// The panel offers the Simulator tab: on the Mac, with Settings › General › Simulator on.
+    private var offersSimulator: Bool {
+        simulatorPanel != nil && simulatorSwitch && SimulatorPreference.isOffered
+    }
+
+    /// The Simulator tab in the strip, named after the device the task attached.
+    private var simulatorTab: WorkSurfaceTab? {
+        guard offersSimulator else { return nil }
+        return TaskSidePanelTabs.simulatorTab(device: workspaceState.simulator.flatMap { simulatorPanel?.center.device($0) })
     }
 
     /// A tab in the strip only shows its panel; it never starts a side chat or a shell.
@@ -886,7 +917,7 @@ struct TaskDetail: View {
 
     private func openSidePanel(_ id: String) {
         switch id {
-        case "files", TaskSurfaceNavigationProjection.launcherID:
+        case "files", TaskSurfaceNavigationProjection.launcherID, TaskSurfaceNavigationProjection.simulatorID:
             showSidePanelTab(id)
         case "sideChat":
             onOpenSideChat?()

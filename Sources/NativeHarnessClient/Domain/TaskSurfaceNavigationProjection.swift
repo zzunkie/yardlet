@@ -65,7 +65,10 @@ enum TaskSurfaceNavigationProjection {
 
     /// Side-panel surfaces that stay as tabs, besides browser tabs (`browserTabID`) and other tasks'
     /// conversations (`taskTabID`). A Claude subtask is shown in the panel but is not a tab.
-    static let trailingTabIDs = ["diff", "files", "sideChat"]
+    static let trailingTabIDs = ["diff", "files", "sideChat", simulatorID]
+    /// The task's Simulator tab: the device the task attached (`SimulatorCenter`), or the list to pick one from.
+    /// One per task, with no key of its own; the side panel's toggle returns to it as to any tab used last.
+    static let simulatorID = "simulator"
     /// The launcher's and the + menu's Browser, and `⌘4`: not a tab. Choosing it opens a new browser
     /// tab, as the Codex app's Browser and Open Browser Tab do; `⌘4` shows the browser tab used last.
     static let browserChoiceID = "browser"
@@ -138,7 +141,8 @@ enum TaskSurfaceNavigationProjection {
     static func placement(for surfaceID: String) -> Placement {
         switch surfaceID {
         case "terminal": .bottom
-        case "diff", browserChoiceID, "sideChat", "files", "subtask", TaskPanelDetail.surfaceID, launcherID: .trailing
+        case "diff", browserChoiceID, "sideChat", "files", simulatorID, "subtask", TaskPanelDetail.surfaceID, launcherID:
+            .trailing
         default: taskID(inTab: surfaceID) != nil || browserKey(inTab: surfaceID) != nil ? .trailing : .primary
         }
     }

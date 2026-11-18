@@ -332,6 +332,14 @@ extension YardletSetting {
         detail: L10n.string("Shows the calendars of accounts connected in Connectors beside your tasks."),
         values: .onOff, storage: .flag(key: CalendarPreference.key, defaultValue: false))
 
+    /// Turned off, open Simulator tabs close, the simulator host ends and the devices Yardlet started stop
+    /// (`AppModel.followSimulatorPreference`).
+    static let simulator = YardletSetting(
+        id: "simulator", section: .general, generalGroup: .app, symbol: "iphone", title: L10n.string("Simulator"),
+        detail: L10n.string("Shows iOS simulators in the side panel, where you can watch and use them."),
+        values: .onOff, storage: .flag(key: SimulatorPreference.key, defaultValue: true), asksEveryTime: true,
+        offered: { _ in SimulatorPreference.isOffered })
+
     static let agentBrowserTools = YardletSetting(
         id: "agent_browser_tools", section: .general, generalGroup: .browser, symbol: "globe", title: L10n.string("Agent browser tools"),
         values: .onOff, storage: .flag(key: AgentToolPreference.browserToolsKey, defaultValue: true),
@@ -685,7 +693,7 @@ extension YardletSetting {
 @MainActor
 enum YardletSettingCatalog {
     static let all: [YardletSetting] = [
-        .language, .showInMenuBar, .launchAtLogin, .mailbox, .calendar, .checkForUpdates,
+        .language, .showInMenuBar, .launchAtLogin, .mailbox, .calendar, .simulator, .checkForUpdates,
         .sendShortcut, .followUpBehavior, .nextMessageSuggestions, .claudeContextLimit, .idleCompaction, .autoFixFailingCI, .showTaskServers, .continueAfterRestart,
         .keepScreenUnlocked, .keepWorkingWithLidClosed,
         .agentBrowserTools, .keepCookies, .searchSuggestions, .pageSuggestions, .memorySaver, .memorySaverLevel,

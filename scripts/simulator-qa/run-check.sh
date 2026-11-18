@@ -1,9 +1,10 @@
 #!/bin/zsh
-# Checks the simulator host against a throwaway simulator: builds the helper and the tests, makes a device named
-# "Yardlet Sim QA <random>", boots it without a window (no Simulator.app), runs SimulatorHostQATests against it with
-# the helper started responsible for itself (no screen recording or accessibility permission of its own), then shuts
-# the device down and deletes it, also when a step fails. Devices it did not make are left alone. The screenshots and
-# the helper's log go to .build/simulator-qa/<time>/.
+# Checks the simulator host and the Simulator tab against a throwaway simulator: builds the helper and the tests,
+# makes a device named "Yardlet Sim QA <random>", boots it without a window (no Simulator.app), runs
+# SimulatorHostQATests and SimulatorPanelQATests against it with the helper started responsible for itself (no screen
+# recording or accessibility permission of its own), then shuts the device down and deletes it, also when a step
+# fails. Devices it did not make are left alone. The screenshots and the helper's log go to
+# .build/simulator-qa/<time>/. scripts/simulator-qa/run-panel-check.sh checks the tab in the running app.
 #
 #   DEVELOPER_DIR                      the Xcode to use (xcode-select's by default)
 #   YARDLET_SIMULATOR_QA_DEVICE_TYPE   the device type to make (com.apple.CoreSimulator.SimDeviceType.iPhone-17)
@@ -55,7 +56,7 @@ set +e
 YARDLET_SIMULATOR_QA_DEVICE=$udid \
 YARDLET_SIMULATOR_QA_DEVELOPER_DIR=$developer_dir \
 YARDLET_SIMULATOR_QA_OUTPUT=$output \
-    heavy swift test --build-system native --skip-build --filter SimulatorHostQATests 2>&1 | tee "$output/test.log"
+    heavy swift test --build-system native --skip-build --filter 'SimulatorHostQATests|SimulatorPanelQATests' 2>&1 | tee "$output/test.log"
 result=${pipestatus[1]}
 set -e
 print "Screenshots and logs: $output"

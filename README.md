@@ -47,6 +47,8 @@ several agents and accounts every day, and it is shared for anyone who doesn't h
   with one sign-in. A connector set up once is offered to the agents you run, and can be turned off
   per task.
 - **Built-in browser.** A Chromium panel the agents can drive through browser tools while you watch.
+- **iOS simulators.** A Simulator tab in the side panel shows a simulator of your own Xcode live and takes
+  your clicks, trackpad and keys, without opening Simulator.app (see [Simulators](docs/SIMULATOR.md)).
 - **Personal agents.** Chat with your existing ChatGPT dots alongside coding tasks, with saved drafts
   and native file previews. The account stays with its Codex runtime; no browser needs to stay open
   (see [Personal agents](docs/PERSONAL_AGENTS.md) for current limits).
@@ -288,6 +290,8 @@ test suite's benchmarks, compared with the previous run on the same Mac. See
 `./scripts/simulator-qa/run-check.sh` checks the simulator host (the helper that shows and drives iOS
 simulators) against a simulator it makes for the run, boots without a window and deletes afterwards, also
 when the check fails. It needs Xcode with an iOS simulator runtime and leaves other simulators alone.
+`./scripts/simulator-qa/run-panel-check.sh` checks the Simulator tab the same way in a QA copy of the app
+launched in the background ([docs/SIMULATOR.md](docs/SIMULATOR.md), "Checking it").
 
 Bundles include the in-window browser (Chromium Embedded Framework in a separate browser host
 process). The script uses the CEF distribution pinned for the bundle's architecture in

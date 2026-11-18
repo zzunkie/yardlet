@@ -137,7 +137,7 @@ final class TaskSurfaceNavigationProjectionTests: XCTestCase {
         Projection.toggledPanelState(current: state, targetID: Projection.sidePanelToggleID)
     }
 
-    func testSidePanelOpensToTheLauncherFirstAndThenTheTabUsedLast() {
+    func testSidePanelOpensToTheLauncherFirstAndThenTheTabUsedLast() throws {
         // The Codex app's panel launcher, not Review: nothing is a tab until something is chosen.
         let first = toggleSidePanel(.init())
         XCTAssertEqual(first.trailingSurfaceID, Projection.launcherID)
@@ -154,6 +154,15 @@ final class TaskSurfaceNavigationProjectionTests: XCTestCase {
         let review = Projection.showing("diff", in: toggleSidePanel(hidden))
         XCTAssertEqual(toggleSidePanel(toggleSidePanel(review)).trailingSurfaceID, "diff")
         XCTAssertEqual(review.trailingTabs, [browser, "diff"], "Switching tabs keeps their order")
+
+        // The Simulator tab has no key of its own: the side panel's toggle returns to it, and it is saved as a tab.
+        let simulator = Projection.showing(Projection.simulatorID, in: review)
+        XCTAssertEqual(Projection.placement(for: Projection.simulatorID), .trailing)
+        XCTAssertEqual(simulator.trailingTabs, [browser, "diff", Projection.simulatorID])
+        XCTAssertEqual(toggleSidePanel(toggleSidePanel(simulator)).trailingSurfaceID, Projection.simulatorID)
+        let saved = try JSONDecoder().decode(Projection.PanelState.self, from: JSONEncoder().encode(simulator))
+        XCTAssertEqual(Projection.reconciled(saved), simulator)
+        XCTAssertEqual(Projection.closingTrailingTab(Projection.simulatorID, in: simulator).trailingSurfaceID, "diff")
     }
 
     func testTheLauncherCoversTheTabsAndItsCloseReturnsToTheTabItCovered() {
@@ -294,6 +303,23 @@ final class TaskSurfaceNavigationProjectionTests: XCTestCase {
         XCTAssertEqual(unavailable.filter { !$0.isAvailable }.map(\.id), ["sideChat"])
         XCTAssertEqual(TaskSidePanelTabs.tab("files", selectedFilePath: "Sources/App.swift")?.title, "App.swift")
         XCTAssertNil(TaskSidePanelTabs.tab("subtask", selectedFilePath: nil))
+
+        // With Settings › General › Simulator on, Simulator stands after Browser, with or without Review; the
+        // new-task screen leaves it out, as the device goes with a task.
+        XCTAssertEqual(TaskSidePanelTabs.choices(canOpenSideChat: true, offersSimulator: true).map(\.id),
+                       ["diff", "terminal", "browser", "simulator", "files", "sideChat"])
+        XCTAssertEqual(TaskSidePanelTabs.choices(canOpenSideChat: true, offersReview: false, offersSimulator: true).map(\.id),
+                       ["files", "sideChat", "browser", "simulator", "terminal"])
+        XCTAssertEqual(TaskSidePanelTabs.draftChoices.map(\.id), ["terminal", "browser", "files"])
+        // Its tab is named after the attached device, and is left out of the strip while the switch is off.
+        XCTAssertNil(TaskSidePanelTabs.tab("simulator", selectedFilePath: nil))
+        let phone = SimulatorDevice(identity: .iOSSimulator(udid: UUID().uuidString), name: "iPhone 17", state: .on,
+                                    osName: "iOS 27.2", osVersion: "27.2")
+        let tab = TaskSidePanelTabs.tab("simulator", selectedFilePath: nil,
+                                        simulator: TaskSidePanelTabs.simulatorTab(device: phone))
+        XCTAssertEqual(tab?.title, "iPhone 17")
+        XCTAssertEqual(tab?.systemName, "iphone")
+        XCTAssertEqual(TaskSidePanelTabs.simulatorTab(device: nil).title, L10n.string("Simulator"))
     }
 
     func testPanelsToggleIndependentlyAndChatClosesAllPanels() {

@@ -36,3 +36,29 @@ extension AppModel {
         simulators.isTurnRunning = { [weak self] id in self?.isRunning(id) ?? false }
     }
 }
+
+extension AppModel {
+    /// Follows Settings › General › Simulator from now on: on, the simulator center checks the platforms off the
+    /// main thread, stops what an earlier Yardlet started and left unused, and lists the devices; off, it stops the
+    /// devices Yardlet started and the screens' helper ends. Called once the saved tasks are read, since the center
+    /// reads their attachments.
+    func startSimulators(defaults: UserDefaults = .yardlet) {
+        guard simulatorPreferenceObserver == nil else { return }
+        nonisolated(unsafe) let watched = defaults
+        simulatorPreferenceObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: defaults, queue: nil
+        ) { [weak self] _ in
+            Task { @MainActor in self?.followSimulatorPreference(defaults: watched) }
+        }
+        followSimulatorPreference(defaults: defaults)
+    }
+
+    func followSimulatorPreference(defaults: UserDefaults = .yardlet) {
+        // Any setting posts the change; only the switch's own turns the center on or off.
+        let isOn = SimulatorPreference.isOn(in: defaults)
+        guard isOn != followedSimulatorPreference else { return }
+        followedSimulatorPreference = isOn
+        if !isOn { endSimulatorScreens() }
+        Task { await simulators.setEnabled(isOn) }
+    }
+}

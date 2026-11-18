@@ -61,12 +61,16 @@ enum TaskSidePanelTabs {
         }
     }
 
+    /// - Parameter simulator: the Simulator tab, while the panel offers one; without it the tab is left out.
     @MainActor
-    static func tab(_ id: String, selectedFilePath: String?, browserTabs: TaskBrowserTabs? = nil) -> WorkSurfaceTab? {
+    static func tab(_ id: String, selectedFilePath: String?, browserTabs: TaskBrowserTabs? = nil,
+                    simulator: WorkSurfaceTab? = nil) -> WorkSurfaceTab? {
         if let key = TaskSurfaceNavigationProjection.browserKey(inTab: id) {
             return browserTabs.map { browserTab(key, in: $0) }
         }
         return switch id {
+        case TaskSurfaceNavigationProjection.simulatorID:
+            simulator
         case "diff":
             WorkSurfaceTab(id: id, title: L10n.string("Review"), systemName: "plus.rectangle")
         case "files":
@@ -84,9 +88,11 @@ enum TaskSidePanelTabs {
     /// The launcher's and the + menu's choices, in the Codex app's order (`Wjl`): in a repository
     /// Review, Terminal, Browser, Files, then Side chat; elsewhere, where the Codex app offers no
     /// Changes, Files, Side chat, Browser and Terminal. Terminal opens below the conversation.
+    /// Simulator stands after Browser while Settings › General › Simulator is on.
     /// - Parameter offersReview: false when no repository holds the task's folders and no turn
     ///   reported its changes; nil while that is not known yet, which offers it.
-    static func choices(canOpenSideChat: Bool, offersReview: Bool? = nil) -> [WorkSurfaceTab] {
+    static func choices(canOpenSideChat: Bool, offersReview: Bool? = nil,
+                        offersSimulator: Bool = false) -> [WorkSurfaceTab] {
         let review = WorkSurfaceTab(id: "diff", title: L10n.string("Review"), systemName: "plus.rectangle",
                                     shortcut: "⌘2")
         // The View menu's key for the terminal, which the title bar's button names too (⌘3 also opens it).
@@ -97,9 +103,23 @@ enum TaskSidePanelTabs {
         let files = WorkSurfaceTab(id: "files", title: L10n.string("Files"), systemName: "folder")
         let sideChat = WorkSurfaceTab(id: "sideChat", title: L10n.string("Side chat"),
                                       systemName: "bubble.left.and.bubble.right", isAvailable: canOpenSideChat)
+        let simulator = offersSimulator ? [simulatorChoice] : []
         return offersReview == false
-            ? [files, sideChat, browser, terminal]
-            : [review, terminal, browser, files, sideChat]
+            ? [files, sideChat, browser] + simulator + [terminal]
+            : [review, terminal, browser] + simulator + [files, sideChat]
+    }
+
+    /// The launcher's and the + menu's Simulator, which shows the task's Simulator tab.
+    static var simulatorChoice: WorkSurfaceTab {
+        WorkSurfaceTab(id: TaskSurfaceNavigationProjection.simulatorID, title: L10n.string("Simulator"),
+                       systemName: SimulatorTabSymbol.name(for: nil))
+    }
+
+    /// The Simulator tab: the attached device's name and its platform's symbol, or Simulator while none is attached.
+    static func simulatorTab(device: SimulatorDevice?) -> WorkSurfaceTab {
+        WorkSurfaceTab(id: TaskSurfaceNavigationProjection.simulatorID,
+                       title: device?.name ?? L10n.string("Simulator"),
+                       systemName: SimulatorTabSymbol.name(for: device?.platform))
     }
 }
 
