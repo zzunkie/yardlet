@@ -163,6 +163,13 @@ final class TaskSurfaceNavigationProjectionTests: XCTestCase {
         let saved = try JSONDecoder().decode(Projection.PanelState.self, from: JSONEncoder().encode(simulator))
         XCTAssertEqual(Projection.reconciled(saved), simulator)
         XCTAssertEqual(Projection.closingTrailingTab(Projection.simulatorID, in: simulator).trailingSurfaceID, "diff")
+
+        // An agent's attach while the person uses another tab adds the Simulator tab without showing it.
+        let beside = Projection.addingTrailingTab(Projection.simulatorID, in: review)
+        XCTAssertEqual(beside.trailingSurfaceID, "diff")
+        XCTAssertEqual(beside.trailingTabs, [browser, "diff", Projection.simulatorID])
+        XCTAssertEqual(Projection.closingTrailingTab("diff", in: beside).trailingSurfaceID, browser,
+                       "Closing the shown tab goes to the one used before, not to the added tab")
     }
 
     func testTheLauncherCoversTheTabsAndItsCloseReturnsToTheTabItCovered() {

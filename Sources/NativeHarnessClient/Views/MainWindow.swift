@@ -2438,7 +2438,8 @@ struct MainWindow: View {
     /// What the window gives a task's Simulator tab.
     private var simulatorPanelServices: SimulatorPanelServices {
         SimulatorPanelServices(center: model.simulators, screens: .shared,
-                               taskTitle: { [model] id in model.store.sessions.first { $0.id == id }?.title })
+                               taskTitle: { [model] id in model.store.sessions.first { $0.id == id }?.title },
+                               approvals: model.simulatorTools.approvals)
     }
 
     /// What the window gives a task's rail.

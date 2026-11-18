@@ -7,9 +7,12 @@ import YardletSimulatorHostProtocol
 /// `--ui-fixture=conversation --ui-fixture-simulator-check=<folder>` against a throwaway simulator it boots
 /// (`YARDLET_SIMULATOR_QA_DEVICE`). The app follows Settings › General › Simulator as it does at launch; the
 /// launcher offers Simulator after Browser; the tab lists the devices; the device picked shows live through the
-/// bundle's simulator host, and a click on Settings opens it; turning the switch off closes the tab, takes Simulator
-/// out of the launcher and lets the device go. Captures `{launcher,list,live,settings,off}-{light,dark}.png` and
-/// writes `result.json`; the device is never started or stopped here.
+/// bundle's simulator host, and a click on Settings opens it; the agent's simulator tools, called through the bundle's
+/// `yardlet-mcp` by the script (drive-tools.py), ask the person once on the task's card, which the fixture captures and
+/// allows, and add the Simulator tab beside the tab the person uses; turning the switch off closes the tab, takes
+/// Simulator out of the launcher, lets the device go and removes the approval. Captures
+/// `{launcher,list,live,settings,approval,tools,off}-{light,dark}.png` and writes `result.json`; the device is never
+/// started or stopped here.
 @MainActor
 final class SimulatorPanelQA {
     private typealias Navigation = TaskSurfaceNavigationProjection
@@ -107,6 +110,8 @@ final class SimulatorPanelQA {
             MacSimulatorScreens.shared.press(.home, on: device)
         }
 
+        await checkAgentTools(identity, window: window, workspace: workspace)
+
         // Turned off: the tab closes, the launcher leaves Simulator out, and the helper lets the device go.
         UserDefaults.yardlet.set(false, forKey: SimulatorPreference.key)
         let closed = await waitUntil(.seconds(20)) {
@@ -115,10 +120,62 @@ final class SimulatorPanelQA {
         }
         check("switch off: the tab closes, the center stops, the screen is let go", closed,
               "tabs \(workspace.panels.trailingTabs), enabled \(center.isEnabled)")
+        check("switch off: the person's approval of the device goes with it",
+              !model.simulatorTools.approvals.isApprovedAnywhere(identity), "")
         workspace.setPanels(Navigation.showing(Navigation.launcherID, in: workspace.panels))
         try? await Task.sleep(for: .seconds(1))
         await capture(window, "off")
         UserDefaults.yardlet.removeObject(forKey: SimulatorPreference.key)
+    }
+
+    /// The agent's tools as a harness calls them: the fixture hands the script the task's `yardlet-mcp` launch
+    /// (`tools-launch.json`, then `tools-ready`), and the script's calls run until it writes `tools-done`. Meanwhile
+    /// the first use of the device waits on the task's card, which the fixture captures and allows.
+    private func checkAgentTools(_ identity: SimulatorDeviceIdentity, window: NSWindow,
+                                 workspace: TaskWorkspaceState) async {
+        model.simulatorTools.drivers[.iOS] = MacIOSSimulatorDriver(hosts: MacSimulatorScreens.shared)
+        model.simulators.detach(session)
+        // The person is using another tab: the agent's attach adds the Simulator tab beside it.
+        workspace.setPanels(Navigation.showing("files", in: workspace.panels))
+        let broker = MacAgentToolService.shared.broker
+        // The script's yardlet-mcp runs under no harness of this task, which the endpoint otherwise refuses.
+        let processCheck = broker.callerProcessCheck
+        broker.callerProcessCheck = nil
+        defer { broker.callerProcessCheck = processCheck }
+        guard let launch = broker.agentToolServer(for: session, workspaceRoots: []) else {
+            return check("tools: the task gets the tool server", false, "no launch")
+        }
+        let document: JSONValue = .object(["command": .string(launch.command),
+                                           "env": .object(launch.environment.mapValues { .string($0) })])
+        let launchFile = output.appending(path: "tools-launch.json")
+        guard let data = try? JSONEncoder().encode(document),
+              FileManager.default.createFile(atPath: launchFile.path(percentEncoded: false), contents: data,
+                                             attributes: [.posixPermissions: 0o600]) else {
+            return check("tools: the launch is handed to the script", false, "")
+        }
+        try? "ready".write(to: output.appending(path: "tools-ready"), atomically: true, encoding: .utf8)
+        let done = output.appending(path: "tools-done").path(percentEncoded: false)
+        var cards = 0
+        let deadline = ContinuousClock.now + .seconds(300)
+        while !FileManager.default.fileExists(atPath: done), ContinuousClock.now < deadline {
+            if let approval = model.sessionTools.approvals(for: session).first {
+                cards += 1
+                try? await Task.sleep(for: .seconds(1))
+                await capture(window, "approval")
+                model.sessionTools.answer(approval.id, allow: true)
+            }
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        check("tools: the script's calls ended", FileManager.default.fileExists(atPath: done), "")
+        check("tools: the device's first use asked the person once", cards == 1, "\(cards) cards")
+        check("tools: a simulator's approval holds for every task",
+              model.simulatorTools.approvals.isApproved(identity, for: UUID()), "")
+        check("tools: the Simulator tab joined beside the tab the person uses",
+              workspace.panels.trailingTabs.contains(Navigation.simulatorID) && workspace.panels.trailingSurfaceID == "files",
+              "\(workspace.panels)")
+        workspace.setPanels(Navigation.showing(Navigation.simulatorID, in: workspace.panels))
+        try? await Task.sleep(for: .seconds(2))
+        await capture(window, "tools")
     }
 
     private func screenView(in window: NSWindow) -> SimulatorScreenView? {

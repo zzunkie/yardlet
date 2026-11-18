@@ -10,6 +10,8 @@ struct SimulatorPanelServices {
     let screens: MacSimulatorScreens
     /// A task's title, while it is neither archived nor gone.
     let taskTitle: @MainActor (UUID) -> String?
+    /// The devices the person let agents use, which the device menu takes back; nil offers no such item.
+    var approvals: SimulatorApprovals? = nil
 }
 
 private struct SimulatorPanelKey: EnvironmentKey {
@@ -165,7 +167,8 @@ struct SimulatorPane: View {
     // MARK: - Device menu
 
     private var deviceMenu: some View {
-        let menu = SimulatorDeviceMenu.make(for: task, in: center, taskTitle: services.taskTitle)
+        let menu = SimulatorDeviceMenu.make(for: task, in: center, taskTitle: services.taskTitle,
+                                            approvals: services.approvals)
         return Menu {
             Menu(L10n.string("Switch Device")) {
                 Picker(L10n.string("Switch Device"), selection: Binding(
@@ -205,6 +208,11 @@ struct SimulatorPane: View {
             Button(L10n.string("Use in This Task")) { center.claim(for: task) }
         case .disconnect:
             Button(L10n.string("Disconnect")) { center.detach(task) }
+        case .revokeAgentAccess:
+            Button(L10n.string("Revoke Agent Access")) {
+                guard let attached else { return }
+                services.approvals?.revoke(attached)
+            }
         case .shutDown:
             Button(L10n.string("Shut Down")) {
                 guard let attached else { return }

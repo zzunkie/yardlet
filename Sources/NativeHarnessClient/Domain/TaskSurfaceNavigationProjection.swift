@@ -176,6 +176,16 @@ enum TaskSurfaceNavigationProjection {
         return reconciled(next)
     }
 
+    /// Adds a side-panel tab at the end without showing it: the Simulator tab an agent's `simulator_attach` adds while
+    /// the person uses another tab of the panel. Least recently used, so closing the shown tab does not move to it.
+    static func addingTrailingTab(_ surfaceID: String, in state: PanelState) -> PanelState {
+        guard !state.trailingTabs.contains(surfaceID) else { return state }
+        var next = state
+        next.trailingTabs.append(surfaceID)
+        next.recentTrailingTabs.append(surfaceID)
+        return reconciled(next)
+    }
+
     /// Hides the side panel and keeps its tabs for the next time it is shown.
     static func hidingTrailing(_ state: PanelState) -> PanelState {
         var next = state

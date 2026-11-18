@@ -340,8 +340,12 @@ final class SimulatorCenterTests: XCTestCase {
         XCTAssertTrue(mixed.text.contains("The person is using Phone A"), mixed.text)
         tools.lastPersonInput = { _ in nil }
 
-        // Taken back, the approval is asked again; declined, nothing reaches the device.
+        // The device menu takes the approval back; asked again, declined, nothing reaches the device.
+        XCTAssertTrue(SimulatorDeviceMenu.make(for: second, in: center, taskTitle: { _ in nil }, approvals: tools.approvals)
+            .items.contains(.revokeAgentAccess))
         tools.approvals.revoke(.iOSSimulator(udid: phoneA))
+        XCTAssertFalse(SimulatorDeviceMenu.make(for: second, in: center, taskTitle: { _ in nil }, approvals: tools.approvals)
+            .items.contains(.revokeAgentAccess))
         allows = false
         driver.events = []
         let declined = await run(SimulatorToolCatalog.tap, ["x": .integer(1), "y": .integer(1)], in: second)
@@ -358,7 +362,7 @@ final class SimulatorCenterTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let approvals = SimulatorApprovals(defaults: defaults)
         let (first, second) = (UUID(), UUID())
-        let phone = SimulatorDeviceIdentity.androidDevice(serialNumber: "R5CR10ABCDE")
+        let phone = SimulatorDeviceIdentity.androidDevice(serialNumber: "0A1B2C3D4E5F")
         let emulator = SimulatorDeviceIdentity.androidEmulator(avd: "Pixel:9")
         approvals.approve(phone, for: first)
         approvals.approve(emulator, for: first)

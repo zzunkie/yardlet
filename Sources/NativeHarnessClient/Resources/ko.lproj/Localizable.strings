@@ -4074,3 +4074,4 @@
 "Pictures of its screen are sent to the model's provider." = "화면 이미지가 모델 제공사로 전송됩니다.";
 "Allowed for this task only." = "이 작업에만 허락합니다.";
 "Once allowed, any task's agent can use it until you take that back in the Simulator tab." = "한 번 허락하면 Simulator 탭에서 거둘 때까지 모든 작업의 에이전트가 쓸 수 있습니다.";
+"Revoke Agent Access" = "에이전트 허락 거두기";

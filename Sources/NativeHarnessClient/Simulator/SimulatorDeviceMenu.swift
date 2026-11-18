@@ -1,8 +1,8 @@
 import Foundation
 
 /// The Simulator tab's device menu, as what it offers: another device to show, taking the device's input from
-/// another task, letting go of the device, and shutting down a device Yardlet started, which says that Yardlet
-/// shuts it down once it is unused. Built from what the simulator center knows, so it is checked without opening a
+/// another task, letting go of the device, taking back the person's approval for agents to use it, and shutting down a
+/// device Yardlet started, which says that Yardlet shuts it down once it is unused. Built from what the simulator center knows, so it is checked without opening a
 /// menu.
 struct SimulatorDeviceMenu: Equatable {
     enum Item: Equatable {
@@ -10,6 +10,8 @@ struct SimulatorDeviceMenu: Equatable {
         /// the task that has it.
         case useInThisTask(heldBy: String)
         case disconnect
+        /// The person let agents use the device (`SimulatorApprovals`): taking it back makes the next tool ask again.
+        case revokeAgentAccess
         /// Shuts down a device Yardlet started.
         case shutDown
         /// Yardlet started the device and shuts it down once no task uses it.
@@ -21,8 +23,10 @@ struct SimulatorDeviceMenu: Equatable {
     var items: [Item]
 
     /// - Parameter taskTitle: another task's title, or nil when it is gone.
+    /// - Parameter approvals: the devices the person let agents use; nil offers no item for them.
     @MainActor
-    static func make(for task: UUID, in center: SimulatorCenter, taskTitle: (UUID) -> String?) -> Self {
+    static func make(for task: UUID, in center: SimulatorCenter, taskTitle: (UUID) -> String?,
+                     approvals: SimulatorApprovals? = nil) -> Self {
         let entries = center.entries(for: task)
         guard let attached = entries.first(where: \.isAttachedHere) else { return Self(devices: entries, items: []) }
         var items: [Item] = []
@@ -30,6 +34,7 @@ struct SimulatorDeviceMenu: Equatable {
             items.append(.useInThisTask(heldBy: taskTitle(holder) ?? L10n.string("Another task")))
         }
         items.append(.disconnect)
+        if approvals?.isApprovedAnywhere(attached.device.identity) == true { items.append(.revokeAgentAccess) }
         if attached.isStartedByYardlet {
             if attached.device.state.isRunning { items.append(.shutDown) }
             items.append(.startedByYardletNote)

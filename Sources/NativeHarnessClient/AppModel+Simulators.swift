@@ -59,13 +59,19 @@ extension AppModel {
         let isOn = SimulatorPreference.isOn(in: defaults)
         guard isOn != followedSimulatorPreference else { return }
         followedSimulatorPreference = isOn
-        if !isOn { endSimulatorScreens() }
+        if !isOn {
+            endSimulatorScreens()
+            // The person's approvals of devices go with the feature (`SimulatorApprovals`).
+            simulatorTools.approvals.removeAll()
+        }
         Task { await simulators.setEnabled(isOn) }
+    }
+}
 
 /// The agents' simulator tools (`SimulatorAgentTools`, docs/SIMULATOR.md, "Agent tools"), answered against the same
 /// simulator center the Simulator tab uses.
 extension AppModel: SimulatorToolHandling {
-    var simulatorSwitchIsOn: Bool { simulators.isEnabled }
+    var simulatorSwitchIsOn: Bool { SimulatorPreference.isOn(in: preferences) }
 
     var simulatorPlatformIsUsable: Bool { simulators.offersDevices }
 
@@ -78,7 +84,24 @@ extension AppModel: SimulatorToolHandling {
                                         approvals: SimulatorApprovals(defaults: preferences))
         tools.askPerson = { [weak self] device, task in await self?.asksToUseSimulator(device, task: task) ?? false }
         tools.taskTitle = { [weak self] id in self?.store.sessions.first { $0.id == id }?.title }
+        tools.showPanel = { [weak self] task in self?.showSimulatorTab(for: task) ?? .notShown }
+        tools.lastPersonInput = { [weak self] device in self?.simulators.lastPersonInput(on: device) }
         return tools
+    }
+
+    /// `simulator_attach` shows the task's Simulator tab, as the Claude app's attach shows its device, unless the
+    /// person is using another tab of the task's side panel: the Simulator tab then joins the strip, and the panel
+    /// stays on theirs. A subagent's call opens no panel.
+    func showSimulatorTab(for task: UUID) -> SimulatorPanelShowing {
+        guard store.sessions.contains(where: { $0.id == task }) else { return .notShown }
+        let workspace = taskWorkspaces.state(for: task)
+        let id = TaskSurfaceNavigationProjection.simulatorID
+        if let shown = workspace.panels.trailingSurfaceID, shown != id, shown != TaskSurfaceNavigationProjection.launcherID {
+            workspace.setPanels(TaskSurfaceNavigationProjection.addingTrailingTab(id, in: workspace.panels))
+            return .besidePersonsTab
+        }
+        workspace.setPanels(TaskSurfaceNavigationProjection.showing(id, in: workspace.panels))
+        return .shown
     }
 
     /// Asks the person, on the request card in the calling task, to let its agent use the device, whatever the task's

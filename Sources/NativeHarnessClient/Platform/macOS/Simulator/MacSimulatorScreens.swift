@@ -15,15 +15,19 @@ protocol SimulatorScreenSubscriber: AnyObject {
 /// attached for the panels that show them, and each panel's frames. A device is attached when the first panel
 /// starts showing it and let go a little after the last one stops, so going to another tab and back does not
 /// attach it again; the helper ends a minute after it lets go of its last device. Every panel that shows a device
-/// subscribes with its own size, and the helper copies each frame once, for the largest of them.
+/// subscribes with its own size, and the helper copies each frame once, for the largest of them. The agents' simulator
+/// tools attach a device through the same helper (`attachForTools`), and hold it attached while they use it, with or
+/// without a panel showing it.
 ///
 /// Turning Settings › General › Simulator off ends every helper (`endAll()`).
 @MainActor @Observable
-final class MacSimulatorScreens {
+final class MacSimulatorScreens: SimulatorHostAttaching {
     static let shared = MacSimulatorScreens()
 
     /// How long a device stays attached after the last panel stops showing it.
     static let releaseDelay: Duration = .seconds(10)
+    /// How long the agents' tools hold a device attached after their last call, unless they let go of it first.
+    static let toolHoldDelay: Duration = .seconds(120)
 
     /// How far a device's screen is.
     enum Link: Equatable {
@@ -51,6 +55,8 @@ final class MacSimulatorScreens {
     @ObservationIgnored private var subscribers: [UUID: [ObjectIdentifier: WeakSubscriber]] = [:]
     @ObservationIgnored private var releases: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var attaches: [UUID: Task<Void, Never>] = [:]
+    /// The devices the agents' tools hold attached, each with the wait that lets go of it.
+    @ObservationIgnored private var toolHolds: [UUID: Task<Void, Never>] = [:]
 
     private struct WeakSubscriber {
         weak var subscriber: (any SimulatorScreenSubscriber)?
@@ -116,14 +122,67 @@ final class MacSimulatorScreens {
         attachedClient(device)?.key(usage, phase, on: device)
     }
 
+    // MARK: - Agent tools
+
+    /// Attaches the device for the agents' tools as a panel would, or finds it attached, and holds it attached until
+    /// `releaseForTools(_:)` or a while after this last call.
+    func attachForTools(_ device: UUID, with toolchain: SimulatorToolchain) async throws
+        -> (client: SimulatorHostClient, screen: SimulatorScreen) {
+        holdForTools(device)
+        if let attached = deviceClients[device], toolchains[device] != toolchain {
+            attached.detach(device)
+            deviceClients[device] = nil
+            links[device] = nil
+        }
+        toolchains[device] = toolchain
+        switch links[device] {
+        case .attached:
+            break
+        case .attaching:
+            if let attaching = attaches[device] { await attaching.value }
+        case .failed, nil:
+            attach(device, with: toolchain)
+            if let attaching = attaches[device] { await attaching.value }
+        }
+        switch links[device] {
+        case let .attached(screen):
+            guard let client = deviceClients[device] else { break }
+            return (client, screen)
+        case let .failed(message):
+            throw SimulatorHostClient.Failure.device(message)
+        case .attaching, nil:
+            break
+        }
+        throw SimulatorHostClient.Failure.device("the simulator host let go of the device")
+    }
+
+    /// The agents' tools let go of the device: it is let go of now, unless a panel shows it.
+    func releaseForTools(_ device: UUID) {
+        guard let hold = toolHolds.removeValue(forKey: device) else { return }
+        hold.cancel()
+        release(device)
+    }
+
+    private func holdForTools(_ device: UUID) {
+        releases.removeValue(forKey: device)?.cancel()
+        toolHolds[device]?.cancel()
+        toolHolds[device] = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.toolHoldDelay)
+            guard !Task.isCancelled else { return }
+            self?.releaseForTools(device)
+        }
+    }
+
     // MARK: - The switch
 
     /// Settings › General › Simulator turned off: every helper ends, and the panels' screens go blank.
     func endAll() {
         for task in releases.values { task.cancel() }
         for task in attaches.values { task.cancel() }
+        for task in toolHolds.values { task.cancel() }
         releases = [:]
         attaches = [:]
+        toolHolds = [:]
         for subscribersOfDevice in subscribers.values {
             for entry in subscribersOfDevice.values { entry.subscriber?.frameDisplay.clear() }
         }
@@ -192,7 +251,7 @@ final class MacSimulatorScreens {
     private func release(_ device: UUID) {
         releases[device] = nil
         pruneSubscribers(of: device)
-        guard subscribers[device] == nil else { return }
+        guard subscribers[device] == nil, toolHolds[device] == nil else { return }
         attaches.removeValue(forKey: device)?.cancel()
         deviceClients.removeValue(forKey: device)?.detach(device)
         toolchains[device] = nil

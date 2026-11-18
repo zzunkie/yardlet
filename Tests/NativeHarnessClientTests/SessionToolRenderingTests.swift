@@ -257,8 +257,8 @@ final class SessionToolRenderingTests: XCTestCase {
         let devices = [
             ("simulator-approval-card", SimulatorDevice(identity: .iOSSimulator(udid: UUID().uuidString), name: "iPhone 17",
                                                         state: .on, osName: "iOS 27.2", osVersion: "27.2")),
-            ("device-approval-card", SimulatorDevice(identity: .androidDevice(serialNumber: "R5CR10ABCDE"),
-                                                     name: "Galaxy S21+", state: .on, osName: "Android 15", osVersion: "15"))
+            ("device-approval-card", SimulatorDevice(identity: .androidDevice(serialNumber: "0A1B2C3D4E5F"),
+                                                     name: "Pixel 9", state: .on, osName: "Android 15", osVersion: "15"))
         ]
         for (name, device) in devices {
             let card = SimulatorApprovalCard(device: device)

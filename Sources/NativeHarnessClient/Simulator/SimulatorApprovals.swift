@@ -1,17 +1,20 @@
 import Foundation
+import Observation
 
 /// The devices the person let agents use. Yardlet asks before a task's agent first uses a device, whatever the task's
 /// permission mode, as the Claude app asks once per device. A simulator's or an emulator's approval holds for every
 /// task, and is kept in Yardlet's preferences, so turning the Simulator switch off or removing Yardlet takes it with
 /// it. A real device's holds only for the task it was given in, and only while Yardlet runs: kept for every task, it
 /// would let any later task, a scheduled run's or one that asks nothing, reach a phone signed in to real accounts
-/// (`SimulatorDeviceKind.approvalHoldsForEveryTask`).
-@MainActor
+/// (`SimulatorDeviceKind.approvalHoldsForEveryTask`). The Simulator tab's device menu takes an approval back.
+@MainActor @Observable
 final class SimulatorApprovals {
     static let key = "YardletSimulatorApprovedDevices"
 
-    private let defaults: UserDefaults
+    @ObservationIgnored private let defaults: UserDefaults
     private var perTask: [UUID: Set<SimulatorDeviceIdentity>] = [:]
+    /// Changes with every approval written or removed, which the preferences do not tell observers.
+    private var savedRevision = 0
 
     init(defaults: UserDefaults = .yardlet) {
         self.defaults = defaults
@@ -50,6 +53,7 @@ final class SimulatorApprovals {
     func removeAll() {
         perTask = [:]
         defaults.removeObject(forKey: Self.key)
+        savedRevision += 1
     }
 
     func taskRemoved(_ task: UUID) {
@@ -58,7 +62,8 @@ final class SimulatorApprovals {
 
     /// Each approval as "<kind>:<id>", the kind first: an AVD's name may hold a colon, a kind never does.
     private var saved: Set<SimulatorDeviceIdentity> {
-        Set((defaults.stringArray(forKey: Self.key) ?? []).compactMap { entry in
+        _ = savedRevision
+        return Set((defaults.stringArray(forKey: Self.key) ?? []).compactMap { entry in
             guard let colon = entry.firstIndex(of: ":"),
                   let kind = SimulatorDeviceKind(rawValue: String(entry[..<colon])), kind.approvalHoldsForEveryTask
             else { return nil }
@@ -67,6 +72,7 @@ final class SimulatorApprovals {
     }
 
     private func save(_ devices: Set<SimulatorDeviceIdentity>) {
+        savedRevision += 1
         guard !devices.isEmpty else { return defaults.removeObject(forKey: Self.key) }
         defaults.set(devices.map { "\($0.kind.rawValue):\($0.value)" }.sorted(), forKey: Self.key)
     }

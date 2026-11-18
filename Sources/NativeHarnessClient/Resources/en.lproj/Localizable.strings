@@ -4074,3 +4074,4 @@
 "Pictures of its screen are sent to the model's provider." = "Pictures of its screen are sent to the model's provider.";
 "Allowed for this task only." = "Allowed for this task only.";
 "Once allowed, any task's agent can use it until you take that back in the Simulator tab." = "Once allowed, any task's agent can use it until you take that back in the Simulator tab.";
+"Revoke Agent Access" = "Revoke Agent Access";

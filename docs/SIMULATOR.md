@@ -15,6 +15,9 @@ The code:
   (`SimulatorScreenView`).
 - `Sources/YardletSimulatorHost/`: the simulator host, a helper executable in the bundle that opens Xcode's
   SimulatorKit at run time.
+- The agents' tools: their definitions (`Sources/YardletAgentTools/SimulatorToolCatalog.swift`), their checks and
+  results (`Sources/NativeHarnessClient/AgentTools/SimulatorAgentTools.swift`), the person's approvals
+  (`SimulatorApprovals`), and the iOS simulators' screenshots and input (`MacIOSSimulatorDriver`).
 
 ## Turning it on and off
 
@@ -147,24 +150,90 @@ When the host cannot attach the device, the tab says "The simulator's screen can
 
 - iOS devices have a Home button.
 - The device menu: Switch Device (the list of devices), "Use in This Task" when another task claims the device,
-  Disconnect, and for a device Yardlet started and still on, Shut Down with a note that Yardlet shuts it down when
-  no task uses it.
+  Disconnect, "Revoke Agent Access" when the person let agents use the device (below, "Agent tools"), and for a
+  device Yardlet started and still on, Shut Down with a note that Yardlet shuts it down when no task uses it.
 
 Rotation, appearance, location, pinching and the Mac's clipboard are not in the tab.
+
+## Agent tools
+
+A task's agent sees and drives the device its task attached through eight tools of Yardlet's MCP server
+(docs/AGENT_BROWSER_TOOLS.md, "Simulator tools"). A task gets them when the switch was on as its session started or
+resumed, as "Agent browser tools" works, while a platform's devices can be used: a running task's list gains them
+once the check finds a usable Xcode, and loses them when the switch turns off, as nothing runs then.
+
+| Tool | Arguments | Behavior |
+|---|---|---|
+| `simulator_list` | none | JSON `{devices:[{device, platform, name, os, state, attached, usedBy, startedByYardlet, shown}], note}`: every listed device with its id (an iOS simulator's UDID), whether this task attached it, the task whose agent uses it ("this task" or that task's title), whether Yardlet started it and whether a Simulator tab shows it. The note names a platform that cannot be used and why. Read-only |
+| `simulator_attach` | `device` (required: an id or a name) | After the person's approval (below), attaches the device to the task and claims it, starting it when it is off and waiting until it is ready. Shows the task's Simulator tab; while the person uses another tab of the panel, the Simulator tab joins the strip beside it and the result says so. The result gives the id to pass to the agent's own build and install tools (`xcrun simctl install <id> <app>`), the screen's size in points, and whether Yardlet started the device (it then shuts down when unused) or it was on before (another app may be using it). Refused: an unknown id or name, a name several devices share (naming them), a device another task's agent uses (with that task's title), a start past the two devices Yardlet runs for agents; each names the devices that are on and free |
+| `simulator_detach` | none | Lets go of the attachment and the claim. A device Yardlet started shuts down ten minutes after no task attaches it |
+| `simulator_screenshot` | `format` (png or jpeg) | The screen at its size in points (402×874 for an iPhone 17), which the result names |
+| `simulator_tap` | `x`, `y` (required), `duration` | One finger down and up at the point; held longer than 0.5 seconds, a long press |
+| `simulator_swipe` | `x`, `y`, `x2`, `y2` (required), `duration` (0.3 by default) | One finger moved in even 16 ms steps from the first point to the second. One that starts within 4 points of an edge is the system's edge gesture, which the description says |
+| `simulator_type` | `text` (required), `method` (`paste`, the default, or `keys`) | `paste` reads the text on the device's clipboard (`simctl pbpaste`), puts the text there (`simctl pbcopy`, given a UTF-8 locale, without which it refuses text outside ASCII), presses ⌘V as hardware keys and puts the earlier text back half a second later. Text in any language goes in as written, and iOS asks no "Allow Paste", since the paste comes from the keyboard. `keys` types ASCII as hardware keys, which the device reads with its own keyboard layout, so the text goes in as written only while that layout is English; the result says so. The agent uses `keys` for a field that refuses a paste (the text does not appear) or when the clipboard cannot be used, as the description and the results say. Yardlet does not judge a paste from the screen, which changes anyway (a blinking cursor, search suggestions). Something other than text on the device's clipboard does not come back |
+| `simulator_press` | `button` or `key`, `count` (1 to 50) | An iPhone's buttons: home, lock, volume_up, volume_down and action (back, recents and power are Android's, refused on an iPhone). Keys: return, delete, tab, escape, space, up, down, left, right and select_all (⌘A) |
+
+**The person's approval.** The first time a task's agent uses a device, Yardlet asks on the request card in the
+task ("Let this task use the iPhone 17 simulator?"), whatever the task's permission mode, as the Claude app asks once
+for each device. The call waits for the answer as the browser tools' `file:` approval does: unanswered, the card is
+declined when the turn stops, or after ten minutes. Declined, the call is `refused` and nothing reaches the device.
+
+- A simulator's approval holds for every task, so a scheduled run uses a device the person allowed before, and one
+  not allowed yet waits on its card and is declined. It is kept in Yardlet's preferences
+  (`YardletSimulatorApprovedDevices`): turning the switch off removes every approval, and removing Yardlet removes its
+  preferences with them.
+- A real device's approval holds only in the task it was given in, and only while Yardlet runs; its card adds that
+  with real accounts signed in, the agent can send messages or make payments, and that pictures of its screen are sent
+  to the model's provider.
+- "Revoke Agent Access" in the device menu takes an approval back in every task; the next tool on the device asks
+  again.
+
+**What the code holds the agent to.**
+
+- Every tool but `simulator_list` and `simulator_attach` acts on the task's attached device, and no tool attaches one
+  by itself: a device that is on may be the person's own in Simulator.app or another task's QA device. Without an
+  attached device a tool answers `not_found`, naming the devices and `simulator_attach`.
+- Positions are points of the last screenshot, checked to be on the screen. A duration is at most 10 seconds, a count
+  at most 50, a text at most 1,000 characters; past these the call is `invalid_arguments` with the range, before
+  anything reaches the device.
+- Before each tool the device is claimed again and, when the idle rules shut it down, started again under the attach's
+  rules, which the result says. Each tool counts as a use for the idle rules.
+- The person's touch, scroll or key on the device in the last 30 seconds is said in the result ("The person is using
+  iPhone 17 in a Simulator tab"); it does not stop the agent's input.
+- The tools attach a device through the panels' simulator host, so a device a tab shows and the tools drive is
+  attached once. The tools hold it attached for two minutes after their last call, or until `simulator_detach`.
+
+**What the agent's own tools do.** Building, installing, launching, logs and debugging are not simulator tools: the
+agent passes the device's id to its own (`xcrun simctl` in its shell, a build tool's simulator id, Xcode's run
+destination), under its harness's own permissions. Another tool with a session open on the same device (XcodeBuildMCP,
+Xcode's device interaction) may drive it meanwhile; the tools' descriptions say the agent may leave the input to it,
+and that input from outside Yardlet mixes with theirs.
+
+Do not sign in to real accounts on a device an agent uses, and do not hand an agent an app whose terms forbid
+automation.
 
 ## Checking it
 
 - `TaskSurfaceNavigationProjectionTests` and `SimulatorCenterTests` check the tab's place in the panel, the
-  launcher's order and the device menu's items.
+  launcher's order and the device menu's items. `SimulatorCenterTests` also checks the agent tools: the list each task
+  gets, the attached device only, approvals and their reach, positions turned into fractions of the screen, and the
+  limits.
+- `SessionToolRenderingTests` draws the approval cards of a simulator and of a real device under
+  `.build/session-tools-qa/`.
 - `SimulatorPanelRenderingTests` draws each state of the tab with fictional devices (the list, each missing
   part, a saved tab whose Xcode is gone, booting, off, an unsupported Xcode, a screen that could not be shown)
   in both appearances under `.build/simulator-panel/`.
 - `scripts/simulator-qa/run-check.sh` runs `SimulatorHostQATests` and `SimulatorPanelQATests` against a
   simulator it makes, boots without a window and deletes afterwards: the live screen, a click, a trackpad scroll,
-  Home and typing, through the helper. Simulators it did not make are left alone.
+  Home and typing, through the helper, and the agent tools' select-all and paste, which puts the device's clipboard
+  back. Simulators it did not make are left alone.
 - `scripts/simulator-qa/run-panel-check.sh` does the same in the running app: a QA bundle launched in the
   background with a temporary home follows the switch, lists and attaches its simulator, shows it live through
-  the bundle's simulator host, takes a click, and closes the tab when the switch turns off.
+  the bundle's simulator host, takes a click, and closes the tab when the switch turns off. Before that,
+  `drive-tools.py` calls the agent tools through the bundle's `yardlet-mcp` as a harness does: the fixture captures
+  the approval card in the task and allows it, and the calls attach the device beside the tab the person uses, tap,
+  swipe, paste, type keys and press buttons, and are refused out of bounds. Turning the switch off removes the
+  approval.
 
 The performance bench's `simulator-scroll` scene scrolls a long conversation beside a Simulator tab whose
 screen is still and then changes 60 times a second (docs/PERFORMANCE_BENCH.md, "2. Scenes").

@@ -291,7 +291,8 @@ test suite's benchmarks, compared with the previous run on the same Mac. See
 simulators) against a simulator it makes for the run, boots without a window and deletes afterwards, also
 when the check fails. It needs Xcode with an iOS simulator runtime and leaves other simulators alone.
 `./scripts/simulator-qa/run-panel-check.sh` checks the Simulator tab the same way in a QA copy of the app
-launched in the background ([docs/SIMULATOR.md](docs/SIMULATOR.md), "Checking it").
+launched in the background, and calls the agents' simulator tools through that copy's `yardlet-mcp`
+([docs/SIMULATOR.md](docs/SIMULATOR.md), "Checking it").
 
 Bundles include the in-window browser (Chromium Embedded Framework in a separate browser host
 process). The script uses the CEF distribution pinned for the bundle's architecture in

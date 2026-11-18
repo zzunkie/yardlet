@@ -4,8 +4,9 @@
 # it without a window (no Simulator.app), then launches the bundle in the background with a temporary home
 # (qa-launch.sh: never active, its windows past every screen) and the DEBUG fixture SimulatorPanelQA
 # (`--ui-fixture-simulator-check`). The fixture follows the Simulator switch as the app does at launch, opens the
-# tab, attaches the device, checks its live screen and a click through the bundle's simulator host, turns the
-# switch off and checks the tab closes, capturing each step in both appearances. However the run ends, the script
+# tab, attaches the device, checks its live screen and a click through the bundle's simulator host, hands this script
+# the task's yardlet-mcp launch for drive-tools.py to call the agent's simulator tools with (the fixture allows the
+# approval card they raise), turns the switch off and checks the tab closes, capturing each step in both appearances. However the run ends, the script
 # ends the app by its PID, shuts the device down and deletes it, and removes the QA bundle and home; devices it did
 # not make are left alone. It exits 1 when a check failed or the fixture did not finish. The captures, result.json
 # and the app's log go to .build/simulator-qa/panel-<time>/.
@@ -65,11 +66,24 @@ app_pid=$("$ROOT/scripts/browser-host-qa/qa-launch.sh" "$qa_app" "$qa_home" "$ou
     "YARDLET_SIMULATOR_QA_DEVICE=$udid" -- \
     --ui-fixture=conversation --ui-fixture-browser-ignore-occlusion --ui-fixture-simulator-check="$output")
 print "QA app $app_pid"
-deadline=$(( SECONDS + 300 ))
-while [[ ! -e "$output/finished" ]] && kill -0 "$app_pid" 2>/dev/null && (( SECONDS < deadline )); do sleep 1; done
+deadline=$(( SECONDS + 600 ))
+tools=0
+while [[ ! -e "$output/finished" ]] && kill -0 "$app_pid" 2>/dev/null && (( SECONDS < deadline )); do
+    if [[ -e "$output/tools-ready" && ! -e "$output/tools-done" ]]; then
+        set +e
+        /usr/bin/python3 -I "$ROOT/scripts/simulator-qa/drive-tools.py" "$output/tools-launch.json" "$udid" "$output" \
+            | tee "$output/tools.log"
+        tools=${pipestatus[1]}
+        set -e
+        # The launch holds the task's tool token.
+        rm -f "$output/tools-launch.json"
+        print done > "$output/tools-done"
+    fi
+    sleep 1
+done
 
 [[ -e "$output/finished" ]] || { print -u2 "error: the fixture did not finish; see $output/app.log"; exit 1; }
-result=0
+result=$(( tools == 0 ? 0 : 1 ))
 /usr/bin/python3 -I - "$output/result.json" <<'EOF' || result=1
 import json, sys
 checks = json.load(open(sys.argv[1]))["checks"]

@@ -100,7 +100,7 @@ extension AppModel {
             model.personalAgentReadings = PersonalAgentReadings(cache: PersonalAgentCacheFiles.live)
             model.simulators = SimulatorCenter(backends: [MacIOSSimulatorBackend()], record: simulatorStartRecord())
             wireSimulatorScreens(to: model)
-            model.simulatorTools.drivers[.iOS] = MacIOSSimulatorDriver(hosts: MacSimulatorToolHosts.shared)
+            model.simulatorTools.drivers[.iOS] = MacIOSSimulatorDriver(hosts: MacSimulatorScreens.shared)
             model.coordinationLog.fileURL = storageRootURL.appending(path: "logs/task-coordination.log")
             model.followRuntimeChoices()
             return model
