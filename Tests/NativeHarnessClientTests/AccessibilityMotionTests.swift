@@ -21,17 +21,6 @@ final class AccessibilityMotionTests: XCTestCase {
         XCTAssertGreaterThan(ParityAccessibility.composer, ParityAccessibility.secondary)
     }
 
-    func testSettingsRowsExposeStatusAndDetailAsOneAccessibleValue() {
-        XCTAssertEqual(
-            SettingsAccessibility.value(status: "Yardlet-owned", detail: "Restores the task index."),
-            "Yardlet-owned, Restores the task index."
-        )
-        XCTAssertEqual(
-            SettingsAccessibility.value(status: "", detail: "Not exposed by this runtime"),
-            "Not exposed by this runtime"
-        )
-    }
-
     func testProviderControlsExposeSelectedChoiceAndActionMeaning() {
         let selector = ProviderCapabilitySelector(
             id: "mode",

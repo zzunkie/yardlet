@@ -2990,6 +2990,7 @@
 "Nothing is saved for this site. Search for a sign-in or code saved elsewhere." = "이 사이트에 저장된 항목이 없습니다. 다른 사이트에 저장한 로그인이나 인증 코드를 검색하세요.";
 "Other passwords" = "다른 비밀번호";
 "No matching passwords" = "일치하는 비밀번호가 없습니다";
+"No saved passwords" = "저장한 비밀번호가 없습니다";
 "No site" = "사이트 없음";
 "Passwords for %@" = "%@의 비밀번호";
 "Two-factor codes for %@" = "%@의 인증 코드";

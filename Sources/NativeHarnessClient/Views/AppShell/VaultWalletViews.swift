@@ -25,19 +25,19 @@ struct VaultWalletSection: View {
         let wallet = vault.wallet
         VStack(alignment: .leading, spacing: 8) {
             Text(L10n.string("Addresses and cards"))
-                .font(.callout.weight(.semibold))
+                .font(SettingsMetrics.groupTitleFont)
             VStack(alignment: .trailing, spacing: 8) {
                 VStack(spacing: 0) {
                     switchRow
                     ForEach(wallet.addresses) { address in
-                        Divider().padding(.leading, SettingsCenterView.dividerLeading)
+                        Divider()
                         row(systemName: "house", title: address.name.isEmpty ? address.place : address.name,
                             detail: address.name.isEmpty ? "" : address.place) {
                             editing = .address(address)
                         }
                     }
                     ForEach(wallet.cards) { card in
-                        Divider().padding(.leading, SettingsCenterView.dividerLeading)
+                        Divider()
                         row(systemName: "creditcard", title: card.label,
                             detail: [L10n.format("Expires %@", card.expiry), card.name].filter { !$0.isEmpty }
                                 .joined(separator: " · ")) {
@@ -45,7 +45,7 @@ struct VaultWalletSection: View {
                         }
                     }
                 }
-                .padding(.horizontal, 12)
+                .padding(.horizontal, SettingsMetrics.groupHorizontalPadding)
                 .parityCard()
                 HStack(spacing: 8) {
                     if !wallet.isEmpty {
@@ -53,7 +53,7 @@ struct VaultWalletSection: View {
                     }
                     Spacer(minLength: 8)
                     if let failure {
-                        Text(failure).font(.caption).foregroundStyle(.red).lineLimit(2)
+                        Text(failure).font(SettingsMetrics.detailFont).foregroundStyle(.red).lineLimit(2)
                     }
                     Button(L10n.string("Add Address…")) { editing = .address(nil) }
                     Button(L10n.string("Add Card…")) { editing = .card(nil) }
@@ -79,10 +79,7 @@ struct VaultWalletSection: View {
     }
 
     private var switchRow: some View {
-        HStack(spacing: 12) {
-            VaultSettingsIcon(systemName: YardletSetting.addressesAndCards.symbol)
-            Text(YardletSetting.addressesAndCards.title).font(.callout.weight(.medium))
-            Spacer(minLength: 8)
+        SettingsRow(title: YardletSetting.addressesAndCards.title) {
             Toggle(YardletSetting.addressesAndCards.title, isOn: Binding(
                 get: { vault.offersWallet }, set: { vault.isWalletEnabled = $0 }))
                 .labelsHidden()
@@ -90,7 +87,6 @@ struct VaultWalletSection: View {
                 .controlSize(.small)
                 .disabled(!vault.isAllowedBuild)
         }
-        .padding(.vertical, 12)
     }
 
     private func row(systemName: String, title: String, detail: String, open: @escaping () -> Void) -> some View {
@@ -98,9 +94,9 @@ struct VaultWalletSection: View {
             HStack(spacing: 12) {
                 VaultSettingsIcon(systemName: systemName)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.callout.weight(.medium)).lineLimit(1)
+                    Text(title).font(SettingsMetrics.titleFont).lineLimit(1)
                     if !detail.isEmpty {
-                        Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                        Text(detail).font(SettingsMetrics.detailFont).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                     }
                 }
                 Spacer(minLength: 8)
@@ -148,7 +144,7 @@ private struct VaultWalletSheetFrame<Fields: View>: View {
             HStack(spacing: 8) {
                 if canDelete { Button(L10n.string("Delete"), role: .destructive, action: onDelete) }
                 if let failure {
-                    Text(failure).font(.caption).foregroundStyle(.red).lineLimit(2)
+                    Text(failure).font(SettingsMetrics.detailFont).foregroundStyle(.red).lineLimit(2)
                 }
                 Spacer(minLength: 8)
                 Button(L10n.string("Cancel"), action: onCancel).keyboardShortcut(.cancelAction)

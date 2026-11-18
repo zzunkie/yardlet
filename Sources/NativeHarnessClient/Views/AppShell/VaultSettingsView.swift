@@ -93,11 +93,14 @@ struct VaultSettingsView: View {
                 }
             }
             HStack(spacing: 8) {
-                Button(L10n.string("Delete all passwords…"), role: .destructive) { confirmsEmptying = true }
-                    .controlSize(.small)
+                // Nothing to delete, nothing to offer.
+                if !vault.items.isEmpty {
+                    Button(L10n.string("Delete all passwords…"), role: .destructive) { confirmsEmptying = true }
+                        .controlSize(.small)
+                }
                 if let failure {
                     Text(failure)
-                        .font(.caption)
+                        .font(SettingsMetrics.detailFont)
                         .foregroundStyle(.red)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
@@ -136,29 +139,18 @@ struct VaultSettingsView: View {
     }
 
     private var switchCard: some View {
-        HStack(spacing: 12) {
-            VaultSettingsIcon(systemName: YardletSetting.passwordManager.symbol)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(YardletSetting.passwordManager.title).font(.callout.weight(.medium))
-                if !vault.isAllowedBuild {
-                    Text(L10n.string("Available in team-signed builds of Yardlet."))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+        SettingsGroup {
+            SettingsRow(title: YardletSetting.passwordManager.title,
+                        notes: vault.isAllowedBuild ? [] : [L10n.string("Available in team-signed builds of Yardlet.")]) {
+                // A build that cannot keep items behind the team's code requirement shows the vault off.
+                Toggle(YardletSetting.passwordManager.title, isOn: Binding(
+                    get: { vault.isAllowedBuild && vault.isEnabled }, set: { vault.isEnabled = $0 }))
+                    .labelsHidden()
+                    .toggleStyle(.paritySwitch)
+                    .controlSize(.small)
+                    .disabled(!vault.isAllowedBuild)
             }
-            Spacer(minLength: 8)
-            // A build that cannot keep items behind the team's code requirement shows the vault off.
-            Toggle(YardletSetting.passwordManager.title, isOn: Binding(
-                get: { vault.isAllowedBuild && vault.isEnabled }, set: { vault.isEnabled = $0 }))
-                .labelsHidden()
-                .toggleStyle(.paritySwitch)
-                .controlSize(.small)
-                .disabled(!vault.isAllowedBuild)
         }
-        .padding(.vertical, 14)
-        .padding(.horizontal, 12)
-        .parityCard()
     }
 
     private var searchField: some View {
@@ -186,21 +178,21 @@ struct VaultSettingsView: View {
     private var codeList: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(L10n.string("Two-factor codes"))
-                .font(.callout.weight(.semibold))
+                .font(SettingsMetrics.groupTitleFont)
             VStack(spacing: 0) {
                 ForEach(Array(codeItems.filter { $0.matches(query) }.enumerated()), id: \.element.id) { index, item in
-                    if index > 0 { Divider().padding(.leading, SettingsCenterView.dividerLeading) }
+                    if index > 0 { Divider() }
                     HStack(spacing: 12) {
                         VaultSettingsIcon(systemName: "number")
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.name)
-                                .font(.callout.weight(.medium))
+                                .font(SettingsMetrics.titleFont)
                                 .lineLimit(1)
                             let detail = [item.identity, item.sites.joined(separator: ", ")].filter { !$0.isEmpty }
                                 .joined(separator: " · ")
                             if !detail.isEmpty {
                                 Text(detail)
-                                    .font(.caption)
+                                    .font(SettingsMetrics.detailFont)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
                                     .truncationMode(.middle)
@@ -215,7 +207,7 @@ struct VaultSettingsView: View {
                     .accessibilityElement(children: .contain)
                 }
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, SettingsMetrics.groupHorizontalPadding)
             .frame(maxWidth: .infinity)
             .parityCard()
         }
@@ -235,7 +227,7 @@ struct VaultSettingsView: View {
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Text(L10n.string("Two-factor codes with no site"))
-                    .font(.callout.weight(.semibold))
+                    .font(SettingsMetrics.groupTitleFont)
                 Spacer(minLength: 8)
                 Button(L10n.string("Link All")) { link(ready) }
                     .controlSize(.small)
@@ -243,16 +235,16 @@ struct VaultSettingsView: View {
             }
             VStack(spacing: 0) {
                 ForEach(Array(codes.enumerated()), id: \.element.id) { index, item in
-                    if index > 0 { Divider().padding(.leading, SettingsCenterView.dividerLeading) }
+                    if index > 0 { Divider() }
                     HStack(spacing: 12) {
                         VaultSettingsIcon(systemName: "number")
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.name)
-                                .font(.callout.weight(.medium))
+                                .font(SettingsMetrics.titleFont)
                                 .lineLimit(1)
                             if !item.username.isEmpty {
                                 Text(item.username)
-                                    .font(.caption)
+                                    .font(SettingsMetrics.detailFont)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
                                     .truncationMode(.middle)
@@ -275,13 +267,13 @@ struct VaultSettingsView: View {
                     .accessibilityElement(children: .contain)
                 }
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, SettingsMetrics.groupHorizontalPadding)
             .frame(maxWidth: .infinity)
             .parityCard()
             .disabled(!vault.isAllowedBuild)
             if let linkFailure {
                 Text(linkFailure)
-                    .font(.caption)
+                    .font(SettingsMetrics.detailFont)
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -313,19 +305,19 @@ struct VaultSettingsView: View {
         let shown = shownItems
         return VStack(spacing: 0) {
             ForEach(Array(shown.enumerated()), id: \.element.id) { index, item in
-                if index > 0 { Divider().padding(.leading, SettingsCenterView.dividerLeading) }
+                if index > 0 { Divider() }
                 VaultItemRow(item: item) { editing = Editing(item: item) }
             }
-            if isSearching, shown.isEmpty {
-                Text(L10n.string("No matching passwords"))
-                    .font(.callout)
+            if shown.isEmpty {
+                // An empty list says so rather than showing an empty box.
+                Text(L10n.string(isSearching ? "No matching passwords" : "No saved passwords"))
+                    .font(SettingsMetrics.detailFont)
                     .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             }
         }
-        .padding(.horizontal, 12)
-        // With no items the list keeps the height of one row.
-        .frame(maxWidth: .infinity, minHeight: 54)
+        .padding(.horizontal, SettingsMetrics.groupHorizontalPadding)
+        .frame(maxWidth: .infinity)
         .parityCard()
     }
 
@@ -389,31 +381,31 @@ private struct VaultItemRow: View {
                     // The account beside the name tells apart a site's items (design §17): the name gives way first.
                     HStack(spacing: 8) {
                         Text(item.name)
-                            .font(.callout.weight(.medium))
+                            .font(SettingsMetrics.titleFont)
                             .lineLimit(1)
                             .truncationMode(.middle)
                         if !item.identity.isEmpty {
                             Text(item.identity)
-                                .font(.callout)
+                                .font(SettingsMetrics.detailFont)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                                 .layoutPriority(1)
                         }
                     }
                     Text(detail)
-                        .font(.caption)
+                        .font(SettingsMetrics.detailFont)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
                 Spacer(minLength: 8)
                 Text(item.policy.title)
-                    .font(.caption)
+                    .font(SettingsMetrics.detailFont)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .frame(width: 104, alignment: .leading)
                 Text(lastUsed)
-                    .font(.caption)
+                    .font(SettingsMetrics.detailFont)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .frame(width: 72, alignment: .trailing)
@@ -440,14 +432,15 @@ private struct VaultItemRow: View {
     }
 }
 
+/// An item's kind beside its name: the symbol alone, in the secondary colour.
 struct VaultSettingsIcon: View {
     let systemName: String
 
     var body: some View {
         Image(systemName: systemName)
-            .font(.system(size: 13, weight: .semibold))
+            .font(.system(size: 14))
             .foregroundStyle(.secondary)
-            .frame(width: 30, height: 30)
-            .background(ParityTheme.canvas, in: RoundedRectangle(cornerRadius: 8))
+            .frame(width: 20)
+            .accessibilityHidden(true)
     }
 }

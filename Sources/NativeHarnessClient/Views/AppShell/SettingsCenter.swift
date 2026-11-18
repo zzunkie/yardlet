@@ -41,14 +41,6 @@ struct SettingsAccountsContext {
     var fixtureLogin: (HarnessKind, AccountInteractiveCommand)? = nil
 }
 
-enum SettingsAccessibility {
-    static func value(status: String, detail: String) -> String {
-        [status, detail]
-            .filter { !$0.isEmpty }
-            .joined(separator: ", ")
-    }
-}
-
 struct SettingsCenterView: View {
     @Environment(\.dismiss) private var dismiss
     let notificationCenter: any SystemNotificationCenter
@@ -183,15 +175,9 @@ struct SettingsCenterView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Image(systemName: "gearshape.2")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 30, height: 30)
-                    .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 8))
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(L10n.string("Settings"))
-                        .font(.system(size: 14, weight: .semibold))
-                }
+                // The two apps' top row: the word alone, then the way out.
+                Text(L10n.string("Settings"))
+                    .font(.system(size: 14, weight: .semibold))
                 Spacer()
                 Button(L10n.string("Done")) { dismiss() }
                     .keyboardShortcut(.cancelAction)
@@ -410,17 +396,12 @@ struct SettingsCenterView: View {
         focusedSection = target
     }
 
+    /// The page's name as both apps title a settings page: words only; the list beside it carries the symbol.
     private var detailHeader: some View {
-        HStack(spacing: 10) {
-            Image(systemName: section.systemName)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(ParityTheme.accent)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(section.title)
-                    .font(.system(size: 18, weight: .semibold))
-            }
-            Spacer()
-        }
+        Text(section.title)
+            .font(.system(size: 18, weight: .semibold))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityAddTraits(.isHeader)
     }
 
     @ViewBuilder
@@ -443,18 +424,11 @@ struct SettingsCenterView: View {
                     ForEach(GeneralSettingsGroup.allCases, id: \.self) { group in
                         let members = rows.filter { $0.generalGroup == group }
                         if !members.isEmpty {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text(group.title)
-                                    .font(.callout.weight(.semibold))
-                                    .accessibilityAddTraits(.isHeader)
-                                VStack(spacing: 0) {
-                                    ForEach(Array(members.enumerated()), id: \.element.id) { index, setting in
-                                        if index > 0 { Divider().padding(.leading, Self.dividerLeading) }
-                                        generalRow(setting)
-                                    }
+                            SettingsGroup(title: group.title) {
+                                ForEach(Array(members.enumerated()), id: \.element.id) { index, setting in
+                                    if index > 0 { Divider() }
+                                    generalRow(setting)
                                 }
-                                .padding(.horizontal, 12)
-                                .parityCard()
                             }
                         }
                     }
@@ -553,13 +527,12 @@ struct SettingsCenterView: View {
         if let remoteHost {
             SettingsPreferenceRow(
                 setting: setting,
-                icon: settingsControlIcon(setting.symbol),
                 hint: hint,
                 remoteValue: remoteHost.hostSettingValue(setting),
                 onSelectRemote: { requestRemoteSettingChange(setting, to: $0) }
             )
         } else {
-            SettingsPreferenceRow(setting: setting, icon: settingsControlIcon(setting.symbol), hint: hint)
+            SettingsPreferenceRow(setting: setting, hint: hint)
         }
     }
 
@@ -573,12 +546,11 @@ struct SettingsCenterView: View {
             languageRow(setting)
         case YardletSetting.hideKeysAndTokens.id:
             if let vault {
-                CredentialHidingRow(vault: vault, setting: setting, icon: settingsControlIcon(setting.symbol))
+                CredentialHidingRow(vault: vault, setting: setting)
             } else if let remoteHost {
                 let isAllowedBuild = remoteHost.hostSettings?.credentialHidingAllowedBuild ?? false
                 CredentialHidingContentRow(
                     setting: setting,
-                    icon: settingsControlIcon(setting.symbol),
                     hidesCredentials: remoteHost.hostSettingValue(setting) == YardletSetting.on,
                     isAllowedBuild: isAllowedBuild,
                     onToggle: { hides in
@@ -604,10 +576,7 @@ struct SettingsCenterView: View {
     }
 
     private func languageRow(_ setting: YardletSetting) -> some View {
-        HStack(spacing: 12) {
-            settingsControlIcon(setting.symbol)
-            SettingsRowText(setting: setting)
-            Spacer(minLength: 8)
+        SettingsRow(setting: setting) {
             Picker(setting.title, selection: Binding(
                 get: { language },
                 set: { language = $0; AppLanguagePreference.store($0) })) {
@@ -620,15 +589,11 @@ struct SettingsCenterView: View {
             .fixedSize()
             .controlSize(.small)
         }
-        .padding(.vertical, 14)
     }
 
     /// Sparkle's own switch, in a public build.
     private func updateChecksRow(_ sparkle: YardletSparkle, setting: YardletSetting) -> some View {
-        HStack(spacing: 12) {
-            settingsControlIcon(setting.symbol)
-            SettingsRowText(setting: setting)
-            Spacer(minLength: 8)
+        SettingsRow(setting: setting) {
             Toggle(setting.title, isOn: Binding(
                 get: { sparkle.checksAutomatically },
                 set: { sparkle.checksAutomatically = $0 }))
@@ -636,39 +601,31 @@ struct SettingsCenterView: View {
                 .toggleStyle(.paritySwitch)
                 .controlSize(.small)
         }
-        .padding(.vertical, 14)
     }
 
+    /// Theme, interface size and the code font as rows of one group, each control at the row's end.
     private var appearanceDetail: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 10) {
-                Label(YardletSetting.theme.title, systemImage: YardletSetting.theme.symbol)
-                    .font(.callout.weight(.semibold))
+        SettingsGroup {
+            SettingsRow(setting: .theme) {
                 Picker(YardletSetting.theme.title, selection: $appearanceRawValue) {
                     ForEach(YardletAppearancePreference.allCases) { preference in
                         Text(preference.title).tag(preference.rawValue)
                     }
                 }
-                .labelsHidden().pickerStyle(.segmented)
-                .frame(maxWidth: 360)
+                .labelsHidden().pickerStyle(.segmented).fixedSize()
             }
             Divider()
-            VStack(alignment: .leading, spacing: 10) {
-                Label(YardletSetting.interfaceSize.title, systemImage: YardletSetting.interfaceSize.symbol)
-                    .font(.callout.weight(.semibold))
+            SettingsRow(setting: .interfaceSize) {
                 Picker(YardletSetting.interfaceSize.title, selection: $interfaceSizeRawValue) {
                     ForEach(YardletInterfaceSizePreference.allCases) { preference in
                         Text(preference.title).tag(preference.rawValue)
                     }
                 }
-                .labelsHidden().frame(width: 160)
+                .labelsHidden().fixedSize()
             }
             Divider()
             codeFontDetail
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .parityCard()
     }
 
     /// The code font and its size as one pair, as the Claude app's and the Codex app's Appearance offer them: the
@@ -677,42 +634,34 @@ struct SettingsCenterView: View {
         let setting = YardletSetting.codeFontSize
         let codeFont = YardletCodeFont(name: codeFontFamilies.contains(codeFontName) ? codeFontName : "",
                                        points: CodeFontPreference.size(codeFontSize))
-        return VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                Label(L10n.string("Code font"), systemImage: setting.symbol)
-                    .font(.callout.weight(.semibold))
-                if let detail = setting.detail {
-                    Text(detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            HStack(spacing: 8) {
-                Picker(L10n.string("Code font"), selection: Binding(
-                    get: { codeFont.name }, set: { codeFontName = $0 })) {
-                    Text(L10n.string("System")).tag("")
-                    if !codeFontFamilies.isEmpty { Divider() }
-                    ForEach(codeFontFamilies, id: \.self) { family in
-                        Text(family).tag(family)
+        return VStack(alignment: .leading, spacing: 0) {
+            SettingsRow(title: L10n.string("Code font"), detail: setting.detail) {
+                HStack(spacing: 8) {
+                    Picker(L10n.string("Code font"), selection: Binding(
+                        get: { codeFont.name }, set: { codeFontName = $0 })) {
+                        Text(L10n.string("System")).tag("")
+                        if !codeFontFamilies.isEmpty { Divider() }
+                        ForEach(codeFontFamilies, id: \.self) { family in
+                            Text(family).tag(family)
+                        }
                     }
-                }
-                .labelsHidden().fixedSize()
-                Picker(setting.title, selection: Binding(
-                    get: { String(codeFont.points) }, set: { codeFontSize = $0 })) {
-                    ForEach(setting.choices, id: \.value) { choice in
-                        Text(choice.title).tag(choice.value)
+                    .labelsHidden().fixedSize()
+                    Picker(setting.title, selection: Binding(
+                        get: { String(codeFont.points) }, set: { codeFontSize = $0 })) {
+                        ForEach(setting.choices, id: \.value) { choice in
+                            Text(choice.title).tag(choice.value)
+                        }
                     }
+                    .labelsHidden().fixedSize()
                 }
-                .labelsHidden().fixedSize()
             }
             Text(TranscriptCodeBlock.highlighted(Self.codeFontSample, language: "swift", isDark: colorScheme == .dark))
                 .font(codeFont.font(ofSize: codeFont.size(12.5, scale: interfaceScale)))
                 .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: 420, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(12)
-                .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 9))
-                .overlay { RoundedRectangle(cornerRadius: 9).stroke(ParityTheme.separator) }
+                .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 8))
+                .padding(.bottom, SettingsMetrics.rowVerticalPadding)
                 .accessibilityHidden(true)
         }
     }
@@ -722,10 +671,6 @@ struct SettingsCenterView: View {
             return "Hello, \\(name)!"
         }
         """
-
-    /// Where a General row's divider starts: under the words, past the 30 pt icon and the 12 pt
-    /// gap, as Connectors' rows divide.
-    static let dividerLeading: CGFloat = 30 + 12
 
     private var savesMemoryBinding: Binding<Bool> {
         guard let remoteHost else { return $savesMemory }
@@ -749,23 +694,19 @@ struct SettingsCenterView: View {
     private func memorySaverRow(_ setting: YardletSetting) -> some View {
         let isOn = savesMemoryBinding.wrappedValue
         return VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 12) {
-                settingsControlIcon(setting.symbol)
-                SettingsRowText(setting: setting)
-                Spacer(minLength: 8)
+            SettingsRow(setting: setting) {
                 Toggle(setting.title, isOn: savesMemoryBinding)
                     .labelsHidden()
                     .toggleStyle(.paritySwitch)
                     .controlSize(.small)
             }
-            .padding(.vertical, 14)
             if isOn {
                 Picker(YardletSetting.memorySaverLevel.title, selection: memorySaverLevelBinding) {
                     ForEach(BrowserMemorySaver.Level.allCases) { level in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(level.title).font(.callout)
+                            Text(level.title).font(SettingsMetrics.titleFont)
                             Text(level.detail)
-                                .font(.caption)
+                                .font(SettingsMetrics.detailFont)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -775,9 +716,7 @@ struct SettingsCenterView: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.radioGroup)
-                .controlSize(.small)
-                .padding(.leading, Self.dividerLeading)
-                .padding(.bottom, 8)
+                .padding(.bottom, SettingsMetrics.rowVerticalPadding)
             }
         }
     }
@@ -791,18 +730,7 @@ struct SettingsCenterView: View {
         case (true, .unavailable): L10n.string("Not available in this copy of Yardlet")
         default: nil
         }
-        return HStack(spacing: 12) {
-            settingsControlIcon(setting.symbol)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(setting.title).font(.callout.weight(.medium))
-                if let note {
-                    Text(note)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            Spacer(minLength: 8)
+        return SettingsRow(title: setting.title, detail: note) {
             if keepsWorkingWithLidClosed, helper.status == .needsApproval || helper.status == .off {
                 Button(L10n.string("Open System Settings")) { helper.openSystemSettings() }
                     .controlSize(.small)
@@ -812,23 +740,12 @@ struct SettingsCenterView: View {
                 .toggleStyle(.paritySwitch)
                 .controlSize(.small)
         }
-        .padding(.vertical, 14)
     }
 
     /// "Launch at login", with one line and System Settings while macOS keeps Yardlet's login item turned off.
     private func launchAtLoginRow(_ item: LaunchAtLogin, setting: YardletSetting) -> some View {
-        HStack(spacing: 12) {
-            settingsControlIcon(setting.symbol)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(setting.title).font(.callout.weight(.medium))
-                if item.status == .needsApproval {
-                    Text(L10n.string("Allow Yardlet in Login Items in System Settings"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            Spacer(minLength: 8)
+        SettingsRow(title: setting.title,
+                    detail: item.status == .needsApproval ? L10n.string("Allow Yardlet in Login Items in System Settings") : nil) {
             if item.status == .needsApproval {
                 Button(L10n.string("Open System Settings")) { item.openSystemSettings() }
                     .controlSize(.small)
@@ -838,7 +755,6 @@ struct SettingsCenterView: View {
                 .toggleStyle(.paritySwitch)
                 .controlSize(.small)
         }
-        .padding(.vertical, 14)
         // The person may have changed it in System Settings since.
         .onAppear { item.refresh() }
     }
@@ -852,18 +768,7 @@ struct SettingsCenterView: View {
         case (true, "unavailable"?): L10n.string("Not available in this copy of Yardlet")
         default: nil
         }
-        return HStack(spacing: 12) {
-            settingsControlIcon(setting.symbol)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(setting.title).font(.callout.weight(.medium))
-                if let note {
-                    Text(note)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            Spacer(minLength: 8)
+        return SettingsRow(title: setting.title, detail: note) {
             Toggle(setting.title, isOn: Binding(
                 get: { isOn },
                 set: { requestRemoteSettingChange(setting, to: $0 ? YardletSetting.on : YardletSetting.off) }
@@ -872,43 +777,43 @@ struct SettingsCenterView: View {
             .toggleStyle(.paritySwitch)
             .controlSize(.small)
         }
-        .padding(.vertical, 14)
     }
 
-    private func settingsControlIcon(_ systemName: String) -> some View {
-        Image(systemName: systemName)
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(.secondary)
-            .frame(width: 30, height: 30)
-            .background(ParityTheme.canvas, in: RoundedRectangle(cornerRadius: 8))
-    }
-
+    /// macOS's permission for Yardlet's notifications, then the Codex app's four in its order (when a finished turn
+    /// notifies, approvals, questions, the sound) and Yardlet's own, in one group as General's rows are.
     private var notificationDetail: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            settingRow(
-                title: L10n.string("macOS notifications"),
-                detail: L10n.string("Allow Yardlet's notifications in macOS for the settings below."),
-                status: notifications.statusLabel,
-                systemName: "bell"
-            )
-            HStack(spacing: 8) {
-                Button(L10n.string("Enable notifications")) {
-                    Task { await notifications.requestAuthorization() }
+        SettingsGroup {
+            SettingsRow(title: L10n.string("macOS notifications"),
+                        detail: L10n.string("Allow Yardlet's notifications in macOS for the settings below.")) {
+                if !notifications.statusLabel.isEmpty {
+                    Text(notifications.statusLabel)
+                        .font(SettingsMetrics.detailFont)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.trailing)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .disabled(notifications.isLoading || notifications.authorization.isDeliverable)
                 if notifications.authorization == .denied {
                     Button(L10n.string("Open System Settings")) {
                         notifications.openSystemSettings()
                     }
                     .accessibilityHint(L10n.string("Allow notifications for Yardlet in macOS settings."))
+                } else if !notifications.authorization.isDeliverable {
+                    Button(L10n.string("Enable notifications")) {
+                        Task { await notifications.requestAuthorization() }
+                    }
+                    .disabled(notifications.isLoading)
                 }
-                Button(L10n.string("Refresh notification status")) {
+                Button {
                     Task { await notifications.refresh() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
                 }
+                .buttonStyle(.borderless)
                 .disabled(notifications.isLoading)
+                .help(L10n.string("Refresh notification status"))
+                .accessibilityLabel(L10n.string("Refresh notification status"))
             }
             .controlSize(.small)
-            // The Codex app's four, in its order: when a finished turn notifies, approvals, questions, the sound.
             Divider()
             notificationMenuRow(.turnCompletionNotifications, selection: $turnCompletionNotifications)
             Divider()
@@ -923,38 +828,27 @@ struct SettingsCenterView: View {
                     NotificationSoundPreview.play(sound)
                 }))
             Divider()
-            HStack(spacing: 12) {
-                settingsControlIcon(YardletSetting.personalAgentMessages.symbol)
-                SettingsRowText(setting: .personalAgentMessages)
-                Spacer(minLength: 8)
+            SettingsRow(setting: .personalAgentMessages) {
                 Toggle(YardletSetting.personalAgentMessages.title, isOn: $notifiesPersonalAgentMessages)
                     .labelsHidden()
                     .toggleStyle(.paritySwitch)
                     .controlSize(.small)
             }
-            .padding(.vertical, 6)
             if showsMailbox {
                 Divider()
-                HStack(spacing: 12) {
-                    settingsControlIcon(YardletSetting.newMail.symbol)
-                    SettingsRowText(setting: .newMail)
-                    Spacer(minLength: 8)
+                SettingsRow(setting: .newMail) {
                     Toggle(YardletSetting.newMail.title, isOn: $notifiesNewMail)
                         .labelsHidden()
                         .toggleStyle(.paritySwitch)
                         .controlSize(.small)
                 }
-                .padding(.vertical, 6)
             }
         }
     }
 
     /// A notification setting with its choices in a menu.
     private func notificationMenuRow(_ setting: YardletSetting, selection: Binding<String>) -> some View {
-        HStack(spacing: 12) {
-            settingsControlIcon(setting.symbol)
-            SettingsRowText(setting: setting)
-            Spacer(minLength: 8)
+        SettingsRow(setting: setting) {
             Picker(setting.title, selection: selection) {
                 ForEach(setting.choices, id: \.value) { choice in
                     Text(choice.title).tag(choice.value)
@@ -965,56 +859,16 @@ struct SettingsCenterView: View {
             .fixedSize()
             .controlSize(.small)
         }
-        .padding(.vertical, 6)
     }
 
     /// A notification setting's switch, on the key the notifications read.
     private func notificationSwitchRow(_ setting: YardletSetting) -> some View {
-        HStack(spacing: 12) {
-            settingsControlIcon(setting.symbol)
-            SettingsRowText(setting: setting)
-            Spacer(minLength: 8)
+        SettingsRow(setting: setting) {
             if case let .flag(key, defaultValue) = setting.storage {
                 PreferenceSwitch(setting.title, key: key, defaultValue: defaultValue)
             }
         }
-        .padding(.vertical, 6)
     }
-
-    private func settingRow(
-        title: String,
-        detail: String,
-        status: String,
-        systemName: String
-    ) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: systemName)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 30, height: 30)
-                .background(ParityTheme.canvas, in: RoundedRectangle(cornerRadius: 8))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.callout.weight(.semibold))
-                Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 8)
-            if !status.isEmpty {
-                Text(status)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.trailing)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(.vertical, 12)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(title)
-        .accessibilityValue(SettingsAccessibility.value(status: status, detail: detail))
-    }
-
 }
 
 /// One section in Settings' list: its symbol and name, filled when chosen and lighter on hover, as
@@ -1099,15 +953,13 @@ private struct SettingsAccountSectionRow: View {
 
 /// General's switch for hiding keys and tokens from agents (`VaultCenter.hidesCredentials`), which follows the vault as
 /// it changes; turning it off asks Touch ID or the login password.
-private struct CredentialHidingRow<Icon: View>: View {
+private struct CredentialHidingRow: View {
     @ObservedObject var vault: VaultCenter
     let setting: YardletSetting
-    let icon: Icon
 
     var body: some View {
         CredentialHidingContentRow(
             setting: setting,
-            icon: icon,
             hidesCredentials: vault.hidesCredentials,
             isAllowedBuild: vault.isAllowedBuild,
             onToggle: { hides in Task { await vault.setHidesCredentials(hides) } }
@@ -1115,38 +967,32 @@ private struct CredentialHidingRow<Icon: View>: View {
     }
 }
 
-private struct CredentialHidingContentRow<Icon: View>: View {
+private struct CredentialHidingContentRow: View {
     let setting: YardletSetting
-    let icon: Icon
     let hidesCredentials: Bool
     let isAllowedBuild: Bool
     let onToggle: (Bool) -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
-            icon
-            VStack(alignment: .leading, spacing: 3) {
-                Text(setting.title).font(.callout.weight(.medium))
-                Text(setting.detail ?? "")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                if !isAllowedBuild {
-                    Text(L10n.string("Always on in a build that is not team-signed."))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            Spacer(minLength: 8)
+        SettingsRow(title: setting.title, detail: setting.detail,
+                    notes: isAllowedBuild ? [] : [L10n.string("Always on in a build that is not team-signed.")]) {
             Toggle(setting.title, isOn: Binding(get: { hidesCredentials }, set: { onToggle($0) }))
                 .labelsHidden()
                 .toggleStyle(.paritySwitch)
                 .controlSize(.small)
                 .disabled(!isAllowedBuild)
         }
-        .padding(.vertical, 14)
     }
+}
+
+/// The sizes every settings row shares, as both apps set theirs: a 13 pt title, a 12 pt line under it in the
+/// secondary colour, 12 pt above and below, 16 pt inside a group's sides.
+enum SettingsMetrics {
+    static let titleFont = Font.system(size: 13, weight: .medium)
+    static let detailFont = Font.system(size: 12)
+    static let groupTitleFont = Font.system(size: 13, weight: .semibold)
+    static let rowVerticalPadding: CGFloat = 12
+    static let groupHorizontalPadding: CGFloat = 16
 }
 
 /// A settings row's words: the setting's title, with its line under it where it has one.
@@ -1154,37 +1000,95 @@ struct SettingsRowText: View {
     let setting: YardletSetting
 
     var body: some View {
-        if let detail = setting.detail {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(setting.title).font(.callout.weight(.medium))
-                Text(detail)
-                    .font(.caption)
+        SettingsRowWords(title: setting.title, detail: setting.detail)
+    }
+}
+
+/// A title and the lines under it, in the row's sizes.
+struct SettingsRowWords: View {
+    let title: String
+    var detail: String?
+    var notes: [String] = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(SettingsMetrics.titleFont)
+            ForEach(Array(([detail].compactMap { $0 } + notes).enumerated()), id: \.offset) { _, line in
+                Text(line)
+                    .font(SettingsMetrics.detailFont)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-        } else {
-            Text(setting.title).font(.callout.weight(.medium))
         }
     }
 }
 
-/// A General row for a setting kept in Yardlet's defaults: its symbol and words, and a switch, or segments
-/// for a choice, on the key the rest of the app reads, so a change the agent's settings tools make shows here.
-private struct SettingsPreferenceRow<Icon: View>: View {
+/// One settings row as both apps draw it: the words on the left and the control at the trailing edge, with no
+/// symbol of its own (the section list carries the symbols).
+struct SettingsRow<Control: View>: View {
+    let title: String
+    var detail: String?
+    var notes: [String] = []
+    @ViewBuilder let control: () -> Control
+
+    init(title: String, detail: String? = nil, notes: [String] = [], @ViewBuilder control: @escaping () -> Control) {
+        self.title = title
+        self.detail = detail
+        self.notes = notes
+        self.control = control
+    }
+
+    init(setting: YardletSetting, notes: [String] = [], @ViewBuilder control: @escaping () -> Control) {
+        self.init(title: setting.title, detail: setting.detail, notes: notes, control: control)
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            SettingsRowWords(title: title, detail: detail, notes: notes)
+            Spacer(minLength: 12)
+            HStack(spacing: 8) { control() }
+        }
+        .padding(.vertical, SettingsMetrics.rowVerticalPadding)
+    }
+}
+
+/// Rows in one rounded group with dividers between them, under an optional heading, as General's groups are.
+struct SettingsGroup<Content: View>: View {
+    var title: String?
+    @ViewBuilder let content: () -> Content
+
+    init(title: String? = nil, @ViewBuilder content: @escaping () -> Content) {
+        self.title = title
+        self.content = content
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let title {
+                Text(title)
+                    .font(SettingsMetrics.groupTitleFont)
+                    .accessibilityAddTraits(.isHeader)
+            }
+            VStack(alignment: .leading, spacing: 0) { content() }
+                .padding(.horizontal, SettingsMetrics.groupHorizontalPadding)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .parityCard()
+        }
+    }
+}
+
+/// A General row for a setting kept in Yardlet's defaults: its words, and a switch, or segments for a choice, on
+/// the key the rest of the app reads, so a change the agent's settings tools make shows here.
+private struct SettingsPreferenceRow: View {
     let setting: YardletSetting
-    let icon: Icon
     let hint: String?
     var remoteValue: String? = nil
     var onSelectRemote: ((String) -> Void)? = nil
 
     var body: some View {
-        HStack(spacing: 12) {
-            icon
-            SettingsRowText(setting: setting)
-            Spacer(minLength: 8)
+        SettingsRow(setting: setting) {
             control.modifier(SettingsHint(hint: hint))
         }
-        .padding(.vertical, 14)
     }
 
     @ViewBuilder private var control: some View {

@@ -95,43 +95,27 @@ struct CLIUpdateSettingsView: View {
 
     var body: some View {
         let rows = displayRows
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: YardletSetting.cliAutomaticUpdates.symbol)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 30, height: 30)
-                    .background(ParityTheme.canvas, in: RoundedRectangle(cornerRadius: 8))
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(YardletSetting.cliAutomaticUpdates.title).font(.callout.weight(.medium))
-                    Text(YardletSetting.cliAutomaticUpdates.detail ?? "")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if let last = lastCheckAll {
-                        Text(L10n.format("Checked %@ · checks every 6 hours", Calendar.current.isDateInToday(last)
-                            ? last.formatted(date: .omitted, time: .shortened)
-                            : last.formatted(date: .abbreviated, time: .shortened)))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+        VStack(alignment: .leading, spacing: 16) {
+            SettingsGroup {
+                SettingsRow(setting: .cliAutomaticUpdates, notes: lastCheckAll.map { last in
+                    [L10n.format("Checked %@ · checks every 6 hours", Calendar.current.isDateInToday(last)
+                        ? last.formatted(date: .omitted, time: .shortened)
+                        : last.formatted(date: .abbreviated, time: .shortened))]
+                } ?? []) {
+                    Toggle(YardletSetting.cliAutomaticUpdates.title, isOn: autoUpdateBinding)
+                        .labelsHidden()
+                        .toggleStyle(.paritySwitch)
+                        .controlSize(.small)
                 }
-                Spacer(minLength: 8)
-                Toggle(YardletSetting.cliAutomaticUpdates.title, isOn: autoUpdateBinding)
-                    .labelsHidden()
-                    .toggleStyle(.paritySwitch)
-                    .controlSize(.small)
             }
-            .padding(14)
-            .parityCard()
 
             if rows.isEmpty {
-                Text(L10n.string("No harness CLI is installed."))
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .padding(14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .parityCard()
+                SettingsGroup {
+                    Text(L10n.string("No harness CLI is installed."))
+                        .font(SettingsMetrics.detailFont)
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, SettingsMetrics.rowVerticalPadding)
+                }
             } else {
                 VStack(spacing: 0) {
                     ForEach(rows) { row in
@@ -141,7 +125,7 @@ struct CLIUpdateSettingsView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 12)
+                .padding(.horizontal, SettingsMetrics.groupHorizontalPadding)
                 .parityCard()
             }
         }
@@ -155,22 +139,22 @@ struct CLIUpdateSettingsView: View {
                 HarnessLogoView(descriptor: descriptor, size: 28)
             }
             VStack(alignment: .leading, spacing: 3) {
-                Text(row.harness.displayName).font(.callout.weight(.semibold))
-                Text(row.method).font(.caption).foregroundStyle(.secondary)
+                Text(row.harness.displayName).font(SettingsMetrics.titleFont)
+                Text(row.method).font(SettingsMetrics.detailFont).foregroundStyle(.secondary)
                 Text(row.versions)
-                    .font(.caption.monospacedDigit())
+                    .font(SettingsMetrics.detailFont.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if let status = row.status {
                     Text(status)
-                        .font(.caption)
+                        .font(SettingsMetrics.detailFont)
                         .foregroundStyle(row.isWarning ? Color.orange : Color.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if let newerVersion = row.newerVersion, let newerText = row.newerText {
                     HStack(spacing: 8) {
                         Text(newerText)
-                            .font(.caption)
+                            .font(SettingsMetrics.detailFont)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                         Button(L10n.string("Use This Version")) {

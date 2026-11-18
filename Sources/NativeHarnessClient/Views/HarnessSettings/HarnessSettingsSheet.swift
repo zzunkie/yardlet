@@ -90,9 +90,7 @@ struct HarnessSettingsSheet: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            HarnessIdentityIcon(harness: session.harness, size: 18)
-                .frame(width: 32, height: 32)
-                .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 9))
+            HarnessIdentityIcon(harness: session.harness, size: 20)
             VStack(alignment: .leading, spacing: 2) {
                 Text(session.harness.displayName)
                     .font(.headline)
@@ -149,7 +147,7 @@ struct HarnessSettingsSheet: View {
 
     private var controls: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 13) {
+            VStack(alignment: .leading, spacing: 12) {
                 if content.controls.isEmpty && !content.isLoading {
                     ContentUnavailableView(
                         L10n.string("No live controls exposed"),
@@ -158,8 +156,14 @@ struct HarnessSettingsSheet: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 55)
                 }
-                ForEach(content.controls) { control in
-                    controlCard(control)
+                if !content.controls.isEmpty {
+                    // The provider's controls as rows of one group, as Settings draws its rows.
+                    SettingsGroup {
+                        ForEach(Array(content.controls.enumerated()), id: \.element.id) { index, control in
+                            if index > 0 { Divider() }
+                            controlRow(control)
+                        }
+                    }
                 }
                 if !content.notes.isEmpty {
                     VStack(alignment: .leading, spacing: 7) {
@@ -220,23 +224,10 @@ struct HarnessSettingsSheet: View {
 
     // MARK: - Rows
 
-    private func controlCard(_ control: HarnessSettingsControl) -> some View {
-        HStack(alignment: .center, spacing: 14) {
-            rowIcon(control.systemImage)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(control.title).font(.callout.weight(.semibold))
-                if let description = control.description, !description.isEmpty {
-                    Text(description)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            Spacer(minLength: 12)
+    private func controlRow(_ control: HarnessSettingsControl) -> some View {
+        SettingsRow(title: control.title, detail: control.description.flatMap { $0.isEmpty ? nil : $0 }) {
             trailingControl(control)
         }
-        .padding(15)
-        .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 12))
-        .overlay { RoundedRectangle(cornerRadius: 12).stroke(ParityTheme.separator) }
     }
 
     @ViewBuilder
@@ -268,31 +259,21 @@ struct HarnessSettingsSheet: View {
 
     private func listRow(_ item: HarnessSettingsListItem) -> some View {
         HStack(alignment: .top, spacing: 12) {
-            rowIcon(item.systemImage)
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 7) {
-                    Text(item.title).font(.callout.weight(.semibold))
+                    Text(item.title).font(SettingsMetrics.titleFont)
                     ForEach(item.badges, id: \.text) { badge in
                         statusBadge(badge)
                     }
                 }
                 if let description = item.description {
-                    Text(description).font(.caption).foregroundStyle(.secondary)
+                    Text(description).font(SettingsMetrics.detailFont).foregroundStyle(.secondary)
                 }
-                Text(item.detail).font(.caption2).foregroundStyle(.tertiary)
+                Text(item.detail).font(SettingsMetrics.detailFont).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }
-        .padding(.vertical, 10)
-    }
-
-    /// The row's symbol; decoration, so the row is read by its title.
-    private func rowIcon(_ name: String) -> some View {
-        Image(systemName: name)
-            .font(.system(size: 14, weight: .semibold))
-            .frame(width: 30, height: 30)
-            .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 8))
-            .accessibilityHidden(true)
+        .padding(.vertical, SettingsMetrics.rowVerticalPadding)
     }
 
     private func statusBadge(_ badge: HarnessSettingsListItem.Badge) -> some View {

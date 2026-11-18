@@ -29,7 +29,7 @@ struct ConnectorSettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 if let remoteNote {
                     Text(remoteNote)
-                        .font(.caption)
+                        .font(SettingsMetrics.detailFont)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -78,10 +78,10 @@ struct ConnectorSettingsView: View {
                             )
                         }
                     }
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, SettingsMetrics.groupHorizontalPadding)
                     .parityCard()
                     Text(L10n.string("Claude Code tasks get changes from their next turn, and other tasks when they next start or resume."))
-                        .font(.caption)
+                        .font(SettingsMetrics.detailFont)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -99,7 +99,7 @@ struct ConnectorSettingsView: View {
             }
 
             claudeAIRow
-                .padding(.horizontal, 12)
+                .padding(.horizontal, SettingsMetrics.groupHorizontalPadding)
                 .parityCard()
         }
         .task {
@@ -118,7 +118,7 @@ struct ConnectorSettingsView: View {
                 .font(.system(size: 22, weight: .regular))
                 .foregroundStyle(.secondary)
             Text(L10n.string("No connectors yet"))
-                .font(.callout.weight(.semibold))
+                .font(SettingsMetrics.groupTitleFont)
             if !isRemote {
                 Button(L10n.string("Add connector")) { adding = .directory }
                     .parityProminentButton()
@@ -133,21 +133,13 @@ struct ConnectorSettingsView: View {
     }
 
     private var claudeAIRow: some View {
-        HStack(alignment: .center, spacing: 12) {
-            Image(systemName: YardletSetting.claudeAIConnectors.symbol)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 30, height: 30)
-                .background(ParityTheme.canvas, in: RoundedRectangle(cornerRadius: 8))
-            SettingsRowText(setting: .claudeAIConnectors)
-            Spacer(minLength: 8)
+        SettingsRow(setting: .claudeAIConnectors) {
             Toggle(YardletSetting.claudeAIConnectors.title, isOn: claudeAIConnectorsOverride ?? $claudeAIConnectors)
                 .labelsHidden()
                 .toggleStyle(.paritySwitch)
                 .controlSize(.small)
                 .disabled(!canEditSettings)
         }
-        .padding(.vertical, 12)
     }
 }
 
@@ -161,7 +153,7 @@ struct ConnectorSetupTiles: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(L10n.string("Set up in one go")).font(.headline)
             Text(L10n.string("For services that need an app of your own."))
-                .font(.caption)
+                .font(SettingsMetrics.detailFont)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
@@ -221,8 +213,8 @@ struct ConnectorSetupTiles: View {
         HStack(spacing: 10) {
             ConnectorIcon(name: name, presetID: id == "gmail" ? nil : id, sources: id == "gmail" ? .google : nil, size: 30)
             VStack(alignment: .leading, spacing: 1) {
-                Text(name).font(.callout.weight(.medium))
-                Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(name).font(SettingsMetrics.titleFont)
+                Text(detail).font(SettingsMetrics.detailFont).foregroundStyle(.secondary).lineLimit(1)
                 HStack(spacing: 4) {
                     Circle().fill(done ? Color.green : Color.secondary.opacity(0.5)).frame(width: 6, height: 6)
                     Text(status).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
@@ -336,10 +328,10 @@ struct RedirectURIField: View {
     var body: some View {
         HStack(spacing: 6) {
             Text(L10n.string("Redirect URL"))
-                .font(.caption)
+                .font(SettingsMetrics.detailFont)
                 .foregroundStyle(.secondary)
             Text(ConnectorOAuth.registeredClientRedirectURI.absoluteString)
-                .font(.caption.monospaced())
+                .font(SettingsMetrics.detailFont.monospaced())
                 .textSelection(.enabled)
             Button {
                 TranscriptClipboard.copy(ConnectorOAuth.registeredClientRedirectURI.absoluteString)
@@ -374,23 +366,23 @@ private struct ConnectorRow: View {
         HStack(alignment: .center, spacing: 12) {
             ConnectorIcon(name: record.name, presetID: record.presetID, sources: record.iconSources, size: 30)
             VStack(alignment: .leading, spacing: 2) {
-                Text(record.name).font(.callout.weight(.medium))
+                Text(record.name).font(SettingsMetrics.titleFont)
                 if let detail {
                     Text(detail)
-                        .font(.caption)
+                        .font(SettingsMetrics.detailFont)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
                 if case let .error(reason) = state {
                     Text(reason)
-                        .font(.caption)
+                        .font(SettingsMetrics.detailFont)
                         .foregroundStyle(.red)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                 } else if let note = ConnectorSettingsState.note(record, in: center) {
                     Text(note)
-                        .font(.caption)
+                        .font(SettingsMetrics.detailFont)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -432,7 +424,7 @@ private struct ConnectorRow: View {
     private func gitHubCode(_ code: String) -> some View {
         HStack(spacing: 6) {
             Text(L10n.string("Paste this code on GitHub's page:"))
-                .font(.caption)
+                .font(SettingsMetrics.detailFont)
                 .foregroundStyle(.secondary)
             Text(code)
                 .font(.callout.monospaced().weight(.semibold))
@@ -733,11 +725,11 @@ struct ConnectorImportList: View {
                 Spacer(minLength: 8)
                 Button(L10n.string("Hide"), action: onDismiss)
                     .buttonStyle(.borderless)
-                    .font(.caption)
+                    .font(SettingsMetrics.detailFont)
                     .foregroundStyle(.secondary)
             }
             Text(L10n.string("Found in your other apps' and harnesses' settings. Connecting one here leaves those settings as they are."))
-                .font(.caption)
+                .font(SettingsMetrics.detailFont)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
             VStack(spacing: 0) {
@@ -751,7 +743,7 @@ struct ConnectorImportList: View {
                 RoundedRectangle(cornerRadius: 10).stroke(ParityTheme.separator)
             }
             if let unreadable {
-                Text(unreadable).font(.caption).foregroundStyle(.red)
+                Text(unreadable).font(SettingsMetrics.detailFont).foregroundStyle(.red)
             }
         }
     }
@@ -762,7 +754,7 @@ struct ConnectorImportList: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(suggestion.name).font(.callout)
                 Text(([suggestion.foundIn.joined(separator: ", ")] + programDetail(suggestion)).joined(separator: " · "))
-                    .font(.caption)
+                    .font(SettingsMetrics.detailFont)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)

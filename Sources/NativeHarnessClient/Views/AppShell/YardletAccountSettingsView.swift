@@ -11,17 +11,16 @@ struct YardletAccountSettingsView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            RemoteSettingsIcon(systemName: "person.crop.circle")
-            VStack(alignment: .leading, spacing: 3) {
-                Text(L10n.string("Account")).font(.callout.weight(.medium))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(L10n.string("Account")).font(SettingsMetrics.titleFont)
                 Text(detail)
-                    .font(.caption)
+                    .font(SettingsMetrics.detailFont)
                     .foregroundStyle(service.accountError == nil ? Color.secondary : Color.orange)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                 if !service.isEnabled {
                     Text(L10n.string("Turn on remote connections so a new phone can find this Mac."))
-                        .font(.caption)
+                        .font(SettingsMetrics.detailFont)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -29,9 +28,9 @@ struct YardletAccountSettingsView: View {
             Spacer(minLength: 8)
             accessory
         }
-        .padding(.vertical, 14)
+        .padding(.vertical, SettingsMetrics.rowVerticalPadding)
         .accessibilityElement(children: .contain)
-        .padding(.horizontal, 12)
+        .padding(.horizontal, SettingsMetrics.groupHorizontalPadding)
         .parityCard()
         .task { await service.refreshAccountPage() }
     }

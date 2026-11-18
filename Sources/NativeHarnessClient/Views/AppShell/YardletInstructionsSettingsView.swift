@@ -63,16 +63,11 @@ struct YardletInstructionsSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: YardletSetting.yardletInstructions.symbol)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 30, height: 30)
-                    .background(ParityTheme.canvas, in: RoundedRectangle(cornerRadius: 8))
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(YardletSetting.yardletInstructions.title).font(.callout.weight(.medium))
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(YardletSetting.yardletInstructions.title).font(SettingsMetrics.titleFont)
                     Text(YardletSetting.yardletInstructions.detail ?? "")
-                        .font(.caption)
+                        .font(SettingsMetrics.detailFont)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -82,7 +77,8 @@ struct YardletInstructionsSettingsView: View {
                     .toggleStyle(.paritySwitch)
                     .controlSize(.small)
             }
-            .padding(14)
+            .padding(.vertical, SettingsMetrics.rowVerticalPadding)
+            .padding(.horizontal, SettingsMetrics.groupHorizontalPadding)
             .parityCard()
 
             TextEditor(text: textBinding)
@@ -111,7 +107,7 @@ struct YardletInstructionsSettingsView: View {
             let unsupported = YardletInstructionsRoute.unsupportedHarnesses.map(\.displayName)
             if !unsupported.isEmpty {
                 Text(L10n.format("Not supported: %@", unsupported.joined(separator: ", ")))
-                    .font(.caption)
+                    .font(SettingsMetrics.detailFont)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -127,19 +123,14 @@ private struct RoutingEvaluationSettingsCard: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: YardletSetting.dailyEvaluation.symbol)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 30, height: 30)
-                .background(ParityTheme.canvas, in: RoundedRectangle(cornerRadius: 8))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(YardletSetting.dailyEvaluation.title).font(.callout.weight(.medium))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(YardletSetting.dailyEvaluation.title).font(SettingsMetrics.titleFont)
                 Text(YardletSetting.dailyEvaluation.detail ?? "")
-                    .font(.caption)
+                    .font(SettingsMetrics.detailFont)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(YardletSetting.dailyEvaluation.note ?? "")
-                    .font(.caption)
+                    .font(SettingsMetrics.detailFont)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if isEnabled, let last = lastRunAt {
@@ -151,17 +142,18 @@ private struct RoutingEvaluationSettingsCard: View {
                                 .buttonStyle(.link)
                         }
                     }
-                    .font(.caption)
+                    .font(SettingsMetrics.detailFont)
                     .padding(.top, 2)
                 }
             }
             Spacer(minLength: 8)
             Toggle(YardletSetting.dailyEvaluation.title, isOn: $isEnabled)
                 .labelsHidden()
-                .toggleStyle(.switch)
+                .toggleStyle(.paritySwitch)
                 .controlSize(.small)
         }
-        .padding(14)
+        .padding(.vertical, SettingsMetrics.rowVerticalPadding)
+        .padding(.horizontal, SettingsMetrics.groupHorizontalPadding)
         .parityCard()
     }
 }

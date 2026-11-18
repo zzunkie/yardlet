@@ -46,11 +46,11 @@ struct RemoteSettingsView: View {
                             .controlSize(.small)
                     }
                     divider
-                    row(icon: "network", title: L10n.string("Connections"), detail: reachText,
+                    row(title: L10n.string("Connections"), detail: reachText,
                         detailColor: canPair ? .secondary : .orange) { EmptyView() }
                 }
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, SettingsMetrics.groupHorizontalPadding)
             .parityCard()
 
             if service.isEnabled {
@@ -62,34 +62,32 @@ struct RemoteSettingsView: View {
         .task { await service.reloadDevices() }
     }
 
-    private var divider: some View {
-        Divider().padding(.leading, 30 + 12) // under the words, past the icon and the gap
-    }
+    private var divider: some View { Divider() }
 
+    /// A row as Settings › General draws one, with its line in `detailColor`.
     private func row<Accessory: View>(
-        icon: String, title: String, detail: String, detailColor: Color = .secondary,
+        title: String, detail: String, detailColor: Color = .secondary,
         @ViewBuilder accessory: () -> Accessory
     ) -> some View {
         HStack(spacing: 12) {
-            RemoteSettingsIcon(systemName: icon)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.callout.weight(.medium))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(SettingsMetrics.titleFont)
                 Text(detail)
-                    .font(.caption)
+                    .font(SettingsMetrics.detailFont)
                     .foregroundStyle(detailColor)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer(minLength: 8)
+            Spacer(minLength: 12)
             accessory()
         }
-        .padding(.vertical, 14)
+        .padding(.vertical, SettingsMetrics.rowVerticalPadding)
         .accessibilityElement(children: .contain)
     }
 
     /// A switch's row, in the words the settings catalog gives it.
     private func row<Accessory: View>(setting: YardletSetting, @ViewBuilder accessory: () -> Accessory) -> some View {
-        row(icon: setting.symbol, title: setting.title, detail: setting.detail ?? "", accessory: accessory)
+        row(title: setting.title, detail: setting.detail ?? "", accessory: accessory)
     }
 
     /// A phone can reach this Mac some way now.
@@ -126,15 +124,15 @@ struct RemoteSettingsView: View {
                     RemotePairingQRCode(text: pairing.url?.absoluteString ?? "")
                     VStack(alignment: .leading, spacing: 8) {
                         Text(L10n.string("Scan this code with Yardlet on your phone."))
-                            .font(.callout.weight(.medium))
+                            .font(SettingsMetrics.titleFont)
                             .fixedSize(horizontal: false, vertical: true)
                         Text(L10n.string("On another computer, copy the link and open it in Yardlet there."))
-                            .font(.caption)
+                            .font(SettingsMetrics.detailFont)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                         TimelineView(.periodic(from: .now, by: 1)) { context in
                             Text(L10n.format("Works once for 5 minutes · %@ left", Self.remaining(until: pairing.expiresAt, now: context.date)))
-                                .font(.caption.monospacedDigit())
+                                .font(SettingsMetrics.detailFont.monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }
                         HStack(spacing: 8) {
@@ -143,7 +141,7 @@ struct RemoteSettingsView: View {
                                     .controlSize(.small)
                                 if copiedLink == url {
                                     Text(L10n.string("Copied"))
-                                        .font(.caption)
+                                        .font(SettingsMetrics.detailFont)
                                         .foregroundStyle(.secondary)
                                 }
                             }
@@ -153,16 +151,16 @@ struct RemoteSettingsView: View {
                     }
                     Spacer(minLength: 0)
                 }
-                .padding(.vertical, 14)
+                .padding(.vertical, SettingsMetrics.rowVerticalPadding)
             } else {
-                row(icon: "qrcode", title: L10n.string("Pair a device"), detail: pairingDescription) {
+                row(title: L10n.string("Pair a device"), detail: pairingDescription) {
                     Button(L10n.string("Pair…")) { Task { await service.startPairing() } }
                         .controlSize(.small)
                         .disabled(!canPair)
                 }
             }
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, SettingsMetrics.groupHorizontalPadding)
         .parityCard()
     }
 
@@ -197,13 +195,13 @@ struct RemoteSettingsView: View {
         HStack(alignment: .center, spacing: 12) {
             RemoteSettingsIcon(systemName: "smartphone")
             VStack(alignment: .leading, spacing: 4) {
-                Text(L10n.format("%@ wants to connect to this Mac", request.name)).font(.callout.weight(.medium))
+                Text(L10n.format("%@ wants to connect to this Mac", request.name)).font(SettingsMetrics.titleFont)
                 Text(verbatim: Self.spaced(request.code))
                     .font(.system(size: 22, weight: .semibold, design: .monospaced))
                     .accessibilityLabel(L10n.string("Link code"))
                     .accessibilityValue(request.code)
                 Text(L10n.string("Allow it if the phone shows the same number."))
-                    .font(.caption)
+                    .font(SettingsMetrics.detailFont)
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
@@ -213,8 +211,8 @@ struct RemoteSettingsView: View {
             Button(L10n.string("Allow")) { Task { await service.answerLink(approve: true) } }
                 .controlSize(.small)
         }
-        .padding(.vertical, 14)
-        .padding(.horizontal, 12)
+        .padding(.vertical, SettingsMetrics.rowVerticalPadding)
+        .padding(.horizontal, SettingsMetrics.groupHorizontalPadding)
         .parityCard()
     }
 
@@ -229,22 +227,22 @@ struct RemoteSettingsView: View {
     private var devicesCard: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(L10n.string("Paired devices"))
-                .font(.callout.weight(.semibold))
+                .font(SettingsMetrics.groupTitleFont)
                 .padding(.vertical, 12)
             if service.devices.isEmpty {
                 Text(L10n.string("No paired devices"))
-                    .font(.caption)
+                    .font(SettingsMetrics.detailFont)
                     .foregroundStyle(.secondary)
                     .padding(.bottom, 14)
             }
             ForEach(Array(service.devices.enumerated()), id: \.element.id) { index, device in
-                if index > 0 { Divider().padding(.leading, 48) }
+                if index > 0 { Divider() }
                 HStack(spacing: 12) {
                     RemoteSettingsIcon(systemName: Self.icon(for: device))
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(device.name).font(.callout.weight(.medium))
+                        Text(device.name).font(SettingsMetrics.titleFont)
                         Text(deviceDetail(device))
-                            .font(.caption)
+                            .font(SettingsMetrics.detailFont)
                             .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 8)
@@ -259,15 +257,15 @@ struct RemoteSettingsView: View {
                     permissionToggle(.fileWrites, title: "Write files", device: device)
                     permissionToggle(.settings, title: "Change settings", device: device)
                 }
-                .padding(.leading, 42)
+                .padding(.leading, RemoteSettingsIcon.width + 12)
                 .padding(.bottom, 12)
             }
             if let error = service.removalError {
-                Text(error).font(.caption).foregroundStyle(.red).padding(.bottom, 12)
+                Text(error).font(SettingsMetrics.detailFont).foregroundStyle(.red).padding(.bottom, 12)
             }
             if let error = service.permissionError {
                 HStack {
-                    Text(error).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                    Text(error).font(SettingsMetrics.detailFont).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
                     if service.canRetryPermissionChange {
                         Button(L10n.string("Retry")) { Task { await service.retryPermissionChange() } }
                             .controlSize(.small)
@@ -277,7 +275,7 @@ struct RemoteSettingsView: View {
                 .padding(.bottom, 12)
             }
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, SettingsMetrics.groupHorizontalPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .parityCard()
         .confirmationDialog(
@@ -297,9 +295,9 @@ struct RemoteSettingsView: View {
     private func permissionToggle(_ permission: RemoteDevicePermission, title: String, device: RemoteDevice) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 3) {
-                Text(L10n.string(title)).font(.callout)
+                Text(L10n.string(title)).font(.system(size: 13))
                 if let detail = permissionDetail(permission) {
-                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                    Text(detail).font(SettingsMetrics.detailFont).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -315,7 +313,7 @@ struct RemoteSettingsView: View {
             .accessibilityLabel(L10n.format("%@ for %@", L10n.string(title), device.name))
             .disabled(service.removingDeviceIDs.contains(device.id))
         }
-        .font(.caption)
+        .font(SettingsMetrics.detailFont)
     }
 
     /// What a permission lets the device do, where its name does not already say it.
@@ -355,15 +353,17 @@ struct RemoteSettingsView: View {
     }
 }
 
+/// A device's kind beside its name: the symbol alone, in the secondary colour.
 struct RemoteSettingsIcon: View {
+    static let width: CGFloat = 20
     let systemName: String
 
     var body: some View {
         Image(systemName: systemName)
-            .font(.system(size: 13, weight: .semibold))
+            .font(.system(size: 15))
             .foregroundStyle(.secondary)
-            .frame(width: 30, height: 30)
-            .background(ParityTheme.canvas, in: RoundedRectangle(cornerRadius: 8))
+            .frame(width: Self.width)
+            .accessibilityHidden(true)
     }
 }
 
