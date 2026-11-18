@@ -5,6 +5,8 @@ import Foundation
 ///
 /// - A page is whole turns counted back from the latest (or from before the window's start for
 ///   `loadOlder`), up to `limits`, at least one turn.
+/// - A turn takes about `maxTurnBytes` at most, so a page of one turn still fits a message (§13.2): past it,
+///   the turn's oldest work goes without what full detail adds (`fitted`).
 /// - An update compares the window's items with the ones sent: items whose relative order held are
 ///   replaced in place when they changed; the rest are removed and inserted where they now are. A
 ///   window whose first turn is gone, or a change too large to describe, is sent again whole
@@ -17,12 +19,16 @@ public struct RemoteConversationWindow: Sendable {
         public var maxBytes: Int
         /// More changes than this send the window again whole.
         public var maxChanges: Int
+        /// About how many bytes one turn's items may take, as much as one `conversation` event carries.
+        public var maxTurnBytes: Int
 
-        public init(maxTurns: Int = 10, maxItems: Int = 120, maxBytes: Int = 384 * 1024, maxChanges: Int = 240) {
+        public init(maxTurns: Int = 10, maxItems: Int = 120, maxBytes: Int = 384 * 1024, maxChanges: Int = 240,
+                    maxTurnBytes: Int = 2 * 1024 * 1024) {
             self.maxTurns = maxTurns
             self.maxItems = maxItems
             self.maxBytes = maxBytes
             self.maxChanges = maxChanges
+            self.maxTurnBytes = maxTurnBytes
         }
     }
 
@@ -60,7 +66,7 @@ public struct RemoteConversationWindow: Sendable {
     public mutating func open(_ conversation: RemoteConversation) -> Page {
         let start = pageStart(in: conversation.turns, before: conversation.turns.endIndex)
         startTurnID = conversation.turns.indices.contains(start) ? conversation.turns[start].id : nil
-        sent = conversation.turns[start...].flatMap(\.items)
+        sent = items(of: conversation.turns[start...])
         return page(sent, start: start, conversation: conversation)
     }
 
@@ -75,7 +81,7 @@ public struct RemoteConversationWindow: Sendable {
             return .page(Page(items: [], cursor: nil, hasOlder: false))
         }
         let start = pageStart(in: conversation.turns, before: current)
-        let items = conversation.turns[start..<current].flatMap(\.items)
+        let items = items(of: conversation.turns[start..<current])
         self.startTurnID = conversation.turns[start].id
         sent = items + sent
         return .page(page(items, start: start, conversation: conversation))
@@ -87,7 +93,7 @@ public struct RemoteConversationWindow: Sendable {
             if startTurnID == nil, conversation.turns.isEmpty, sent.isEmpty { return .unchanged }
             return .reset(open(conversation))
         }
-        let items = conversation.turns[start...].flatMap(\.items)
+        let items = items(of: conversation.turns[start...])
         guard let changes = Self.changes(from: sent, to: items) else { return .reset(open(conversation)) }
         guard changes.count <= limits.maxChanges else { return .reset(open(conversation)) }
         sent = items
@@ -110,18 +116,48 @@ public struct RemoteConversationWindow: Sendable {
         var items = 0
         var bytes = 0
         while start > turns.startIndex {
-            let turn = turns[start - 1]
-            let turnBytes = turn.items.reduce(0) { $0 + Self.estimatedBytes($1) }
+            let turn = Self.fitted(turns[start - 1].items, maxBytes: limits.maxTurnBytes)
+            let turnBytes = turn.reduce(0) { $0 + Self.estimatedBytes($1) }
             let taken = end - start
-            if taken > 0, taken >= limits.maxTurns || items + turn.items.count > limits.maxItems
+            if taken > 0, taken >= limits.maxTurns || items + turn.count > limits.maxItems
                 || bytes + turnBytes > limits.maxBytes {
                 break
             }
             start -= 1
-            items += turn.items.count
+            items += turn.count
             bytes += turnBytes
         }
         return start
+    }
+
+    /// The turns' items as the window sends them, each turn `fitted`.
+    private func items(of turns: ArraySlice<RemoteTurn>) -> [RemoteItem] {
+        turns.flatMap { Self.fitted($0.items, maxBytes: limits.maxTurnBytes) }
+    }
+
+    /// One turn's items within about `maxBytes`. A turn that takes more keeps its newest work and what it was
+    /// sent and answered whole, and sends its oldest work items as §6 does, without what full detail adds
+    /// (`lightened`): their lines stay, and `itemDetail` still reads their output (§15.8). Work still too large
+    /// for that leaves out its oldest lines. The same items always give the same result, so updates compare.
+    public static func fitted(_ items: [RemoteItem], maxBytes: Int) -> [RemoteItem] {
+        var sizes = items.map(estimatedBytes)
+        var total = sizes.reduce(0, +)
+        guard total > maxBytes else { return items }
+        var items = items
+        for index in items.indices where total > maxBytes && items[index].inWork == true {
+            let item = items[index].lightened
+            let size = estimatedBytes(item)
+            total -= sizes[index] - size
+            sizes[index] = size
+            items[index] = item
+        }
+        guard total > maxBytes else { return items }
+        var kept = [Bool](repeating: true, count: items.count)
+        for index in items.indices where total > maxBytes && items[index].inWork == true {
+            kept[index] = false
+            total -= sizes[index]
+        }
+        return items.indices.filter { kept[$0] }.map { items[$0] }
     }
 
     /// About how many bytes an item takes in a page, as `Limits.maxBytes` counts them.
@@ -220,6 +256,32 @@ public struct RemoteConversationWindow: Sendable {
             cursor = previous[cursor]
         }
         return run.reversed()
+    }
+}
+
+extension RemoteItem {
+    /// The item without what only a subscription's full detail adds to it (§15.24): a line's body, previews, a
+    /// subagent's input and output, and text past §6's limits.
+    var lightened: RemoteItem {
+        var item = self
+        item.body = nil
+        item.images = nil
+        item.subagent?.input = nil
+        item.subagent?.output = nil
+        item.subagent?.copyText = nil
+        var truncated = false
+        func capped(_ text: String?, _ limit: Int) -> String? {
+            guard let text, text.utf8.count > limit else { return text }
+            let capped = RemoteText.capped(text, limit)
+            truncated = truncated || capped.truncated
+            return capped.text
+        }
+        item.text = capped(text, kind == .approval ? RemoteText.planTextLimit : RemoteText.assistantLimit)
+        item.detail = capped(detail, RemoteText.requestDetailLimit)
+        item.command = capped(command, RemoteText.commandLimit)
+        item.message = capped(message, kind == .error ? RemoteText.errorLimit : RemoteText.requestDetailLimit)
+        if truncated { item.truncated = true }
+        return item
     }
 }
 

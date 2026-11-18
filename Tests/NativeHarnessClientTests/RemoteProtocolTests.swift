@@ -839,6 +839,54 @@ final class RemoteProtocolTests: XCTestCase {
         XCTAssertEqual(window.older("t:a", in: conversation), .needsProvider)
     }
 
+    func testATurnTooLargeForAMessageSendsItsOldestWorkAsTheBasicDetail() throws {
+        // A full-detail turn of 300 lines with 64 KB bodies each (base64 written out by commands), about 19 MiB.
+        func turn(lines: Int) -> RemoteTurn {
+            var prompt = RemoteItem(id: "i:prompt", turnId: "big", kind: .user)
+            prompt.text = "Fix the art"
+            var work: [RemoteItem] = (0..<lines).map { index in
+                var line = RemoteItem(id: "i:line-\(index)", turnId: "big", kind: .activity)
+                line.inWork = true
+                line.title = "Ran echo"
+                line.hasDetail = true
+                var body = RemoteConversationBody()
+                body.command = "echo '" + String(repeating: "A", count: 64_000) + "'"
+                line.body = body
+                return line
+            }
+            var answer = RemoteItem(id: "i:answer", turnId: "big", kind: .assistant)
+            answer.role = "answer"
+            answer.text = "Done"
+            work.append(answer)
+            return RemoteTurn(id: "big", items: [prompt, RemoteItem(id: "turn:big", turnId: "big", kind: .turn)] + work)
+        }
+        var window = RemoteConversationWindow()
+        let page = window.open(RemoteConversation(turns: [turn(lines: 300)]))
+        var response = RemoteResponse(re: "3")
+        response.items = page.items
+        let bytes = RemoteJSON.string(response).utf8.count
+        XCTAssertLessThan(bytes, 3 * 1024 * 1024)
+        // Every line is there, in order; the oldest without its body, which `itemDetail` reads, the newest whole.
+        XCTAssertEqual(page.items.map(\.id), turn(lines: 300).items.map(\.id))
+        XCTAssertNil(page.items[2].body)
+        XCTAssertEqual(page.items[2].hasDetail, true)
+        XCTAssertNotNil(page.items[301].body)
+        XCTAssertEqual(page.items.last?.text, "Done")
+
+        // Each update reads the same: no change sends the window again, and a new line sends the few it moves.
+        XCTAssertEqual(window.update(RemoteConversation(turns: [turn(lines: 300)])), .unchanged)
+        guard case let .changes(changes) = window.update(RemoteConversation(turns: [turn(lines: 301)])) else { return XCTFail() }
+        XCTAssertLessThan(changes.count, 10)
+        XCTAssertEqual(Self.strictlyApplying(changes, to: page.items), window.sent)
+
+        // Lines too many even so leave out the oldest work, never what was sent or answered.
+        var lines = RemoteConversationWindow(limits: .init(maxTurnBytes: 20_000))
+        let kept = lines.open(RemoteConversation(turns: [turn(lines: 300)])).items
+        XCTAssertLessThan(kept.reduce(0) { $0 + RemoteConversationWindow.estimatedBytes($1) }, 20_000)
+        XCTAssertEqual(kept.prefix(2).map(\.id), ["i:prompt", "turn:big"])
+        XCTAssertEqual(kept.suffix(2).map(\.id), ["i:line-299", "i:answer"])
+    }
+
     func testUpdatesAreChangesThatReproduceTheConversation() throws {
         var turns = (1...4).map { Self.turn("t\($0)", items: 3) }
         var window = RemoteConversationWindow()

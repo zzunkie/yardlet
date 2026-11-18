@@ -2620,7 +2620,13 @@ public actor RemoteServer {
     // MARK: - Sending and closing
 
     func respond(_ response: RemoteResponse, to id: UUID) {
-        connections[id]?.channel.send(RemoteJSON.string(response))
+        var text = RemoteJSON.string(response)
+        // A message past the limit is never sent (§13.2): the phone hears that the answer is too large, not nothing.
+        if text.utf8.count > RemoteProtocol.maxServerMessageBytes {
+            RemoteLog.notice("Remote: answered a request with tooLarge, its response took \(text.utf8.count) bytes")
+            text = RemoteJSON.string(RemoteResponse.failure(response.re, RemoteError(.tooLarge)))
+        }
+        connections[id]?.channel.send(text)
     }
 
     func send(_ event: RemoteEvent, to id: UUID) {

@@ -145,7 +145,8 @@ badge read (`TaskAttentionProjection`, `SidebarTaskIndicatorProjection`).
 {"re": "3", "ok": true, "taskId": "4C1F…", "items": [ … ], "cursor": "t:…", "hasOlder": true}
 ```
 
-- `items`: the latest page of the conversation (whole turns, at least one), oldest first (§6).
+- `items`: the latest page of the conversation (whole turns, at least one), oldest first (§6). A turn too large for
+  a page sends its oldest work lighter (§15.24, "Size").
 - `cursor`: names the start of what was sent; pass it to `loadOlder`. Absent when `hasOlder` is false.
 - `hasOlder`: there is more before (loaded on the Mac, or still with the provider).
 - Then the server pushes `conversation`, `conversationReset` and `conversationEnded` events for the
@@ -515,6 +516,7 @@ The provider's notices beside the turn (a model reroute, a warning) and context 
   bucket of their own instead: a burst of 60, then 30 per second.
 - IDs a request carries: `taskId`, `projectId`, `scheduleId`, `accountId` and `tabId` at most 64 bytes; `requestId`,
   `itemId`, `suggestionId` and `choice` at most 256. A longer one is `badRequest`.
+- The Mac sends no message over 8 MiB (§13.2): a response that would be larger is answered `tooLarge` instead.
 - A connection whose phone leaves more than 32 MiB of the Mac's messages untaken is closed, with what was waiting:
   a direct socket is dropped, and over the relay the phone's stream closes with 4429.
 - At most 8 connections of paired devices at once; more are closed (4503). A v2 connection counts once the
@@ -548,7 +550,7 @@ The provider's notices beside the turn (a model reroute, a warning) and context 
 | `unavailable` | the task is not connected to its harness on the Mac |
 | `notRunning` | nothing to stop |
 | `emptyMessage` | `sendMessage.text` is empty |
-| `tooLarge` | `sendMessage.text` is too long, or a file is over 100 MiB (§15.22) |
+| `tooLarge` | `sendMessage.text` is too long, a file is over 100 MiB (§15.22), or the answer would be over a message's 8 MiB (§7) |
 | `unsupportedCommand` | a slash command |
 | `busy` | the task cannot take it now (editing, switching account, held by another app), a run of the schedule is starting, or a message still being sent names the file (§15.20) |
 | `rateLimited` | over the rate limit, or a device's file budget (§15.22) |
@@ -1710,7 +1712,12 @@ for what they read beyond §6's items, and so do the phone apps.
   carries `options` is the one the task continues from, which may sit before turns that only Claude Code's own
   notices opened, and `autoContinue: true` marks the armed continue, which the Mac keeps by the reset it waits for.
 - **Size.** A page still holds about 384 KB of items besides its first turn (previews count by their bytes), and a
-  `conversation` event at most about 2 MiB; larger changes come as several events in a row (§5.3).
+  `conversation` event at most about 2 MiB; larger changes come as several events in a row (§5.3). One turn takes about
+  2 MiB at most too, so a page of a single turn still fits a message (§13.2): past that, its oldest work items
+  (`inWork`) come as §6 sends them, without `body`, `images`, a subagent's `input`, `output` and `copyText`, or text
+  past §6's limits, as many as it takes. Their lines stay, and `itemDetail` reads their output (§15.8). Work still too
+  large for that leaves out its oldest lines, which the header's `workCount` still counts; what was sent and answered
+  stays. The same turn always comes the same way, so an update sends only the items a change moves.
 - **Phones:** the Android and iPhone apps send `"detail": "full"` to a Mac with `fullConversation`. They keep the flag
   with their saved copy of the Mac, since a conversation open on a new connection is subscribed before the snapshot
   answers, and subscribe again in full detail once it says so. They decode the previews, read a line's `body` without
