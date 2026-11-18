@@ -148,11 +148,11 @@ struct ConversationRequestCard: View {
                 Image(systemName: outcomeSymbol)
                     .accessibilityHidden(true)
                 Text(stateTitle)
-                Text(verbatim: "·").foregroundStyle(.tertiary)
+                Text(verbatim: "·").foregroundStyle(.tertiary).accessibilityHidden(true)
                 Text(request.title)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                if let detail = request.detail, !detail.isEmpty {
+                if let detail = outcomeDetail {
                     Text(detail)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -163,7 +163,14 @@ struct ConversationRequestCard: View {
             stateNote
         }
         .help(request.method ?? "")
-        .accessibilityElement(children: .combine)
+    }
+
+    /// What the request was about, on its outcome line: the provider's own words (a Codex request's reason or
+    /// question) when it gave any, otherwise the request's detail.
+    private var outcomeDetail: String? {
+        if let message = request.codexContext?.messages.first { return message }
+        if let detail = request.detail, !detail.isEmpty { return detail }
+        return nil
     }
 
     /// The headline is the provider's description of a call (Claude Code's "Run the unit tests") when it gave
