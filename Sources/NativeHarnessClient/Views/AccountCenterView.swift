@@ -589,11 +589,11 @@ struct ConnectionCenterContent: View {
             HStack(spacing: 12) {
                 HarnessLogoView(descriptor: descriptor, size: 28)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(descriptor.displayName).font(.callout.weight(.semibold)).lineLimit(1)
+                    Text(descriptor.displayName).font(SettingsMetrics.titleFont).lineLimit(1)
                 }
                 Spacer(minLength: 12)
                 Label(status, systemImage: installed ? "checkmark.circle" : "minus.circle")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(SettingsMetrics.detailFont).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
             }

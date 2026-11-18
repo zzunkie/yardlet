@@ -181,9 +181,9 @@ struct UsageLimitAutoContinueSettingRow: View {
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(YardletSetting.continueAtUsageLimit.title).font(.callout.weight(.medium))
+                Text(YardletSetting.continueAtUsageLimit.title).font(SettingsMetrics.titleFont)
                 Text(YardletSetting.continueAtUsageLimit.detail ?? "")
-                    .font(.caption)
+                    .font(SettingsMetrics.detailFont)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

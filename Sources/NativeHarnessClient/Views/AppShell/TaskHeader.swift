@@ -277,7 +277,7 @@ struct TaskHeaderActivity: View {
                 .accessibilityLabel(status.displayName)
                 .help(status.displayName)
         case .waitingForApproval, .failed:
-            Image(systemName: status == .failed ? "exclamationmark.circle" : "exclamationmark.shield")
+            Image(systemName: status == .failed ? "exclamationmark.triangle" : "exclamationmark.shield")
                 .font(.system(size: 12))
                 .foregroundStyle(status == .failed ? Color.red : Color.orange)
                 .accessibilityLabel(status.displayName)

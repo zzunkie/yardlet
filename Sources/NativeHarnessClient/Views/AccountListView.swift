@@ -129,9 +129,9 @@ struct AccountList: View {
             Divider()
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(YardletSetting.newTaskAccountAutomatically.title).font(.callout.weight(.medium))
+                    Text(YardletSetting.newTaskAccountAutomatically.title).font(SettingsMetrics.titleFont)
                     Text(YardletSetting.newTaskAccountAutomatically.detail ?? "")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(SettingsMetrics.detailFont).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
@@ -802,9 +802,9 @@ struct AccountMoveSettingRow: View {
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(YardletSetting.moveTasksToAccountsWithRoom.title).font(.callout.weight(.medium))
+                Text(YardletSetting.moveTasksToAccountsWithRoom.title).font(SettingsMetrics.titleFont)
                 Text(YardletSetting.moveTasksToAccountsWithRoom.detail ?? "")
-                    .font(.caption)
+                    .font(SettingsMetrics.detailFont)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

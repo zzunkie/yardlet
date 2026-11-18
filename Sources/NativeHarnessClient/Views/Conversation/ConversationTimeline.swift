@@ -646,15 +646,12 @@ struct ConversationTimeline: View {
                 .frame(maxWidth: .infinity)
                 .padding(.top, 96)
         } else {
-            VStack(spacing: 9) {
-                Image(systemName: "text.bubble")
-                    .font(.system(size: 19, weight: .medium))
-                    .foregroundStyle(.tertiary)
-                Text(L10n.string("Start a conversation"))
-                    .font(.callout.weight(.semibold))
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.top, 96)
+            // A quiet line, without a symbol over it, as both apps leave an empty conversation.
+            Text(L10n.string("Start a conversation"))
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 96)
         }
     }
 }
