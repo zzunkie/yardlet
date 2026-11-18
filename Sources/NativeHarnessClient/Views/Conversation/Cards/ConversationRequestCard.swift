@@ -14,6 +14,9 @@ import SwiftUI
 struct ConversationRequestCard: View {
     let request: ConversationRequest
     let actions: ConversationActions
+    /// Whether the composer's keys answer this request: only the oldest of the ones waiting, so the
+    /// keys show on that one card.
+    var answeredByComposerKeys = true
 
     @State private var input: ConversationRequestFormInput
     /// Which keys allow a request from the composer (`ComposerApprovalKey`).
@@ -26,10 +29,11 @@ struct ConversationRequestCard: View {
     ///   - input: what the form starts with (renders only). A waiting question that takes one answer
     ///     starts on its first option, as both apps start it.
     ///   - questionIndex: the question a form of several starts on (renders only).
-    init(request: ConversationRequest, actions: ConversationActions, input: ConversationRequestFormInput = .init(),
-         questionIndex: Int = 0) {
+    init(request: ConversationRequest, actions: ConversationActions, answeredByComposerKeys: Bool = true,
+         input: ConversationRequestFormInput = .init(), questionIndex: Int = 0) {
         self.request = request
         self.actions = actions
+        self.answeredByComposerKeys = answeredByComposerKeys
         var start = input
         if request.state == .pending, let form = request.form { start.preselect(form.questionSteps) }
         _input = State(initialValue: start)
@@ -38,25 +42,33 @@ struct ConversationRequestCard: View {
     }
 
     var body: some View {
+        if request.state == .pending {
+            pendingCard
+        } else {
+            answered
+        }
+    }
+
+    /// A request waiting for the person, on the neutral panel both apps draw one on: what it asks, what it would
+    /// do, and its answers.
+    private var pendingCard: some View {
         let responses = offeredResponses
-        VStack(alignment: .leading, spacing: ParityTheme.proseBlockSpacing) {
+        let usesDescriptionAsHeadline = descriptionHeadline != nil
+        return VStack(alignment: .leading, spacing: 12) {
             header
 
-            if let detail = request.detail,
+            if !usesDescriptionAsHeadline, let detail = request.detail,
                request.preview?.repeats(detail) != true {
                 Text(detail)
-                    .font(.callout)
+                    .font(.system(size: 13))
                     .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if let preview = request.preview {
-                PermissionRequestPreviewView(preview: preview)
+                PermissionRequestPreviewView(preview: preview, showsDescription: !usesDescriptionAsHeadline)
             } else if let command = request.command {
-                labeledBox(L10n.string("Command")) {
-                    Text(command)
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                CodexBoundedOutput(text: command, folds: false)
             }
             if showsProviderContext, let context = request.codexContext {
                 providerContext(context)
@@ -80,26 +92,86 @@ struct ConversationRequestCard: View {
                 EmptyView()
             }
 
-            if request.state == .pending, !drawsAnswersInForm(responses) {
+            if !drawsAnswersInForm(responses) {
                 if responses.isEmpty {
                     Text(request.unanswerableReason ?? L10n.string("This Codex request needs a structured response."))
-                        .font(.caption)
+                        .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
                     responseButtons(responses)
                 }
-            } else {
-                stateNote
             }
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(tint.opacity(0.05), in: RoundedRectangle(cornerRadius: 11))
-        .overlay {
-            RoundedRectangle(cornerRadius: 11)
-                .stroke(tint.opacity(0.24))
+        .modifier(ConversationRequestSurface())
+    }
+
+    /// An answered request as both apps leave one in the conversation: no panel of its own. A question form
+    /// reads as its questions and answers, a plan as the plan under how it ended, anything else as one muted
+    /// line saying how it ended, with the provider's words when it gave any.
+    @ViewBuilder
+    private var answered: some View {
+        switch request.form {
+        case .choices, .freeText:
+            VStack(alignment: .leading, spacing: 8) {
+                outcomeLine
+                questionForm(request.form?.questionSteps ?? [], responses: [])
+                    .padding(.leading, 12)
+                    .overlay(alignment: .leading) {
+                        Rectangle().fill(ParityTheme.strongSeparator).frame(width: 2)
+                    }
+            }
+        case let .planReview(plan):
+            VStack(alignment: .leading, spacing: 8) {
+                outcomeLine
+                planBody(plan)
+            }
+        case let .mcpForm(form):
+            // The form as it was sent, read-only, as an answered question reads as its answers.
+            VStack(alignment: .leading, spacing: 8) {
+                outcomeLine
+                CodexMCPElicitationFormView(form: form, input: $input.fields, isAnswerable: false)
+                    .padding(.leading, 12)
+                    .overlay(alignment: .leading) {
+                        Rectangle().fill(ParityTheme.strongSeparator).frame(width: 2)
+                    }
+            }
+        case nil:
+            outcomeLine
         }
+    }
+
+    /// How the request ended and what it was about, in the secondary colour, with the provider's message under it.
+    private var outcomeLine: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: outcomeSymbol)
+                    .accessibilityHidden(true)
+                Text(stateTitle)
+                Text(verbatim: "·").foregroundStyle(.tertiary)
+                Text(request.title)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if let detail = request.detail, !detail.isEmpty {
+                    Text(detail)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            .font(.system(size: 13))
+            .foregroundStyle(.secondary)
+            stateNote
+        }
+        .help(request.method ?? "")
+        .accessibilityElement(children: .combine)
+    }
+
+    /// The headline is the provider's description of a call (Claude Code's "Run the unit tests") when it gave
+    /// one, under the tool's name; otherwise the request's own title.
+    private var descriptionHeadline: String? {
+        guard formKind == .none, case let .command(_, description)? = request.preview,
+              let description, !description.isEmpty else { return nil }
+        return description
     }
 
     /// What the card offers while the request waits, by what the host can carry back.
@@ -124,23 +196,29 @@ struct ConversationRequestCard: View {
 
     // MARK: - Header
 
+    /// The request's title as both apps head their cards: a 13 pt semibold line, under the tool's name in the
+    /// secondary colour when the provider described the call.
     private var header: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: icon)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(tint)
-                .frame(width: 28, height: 28)
-                .background(tint.opacity(0.1), in: RoundedRectangle(cornerRadius: 7))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(stateTitle)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(tint)
+        VStack(alignment: .leading, spacing: 2) {
+            if let headline = descriptionHeadline {
                 Text(request.title)
-                    .font(.callout.weight(.semibold))
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                Text(headline)
+                    .font(.system(size: 13, weight: .semibold))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text(request.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer()
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .help(request.method ?? "")
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
     }
 
     private enum FormKind {
@@ -160,26 +238,12 @@ struct ConversationRequestCard: View {
     /// An answerable card is not an approval, so its resolved state reads as the answer it was.
     private var stateTitle: String { request.stateTitle }
 
-    private var icon: String {
-        switch (formKind, request.state) {
-        case (.question, .pending): "questionmark.bubble.fill"
-        case (.question, .allowed), (.question, .answered): "checkmark.bubble.fill"
-        case (.plan, .pending): "list.bullet.clipboard.fill"
-        case (_, .pending): "lock.shield.fill"
-        case (_, .allowed): "checkmark.shield.fill"
-        case (_, .answered): "checkmark.circle.fill"
-        case (_, .denied): "xmark.shield.fill"
-        case (_, .expired): "clock.badge.exclamationmark"
-        case (_, .rejected): "xmark.octagon.fill"
-        }
-    }
-
-    private var tint: Color {
+    private var outcomeSymbol: String {
         switch request.state {
-        case .pending: .orange
-        case .allowed, .answered: .green
-        case .denied, .rejected: .red
-        case .expired: .secondary
+        case .pending: "hourglass"
+        case .allowed, .answered: "checkmark.circle"
+        case .denied, .rejected: "xmark.circle"
+        case .expired: "clock"
         }
     }
 
@@ -188,14 +252,14 @@ struct ConversationRequestCard: View {
     private var stateNote: some View {
         switch request.state {
         case let .expired(message?) where !message.isEmpty:
-            Label(message, systemImage: "clock.badge.xmark")
-                .font(.caption)
+            Text(message)
+                .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         case let .rejected(message) where !message.isEmpty:
             Text(message)
-                .font(.caption)
-                .foregroundStyle(.red)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         default:
@@ -225,30 +289,19 @@ struct ConversationRequestCard: View {
             VStack(alignment: .leading, spacing: 4) {
                 if let title = field.titleKey {
                     Text(L10n.string(title))
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.tertiary)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
                 }
                 CodexBoundedOutput(text: field.text, folds: false)
             }
         }
         if context.isEmpty, request.command == nil, let method = request.method {
             Text(method)
-                .font(.caption.monospaced())
+                .font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         }
-    }
-
-    private func labeledBox<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.tertiary)
-            content()
-        }
-        .padding(10)
-        .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 8))
     }
 
     // MARK: - Forms
@@ -290,7 +343,7 @@ struct ConversationRequestCard: View {
         TranscriptMarkdownText(text: plan)
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(10)
+            .padding(12)
             .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 8))
             .accessibilityLabel(L10n.string("Proposed plan"))
     }
@@ -323,21 +376,27 @@ struct ConversationRequestCard: View {
         actions.respond(request.id, route)
     }
 
+    /// An answer's button, with the key that gives it inside, as both apps show "Esc" and "⏎" in theirs.
     @ViewBuilder
     private func responseButton(_ response: ConversationRequestResponse) -> some View {
         let route = request.route(for: response, input: input)
         let role: ButtonRole? = response.role == .destructive ? .destructive : nil
         let send = { self.send(response) }
-        let help = ShortcutHelp.text(response.title, keys(for: response))
+        let keys = keys(for: response)
+        let help = ShortcutHelp.text(response.title, keys)
+        let label = HStack(spacing: 6) {
+            Text(response.title)
+            if let key = keys.first { ConversationKeyCap(shortcut: key) }
+        }
         if response.role == .primary {
-            Button(response.title, role: role, action: send)
+            Button(role: role, action: send) { label }
                 .parityProminentButton()
                 .parityPointer()
                 .disabled(route == nil)
                 .accessibilityLabel(response.title)
                 .help(help)
         } else {
-            Button(response.title, role: role, action: send)
+            Button(role: role, action: send) { label }
                 .buttonStyle(.bordered)
                 .parityPointer()
                 .disabled(route == nil)
@@ -349,10 +408,41 @@ struct ConversationRequestCard: View {
     /// The composer's keys that give this answer (`ComposerApprovalKey`): "Allow once" and the
     /// one-time denial of a request a notification could answer.
     private func keys(for response: ConversationRequestResponse) -> [KeyboardShortcut] {
-        guard actions.answersFromComposer, let pending = NotificationApprovalProjection.pendingRequest(for: request)
-        else { return [] }
+        guard actions.answersFromComposer, answeredByComposerKeys,
+              let pending = NotificationApprovalProjection.pendingRequest(for: request) else { return [] }
         if response.route == pending.allowOnce { return ComposerApprovalKey.allow(sendShortcut) }
         if response.route == pending.deny { return ComposerApprovalKey.deny }
         return []
+    }
+}
+
+/// The panel a waiting request sits on, as both apps draw theirs: a neutral surface with a hairline border, never
+/// tinted by the request's state or kind.
+struct ConversationRequestSurface: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(ParityTheme.elevated, in: RoundedRectangle(cornerRadius: ParityTheme.panelCornerRadius))
+            .overlay {
+                RoundedRectangle(cornerRadius: ParityTheme.panelCornerRadius)
+                    .stroke(ParityTheme.strongSeparator)
+            }
+    }
+}
+
+/// A key inside a button, as both apps draw one: the key's glyph in a small outlined box ("Esc" for escape).
+struct ConversationKeyCap: View {
+    let shortcut: KeyboardShortcut
+
+    var body: some View {
+        Text(verbatim: shortcut.key == .escape && shortcut.modifiers.isEmpty ? "Esc" : shortcut.displayText)
+            .font(.system(size: 10.5, weight: .medium))
+            .fixedSize()
+            .padding(.horizontal, 4)
+            .frame(minWidth: 16, minHeight: 15)
+            .overlay { RoundedRectangle(cornerRadius: 4).stroke(.foreground.opacity(0.3)) }
+            .opacity(0.85)
+            .accessibilityHidden(true)
     }
 }

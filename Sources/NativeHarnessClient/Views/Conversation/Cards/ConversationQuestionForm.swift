@@ -25,6 +25,8 @@ struct ConversationQuestionStepsView<Finish: View>: View {
     @ViewBuilder let finish: () -> Finish
 
     @FocusState private var focus: Focus?
+    /// The option row under the pointer, drawn a shade lighter than the chosen one.
+    @State private var hovered: String?
 
     private enum Focus: Hashable {
         case form
@@ -43,15 +45,15 @@ struct ConversationQuestionStepsView<Finish: View>: View {
                 }
                 if let text = step.text, !text.isEmpty {
                     Text(text)
-                        .font(.callout.weight(.medium))
+                        .font(.system(size: 13, weight: .medium))
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if step.allowsMultipleSelections {
                     Text(L10n.string("Choose one or more"))
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
                 }
                 if step.isFreeTextOnly {
                     answerField(step)
@@ -81,9 +83,8 @@ struct ConversationQuestionStepsView<Finish: View>: View {
         HStack(alignment: .center, spacing: 8) {
             if let header = step.header, !header.isEmpty {
                 Text(header)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.tertiary)
-                    .textCase(.uppercase)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
@@ -92,7 +93,7 @@ struct ConversationQuestionStepsView<Finish: View>: View {
                     pagerButton(systemImage: "chevron.left", label: L10n.string("Previous question"),
                                 isEnabled: stepper.hasPrevious) { move(by: -1) }
                     Text(L10n.format("Question %lld of %lld", Int64(stepper.index + 1), Int64(steps.count)))
-                        .font(.caption.monospacedDigit())
+                        .font(.system(size: 12).monospacedDigit())
                         .foregroundStyle(.secondary)
                         .fixedSize()
                     pagerButton(systemImage: "chevron.right", label: L10n.string("Next question"),
@@ -163,15 +164,15 @@ struct ConversationQuestionStepsView<Finish: View>: View {
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Image(systemName: Self.indicator(multiple: step.allowsMultipleSelections, isOn: isSelected))
-                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(isSelected ? ParityTheme.accent : Color.secondary)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(option.label)
-                        .font(.callout.weight(isSelected ? .semibold : .regular))
+                        .font(.system(size: 13, weight: isSelected ? .medium : .regular))
                         .fixedSize(horizontal: false, vertical: true)
                     if let description = option.description, !description.isEmpty {
                         Text(description)
-                            .font(.caption)
+                            .font(.system(size: 12))
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -180,11 +181,13 @@ struct ConversationQuestionStepsView<Finish: View>: View {
             }
             .contentShape(Rectangle())
             .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(isSelected ? ParityTheme.selectedFill : ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 8))
+            .padding(.vertical, 8)
+            .background(Self.rowFill(isSelected: isSelected, isHovered: hovered == option.label && isAnswerable),
+                        in: RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
         .parityPointer()
+        .onHover { hovered = $0 ? option.label : (hovered == option.label ? nil : hovered) }
         .disabled(!isAnswerable)
         .accessibilityLabel(option.label)
         .accessibilityValue(option.description ?? "")
@@ -201,19 +204,19 @@ struct ConversationQuestionStepsView<Finish: View>: View {
                 focus = .customAnswer(step.id)
             } label: {
                 Image(systemName: Self.indicator(multiple: step.allowsMultipleSelections, isOn: isChosen))
-                    .foregroundStyle(isChosen ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(isChosen ? ParityTheme.accent : Color.secondary)
             }
             .buttonStyle(.plain)
             .parityPointer()
             .disabled(!isAnswerable)
             .accessibilityHidden(true)
             textField(step, placeholder: L10n.string("Type your own answer"), isBordered: false)
-                .font(.callout)
+                .font(.system(size: 13))
                 .accessibilityLabel(L10n.string("Other"))
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(isChosen ? ParityTheme.selectedFill : ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 8))
+        .padding(.vertical, 8)
+        .background(Self.rowFill(isSelected: isChosen, isHovered: false), in: RoundedRectangle(cornerRadius: 8))
     }
 
     /// A question with no options, answered only in the person's words.
@@ -245,6 +248,11 @@ struct ConversationQuestionStepsView<Finish: View>: View {
         } else {
             field.textFieldStyle(.plain)
         }
+    }
+
+    /// Both apps' option rows: no fill at rest, a light one under the pointer, the selection's fill when chosen.
+    static func rowFill(isSelected: Bool, isHovered: Bool) -> Color {
+        isSelected ? ParityTheme.selectedFill : (isHovered ? ParityTheme.hoverFill : .clear)
     }
 
     static func indicator(multiple: Bool, isOn: Bool) -> String {
@@ -382,7 +390,7 @@ struct ConversationQuestionSummary: View {
         VStack(alignment: .leading, spacing: 3) {
             let question = step.text ?? step.header ?? L10n.string("Question")
             Text(question)
-                .font(.callout)
+                .font(.system(size: 13))
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
@@ -391,13 +399,13 @@ struct ConversationQuestionSummary: View {
                 if let answer = answers[step.id], !answer.values.isEmpty {
                     let text = Self.text(answer, isSecret: step.isSecret)
                     Text(text)
-                        .font(.callout.weight(.medium))
+                        .font(.system(size: 13, weight: .medium))
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                         .conversationSelectionText(text)
                 } else {
                     Text(L10n.string("Not answered"))
-                        .font(.callout)
+                        .font(.system(size: 13))
                         .foregroundStyle(.tertiary)
                         .conversationSelectionText(L10n.string("Not answered"))
                 }
@@ -439,7 +447,7 @@ struct ConversationQuestionPreview: View {
                 TranscriptMarkdownText(text: markdown)
             } else {
                 Text(L10n.string("No preview"))
-                    .font(.caption)
+                    .font(.system(size: 12))
                     .foregroundStyle(.tertiary)
                     .frame(maxWidth: .infinity, minHeight: 48)
             }

@@ -538,7 +538,7 @@ struct ConversationWorkLine: View, Equatable {
             if item.phase == .running {
                 ProgressView().controlSize(.mini)
                     .centeredOnCapHeight(ofTextSize: ConversationStatusLineFont.size * interfaceScale)
-            } else if item.phase == .failed {
+            } else if item.phase == .failed, !ConversationLineWording.saysFailure(tool, phase: item.phase, harness: harness) {
                 Text(L10n.string("Failed")).foregroundStyle(Color.red)
             }
             if tool.isApproved { ConversationAllowedMark() }

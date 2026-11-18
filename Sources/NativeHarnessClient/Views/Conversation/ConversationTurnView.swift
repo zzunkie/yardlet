@@ -287,8 +287,11 @@ struct ConversationTurnView: View, Equatable {
                 outcomeCard(outcome)
             }
 
+            // The composer's keys answer the oldest request a notification could answer (`ComposerApprovalKey`).
+            let keyed = turn.requests.first { NotificationApprovalProjection.pendingRequest(for: $0) != nil }?.id
             ForEach(turn.requests) { request in
-                ConversationRequestCard(request: request, actions: context.actions)
+                ConversationRequestCard(request: request, actions: context.actions,
+                                        answeredByComposerKeys: request.id == keyed)
             }
 
             // Questions Codex asked while it goes on working wait for the person under the turn, as the

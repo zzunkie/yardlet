@@ -18,15 +18,12 @@ struct PersonalAgentRequestCard: View {
     var openWeb: (() -> Void)?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: ParityTheme.proseBlockSpacing) {
+        VStack(alignment: .leading, spacing: 12) {
             header
             content
             footer
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(tint.opacity(0.05), in: RoundedRectangle(cornerRadius: 11))
-        .overlay { RoundedRectangle(cornerRadius: 11).stroke(tint.opacity(0.24)) }
+        .modifier(ConversationRequestSurface())
         .accessibilityElement(children: .contain)
         .accessibilityLabel(stateTitle)
     }
@@ -36,24 +33,20 @@ struct PersonalAgentRequestCard: View {
 
     // MARK: - Header
 
+    /// How the request stands, in the secondary colour with its symbol, over what it asks, as the coding task's
+    /// card heads itself.
     private var header: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: icon)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(tint)
-                .frame(width: 28, height: 28)
-                .background(tint.opacity(0.1), in: RoundedRectangle(cornerRadius: 7))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(stateTitle)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(tint)
-                Text(title)
-                    .font(.callout.weight(.semibold))
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 2) {
+            Label(stateTitle, systemImage: icon)
+                .labelStyle(.titleAndIcon)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var title: String {
@@ -91,28 +84,16 @@ struct PersonalAgentRequestCard: View {
 
     private var icon: String {
         switch phase {
-        case .closed(.allowed): isQuestion ? "checkmark.bubble.fill" : "checkmark.shield.fill"
-        case .closed(.denied): "xmark.shield.fill"
-        case .closed(.answered), .closed(.resolved): "checkmark.circle.fill"
-        case .closed(.expired): "clock.badge.exclamationmark"
-        case .unconfirmed: "questionmark.circle.fill"
+        case .closed(.allowed), .closed(.answered), .closed(.resolved): "checkmark.circle"
+        case .closed(.denied): "xmark.circle"
+        case .closed(.expired): "clock"
+        case .unconfirmed: "questionmark.circle"
         default:
             switch item.request.kind {
             case .unsupported: "arrow.up.right.square"
-            case .form: "questionmark.bubble.fill"
-            case .approval: "lock.shield.fill"
+            case .form: "questionmark.bubble"
+            case .approval: "hand.raised"
             }
-        }
-    }
-
-    private var tint: Color {
-        switch phase {
-        case .closed(.allowed): .green
-        case .closed(.denied): .red
-        case .closed: .secondary
-        case .unconfirmed: .orange
-        default:
-            if case .unsupported = item.request.kind { .secondary } else { .orange }
         }
     }
 

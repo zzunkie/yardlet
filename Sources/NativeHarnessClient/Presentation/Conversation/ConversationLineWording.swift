@@ -367,6 +367,13 @@ enum ConversationLineWording {
         }
     }
 
+    /// Whether a failed call's line already says it failed (Claude Code's "Failed to edit"), so the line
+    /// does not mark it failed a second time.
+    static func saysFailure(_ tool: ConversationTool, phase: ConversationItemPhase, harness: HarnessKind) -> Bool {
+        phase == .failed && harness == .claudeCode && tool.kind.wordedLines == nil
+            && claudeTool(tool, phase: phase, localize: { $0 }) != nil
+    }
+
     /// A title that already says what its kind does, as ACP agents word theirs ("Read `README.md`" or
     /// "Reading README.md" for `read`, "Execute `ls`" for `execute`): the line itself, its first word the verb.
     /// That word, up to any punctuation or backtick at its end, must be a form of the kind: the kind itself, or

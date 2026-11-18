@@ -176,10 +176,11 @@ final class ConversationRequestRoutingTests: XCTestCase {
             id: "options", title: "Run", detail: nil, command: "swift test", actions: options
         ))
         XCTAssertEqual(withOptions.command, "swift test")
-        XCTAssertEqual(withOptions.responses.map(\.title), ["Reject", "Allow once", "Always allow"])
-        XCTAssertEqual(withOptions.responses.map(\.role), [.destructive, .primary, .secondary])
+        // The denial first and the narrowest allow last, as both apps end the row with "Allow once".
+        XCTAssertEqual(withOptions.responses.map(\.title), ["Reject", "Always allow", "Allow once"])
+        XCTAssertEqual(withOptions.responses.map(\.role), [.destructive, .secondary, .primary])
         XCTAssertEqual(withOptions.responses.map(\.route), [
-            .providerAction(options[2]), .providerAction(options[0]), .providerAction(options[1])
+            .providerAction(options[2]), .providerAction(options[1]), .providerAction(options[0])
         ])
         // A host that cannot forward the provider's own option offers plain deny and allow.
         XCTAssertEqual(withOptions.offeredResponses(canChooseOption: false, canAnswer: true).map(\.route),

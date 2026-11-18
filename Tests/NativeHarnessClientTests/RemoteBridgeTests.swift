@@ -421,8 +421,8 @@ final class RemoteBridgeTests: XCTestCase {
             .turns.last)
         let pending = try XCTUnwrap(turn.items.last { $0.kind == .approval })
         let choices = try XCTUnwrap(pending.choices)
-        XCTAssertEqual(choices.map { $0.text?.key }, ["Deny", "Allow", "Always allow in this project (saved to %@)"])
-        XCTAssertEqual(choices.last?.text?.args, [RemoteLocalizedText(text: ".claude/settings.local.json")])
+        XCTAssertEqual(choices.map { $0.text?.key }, ["Deny", "Always allow in this project (saved to %@)", "Allow"])
+        XCTAssertEqual(choices[1].text?.args, [RemoteLocalizedText(text: ".claude/settings.local.json")])
         let read = try XCTUnwrap(turn.items.first { $0.kind == .activity })
         let words = try XCTUnwrap(read.words?.first)
         XCTAssertEqual(words.verb, L10n.string("claude.read.done"))
@@ -436,7 +436,7 @@ final class RemoteBridgeTests: XCTestCase {
             let value = L10n.string(key, languageCode: "ko")
             return value == key ? nil : value
         }
-        var english = try XCTUnwrap(choices.last)
+        var english = choices[1]
         english.title = "Always allow in this project (saved to .claude/settings.local.json)"
         XCTAssertEqual(RemoteTurnProjection.title(of: english, lookup: korean), "이 프로젝트에서 항상 허용 (.claude/settings.local.json에 저장)")
         english.text = RemoteLocalizedText(key: "A key no catalog has")

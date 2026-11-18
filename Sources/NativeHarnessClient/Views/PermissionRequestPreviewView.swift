@@ -4,6 +4,8 @@ import SwiftUI
 /// contents in the file change card's diff box, or a command with its description.
 struct PermissionRequestPreviewView: View {
     let preview: PermissionRequestPreview
+    /// The command's description, when the card does not already head itself with it.
+    var showsDescription = true
 
     @Environment(\.transcriptWorkspaceURL) private var workspaceURL
 
@@ -22,21 +24,18 @@ struct PermissionRequestPreviewView: View {
                     .monospacedDigit()
             }
         case let .command(command, description):
-            VStack(alignment: .leading, spacing: 6) {
-                if let description {
+            VStack(alignment: .leading, spacing: 8) {
+                if showsDescription, let description {
                     Text(description)
-                        .font(.callout)
+                        .font(.system(size: 13))
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Text(L10n.string("Command"))
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.tertiary)
                 CodexBoundedOutput(text: command.text, folds: false)
                 if command.omittedLineCount > 0 {
                     Text(L10n.format("%lld more lines", Int64(command.omittedLineCount)))
-                        .font(.system(size: 11.5))
+                        .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                 }
             }

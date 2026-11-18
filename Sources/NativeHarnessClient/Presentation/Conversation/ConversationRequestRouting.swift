@@ -94,8 +94,8 @@ enum ConversationRequestResponses {
         ]
     }
 
-    /// The provider's own options, denials first and the narrowest allow prominent; or deny and
-    /// allow when it sent none.
+    /// The provider's own options, denials first and the narrowest allow prominent and last, as both apps
+    /// end the row with "Allow once"; or deny and allow when it sent none.
     static func plain(providerActions: [PermissionRequestAction]) -> [ConversationRequestResponse] {
         guard !providerActions.isEmpty else {
             return [
@@ -104,7 +104,9 @@ enum ConversationRequestResponses {
             ]
         }
         let prominent = PermissionActionPreference.preferred(from: providerActions, decision: .allow)
-        let ordered = providerActions.filter { $0.decision == .deny } + providerActions.filter { $0.decision == .allow }
+        let allows = providerActions.filter { $0.decision == .allow }
+        let ordered = providerActions.filter { $0.decision == .deny }
+            + allows.filter { $0.id != prominent?.id } + allows.filter { $0.id == prominent?.id }
         return ordered.map { action in
             let role: ConversationRequestResponse.Role = action.decision == .deny ? .destructive
                 : action.id == prominent?.id ? .primary : .secondary
