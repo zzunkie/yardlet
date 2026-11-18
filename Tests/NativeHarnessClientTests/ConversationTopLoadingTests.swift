@@ -118,7 +118,7 @@ final class ConversationTopLoadingTests: XCTestCase {
 
     /// A long transcript opens at its bottom without loading. Scrolling up to the top brings in the
     /// window's next 10 turns once, and the turn at the top stays there; scrolling up to the new top
-    /// again and again brings in the rest.
+    /// again and again brings in the rest, 10 each time.
     func testScrollingToTheTopOfATranscriptBringsEarlierTurnsInOnceAndKeepsThePlace() throws {
         try requireAwakeDisplay()
         let mounted = mount(ConversationTimeline(source: .transcript(
@@ -138,10 +138,16 @@ final class ConversationTopLoadingTests: XCTestCase {
         XCTAssertTrue((80...81).contains(after.number), "the turn read stays in view, not the new top: \(after)")
         XCTAssertGreaterThan(scroll.contentView.bounds.minY, 1_500, "the earlier turns arrived above the reader")
 
-        for _ in 0..<60 where (drawnTurnCount(mounted.hosting) ?? 0) < 90 {
-            userScroll(scroll, up: 3_000, in: mounted.hosting)
+        // Each load is drawn whole before the next scroll, as the first one was: its turns are drawn a
+        // few each display cycle the reader holds still, so how many a fixed pause draws depends on
+        // the machine, and scrolling again while some wait draws only the next of them.
+        for expected in stride(from: 30, through: 90, by: ConversationTurnWindow.step) {
+            userScroll(scroll, up: Int32(scroll.contentView.bounds.minY + 200), in: mounted.hosting)
+            pumpUntil(mounted.hosting) { drawnTurnCount(mounted.hosting) == expected }
+            let drawn = drawnTurnCount(mounted.hosting)
+            XCTAssertEqual(drawn, expected, "one load for each arrival at the top")
+            if drawn != expected { break }
         }
-        XCTAssertEqual(drawnTurnCount(mounted.hosting), 90)
     }
 
     /// A classic mouse wheel, without a trackpad's phases, is the reader's scrolling too (SwiftUI
