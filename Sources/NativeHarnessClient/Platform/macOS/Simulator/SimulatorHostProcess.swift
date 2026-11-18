@@ -12,7 +12,7 @@ import YardletSurfacePort
 /// other event.
 ///
 /// The helper starts responsible for itself (`DisclaimedSpawn`): it holds none of the screen recording, accessibility
-/// or automation permissions the person gave Yardlet, and needs none.
+/// or automation permissions the person gave Yardlet, and needs none. It runs in a sandbox (`SimulatorHostSandbox`).
 final class SimulatorHostProcess: @unchecked Sendable {
     static var bundledExecutable: URL {
         Bundle.main.bundleURL.appending(
@@ -72,8 +72,10 @@ final class SimulatorHostProcess: @unchecked Sendable {
         let logHandle = log.flatMap(Self.logHandle(at:))
         let child: pid_t
         do {
+            let launch = try SimulatorHostSandbox.launch(executable: try DisclaimedSpawn.runnable(executable), arguments: arguments,
+                                                         developerDirectory: developerDirectory, surfacePort: portName)
             child = try DisclaimedSpawn.run(
-                executable: try DisclaimedSpawn.runnable(executable), arguments: arguments, environment: environment,
+                executable: launch.executable, arguments: launch.arguments, environment: environment,
                 standardInput: commands.fileHandleForReading.fileDescriptor,
                 standardOutput: eventPipe.fileHandleForWriting.fileDescriptor,
                 standardError: logHandle?.fileDescriptor)

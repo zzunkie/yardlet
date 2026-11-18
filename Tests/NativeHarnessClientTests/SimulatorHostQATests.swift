@@ -58,11 +58,14 @@ final class SimulatorHostQATests: XCTestCase {
         print("Simulator QA: Xcode \(client.xcodeVersion ?? "?"), \(client.capabilities), screen \(screen)")
 
         // Started responsible for itself, the helper holds none of the permissions Yardlet (or this test's terminal)
-        // holds: screen recording, accessibility, automation.
+        // holds: screen recording, accessibility, automation. Its sandbox keeps it out of the home folder and the network.
         let diagnosis = try await client.diagnose()
         XCTAssertEqual(diagnosis.processID, client.helperProcessID)
         XCTAssertEqual(diagnosis.responsibleProcessID, diagnosis.processID, "the helper is not responsible for itself")
         XCTAssertFalse(diagnosis.screenCaptureAccess, "the helper inherited screen recording permission")
+        XCTAssertEqual(diagnosis.sandboxed, true, "the helper runs without its sandbox")
+        XCTAssertFalse(diagnosis.homeReadable, "the helper reads the home folder")
+        XCTAssertFalse(diagnosis.networkReachable, "the helper reaches the network")
 
         // The first frame: the screen as it is, fit within the size asked for.
         let layer = CALayer()

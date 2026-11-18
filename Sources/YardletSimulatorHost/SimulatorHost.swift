@@ -63,8 +63,35 @@ final class SimulatorHost: @unchecked Sendable {
         case .diagnose(let request):
             // A preflight asks the person nothing and records nothing. (AXIsProcessTrusted, by contrast, puts a process
             // responsible for itself in the Accessibility list of Privacy & Security.)
-            output.write(.diagnosis(request: request, processID: getpid(), screenCaptureAccess: CGPreflightScreenCaptureAccess()))
+            output.write(.diagnosis(request: request, processID: getpid(), screenCaptureAccess: CGPreflightScreenCaptureAccess(),
+                                    homeReadable: Self.canReadHome(), networkReachable: Self.canReachNetwork()))
         }
+    }
+
+    /// Whether a folder in the home folder opens: ~/Library/Preferences, which no privacy permission guards.
+    private static func canReadHome() -> Bool {
+        guard let home = getpwuid(getuid())?.pointee.pw_dir else { return false }
+        guard let folder = opendir(String(cString: home) + "/Library/Preferences") else { return false }
+        closedir(folder)
+        return true
+    }
+
+    /// Whether a connection may start: to the loopback discard port, which no one answers, so nothing is sent. The
+    /// sandbox refuses the connection itself (EPERM); otherwise it is refused by the port or still under way.
+    private static func canReachNetwork() -> Bool {
+        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { return false }
+        defer { close(descriptor) }
+        _ = fcntl(descriptor, F_SETFL, O_NONBLOCK)
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = in_port_t(9).bigEndian
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let result = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        return result == 0 || (errno != EPERM && errno != EACCES)
     }
 
     private func session(_ device: UUID) -> DeviceSession? {

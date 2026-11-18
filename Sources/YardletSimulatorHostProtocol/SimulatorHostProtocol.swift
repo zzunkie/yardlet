@@ -126,8 +126,9 @@ public enum SimulatorHostCommand: Codable, Equatable, Sendable {
     case key(device: UUID, usage: SimulatorKeyUsage, phase: SimulatorPressPhase)
     /// Types the text on the hardware keyboard, key by key, as the device's keyboard layout reads the keys.
     case typeText(device: UUID, text: SimulatorKeyboardText)
-    /// Whether the helper holds screen recording permission (it should not), checked without asking the person.
-    /// Answered with `diagnosis`.
+    /// Whether the helper holds screen recording permission, can read the home folder or can open a network
+    /// connection (it should do none of these), checked without asking the person or sending anything. Answered with
+    /// `diagnosis`.
     case diagnose(request: Int)
 }
 
@@ -213,7 +214,7 @@ public enum SimulatorHostEvent: Codable, Equatable, Sendable {
     case requestFailed(request: Int, message: String)
     /// Input the device did not take, or a command for a device the helper has not attached.
     case commandFailed(device: UUID, message: String)
-    case diagnosis(request: Int, processID: Int32, screenCaptureAccess: Bool)
+    case diagnosis(request: Int, processID: Int32, screenCaptureAccess: Bool, homeReadable: Bool, networkReachable: Bool)
 }
 
 /// Stream framing: a 4-byte big-endian length, then that many bytes of UTF-8 JSON.

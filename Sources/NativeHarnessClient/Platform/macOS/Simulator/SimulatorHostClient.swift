@@ -113,15 +113,27 @@ final class SimulatorHostClient {
         process?.send(.typeText(device: device, text: text))
     }
 
-    /// For QA: the helper's process, the process macOS holds responsible for it (the helper itself, so it has none of
-    /// Yardlet's permissions), and whether it holds screen recording permission (it should not).
-    func diagnose() async throws -> (processID: Int32, responsibleProcessID: Int32?, screenCaptureAccess: Bool) {
+    struct Diagnosis: Equatable {
+        var processID: Int32
+        /// The process macOS holds responsible for the helper: the helper itself, so it has none of Yardlet's permissions.
+        var responsibleProcessID: Int32?
+        var sandboxed: Bool?
+        var screenCaptureAccess: Bool
+        var homeReadable: Bool
+        var networkReachable: Bool
+    }
+
+    /// For QA: how the helper runs. It should be responsible for itself and sandboxed, and hold no screen recording
+    /// permission, no read of the home folder and no network.
+    func diagnose() async throws -> Diagnosis {
         let request = nextRequest
         let answer = try await ask(request) { .diagnose(request: request) }
-        guard case .diagnosis(_, let processID, let screenCapture) = answer else {
+        guard case .diagnosis(_, let processID, let screenCapture, let home, let network) = answer else {
             throw Failure.request("the helper answered with no diagnosis")
         }
-        return (processID, DisclaimedSpawn.responsibleProcess(for: processID), screenCapture)
+        return Diagnosis(processID: processID, responsibleProcessID: DisclaimedSpawn.responsibleProcess(for: processID),
+                         sandboxed: SimulatorHostSandbox.isSandboxed(processID), screenCaptureAccess: screenCapture,
+                         homeReadable: home, networkReachable: network)
     }
 
     func terminate() {
@@ -179,7 +191,7 @@ final class SimulatorHostClient {
         case .detached(let device, _):
             screens[device] = nil
             onEvent?(event)
-        case .screenshot(let request, _), .diagnosis(let request, _, _):
+        case .screenshot(let request, _), .diagnosis(let request, _, _, _, _):
             requests.removeValue(forKey: request)?.resume(returning: event)
         case .requestFailed(let request, let message):
             requests.removeValue(forKey: request)?.resume(throwing: Failure.request(message))

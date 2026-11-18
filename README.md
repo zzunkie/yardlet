@@ -367,6 +367,9 @@ YARDLET_SIGNING_IDENTITY="Developer ID Application: <name> (<team>)" ./scripts/b
   permissions the person gave Yardlet; a helper inside Desktop, Documents or Downloads (a development
   build there) starts from a copy in the temporary folder, so macOS asks for no folder access. The
   helper never calls `AXIsProcessTrusted`, which would list it under Accessibility in Privacy & Security.
+  It runs in a sandbox that `sandbox-exec` applies as it starts (`SimulatorHostSandbox`): it reads only its
+  own bundle, the Xcode, CoreSimulator and the simulator runtimes, writes only Metal's shader cache, reaches
+  only Yardlet's surface port beyond Apple's base profile, and has no network.
 - A Developer ID identity signs with a secure timestamp (Apple's timestamp server); other identities,
   such as Apple Development for local checks, sign without one unless `YARDLET_SIGNING_TIMESTAMP=1`.
   Only a Developer ID build can be notarized.
