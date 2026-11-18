@@ -8,7 +8,8 @@ import YardletSimulatorHostProtocol
 @testable import NativeHarnessClient
 
 /// The simulator host against a real, booted simulator: the first frame, a tap that opens Settings, the home button,
-/// a drag, keys, and that the helper holds no screen recording or accessibility permission of its own. Run by
+/// a drag, keys, the agent tools' select-all and paste (`MacIOSSimulatorDriver`), and that the helper holds no screen
+/// recording or accessibility permission of its own. Run by
 /// scripts/simulator-qa/run-check.sh, which makes a throwaway device, boots it without a window and deletes it after;
 /// without `YARDLET_SIMULATOR_QA_DEVICE` the test is skipped.
 ///
@@ -122,7 +123,28 @@ final class SimulatorHostQATests: XCTestCase {
         }
         try await Task.sleep(for: .seconds(1))
         client.type(try XCTUnwrap(SimulatorKeyboardText("yardlet")), on: setup.device)
-        _ = try await screenshot(client, setup, "6-typed", "the keys typed nothing") { $0.difference(from: search) > 0.01 }
+        let typed = try await screenshot(client, setup, "6-typed", "the keys typed nothing") { $0.difference(from: search) > 0.01 }
+
+        // The agent tools' driver: select-all and delete empty the field, and a paste enters text in any language from
+        // the device's clipboard, which then holds what it held before.
+        let driver = MacIOSSimulatorDriver(hosts: AttachedHost(client: client))
+        let device = SimulatorDevice(identity: .iOSSimulator(udid: setup.device.uuidString), name: "QA device", state: .on,
+                                     osName: "", osVersion: "")
+        let toolchain = SimulatorToolchain(directory: setup.developerDirectory.path)
+        let toolScreen = try await driver.prepare(device, with: toolchain)
+        XCTAssertEqual(toolScreen, SimulatorToolScreen(width: screen.pointWidth, height: screen.pointHeight))
+        try await driver.press(.selectAll, on: device)
+        try await driver.press(.delete, on: device)
+        let cleared = try await screenshot(client, setup, "7-cleared", "select-all and delete left the field") {
+            $0.difference(from: typed) > 0.005
+        }
+        let earlier = "The person's clipboard"
+        let copied = await pasteboard(["pbcopy", setup.device.uuidString], setup, input: earlier)
+        XCTAssertTrue(copied.succeeded, copied.stderr)
+        try await driver.paste("안녕하세요 Yardlet", on: device, with: toolchain)
+        _ = try await screenshot(client, setup, "8-pasted", "the paste entered nothing") { $0.difference(from: cleared) > 0.005 }
+        let restored = await pasteboard(["pbpaste", setup.device.uuidString], setup)
+        XCTAssertEqual(restored.stdout, earlier, "the device's clipboard did not get its text back")
         client.key(SimulatorKeyboard.escape, .press, on: setup.device)
         client.press(.home, .press, on: setup.device)
         try await Task.sleep(for: .seconds(1))
@@ -143,6 +165,31 @@ final class SimulatorHostQATests: XCTestCase {
     }
 
     // MARK: Helpers
+
+    /// The device's clipboard through `simctl`, as the driver reads and writes it.
+    private func pasteboard(_ arguments: [String], _ setup: Setup, input: String? = nil) async -> CLICommandResult {
+        await CLIProcess.run(CLICommand(
+            executable: URL(filePath: "/usr/bin/xcrun"), arguments: ["simctl"] + arguments,
+            environment: ["DEVELOPER_DIR": setup.developerDirectory.path, "LC_CTYPE": "UTF-8"], timeout: .seconds(20),
+            standardInput: input.map { Data($0.utf8) }))
+    }
+
+    /// The test's own client, attached already, as the driver's host.
+    private final class AttachedHost: SimulatorHostAttaching {
+        let client: SimulatorHostClient
+
+        init(client: SimulatorHostClient) {
+            self.client = client
+        }
+
+        func attachForTools(_ device: UUID, with toolchain: SimulatorToolchain) async throws
+            -> (client: SimulatorHostClient, screen: SimulatorScreen) {
+            guard let screen = client.screens[device] else { throw SimulatorHostClient.Failure.device("not attached") }
+            return (client, screen)
+        }
+
+        func releaseForTools(_ device: UUID) {}
+    }
 
     /// A finger down and up again, as a person taps.
     private func tap(_ client: SimulatorHostClient, _ point: SimulatorPoint, on device: UUID) async throws {

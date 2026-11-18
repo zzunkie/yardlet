@@ -1,6 +1,7 @@
 import Foundation
 @testable import NativeHarnessClient
 import XCTest
+import YardletAgentTools
 
 @MainActor
 final class SimulatorCenterTests: XCTestCase {
@@ -250,6 +251,170 @@ final class SimulatorCenterTests: XCTestCase {
         XCTAssertEqual(backend.shutDowns, [phoneA, phoneB])
         XCTAssertTrue(record.load().isEmpty)
     }
+
+    // MARK: - Agent tools
+
+    /// The agents' simulator tools (docs/SIMULATOR.md, "Agent tools") act only on the device their task attached, once
+    /// the person allowed it; positions are on the screen, in the units of the screenshots, and durations, counts and
+    /// text stay within their limits before anything reaches the device.
+    func testTheAgentsToolsActOnlyOnTheAttachedDeviceThePersonAllowed() async throws {
+        let backend = FakeSimulatorBackend([(phoneA, .on), (phoneB, .off)])
+        let center = SimulatorCenter(backends: [backend])
+        await center.setEnabled(true)
+        let suite = "SimulatorToolTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let driver = RecordingSimulatorDriver(screen: SimulatorToolScreen(width: 402, height: 874))
+        let tools = SimulatorAgentTools(center: { center }, approvals: SimulatorApprovals(defaults: defaults),
+                                        drivers: [.iOS: driver])
+        tools.sleep = { _ in }
+        var asked: [String] = []
+        var allows = true
+        tools.askPerson = { device, _ in
+            asked.append(device.name)
+            return allows
+        }
+        let (first, second) = (UUID(), UUID())
+        func run(_ tool: String, _ arguments: [String: ToolJSON] = [:], in task: UUID? = nil) async -> AgentToolResult {
+            await tools.run(tool: tool, arguments: .object(arguments), task: task ?? first)
+        }
+
+        // Without an attached device a tool names the devices and simulator_attach, and nothing reaches one.
+        let unattached = await run(SimulatorToolCatalog.tap, ["x": .integer(10), "y": .integer(10)])
+        XCTAssertEqual(unattached.failure?.kind, .notFound)
+        XCTAssertTrue(unattached.text.contains("simulator_attach") && unattached.text.contains(phoneA), unattached.text)
+
+        // The person is asked once for a simulator, and the approval holds for every task.
+        let attached = await run(SimulatorToolCatalog.attach, ["device": .string("Phone A")])
+        XCTAssertFalse(attached.isError, attached.text)
+        XCTAssertTrue(attached.text.contains("Its id is \(phoneA)") && attached.text.contains("402×874 points"),
+                      attached.text)
+        XCTAssertTrue(attached.text.contains("started outside Yardlet"), attached.text)
+        XCTAssertEqual(asked, ["Phone A"])
+        let claimed = await run(SimulatorToolCatalog.attach, ["device": .string(phoneA)], in: second)
+        XCTAssertEqual(claimed.failure?.kind, .refused, "Another task's agent uses it")
+        XCTAssertEqual(asked, ["Phone A"], "No card for a device the attach would refuse")
+        _ = await run(SimulatorToolCatalog.detach)
+        let reused = await run(SimulatorToolCatalog.attach, ["device": .string(phoneA)], in: second)
+        XCTAssertFalse(reused.isError, reused.text)
+        XCTAssertEqual(asked, ["Phone A"], "A simulator's approval holds for every task")
+
+        // Positions are points of the screenshot, sent as fractions of the screen; off the screen is refused.
+        let shot = await run(SimulatorToolCatalog.screenshot, in: second)
+        XCTAssertTrue(shot.text.contains("402×874 points"), shot.text)
+        _ = await run(SimulatorToolCatalog.tap, ["x": .integer(201), "y": .number(437)], in: second)
+        _ = await run(SimulatorToolCatalog.swipe, ["x": .integer(0), "y": .integer(0), "x2": .integer(402),
+                                                   "y2": .integer(874), "duration": .number(0.032)], in: second)
+        XCTAssertEqual(driver.events, [
+            .touch(.down, 0.5, 0.5), .touch(.up, 0.5, 0.5),
+            .touch(.down, 0, 0), .touch(.move, 0.5, 0.5), .touch(.move, 1, 1), .touch(.up, 1, 1)
+        ])
+        driver.events = []
+        let off = await run(SimulatorToolCatalog.tap, ["x": .integer(403), "y": .integer(10)], in: second)
+        XCTAssertEqual(off.failure?.kind, .invalidArguments)
+        XCTAssertEqual(off.failure?.details["width"], .integer(402))
+        for (tool, arguments) in [
+            (SimulatorToolCatalog.tap, ["x": ToolJSON.integer(1), "y": .integer(1), "duration": .integer(11)]),
+            (SimulatorToolCatalog.type, ["text": .string(String(repeating: "a", count: 1_001))]),
+            (SimulatorToolCatalog.type, ["text": .string("안녕"), "method": .string("keys")]),
+            (SimulatorToolCatalog.press, ["button": .string("home"), "count": .integer(51)]),
+            (SimulatorToolCatalog.press, ["button": .string("home"), "key": .string("return")]),
+            (SimulatorToolCatalog.press, ["button": .string("back")])
+        ] {
+            let refused = await run(tool, arguments, in: second)
+            XCTAssertEqual(refused.failure?.kind, .invalidArguments, "\(tool) \(arguments): \(refused.text)")
+        }
+        XCTAssertEqual(driver.events, [], "Nothing out of bounds reached the device")
+
+        // Text pastes by default, in any language; keys type ASCII on the hardware keyboard.
+        _ = await run(SimulatorToolCatalog.type, ["text": .string("안녕하세요 Hello")], in: second)
+        _ = await run(SimulatorToolCatalog.type, ["text": .string("Hello"), "method": .string("keys")], in: second)
+        _ = await run(SimulatorToolCatalog.press, ["button": .string("home"), "count": .integer(2)], in: second)
+        _ = await run(SimulatorToolCatalog.press, ["key": .string("select_all")], in: second)
+        XCTAssertEqual(driver.events, [.paste("안녕하세요 Hello"), .keys("Hello"), .button(.home), .button(.home),
+                                       .key(.selectAll)])
+
+        // A person's recent input on the device is said, and does not stop the agent's.
+        tools.lastPersonInput = { _ in Date().addingTimeInterval(-3) }
+        let mixed = await run(SimulatorToolCatalog.tap, ["x": .integer(1), "y": .integer(1)], in: second)
+        XCTAssertTrue(mixed.text.contains("The person is using Phone A"), mixed.text)
+        tools.lastPersonInput = { _ in nil }
+
+        // Taken back, the approval is asked again; declined, nothing reaches the device.
+        tools.approvals.revoke(.iOSSimulator(udid: phoneA))
+        allows = false
+        driver.events = []
+        let declined = await run(SimulatorToolCatalog.tap, ["x": .integer(1), "y": .integer(1)], in: second)
+        XCTAssertEqual(declined.failure?.kind, .refused)
+        XCTAssertEqual(declined.failure?.retry, AgentToolFailure.Retry.no)
+        XCTAssertEqual(driver.events, [])
+    }
+
+    /// A simulator's or an emulator's approval holds for every task and is kept in the preferences the Simulator switch
+    /// clears; a real device's holds for its task only and is never written down.
+    func testARealDevicesApprovalHoldsForItsTaskOnly() throws {
+        let suite = "SimulatorApprovalTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let approvals = SimulatorApprovals(defaults: defaults)
+        let (first, second) = (UUID(), UUID())
+        let phone = SimulatorDeviceIdentity.androidDevice(serialNumber: "R5CR10ABCDE")
+        let emulator = SimulatorDeviceIdentity.androidEmulator(avd: "Pixel:9")
+        approvals.approve(phone, for: first)
+        approvals.approve(emulator, for: first)
+        XCTAssertTrue(approvals.isApproved(phone, for: first))
+        XCTAssertFalse(approvals.isApproved(phone, for: second))
+        XCTAssertTrue(approvals.isApproved(emulator, for: second))
+        let restarted = SimulatorApprovals(defaults: defaults)
+        XCTAssertTrue(restarted.isApproved(emulator, for: second), "An AVD name with a colon reads back")
+        XCTAssertFalse(restarted.isApproved(phone, for: first), "A real device's approval is not kept")
+        XCTAssertEqual(defaults.stringArray(forKey: SimulatorApprovals.key), ["androidEmulator:Pixel:9"])
+        approvals.removeAll()
+        XCTAssertFalse(approvals.isApproved(phone, for: first))
+        XCTAssertNil(defaults.object(forKey: SimulatorApprovals.key), "Turned off, nothing is left behind")
+    }
+
+    /// A task lists the simulator tools when the Simulator switch was on as it started and a platform's devices can be
+    /// used; they are not in the list `yardlet-mcp` falls back to without the app.
+    func testTheSimulatorToolsAreListedWhileTheSwitchAndAPlatformAllowThem() async throws {
+        let broker = AgentToolBroker(
+            environment: AgentToolBroker.Environment(
+                executableURL: URL(filePath: "/bin/sh"), endpoint: "/tmp/Yardlet-tools-test/tools.sock",
+                privateDirectory: URL(filePath: "/tmp/Yardlet-tools-test"), isEnabled: { true }),
+            tools: BrowserAgentTools(usesMacEditingCommands: true, pages: { _ in BrowserAgentPage(cdp: ScriptedCDP()) }))
+        let handler = FakeSimulatorToolHandler()
+        broker.simulators = handler
+        func listed(_ task: UUID, _ token: String) async -> [String] {
+            await broker.list(AgentToolCall(token: token, session: task.uuidString, tool: "", arguments: .object([:]),
+                                            method: AgentToolCall.listMethod))?.tools.compactMap { $0["name"]?.stringValue }
+                .filter { $0.hasPrefix("simulator_") } ?? []
+        }
+        let on = UUID()
+        let onToken = try XCTUnwrap(broker.agentToolServer(for: on, workspaceRoots: [])?.environment[AgentToolEnvironment.token])
+        let names = await listed(on, onToken)
+        XCTAssertEqual(names, SimulatorToolCatalog.tools.map(\.name))
+        XCTAssertEqual(names.count, 8)
+        handler.simulatorPlatformIsUsable = false
+        let unusable = await listed(on, onToken)
+        XCTAssertEqual(unusable, [], "No platform's devices can be used")
+        handler.simulatorPlatformIsUsable = true
+
+        handler.simulatorSwitchIsOn = false
+        let off = UUID()
+        let offToken = try XCTUnwrap(broker.agentToolServer(for: off, workspaceRoots: [])?.environment[AgentToolEnvironment.token])
+        let offNames = await listed(off, offToken)
+        XCTAssertEqual(offNames, [], "Off as the task started")
+        let refused = await broker.handle(AgentToolCall(token: offToken, session: off.uuidString,
+                                                        tool: SimulatorToolCatalog.list, arguments: .object([:])))
+        XCTAssertEqual(refused.failure?.kind, .refused)
+        let stillOn = await listed(on, onToken)
+        XCTAssertEqual(stillOn.count, 8, "A task keeps what the switch was as it started")
+        let missing = await broker.handle(AgentToolCall(token: onToken, session: on.uuidString,
+                                                        tool: SimulatorToolCatalog.tap, arguments: .object(["x": .integer(1)])))
+        XCTAssertEqual(missing.failure?.kind, .invalidArguments, "Checked against the listed schema first")
+        XCTAssertEqual(handler.calls, [])
+        XCTAssertFalse(AgentToolCatalog.builtInTools.contains { $0.name.hasPrefix("simulator_") })
+    }
 }
 
 /// Simulators that start and stop at once, each boot with a process of its own.
@@ -334,5 +499,61 @@ private final class ManualSimulatorClock: SimulatorClock, @unchecked Sendable {
 
     func sleep(until deadline: Date) async throws {
         try await Task.sleep(for: .seconds(3600))
+    }
+}
+
+/// Records what the tools send a device, on a screen of a set size.
+@MainActor
+private final class RecordingSimulatorDriver: SimulatorDeviceDriving {
+    enum Event: Equatable {
+        case touch(SimulatorToolTouchPhase, Double, Double)
+        case button(SimulatorToolButton)
+        case key(SimulatorToolKey)
+        case paste(String)
+        case keys(String)
+    }
+
+    let buttons: [SimulatorToolButton] = [.home, .lock, .volumeUp, .volumeDown, .action]
+    let screen: SimulatorToolScreen
+    var events: [Event] = []
+
+    init(screen: SimulatorToolScreen) {
+        self.screen = screen
+    }
+
+    func prepare(_ device: SimulatorDevice, with toolchain: SimulatorToolchain) async throws -> SimulatorToolScreen {
+        screen
+    }
+
+    func screenshot(of device: SimulatorDevice, format: SimulatorToolImageFormat) async throws -> SimulatorToolImage {
+        SimulatorToolImage(data: Data([0x89, 0x50]), format: format, width: screen.width, height: screen.height)
+    }
+
+    func touch(_ phase: SimulatorToolTouchPhase, at point: SimulatorScreenFraction, on device: SimulatorDevice) throws {
+        events.append(.touch(phase, point.x, point.y))
+    }
+
+    func press(_ button: SimulatorToolButton, on device: SimulatorDevice) async throws { events.append(.button(button)) }
+
+    func press(_ key: SimulatorToolKey, on device: SimulatorDevice) async throws { events.append(.key(key)) }
+
+    func paste(_ text: String, on device: SimulatorDevice, with toolchain: SimulatorToolchain) async throws {
+        events.append(.paste(text))
+    }
+
+    func typeKeys(_ text: String, on device: SimulatorDevice) async throws { events.append(.keys(text)) }
+
+    func release(_ device: SimulatorDevice) {}
+}
+
+@MainActor
+private final class FakeSimulatorToolHandler: SimulatorToolHandling {
+    var simulatorSwitchIsOn = true
+    var simulatorPlatformIsUsable = true
+    var calls: [String] = []
+
+    func callSimulatorTool(named name: String, arguments: ToolJSON, callerID: UUID) async -> AgentToolResult {
+        calls.append(name)
+        return .text("ran")
     }
 }

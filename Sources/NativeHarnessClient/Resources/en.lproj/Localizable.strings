@@ -4067,3 +4067,10 @@
 "No simulators" = "No simulators";
 "Add a simulator in Xcode › Window › Devices and Simulators." = "Add a simulator in Xcode › Window › Devices and Simulators.";
 "Simulator screen" = "Simulator screen";
+"Let this task use the %@ simulator?" = "Let this task use the %@ simulator?";
+"Let this task use the %@ emulator?" = "Let this task use the %@ emulator?";
+"Let this task use %@?" = "Let this task use %@?";
+"If real accounts are signed in on it, the agent can send messages or make payments." = "If real accounts are signed in on it, the agent can send messages or make payments.";
+"Pictures of its screen are sent to the model's provider." = "Pictures of its screen are sent to the model's provider.";
+"Allowed for this task only." = "Allowed for this task only.";
+"Once allowed, any task's agent can use it until you take that back in the Simulator tab." = "Once allowed, any task's agent can use it until you take that back in the Simulator tab.";

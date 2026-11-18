@@ -1,7 +1,7 @@
 import Foundation
 
 /// Runs the commands of CLI checks, updates and verification probes as child processes, with the
-/// runtime's usual environment, no input, and a time limit that stops the process tree.
+/// runtime's usual environment, no input unless the command gives some, and a time limit that stops the process tree.
 enum CLIProcess {
     static func run(_ command: CLICommand, currentDirectory: URL? = nil) async -> CLICommandResult {
         await Task.detached(priority: .utility) {
@@ -10,7 +10,8 @@ enum CLIProcess {
             let error = Pipe()
             process.executableURL = command.executable
             process.arguments = command.arguments
-            process.standardInput = FileHandle.childNullDevice()
+            let input = command.standardInput.map { _ in Pipe.childInput() }
+            process.standardInput = input ?? FileHandle.childNullDevice()
             process.standardOutput = output
             process.standardError = error
             if let currentDirectory { process.currentDirectoryURL = currentDirectory }
@@ -19,6 +20,13 @@ enum CLIProcess {
             let exit: ProcessExit
             do { exit = try ProcessExit(running: process) } catch {
                 return CLICommandResult(exitCode: -1, stdout: "", stderr: error.localizedDescription)
+            }
+            if let input, let data = command.standardInput {
+                // Written beside the reads below, so a command that answers before it has read everything never stalls.
+                Task.detached {
+                    try? input.fileHandleForWriting.write(contentsOf: data)
+                    try? input.fileHandleForWriting.close()
+                }
             }
             let timeout = command.timeout
             let timer = Task {

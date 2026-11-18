@@ -75,7 +75,7 @@ struct SimulatorAttachment: Equatable, Sendable {
 }
 
 /// Why an attach was refused, with the devices that are on and free to offer instead.
-struct SimulatorRefusal: Equatable, Sendable {
+struct SimulatorRefusal: Error, Equatable, Sendable {
     enum Reason: Equatable, Sendable {
         /// The Simulator feature is off.
         case disabled
@@ -138,6 +138,8 @@ final class SimulatorCenter {
 
     /// Whether a task's turn runs, which keeps the devices it attaches on.
     @ObservationIgnored var isTurnRunning: @MainActor (UUID) -> Bool = { _ in false }
+    /// Whether a platform's devices can be used changed (`offersDevices`): the agents' tool lists follow it.
+    @ObservationIgnored var onOffersDevicesChanged: @MainActor () -> Void = {}
     @ObservationIgnored var attachmentStore: any SimulatorAttachmentStore
 
     @ObservationIgnored private let backends: [SimulatorPlatform: any SimulatorBackend]
@@ -171,6 +173,11 @@ final class SimulatorCenter {
 
     // MARK: - The feature
 
+    /// The feature is on and a platform's devices can be listed and started: the agents' simulator tools are offered.
+    var offersDevices: Bool {
+        isEnabled && checks.values.contains { $0.availability.listsDevices }
+    }
+
     /// The Simulator switch. On: checks the platforms, stops what an earlier Yardlet started and left unused, and
     /// lists the devices. Off: stops the devices Yardlet started and lets go of every claim.
     func setEnabled(_ enabled: Bool) async {
@@ -187,7 +194,9 @@ final class SimulatorCenter {
             claims = [:]
             shownPanels = [:]
             devices = []
+            let offered = offersDevices
             checks = [:]
+            if offered { onOffersDevicesChanged() }
         }
     }
 
@@ -212,7 +221,10 @@ final class SimulatorCenter {
             found[platform] = check
         }
         guard isEnabled else { return }
-        if found != checks { checks = found }
+        guard found != checks else { return }
+        let offered = offersDevices
+        checks = found
+        if offersDevices != offered { onOffersDevicesChanged() }
     }
 
     /// The developer folder or SDK a platform's devices run with, which the simulator host is also handed.
@@ -304,34 +316,53 @@ final class SimulatorCenter {
         return saved
     }
 
-    /// Attaches the device an ID or name names (`devices(named:)`), after listing the devices again.
-    func attach(_ query: String, to task: UUID, by requester: SimulatorRequester) async -> SimulatorAttachResult {
-        guard isEnabled else { return refusal(.disabled) }
+    /// The device an ID or name names (`devices(named:)`), after listing the devices again, or why none does.
+    func resolve(_ query: String) async -> Result<SimulatorDevice, SimulatorRefusal> {
+        guard isEnabled else { return .failure(refusal(.disabled)) }
         await refreshDevices()
         let matches = devices(named: query)
-        guard let device = matches.first else { return refusal(.unknownDevice(query)) }
-        guard matches.count == 1 else { return refusal(.ambiguousDevice(query, matches: matches)) }
-        return await attach(device.identity, to: task, by: requester)
+        guard let device = matches.first else { return .failure(refusal(.unknownDevice(query))) }
+        guard matches.count == 1 else { return .failure(refusal(.ambiguousDevice(query, matches: matches))) }
+        return .success(device)
+    }
+
+    /// Attaches the device an ID or name names (`resolve(_:)`).
+    func attach(_ query: String, to task: UUID, by requester: SimulatorRequester) async -> SimulatorAttachResult {
+        switch await resolve(query) {
+        case let .success(device): await attach(device.identity, to: task, by: requester)
+        case let .failure(refusal): .refused(refusal)
+        }
+    }
+
+    /// Why attaching the device to the task would be refused, checked without attaching or starting anything; nil when
+    /// the attach would go ahead. The agent's tools ask the person only about a device they could then attach.
+    func attachRefusal(_ identity: SimulatorDeviceIdentity, to task: UUID,
+                       by requester: SimulatorRequester) -> SimulatorRefusal? {
+        guard isEnabled else { return refusal(.disabled) }
+        guard let device = device(identity) else { return refusal(.unknownDevice(identity.value)) }
+        let platform = device.platform
+        guard backends[platform] != nil, toolchain(for: platform) != nil else {
+            let missing: SimulatorAvailability = platform == .iOS ? .xcodeMissing : .sdkMissing
+            return refusal(.unavailable(platform, checks[platform]?.availability ?? missing))
+        }
+        guard requester == .agent else { return nil }
+        if let holder = claims[identity], holder != task {
+            return refusal(.claimedByAnotherTask(holder), excluding: identity)
+        }
+        if !state(of: identity).isRunning, startedCount >= Self.agentStartLimit {
+            return refusal(.startLimit(Self.agentStartLimit), excluding: identity)
+        }
+        return nil
     }
 
     /// Attaches the device to the task, claims it when no task does, and starts it when it is off.
     func attach(_ identity: SimulatorDeviceIdentity, to task: UUID,
                 by requester: SimulatorRequester) async -> SimulatorAttachResult {
-        guard isEnabled else { return refusal(.disabled) }
-        guard let device = device(identity) else { return refusal(.unknownDevice(identity.value)) }
-        let platform = device.platform
-        guard let backend = backends[platform], let toolchain = toolchain(for: platform) else {
-            let missing: SimulatorAvailability = platform == .iOS ? .xcodeMissing : .sdkMissing
-            return refusal(.unavailable(platform, checks[platform]?.availability ?? missing))
-        }
+        if let refusal = attachRefusal(identity, to: task, by: requester) { return .refused(refusal) }
+        guard let device = device(identity), let backend = backends[device.platform],
+              let toolchain = toolchain(for: device.platform) else { return .refused(refusal(.unknownDevice(identity.value))) }
         let holder = claims[identity]
-        if let holder, holder != task, requester == .agent {
-            return refusal(.claimedByAnotherTask(holder), excluding: identity)
-        }
         let needsStart = !state(of: identity).isRunning
-        if needsStart, requester == .agent, startedCount >= Self.agentStartLimit {
-            return refusal(.startLimit(Self.agentStartLimit), excluding: identity)
-        }
 
         if let previous = attachment(of: task), previous != identity { letGo(of: previous, by: task) }
         if attachments[task] != identity {
@@ -362,8 +393,8 @@ final class SimulatorCenter {
     /// Before an agent's tool acts on the task's device: claims it again when no task does (claims are not kept
     /// across a restart) and starts it again when the idle rules stopped it, under the same rules as an attach.
     func prepareAttachedDevice(for task: UUID) async -> SimulatorAttachResult {
-        guard isEnabled else { return refusal(.disabled) }
-        guard let identity = attachment(of: task) else { return refusal(.notAttached) }
+        guard isEnabled else { return .refused(refusal(.disabled)) }
+        guard let identity = attachment(of: task) else { return .refused(refusal(.notAttached)) }
         await refreshDevices()
         return await attach(identity, to: task, by: .agent)
     }
@@ -477,11 +508,11 @@ final class SimulatorCenter {
     private var startedCount: Int { Set(startedByYardlet.keys).union(boots.keys).count }
 
     private func refusal(_ reason: SimulatorRefusal.Reason,
-                         excluding identity: SimulatorDeviceIdentity? = nil) -> SimulatorAttachResult {
+                         excluding identity: SimulatorDeviceIdentity? = nil) -> SimulatorRefusal {
         let free = devices.filter {
             $0.identity != identity && state(of: $0.identity) == .on && claims[$0.identity] == nil
         }
-        return .refused(SimulatorRefusal(reason: reason, freeRunningDevices: free))
+        return SimulatorRefusal(reason: reason, freeRunningDevices: free)
     }
 
     private func letGo(of identity: SimulatorDeviceIdentity, by task: UUID) {

@@ -11,6 +11,7 @@ public enum SimulatorKeyboard {
     public static let upArrow = SimulatorKeyUsage(0x52)!
     public static let leftShift = SimulatorKeyUsage(0xE1)!
     public static let leftCommand = SimulatorKeyUsage(0xE3)!
+    public static let letterA = SimulatorKeyUsage(0x04)!
     public static let letterV = SimulatorKeyUsage(0x19)!
 
     /// The key that types `scalar` and whether it takes Shift; nil for anything but printable ASCII, a newline or a tab.

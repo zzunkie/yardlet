@@ -4067,3 +4067,10 @@
 "No simulators" = "시뮬레이터가 없습니다";
 "Add a simulator in Xcode › Window › Devices and Simulators." = "Xcode › Window › Devices and Simulators에서 시뮬레이터를 추가하세요.";
 "Simulator screen" = "시뮬레이터 화면";
+"Let this task use the %@ simulator?" = "이 작업이 %@ 시뮬레이터를 쓰게 할까요?";
+"Let this task use the %@ emulator?" = "이 작업이 %@ 에뮬레이터를 쓰게 할까요?";
+"Let this task use %@?" = "이 작업이 %@ 기기를 쓰게 할까요?";
+"If real accounts are signed in on it, the agent can send messages or make payments." = "실제 계정이 로그인되어 있으면 에이전트가 메시지를 보내거나 결제할 수 있습니다.";
+"Pictures of its screen are sent to the model's provider." = "화면 이미지가 모델 제공사로 전송됩니다.";
+"Allowed for this task only." = "이 작업에만 허락합니다.";
+"Once allowed, any task's agent can use it until you take that back in the Simulator tab." = "한 번 허락하면 Simulator 탭에서 거둘 때까지 모든 작업의 에이전트가 쓸 수 있습니다.";

@@ -36,6 +36,18 @@ protocol TaskSuggestionToolHandling: AnyObject {
     func callTaskSuggestionTool(named name: String, arguments: ToolJSON, sessionID: UUID) async -> AgentToolResult
 }
 
+/// Yardlet's simulator tools (`SimulatorToolCatalog`), answered by the app against its simulator center
+/// (docs/SIMULATOR.md, "Agent tools"). A task has them when Settings › General › Simulator was on as it started or
+/// resumed, as "Agent browser tools" works, while a platform's devices can be used.
+@MainActor
+protocol SimulatorToolHandling: AnyObject {
+    /// Settings › General › Simulator, read when a task starts or resumes and kept for it.
+    var simulatorSwitchIsOn: Bool { get }
+    /// A platform's devices can be listed and started now.
+    var simulatorPlatformIsUsable: Bool { get }
+    func callSimulatorTool(named name: String, arguments: ToolJSON, callerID: UUID) async -> AgentToolResult
+}
+
 /// Yardlet's session tools (`SessionToolCatalog`), answered by the app: reading the person's other
 /// tasks, messaging one, starting a child task and running a subagent. A call may wait for the
 /// person's approval or for another task's turn.
@@ -58,7 +70,7 @@ protocol ScheduleToolHandling: AnyObject {
 /// endpoint that carries calls here is platform code; this type only sees decoded calls.
 ///
 /// A task gets the server when the app answers the task suggestion tools, which every task has,
-/// or else when the browser tools are on or a connector is connected. Whether the browser tools
+/// or else when the browser or simulator tools are on or a connector is connected. Whether the browser tools
 /// were on is kept per task from that moment, like the rest of the injection.
 ///
 /// A running task's server learns when the task's list changes by asking here (`tools/watch`):
@@ -85,6 +97,8 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     private var tokens: [UUID: String] = [:]
     private var workspaceRoots: [UUID: [URL]] = [:]
     private var browserToolsByTask: [UUID: Bool] = [:]
+    /// Whether the Simulator switch was on when each task was injected.
+    private var simulatorToolsByTask: [UUID: Bool] = [:]
     /// What each task's harness was found to load itself when the task was injected.
     private var connectorScopes: [UUID: ConnectorTaskScope] = [:]
     var connectors: (any ConnectorToolProviding)?
@@ -98,6 +112,8 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     var sharesTerminal: @MainActor () -> Bool = { TerminalSharingPreference.isOn() }
     /// The app, which answers the scheduled-task tools. Nil, as in tests, offers none.
     weak var schedules: (any ScheduleToolHandling)?
+    /// The app, which answers the simulator tools. Nil, as in tests and on other platforms, offers none.
+    weak var simulators: (any SimulatorToolHandling)?
     /// The vault for agents. A task with the browser tools also gets `browser_fill_credential` while
     /// it offers the tool (on, with an item); nil, as in tests, offers none.
     var vault: VaultCenter? {
@@ -149,7 +165,9 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     func agentToolServer(for localSessionID: UUID, workspaceRoots roots: [URL],
                          connectorScope: ConnectorTaskScope?) -> AgentToolServerLaunch? {
         let browserTools = environment.isEnabled()
-        guard browserTools || suggestions != nil || sessions != nil || schedules != nil || connectors?.offersTools == true,
+        let simulatorTools = simulators?.simulatorSwitchIsOn ?? false
+        guard browserTools || simulatorTools || suggestions != nil || sessions != nil || schedules != nil
+                || connectors?.offersTools == true,
               let executable = environment.executableURL,
               FileManager.default.isExecutableFile(atPath: executable.path(percentEncoded: false))
         else { return nil }
@@ -164,6 +182,7 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         tokens[localSessionID] = token
         workspaceRoots[localSessionID] = roots
         browserToolsByTask[localSessionID] = browserTools
+        simulatorToolsByTask[localSessionID] = simulatorTools
         connectorScopes[localSessionID] = connectorScope
         var launchEnvironment = [
             AgentToolEnvironment.endpoint: environment.endpoint,
@@ -207,6 +226,7 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         tokens.removeValue(forKey: localSessionID)
         workspaceRoots.removeValue(forKey: localSessionID)
         browserToolsByTask.removeValue(forKey: localSessionID)
+        simulatorToolsByTask.removeValue(forKey: localSessionID)
         connectorScopes.removeValue(forKey: localSessionID)
         tools.closeTab(for: localSessionID)
     }
@@ -268,6 +288,14 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         if ScheduleToolCatalog.definition(named: call.tool) != nil, let schedules {
             return await schedules.callScheduleTool(named: call.tool, arguments: call.arguments, callerID: sessionID)
         }
+        if SimulatorToolCatalog.definition(named: call.tool) != nil, let simulators {
+            guard simulatorToolsByTask[sessionID] == true else {
+                return .failure("The Simulator feature was off in Yardlet's settings when this task started. The person "
+                    + "can turn it on in Settings → General → Simulator; the tools come once the task starts or resumes.",
+                    .refused, retry: .no)
+            }
+            return await simulators.callSimulatorTool(named: call.tool, arguments: call.arguments, callerID: sessionID)
+        }
         if let result = await connectors?.callConnectorTool(named: call.tool, arguments: call.arguments,
                                                              for: connectorContext(sessionID)) {
             return result
@@ -295,7 +323,7 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         AgentToolCatalog.definition(named: name) ?? VaultToolCatalog.definition(named: name)
             ?? TaskSuggestionToolCatalog.definition(named: name) ?? SessionToolCatalog.definition(named: name)
             ?? TerminalToolCatalog.definition(named: name) ?? SettingsToolCatalog.definition(named: name)
-            ?? ScheduleToolCatalog.definition(named: name)
+            ?? ScheduleToolCatalog.definition(named: name) ?? SimulatorToolCatalog.definition(named: name)
     }
 
     /// A call to a tool the task does not have, such as one its harness listed before a connector went off,
@@ -310,9 +338,9 @@ final class AgentToolBroker: AgentToolLaunchProviding {
                         details: ["tool": .string(name), "similar": .array(family.map(ToolJSON.string))])
     }
 
-    /// The task's tools: the browser catalog when it was on, the task suggestion tools, the session
-    /// tools and the settings tools, `read_terminal` while the terminal is shared, the scheduled-task tools, then connected
-    /// connectors' tools, less any whose name is one of Yardlet's own (a
+    /// The task's tools: the browser catalog when it was on, the simulator tools when the Simulator switch was on and a
+    /// platform's devices can be used, the task suggestion tools, the session tools and the settings tools,
+    /// `read_terminal` while the terminal is shared, the scheduled-task tools, then connected connectors' tools, less any whose name is one of Yardlet's own (a
     /// connector slug and tool can spell `spawn_task`), with their fingerprint. Nil when the
     /// call's token does not match.
     func list(_ call: AgentToolCall) async -> AgentToolList? {
@@ -332,17 +360,20 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         let browserOn = browserToolsByTask[sessionID] != false
         let browser = browserOn ? AgentToolCatalog.browserTools.map(\.json) : []
         let vaultTools = browserOn && vault?.offersTool == true ? [VaultToolCatalog.tool.json] : []
+        let simulatorTools = simulatorToolsByTask[sessionID] == true && simulators?.simulatorPlatformIsUsable == true
+            ? SimulatorToolCatalog.tools.map(\.json) : []
         let suggestionTools = suggestions == nil ? [] : TaskSuggestionToolCatalog.tools.map(\.json)
         let sessionTools = sessions == nil ? [] : (SessionToolCatalog.tools + SettingsToolCatalog.tools).map(\.json)
         let terminalTools = sessions != nil && sharesTerminal() ? [TerminalToolCatalog.tool.json] : []
         let scheduleTools = schedules == nil ? [] : ScheduleToolCatalog.tools.map(\.json)
         let ownNames = Set((TaskSuggestionToolCatalog.tools + SessionToolCatalog.tools + SettingsToolCatalog.tools
-            + ScheduleToolCatalog.tools
+            + ScheduleToolCatalog.tools + SimulatorToolCatalog.tools
             + [VaultToolCatalog.tool, TerminalToolCatalog.tool]).map(\.name))
         let connectorTools = (await connectors?.connectorTools(for: connectorContext(sessionID)) ?? []).filter {
             !ownNames.contains($0["name"]?.stringValue ?? "")
         }
-        return browser + vaultTools + suggestionTools + sessionTools + terminalTools + scheduleTools + connectorTools
+        return browser + vaultTools + simulatorTools + suggestionTools + sessionTools + terminalTools + scheduleTools
+            + connectorTools
     }
 
     // MARK: Tool list changes

@@ -544,6 +544,11 @@ struct NativeHarnessClientApp: App {
                     MacAgentToolService.shared.broker.suggestions = model
                     MacAgentToolService.shared.broker.sessions = model
                     MacAgentToolService.shared.broker.schedules = model
+                    MacAgentToolService.shared.broker.simulators = model
+                    // The simulator tools come and go with the platforms the Simulator switch finds usable.
+                    model.simulators.onOffersDevicesChanged = { [weak broker = MacAgentToolService.shared.broker] in
+                        broker?.toolsMayHaveChanged()
+                    }
                     MacAgentToolService.shared.broker.handoffs = model
                     // The settings tools change the vault's and Sparkle's switches as Settings does.
                     model.settingsVault = MacAgentToolService.shared.vault

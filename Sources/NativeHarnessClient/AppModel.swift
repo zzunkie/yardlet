@@ -481,6 +481,8 @@ final class AppModel {
     @ObservationIgnored var followedSimulatorPreference: Bool?
     /// Ends what shows the devices' screens, when the switch turns off: the Mac's simulator host.
     @ObservationIgnored var endSimulatorScreens: @MainActor () -> Void = {}
+    /// The agents' simulator tools, over `simulators` (`AppModel+Simulators`).
+    @ObservationIgnored lazy var simulatorTools: SimulatorAgentTools = makeSimulatorTools()
 
     init(
         store: SessionStore,
@@ -3135,6 +3137,7 @@ final class AppModel {
             composerDrafts.remove(for: session.id)
             taskWorkspaces.remove(for: session.id)
             simulators.taskRemoved(session.id)
+            simulatorTools.taskRemoved(session.id)
             pullRequestDetails.forget(session.id)
             withdrawApprovalNotifications(for: session.id)
             eventsBySessionID.removeValue(forKey: session.id)

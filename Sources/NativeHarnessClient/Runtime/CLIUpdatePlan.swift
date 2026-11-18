@@ -6,6 +6,8 @@ struct CLICommand: Equatable, Sendable {
     var arguments: [String]
     var environment: [String: String] = [:]
     var timeout: Duration
+    /// What the command reads on its standard input, which keeps a value out of its arguments; nil gives it none.
+    var standardInput: Data? = nil
 }
 
 struct CLICommandResult: Equatable, Sendable {

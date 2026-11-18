@@ -1,4 +1,5 @@
 import Foundation
+import YardletAgentTools
 
 /// The tasks' attached devices, kept in their workspace snapshots (`TaskWorkspaceSnapshot.simulator`).
 @MainActor
@@ -60,5 +61,55 @@ extension AppModel {
         followedSimulatorPreference = isOn
         if !isOn { endSimulatorScreens() }
         Task { await simulators.setEnabled(isOn) }
+
+/// The agents' simulator tools (`SimulatorAgentTools`, docs/SIMULATOR.md, "Agent tools"), answered against the same
+/// simulator center the Simulator tab uses.
+extension AppModel: SimulatorToolHandling {
+    var simulatorSwitchIsOn: Bool { simulators.isEnabled }
+
+    var simulatorPlatformIsUsable: Bool { simulators.offersDevices }
+
+    func callSimulatorTool(named name: String, arguments: ToolJSON, callerID: UUID) async -> AgentToolResult {
+        await simulatorTools.run(tool: name, arguments: arguments, task: callerID)
+    }
+
+    func makeSimulatorTools() -> SimulatorAgentTools {
+        let tools = SimulatorAgentTools(center: { [unowned self] in simulators },
+                                        approvals: SimulatorApprovals(defaults: preferences))
+        tools.askPerson = { [weak self] device, task in await self?.asksToUseSimulator(device, task: task) ?? false }
+        tools.taskTitle = { [weak self] id in self?.store.sessions.first { $0.id == id }?.title }
+        return tools
+    }
+
+    /// Asks the person, on the request card in the calling task, to let its agent use the device, whatever the task's
+    /// permission mode, and waits for the answer as the browser's file approval does (`allowsBrowserFile`): with no
+    /// answer, the card is refused when the turn stops. A real device's card says what it can reach.
+    func asksToUseSimulator(_ device: SimulatorDevice, task: UUID) async -> Bool {
+        guard let caller = sessionToolCaller(task) else { return false }
+        let request = SimulatorApprovalCard(device: device)
+        return await askPerson(title: request.title, detail: request.detail, caller: caller)
+    }
+}
+
+/// The words of the card that asks the person to let a task's agent use a device.
+struct SimulatorApprovalCard: Equatable {
+    var title: String
+    var detail: String
+
+    init(device: SimulatorDevice) {
+        title = switch device.identity.kind {
+        case .iOSSimulator: L10n.format("Let this task use the %@ simulator?", device.name)
+        case .androidEmulator: L10n.format("Let this task use the %@ emulator?", device.name)
+        case .androidDevice: L10n.format("Let this task use %@?", device.name)
+        }
+        var lines = device.osName.isEmpty ? [] : [device.osName]
+        if device.identity.kind.isPhysical {
+            lines.append(L10n.string("If real accounts are signed in on it, the agent can send messages or make payments."))
+            lines.append(L10n.string("Pictures of its screen are sent to the model's provider."))
+            lines.append(L10n.string("Allowed for this task only."))
+        } else {
+            lines.append(L10n.string("Once allowed, any task's agent can use it until you take that back in the Simulator tab."))
+        }
+        detail = lines.joined(separator: "\n")
     }
 }
