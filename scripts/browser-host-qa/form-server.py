@@ -48,7 +48,8 @@ site sets and deletes host-only, /shapes/login (SHAPES_LOGIN below), for picking
 scheme, and a tap target), /frames (an open and a closed shadow root, a frame from this site and one from another that
 holds a frame from this site again) and /handoff (a check only the person passes), and for video /media (MEDIA below)
 with the files media-fixtures.swift wrote to the output directory's media folder under /media/<name>, and for a tab
-shown again after it was hidden /idle?n=N (striped edge to edge, IDLE_PAGE below).
+shown again after it was hidden /idle?n=N (striped edge to edge, IDLE_PAGE below), and for timing a remote device's view
+of a tab /remote-perf (remote_perf_page below).
 Each records what the page received in window.qa."""
 import time
 import argparse
@@ -301,6 +302,52 @@ def large_page():
     return f"""<!doctype html><html lang="en"><meta charset="utf-8"><title>Large page</title>
 <h1>Large page</h1><table><thead><tr><th>Name</th><th>Value</th><th>Link</th><th>Pick</th></tr></thead>
 <tbody>{rows}</tbody></table><ul>{items}</ul>{paragraphs}<button id="last">Last button</button></html>"""
+
+
+def remote_perf_page():
+    """A long documentation-like page for timing a remote device's view of a tab (BrowserHostRemoteTabPerf): a bar
+    that stays at the top holds a text field and two blocks whose colors count, in base 8, the text field's input
+    events and the page's wheel events, so each picture says how much of the device's input it shows."""
+    sections = ''.join(
+        f'<section><h2>Section {i}: configuring the release pipeline</h2>'
+        f'<p>Paragraph {i}a. Releases are cut from the main branch once every check passes; the notes list each '
+        f'change since the last tag, grouped by area, with a link to its pull request and its author.</p>'
+        f'<p>Paragraph {i}b. A draft release keeps its assets private until it is published. Upload the signed '
+        f'archive, its checksum and the appcast entry, then publish to make all three visible together.</p>'
+        f'<pre>git tag -s v1.{i}.0 -m "Release 1.{i}.0"\ngit push origin v1.{i}.0\ngh release create v1.{i}.0 --draft</pre>'
+        f'<div class="band" style="background:hsl({(i * 37) % 360} 60% 70%)"></div>'
+        f'<p>Paragraph {i}c. If a check fails after the tag is pushed, delete the draft, fix the cause on main, '
+        f'and tag again with the next patch number rather than moving the tag.</p></section>'
+        for i in range(120))
+    return f"""<!doctype html><html lang="en"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Remote perf</title>
+<style>body{{margin:0;font:16px/1.5 -apple-system,sans-serif;color:#1f2328;background:#fff}}
+#bar{{position:fixed;top:0;left:0;right:0;height:56px;background:#f6f8fa;border-bottom:1px solid #d0d7de;display:flex;
+align-items:center;padding:0 8px;gap:6px;z-index:2}}
+#field{{flex:1;min-width:0;height:36px;font:18px -apple-system;padding:0 8px;caret-color:transparent;border:1px solid #888;
+outline:none;background:#fff;color:#000}}
+.mark{{width:36px;height:36px;flex:none}} main{{padding:72px 16px 16px}} h2{{font-size:22px;margin:24px 0 8px}}
+pre{{background:#f6f8fa;padding:12px;overflow:auto;font:13px/1.4 ui-monospace,monospace;white-space:pre-wrap}}
+.band{{height:28px;border-radius:6px}}</style>
+<div id="bar"><input id="field" autocomplete="off" spellcheck="false"><div class="mark" id="m0"></div>
+<div class="mark" id="m1"></div></div><main>{sections}</main>
+<script>
+const colors = ['#000000', '#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff', '#ffffff'];
+let inputs = 0, wheels = 0;
+function show() {{
+  const count = inputs + wheels;
+  m0.style.background = colors[count % 8];
+  m1.style.background = colors[Math.floor(count / 8) % 8];
+}}
+show();
+field.addEventListener('input', () => {{ inputs++; show(); }});
+addEventListener('wheel', () => {{ wheels++; show(); }}, {{passive: true}});
+window.qa = {{
+  reset() {{ scrollTo(0, 0); field.value = ''; inputs = 0; wheels = 0; show(); field.focus(); return true; }},
+  counts() {{ return {{inputs, wheels, scrollY: Math.round(scrollY)}}; }}
+}};
+field.focus();
+</script></html>"""
 
 
 SPA = '''<!doctype html><meta charset="utf-8"><title>SPA</title><h1 id="where">SPA home</h1>
@@ -1764,6 +1811,8 @@ class Handler(BaseHTTPRequestHandler):
             payload = ACCESSIBILITY.encode()
         elif self.path.startswith('/large'):
             payload = large_page().encode()
+        elif self.path.startswith('/remote-perf'):
+            payload = remote_perf_page().encode()
         elif self.path.startswith('/remote-frames'):
             payload = REMOTE_FRAMES.encode()
         elif self.path.startswith('/remote-copy-next'):

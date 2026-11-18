@@ -673,6 +673,18 @@ copies once the window goes (its next document has no script); and this Mac's cl
 `changeCount` is read). `watchedPageHasFocus` in `result.json` records that the watched page has no focus without a panel
 here, which is why Chromium refuses that page's own `navigator.clipboard.writeText`.
 
+`--ui-fixture-browser-check-only=remote-tab-perf` (`BrowserHostRemoteTabPerf`, QA path `/remote-perf`) times what a
+phone sees of a task's tab (docs/REMOTE_PROTOCOL.md, section 15.25) through the real server, bridge and host: a phone's
+watch (390 by 844 CSS pixels, pictures of at most 1,170 by 2,532 pixels) over loopback, and through loopback links that
+delay and narrow the bytes as a path through the relay does (40 ms each way at 20 Mbit/s, and 100 ms at 5 Mbit/s), each
+with one frame in flight and with two. The phone decodes each frame before it acknowledges it, as the phone apps do. On
+each link it scrolls the long page ten times a second and types five characters a second, and `remote-tab-perf.json`
+records the frames a second, the time from each input to the first decoded picture that shows it (the page counts its
+wheel and input events in two colored blocks at the top), the bytes per frame, the frames whose top bar is not where
+the page draws it (a picture taken off the visible page), and the CPU the app and the browser host used. It also times
+one picture's steps alone, and screenshots at other qualities, scales and formats. `--ui-fixture-remote-tab-interval=<seconds>`
+tries another shortest gap between looks.
+
 `--ui-fixture-browser-check-only=browser-use` (`BrowserHostBrowserUseQA`) checks the agent's use of the
 browser: screen size emulation (presets, kept after a new load, reference clicks, screenshot size, color scheme, kept
 after a full-page screenshot, desktop, a size larger than the panel drawn shrunk with the person's clicks landing in the
