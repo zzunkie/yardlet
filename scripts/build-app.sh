@@ -95,6 +95,23 @@ fi
 # Package.swift reads this: an empty value leaves the CEF targets out.
 export YARDLET_CEF_DIR="$CEF_DIR"
 
+# The scrcpy server the Android screen runs on the device (docs/SIMULATOR.md): the pinned release's file as
+# published, downloaded once into the cache and checked before every use. ScrcpyServer
+# (Sources/NativeHarnessClient/Simulator/Android/ScrcpyProtocol.swift) pins the same file and checks it again
+# before it pushes it to a device.
+SCRCPY_SERVER_URL="https://github.com/Genymobile/scrcpy/releases/download/v5.0.1/scrcpy-server-v5.0.1"
+SCRCPY_SERVER_SHA256="764eb6f79811d5211fe9df341120882ba9994c7a61b897d7bf3fb662e53bc536"
+SCRCPY_SERVER="$HOME/Library/Caches/Yardlet/scrcpy/${SCRCPY_SERVER_URL:t}"
+if [[ ! -f "$SCRCPY_SERVER" ]]; then
+    mkdir -p "${SCRCPY_SERVER:h}"
+    /usr/bin/curl -fL --retry 3 -o "$SCRCPY_SERVER.partial" "$SCRCPY_SERVER_URL"
+    /bin/mv "$SCRCPY_SERVER.partial" "$SCRCPY_SERVER"
+fi
+if [[ "$(/usr/bin/shasum -a 256 "$SCRCPY_SERVER" | cut -d' ' -f1)" != "$SCRCPY_SERVER_SHA256" ]]; then
+    echo "error: $SCRCPY_SERVER does not match the pinned SHA-256 $SCRCPY_SERVER_SHA256; remove it and run this script again" >&2
+    exit 1
+fi
+
 cd "$PROJECT_ROOT"
 # swift build once for this Mac, or once for each of YARDLET_ARCHS.
 swift_build() {
@@ -284,6 +301,8 @@ if [[ -d "$SWIFTTERM_BUNDLE" ]]; then
 fi
 
 cp "$PROJECT_ROOT/THIRD_PARTY_NOTICES.md" "$RESOURCES_DIR/THIRD_PARTY_NOTICES.md"
+# Unchanged, under the name ScrcpyServer.resourceName looks for.
+/usr/bin/ditto "$SCRCPY_SERVER" "$RESOURCES_DIR/scrcpy-server"
 # Chromium's own notices come with Chromium (THIRD_PARTY_NOTICES.md), so not in a bundle built without it.
 rm -f "$RESOURCES_DIR/CHROMIUM_CREDITS.html"
 

@@ -1,5 +1,8 @@
+import CoreMedia
+import CoreVideo
 import Foundation
 @testable import NativeHarnessClient
+import VideoToolbox
 import XCTest
 
 final class AndroidSimulatorTests: XCTestCase {
@@ -139,6 +142,117 @@ final class AndroidSimulatorTests: XCTestCase {
         XCTAssertTrue(video.closed && control.closed)
     }
 
+    func testScreenshotsAndTouchesUseTheScreensDpAndTheStreamsFrame() throws {
+        let metrics = try XCTUnwrap(AndroidDisplayMetrics.parse("""
+            Physical size: 1080x2400
+            Override size: 720x1600
+            Physical density: 420
+            Override density: 320
+
+            """))
+        XCTAssertEqual(metrics, AndroidDisplayMetrics(width: 720, height: 1600, density: 320))
+        // Turned as the frame is.
+        XCTAssertTrue(metrics.dpSize(frameWidth: 576, frameHeight: 1280) == (360, 800))
+        XCTAssertTrue(metrics.dpSize(frameWidth: 1280, frameHeight: 576) == (800, 360))
+        XCTAssertEqual(AndroidDisplayMetrics.parse("Physical size: 1080x2400\nPhysical density: 420\n")?.density, 420)
+        XCTAssertNil(AndroidDisplayMetrics.parse("Physical size: 1080x2400\n"))
+
+        XCTAssertEqual(ScrcpyPosition(fractionX: 0.5, y: 0.25, frameWidth: 576, frameHeight: 1280),
+                       ScrcpyPosition(x: 288, y: 320, screenWidth: 576, screenHeight: 1280))
+        XCTAssertEqual(ScrcpyPosition(fractionX: 1, y: .nan, frameWidth: 576, frameHeight: 1280),
+                       ScrcpyPosition(x: 575, y: 0, screenWidth: 576, screenHeight: 1280))
+
+        // The bundle carries the file the client checks before it pushes one to a device.
+        let script = try String(contentsOf: URL(filePath: #filePath).deletingLastPathComponent()
+            .appending(path: "../../scripts/build-app.sh").standardizedFileURL, encoding: .utf8)
+        XCTAssertTrue(script.contains("SCRCPY_SERVER_URL=\"\(ScrcpyServer.releaseURL)\""))
+        XCTAssertTrue(script.contains("SCRCPY_SERVER_SHA256=\"\(ScrcpyServer.sha256)\""))
+        XCTAssertTrue(script.contains("$RESOURCES_DIR/\(ScrcpyServer.resourceName)\""))
+    }
+
+    /// A device's stream as scrcpy sends it, Annex B with the parameter sets in config packets, decodes into
+    /// IOSurfaces a layer can show, and a rotation's new capture starts the decoder over at the new size.
+    func testDecodesTheStreamIntoSurfacesAndStartsOverWhenTheDeviceTurns() throws {
+        let frames = DecodedFrames()
+        let decoder = AndroidVideoDecoder(output: { frames.add($0) }, needsKeyFrame: {})
+        for (width, height) in [(360, 640), (640, 360)] {
+            decoder.handle(.session(width: width, height: height))
+            let (sets, pictures) = try encodedFrames(width: width, height: height, count: 3)
+            // A picture before the config packet is no use to a decoder that has not started.
+            if width == 360 { decoder.handle(.packet(pictures[0], presentationMicroseconds: 1, isKeyFrame: true)) }
+            decoder.handle(.packet(sets, presentationMicroseconds: nil, isKeyFrame: false))
+            for (number, picture) in pictures.enumerated() {
+                decoder.handle(.packet(picture, presentationMicroseconds: UInt64(number + 1) * 16_000, isKeyFrame: number == 0))
+            }
+            decoder.flush()
+        }
+        let decoded = frames.all
+        XCTAssertEqual(decoded.map { "\($0.width)x\($0.height)" }, ["360x640", "360x640", "360x640", "640x360", "640x360", "640x360"])
+        XCTAssertEqual(decoded.map(\.format), [1, 1, 1, 2, 2, 2])
+        XCTAssertEqual(decoded.map(\.sequence), [1, 2, 3, 4, 5, 6])
+        let last = try XCTUnwrap(decoded.last)
+        XCTAssertEqual(CVPixelBufferGetPixelFormatType(last.pixelBuffer), kCVPixelFormatType_32BGRA)
+        XCTAssertEqual(IOSurfaceGetWidth(last.surface), 640)
+        XCTAssertEqual(decoder.latest?.sequence, 6)
+    }
+
+    /// Frames encoded with VideoToolbox as an Android encoder sends them: the parameter sets in Annex B, then each
+    /// picture in Annex B, the first a key frame.
+    private func encodedFrames(width: Int, height: Int, count: Int) throws -> (sets: Data, pictures: [Data]) {
+        var created: VTCompressionSession?
+        XCTAssertEqual(VTCompressionSessionCreate(allocator: nil, width: Int32(width), height: Int32(height),
+                                                  codecType: kCMVideoCodecType_H264, encoderSpecification: nil,
+                                                  imageBufferAttributes: nil, compressedDataAllocator: nil,
+                                                  outputCallback: nil, refcon: nil, compressionSessionOut: &created), noErr)
+        let session = try XCTUnwrap(created)
+        defer { VTCompressionSessionInvalidate(session) }
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
+        var samples: [CMSampleBuffer] = []
+        for number in 0..<count {
+            var pixels: CVPixelBuffer?
+            CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_32BGRA, nil, &pixels)
+            let buffer = try XCTUnwrap(pixels)
+            CVPixelBufferLockBaseAddress(buffer, [])
+            memset(CVPixelBufferGetBaseAddress(buffer), Int32(40 * (number + 1)), CVPixelBufferGetDataSize(buffer))
+            CVPixelBufferUnlockBaseAddress(buffer, [])
+            let options = number == 0 ? [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary : nil
+            VTCompressionSessionEncodeFrame(session, imageBuffer: buffer,
+                                            presentationTimeStamp: CMTime(value: Int64(number), timescale: 60),
+                                            duration: .invalid, frameProperties: options, infoFlagsOut: nil) { status, _, sample in
+                if status == noErr, let sample { samples.append(sample) }
+            }
+        }
+        VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid)
+        XCTAssertEqual(samples.count, count)
+        let format = try XCTUnwrap(CMSampleBufferGetFormatDescription(samples[0]))
+        var sets = Data()
+        for index in 0..<2 {
+            var pointer: UnsafePointer<UInt8>?
+            var size = 0
+            CMVideoFormatDescriptionGetH264ParameterSetAtIndex(format, parameterSetIndex: index, parameterSetPointerOut: &pointer,
+                                                               parameterSetSizeOut: &size, parameterSetCountOut: nil,
+                                                               nalUnitHeaderLengthOut: nil)
+            sets.append(contentsOf: [0, 0, 0, 1])
+            sets.append(try XCTUnwrap(pointer), count: size)
+        }
+        let pictures = try samples.map { sample -> Data in
+            let block = try XCTUnwrap(CMSampleBufferGetDataBuffer(sample))
+            var avcc = Data(count: CMBlockBufferGetDataLength(block))
+            avcc.withUnsafeMutableBytes { _ = CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: $0.count, destination: $0.baseAddress!) }
+            var annexB = Data()
+            var offset = 0
+            while offset + 4 <= avcc.count {
+                let length = avcc[offset..<offset + 4].reduce(0) { $0 << 8 | Int($1) }
+                annexB.append(contentsOf: [0, 0, 0, 1])
+                annexB.append(avcc[offset + 4..<offset + 4 + length])
+                offset += 4 + length
+            }
+            return annexB
+        }
+        return (sets, pictures)
+    }
+
     private func header(_ flags: UInt64, size: UInt32, session: (Int, Int)? = nil) -> Data {
         var data = Data()
         if let session {
@@ -150,6 +264,13 @@ final class AndroidSimulatorTests: XCTestCase {
         withUnsafeBytes(of: size.bigEndian) { data.append(contentsOf: $0) }
         return data
     }
+}
+
+private final class DecodedFrames: @unchecked Sendable {
+    private let lock = NSLock()
+    private var frames: [AndroidVideoDecoder.Frame] = []
+    var all: [AndroidVideoDecoder.Frame] { lock.withLock { frames } }
+    func add(_ frame: AndroidVideoDecoder.Frame) { lock.withLock { frames.append(frame) } }
 }
 
 /// Answers each command with `answer`'s output, or fails it; keeps every command.

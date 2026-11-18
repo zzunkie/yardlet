@@ -4,6 +4,14 @@ import Foundation
 /// runtime's usual environment, no input unless the command gives some, and a time limit that stops the process tree.
 enum CLIProcess {
     static func run(_ command: CLICommand, currentDirectory: URL? = nil) async -> CLICommandResult {
+        let result = await runForData(command, currentDirectory: currentDirectory)
+        return CLICommandResult(exitCode: result.exitCode, stdout: String(decoding: result.stdout, as: UTF8.self),
+                                stderr: result.stderr)
+    }
+
+    /// `run(_:currentDirectory:)` for a command whose standard output is bytes rather than text, such as an image.
+    static func runForData(_ command: CLICommand, currentDirectory: URL? = nil) async
+        -> (exitCode: Int32, stdout: Data, stderr: String) {
         await Task.detached(priority: .utility) {
             let process = Process()
             let output = Pipe()
@@ -19,7 +27,7 @@ enum CLIProcess {
                 overrides: ["NO_COLOR": "1", "PAGER": "cat"].merging(command.environment) { _, new in new })
             let exit: ProcessExit
             do { exit = try ProcessExit(running: process) } catch {
-                return CLICommandResult(exitCode: -1, stdout: "", stderr: error.localizedDescription)
+                return (-1, Data(), error.localizedDescription)
             }
             if let input, let data = command.standardInput {
                 // Written beside the reads below, so a command that answers before it has read everything never stalls.
@@ -41,13 +49,8 @@ enum CLIProcess {
             let stderr = await errorData.value
             let ended = await exit.wait(timeout: .seconds(10))
             timer.cancel()
-            if await timer.value {
-                return CLICommandResult(exitCode: -1, stdout: String(decoding: outputData, as: UTF8.self),
-                    stderr: L10n.string("Timed out"))
-            }
-            return CLICommandResult(exitCode: ended ? process.terminationStatus : -1,
-                stdout: String(decoding: outputData, as: UTF8.self),
-                stderr: String(decoding: stderr, as: UTF8.self))
+            if await timer.value { return (-1, outputData, L10n.string("Timed out")) }
+            return (ended ? process.terminationStatus : -1, outputData, String(decoding: stderr, as: UTF8.self))
         }.value
     }
 
