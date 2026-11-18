@@ -437,7 +437,10 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   time or a copy Setup did not install, as the app starts, before the runtime does; with nothing missing that reads
   four package lists and adds nothing.
 
-On Windows, with Swift 6.4.1 and Visual Studio's C++ tools (swift-winrt is C++):
+On Windows, with Swift 6.4.1 and Visual Studio's C++ tools (swift-winrt is C++). MSVC 14.52 (Visual Studio 18.12)
+and later accept only clang 22 and later in their C++ headers, and Swift 6.4's clang is 21, so the runners' Swift
+(`Windows/scripts/install-swift.ps1`) defines `_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH` for every compile in a
+`clang.cfg` beside its clang; a PC with that MSVC needs the same or an earlier MSVC toolset:
 
 ```powershell
 Windows/scripts/generate-bindings.ps1
