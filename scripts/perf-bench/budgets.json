@@ -60,5 +60,17 @@
     "bodies.conversationLayoutCount": 1800,
     "bodies.conversationTurnCount": 70,
     "bodies.conversationTimelineCount": 120
+  },
+  "simulator-scroll/scroll-still": {
+    "mainThread.cpuPercent": 40.0,
+    "bodies.conversationLayoutCount": 1600,
+    "bodies.conversationTurnCount": 20,
+    "bodies.conversationTimelineCount": 24
+  },
+  "simulator-scroll/scroll": {
+    "mainThread.cpuPercent": 40.0,
+    "bodies.conversationLayoutCount": 1600,
+    "bodies.conversationTurnCount": 20,
+    "bodies.conversationTimelineCount": 24
   }
 }

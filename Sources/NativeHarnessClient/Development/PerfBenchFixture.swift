@@ -57,6 +57,9 @@ enum PerfBenchFixture {
         /// The same conversation moved as fast as a reader moves it: its scroller's knob dragged from
         /// the end to the top and back, then the keyboard's Page Up, Page Down, Home and End.
         case conversationJump = "conversation-jump"
+        /// The conversation of `conversation-scroll` scrolled the same way beside a Simulator tab whose device's
+        /// screen stays still, then while it changes 60 times a second: what a moving device costs the window.
+        case simulatorScroll = "simulator-scroll"
     }
 
     static var isRequested: Bool { CommandLine.arguments.contains(argument) }
@@ -227,7 +230,7 @@ enum PerfBenchFixture {
         case .sidebar:
             shown = [codexTask(shownTaskID, title: "Fix the parser's empty input", threadID: codexThreadID,
                                turns: (0..<4).map { LongConversationFixture.codexTurn($0) })]
-        case .conversationScroll, .conversationJump:
+        case .conversationScroll, .conversationJump, .simulatorScroll:
             shown = [claudeTask(shownTaskID, title: "Fix the parser's empty input", runtime: claude,
                                 sessionID: claudeSessionID, turns: 60, links: true)]
         case .browserTabs:
@@ -428,6 +431,8 @@ private final class PerfBenchRunner {
             await scrollConversation()
         case .conversationJump:
             await jumpConversation()
+        case .simulatorScroll:
+            await scrollBesideSimulator()
         }
         finish()
     }
@@ -528,7 +533,7 @@ private final class PerfBenchRunner {
     /// would hand them on, so following lets go, earlier turns come in at the top and the view keeps its
     /// place as they arrive, as for a reader. Then the same while the last turn streams; the message that
     /// starts it brings the view back to the end.
-    private func scrollConversation() async {
+    private func scrollConversation(simulator: PerfBenchSimulatorFrames? = nil) async {
         guard let window, let scroll = conversationScrollView(in: window) else {
             problems.append("no conversation scroll view")
             return
@@ -582,6 +587,25 @@ private final class PerfBenchRunner {
             gesture = .changed
         }
         let scrollHeight = scroll.documentView?.frame.height ?? 0
+        if let simulator {
+            // The same scroll beside the Simulator tab, its screen still and then changing every frame.
+            await phase("scroll-still", seconds: 10, frames: true, onFrame: move)
+            Self.scrollWheel(scroll, by: 0, phase: .ended)
+            let still = traveled(from: scrollHeight)
+            upward = true
+            reversals = 0
+            gesture = .began
+            resetTravel()
+            simulator.start()
+            await phase("scroll", seconds: 10, frames: true, onFrame: move)
+            simulator.stop()
+            Self.scrollWheel(scroll, by: 0, phase: .ended)
+            if moved < 2_000 { problems.append("the conversation scrolled only \(Int(moved)) pt (is the display asleep?)") }
+            record["conversation"] = ["visibleHeight": scroll.contentView.bounds.height, "scroll-still": still,
+                                      "scroll": traveled(from: scrollHeight)]
+            record["simulator"] = simulator.record
+            return
+        }
         await phase("scroll", seconds: 10, frames: true, onFrame: move)
         Self.scrollWheel(scroll, by: 0, phase: .ended)
         let scrolled = traveled(from: scrollHeight)
@@ -600,6 +624,41 @@ private final class PerfBenchRunner {
         Self.scrollWheel(scroll, by: 0, phase: .ended)
         record["conversation"] = ["visibleHeight": scroll.contentView.bounds.height,
                                   "scroll": scrolled, "scroll-streaming": traveled(from: streamingHeight)]
+    }
+
+    /// `simulator-scroll`: the shown task's Simulator tab shows the bench's device (`PerfBenchSimulatorBackend`), with
+    /// no Xcode or helper behind it, and the conversation scrolls beside it as in `conversation-scroll`.
+    private func scrollBesideSimulator() async {
+        let device = PerfBenchSimulatorBackend.device
+        model.simulators = SimulatorCenter(backends: [PerfBenchSimulatorBackend()])
+        await model.simulators.setEnabled(true)
+        _ = await model.simulators.attach(.iOSSimulator(udid: device.uuidString), to: PerfBenchFixture.shownTaskID,
+                                          by: .person)
+        MacSimulatorScreens.shared.attachWithoutHelper(device, screen: PerfBenchSimulatorBackend.screen,
+                                                       toolchain: PerfBenchSimulatorBackend.toolchain)
+        let workspace = model.taskWorkspaces.state(for: PerfBenchFixture.shownTaskID)
+        workspace.setPanels(TaskSurfaceNavigationProjection.showing(TaskSurfaceNavigationProjection.simulatorID,
+                                                                    in: workspace.panels))
+        let shown = await waitUntil(.seconds(20)) {
+            self.window.flatMap(Self.simulatorScreen(in:))?.screenPixelSize != nil
+        }
+        guard shown, let view = window.flatMap(Self.simulatorScreen(in:)), let size = view.screenPixelSize,
+              let frames = PerfBenchSimulatorFrames(display: view.frameDisplay, pixelWidth: size.width,
+                                                    pixelHeight: size.height) else {
+            problems.append("the Simulator tab did not show the device")
+            return
+        }
+        try? await Task.sleep(for: .seconds(2))
+        await scrollConversation(simulator: frames)
+    }
+
+    private static func simulatorScreen(in window: NSWindow) -> SimulatorScreenView? {
+        func find(_ view: NSView) -> SimulatorScreenView? {
+            if let screen = view as? SimulatorScreenView { return screen }
+            for subview in view.subviews { if let found = find(subview) { return found } }
+            return nil
+        }
+        return window.contentView.flatMap(find)
     }
 
     /// A trackpad's scroll wheel event of `points` (positive moves toward the top) in a gesture's

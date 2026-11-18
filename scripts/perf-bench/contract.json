@@ -51,6 +51,10 @@
     "conversation-jump": [
       "drag",
       "keys"
+    ],
+    "simulator-scroll": [
+      "scroll-still",
+      "scroll"
     ]
   },
   "micro": [
