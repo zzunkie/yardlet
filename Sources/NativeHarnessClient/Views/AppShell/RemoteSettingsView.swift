@@ -123,9 +123,14 @@ struct RemoteSettingsView: View {
                 HStack(alignment: .top, spacing: 18) {
                     RemotePairingQRCode(text: pairing.url?.absoluteString ?? "")
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(L10n.string("Scan this code with Yardlet on your phone."))
-                            .font(SettingsMetrics.titleFont)
-                            .fixedSize(horizontal: false, vertical: true)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(L10n.string("Scan this code with Yardlet on your phone."))
+                                .font(SettingsMetrics.titleFont)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Button(L10n.string("Get the Android app")) { OutsideBrowser.open(Self.phoneAppPage) }
+                                .buttonStyle(.link)
+                                .font(SettingsMetrics.detailFont)
+                        }
                         Text(L10n.string("On another computer, copy the link and open it in Yardlet there."))
                             .font(SettingsMetrics.detailFont)
                             .foregroundStyle(.secondary)
@@ -163,6 +168,9 @@ struct RemoteSettingsView: View {
         .padding(.horizontal, SettingsMetrics.groupHorizontalPadding)
         .parityCard()
     }
+
+    /// The site's page for the phone app, which says where to get it now.
+    static let phoneAppPage = URL(string: "https://yardlet.app/#phone")!
 
     private var pairingDescription: String {
         if let name = service.pairedDeviceName { return L10n.format("%@ is paired.", name) }

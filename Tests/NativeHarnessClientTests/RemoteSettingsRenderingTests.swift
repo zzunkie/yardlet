@@ -8,8 +8,8 @@ import XCTest
 ///
 /// - `remote-off-*.png`: the switch off, nothing else.
 /// - `remote-pairing-*.png`: on, kept awake on power, reachable on the same Wi-Fi, Tailscale and the Yardlet
-///   server, a pairing open with its QR code, its link to copy and time left, and two paired devices: a phone
-///   connected now and a Mac last seen yesterday.
+///   server, a pairing open with its QR code, the link to the Android app, its link to copy and time left, and
+///   two paired devices: a phone connected now and a Mac last seen yesterday.
 /// - `remote-link-*.png`: a phone asking to link through the account, with its number.
 /// - `remote-paired-*.png`: after the pairing and the link, with the paired phone named.
 ///
@@ -70,6 +70,7 @@ final class RemoteSettingsRenderingTests: XCTestCase {
         XCTAssertTrue(pairingElements.contains { $0.label == L10n.string("Pairing QR code") }, pairingElements.description)
         XCTAssertTrue(pairingElements.contains { $0.label == L10n.format("Remove %@", "Pixel 9") })
         XCTAssertTrue(pairingElements.contains { $0.label == L10n.string("Copy link") }, pairingElements.description)
+        XCTAssertTrue(pairingElements.contains { $0.label == L10n.string("Get the Android app") }, pairingElements.description)
         XCTAssertTrue(pairingElements.contains { $0.label == L10n.string("Keep this Mac awake on power") })
 
         // A phone pairs with the QR's secret: the pairing closes and the new phone is named.

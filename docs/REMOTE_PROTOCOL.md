@@ -692,8 +692,9 @@ phone also keeps the direct addresses of §13.3.
 
 ## 12. v2 pairing
 
-Settings › Remote › "Pair a device" shows a QR code holding the link below, and Copy link puts the same link on
-the clipboard for Yardlet on another computer (§18):
+Settings › Remote › "Pair a device" shows a QR code holding the link below, with "Get the Android app" beside it,
+which opens the site's page for the phone app (`https://yardlet.app/#phone`) in a browser other than Yardlet.
+Copy link puts the code's link on the clipboard for Yardlet on another computer (§18):
 
 ```
 yardlet-remote://pair?v=2&k=<Mac static public key>&s=<secret>&n=MacBook%20Pro&h=192.168.1.20:47616&h=100.64.12.34:47616&r=wss://relay.example.test&i=<room>&a=https://alternate.relay.example.test

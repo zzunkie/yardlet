@@ -2043,6 +2043,7 @@
 "Connecting to the Yardlet server…" = "Connecting to the Yardlet server…";
 "Can't reach the Yardlet server" = "Can't reach the Yardlet server";
 "Scan this code with Yardlet on your phone." = "Scan this code with Yardlet on your phone.";
+"Get the Android app" = "Get the Android app";
 "Works once for 5 minutes · %@ left" = "Works once for 5 minutes · %@ left";
 "A code to scan with your phone, or a link for Yardlet on another computer." = "A code to scan with your phone, or a link for Yardlet on another computer.";
 "%@ wants to connect to this Mac" = "%@ wants to connect to this Mac";

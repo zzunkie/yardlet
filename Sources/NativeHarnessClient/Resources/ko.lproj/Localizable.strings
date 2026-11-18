@@ -2043,6 +2043,7 @@
 "Connecting to the Yardlet server…" = "Yardlet 서버에 연결하는 중…";
 "Can't reach the Yardlet server" = "Yardlet 서버에 닿지 않음";
 "Scan this code with Yardlet on your phone." = "휴대폰의 Yardlet으로 이 QR 코드를 찍으세요.";
+"Get the Android app" = "Android 앱 받기";
 "Works once for 5 minutes · %@ left" = "5분 동안 한 번 쓸 수 있습니다 · %@ 남음";
 "A code to scan with your phone, or a link for Yardlet on another computer." = "휴대폰으로 찍을 코드나, 다른 컴퓨터의 Yardlet에서 열 링크를 만듭니다.";
 "%@ wants to connect to this Mac" = "%@ 기기가 이 Mac에 연결하려 합니다";
