@@ -256,7 +256,16 @@ if ($hover) {
     [void][QaWindow]::SetCursorPos([int]($u.Left+14),[int]($u.Top+14))
     [QaWindow]::mouse_event(1,1,0,0,[UIntPtr]::Zero)
     Start-Sleep -Milliseconds 550
-    Shot 'hover-after-activation' 
+    Shot 'hover-after-activation'
+    $whole=[Drawing.Bitmap]::new((Join-Path $out 'hover-after-activation.png'))
+    $win=New-Object QaWindow+Rect;[void][QaWindow]::GetWindowRect($hwnd,[ref]$win)
+    $shades=foreach ($label in 'Table','Summary','Detailed') {
+        $box=(Find-Control $ct::RadioButton @($label)).Current.BoundingRectangle
+        $whole.GetPixel([int]($box.Right-$win.Left-32),[int]($box.Top-$win.Top+14)).R
+    }
+    $whole.Dispose()
+    ("Rest, hover, selected gray values: "+($shades -join ', ')) | Set-Content (Join-Path $out 'choice-fills.txt')
+    if ($shades.Count -ne 3 -or $shades[0] -le $shades[1] -or $shades[1] -le $shades[2]) {throw 'Question fills did not distinguish rest, hover and selection'}
 }
 $detail=Find-Control $ct::RadioButton @('Detailed')
 if ($detail) {$detail.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select();Start-Sleep -Milliseconds 300;Shot 'question-selected'}
