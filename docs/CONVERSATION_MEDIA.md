@@ -1,8 +1,9 @@
 # Media in the conversation
 
 What an answer shows in place besides its words: the pictures its Markdown names, the videos and sounds it names,
-its Mermaid diagrams, and the visualizations the Codex app's `visualize` skill writes. Everything here is drawn on the
-Mac for the person only; nothing of it reaches a harness or a model, and none of it has a setting.
+its Mermaid diagrams, the visualizations the Codex app's `visualize` skill writes, and the views other harnesses draw
+with Yardlet's `show_widget` tool. Everything here is drawn on the Mac for the person only; nothing of it reaches a
+harness or a model, and none of it has a setting.
 
 ## Pictures
 
