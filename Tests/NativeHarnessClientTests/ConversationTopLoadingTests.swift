@@ -424,19 +424,9 @@ final class ConversationTopLoadingTests: XCTestCase {
         while !isDone(), Date() < deadline { pump(hosting, passes: 1) }
     }
 
-    /// A trackpad scroll with its phases, which is how SwiftUI tells a reader's scroll from layout.
-    /// It only moves while the display is awake and unlocked (`requireAwakeDisplay`).
+    /// A trackpad scroll with its phases (`trackpadScroll`), then the conversation's next updates.
     private func userScroll(_ scroll: NSScrollView, up points: Int32, steps count: Int32 = 6, in hosting: NSView) {
-        let steps: [(phase: Int64, delta: Int32)] = [(1, 0)]
-            + Array(repeating: (2, points / count), count: Int(count)) + [(4, 0)]
-        for step in steps {
-            guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
-                                      wheel1: step.delta, wheel2: 0, wheel3: 0) else { continue }
-            event.setIntegerValueField(.scrollWheelEventScrollPhase, value: step.phase)
-            event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
-            if let wheel = NSEvent(cgEvent: event) { scroll.scrollWheel(with: wheel) }
-            RunLoop.main.run(until: Date().addingTimeInterval(0.02))
-        }
+        trackpadScroll(scroll, up: points, steps: count)
         pump(hosting)
     }
 
