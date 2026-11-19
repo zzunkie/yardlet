@@ -116,7 +116,7 @@ struct MailComposeView: View {
             Spacer(minLength: 8)
             if window.sendsAt != nil {
                 Button(L10n.string("Undo send")) { window.undoSend() }
-                    .buttonStyle(.link)
+                    .parityLinkButton()
                     .font(.system(size: 12.5 * scale, weight: .medium))
             }
         }

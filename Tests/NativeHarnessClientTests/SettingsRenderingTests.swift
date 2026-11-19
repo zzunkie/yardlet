@@ -18,6 +18,65 @@ import XCTest
         super.tearDown()
     }
 
+    func testAccentPresetsReachSwiftUIAndAppKitInBothAppearances() throws {
+        XCTAssertEqual(ParityTheme.accentColor(for: .system), NSColor.controlAccentColor)
+        for (preset, light, dark) in [(YardletAccentPreference.ink, 0x143B6B, 0x8CB8FA),
+                                      (.grove, 0x14664A, 0x7AD1AD), (.iris, 0x5C45AB, 0xB8A6FA)] {
+            for appearance in WindowlessRender.Appearance.allCases {
+                let rgb = appearance == .light ? light : dark
+                var environment = EnvironmentValues()
+                environment.colorScheme = appearance.colorScheme
+                environment.yardletAccent = preset
+                let native = try XCTUnwrap(NSAppearance(named: appearance.appKitName))
+                native.performAsCurrentDrawingAppearance {
+                    let resolved = ParityTheme.accent.resolve(in: environment)
+                    let bridge = Color(nsColor: ParityTheme.accentColor(for: preset)).resolve(in: environment)
+                    XCTAssertEqual(resolved, bridge)
+                    XCTAssertEqual(resolved.red, Float(rgb >> 16) / 255, accuracy: 0.001)
+                    XCTAssertEqual(resolved.green, Float((rgb >> 8) & 255) / 255, accuracy: 0.001)
+                    XCTAssertEqual(resolved.blue, Float(rgb & 255) / 255, accuracy: 0.001)
+                    let minimum = [ParityTheme.canvas, ParityTheme.sidebar, ParityTheme.elevated, ParityTheme.input]
+                        .map { Self.contrast(resolved, $0.resolve(in: environment)) }.min()!
+                    XCTAssertGreaterThanOrEqual(minimum, 4.5)
+                    XCTAssertGreaterThanOrEqual(Self.contrast(resolved, ParityTheme.onAccent.resolve(in: environment)), 4.5)
+                    print("Accent contrast", preset.rawValue, appearance.suffix, String(format: "%.2f", minimum))
+                }
+            }
+        }
+    }
+
+    /// The same mounted window picks up a settings write, including a change from one preset to another.
+    func testAnOpenWindowFollowsTheAccentSetting() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("WindowAccent")))
+        defaults.set("light", forKey: YardletPreferenceKeys.appearance)
+        let presets: [YardletAccentPreference] = [.ink, .iris, .grove]
+        let host = WindowlessRender.Host(YardletWindowPreferences(usesVisualFixture: false) {
+            HStack(spacing: 0) {
+                ParityTheme.accent
+                ForEach(presets) { preset in Color(nsColor: ParityTheme.accentColor(for: preset)) }
+            }
+        }.defaultAppStorage(defaults), size: CGSize(width: 80, height: 20), appearance: .light, alpha: 0)
+        defer { host.close() }
+        for (index, preset) in presets.enumerated() {
+            defaults.set(preset.rawValue, forKey: YardletPreferenceKeys.accent)
+            // Compare two rendered pixels in the same display profile.
+            host.settle(until: {
+                guard let bitmap = try? host.capture().bitmap else { return false }
+                let width = bitmap.pixelsWide / 4
+                let y = bitmap.pixelsHigh / 2
+                return bitmap.colorAt(x: width / 2, y: y) == bitmap.colorAt(x: width * (index + 1) + width / 2, y: y)
+            })
+        }
+    }
+
+    private static func contrast(_ a: Color.Resolved, _ b: Color.Resolved) -> Float {
+        func luminance(_ c: Color.Resolved) -> Float {
+            0.2126 * c.linearRed + 0.7152 * c.linearGreen + 0.0722 * c.linearBlue
+        }
+        let x = luminance(a), y = luminance(b)
+        return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+    }
+
     func testSettingsSectionsAndTheAccountsSectionDraw() async throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let (store, runtime) = try accountsFixture()

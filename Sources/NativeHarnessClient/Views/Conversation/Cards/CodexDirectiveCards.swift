@@ -258,12 +258,12 @@ struct CodexVisualizationCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             if let retry {
                 Button(L10n.string("Show view again"), action: retry)
-                    .buttonStyle(.link)
+                    .parityLinkButton()
                     .font(.system(size: 12 * interfaceScale))
             }
             if let openFile {
                 Button(L10n.string("Open file"), action: openFile)
-                    .buttonStyle(.link)
+                    .parityLinkButton()
                     .font(.system(size: 12 * interfaceScale))
             }
         }

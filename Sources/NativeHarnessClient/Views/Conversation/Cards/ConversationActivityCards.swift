@@ -54,7 +54,7 @@ struct ConversationSubagentCard: View {
                         routeControls(route)
                     }
                 }
-                .buttonStyle(.link)
+                .parityLinkButton()
                 .parityPointer()
                 .font(.caption)
                 ForEach(Array(routes.enumerated()), id: \.offset) { _, route in

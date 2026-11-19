@@ -486,6 +486,11 @@ extension YardletSetting {
         values: choices(YardletAppearancePreference.self, title: \.title),
         storage: .choice(key: YardletPreferenceKeys.appearance, defaultValue: YardletAppearancePreference.system.rawValue))
 
+    static let accent = YardletSetting(
+        id: "accent", section: .appearance, title: L10n.string("Accent"),
+        values: choices(YardletAccentPreference.self, title: \.title),
+        storage: .choice(key: YardletPreferenceKeys.accent, defaultValue: YardletAccentPreference.system.rawValue))
+
     static let interfaceSize = YardletSetting(
         id: "interface_size", section: .appearance, symbol: "textformat.size", title: L10n.string("Interface size"),
         values: choices(YardletInterfaceSizePreference.self, title: \.title),
@@ -692,6 +697,14 @@ extension YardletSetting {
 /// Settings' own.
 @MainActor
 enum YardletSettingCatalog {
+    private static var appearance: [YardletSetting] {
+#if os(macOS)
+        [.theme, .accent, .interfaceSize, .codeFontSize]
+#else
+        [.theme, .interfaceSize, .codeFontSize]
+#endif
+    }
+
     static let all: [YardletSetting] = [
         .language, .showInMenuBar, .launchAtLogin, .mailbox, .calendar, .simulator, .checkForUpdates,
         .sendShortcut, .followUpBehavior, .nextMessageSuggestions, .claudeContextLimit, .idleCompaction, .autoFixFailingCI, .showTaskServers, .continueAfterRestart,
@@ -699,7 +712,7 @@ enum YardletSettingCatalog {
         .agentBrowserTools, .keepCookies, .searchSuggestions, .pageSuggestions, .memorySaver, .memorySaverLevel,
         .hideKeysAndTokens,
         .shareTerminal, .terminalLocation,
-        .theme, .interfaceSize, .codeFontSize,
+    ] + appearance + [
         .personalAgentMessages, .newMail,
         .turnCompletionNotifications, .approvalNotifications, .questionNotifications, .notificationSound,
         .yardletInstructions, .dailyEvaluation,

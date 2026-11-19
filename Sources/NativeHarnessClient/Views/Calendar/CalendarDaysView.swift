@@ -50,10 +50,10 @@ struct CalendarDaysView: View {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text(CalendarText.weekday(day, calendar: calendar))
                         .font(.system(size: 12 * scale))
-                        .foregroundStyle(isToday ? AnyShapeStyle(ParityTheme.accent) : AnyShapeStyle(.secondary))
+                        .foregroundStyle(isToday ? AnyShapeStyle(ParityTheme.accentText) : AnyShapeStyle(.secondary))
                     Text(String(calendar.component(.day, from: day)))
                         .font(.system(size: 17 * scale, weight: isToday ? .semibold : .regular).monospacedDigit())
-                        .foregroundStyle(isToday ? AnyShapeStyle(ParityTheme.accent)
+                        .foregroundStyle(isToday ? AnyShapeStyle(ParityTheme.accentText)
                                          : isWeekend ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
                 }
                 .lineLimit(1)

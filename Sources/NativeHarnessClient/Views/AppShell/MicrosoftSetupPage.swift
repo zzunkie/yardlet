@@ -77,7 +77,7 @@ struct MicrosoftSetupPage: View {
                     editingApp = true
                     showsSteps = true
                 }
-                .buttonStyle(.link)
+                .parityLinkButton()
                 .font(.caption)
             }
             permissionNote

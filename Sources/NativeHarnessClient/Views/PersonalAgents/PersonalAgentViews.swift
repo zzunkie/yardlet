@@ -704,7 +704,7 @@ struct PersonalAgentConversationView: View {
         if !message.isDeleted, message.isUnsupported || message.attachments.contains(where: { !$0.opensHere && $0.url == nil }),
            let page = DotsLinks.web(for: agent) {
             Button(L10n.string("Open This Dot on the Web")) { openWeb(page) }
-                .buttonStyle(.link)
+                .parityLinkButton()
                 .font(.system(size: 12 * scale))
                 .parityPointer()
         }

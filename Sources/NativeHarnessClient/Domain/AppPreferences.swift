@@ -20,6 +20,26 @@ enum YardletAppearancePreference: String, CaseIterable, Identifiable {
     }
 }
 
+/// One accent for controls, selections and links in the Mac app.
+enum YardletAccentPreference: String, CaseIterable, Identifiable, Sendable {
+    case system, ink, grove, iris
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .system: L10n.string("System")
+        case .ink: L10n.string("Ink")
+        case .grove: L10n.string("Grove")
+        case .iris: L10n.string("Iris")
+        }
+    }
+
+    static func current(in defaults: UserDefaults = .yardlet) -> Self {
+        defaults.string(forKey: YardletPreferenceKeys.accent).flatMap(Self.init(rawValue:)) ?? .system
+    }
+}
+
 /// Settings › Appearance › Interface size.
 enum YardletInterfaceSizePreference: String, CaseIterable, Identifiable {
     case compact
@@ -38,6 +58,7 @@ enum YardletInterfaceSizePreference: String, CaseIterable, Identifiable {
 }
 
 enum YardletPreferenceKeys {
+    static let accent = "YardletAccent"
     static let appearance = "YardletAppearance"
     static let interfaceSize = "YardletInterfaceSize"
 }

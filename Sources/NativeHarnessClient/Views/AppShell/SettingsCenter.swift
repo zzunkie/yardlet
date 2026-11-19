@@ -83,6 +83,7 @@ struct SettingsCenterView: View {
     @State private var setupExpanded = false
     @AppStorage(YardletPreferenceKeys.appearance) private var appearanceRawValue =
         YardletAppearancePreference.system.rawValue
+    @AppStorage(YardletPreferenceKeys.accent) private var accent = YardletAccentPreference.system
     @AppStorage(YardletPreferenceKeys.interfaceSize) private var interfaceSizeRawValue =
         YardletInterfaceSizePreference.standard.rawValue
     /// Read by each window as it changes (`YardletWindowPreferences`).
@@ -613,6 +614,20 @@ struct SettingsCenterView: View {
                     }
                 }
                 .labelsHidden().pickerStyle(.segmented).fixedSize()
+            }
+            Divider()
+            SettingsRow(setting: .accent) {
+                HStack(spacing: 8) {
+                    Circle().fill(ParityTheme.accent)
+                        .overlay { Circle().strokeBorder(ParityTheme.strongSeparator) }
+                        .frame(width: 12, height: 12).accessibilityHidden(true)
+                    Picker(YardletSetting.accent.title, selection: $accent) {
+                        ForEach(YardletAccentPreference.allCases) { preset in
+                            Text(preset.title).tag(preset)
+                        }
+                    }
+                    .labelsHidden().fixedSize()
+                }
             }
             Divider()
             SettingsRow(setting: .interfaceSize) {

@@ -201,7 +201,7 @@ struct CodexFileDiffBox<FileLink: View>: View {
                     if let openTaskFileChanges { openTaskFileChanges(row.displayPath) }
                     else { openTaskChanges?() }
                 }
-                    .buttonStyle(.link)
+                    .parityLinkButton()
                     .parityPointer()
             }
             Spacer(minLength: 0)

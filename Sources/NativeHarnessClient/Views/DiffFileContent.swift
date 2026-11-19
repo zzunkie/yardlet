@@ -161,7 +161,7 @@ struct DiffFileContent: View {
                     Button { startComment(at: line) } label: {
                         Image(systemName: "plus")
                             .font(.system(size: 9 * interfaceScale, weight: .bold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(ParityTheme.onAccent)
                             .frame(width: 16 * interfaceScale, height: 16 * interfaceScale)
                             .background(ParityTheme.accent, in: RoundedRectangle(cornerRadius: 4))
                     }

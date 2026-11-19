@@ -87,7 +87,7 @@ struct CodexBoundedOutput: View {
                 ) {
                     isExpanded.toggle()
                 }
-                .buttonStyle(.link)
+                .parityLinkButton()
                 .parityPointer()
                 .font(.caption2)
             }
@@ -150,7 +150,7 @@ struct CodexCommandOutput: View {
                 ) {
                     showsAll.toggle()
                 }
-                .buttonStyle(.link)
+                .parityLinkButton()
                 .parityPointer()
                 .font(.caption2)
             }

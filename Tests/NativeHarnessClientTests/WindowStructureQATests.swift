@@ -65,6 +65,46 @@ final class WindowStructureQATests: XCTestCase {
             .environment(\.colorScheme, appearance.colorScheme)
     }
 
+    /// Synthetic main window and Appearance sheet, captured without showing a window.
+    func testColorThemeAppearance() throws {
+        guard let phase = ProcessInfo.processInfo.environment["YARDLET_COLOR_RENDER"] else {
+            throw XCTSkip("Set YARDLET_COLOR_RENDER to capture the appearance")
+        }
+        let directory = try WindowlessRender.directory("design-audit/color-theme/" + phase)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("ColorRender")))
+        let preset = ProcessInfo.processInfo.environment["YARDLET_RENDER_ACCENT"] ?? "system"
+        defaults.set(preset, forKey: YardletPreferenceKeys.accent)
+        let fixture = try makeFixture()
+        let model = fixture.model
+        let task = fixture.running
+        model.transcripts[task.id] = [
+            TranscriptEntry(content: .user(text: "Check the reading layout and run the focused tests.")),
+            TranscriptEntry(content: .assistant(
+                text: "The conversation and composer share the same gutter. See the [design system](https://example.test/design) for the measurements.",
+                isStreaming: false)),
+            TranscriptEntry(content: .permission(PermissionRequest(id: "layout-tests", title: "Run the layout tests",
+                detail: "Verify the conversation and composer.", command: "swift test --filter LayoutTests"), state: .pending))
+        ]
+        model.splits.activate(.session(task.id))
+        for appearance in WindowlessRender.Appearance.allCases {
+            let size = NSSize(width: 1160, height: 760)
+            let host = WindowlessRender.Host(YardletWindowPreferences(usesVisualFixture: false) {
+                window(model, appearance, size: size)
+            }.defaultAppStorage(defaults), size: size, appearance: appearance, alpha: 0)
+            defer { host.close() }
+            host.settle(passes: 12)
+            XCTAssertFalse(host.window.isVisible)
+            try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "main-\(appearance.suffix).png"))
+            let sheet = WindowlessRender.Host(YardletWindowPreferences(usesVisualFixture: false) {
+                SettingsCenterView(initialSection: SettingsSection.appearance.rawValue)
+                    .environment(\.colorScheme, appearance.colorScheme)
+            }.defaultAppStorage(defaults), size: SettingsCenterView.preferredSize, appearance: appearance, alpha: 0)
+            defer { sheet.close() }
+            sheet.settle()
+            try WindowlessRender.writePNG(sheet.capture().bitmap, to: directory.appending(path: "appearance-\(appearance.suffix).png"))
+        }
+    }
+
     // MARK: - Accessibility with frames
 
     private struct Control {

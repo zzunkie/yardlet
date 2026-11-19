@@ -296,7 +296,7 @@ struct ActivityViewButton: View {
         if toggle.needsAttention {
             Image(systemName: "bell.badge")
                 .symbolRenderingMode(.palette)
-                .foregroundStyle(Color.blue, Color.primary)
+                .foregroundStyle(ParityTheme.accent, Color.primary)
         } else {
             Image(systemName: "bell")
                 .foregroundStyle(.primary)

@@ -281,7 +281,7 @@ struct ConversationTurnView: View, Equatable {
                 .buttonStyle(.borderless)
                 .parityPointer()
                 .font(.caption)
-                .foregroundStyle(ParityTheme.accent)
+                .foregroundStyle(ParityTheme.accentText)
                 .accessibilityHint(L10n.string("Load the next page of items for this turn."))
             }
 

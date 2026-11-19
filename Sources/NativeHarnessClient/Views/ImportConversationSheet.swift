@@ -230,7 +230,7 @@ struct ImportConversationSheet: View {
     /// The search's words marked in the matching text, as Codex's own history search shows them.
     private func highlighted(_ text: String) -> Text {
         CodexHistorySearchProjection.segments(text, query: search).reduce(into: Text("")) { result, segment in
-            let part = Text(segment.text).foregroundStyle(segment.isMatch ? ParityTheme.accent : .secondary)
+            let part = Text(segment.text).foregroundStyle(segment.isMatch ? ParityTheme.accentText : .secondary)
             result = result + (segment.isMatch ? part.bold() : part)
         }
     }

@@ -38,7 +38,7 @@ struct TranscriptMarkdownText: View {
                         visibleCharacterLimit = initialCharacterLimit
                     }
                 }
-                .buttonStyle(.link)
+                .parityLinkButton()
                 .parityPointer()
                 .font(.caption2)
             }
@@ -325,7 +325,7 @@ struct TranscriptInlineMarkdownText: View, Equatable {
         return Text(attributed)
             .font(font)
             .lineSpacing(ParityTheme.proseLineSpacing * interfaceScale)
-            .tint(ParityTheme.accent)
+            .tint(ParityTheme.accentText)
             .fixedSize(horizontal: false, vertical: true)
             .conversationFindAnchor(placesFindAnchor ? fraction : nil)
     }

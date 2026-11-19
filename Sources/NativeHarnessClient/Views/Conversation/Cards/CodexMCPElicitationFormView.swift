@@ -110,7 +110,7 @@ struct CodexMCPElicitationFormView: View {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Image(systemName: isMultiple ? (isSelected ? "checkmark.square.fill" : "square")
                                                      : (isSelected ? "largecircle.fill.circle" : "circle"))
-                            .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                            .foregroundStyle(isSelected ? ParityTheme.accent : Color.secondary)
                             .accessibilityHidden(true)
                         Text(option.title)
                             .font(.callout.weight(isSelected ? .semibold : .regular))

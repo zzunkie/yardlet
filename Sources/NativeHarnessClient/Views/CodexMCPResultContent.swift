@@ -58,7 +58,7 @@ private struct CodexMCPResultLink: View {
                     if let url {
                         Button { openURL(url) } label: {
                             Text(verbatim: link.label)
-                                .foregroundStyle(ParityTheme.accent)
+                                .foregroundStyle(ParityTheme.accentText)
                                 .multilineTextAlignment(.leading)
                         }
                         .buttonStyle(.plain)

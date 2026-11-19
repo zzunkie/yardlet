@@ -128,7 +128,7 @@ struct RemoteSettingsView: View {
                                 .font(SettingsMetrics.titleFont)
                                 .fixedSize(horizontal: false, vertical: true)
                             Button(L10n.string("Get the Android app")) { OutsideBrowser.open(Self.phoneAppPage) }
-                                .buttonStyle(.link)
+                                .parityLinkButton()
                                 .font(SettingsMetrics.detailFont)
                         }
                         Text(L10n.string("On another computer, copy the link and open it in Yardlet there."))

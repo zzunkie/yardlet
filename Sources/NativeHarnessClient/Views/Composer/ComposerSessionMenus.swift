@@ -648,7 +648,7 @@ struct IntelligenceEffortSlider: View {
                 Spacer(minLength: 8)
                 Text(shownName)
                     .font(.callout.weight(.semibold))
-                    .foregroundStyle(isMaximum ? AnyShapeStyle(ParityTheme.accent) : AnyShapeStyle(.primary))
+                    .foregroundStyle(isMaximum ? AnyShapeStyle(ParityTheme.accentText) : AnyShapeStyle(.primary))
                     .contentTransition(.opacity)
                     .accessibilityHidden(true)
             }

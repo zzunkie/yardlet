@@ -792,7 +792,7 @@ private struct NewTaskComposer: View {
                             reportProblem(harness: draft.harness, message: draft.creationError)
                         }
                         .buttonStyle(.borderless)
-                        .foregroundStyle(ParityTheme.accent)
+                        .foregroundStyle(ParityTheme.accentText)
                         .parityPointer()
                     }
                 }
