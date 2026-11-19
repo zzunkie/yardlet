@@ -285,6 +285,55 @@ final class ClaudeAdapterLiveTests: XCTestCase {
         }
     }
 
+    /// The account's plugins listed and switched with the CLI's own commands, in a temporary home
+    /// and config folder holding one plugin from a local marketplace. Nothing signs in, no session
+    /// starts and no model turn runs.
+    func testLiveAccountPluginSwitchesInATemporaryConfigFolder() async throws {
+        guard let binaryPath = ProcessInfo.processInfo.environment["NHC_CLAUDE_LIVE_BINARY"] else {
+            throw XCTSkip("Set NHC_CLAUDE_LIVE_BINARY for the bounded live smoke")
+        }
+        let binaryURL = URL(filePath: binaryPath)
+        let root = FileManager.default.temporaryDirectory.appending(path: "nhc-claude-plugins-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let market = root.appending(path: "market")
+        let files: [String: String] = [
+            ".claude-plugin/marketplace.json":
+                #"{"name": "probe-market", "owner": {"name": "probe"}, "plugins": [{"name": "demo", "source": "./demo"}]}"#,
+            "demo/.claude-plugin/plugin.json": #"{"name": "demo", "version": "1.0.0", "description": "Probe plugin"}"#,
+            "demo/skills/probe/SKILL.md": "---\nname: probe\ndescription: Probe skill.\n---\nSay PROBE.\n"
+        ]
+        for (path, text) in files {
+            let url = market.appending(path: path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(text.utf8).write(to: url)
+        }
+        let config = root.appending(path: "config")
+        let environment = ["HOME": root.appending(path: "home").path(percentEncoded: false),
+                           "CLAUDE_CONFIG_DIR": config.path(percentEncoded: false)]
+        for arguments in [["plugin", "marketplace", "add", market.path(percentEncoded: false)],
+                          ["plugin", "install", "demo@probe-market", "--scope", "user"]] {
+            let result = try await AccountCommandRunner.run(executableURL: binaryURL, arguments: arguments,
+                                                            environment: environment, timeout: .seconds(60))
+            XCTAssertEqual(result.exitCode, 0, result.output)
+        }
+
+        let adapter = ClaudeAdapter(executableURL: binaryURL, environmentOverrides: environment)
+        let demo = HarnessAccountPlugin(id: "demo@probe-market", name: "demo", marketplace: "probe-market",
+                                        description: "Probe plugin", isEnabled: true)
+        var listed = try await adapter.accountPlugins()
+        XCTAssertEqual(listed, [demo])
+        try await adapter.setAccountPlugin(demo.id, enabled: false)
+        listed = try await adapter.accountPlugins()
+        XCTAssertEqual(listed.map(\.isEnabled), [false], "A plugin turned off stays listed, to turn on again")
+        try await adapter.setAccountPlugin(demo.id, enabled: false)
+        try await adapter.setAccountPlugin(demo.id, enabled: true)
+        listed = try await adapter.accountPlugins()
+        XCTAssertEqual(listed, [demo])
+        let settings = try JSONSerialization.jsonObject(with: Data(contentsOf: config.appending(path: "settings.json")))
+        XCTAssertEqual((settings as? [String: Any])?["enabledPlugins"] as? [String: Bool], [demo.id: true],
+                       "The switch is the account's user setting")
+    }
+
     private nonisolated static func isLoggedIn(_ binaryURL: URL) throws -> Bool {
         let process = Process()
         let pipe = Pipe()

@@ -579,6 +579,50 @@ final class ClaudeAdapterTests: XCTestCase {
         let state = try await routed.providerCapabilities(for: handle)
         XCTAssertEqual(state.mcpServers, [HarnessMCPServerStatus(name: "github", state: .needsAuthentication)])
     }
+
+    /// What the harness settings sheet reads from `claude plugin list --json` and the switch's
+    /// `--json` result line: the account's own installs, on or off, never a project's; a plugin
+    /// already as asked counts as done; anything else is the CLI's own message. Shapes from
+    /// Claude Code 2.1.327, with a warning on the shared output.
+    func testAccountPluginsAreTheAccountsOwnInstallsAndASwitchReadsTheCLIsResult() throws {
+        let output = """
+        Warning: marketplace cache is stale
+        [
+          {"id": "playwright@claude-plugins-official", "version": "1", "scope": "user", "enabled": false,
+           "installPath": "/fixture/playwright", "projectEnabled": false},
+          {"id": "style@local-market", "version": "1", "scope": "user", "enabled": true, "installPath": "/fixture/style"},
+          {"id": "style@local-market", "version": "1", "scope": "project", "enabled": true, "projectPath": "/repo"},
+          {"id": "repo-only@market", "version": "1", "scope": "local", "enabled": true, "projectPath": "/repo"}
+        ]
+        """
+        let plugins = try ClaudeAccountPlugins.plugins(fromListOutput: output) { $0 == "/fixture/style" ? "Writing style" : nil }
+        XCTAssertEqual(plugins, [
+            HarnessAccountPlugin(id: "playwright@claude-plugins-official", name: "playwright",
+                                 marketplace: "claude-plugins-official", description: nil, isEnabled: false),
+            HarnessAccountPlugin(id: "style@local-market", name: "style", marketplace: "local-market",
+                                 description: "Writing style", isEnabled: true)
+        ])
+        XCTAssertEqual(try ClaudeAccountPlugins.plugins(fromListOutput: "[]"), [])
+        XCTAssertThrowsError(try ClaudeAccountPlugins.plugins(fromListOutput: "error: unknown option '--json'"))
+        XCTAssertEqual(ClaudeAccountPlugins.switchArguments(id: "demo@market", enabled: false),
+                       ["plugin", "disable", "--scope", "user", "--json", "--", "demo@market"])
+
+        let ok = #"{"command":"enable","outcome":"ok","plugin":"demo@market","scope":"user","message":"Enabled"}"#
+        let already = """
+        {"command":"disable","outcome":"failed","message":"already disabled","failureCode":"already_in_goal_state","alreadyInGoalState":true}
+        ✘ Failed to disable plugin "demo@market": already disabled
+        """
+        let refused = """
+        {"command":"enable","outcome":"failed","plugin":"demo@market","message":"Plugin \\"demo@market\\" is not installed"}
+        ✘ Failed to enable plugin
+        """
+        XCTAssertNoThrow(try ClaudeAccountPlugins.checkSwitch(AccountCommandResult(exitCode: 0, output: ok)))
+        XCTAssertNoThrow(try ClaudeAccountPlugins.checkSwitch(AccountCommandResult(exitCode: 1, output: already)))
+        XCTAssertThrowsError(try ClaudeAccountPlugins.checkSwitch(AccountCommandResult(exitCode: 1, output: refused))) {
+            XCTAssertEqual($0.localizedDescription, #"Plugin "demo@market" is not installed"#)
+        }
+        XCTAssertThrowsError(try ClaudeAccountPlugins.checkSwitch(AccountCommandResult(exitCode: 1, output: "unknown option")))
+    }
 }
 
 private actor ClaudePayloadRecorder {

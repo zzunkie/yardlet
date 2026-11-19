@@ -38,7 +38,13 @@ final class HarnessSettingsSheetTests: XCTestCase {
 
         XCTAssertEqual(content.skills?.map(\.title), ["OpenAI Docs", "Verification", "Drafts"])
         XCTAssertEqual(content.skills?.map(\.detail), ["user", "plugin", "repo"])
-        XCTAssertEqual(content.skills?.map { $0.badges.map(\.tone) }, [[.positive], [.positive], [.neutral]])
+        XCTAssertEqual(content.skills?.map(\.switchState), [
+            .init(target: .codexSkill(path: "/fixture/openai-docs/SKILL.md"), isOn: true),
+            .init(target: .codexSkill(path: "/fixture/verification/SKILL.md"), isOn: true),
+            .init(target: .codexSkill(path: "/fixture/drafts/SKILL.md"), isOn: false)
+        ], "Each skill has a switch showing whether Codex has it on")
+        XCTAssertEqual(content.skills?.map(\.badges), [[], [], []], "The switch says what a badge said")
+        XCTAssertEqual(content.switchNote, L10n.string("Applies to all tasks on this account, starting with new tasks."))
         XCTAssertNil(content.skills?.last?.description, "An empty description is left out")
         XCTAssertEqual(content.plugins?.map(\.title), ["GitHub", "Linear", "Figma"])
         let installed = L10n.string("Installed"), disabled = L10n.string("Disabled")
@@ -46,6 +52,7 @@ final class HarnessSettingsSheetTests: XCTestCase {
                        [[installed], [installed, disabled], [L10n.string("Available")]])
         XCTAssertEqual(content.plugins?.map { $0.badges.map(\.tone) },
                        [[.positive], [.positive, .warning], [.neutral]])
+        XCTAssertEqual(content.plugins?.compactMap(\.switchState), [], "Codex only installs and removes plugins")
         XCTAssertEqual(content.errors, ["Plugins unavailable: offline"])
         XCTAssertEqual(content.actionMessage, L10n.format("Mode selected: %@", "Plan"))
     }
@@ -93,6 +100,26 @@ final class HarnessSettingsSheetTests: XCTestCase {
         XCTAssertEqual(content.controls[2].kind, .action(buttonTitle: L10n.string("Fork"), command: .fork),
                        "The fork row is the same row Codex has")
         XCTAssertEqual(content.notes, ["Skills, agents, plugins, hooks, and MCP remain owned by Claude Code settings."])
+        XCTAssertNil(content.switchNote)
+
+        // Once the sheet has read the account's plugins, each has a switch, off ones included.
+        let switches = HarnessSwitchState(accountPlugins: HarnessSettingsFixtures.claudePlugins, reach: .sharedSettings,
+                                          errors: ["Couldn't turn on demo: refused"])
+        let listed = HarnessSettingsSheetProjection.content(
+            source: .provider, codex: .empty, provider: HarnessSettingsFixtures.claudeState, switches: switches,
+            canBranch: true
+        )
+        XCTAssertEqual(listed.sections, [.controls, .plugins])
+        XCTAssertNil(listed.skills, "Claude Code skills outside plugins have no switch of the harness's own")
+        XCTAssertEqual(listed.plugins?.map(\.title), ["frontend-design", "playwright"])
+        XCTAssertEqual(listed.plugins?.map(\.detail), ["claude-plugins-official", "claude-plugins-official"])
+        XCTAssertEqual(listed.plugins?.map(\.switchState), [
+            .init(target: .accountPlugin(id: "frontend-design@claude-plugins-official"), isOn: true),
+            .init(target: .accountPlugin(id: "playwright@claude-plugins-official"), isOn: false)
+        ])
+        XCTAssertEqual(listed.switchNote, L10n.string(
+            "Applies to all tasks on the accounts that share these settings, starting with new tasks."))
+        XCTAssertEqual(listed.errors, ["Couldn't turn on demo: refused"])
     }
 
     func testACPSheetShowsTheSessionsOwnOptionsAndActions() throws {
@@ -156,17 +183,21 @@ final class HarnessSettingsSheetTests: XCTestCase {
         let commands: [HarnessSettingsCommand] = [
             .selectCodexMode("plan|plan||"), .selectCodexMode(nil),
             .setProviderOption(id: "model", value: "opus"), .performProviderAction(id: "compact"),
-            .fork, .reviewCodexWorkingTree
+            .fork, .reviewCodexWorkingTree, .setSwitch(.accountPlugin(id: "demo@market"), enabled: false)
         ]
         for command in commands { await actions.run(command) }
         await actions.refresh(.codex)
         await actions.refresh(.provider)
+        await actions.open(.provider, sourceIsLoaded: true)
+        await actions.open(.codex, sourceIsLoaded: false)
 
         XCTAssertEqual(recorder.calls, [
             "selectCodexMode(plan|plan||)", "selectCodexMode(default)",
             "setProviderOption(model, opus)", "performProviderAction(compact)",
-            "fork", "reviewCodexWorkingTree", "loadCodex", "loadProvider"
-        ])
+            "fork", "reviewCodexWorkingTree", "setSwitch(accountPlugin(id: \"demo@market\"), false)",
+            "loadCodex", "loadSwitches", "loadProvider", "loadSwitches",
+            "loadSwitches", "loadCodex", "loadSwitches"
+        ], "Opening reads the switches every time, and the source only when the task lacks it")
         XCTAssertTrue(recorder.dismissals == 0, "Running a command does not close the sheet by itself")
     }
 
@@ -180,7 +211,7 @@ final class HarnessSettingsSheetTests: XCTestCase {
             XCTAssertEqual(recorder.calls.count, 1)
         }
         for command in [HarnessSettingsCommand.selectCodexMode(nil), .setProviderOption(id: "model", value: "opus"),
-                        .performProviderAction(id: "compact")] {
+                        .performProviderAction(id: "compact"), .setSwitch(.codexSkill(path: "/fixture/SKILL.md"), enabled: true)] {
             let recorder = HarnessSettingsCallRecorder()
             recorder.actions().perform(command)
             await recorder.waitForCalls(1)
@@ -235,6 +266,14 @@ final class HarnessSettingsSheetTests: XCTestCase {
         await actions.run(.reviewCodexWorkingTree)
         XCTAssertEqual(model.harnessSettings(for: session).actionMessage, L10n.string("Working tree review started"))
 
+        // An App Server that cannot write the skill's setting leaves the list as it was and says why.
+        let skillsBefore = model.harnessSettings(for: session).skills
+        await actions.run(.setSwitch(.codexSkill(path: "/fixture/SKILL.md"), enabled: false))
+        content = model.harnessSettings(for: session)
+        XCTAssertEqual(content.skills, skillsBefore)
+        XCTAssertEqual(content.errors, [L10n.format("Couldn't turn off %@: %@", "/fixture/SKILL.md",
+                                                    L10n.string("This harness cannot turn skills on or off"))])
+
         await actions.run(.fork)
         let forkedFrom = await adapter.forkedFromSessionIDs
         XCTAssertEqual(forkedFrom, [session.id])
@@ -282,8 +321,78 @@ final class HarnessSettingsSheetTests: XCTestCase {
     }
 }
 
+@MainActor
+final class HarnessSettingsSwitchTests: XCTestCase {
+    /// A Claude Code task's plugin switches: listed from the account's adapter without starting the
+    /// task, changed through it, and a refused change leaves the row as the harness last listed it.
+    /// The note says the change reaches every account reading the same settings file.
+    func testClaudeCodePluginSwitchesGoThroughTheHarnessAndFailClosed() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "harness-switches-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaultFolder = root.appending(path: "default-claude"), accountFolder = root.appending(path: "account")
+        for folder in [defaultFolder, accountFolder] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        try Data("{}".utf8).write(to: defaultFolder.appending(path: "settings.json"))
+        // An account folder Yardlet made reads the default folder's settings through a link.
+        try FileManager.default.createSymbolicLink(at: accountFolder.appending(path: "settings.json"),
+                                                   withDestinationURL: defaultFolder.appending(path: "settings.json"))
+        let connections = ProviderConnectionStore()
+        connections.defaultLoginEnvironment = ["CLAUDE_CONFIG_DIR": defaultFolder.path(percentEncoded: false)]
+        connections.homeURL = root
+        let account = ProviderConnection(id: "work", name: "Work", harness: .claudeCode, providerID: nil,
+                                         homePath: accountFolder.path(percentEncoded: false), credentialSelector: nil)
+        let session = SessionRecord(
+            harness: .claudeCode, workspaceURL: URL(filePath: "/fixture/harness-switches"),
+            runtimeExecutableURL: URL(filePath: "/fixture/claude"), title: "Plugins", connection: account
+        )
+        let adapter = FakeHarnessAdapter(kind: .claudeCode)
+        await adapter.stageAccountPlugins(HarnessSettingsFixtures.claudePlugins)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("NativeHarnessClientTests")))
+        let model = AppModel(
+            store: SessionStore(sessions: [session], repository: InMemorySessionRepository(sessions: [session])),
+            runtimeSelections: RuntimeSelectionStore(defaults: defaults),
+            registry: HarnessRegistry { _, _ in adapter },
+            connections: connections,
+            restoresIndexOnLaunch: false
+        )
+        let actions = HarnessSettingsActions(model: model, session: session, dismiss: {})
+
+        await actions.open(.provider, sourceIsLoaded: true)
+        var content = model.harnessSettings(for: session)
+        XCTAssertFalse(model.isAttached(session.id), "Listing the account's plugins starts no session")
+        XCTAssertEqual(content.sections, [.controls, .plugins])
+        XCTAssertEqual(content.plugins?.map { $0.switchState?.isOn }, [true, false])
+        XCTAssertEqual(content.switchNote, L10n.string(
+            "Applies to all tasks on the accounts that share these settings, starting with new tasks."))
+
+        await actions.run(.setSwitch(.accountPlugin(id: "playwright@claude-plugins-official"), enabled: true))
+        content = model.harnessSettings(for: session)
+        XCTAssertEqual(content.plugins?.map { $0.switchState?.isOn }, [true, true], "The row follows the harness")
+        XCTAssertEqual(content.errors, [])
+
+        await adapter.refuseAccountPluginSwitches("settings.json is read-only")
+        await actions.run(.setSwitch(.accountPlugin(id: "frontend-design@claude-plugins-official"), enabled: false))
+        content = model.harnessSettings(for: session)
+        XCTAssertEqual(content.plugins?.map { $0.switchState?.isOn }, [true, true], "A refused switch stays where it was")
+        XCTAssertEqual(content.errors, [L10n.format("Couldn't turn off %@: %@", "frontend-design",
+                                                    "settings.json is read-only")])
+        let asked = await adapter.accountPluginSwitches
+        XCTAssertEqual(asked, ["playwright@claude-plugins-official=true", "frontend-design@claude-plugins-official=false"])
+
+        // A folder with its own settings file reaches only its own tasks.
+        try FileManager.default.removeItem(at: accountFolder.appending(path: "settings.json"))
+        try Data("{}".utf8).write(to: accountFolder.appending(path: "settings.json"))
+        await actions.open(.provider, sourceIsLoaded: true)
+        XCTAssertEqual(model.harnessSettings(for: session).switchNote,
+                       L10n.string("Applies to all tasks on this account, starting with new tasks."))
+        await model.shutdown()
+    }
+}
+
 /// Window-less renders of the sheet for Codex, Claude Code and an ACP harness (OpenCode), light
-/// and dark, under `.build/harness-settings-qa/`, and what each exposes to accessibility.
+/// and dark, under `.build/harness-settings-qa/`, and what each exposes to accessibility. Names
+/// start with the language the run draws in (`-AppleLanguages '(ko)'` for Korean).
 @MainActor
 final class HarnessSettingsSheetRenderingTests: XCTestCase {
     private let size = NSSize(width: 680, height: 520)
@@ -309,17 +418,29 @@ final class HarnessSettingsSheetRenderingTests: XCTestCase {
         let openCode = HarnessSettingsSheetProjection.providerContent(
             HarnessSettingsFixtures.openCodeState, canBranch: false
         )
+        // The account's plugins, one off, after a switch the harness refused.
+        let claudePlugins = HarnessSettingsSheetProjection.providerContent(
+            try XCTUnwrap(fixture.providerCapabilities[claudeSession.id]),
+            switches: HarnessSwitchState(
+                accountPlugins: HarnessSettingsFixtures.claudePlugins, reach: .sharedSettings,
+                errors: [L10n.format("Couldn't turn on %@: %@", "playwright",
+                                     "Plugin \"playwright@claude-plugins-official\" was not found in its marketplace")]),
+            canBranch: true
+        )
+        let language = L10n.string("Done") == "완료" ? "ko" : "en"
 
         let renders: [(name: String, session: SessionRecord, content: HarnessSettingsSheetContent, section: String?)] = [
             ("codex-controls", codexSession, codex, nil),
             ("codex-skills", codexSession, codex, "skills"),
             ("codex-plugins", codexSession, codex, "plugins"),
             ("claude-code-controls", claudeSession, claude, nil),
+            ("claude-code-plugins", claudeSession, claudePlugins, "plugins"),
             ("opencode-controls", openCodeSession, openCode, nil)
         ]
         var axLists: [String] = []
         for render in renders {
-            let captures = try WindowlessRender.hostedInBothAppearances(render.name, in: directory, size: size) {
+            let captures = try WindowlessRender.hostedInBothAppearances("\(language)-\(render.name)", in: directory,
+                                                                        size: size) {
                 sheet(render.session, render.content, section: render.section)
                     .environment(\.colorScheme, $0.colorScheme)
             }
@@ -349,11 +470,20 @@ final class HarnessSettingsSheetRenderingTests: XCTestCase {
                     XCTAssertTrue(found, "\(render.name): \(control.title)")
                 }
             }
+            // A row with a switch offers it under the row's name, with the note saying whose tasks it reaches.
+            let rows = render.section == "skills" ? render.content.skills : render.section == "plugins" ? render.content.plugins : nil
+            for row in rows ?? [] where row.switchState != nil {
+                XCTAssertTrue(elements.contains { $0.role == "AXCheckBox" && $0.label == row.title },
+                              "\(render.name): \(row.title)")
+            }
+            if let note = render.content.switchNote, rows?.contains(where: { $0.switchState != nil }) == true {
+                XCTAssertTrue(elements.contains { $0.label.contains(note) || $0.value.contains(note) }, render.name)
+            }
             // The section picker appears only when there is more than one section.
             let hasPicker = elements.contains { $0.label == L10n.string("Harness settings sections") }
             XCTAssertEqual(hasPicker, render.content.sections.count > 1, render.name)
         }
-        try axLists.joined(separator: "\n\n").write(to: directory.appending(path: "sheets-ax.txt"),
+        try axLists.joined(separator: "\n\n").write(to: directory.appending(path: "\(language)-sheets-ax.txt"),
                                                      atomically: true, encoding: .utf8)
     }
 
@@ -381,6 +511,8 @@ private final class HarnessSettingsCallRecorder {
             performProviderAction: { self.calls.append("performProviderAction(\($0))") },
             fork: { self.calls.append("fork") },
             reviewCodexWorkingTree: { self.calls.append("reviewCodexWorkingTree") },
+            loadSwitches: { self.calls.append("loadSwitches") },
+            setSwitch: { self.calls.append("setSwitch(\($0), \($1))") },
             dismiss: { self.dismissals += 1 }
         )
     }
@@ -450,6 +582,14 @@ private enum HarnessSettingsFixtures {
             notes: ["Skills, agents, plugins, hooks, and MCP remain owned by Claude Code settings."]
         )
     }
+
+    static let claudePlugins = [
+        HarnessAccountPlugin(id: "frontend-design@claude-plugins-official", name: "frontend-design",
+                             marketplace: "claude-plugins-official",
+                             description: "Frontend design skill for UI/UX implementation", isEnabled: true),
+        HarnessAccountPlugin(id: "playwright@claude-plugins-official", name: "playwright",
+                             marketplace: "claude-plugins-official", description: nil, isEnabled: false)
+    ]
 
     /// What OpenCode's ACP session reports, through the adapter's own projector.
     static var openCodeState: ProviderCapabilityState {

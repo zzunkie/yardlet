@@ -126,6 +126,9 @@ final class AppModel {
     /// Kept in memory only, as the Codex app keeps it in its composer.
     private(set) var codexStatusBySessionID: [UUID: CodexStatusReading] = [:]
     private(set) var providerCapabilitiesBySessionID: [UUID: ProviderCapabilityState] = [:]
+    /// What each task's harness settings sheet read for its switches (`loadHarnessSwitches`). The
+    /// harness keeps the values; this is only the last reading, in memory.
+    private(set) var harnessSwitchesBySessionID: [UUID: HarnessSwitchState] = [:]
     private(set) var providerUsageBySessionID: [UUID: HarnessProtocolUsage] = [:]
     /// Codex token usage for a task whose thread has reported none this run: what the index kept,
     /// then the rollout's latest `token_count`. The thread's own turns win whenever they have it.
@@ -3198,6 +3201,7 @@ final class AppModel {
             if case .discard = removal { sessionTools.forget(session.id) }
             transcriptSnapshots.remove(for: session.id)
             providerCapabilitiesBySessionID.removeValue(forKey: session.id)
+            harnessSwitchesBySessionID.removeValue(forKey: session.id)
             providerUsageBySessionID.removeValue(forKey: session.id)
             restoredCodexTokenUsageBySessionID.removeValue(forKey: session.id)
             savedContextUsage.removeValue(forKey: session.id)
@@ -5149,6 +5153,99 @@ final class AppModel {
             state,
             for: session.id
         )
+    }
+
+    /// What the harness settings sheet's switches stand for: whose tasks they reach, and the
+    /// plugins the task's account installed where its harness lists them (Claude Code). The list
+    /// comes from the harness's own command through the account's adapter, so no session starts.
+    func loadHarnessSwitches(for session: SessionRecord) async {
+        guard store.sessions.contains(where: { $0.id == session.id }) else { return }
+        var state = harnessSwitchesBySessionID[session.id] ?? HarnessSwitchState()
+        state.reach = harnessSwitchReach(for: session)
+        let adapter = await registryAdapter(for: session)
+        guard let switching = adapter as? any HarnessAccountPluginSwitching, switching.switchesAccountPlugins else {
+            harnessSwitchesBySessionID[session.id] = state
+            return
+        }
+        state.isLoading = true
+        harnessSwitchesBySessionID[session.id] = state
+        do {
+            state.accountPlugins = try await switching.accountPlugins()
+            state.errors = []
+        } catch {
+            state.errors = [L10n.format("Plugins unavailable: %@", error.localizedDescription)]
+        }
+        state.isLoading = false
+        guard store.sessions.contains(where: { $0.id == session.id }) else { return }
+        harnessSwitchesBySessionID[session.id] = state
+    }
+
+    /// Turns a skill or plugin on or off with the harness's own command, then reads the list again
+    /// from the harness. A command that fails leaves the list as the harness last reported it, so
+    /// the switch stays where it was, and its error shows under the sheet's sections.
+    func setHarnessSwitch(_ target: HarnessSettingsSwitch, enabled: Bool, for session: SessionRecord) async {
+        guard store.sessions.contains(where: { $0.id == session.id }) else { return }
+        do {
+            switch target {
+            case let .codexSkill(path):
+                let (adapter, provider, _) = try await codexProvider(for: session)
+                guard let switching = adapter as? any HarnessSkillSwitching else {
+                    throw HarnessAdapterError.capabilityUnavailable(L10n.string("This harness cannot turn skills on or off"))
+                }
+                try await switching.setSkill(at: path, enabled: enabled)
+                let skills = try await provider.skills(in: session.workspaceURL)
+                guard store.sessions.contains(where: { $0.id == session.id }) else { return }
+                codexCapabilitiesBySessionID[session.id, default: .empty].skills = skills
+            case let .accountPlugin(id):
+                guard let switching = await registryAdapter(for: session) as? any HarnessAccountPluginSwitching,
+                      switching.switchesAccountPlugins else {
+                    throw HarnessAdapterError.capabilityUnavailable(L10n.string("This harness cannot turn plugins on or off"))
+                }
+                try await switching.setAccountPlugin(id, enabled: enabled)
+                let plugins = try await switching.accountPlugins()
+                guard store.sessions.contains(where: { $0.id == session.id }) else { return }
+                harnessSwitchesBySessionID[session.id, default: HarnessSwitchState()].accountPlugins = plugins
+            }
+            harnessSwitchesBySessionID[session.id, default: HarnessSwitchState()].errors = []
+        } catch {
+            guard store.sessions.contains(where: { $0.id == session.id }) else { return }
+            let message = enabled
+                ? L10n.format("Couldn't turn on %@: %@", harnessSwitchName(target, in: session), error.localizedDescription)
+                : L10n.format("Couldn't turn off %@: %@", harnessSwitchName(target, in: session), error.localizedDescription)
+            harnessSwitchesBySessionID[session.id, default: HarnessSwitchState()].errors = [message]
+        }
+    }
+
+    /// The row's title for a switch's message.
+    private func harnessSwitchName(_ target: HarnessSettingsSwitch, in session: SessionRecord) -> String {
+        switch target {
+        case let .codexSkill(path):
+            codexCapabilitiesBySessionID[session.id]?.skills.first { $0.path == path }?.displayName ?? path
+        case let .accountPlugin(id):
+            harnessSwitchesBySessionID[session.id]?.accountPlugins?.first { $0.id == id }?.name ?? id
+        }
+    }
+
+    /// Whether the settings file the task's switches write is the task's account's alone, or one
+    /// that other accounts Yardlet knows read through a link: Claude Code's `settings.json` in the
+    /// account's config folder, Codex's `config.toml` in its home.
+    private func harnessSwitchReach(for session: SessionRecord) -> HarnessSwitchReach {
+        guard !isVisualFixture else { return .account }
+        let saved = connections.connections(for: session.harness).compactMap { $0.homePath.map { URL(filePath: $0) } }
+        switch session.harness {
+        case .claudeCode:
+            let folder = ClaudeSubagentTranscriptReader.configDirectory(connection: session.connection,
+                                                                       workspaceURL: session.workspaceURL)
+            return .of(folder: folder, among: [connections.claudeDefaultHome] + saved, fileName: "settings.json")
+        case .codex:
+            let folder = session.environmentScope == .yardlet
+                ? codexEnvironmentManager?.paths.runtimeHomeURL
+                : session.connection?.homePath.map { URL(filePath: $0) } ?? connections.codexDefaultHome
+            guard let folder else { return .account }
+            return .of(folder: folder, among: [connections.codexDefaultHome] + saved, fileName: "config.toml")
+        default:
+            return .account
+        }
     }
 
     /// User-requested metadata for a new Claude task's home composer. Its account and workspace

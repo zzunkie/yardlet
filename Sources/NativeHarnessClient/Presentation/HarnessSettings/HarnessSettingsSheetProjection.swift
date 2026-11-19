@@ -39,15 +39,25 @@ enum HarnessSettingsCommand: Equatable, Sendable {
     /// The task's fork (`AppModel.branch`), offered when its adapter can branch.
     case fork
     case reviewCodexWorkingTree
+    /// A skill or plugin row's switch, through the harness's own command.
+    case setSwitch(HarnessSettingsSwitch, enabled: Bool)
 
     /// Fork and review continue in the task list and the conversation, so the sheet closes before
-    /// they start, as the Codex sheet did. Selectors and provider actions keep it open.
+    /// they start, as the Codex sheet did. Selectors, provider actions and switches keep it open.
     var dismissesSheet: Bool {
         switch self {
         case .fork, .reviewCodexWorkingTree: true
-        case .selectCodexMode, .setProviderOption, .performProviderAction: false
+        case .selectCodexMode, .setProviderOption, .performProviderAction, .setSwitch: false
         }
     }
+}
+
+/// What a skill or plugin row's switch turns on and off. The harness keeps the value: a Codex
+/// skill in the account's `config.toml` (`skills/config/write`), a Claude Code plugin in the
+/// account's user settings (`claude plugin enable|disable --scope user`).
+enum HarnessSettingsSwitch: Equatable, Sendable {
+    case codexSkill(path: String)
+    case accountPlugin(id: String)
 }
 
 struct HarnessSettingsChoice: Equatable, Identifiable, Sendable {
@@ -75,9 +85,15 @@ struct HarnessSettingsControl: Equatable, Identifiable, Sendable {
     let kind: Kind
 }
 
-/// A row of the Skills or Plugins section. These lists report the provider's state and offer no
-/// control over it: Codex owns enabling skills and installing plugins.
+/// A row of the Skills or Plugins section: what the provider reports, with a switch where the
+/// harness's own command turns the item on and off (Codex skills, Claude Code plugins). Installing
+/// and removing stay with the harness.
 struct HarnessSettingsListItem: Equatable, Identifiable, Sendable {
+    struct SwitchState: Equatable, Sendable {
+        let target: HarnessSettingsSwitch
+        let isOn: Bool
+    }
+
     struct Badge: Equatable, Sendable {
         enum Tone: Equatable, Sendable {
             case positive
@@ -96,6 +112,8 @@ struct HarnessSettingsListItem: Equatable, Identifiable, Sendable {
     let detail: String
     let systemImage: String
     let badges: [Badge]
+    /// Nil for a row the harness gives no switch.
+    var switchState: SwitchState? = nil
 }
 
 /// What a task's harness settings sheet shows.
@@ -110,6 +128,8 @@ struct HarnessSettingsSheetContent: Equatable, Sendable {
     var errors: [String] = []
     var actionMessage: String?
     var isLoading = false
+    /// Where the switches reach and when a change takes effect, shown above a list with switches.
+    var switchNote: String?
 
     var sections: [HarnessSettingsSection] {
         [.controls] + (skills == nil ? [] : [.skills]) + (plugins == nil ? [] : [.plugins])
@@ -131,15 +151,18 @@ enum HarnessSettingsSheetProjection {
         source: HarnessSettingsSource,
         codex: CodexCapabilityState,
         provider: ProviderCapabilityState,
+        switches: HarnessSwitchState = HarnessSwitchState(),
         canBranch: Bool
     ) -> HarnessSettingsSheetContent {
         switch source {
-        case .codex: codexContent(codex, canBranch: canBranch)
-        case .provider: providerContent(provider, canBranch: canBranch)
+        case .codex: codexContent(codex, switches: switches, canBranch: canBranch)
+        case .provider: providerContent(provider, switches: switches, canBranch: canBranch)
         }
     }
 
-    static func codexContent(_ state: CodexCapabilityState, canBranch: Bool) -> HarnessSettingsSheetContent {
+    static func codexContent(
+        _ state: CodexCapabilityState, switches: HarnessSwitchState = HarnessSwitchState(), canBranch: Bool
+    ) -> HarnessSettingsSheetContent {
         var controls = [codexModeSelector(state)]
         if canBranch { controls.append(forkControl) }
         controls.append(HarnessSettingsControl(
@@ -153,23 +176,40 @@ enum HarnessSettingsSheetProjection {
             controls: controls,
             skills: state.skills.map(skillItem),
             plugins: state.plugins.map(pluginItem),
-            errors: state.errors,
+            errors: state.errors + switches.errors,
             actionMessage: state.actionMessage,
-            isLoading: state.isLoading
+            isLoading: state.isLoading || switches.isLoading,
+            switchNote: switchNote(for: switches.reach)
         )
     }
 
-    static func providerContent(_ state: ProviderCapabilityState, canBranch: Bool) -> HarnessSettingsSheetContent {
+    static func providerContent(
+        _ state: ProviderCapabilityState, switches: HarnessSwitchState = HarnessSwitchState(), canBranch: Bool
+    ) -> HarnessSettingsSheetContent {
         var controls = state.selectors.map(providerSelector)
         if canBranch { controls.append(forkControl) }
         controls += state.actions.map(providerAction)
         return HarnessSettingsSheetContent(
             controls: controls,
             notes: state.notes,
-            errors: state.errors,
+            plugins: switches.accountPlugins?.map(accountPluginItem),
+            errors: state.errors + switches.errors,
             actionMessage: state.actionMessage,
-            isLoading: state.isLoading
+            isLoading: state.isLoading || switches.isLoading,
+            switchNote: switches.accountPlugins == nil ? nil : switchNote(for: switches.reach)
         )
+    }
+
+    /// Both harnesses keep a running session's skills and plugins as it started with them: a Codex
+    /// thread keeps the skill list its first turn sent, and Claude Code loads plugins when it starts
+    /// (until something asks it to reload them, which Yardlet does not). So a change reaches the
+    /// tasks that start after it, on every account that reads the same settings file.
+    static func switchNote(for reach: HarnessSwitchReach) -> String {
+        switch reach {
+        case .account: L10n.string("Applies to all tasks on this account, starting with new tasks.")
+        case .sharedSettings:
+            L10n.string("Applies to all tasks on the accounts that share these settings, starting with new tasks.")
+        }
     }
 
     // MARK: - Controls
@@ -255,9 +295,22 @@ enum HarnessSettingsSheetProjection {
             description: skill.description.isEmpty ? nil : skill.description,
             detail: skill.scope,
             systemImage: "wand.and.stars",
-            badges: [skill.enabled
-                ? .init(text: L10n.string("Enabled"), tone: .positive)
-                : .init(text: L10n.string("Disabled"), tone: .neutral)]
+            badges: [],
+            switchState: .init(target: .codexSkill(path: skill.path), isOn: skill.enabled)
+        )
+    }
+
+    /// A Claude Code plugin the account installed, on or off. Its marketplace is the row's detail,
+    /// as a Codex plugin's is.
+    private static func accountPluginItem(_ plugin: HarnessAccountPlugin) -> HarnessSettingsListItem {
+        HarnessSettingsListItem(
+            id: plugin.id,
+            title: plugin.name,
+            description: plugin.description,
+            detail: plugin.marketplace ?? plugin.id,
+            systemImage: "puzzlepiece.extension",
+            badges: [],
+            switchState: .init(target: .accountPlugin(id: plugin.id), isOn: plugin.isEnabled)
         )
     }
 
@@ -290,14 +343,24 @@ struct HarnessSettingsActions {
     var performProviderAction: (String) async -> Void
     var fork: () async -> Void
     var reviewCodexWorkingTree: () async -> Void
+    var loadSwitches: () async -> Void
+    var setSwitch: (HarnessSettingsSwitch, Bool) async -> Void
     var dismiss: () -> Void
 
-    /// Rereads the sheet's capabilities from its source.
+    /// Rereads the sheet's capabilities from its source, then what its switches stand for.
     func refresh(_ source: HarnessSettingsSource) async {
         switch source {
         case .codex: await loadCodex()
         case .provider: await loadProvider()
         }
+        await loadSwitches()
+    }
+
+    /// What the sheet reads as it opens: its source when the task does not have it yet, and what
+    /// its switches stand for every time, since the harness's own app, its CLI or another task may
+    /// have changed that since.
+    func open(_ source: HarnessSettingsSource, sourceIsLoaded: Bool) async {
+        if sourceIsLoaded { await loadSwitches() } else { await refresh(source) }
     }
 
     /// Closes the sheet first when the command continues outside it, then starts the command.
@@ -314,6 +377,7 @@ struct HarnessSettingsActions {
         case let .performProviderAction(id): await performProviderAction(id)
         case .fork: await fork()
         case .reviewCodexWorkingTree: await reviewCodexWorkingTree()
+        case let .setSwitch(target, enabled): await setSwitch(target, enabled)
         }
     }
 }
@@ -329,6 +393,8 @@ extension HarnessSettingsActions {
             performProviderAction: { await model.performProviderAction($0, for: session) },
             fork: { _ = await model.branch(session) },
             reviewCodexWorkingTree: { await model.reviewCodexWorkingTree(session) },
+            loadSwitches: { await model.loadHarnessSwitches(for: session) },
+            setSwitch: { await model.setHarnessSwitch($0, enabled: $1, for: session) },
             dismiss: dismiss
         )
     }
@@ -341,6 +407,7 @@ extension AppModel {
             source: HarnessSettingsSource(harness: session.harness),
             codex: codexCapabilitiesBySessionID[session.id] ?? .empty,
             provider: providerCapabilitiesBySessionID[session.id] ?? .empty,
+            switches: harnessSwitchesBySessionID[session.id] ?? HarnessSwitchState(),
             canBranch: canBranch(session)
         )
     }

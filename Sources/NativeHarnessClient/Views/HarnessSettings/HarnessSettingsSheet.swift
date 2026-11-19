@@ -4,7 +4,9 @@ import SwiftUI
 /// header names the harness and the task; the sections are those the provider reports
 /// (`HarnessSettingsSheetContent.sections`), switched with a segmented control when there is more
 /// than one. Controls are cards with the control at the trailing edge; skills and plugins are
-/// divided lists. Errors and the last action's message sit under the sections. Only the
+/// divided lists, with a switch at a row's trailing edge where the harness turns the item on and
+/// off, and a line above them saying whose tasks a switch reaches and from when. Errors and the
+/// last action's message sit under the sections. Only the
 /// provider's own options and values differ between harnesses; what differs is decided in
 /// `HarnessSettingsSheetProjection`, not here.
 struct HarnessSettingsSheet: View {
@@ -192,10 +194,18 @@ struct HarnessSettingsSheet: View {
                 ContentUnavailableView(emptyTitle, systemImage: emptySymbol)
                     .padding(.top, 80)
             } else {
-                LazyVStack(spacing: 0) {
-                    ForEach(items) { item in
-                        listRow(item)
-                        Divider()
+                VStack(alignment: .leading, spacing: 4) {
+                    if let note = content.switchNote, items.contains(where: { $0.switchState != nil }) {
+                        Label(note, systemImage: "info.circle")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    LazyVStack(spacing: 0) {
+                        ForEach(items) { item in
+                            listRow(item)
+                            Divider()
+                        }
                     }
                 }
                 .padding(.horizontal, 22)
@@ -258,7 +268,7 @@ struct HarnessSettingsSheet: View {
     }
 
     private func listRow(_ item: HarnessSettingsListItem) -> some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 7) {
                     Text(item.title).font(SettingsMetrics.titleFont)
@@ -272,6 +282,17 @@ struct HarnessSettingsSheet: View {
                 Text(item.detail).font(SettingsMetrics.detailFont).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
+            if let state = item.switchState {
+                // The switch shows what the harness last reported; choosing asks the harness, and the
+                // row follows its answer.
+                Toggle(item.title, isOn: Binding(
+                    get: { state.isOn },
+                    set: { onCommand(.setSwitch(state.target, enabled: $0)) }))
+                    .labelsHidden()
+                    .toggleStyle(.paritySwitch)
+                    .controlSize(.small)
+                    .accessibilityHint(content.switchNote ?? "")
+            }
         }
         .padding(.vertical, SettingsMetrics.rowVerticalPadding)
     }

@@ -16,7 +16,8 @@ actor YHPCodexCompatibilityAdapter:
     CodexPendingServerRequestValidating,
     CodexThreadReading,
     WrappedAdapterLaunchForwarding,
-    HarnessMCPServerStatusReading
+    HarnessMCPServerStatusReading,
+    HarnessSkillSwitching
 {
     nonisolated let kind = HarnessKind.codex
     nonisolated let protocolManifest: HarnessAdapterManifest
@@ -55,6 +56,8 @@ actor YHPCodexCompatibilityAdapter:
     /// Nor have the thread's background terminals (`thread/backgroundTerminals/list`, App Server 0.163): the session
     /// rail lists them and the memory saver keeps a thread that has one.
     private let backgroundTerminalControl: (any CodexBackgroundTerminalControlling)?
+    /// Nor has turning a skill on or off (`skills/config/write`): the harness settings sheet's switch.
+    private let skillSwitching: (any HarnessSkillSwitching)?
 
     init(adapter: any HarnessAdapter, manifest: HarnessAdapterManifest) {
         precondition(adapter.kind == .codex && manifest.harness == .codex)
@@ -63,6 +66,7 @@ actor YHPCodexCompatibilityAdapter:
         launchFacets = WrappedAdapterLaunchFacets(wrapping: adapter)
         mcpStatusReading = adapter as? any HarnessMCPServerStatusReading
         backgroundTerminalControl = adapter as? any CodexBackgroundTerminalControlling
+        skillSwitching = adapter as? any HarnessSkillSwitching
         core = YHPCompatibilityAdapter(
             adapter: adapter,
             manifest: manifest,
@@ -83,6 +87,13 @@ actor YHPCodexCompatibilityAdapter:
 
     func reportedMCPServers(for localSessionID: UUID) async -> [HarnessMCPServerStatus]? {
         await mcpStatusReading?.reportedMCPServers(for: localSessionID) ?? nil
+    }
+
+    func setSkill(at path: String, enabled: Bool) async throws {
+        guard let skillSwitching else {
+            throw HarnessAdapterError.capabilityUnavailable(L10n.string("This harness cannot turn skills on or off"))
+        }
+        try await skillSwitching.setSkill(at: path, enabled: enabled)
     }
 
     func createSession(_ request: CreateHarnessSessionRequest) async throws -> HarnessSessionHandle {

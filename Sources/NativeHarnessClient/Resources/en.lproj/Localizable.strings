@@ -539,6 +539,15 @@
 "Modes unavailable: %@" = "Modes unavailable: %@";
 "Skills unavailable: %@" = "Skills unavailable: %@";
 "Plugins unavailable: %@" = "Plugins unavailable: %@";
+"Applies to all tasks on this account, starting with new tasks." = "Applies to all tasks on this account, starting with new tasks.";
+"Applies to all tasks on the accounts that share these settings, starting with new tasks." = "Applies to all tasks on the accounts that share these settings, starting with new tasks.";
+"Couldn't turn on %@: %@" = "Couldn't turn on %@: %@";
+"Couldn't turn off %@: %@" = "Couldn't turn off %@: %@";
+"This harness cannot turn skills on or off" = "This harness cannot turn skills on or off";
+"This harness cannot turn plugins on or off" = "This harness cannot turn plugins on or off";
+"Claude Code did not answer in time" = "Claude Code did not answer in time";
+"Claude Code listed its plugins in a form Yardlet does not read" = "Claude Code listed its plugins in a form Yardlet does not read";
+"Codex settings keep this skill as it was" = "Codex settings keep this skill as it was";
 "History unavailable: %@" = "History unavailable: %@";
 "Mode selected: %@" = "Mode selected: %@";
 "Permissions selected: %@" = "Permissions selected: %@";

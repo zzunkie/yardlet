@@ -4078,6 +4078,13 @@ actor FakeHarnessAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresent
     /// The models its session offers, when it names any; it refuses the others.
     private var offeredModels: [String]?
     func offerModels(_ models: [String]) { offeredModels = models }
+    /// A Claude Code account's plugins as the harness lists them, the switches asked for, and the
+    /// reason the next switch is refused, if any (`HarnessAccountPluginSwitching`).
+    private(set) var accountPluginList: [HarnessAccountPlugin] = []
+    private(set) var accountPluginSwitches: [String] = []
+    private var accountPluginRefusal: String?
+    func stageAccountPlugins(_ plugins: [HarnessAccountPlugin]) { accountPluginList = plugins }
+    func refuseAccountPluginSwitches(_ reason: String?) { accountPluginRefusal = reason }
     private(set) var itemPageLoads: [(localSessionID: UUID, turnID: String?, cursor: String?, limit: Int64?)] = []
     private(set) var turnPageLoads: [(localSessionID: UUID, cursor: String?, limit: Int64?)] = []
     private(set) var recentPageLoads: [(workspaceURL: URL, cursor: String?, limit: Int64)] = []
@@ -4836,5 +4843,20 @@ extension FakeHarnessAdapter: CodexBackgroundTerminalControlling {
 
     func cleanBackgroundTerminals(in session: HarnessSessionHandle) async throws {
         backgroundTerminalList = []
+    }
+}
+
+extension FakeHarnessAdapter: HarnessAccountPluginSwitching {
+    nonisolated var switchesAccountPlugins: Bool { kind == .claudeCode }
+
+    func accountPlugins() async throws -> [HarnessAccountPlugin] { accountPluginList }
+
+    func setAccountPlugin(_ id: String, enabled: Bool) async throws {
+        accountPluginSwitches.append("\(id)=\(enabled)")
+        if let accountPluginRefusal { throw HarnessAdapterError.capabilityUnavailable(accountPluginRefusal) }
+        accountPluginList = accountPluginList.map {
+            $0.id == id ? HarnessAccountPlugin(id: $0.id, name: $0.name, marketplace: $0.marketplace,
+                                               description: $0.description, isEnabled: enabled) : $0
+        }
     }
 }

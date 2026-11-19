@@ -539,6 +539,15 @@
 "Modes unavailable: %@" = "모드를 불러올 수 없음: %@";
 "Skills unavailable: %@" = "스킬을 불러올 수 없음: %@";
 "Plugins unavailable: %@" = "플러그인을 불러올 수 없음: %@";
+"Applies to all tasks on this account, starting with new tasks." = "이 계정의 모든 작업에 적용되며, 새 작업부터 반영됩니다.";
+"Applies to all tasks on the accounts that share these settings, starting with new tasks." = "이 설정을 함께 쓰는 모든 계정의 작업에 적용되며, 새 작업부터 반영됩니다.";
+"Couldn't turn on %@: %@" = "%@ 켜기 실패: %@";
+"Couldn't turn off %@: %@" = "%@ 끄기 실패: %@";
+"This harness cannot turn skills on or off" = "이 하네스는 스킬을 켜고 끌 수 없습니다";
+"This harness cannot turn plugins on or off" = "이 하네스는 플러그인을 켜고 끌 수 없습니다";
+"Claude Code did not answer in time" = "Claude Code가 제때 응답하지 않았습니다";
+"Claude Code listed its plugins in a form Yardlet does not read" = "Claude Code가 Yardlet이 읽지 못하는 형식으로 플러그인 목록을 보냈습니다";
+"Codex settings keep this skill as it was" = "Codex 설정 때문에 이 스킬은 바뀌지 않았습니다";
 "History unavailable: %@" = "기록을 불러올 수 없음: %@";
 "Mode selected: %@" = "선택한 모드: %@";
 "Permissions selected: %@" = "선택한 권한: %@";

@@ -20,6 +20,15 @@ extension CodexProtocol {
         )
     }
 
+    /// Turns one skill on or off by its file's path; Codex writes it to the home's `config.toml`.
+    static func writeSkillConfig(id: Int64, path: String, enabled: Bool) -> CodexRPCRequest {
+        CodexRPCRequest(
+            id: id,
+            method: "skills/config/write",
+            params: .object(["path": .string(path), "enabled": .bool(enabled)])
+        )
+    }
+
     static func plugins(id: Int64, workspaceURL: URL) -> CodexRPCRequest {
         CodexRPCRequest(
             id: id,

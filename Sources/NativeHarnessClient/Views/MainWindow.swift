@@ -2731,9 +2731,7 @@ struct MainWindow: View {
                 initialSection: model.initialCodexCapabilitySection
             )
             .task {
-                if !model.hasLoadedHarnessSettings(for: session) {
-                    await actions.refresh(source)
-                }
+                await actions.open(source, sourceIsLoaded: model.hasLoadedHarnessSettings(for: session))
             }
         }
         .onChange(of: hasManagementAlert) { _, isPresented in

@@ -701,3 +701,54 @@ behind) and
 folders linking `projects` to one folder, starting the CLI as Yardlet resumes a task (`--resume=<id>`, stream JSON, only
 the `initialize` request) found the saved conversation through either folder and answered; an unknown ID ended with "No
 conversation found". No sign-in or model turn was involved.
+
+## Skill and plugin switches
+
+A task's harness settings sheet lists the skills and plugins its harness reports. Where the harness turns one on and
+off with its own command, the row has a switch, and Yardlet changes nothing else:
+
+- **Codex:** every skill, through the App Server's `skills/config/write` with the skill file's path. Codex writes a
+  `[[skills.config]]` entry with `enabled = false` to `config.toml` in the account's home and drops it when the skill is
+  turned on again. Codex plugins are installed and removed in Codex and have no switch.
+- **Claude Code:** every plugin the account installed, on or off, from `claude plugin list --json` (the entries with
+  `scope: user`), through `claude plugin enable|disable --scope user --json`, run with the account's
+  `CLAUDE_CONFIG_DIR` as its sessions are (`ClaudeAccountPlugins`). The value is `enabledPlugins` in the config folder's
+  `settings.json`, the scope the Claude app's Manage plugins changes. Plugins installed for a project (`project` and
+  `local` scope) belong to that repository's `.claude/` files and are not listed. Skills outside plugins have no command
+  that turns them off and are not listed. Listing and switching start no session and no model turn.
+
+Yardlet keeps none of these values. The sheet reads them from the harness each time it opens, so a change made in the
+harness's own app or CLI shows there, and removing Yardlet leaves what the same change in the harness's own app would.
+A switch shows what the harness last reported: a refused change leaves it where it was, and the harness's reason shows
+under the sheet's sections. A plugin already as asked (`alreadyInGoalState`) counts as done.
+
+**Whose tasks a switch reaches.** The change goes into the account's settings file. An account folder Yardlet made
+reads the default folder's `settings.json` (Claude Code) or `config.toml` (Codex) through a link ("Claude account
+folders: what stays per account and what is shared" above), and both CLIs write through the link and keep it (Claude
+Code 2.1.327 and Codex 0.169.0, in temporary folders). A switch there reaches the default sign-in, every other account
+linked to the same file, and the harness's own app and terminal where they use the default folder. The line above the
+switches says which applies, "all tasks on this account" or "all tasks on the accounts that share these settings",
+from the file each known account folder (the default and the saved accounts) resolves to (`HarnessSwitchReach`).
+
+**When a change takes effect.** Both CLIs keep a running session's skills and plugins as it started with them, so the
+line says the change applies starting with new tasks. Both were checked with the App Server or the stream-JSON CLI in a
+temporary home, their model requests going to a local server that refused them:
+
+- Codex 0.169.0 sends the skill list once, in a developer message at the start of a thread, and keeps it in the
+  thread's history. After `skills/config/write`, the next turn of the same thread still carried the old list; the first
+  turn of a new thread did not have the skill.
+- Claude Code 2.1.327 loads plugins when it starts. After `claude plugin disable`, the running session still announced
+  the plugin's skill at its next turn. Its `reload_plugins` control request removes the plugin from the session's
+  commands, but the skill list the model was already sent stays in the conversation, and a reload that changes the
+  session's tools rewrites its prompt cache. Yardlet does not send it, so a Claude Code task picks up a change when its
+  CLI next starts.
+
+Verification: `HarnessSettingsSheetTests` (which rows have switches and the line above them),
+`HarnessSettingsSwitchTests.testClaudeCodePluginSwitchesGoThroughTheHarnessAndFailClosed` (listing without starting the
+task, a switch the harness applies, one it refuses, and the line for a linked and an unlinked `settings.json`),
+`ClaudeAdapterTests.testAccountPluginsAreTheAccountsOwnInstallsAndASwitchReadsTheCLIsResult` (what is read from the
+CLI's output), `HarnessSettingsSheetRenderingTests` (`.build/harness-settings-qa/<language>-claude-code-plugins-*` and
+`-codex-skills-*`, light and dark), and the opt-in live checks
+`ClaudeAdapterLiveTests.testLiveAccountPluginSwitchesInATemporaryConfigFolder` and
+`CodexAdapterLiveTests.testLiveSkillSwitchInATemporaryHome`, which run the real CLIs in temporary folders.
+

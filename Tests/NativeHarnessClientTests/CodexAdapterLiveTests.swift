@@ -96,6 +96,43 @@ final class CodexAdapterLiveTests: XCTestCase {
         }
     }
 
+    /// A skill turned off and on again with `skills/config/write`, in a temporary Codex home. Nothing
+    /// signs in and no thread starts.
+    func testLiveSkillSwitchInATemporaryHome() async throws {
+        guard let binaryPath = ProcessInfo.processInfo.environment["NHC_CODEX_LIVE_BINARY"] else {
+            throw XCTSkip("Set NHC_CODEX_LIVE_BINARY for the bounded live smoke")
+        }
+        let root = FileManager.default.temporaryDirectory.appending(path: "nhc-codex-skills-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appending(path: "codex"), workspace = root.appending(path: "work")
+        let skill = home.appending(path: "skills/probe-skill/SKILL.md")
+        try FileManager.default.createDirectory(at: skill.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        try Data("---\nname: probe-skill\ndescription: Probe skill.\n---\nSay PROBE.\n".utf8).write(to: skill)
+        let transport = CodexProcessTransport(
+            executableURL: URL(filePath: binaryPath),
+            environmentManager: CodexEnvironmentManager(paths: CodexEnvironmentPaths(
+                nativeHomeURL: home, yardletRootURL: root.appending(path: "yardlet"))),
+            environmentScope: .native
+        )
+        let adapter = CodexAdapter(executableURL: URL(filePath: binaryPath), transport: transport)
+        func probe() async throws -> CodexSkillSummary {
+            let skills = try await adapter.skills(in: workspace)
+            return try XCTUnwrap(skills.first { $0.name == "probe-skill" })
+        }
+        var listed = try await probe()
+        XCTAssertTrue(listed.enabled)
+        try await adapter.setSkill(at: listed.path, enabled: false)
+        listed = try await probe()
+        XCTAssertFalse(listed.enabled, "A skill turned off stays listed, to turn on again")
+        let config = try String(contentsOf: home.appending(path: "config.toml"), encoding: .utf8)
+        XCTAssertTrue(config.contains("[[skills.config]]") && config.contains("enabled = false"), config)
+        try await adapter.setSkill(at: listed.path, enabled: true)
+        listed = try await probe()
+        XCTAssertTrue(listed.enabled)
+        await transport.stop()
+    }
+
     private nonisolated static func waitForCommandActivity(
         in stream: AsyncStream<HarnessEventEnvelope>
     ) async throws {

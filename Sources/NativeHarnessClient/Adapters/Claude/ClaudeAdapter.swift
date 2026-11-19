@@ -1568,6 +1568,38 @@ actor ClaudeAdapter:
     }
 }
 
+extension ClaudeAdapter: HarnessAccountPluginSwitching {
+    nonisolated var switchesAccountPlugins: Bool { true }
+
+    /// The plugins this account installed, from the CLI's own list (`ClaudeAccountPlugins`). No
+    /// session starts.
+    func accountPlugins() async throws -> [HarnessAccountPlugin] {
+        let result = try await runAccountPluginCommand(ClaudeAccountPlugins.listArguments)
+        guard result.exitCode == 0 else {
+            throw HarnessAdapterError.processExited(
+                code: result.exitCode, message: result.output.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return try ClaudeAccountPlugins.plugins(fromListOutput: result.output)
+    }
+
+    /// Turns the plugin on or off in this account's user settings with the CLI's own command.
+    func setAccountPlugin(_ id: String, enabled: Bool) async throws {
+        try ClaudeAccountPlugins.checkSwitch(
+            try await runAccountPluginCommand(ClaudeAccountPlugins.switchArguments(id: id, enabled: enabled)))
+    }
+
+    /// The CLI run with this account's variables, as its sessions are, so it reads and writes the
+    /// account's config folder.
+    private func runAccountPluginCommand(_ arguments: [String]) async throws -> AccountCommandResult {
+        do {
+            return try await AccountCommandRunner.run(
+                executableURL: executableURL, arguments: arguments, environment: environmentOverrides)
+        } catch AccountCommandError.timedOut {
+            throw HarnessAdapterError.capabilityUnavailable(L10n.string("Claude Code did not answer in time"))
+        }
+    }
+}
+
 extension ClaudeAdapter: HarnessRunningSessionRenaming {
     /// The name the person gave the task, sent as an IDE hosting Claude Code sends one. No turn starts;
     /// the CLI keeps it as the person's own name (`custom-title`), which the Claude app and `/resume`

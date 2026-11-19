@@ -1,6 +1,6 @@
 import Foundation
 
-actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationProviding, CodexThreadReading, CodexComposerProviding, CodexConversationEditing, CodexTurnRecovering, CodexPendingServerRequestValidating, HarnessWorkspaceRootsConfiguring, HarnessInstructionSourceReporting, HarnessAgentToolConfiguring, HarnessYardletInstructionsConfiguring, HarnessMCPServerStatusReading, HarnessInterruptedTurnContinuing, HarnessHistoryFreeSessionConfiguring, HarnessLaunchOptionConfiguring, CodexBackgroundTerminalControlling, HarnessTaskSightReceiving {
+actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationProviding, CodexThreadReading, CodexComposerProviding, CodexConversationEditing, CodexTurnRecovering, CodexPendingServerRequestValidating, HarnessWorkspaceRootsConfiguring, HarnessInstructionSourceReporting, HarnessAgentToolConfiguring, HarnessYardletInstructionsConfiguring, HarnessMCPServerStatusReading, HarnessInterruptedTurnContinuing, HarnessHistoryFreeSessionConfiguring, HarnessLaunchOptionConfiguring, CodexBackgroundTerminalControlling, HarnessTaskSightReceiving, HarnessSkillSwitching {
     private struct ApprovalContext: Sendable {
         let localSessionID: UUID
         let rpcID: CodexRPCID
@@ -929,6 +929,19 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
             CodexProtocol.skills(id: takeRequestID(), workspaceURL: workspaceURL)
         )
         return capabilityProjector.skills(from: response.result)
+    }
+
+    /// Turns the skill on or off in this account's `config.toml` (`skills/config/write`). A running
+    /// thread keeps the skills it started with; a new one gets the change.
+    func setSkill(at path: String, enabled: Bool) async throws {
+        try await ensureInitialized()
+        let response = try await transport.request(
+            CodexProtocol.writeSkillConfig(id: takeRequestID(), path: path, enabled: enabled)
+        )
+        // Settings Codex is required to keep (an administrator's) can leave the skill as it was.
+        if let effective = response.result?["effectiveEnabled"]?.boolValue, effective != enabled {
+            throw HarnessAdapterError.capabilityUnavailable(L10n.string("Codex settings keep this skill as it was"))
+        }
     }
 
     func accountRateLimits() async throws -> CodexAccountRateLimits {

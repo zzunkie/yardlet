@@ -724,7 +724,8 @@ actor YHPProviderCompatibilityAdapter:
     HarnessMCPServerStatusReading,
     HarnessInterruptedTurnContinuing,
     HarnessIdleCompacting,
-    HarnessRunningSessionRenaming
+    HarnessRunningSessionRenaming,
+    HarnessAccountPluginSwitching
 {
     nonisolated let kind: HarnessKind
     nonisolated let protocolManifest: HarnessAdapterManifest
@@ -762,6 +763,10 @@ actor YHPProviderCompatibilityAdapter:
     /// YHP has no request that renames a running session, so the person's rename goes to the
     /// wrapped adapter directly.
     private let runningSessionRenaming: (any HarnessRunningSessionRenaming)?
+    /// Nor has listing an account's plugins or turning one on or off, which the harness does with its
+    /// own command outside any session (Claude Code's `claude plugin`).
+    private let accountPluginSwitching: (any HarnessAccountPluginSwitching)?
+    nonisolated let switchesAccountPlugins: Bool
 
     init(
         adapter: any HarnessAdapter,
@@ -785,6 +790,8 @@ actor YHPProviderCompatibilityAdapter:
         self.interruptedTurnContinuing = adapter as? any HarnessInterruptedTurnContinuing
         self.idleCompacting = adapter as? any HarnessIdleCompacting
         self.runningSessionRenaming = adapter as? any HarnessRunningSessionRenaming
+        self.accountPluginSwitching = adapter as? any HarnessAccountPluginSwitching
+        self.switchesAccountPlugins = accountPluginSwitching?.switchesAccountPlugins ?? false
         self.core = YHPCompatibilityAdapter(
             adapter: adapter,
             manifest: manifest,
@@ -806,6 +813,20 @@ actor YHPProviderCompatibilityAdapter:
 
     func reportedMCPServers(for localSessionID: UUID) async -> [HarnessMCPServerStatus]? {
         await mcpStatusReading?.reportedMCPServers(for: localSessionID) ?? nil
+    }
+
+    func accountPlugins() async throws -> [HarnessAccountPlugin] {
+        guard let accountPluginSwitching else {
+            throw HarnessAdapterError.capabilityUnavailable(L10n.string("This harness cannot turn plugins on or off"))
+        }
+        return try await accountPluginSwitching.accountPlugins()
+    }
+
+    func setAccountPlugin(_ id: String, enabled: Bool) async throws {
+        guard let accountPluginSwitching else {
+            throw HarnessAdapterError.capabilityUnavailable(L10n.string("This harness cannot turn plugins on or off"))
+        }
+        try await accountPluginSwitching.setAccountPlugin(id, enabled: enabled)
     }
 
     func advertisedModels(for localSessionID: UUID) async -> [HarnessModelOption]? {
