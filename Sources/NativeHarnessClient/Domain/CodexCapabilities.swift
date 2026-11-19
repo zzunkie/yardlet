@@ -105,6 +105,16 @@ enum CodexRunLocation: String, Codable, CaseIterable, Equatable, Identifiable, S
     /// The value a task keeps, nil for Ask for approval, which tasks keep as no value.
     var storedValue: String? { self == .askForApproval ? nil : rawValue }
 
+    /// Whether its turns may write in their workspace roots (the workspace sandbox or full access), which is when the
+    /// Codex app adds a thread's visualization folder to them. Read-only turns get none, and neither do Custom's,
+    /// whose sandbox is whatever `config.toml` says.
+    var writesWorkspace: Bool {
+        switch self {
+        case .askForApproval, .approveForMe, .dangerFullAccess: true
+        case .readOnly, .custom: false
+        }
+    }
+
     /// The built-in permission profile (`permissions`); Custom sends none.
     var permissionProfile: String? {
         switch self {

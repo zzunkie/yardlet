@@ -205,13 +205,21 @@ enum CodexProtocol {
         collaborationPreset: CodexCollaborationPreset? = nil,
         runLocation: CodexRunLocation = .askForApproval,
         modelSelection: CodexModelSelection? = nil,
-        turnTrigger: String? = nil
+        turnTrigger: String? = nil,
+        runtimeWorkspaceRoots: [URL]? = nil
     ) -> CodexRPCRequest {
         var params: [String: JSONValue] = [
             "threadId": .string(threadID),
             "input": .array(input.map(\.jsonValue))
         ]
         if let turnTrigger { params["turnTrigger"] = .string(turnTrigger) }
+        // The thread's roots for this turn and the next, the cwd first, as the Codex app sends them with a turn's
+        // visualization folder; nil leaves the thread's roots as they are.
+        if let runtimeWorkspaceRoots {
+            params["runtimeWorkspaceRoots"] = .array(runtimeWorkspaceRoots.map {
+                .string(folderPath($0, posixPath: $0.standardizedFileURL.path(percentEncoded: false)))
+            })
+        }
         if let modelSelection {
             params["model"] = .string(modelSelection.model)
             if let effort = modelSelection.reasoningEffort { params["effort"] = .string(effort) }

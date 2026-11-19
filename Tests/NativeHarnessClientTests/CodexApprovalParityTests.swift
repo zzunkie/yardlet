@@ -90,6 +90,75 @@ final class CodexApprovalParityTests: XCTestCase {
         await adapter.close(handle)
     }
 
+    /// As the Codex app does, a turn that may write gets its thread's visualization folder among its workspace roots,
+    /// dated in UTC by the thread's UUIDv7; unlike the app, a folder the turn made and left empty goes at its end, and
+    /// deleting the thread takes away only a folder Yardlet made.
+    func testATurnThatMayWriteGetsItsThreadsVisualizationFolder() async throws {
+        let manager = FileManager.default
+        let root = manager.temporaryDirectory.appending(path: "yardlet-visualization-folders-\(UUID().uuidString)")
+        defer { try? manager.removeItem(at: root) }
+        let home = root.appending(path: "codex")
+        try manager.createDirectory(at: home, withIntermediateDirectories: true)
+        let folders = CodexVisualizationFolders(codexHome: home, listURL: root.appending(path: "yardlet/visualization-folders.txt"))
+        // 2026-11-18 23:30 UTC, already the 19th in Seoul.
+        let thread = "01a1f0fe-e8c0-7abc-8def-0123456789ab"
+        XCTAssertEqual(CodexVisualizationFolders.date(threadID: thread), "2026/11/18")
+        XCTAssertNil(CodexVisualizationFolders.date(threadID: "4b0d4c7e-2a4e-4f5a-9a77-4cbe1c1a3f10"), "Not a UUIDv7")
+        let folder = try XCTUnwrap(folders.folder(threadID: thread))
+        XCTAssertEqual(folder.path(percentEncoded: false), home.appending(path: "visualizations/2026/11/18/\(thread)/").path(percentEncoded: false))
+
+        let transport = FakeCodexTransport(responses: [
+            "initialize": [.object(["platformOs": .string("macos")])],
+            "thread/resume": [.object(["thread": .object(["id": .string(thread)])])],
+            "thread/items/list": [.object(["data": .array([])])],
+            "turn/start": ["turn-1", "turn-2", "turn-3"].map { .object(["turn": .object(["id": .string($0)])]) },
+            "thread/delete": [.object([:])]
+        ])
+        let adapter = CodexAdapter(executableURL: URL(filePath: "/tmp/codex"), transport: transport,
+                                   visualizationFolders: folders)
+        let workspace = URL(filePath: "/tmp/w")
+        let handle = try await adapter.resumeSession(providerSessionID: thread, localSessionID: UUID(), workspaceURL: workspace)
+        func end(_ turn: String) async throws {
+            await transport.emit(method: "turn/completed", params: .object([
+                "threadId": .string(thread), "turn": .object(["id": .string(turn), "status": .string("completed")])]))
+            try await waitUntil { await adapter.activeTurnID(for: handle) == nil }
+        }
+        func roots() async -> JSONValue? {
+            await transport.requests.last { $0.method == "turn/start" }?.params["runtimeWorkspaceRoots"]
+        }
+
+        // Made as the turn starts, after the task's folder.
+        try await adapter.send("Chart it.", to: handle)
+        let sent = await roots()
+        XCTAssertEqual(sent, .array([.string("/tmp/w"), .string(folder.standardizedFileURL.path(percentEncoded: false))]))
+        XCTAssertTrue(manager.fileExists(atPath: folder.path(percentEncoded: false)))
+        // The turn wrote nothing in it: the folder goes, with the date folders it made.
+        try await end("turn-1")
+        XCTAssertFalse(manager.fileExists(atPath: home.appending(path: "visualizations").path(percentEncoded: false)))
+
+        // A turn that writes a visualization keeps it.
+        try await adapter.send("Chart it again.", to: handle)
+        try "<p>chart</p>".write(to: folder.appending(path: "chart.html"), atomically: true, encoding: .utf8)
+        try await end("turn-2")
+        XCTAssertTrue(manager.fileExists(atPath: folder.appending(path: "chart.html").path(percentEncoded: false)))
+
+        // A read-only turn gets none and leaves the thread's roots as they are.
+        try await adapter.selectRunLocation(.readOnly, for: handle)
+        try await adapter.send("Explain it.", to: handle)
+        let readOnly = await roots()
+        XCTAssertNil(readOnly)
+
+        // Another client's folder for another thread stays; deleting this thread takes away the folder Yardlet made.
+        let other = try XCTUnwrap(folders.folder(threadID: "01a1f0fe-e8c0-7abc-8def-0123456789ac"))
+        try manager.createDirectory(at: other, withIntermediateDirectories: true)
+        folders.remove(threadID: "01a1f0fe-e8c0-7abc-8def-0123456789ac")
+        try await adapter.deleteThread(handle)
+        XCTAssertFalse(manager.fileExists(atPath: folder.path(percentEncoded: false)))
+        XCTAssertTrue(manager.fileExists(atPath: other.path(percentEncoded: false)))
+        XCTAssertFalse(manager.fileExists(atPath: folders.listURL.path(percentEncoded: false)), "Nothing left listed")
+        await adapter.close(handle)
+    }
+
     @MainActor
     func testChoosingAPermissionKeepsItWithTheTask() async throws {
         let adapter = FakeHarnessAdapter(kind: .codex)

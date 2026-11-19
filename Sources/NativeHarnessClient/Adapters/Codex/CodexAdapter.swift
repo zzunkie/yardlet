@@ -47,6 +47,10 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
     private var modelSelectionByLocalSessionID: [UUID: CodexModelSelection] = [:]
     private var runLocationByLocalSessionID: [UUID: CodexRunLocation] = [:]
     private var additionalRootsByLocalSessionID: [UUID: [URL]] = [:]
+    /// Where threads' visualization folders go; nil (a scripted transport) gives turns none.
+    private let visualizationFolders: CodexVisualizationFolders?
+    /// The folders a running turn made for its visualizations, taken away at its end if it left them empty.
+    private var visualizationFoldersMadeByLocalSessionID: [UUID: [URL]] = [:]
     private var agentToolServerByLocalSessionID: [UUID: AgentToolServerLaunch] = [:]
     private var yardletInstructionsByLocalSessionID: [UUID: String] = [:]
     /// Threads to start or fork ephemeral, written nowhere (`run_agent`, a side chat).
@@ -130,9 +134,11 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
         namesNewThreads: Bool = false,
         predictsNextMessages: Bool = false,
         asksForNextMessageSuggestions: @escaping @Sendable () -> Bool = { NextMessageSuggestionPreference.isOn() },
-        resourceOwner: TaskResourceOwner? = nil
+        resourceOwner: TaskResourceOwner? = nil,
+        visualizationFolders: CodexVisualizationFolders? = nil
     ) {
         let executableURL = executableURL.standardizedFileURL
+        self.visualizationFolders = visualizationFolders
         self.executableURL = executableURL
         self.runtimeCompatibility = runtimeCompatibility
         self.clientVersion = clientVersion
@@ -449,16 +455,7 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
         guard !draft.isEmpty else { return }
         switch submission {
         case .start:
-            let response = try await transport.request(
-                CodexProtocol.startTurn(
-                    id: takeRequestID(),
-                    threadID: session.providerSessionID,
-                    input: draft.inputs,
-                    collaborationPreset: collaborationPresetByLocalSessionID[session.localSessionID],
-                    runLocation: runLocationByLocalSessionID[session.localSessionID] ?? .askForApproval,
-                    modelSelection: modelSelectionByLocalSessionID[session.localSessionID]
-                )
-            )
+            let response = try await startTurn(in: session, input: draft.inputs)
             guard let turnID = response.result?["turn"]?["id"]?.stringValue else {
                 throw HarnessAdapterError.invalidProviderEvent("turn/start response is missing turn.id")
             }
@@ -483,6 +480,42 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
             )
         }
         emitPostServerResponseStatus(for: session.localSessionID)
+    }
+
+    /// `turn/start` with the task's mode, permission and model. A turn that may write also gets the thread's
+    /// visualization folder among its workspace roots, as the Codex app's turns do (`CodexVisualizationFolders`).
+    private func startTurn(
+        in session: HarnessSessionHandle,
+        input: [CodexUserInput],
+        turnTrigger: String? = nil
+    ) async throws -> CodexRPCIncomingMessage {
+        let localSessionID = session.localSessionID
+        let runLocation = runLocationByLocalSessionID[localSessionID] ?? .askForApproval
+        finishVisualizationFolders(for: localSessionID)
+        let visualization = runLocation.writesWorkspace
+            ? visualizationFolders?.prepare(threadID: session.providerSessionID) : nil
+        // Kept before the request: the turn can end before its acknowledgement arrives.
+        if let visualization { visualizationFoldersMadeByLocalSessionID[localSessionID] = visualization.made }
+        do {
+            return try await transport.request(CodexProtocol.startTurn(
+                id: takeRequestID(), threadID: session.providerSessionID, input: input,
+                collaborationPreset: collaborationPresetByLocalSessionID[localSessionID],
+                runLocation: runLocation,
+                modelSelection: modelSelectionByLocalSessionID[localSessionID],
+                turnTrigger: turnTrigger,
+                runtimeWorkspaceRoots: visualization.map {
+                    [session.workspaceURL] + (additionalRootsByLocalSessionID[localSessionID] ?? []) + [$0.folder]
+                }))
+        } catch {
+            finishVisualizationFolders(for: localSessionID)
+            throw error
+        }
+    }
+
+    /// The turn ended: what it made for visualizations and left empty goes.
+    private func finishVisualizationFolders(for localSessionID: UUID) {
+        guard let made = visualizationFoldersMadeByLocalSessionID.removeValue(forKey: localSessionID) else { return }
+        visualizationFolders?.finish(made: made)
     }
 
     func activeTurnID(for session: HarnessSessionHandle) -> String? {
@@ -1352,6 +1385,8 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
                 threadID: session.providerSessionID
             )
         )
+        // As the Codex app does when it deletes a thread, but only the folder Yardlet made.
+        visualizationFolders?.remove(threadID: session.providerSessionID)
     }
 
     func selectCollaborationMode(
@@ -1546,12 +1581,7 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
         guard CodexTurnRecoveryProjection.canRetry(turnID, in: state) else {
             throw HarnessAdapterError.capabilityUnavailable(L10n.string("This turn can no longer be retried."))
         }
-        let started = try await transport.request(CodexProtocol.startTurn(
-            id: takeRequestID(), threadID: session.providerSessionID, input: [],
-            collaborationPreset: collaborationPresetByLocalSessionID[session.localSessionID],
-            runLocation: runLocationByLocalSessionID[session.localSessionID] ?? .askForApproval,
-            modelSelection: modelSelectionByLocalSessionID[session.localSessionID],
-            turnTrigger: trigger))
+        let started = try await startTurn(in: session, input: [], turnTrigger: trigger)
         try requireRegistered(session)
         guard let newTurnID = started.result?["turn"]?["id"]?.stringValue, !newTurnID.isEmpty else {
             throw HarnessAdapterError.invalidProviderEvent("turn/start response is missing turn.id")
@@ -1587,12 +1617,9 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
         case .connection, .sleep:
             guard latest.status == .failed, CodexTurnErrorPresentation.isConnectionCut(latest.error) else { return false }
         }
-        let started = try await transport.request(CodexProtocol.startTurn(
-            id: takeRequestID(), threadID: session.providerSessionID, input: [],
-            collaborationPreset: collaborationPresetByLocalSessionID[session.localSessionID],
-            runLocation: runLocationByLocalSessionID[session.localSessionID] ?? .askForApproval,
-            modelSelection: modelSelectionByLocalSessionID[session.localSessionID],
-            turnTrigger: cut == .quit ? RestartContinuation.codexTurnTrigger : RestartContinuation.codexResumeTrigger))
+        let started = try await startTurn(
+            in: session, input: [],
+            turnTrigger: cut == .quit ? RestartContinuation.codexTurnTrigger : RestartContinuation.codexResumeTrigger)
         try requireRegistered(session)
         guard let newTurnID = started.result?["turn"]?["id"]?.stringValue, !newTurnID.isEmpty else {
             throw HarnessAdapterError.invalidProviderEvent("turn/start response is missing turn.id")
@@ -1669,6 +1696,7 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
         collaborationPresetByLocalSessionID.removeValue(forKey: session.localSessionID)
         runLocationByLocalSessionID.removeValue(forKey: session.localSessionID)
         additionalRootsByLocalSessionID.removeValue(forKey: session.localSessionID)
+        finishVisualizationFolders(for: session.localSessionID)
         agentToolServerByLocalSessionID.removeValue(forKey: session.localSessionID)
         yardletInstructionsByLocalSessionID.removeValue(forKey: session.localSessionID)
         historyFreeSessionIDs.remove(session.localSessionID)
@@ -1963,6 +1991,7 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
 
         if message.method == "turn/completed" {
             activeTurnIDByLocalSessionID.removeValue(forKey: localSessionID)
+            finishVisualizationFolders(for: localSessionID)
             if let reviewID = reviewTurnIDByLocalSessionID[localSessionID],
                message.params?["turn"]?["id"]?.stringValue == reviewID {
                 reviewTurnIDByLocalSessionID.removeValue(forKey: localSessionID)

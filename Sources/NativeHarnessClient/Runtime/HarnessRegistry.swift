@@ -184,17 +184,19 @@ actor HarnessRegistry {
         connection: ProviderConnection?
     ) -> any HarnessAdapter {
         if harness == .codex {
+            let environmentManager = connection?.codexEnvironmentManager() ?? codexEnvironmentManager
+                ?? CodexEnvironmentManager(paths: .live())
             let legacy = CodexAdapter(
                 executableURL: executableURL,
-                environmentManager: connection?.codexEnvironmentManager() ?? codexEnvironmentManager
-                    ?? CodexEnvironmentManager(paths: .live()),
+                environmentManager: environmentManager,
                 environmentScope: environmentScope,
                 namesNewThreads: true,
                 predictsNextMessages: true,
                 // The App Server every task of this account and scope shares: its own row in Task
                 // Resource Usage.
                 resourceOwner: .codexAppServer(CodexAppServerIdentity(connection: connection,
-                                                                      environmentScope: environmentScope))
+                                                                      environmentScope: environmentScope)),
+                visualizationFolders: CodexVisualizationFolders(paths: environmentManager.paths, scope: environmentScope)
             )
             switch routingPolicy.route(for: harness) {
             case .legacy:

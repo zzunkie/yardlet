@@ -43,6 +43,15 @@ line of its own, as `visualize{"path": …, "title": …, "mode": "wide"}` betwe
 teaches; the Codex app reads that into `::codex-inline-vis{path=…}`, and Yardlet reads both
 (`CodexVisualization`). "Copy response" leaves the line out, as the app does.
 
+- **Where Codex writes them** (`CodexVisualizationFolders`). As the Codex app does, a turn that may write (Ask for
+  approval, Approve for me, Full access) gets its thread's folder, `<Codex home>/visualizations/YYYY/MM/DD/<thread>`,
+  after the task's folder in `turn/start`'s `runtimeWorkspaceRoots`, made as the turn starts; the skill tells the
+  model to write there. The date is the UTC day of the time in the thread's UUIDv7 ID, the Codex home the one the
+  task's account runs with. A Read-only turn gets none, as in the app, and neither does Custom, whose sandbox is
+  whatever `config.toml` says. Unlike the app, which keeps every turn's folder, a folder the turn made and left empty
+  goes at its end. Yardlet lists the folders it made in `~/.yardlet/harnesses/codex/visualization-folders.txt`, and
+  deleting the thread (`thread/delete`) takes away only those; archiving a thread or removing it from Yardlet's list
+  leaves its folder, and a folder the Codex app or another client made is never removed.
 - **Which files.** An `.html` file in the task's folder, or under a thread's folder in a Codex home,
   `<home>/visualizations/YYYY/MM/DD/<thread>/` and anything below it, where the home holds `config.toml` or
   `sessions` (`CodexVisualizationPage.allowedFile`). A link, a folder or a file over 5 MB is not read. It is read off
@@ -79,4 +88,5 @@ teaches; the Codex app reads that into `::codex-inline-vis{path=…}`, and Yardl
 - **When it cannot be drawn.** A file that is not allowed or not readable, or a page that does not report its height
   within ten seconds, leaves a card with the title, "Show view again" and "Open file". The Windows app leaves the
   visualization out.
-- **Leaving nothing behind.** There is no setting. The page, its state and its height are in memory only.
+- **Leaving nothing behind.** There is no setting. The page, its state and its height are in memory only; the
+  folders Yardlet made keep what the model wrote until the thread is deleted.
