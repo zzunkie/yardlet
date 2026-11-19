@@ -769,7 +769,6 @@
 "Working-tree review" = "Working-tree review";
 "Codex change and review handoffs remain task-owned." = "Codex change and review handoffs remain task-owned.";
 "Hook execution remains owned by the selected runtime." = "Hook execution remains owned by the selected runtime.";
-"Command palette" = "Command palette";
 "Use ⌘K to search task and capability commands." = "Use ⌘K to search task and capability commands.";
 "Default and cancel actions" = "Default and cancel actions";
 "Native keyboard and accessibility semantics are preserved." = "Native keyboard and accessibility semantics are preserved.";

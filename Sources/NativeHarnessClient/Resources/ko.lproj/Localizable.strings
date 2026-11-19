@@ -193,7 +193,7 @@
 "New session" = "새 세션";
 "New task" = "새 작업";
 "Home" = "홈";
-"Command palette" = "명령 팔레트";
+"Command palette" = "명령어 팔레트";
 "Codex runtime" = "Codex 런타임";
 "Search commands" = "명령 검색";
 "Search tasks and commands" = "작업과 명령 검색";
@@ -769,7 +769,6 @@
 "Working-tree review" = "작업 트리 검토";
 "Codex change and review handoffs remain task-owned." = "Codex 변경 사항과 검토 핸드오프는 작업이 소유합니다.";
 "Hook execution remains owned by the selected runtime." = "훅 실행은 선택한 런타임이 계속 소유합니다.";
-"Command palette" = "명령어 팔레트";
 "Use ⌘K to search task and capability commands." = "⌘K로 작업 및 기능 명령어를 검색합니다.";
 "Default and cancel actions" = "기본 및 취소 동작";
 "Native keyboard and accessibility semantics are preserved." = "네이티브 키보드와 접근성 의미를 유지합니다.";
@@ -4203,7 +4202,7 @@
 "Change shortcut for %@" = "%@ 단축키 변경";
 "Clear" = "비우기";
 "Clear and assign" = "기존 키를 비우고 지정";
-"Close command palette" = "명령 팔레트 닫기";
+"Close command palette" = "명령어 팔레트 닫기";
 "Complete selection" = "선택 항목 완성";
 "Composer" = "작성창";
 "Cut" = "잘라내기";
