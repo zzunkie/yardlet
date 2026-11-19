@@ -105,9 +105,9 @@ final class TaskHeader {
             ring.height = 14
             mark = ring
         case .waitingForApproval:
-            mark = SidebarStyle.glyph("\u{EA18}", size: 12, color: SidebarStyle.orange)
+            mark = SidebarStyle.glyph(ConversationStyle.Glyph.shield, size: 12, color: WindowsTheme.secondaryText)
         case .failed:
-            mark = SidebarStyle.glyph("\u{E783}", size: 12, color: SidebarStyle.red)
+            mark = SidebarStyle.glyph(ConversationStyle.Glyph.warning, size: 12, color: SidebarStyle.red)
         case .ready, .completed:
             return
         }

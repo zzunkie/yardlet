@@ -4,10 +4,9 @@ import UWP
 import WinUI
 import YardletRemote
 
-/// Settings, as Windows 11's Settings draws its pages: a title, then groups under their names, each setting a card
-/// with its words at the left and its control at the right. It holds what the Mac's Settings › Remote holds
-/// (`RemoteSettingsPane`), when this computer's tasks can be followed from elsewhere, and Connect to a Mac, which the
-/// Mac keeps under File: a link pasted from another Mac, and the Macs paired before, each opened in a window of its own.
+/// Settings groups related rows in one box, with each setting's words at the left and its control at the right.
+/// Settings › Remote controls access to this computer's tasks. Connect to a Mac accepts a pairing link and lists
+/// previously paired Macs, each of which opens in its own window.
 @MainActor
 final class SettingsPane {
     let view = ScrollViewer()
@@ -28,10 +27,10 @@ final class SettingsPane {
         title.margin = Thickness(left: 0, top: 0, right: 0, bottom: 8)
         page.children.append(title)
         if let remote {
-            page.children.append(SettingsCard.groupTitle(L10n.string("Remote")))
+            page.children.append(SettingsGroup.groupTitle(L10n.string("Remote")))
             page.children.append(remote.view)
         }
-        page.children.append(SettingsCard.groupTitle(L10n.string("Connect to a Mac")))
+        page.children.append(SettingsGroup.groupTitle(L10n.string("Connect to a Mac")))
         page.children.append(connect.view)
         view.content = page
         view.verticalScrollBarVisibility = .auto
@@ -55,74 +54,75 @@ final class SettingsPane {
     }
 }
 
-/// Windows 11 Settings' rows: a card for each setting, its symbol and words at the left and its control at the right,
-/// four pixels from the next, under its group's name.
+/// A box around related settings, with an inset divider between rows. Hiding a row hides its divider too.
 @MainActor
-enum SettingsCard {
-    /// The cards' fill and edge, Windows' own card colors.
-    static let fill = ThemeColor(light: .paper(0.70), dark: .paper(0.05))
-    static let stroke = ThemeColor(light: .ink(0.06), dark: .ink(0.10))
-    static let spacing: Double = 4
+final class SettingsGroup {
+    let view = Border()
+    private let rows = StackPanel()
+
+    init(_ contents: [UIElement] = []) {
+        view.background = WindowsTheme.elevated.brush
+        view.borderBrush = WindowsTheme.separator.brush
+        view.borderThickness = Thickness(left: 1, top: 1, right: 1, bottom: 1)
+        view.cornerRadius = ConversationStyle.corners(WindowsTheme.panelCornerRadius)
+        view.padding = Thickness(left: 16, top: 0, right: 16, bottom: 0)
+        view.child = rows
+        for content in contents { append(content) }
+    }
+
+    @discardableResult
+    func append(_ content: UIElement) -> Border {
+        let row = Border()
+        row.padding = Thickness(left: 0, top: 12, right: 0, bottom: 12)
+        if rows.children.size > 0 {
+            row.borderBrush = WindowsTheme.separator.brush
+            row.borderThickness = Thickness(left: 0, top: 1, right: 0, bottom: 0)
+        }
+        row.child = content
+        rows.children.append(row)
+        return row
+    }
 
     static func groupTitle(_ words: String) -> TextBlock {
         let block = TextBlock()
         block.text = words
-        block.fontSize = 14
+        block.fontSize = 13
         block.fontWeight = UWP.FontWeight(weight: 600)
         block.foreground = WindowsTheme.text.brush
         block.margin = Thickness(left: 0, top: 20, right: 0, bottom: 8)
         return block
     }
 
-    /// A card around `content`.
-    static func card(_ content: UIElement) -> Border {
-        let card = Border()
-        card.background = fill.brush
-        card.borderBrush = stroke.brush
-        card.borderThickness = Thickness(left: 1, top: 1, right: 1, bottom: 1)
-        card.cornerRadius = CornerRadius(topLeft: 4, topRight: 4, bottomRight: 4, bottomLeft: 4)
-        card.padding = Thickness(left: 16, top: 12, right: 16, bottom: 12)
-        card.minHeight = 64
-        card.child = content
-        return card
-    }
-
-    /// A setting's row: its symbol, its title with what it does under it, and its control.
-    static func row(glyph: String?, title: String, description: String? = nil, control: FrameworkElement? = nil)
+    /// A setting's title and description at the left and its control at the right.
+    static func row(title: String, description: String? = nil, control: FrameworkElement? = nil)
         -> (row: Grid, description: TextBlock) {
         let row = Grid()
-        row.columnSpacing = 16
-        SidebarStyle.columns(row, [SidebarStyle.auto, SidebarStyle.star, SidebarStyle.auto])
-        if let glyph {
-            let icon = SidebarStyle.glyph(glyph, size: 20, color: WindowsTheme.text)
-            icon.verticalAlignment = .center
-            icon.width = 20
-            row.children.append(icon)
-        }
+        row.columnSpacing = 12
+        SidebarStyle.columns(row, [SidebarStyle.star, SidebarStyle.auto])
         let words = StackPanel()
         words.verticalAlignment = .center
         words.spacing = 2
-        let titleBlock = TextBlock()
-        titleBlock.text = title
-        titleBlock.fontSize = 14
-        titleBlock.foreground = WindowsTheme.text.brush
-        titleBlock.textWrapping = .wrap
-        words.children.append(titleBlock)
-        let detail = TextBlock()
-        detail.text = description ?? ""
-        detail.fontSize = 12
-        detail.foreground = WindowsTheme.secondaryText.brush
-        detail.textWrapping = .wrap
+        words.children.append(text(title, isTitle: true))
+        let detail = text(description ?? "")
         detail.visibility = (description ?? "").isEmpty ? .collapsed : .visible
         words.children.append(detail)
-        try? Grid.setColumn(words, 1)
         row.children.append(words)
         if let control {
             control.verticalAlignment = .center
-            try? Grid.setColumn(control, 2)
+            try? Grid.setColumn(control, 1)
             row.children.append(control)
         }
         return (row, detail)
+    }
+
+    static func text(_ value: String, isTitle: Bool = false) -> TextBlock {
+        let block = TextBlock()
+        block.text = value
+        block.fontSize = isTitle ? 13 : 12
+        block.foreground = isTitle ? WindowsTheme.text.brush : WindowsTheme.secondaryText.brush
+        if isTitle { block.fontWeight = UWP.FontWeight(weight: 500) }
+        block.textWrapping = .wrap
+        return block
     }
 
     /// A switch for a card's end, with no words of its own: the card's title names it.
@@ -155,24 +155,19 @@ final class ConnectToMacSection {
     private let log: QAEventLog
     private let linkField = TextBox()
     private let connectButton = Button()
-    private let connectStatus = TextBlock()
+    private let connectStatus = SettingsGroup.text("")
     private let pairedMacs: PairedMacsList
 
     init(directory: RemoteHostDirectory, log: QAEventLog) {
         self.directory = directory
         self.log = log
         pairedMacs = PairedMacsList(directory: directory, log: log)
-        view.spacing = SettingsCard.spacing
 
         let content = StackPanel()
         content.spacing = 12
-        let (heading, _) = SettingsCard.row(
-            glyph: "\u{E71B}", title: L10n.string("Connect to a Mac"),
-            description: L10n.string("Follow and drive another Mac's tasks here. On that Mac, open Settings › Remote, choose Pair…, then Copy link, and paste the link below."))
-        content.children.append(heading)
+        content.children.append(SettingsGroup.text(L10n.string("Follow and drive another Mac's tasks here. On that Mac, open Settings › Remote, choose Pair…, then Copy link, and paste the link below.")))
         let entry = Grid()
         entry.columnSpacing = 8
-        entry.margin = Thickness(left: 36, top: 0, right: 0, bottom: 0)
         SidebarStyle.columns(entry, [SidebarStyle.star, SidebarStyle.auto])
         linkField.placeholderText = "yardlet-remote://pair?…"
         try? AutomationProperties.setName(linkField, L10n.string("Connection link"))
@@ -183,20 +178,10 @@ final class ConnectToMacSection {
         try? Grid.setColumn(connectButton, 1)
         entry.children.append(connectButton)
         content.children.append(entry)
-        connectStatus.textWrapping = .wrap
-        connectStatus.fontSize = 12
-        connectStatus.foreground = WindowsTheme.secondaryText.brush
-        connectStatus.margin = Thickness(left: 36, top: 0, right: 0, bottom: 0)
         connectStatus.visibility = .collapsed
         content.children.append(connectStatus)
-        let note = TextBlock()
-        note.text = L10n.string("The link works once, for 5 minutes. Pair once while both computers are together; from then on this computer connects on the same network, over Tailscale or through the Yardlet server.")
-        note.textWrapping = .wrap
-        note.fontSize = 12
-        note.foreground = WindowsTheme.secondaryText.brush
-        note.margin = Thickness(left: 36, top: 0, right: 0, bottom: 0)
-        content.children.append(note)
-        view.children.append(SettingsCard.card(content))
+        content.children.append(SettingsGroup.text(L10n.string("The link works once, for 5 minutes. Pair once while both computers are together; from then on this computer connects on the same network, over Tailscale or through the Yardlet server.")))
+        view.children.append(SettingsGroup([content]).view)
 
         pairedMacs.onOpen = { [weak self] hostID in self?.onOpen(hostID) }
         pairedMacs.onRemove = { [weak self] hostID in self?.onRemove(hostID) }

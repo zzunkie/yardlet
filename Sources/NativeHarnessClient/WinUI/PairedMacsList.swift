@@ -5,8 +5,8 @@ import UWP
 import WinUI
 import YardletRemote
 
-/// The Macs this computer paired with, under Connect to a Mac in Settings, as the Mac's Connect window lists them: a card
-/// for each, as Windows 11 Settings draws a setting, with when it last connected, Remove… and Open. Removing asks first, then closes the host's window, forgets the host and its
+/// The Macs this computer paired with, under Connect to a Mac in Settings. Each row shows when it last connected,
+/// Remove… and Open. Removing asks first, then closes the host's window, forgets the host and its
 /// key, and asks the host to forget this computer when it can be reached (`RemoteHostDirectory.forget`).
 @MainActor
 final class PairedMacsList {
@@ -22,13 +22,13 @@ final class PairedMacsList {
     init(directory: RemoteHostDirectory, log: QAEventLog) {
         self.directory = directory
         self.log = log
-        view.spacing = SettingsCard.spacing
     }
 
     func show(_ hosts: [RemoteSavedHost]) {
         view.children.clear()
         guard !hosts.isEmpty else { return }
-        view.children.append(SettingsCard.groupTitle(L10n.string("Paired Macs")))
+        view.children.append(SettingsGroup.groupTitle(L10n.string("Paired Macs")))
+        let group = SettingsGroup()
         let now = Date()
         for host in hosts {
             let seen = host.lastConnectedAt.map { L10n.format("Last connected %@", RelativeTime.ago($0, relativeTo: now)) }
@@ -36,15 +36,16 @@ final class PairedMacsList {
             let buttons = StackPanel()
             buttons.orientation = .horizontal
             buttons.spacing = 8
-            let remove = SettingsCard.button(L10n.string("Remove…")) { [weak self] in self?.confirmRemoval(of: host) }
+            let remove = SettingsGroup.button(L10n.string("Remove…")) { [weak self] in self?.confirmRemoval(of: host) }
             try? AutomationProperties.setName(remove, L10n.format("Remove %@", host.name))
             buttons.children.append(remove)
-            let open = SettingsCard.button(L10n.string("Open")) { [weak self] in self?.onOpen?(host.id) }
+            let open = SettingsGroup.button(L10n.string("Open")) { [weak self] in self?.onOpen?(host.id) }
             try? AutomationProperties.setName(open, L10n.format("Open %@", host.name))
             buttons.children.append(open)
-            let (row, _) = SettingsCard.row(glyph: "\u{E7F4}", title: host.name, description: seen, control: buttons)
-            view.children.append(SettingsCard.card(row))
+            let (row, _) = SettingsGroup.row(title: host.name, description: seen, control: buttons)
+            group.append(row)
         }
+        view.children.append(group.view)
     }
 
     /// The Mac's question, said of this computer rather than of a Mac.

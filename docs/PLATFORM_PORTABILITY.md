@@ -371,8 +371,8 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   host's key in Credential Manager and the list and cache under `%LOCALAPPDATA%\Yardlet`. Without Bonjour, a host is
   reached at the direct addresses it named, on the same network or over Tailscale, and through its relay. A host's
   sidebar is drawn again only when what it shows changes, not as a task's marks and times change while it streams.
-- **This computer's tasks elsewhere.** Settings, at the foot of the sidebar, draws its settings as Windows 11 Settings
-  does, a card for each in its group (`WinUI/SettingsPane.swift`), and holds Settings › Remote as the Mac's
+- **This computer's tasks elsewhere.** Settings, at the foot of the sidebar, draws related settings together in one
+  box with a divider between rows (`WinUI/SettingsPane.swift`). It holds Settings › Remote as the Mac's
   (`WinUI/RemoteSettingsPane.swift`): Allow remote connections, off until turned on and then served on the same
   network and over Tailscale by a listener on every interface at port 47616, advertised with DNS-SD, and through the
   relay; the paths a device can take now; pairing with a QR code (Swift QR Code Generator) and Copy link, which keeps the link

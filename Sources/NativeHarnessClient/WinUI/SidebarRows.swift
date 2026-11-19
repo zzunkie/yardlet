@@ -293,7 +293,7 @@ enum SidebarStatusMark {
         case .awaitingApproval: dot(SidebarStyle.green)
         case .needsInput: dot(SidebarStyle.orange)
         case .waitingInBrowser: symbol("\u{E774}", SidebarStyle.orange)
-        case .failed: symbol("\u{E7BA}", SidebarStyle.red)
+        case .failed: symbol(ConversationStyle.Glyph.warning, SidebarStyle.red)
         case .usageLimit: symbol("\u{EC4A}", SidebarStyle.orange)
         case .running: SidebarBlink.shared.blinking(dot(WindowsTheme.secondaryText))
         case .reconnecting: symbol("\u{E895}", WindowsTheme.secondaryText)

@@ -375,7 +375,7 @@ enum ConversationWorkLines {
         if let counts = tool.lineCounts { trailing.append(FileChangeView.counts(counts, size: 13)) }
         if item.phase == .running {
             trailing.append(ConversationStyle.spinner())
-        } else if item.phase == .failed {
+        } else if item.phase == .failed, !ConversationLineWording.saysFailure(tool, phase: item.phase, harness: context.harness) {
             trailing.append(failed())
         }
         if tool.isApproved { trailing.append(allowedMark()) }

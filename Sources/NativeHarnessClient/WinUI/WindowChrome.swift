@@ -40,11 +40,12 @@ enum WindowChrome {
     /// (`LayerFillColorDefault`) under a hairline at its top and left edges, rounded at its top left.
     static func styleContent(_ content: Border) {
         content.background = layerFill.brush
-        content.borderBrush = SettingsCard.stroke.brush
+        content.borderBrush = layerStroke.brush
         content.borderThickness = Thickness(left: 1, top: 1, right: 0, bottom: 0)
         content.cornerRadius = CornerRadius(topLeft: 8, topRight: 0, bottomRight: 0, bottomLeft: 0)
     }
 
+    private static let layerStroke = ThemeColor(light: .ink(0.06), dark: .ink(0.10))
     private static let layerFill = ThemeColor(light: .paper(0.5), dark: UWP.Color(a: 0x4C, r: 0x3A, g: 0x3A, b: 0x3A))
 
     private static func titleBar(_ title: String, subtitle: TextBlock?) -> Grid {
