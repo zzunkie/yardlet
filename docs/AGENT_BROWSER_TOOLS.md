@@ -294,6 +294,21 @@ They start no model turn and change no files or harness.
   become a chip. When a connector tool's name clashes with `spawn_task` or `dismiss_task`, it is left out of the list
   and calls go to the Yardlet tool.
 
+### Widget tool
+
+`show_widget` draws an HTML view in the conversation for the person, with the Claude app's name and arguments for its
+own tool of that name. Yardlet offers it to every harness but Codex, whose model has the `visualize` skill and its
+thread's folder for it (docs/CONVERSATION_MEDIA.md, "Codex visualizations"); only with the app, as the task suggestion
+tools. It has `readOnlyHint: true` and `openWorldHint: false`, is not loaded always (it stays behind Claude Code's
+tool search), and goes into Claude Code's `--allowedTools`.
+
+| Tool | Arguments | Behavior |
+|---|---|---|
+| `show_widget` | `title`, `widget_code` (both required) | An error when `widget_code` is empty or over 1 MB. Otherwise it answers at once, "Shown to the person in Yardlet's conversation, drawn from this call's widget_code. They see it and you do not, so say in words what matters." It saves nothing: the conversation draws the view from the call's arguments, which the harness keeps (docs/CONVERSATION_MEDIA.md, "Views from other harnesses") |
+
+- The view is recognized by the words only Yardlet's answer has, so the Claude app's own `show_widget` in a
+  conversation imported from it stays a tool line. A connector tool named `show_widget` is left out of the list.
+
 ### Simulator tools
 
 Ten tools, `simulator_list`, `simulator_attach`, `simulator_detach`, `simulator_screenshot`, `simulator_snapshot`,
@@ -567,7 +582,7 @@ threads the same way, in the workspace sandbox asking on request; `readOnly` and
   - A queued subagent: `AgentRun.State.queued`, "Pending" on the agent card and the conversation card; stopping it takes
     it out of the queue. A quit ends it as `interrupted`, as one at work (`run_agent` above); it is not queued again.
 - **Claude Code launch arguments:** The 14 session tools also go into `--allowedTools`, with the task suggestion and
-  settings tools, `read_terminal` and `list_task_runs` (`AgentToolServerLaunch.claudeAllowedTools`; no CLI card; for the
+  settings tools, `read_terminal`, `list_task_runs` and `show_widget` (`AgentToolServerLaunch.claudeAllowedTools`; no CLI card; for the
   calls that reach further and for `archive_task`, the app asks when the calling task runs at a level that asks; hiding
   and showing projects have no card). Codex gets no per-tool `approval_mode`, so for `archive_task` too, as for
   other tools that write, Codex may ask first under that task's approval setting.
@@ -721,7 +736,7 @@ removes the pending record. A successful retry replaces that record with `starte
 
 | Harness | Path | Form | Evidence |
 |---|---|---|---|
-| Claude Code | The launch argument `--mcp-config <file>` (at the very end, because the option takes several values). Just before it, `--allowedTools` with `mcp__yardlet__spawn_task` and `mcp__yardlet__dismiss_task` (the two tools that only show a chip, without a permission card; the Claude app also puts them in `allowedTools`), the session tools, the settings tools, `read_terminal` (while the terminal is not shared the server does not list it and the name allows nothing), and `list_task_runs` of the scheduled-task tools (`AgentToolServerLaunch.claudeAllowedTools`) | `{"mcpServers":{"yardlet":{"type":"stdio","command","args","env"}}}`. The file is a 0600 file in a 0700 folder (so the token does not show in the process list). `--strict-mcp-config` is not used, so the user's servers stay as they are | `--mcp-config <configs...>` and `--strict-mcp-config` are in the CLI's `--help`. The control request `mcp_status` reports `yardlet: connected`, and `mcp_call` calls a tool (section 7) |
+| Claude Code | The launch argument `--mcp-config <file>` (at the very end, because the option takes several values). Just before it, `--allowedTools` with `mcp__yardlet__spawn_task` and `mcp__yardlet__dismiss_task` (the two tools that only show a chip, without a permission card; the Claude app also puts them in `allowedTools`), the session tools, the settings tools, `read_terminal` (while the terminal is not shared the server does not list it and the name allows nothing), `list_task_runs` of the scheduled-task tools, and `show_widget` (`AgentToolServerLaunch.claudeAllowedTools`) | `{"mcpServers":{"yardlet":{"type":"stdio","command","args","env"}}}`. The file is a 0600 file in a 0700 folder (so the token does not show in the process list). `--strict-mcp-config` is not used, so the user's servers stay as they are | `--mcp-config <configs...>` and `--strict-mcp-config` are in the CLI's `--help`. The control request `mcp_status` reports `yardlet: connected`, and `mcp_call` calls a tool (section 7) |
 | Codex | `config` of `thread/start`, `thread/resume` and `thread/fork` | `{"mcp_servers":{"yardlet":{"command","args","env","tool_timeout_sec":1800}}}`. No tool gets an `approval_mode` of Yardlet's: whether Codex asks before a call follows the task's own approval setting and the tool's annotations. A fork gets the new task's token | In the App Server's schema (`app-server generate-json-schema --experimental`) all three requests take `config` (`additionalProperties: true`). Codex merges it into the user's configuration, so a user server in the same home stays connected beside `yardlet` (`mcpServerStatus/list`; a nested object and the dot notation `mcp_servers.yardlet` behave the same), and `mcpServer/tool/call` calls a tool (section 7). `thread/resume` was checked only by its request body, because a thread with no turn has no rollout |
 | ACP (OpenCode, Antigravity, Kimi, Grok, Hermes) | `mcpServers` of `session/new` and `session/load` | `{"name":"yardlet","command","args":[],"env":[{"name","value"}]}` | ACP makes stdio MCP mandatory. The server is not added when `agentCapabilities.mcpCapabilities` of `initialize` has `stdio: false` or is `false`. OpenCode starts the server through `session/new` and sends `initialize` and `tools/list`. Antigravity (`agy acp`, which Yardlet runs from 1.4.11, `AntigravityTransport.acpMinimum`) does the same after a `server/discover` request; it does not save the server in `mcp_config.json`, but keeps each tool's schema under `~/.gemini/antigravity-cli/mcp/<server>/` as it does for its own servers |
 | Muse, Pi, Cursor | none | Not added (no route: `AgentToolInjectionRoute` is nil), and no token is issued | MSP, Pi RPC and headless stream-json have no per-session MCP field. If needed, the next step is to register it with that harness's `mcp add`, with the user's approval |
@@ -769,6 +784,7 @@ removes the pending record. A successful retry replaces that record with `starte
 | `Sources/NativeHarnessClient/AgentTools/` | Injection forms, the token broker (split into browser tools and connector tools), tools → CDP, snapshot, keys, tabs and dialogs | Engine |
 | `Sources/NativeHarnessClient/Platform/macOS/AgentTools/MacAgentToolService.swift` | Bundle path, socket, host connection, App Nap | macOS |
 | `Sources/YardletAgentTools/TaskSuggestionToolCatalog.swift` | Definitions of `spawn_task` and `dismiss_task`, ID format, result sentences | Engine (Foundation only) |
+| `Sources/YardletAgentTools/WidgetToolCatalog.swift` | Definition of `show_widget`, its limits and result sentence | Engine (Foundation only) |
 | `Sources/NativeHarnessClient/Domain/TaskSuggestions.swift`, `AppModel+TaskSuggestions.swift` | Argument checks and answers, per-task outcome storage (`TaskSuggestionStore`), a draft's suggestion source, start records and parent links | Engine |
 | `Sources/NativeHarnessClient/Presentation/Conversation/ConversationTaskSuggestionProjection.swift` | Calls per harness → chips | Engine |
 | `Sources/NativeHarnessClient/Views/Conversation/Cards/TaskSuggestionCard.swift` | Chip view | macOS UI |

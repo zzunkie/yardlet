@@ -34,7 +34,7 @@ struct AgentToolServerLaunch: Equatable, Sendable {
     /// without the CLI's card as well: the app asks on its own card for the changes that ask.
     static var claudeAllowedTools: [String] {
         ((TaskSuggestionToolCatalog.tools + SessionToolCatalog.tools + SettingsToolCatalog.tools).map(\.name)
-            + [TerminalToolCatalog.readTerminal, ScheduleToolCatalog.listRuns])
+            + [TerminalToolCatalog.readTerminal, ScheduleToolCatalog.listRuns, WidgetToolCatalog.showWidget])
             .map { "mcp__\(AgentToolEnvironment.serverName)__\($0)" }
     }
 

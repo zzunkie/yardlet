@@ -86,7 +86,8 @@ final class TaskSuggestionTests: XCTestCase {
         let listed = await broker.list(AgentToolCall(token: token, session: task.uuidString, tool: "",
                                                      arguments: .object([:]), method: AgentToolCall.listMethod))
         let list = try XCTUnwrap(listed)
-        XCTAssertEqual(list.tools.compactMap { $0["name"]?.stringValue }, ["spawn_task", "dismiss_task", "linear_list_issues"],
+        XCTAssertEqual(list.tools.compactMap { $0["name"]?.stringValue },
+                       ["spawn_task", "dismiss_task", "show_widget", "linear_list_issues"],
                        "No browser tools when they were off; a connector tool spelled like Yardlet's own is left out")
 
         let call = AgentToolCall(token: token, session: task.uuidString, tool: "spawn_task",
@@ -104,6 +105,25 @@ final class TaskSuggestionTests: XCTestCase {
         XCTAssertTrue(dismissed.text.contains("withdrawn"), dismissed.text)
         XCTAssertEqual(model.taskSuggestions.resolution(of: id, in: task)?.outcome, .dismissed)
         XCTAssertNil(model.taskSuggestions.resolution(of: id, in: UUID()), "Kept with the task that called")
+
+        // `show_widget` answers at once and keeps nothing; the conversation draws the call. A Codex task, whose model
+        // has its own visualize skill, does not get it.
+        let shown = await broker.handle(AgentToolCall(token: token, session: task.uuidString, tool: "show_widget",
+                                                      arguments: .object(["title": .string("Chart"),
+                                                                          "widget_code": .string("<p>chart</p>")])))
+        XCTAssertFalse(shown.isError, shown.text)
+        XCTAssertTrue(shown.text.contains(WidgetToolCatalog.resultSignature), shown.text)
+        let empty = await broker.handle(AgentToolCall(token: token, session: task.uuidString, tool: "show_widget",
+                                                      arguments: .object(["title": .string("Chart"),
+                                                                          "widget_code": .string(" ")])))
+        XCTAssertTrue(empty.isError)
+        let codexTask = UUID()
+        let codexLaunch = try XCTUnwrap(broker.agentToolServer(for: codexTask, workspaceRoots: [],
+                                                               connectorScope: ConnectorTaskScope(harness: .codex)))
+        let codexToken = try XCTUnwrap(codexLaunch.environment[AgentToolEnvironment.token])
+        let codexList = await broker.list(AgentToolCall(token: codexToken, session: codexTask.uuidString, tool: "",
+                                                        arguments: .object([:]), method: AgentToolCall.listMethod))
+        XCTAssertEqual(codexList?.tools.compactMap { $0["name"]?.stringValue }.contains("show_widget"), false)
 
         // Over the socket, as yardlet-mcp reaches the app.
         let directory = FileManager.default.temporaryDirectory.appending(path: "yts-\(UUID().uuidString.prefix(8))")

@@ -64,7 +64,8 @@ enum ConversationActivityProjection {
                 ConversationConnectorView.of(tool: connector.name, label: connector.label,
                                              arguments: MCPAppArguments.parse(activity.input),
                                              harnessResult: ConversationConnectorView.textResult(activity.output))
-            } : nil
+            } : nil,
+            widget: phase == .completed && connector == nil ? ConversationWidget.of(activity) : nil
         ))
     }
 

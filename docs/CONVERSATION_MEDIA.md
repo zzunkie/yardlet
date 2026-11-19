@@ -98,3 +98,20 @@ teaches; the Codex app reads that into `::codex-inline-vis{path=…}`, and Yardl
   visualization out.
 - **Leaving nothing behind.** There is no setting. The page, its state and its height are in memory only; the
   folders Yardlet made keep what the model wrote until the thread is deleted.
+
+## Views from other harnesses
+
+Claude Code and the ACP harnesses have no `visualize` skill, so Yardlet gives them its own tool for the same view:
+`show_widget(title, widget_code)`, named and shaped as the Claude app's tool of that name (docs/AGENT_BROWSER_TOOLS.md,
+"Widget tool"). Codex does not get it. Its description is five sentences, and it stays behind Claude Code's tool
+search, so it adds little to a turn's prompt.
+
+- **In the conversation.** A completed call that Yardlet answered (its answer has words only Yardlet's has) is a tool
+  row whose detail is the view, open unless the person folds it, standing alone and kept in view in a folded turn,
+  as a connector's MCP App view is (`ConversationWidget`). The view is drawn from the call's arguments, which the
+  harness keeps in its own history, so it is drawn again when the conversation is reopened; Yardlet keeps nothing.
+- **The page.** The fragment in the system's plain styles with Yardlet's small bridge (no kit), in the same sandbox,
+  policy, pool, size, expanding and failure card as a Codex visualization (`MCPAppViewController.startWidget`). Its
+  `prefers-color-scheme` is the app's appearance.
+- **Leaving nothing behind.** There is no setting. Yardlet keeps no view; a harness's history keeps only the call.
+

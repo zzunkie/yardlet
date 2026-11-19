@@ -419,6 +419,11 @@ struct ConversationTool: Equatable, Sendable {
     /// The MCP App view the connector's tool names, drawn as the row's detail once the call completed
     /// (docs/CONNECTORS.md, "MCP Apps").
     var view: ConversationConnectorView? = nil
+    /// The view a completed `show_widget` call drew, as the row's detail (docs/CONVERSATION_MEDIA.md).
+    var widget: ConversationWidget? = nil
+
+    /// The row's detail is a view: it opens on it, stands alone, and stays in a folded turn.
+    var drawsView: Bool { view != nil || widget != nil }
 }
 
 struct ConversationSubagent: Equatable, Sendable {

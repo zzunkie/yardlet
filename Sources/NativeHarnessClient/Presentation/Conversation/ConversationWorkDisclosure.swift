@@ -17,7 +17,7 @@ enum ConversationWorkDisclosure {
     /// that draws a view opens on the view unless the person folded it; anything else starts folded, while
     /// it runs too, unless the person opened it (`choice`).
     static func lineStartsOpen(_ item: ConversationItem, choice: Bool? = nil) -> Bool {
-        if case let .tool(tool) = item.kind, tool.view != nil { return choice ?? true }
+        if case let .tool(tool) = item.kind, tool.drawsView { return choice ?? true }
         return item.phase == .failed || choice == true
     }
 

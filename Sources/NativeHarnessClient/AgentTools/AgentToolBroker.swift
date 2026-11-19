@@ -271,6 +271,9 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         if TaskSuggestionToolCatalog.definition(named: call.tool) != nil, let suggestions {
             return await suggestions.callTaskSuggestionTool(named: call.tool, arguments: call.arguments, sessionID: sessionID)
         }
+        if WidgetToolCatalog.definition(named: call.tool) != nil, offersWidget(to: sessionID) {
+            return Self.showWidget(call.arguments)
+        }
         if SessionToolCatalog.definition(named: call.tool) != nil || SettingsToolCatalog.definition(named: call.tool) != nil,
            let sessions {
             // Keys and tokens in another task's title, conversation or answer are hidden as the browser tools hide them.
@@ -324,6 +327,27 @@ final class AgentToolBroker: AgentToolLaunchProviding {
             ?? TaskSuggestionToolCatalog.definition(named: name) ?? SessionToolCatalog.definition(named: name)
             ?? TerminalToolCatalog.definition(named: name) ?? SettingsToolCatalog.definition(named: name)
             ?? ScheduleToolCatalog.definition(named: name) ?? SimulatorToolCatalog.definition(named: name)
+            ?? WidgetToolCatalog.definition(named: name)
+    }
+
+    /// `show_widget` for the harnesses other than Codex, whose model has the `visualize` skill and its own folder
+    /// for it; only with the app, as the task suggestion tools.
+    private func offersWidget(to sessionID: UUID) -> Bool {
+        suggestions != nil && connectorScopes[sessionID]?.harness != .codex
+    }
+
+    /// `show_widget` answers at once: the conversation draws the view from the call (docs/CONVERSATION_MEDIA.md,
+    /// "Views from other harnesses"), and nothing is kept.
+    private static func showWidget(_ arguments: ToolJSON) -> AgentToolResult {
+        let code = arguments[WidgetToolCatalog.widgetCode]?.stringValue ?? ""
+        guard !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .failure("widget_code is empty.", .invalidArguments, retry: .withChanges)
+        }
+        guard code.utf8.count <= WidgetToolCatalog.maximumCodeLength else {
+            return .failure("widget_code is \(code.utf8.count) bytes; the limit is 1 MB. Draw less, or load a library "
+                + "from a CDN instead of inlining it.", .invalidArguments, retry: .withChanges)
+        }
+        return .text(WidgetToolCatalog.result)
     }
 
     /// A call to a tool the task does not have, such as one its harness listed before a connector went off,
@@ -363,17 +387,18 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         let simulatorTools = simulatorToolsByTask[sessionID] == true && simulators?.simulatorPlatformIsUsable == true
             ? SimulatorToolCatalog.tools.map(\.json) : []
         let suggestionTools = suggestions == nil ? [] : TaskSuggestionToolCatalog.tools.map(\.json)
+        let widgetTools = offersWidget(to: sessionID) ? [WidgetToolCatalog.tool.json] : []
         let sessionTools = sessions == nil ? [] : (SessionToolCatalog.tools + SettingsToolCatalog.tools).map(\.json)
         let terminalTools = sessions != nil && sharesTerminal() ? [TerminalToolCatalog.tool.json] : []
         let scheduleTools = schedules == nil ? [] : ScheduleToolCatalog.tools.map(\.json)
         let ownNames = Set((TaskSuggestionToolCatalog.tools + SessionToolCatalog.tools + SettingsToolCatalog.tools
             + ScheduleToolCatalog.tools + SimulatorToolCatalog.tools
-            + [VaultToolCatalog.tool, TerminalToolCatalog.tool]).map(\.name))
+            + [VaultToolCatalog.tool, TerminalToolCatalog.tool, WidgetToolCatalog.tool]).map(\.name))
         let connectorTools = (await connectors?.connectorTools(for: connectorContext(sessionID)) ?? []).filter {
             !ownNames.contains($0["name"]?.stringValue ?? "")
         }
-        return browser + vaultTools + simulatorTools + suggestionTools + sessionTools + terminalTools + scheduleTools
-            + connectorTools
+        return browser + vaultTools + simulatorTools + suggestionTools + widgetTools + sessionTools + terminalTools
+            + scheduleTools + connectorTools
     }
 
     // MARK: Tool list changes

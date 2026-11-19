@@ -519,7 +519,7 @@ struct ConversationWorkLine: View, Equatable {
             words: tool.kind.wordedLines ?? [ConversationLineWording.tool(tool, phase: item.phase, harness: harness, workspaceURL: workspaceURL)],
             phase: item.phase,
             hasDetail: !texts.isEmpty || tool.mcpResult?.isEmpty == false || tool.diff != nil || !tool.diffs.isEmpty
-                || !tool.images.isEmpty || tool.loadsDetailOnOpen || tool.view != nil,
+                || !tool.images.isEmpty || tool.loadsDetailOnOpen || tool.drawsView,
             startsOpen: startsOpen,
             accessibilityLabel: tool.name.isEmpty ? tool.kind.label : tool.name,
             // A worded line holding a change's diff opens for a review render, as a file change's line does; a
@@ -545,7 +545,9 @@ struct ConversationWorkLine: View, Equatable {
         } actions: {
             ConversationCopyDetailsButton(details: item.copyDetails)
         } detail: {
-            if let view = tool.view, let host = connectorViews, host.result(for: view) != nil {
+            if let widget = tool.widget {
+                CodexVisualizationView(widget: widget, key: "yardlet-widget:" + item.id)
+            } else if let view = tool.view, let host = connectorViews, host.result(for: view) != nil {
                 ConnectorViewCard(key: host.taskID.uuidString + " " + item.id, view: view, host: host) {
                     toolDetails(tool, images: images, isLoading: isLoading)
                 }
@@ -555,7 +557,7 @@ struct ConversationWorkLine: View, Equatable {
         }
         // A line drawn before its connector's tools were read (at launch, or before the connector was connected)
         // starts again, open on its view, once the call turns out to have one: where a line starts is read once.
-        .id(tool.view != nil)
+        .id(tool.drawsView)
     }
 
     /// What an opened call's line holds: its input and output, images, result and changes.

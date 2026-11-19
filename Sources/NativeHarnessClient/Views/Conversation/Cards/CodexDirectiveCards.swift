@@ -319,6 +319,21 @@ struct CodexVisualizationView: View {
     let visualization: CodexVisualization
     /// The row's identity across redraws.
     let key: String
+    /// A `show_widget` call's view, drawn from its HTML rather than a file (docs/CONVERSATION_MEDIA.md, "Views from
+    /// other harnesses"); `visualization` then only names it.
+    var widget: ConversationWidget? = nil
+
+    init(visualization: CodexVisualization, key: String) {
+        self.visualization = visualization
+        self.key = key
+    }
+
+    init(widget: ConversationWidget, key: String) {
+        self.visualization = CodexVisualization(title: widget.title.isEmpty ? L10n.string("Visualization") : widget.title,
+                                                file: "")
+        self.key = key
+        self.widget = widget
+    }
 
     /// Past this the page scrolls inside, so one tall page does not push the conversation away.
     static let maximumHeight: CGFloat = 1_200
@@ -339,13 +354,18 @@ struct CodexVisualizationView: View {
         let display = controller.display
         if display.state == .failed {
             CodexVisualizationCard(visualization: visualization, retry: { controller.retry() },
-                                   openFile: fileURL.map { url in { openURL(url) } })
+                                   openFile: widget == nil ? fileURL.map { url in { openURL(url) } } : nil)
         } else {
-            MCPAppContainer(key: key, controller: controller, start: { [visualization, key, workspaceURL] in
+            MCPAppContainer(key: key, controller: controller, start: { [visualization, widget, key, workspaceURL] in
                 let isDark = colorScheme == .dark
-                controller.startVisualization(visualization, key: key, workspace: workspaceURL, isDark: isDark,
-                                              maximumHeight: Self.maximumHeight, openLink: { url in openURL(url) },
-                                              followUp: composerDraft.draft)
+                if let widget {
+                    controller.startWidget(widget, key: key, isDark: isDark, maximumHeight: Self.maximumHeight,
+                                           openLink: { url in openURL(url) }, followUp: composerDraft.draft)
+                } else {
+                    controller.startVisualization(visualization, key: key, workspace: workspaceURL, isDark: isDark,
+                                                  maximumHeight: Self.maximumHeight, openLink: { url in openURL(url) },
+                                                  followUp: composerDraft.draft)
+                }
             })
             .frame(maxWidth: .infinity)
             .frame(height: display.state == .live || display.state == .parked ? display.height : 240)

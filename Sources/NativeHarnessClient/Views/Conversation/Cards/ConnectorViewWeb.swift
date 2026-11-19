@@ -99,16 +99,37 @@ final class MCPAppViewController: NSObject {
     func startVisualization(_ visualization: CodexVisualization, key: String, workspace: URL?, isDark: Bool,
                             maximumHeight: CGFloat, openLink: @escaping @MainActor (URL) -> Void,
                             followUp: (@MainActor (String) -> Void)?) {
+        startPage(uri: visualization.file, key: key, isDark: isDark, maximumHeight: maximumHeight, openLink: openLink,
+                  followUp: followUp) { state in
+            try await CodexVisualizationPage.load(file: visualization.file, workspace: workspace, state: state)
+        }
+    }
+
+    /// Draws a `show_widget` call's HTML as a visualization without the Codex skill's kit: the same sandbox, policy
+    /// and bridge, in the system's plain styles.
+    func startWidget(_ widget: ConversationWidget, key: String, isDark: Bool, maximumHeight: CGFloat,
+                     openLink: @escaping @MainActor (URL) -> Void, followUp: (@MainActor (String) -> Void)?) {
+        startPage(uri: WidgetToolCatalog.showWidget, key: key, isDark: isDark, maximumHeight: maximumHeight,
+                  openLink: openLink, followUp: followUp) { state in
+            await Task.detached(priority: .userInitiated) {
+                CodexVisualizationPage(html: CodexVisualizationPage.page(widget.code, kit: nil, state: state),
+                                       policy: CodexVisualizationPage.policy)
+            }.value
+        }
+    }
+
+    private func startPage(uri: String, key: String, isDark: Bool, maximumHeight: CGFloat,
+                           openLink: @escaping @MainActor (URL) -> Void, followUp: (@MainActor (String) -> Void)?,
+                           page makePage: @escaping @Sendable (String?) async throws -> CodexVisualizationPage) {
         guard state == .idle || state == .parked else { return }
-        if display.uri != visualization.file { display.uri = visualization.file }
+        if display.uri != uri { display.uri = uri }
         self.isDark = isDark
         self.maximumHeight = maximumHeight
         state = .loading
         let states = CodexVisualizationStates.shared
         loading = Task { [weak self] in
             do {
-                let page = try await CodexVisualizationPage.load(file: visualization.file, workspace: workspace,
-                                                                 state: states.state(key))
+                let page = try await makePage(states.state(key))
                 guard let self, !Task.isCancelled, self.state == .loading else { return }
                 let bridge = CodexVisualizationBridge(openLink: openLink, followUp: followUp,
                                                       saveState: { states.save($0, for: key) })

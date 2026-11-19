@@ -3,6 +3,7 @@ import SwiftUI
 import WebKit
 import XCTest
 @testable import NativeHarnessClient
+@testable import YardletAgentTools
 
 /// A Codex inline visualization drawn by the real web view in its message: the isolation it runs under (another
 /// origin than Yardlet's page, no bridge handler, nothing fetched, no window), the height it reports, the state it
@@ -116,6 +117,108 @@ final class CodexVisualizationRenderingTests: XCTestCase {
 
             // The pool keeps views live past their rows; another suite counts the live ones.
             await controller.park()
+        }
+    }
+
+    /// A `show_widget` call Claude Code made draws its view under the call, open, from the call's arguments, in the
+    /// same sandbox as a Codex visualization; the Claude app's own `show_widget`, whose answer is not Yardlet's, stays
+    /// a tool line.
+    func testAShowWidgetCallDrawsItsViewUnderTheCall() async throws {
+        let input = String(decoding: try JSONSerialization.data(withJSONObject: [
+            "title": "Probe", "widget_code": Self.probe.replacingOccurrences(of: "A visualization", with: "A view")
+        ]), as: UTF8.self)
+        func call(id: String, output: String) -> HarnessActivity {
+            HarnessActivity(id: id, kind: "mcp__yardlet__show_widget", title: "mcp__yardlet__show_widget", input: input,
+                            output: output)
+        }
+        XCTAssertEqual(ConversationWidget.of(call(id: "w", output: WidgetToolCatalog.result))?.title, "Probe")
+        XCTAssertNil(ConversationWidget.of(call(id: "w", output: "Widget rendered.")), "The Claude app's own answer")
+
+        let directory = try WindowlessRender.directory("chat-media-qa")
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        for appearance in WindowlessRender.Appearance.allCases {
+            let id = "toolu-\(appearance.suffix)-\(UUID().uuidString)"
+            let before = Set(MCPAppViewPool.shared.controllers(withPrefix: "yardlet-widget:").keys)
+            let entries = [
+                TranscriptEntry(createdAt: start, content: .user(text: "Show me the chart.")),
+                TranscriptEntry(createdAt: start.addingTimeInterval(1),
+                                content: .activity(call(id: id, output: WidgetToolCatalog.result), state: .completed)),
+                TranscriptEntry(createdAt: start.addingTimeInterval(2), content: .assistant(text: "Here it is.", isStreaming: false))
+            ]
+            let host = WindowlessRender.Host(
+                ConversationTimeline(source: .transcript(entries: entries, harness: .claudeCode, status: .ready,
+                                                         latestTurnIsComplete: true))
+                    .background(ParityTheme.canvas)
+                    .frame(width: 900, height: 700),
+                size: NSSize(width: 900, height: 700), appearance: appearance)
+            defer { host.close() }
+            func controller() -> (key: String, controller: MCPAppViewController)? {
+                // Kept by the row's item.
+                MCPAppViewPool.shared.controllers(withPrefix: "yardlet-widget:").first { !before.contains($0.key) }
+                    .map { ($0.key, $0.value) }
+            }
+            await host.settle(until: { controller().map { CodexVisualizationStates.shared.state($0.key) != nil } ?? false },
+                              timeout: 30)
+            let (key, drawn) = try XCTUnwrap(controller(), "The call's row opens on its view")
+            let state = try XCTUnwrap(CodexVisualizationStates.shared.state(key))
+            let probes = try XCTUnwrap(
+                (try JSONSerialization.jsonObject(with: Data(state.utf8)) as? [String: Any])?["probes"] as? [String: Any])
+            XCTAssertEqual(probes["handler"] as? String, "undefined")
+            XCTAssertEqual(probes["parent"] as? String, "blocked")
+            XCTAssertTrue((probes["blocked"] as? [String])?.contains("connect-src") == true, "\(probes)")
+            XCTAssertEqual(probes["dark"] as? Bool, appearance == .dark)
+            XCTAssertEqual(drawn.display.height, 180, accuracy: 2)
+
+            let webView = try XCTUnwrap(MCPAppViewRenderingTests.webView(in: host.hosting))
+            let snapshot = try await webView.takeSnapshot(configuration: nil)
+            let capture = try host.capture()
+            MCPAppViewRenderingTests.draw(snapshot, of: webView, into: capture.bitmap, hosting: host.hosting)
+            try WindowlessRender.writePNG(capture.bitmap, to: directory.appending(
+                path: "show-widget-\(appearance.suffix).png"))
+            await drawn.park()
+        }
+    }
+
+    /// For review, not for CI: the `show_widget` call whose MCP `tools/call` params are in the file
+    /// `YARDLET_WIDGET_QA_CALL` names, drawn under its call in both appearances. Skipped unless it is set.
+    func testAShowWidgetCallForReview() async throws {
+        guard let path = ProcessInfo.processInfo.environment["YARDLET_WIDGET_QA_CALL"] else {
+            throw XCTSkip("Set YARDLET_WIDGET_QA_CALL to a tools/call params file")
+        }
+        let line = try XCTUnwrap(try String(contentsOfFile: path, encoding: .utf8).split(separator: "\n").last)
+        let params = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+        let input = String(decoding: try JSONSerialization.data(withJSONObject: params["arguments"] ?? [:]), as: UTF8.self)
+        let directory = try WindowlessRender.directory("chat-media-qa")
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        for appearance in WindowlessRender.Appearance.allCases {
+            let before = Set(MCPAppViewPool.shared.controllers(withPrefix: "yardlet-widget:").keys)
+            let call = HarnessActivity(id: "toolu-review-\(appearance.suffix)", kind: "mcp__yardlet__show_widget",
+                                       title: "mcp__yardlet__show_widget", input: input, output: WidgetToolCatalog.result)
+            let entries = [
+                TranscriptEntry(createdAt: start, content: .user(text: "Compare two first-screen layouts here.")),
+                TranscriptEntry(createdAt: start.addingTimeInterval(1), content: .activity(call, state: .completed)),
+                TranscriptEntry(createdAt: start.addingTimeInterval(2), content: .assistant(text: "Done.", isStreaming: false))
+            ]
+            let host = WindowlessRender.Host(
+                ConversationTimeline(source: .transcript(entries: entries, harness: .claudeCode, status: .ready,
+                                                         latestTurnIsComplete: true))
+                    .background(ParityTheme.canvas).frame(width: 900, height: 1_600),
+                size: NSSize(width: 900, height: 1_600), appearance: appearance)
+            func drawn() -> MCPAppViewController? {
+                MCPAppViewPool.shared.controllers(withPrefix: "yardlet-widget:").first { !before.contains($0.key) }?.value
+            }
+            await host.settle(until: { drawn().map { $0.display.state == .live && $0.display.height > 24 } ?? false },
+                              timeout: 30)
+            for _ in 0..<15 { await host.settle(until: { true }); try? await Task.sleep(for: .milliseconds(100)) }
+            if let webView = MCPAppViewRenderingTests.webView(in: host.hosting),
+               let snapshot = try? await webView.takeSnapshot(configuration: nil) {
+                let capture = try host.capture()
+                MCPAppViewRenderingTests.draw(snapshot, of: webView, into: capture.bitmap, hosting: host.hosting)
+                try WindowlessRender.writePNG(capture.bitmap, to: directory.appending(
+                    path: "show-widget-review-\(appearance.suffix).png"))
+            }
+            if let drawn = drawn() { await drawn.park() }
+            host.close()
         }
     }
 

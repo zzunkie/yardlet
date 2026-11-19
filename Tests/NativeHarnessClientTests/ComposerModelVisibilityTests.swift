@@ -223,7 +223,7 @@ final class ComposerModelVisibilityTests: XCTestCase {
         let withServer = ClaudeProcessTransport.arguments(for: ClaudeLaunchConfiguration(
             providerSessionID: "s", workspaceURL: URL(filePath: "/tmp"), resumesExistingSession: true,
             agentToolConfigPath: "/tmp/mcp.json", model: "opus"))
-        XCTAssertEqual(Array(withServer.suffix(25)), ["--model", "opus", "--allowedTools", "mcp__yardlet__spawn_task",
+        XCTAssertEqual(Array(withServer.suffix(26)), ["--model", "opus", "--allowedTools", "mcp__yardlet__spawn_task",
                                                      "mcp__yardlet__dismiss_task", "mcp__yardlet__list_tasks",
                                                      "mcp__yardlet__read_task", "mcp__yardlet__send_message_to_task",
                                                      "mcp__yardlet__wait_tasks", "mcp__yardlet__create_task",
@@ -234,7 +234,7 @@ final class ComposerModelVisibilityTests: XCTestCase {
                                                      "mcp__yardlet__read_personal_agent_thread",
                                                      "mcp__yardlet__list_settings", "mcp__yardlet__update_setting",
                                                      "mcp__yardlet__read_terminal", "mcp__yardlet__list_task_runs",
-                                                     "--mcp-config", "/tmp/mcp.json"],
+                                                     "mcp__yardlet__show_widget", "--mcp-config", "/tmp/mcp.json"],
                        "`--mcp-config` stays last")
     }
 

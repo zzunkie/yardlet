@@ -24,7 +24,7 @@ enum ConversationWorkGrouping {
     static func joinsRun(_ item: ConversationItem) -> Bool {
         if case .reasoning = item.kind { return true }
         // A call that draws a connector's view stands alone, so the view is not folded into a run.
-        if case let .tool(tool) = item.kind, tool.view != nil { return false }
+        if case let .tool(tool) = item.kind, tool.drawsView { return false }
         return ConversationWorkSummary.category(of: item) != nil
     }
 

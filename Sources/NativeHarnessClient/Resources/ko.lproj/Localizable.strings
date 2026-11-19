@@ -2812,6 +2812,7 @@
 "Copy table" = "표 복사";
 "Expand table" = "표 펼치기";
 "Expand visualization" = "시각화 펼치기";
+"Visualization" = "시각화";
 "Load image" = "이미지 불러오기";
 "Couldn't load the image." = "이미지를 불러오지 못했습니다.";
 "Loads it from %@, without cookies." = "쿠키 없이 %@에서 불러옵니다.";
