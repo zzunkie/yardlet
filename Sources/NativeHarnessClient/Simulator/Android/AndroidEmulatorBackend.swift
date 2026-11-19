@@ -87,10 +87,12 @@ struct AndroidEmulatorBackend: SimulatorBackend {
             }.map(AndroidDeviceList.iniValues) ?? [:]
             let api = AndroidDeviceList.apiLevel(target: entry["target"] ?? config["image.sysdir.1"])
             let adb = running[name]
+            // Listed by adb, it runs: ready once adb may use it. Offline, unauthorized or in another state it is still
+            // on its way as far as Yardlet can tell, and an emulator Yardlet started stays counted as its own.
             let state: SimulatorDeviceState = switch adb?.state {
+            case nil: .off
             case .device?: .on
-            case .offline?: .booting
-            default: .off
+            default: .booting
             }
             return SimulatorDevice(identity: .androidEmulator(avd: name),
                                    name: config["avd.ini.displayname"] ?? name.replacingOccurrences(of: "_", with: " "),
@@ -147,10 +149,15 @@ struct AndroidEmulatorBackend: SimulatorBackend {
         guard let serial = try await serial(of: avd, sdk: sdk) else { return }
         let result = await adb(sdk, serial, ["emu", "kill"], timeout: .seconds(20))
         guard result.succeeded else { throw SimulatorCommandError(message: result.failureSummary) }
-        // `emu kill` answers before the emulator has saved its snapshot and ended; wait for it to leave adb's list.
+        // `emu kill` answers before the emulator has saved its snapshot and ended; wait for it to leave adb's list, and
+        // for an emulator this Yardlet started, for its process to end, after which it writes nothing more.
         let deadline = ContinuousClock.now + .seconds(30)
         while ContinuousClock.now < deadline {
             if (try? await adbDevices(sdk))?.contains(where: { $0.serial == serial }) == false { break }
+            try await Task.sleep(for: .milliseconds(500))
+        }
+        while ContinuousClock.now < deadline, let launched = launches.launch(of: avd),
+              launcher.hasEnded(launched.processID) == false {
             try await Task.sleep(for: .milliseconds(500))
         }
         launches.remove(avd: avd)

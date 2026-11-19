@@ -7,8 +7,8 @@ enum SimulatorInstalledItem: Codable, Hashable, Sendable {
     /// An iOS simulator runtime, by the identifier `simctl runtime list` gives it.
     case iOSRuntime(identifier: String, name: String, bytes: Int64?)
     /// An Android SDK package, unpacked at `path` (its SDK path, `emulator` or
-    /// `system-images/android-36/google_apis_playstore/arm64-v8a`) under `sdkRoot`, at the revision Yardlet wrote in
-    /// its `package.xml`.
+    /// `system-images/android-36/google_apis_playstore/arm64-v8a`) under `sdkRoot`, at the revision its
+    /// `source.properties` named when Yardlet unpacked it.
     case androidPackage(sdkRoot: String, path: String, revision: String, name: String, bytes: Int64?)
     /// An AVD Yardlet made, in its AVD folder.
     case androidAVD(home: String, name: String)

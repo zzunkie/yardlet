@@ -166,9 +166,26 @@ final class SimulatorInstallTests: XCTestCase {
         XCTAssertTrue(files.fileExists(
             atPath: sdk.appending(path: "system-images/android-36/google_apis_playstore/arm64-v8a/source.properties").path))
         XCTAssertFalse(files.fileExists(atPath: sdk.appending(path: ".temp").path))
-        // The acceptance sdkmanager reads: the SHA-1 of the license's text.
+        // Each package's `package.xml` as sdkmanager writes it: the stable package from the list, as a local one, with
+        // its license, under a root that declares the list's namespaces and the repository's.
+        let tools = try String(contentsOf: sdk.appending(path: "platform-tools/package.xml"), encoding: .utf8)
+        XCTAssertTrue(tools.contains(#"<common:repository xmlns:sdk="http://schemas.android.com/sdk/android/repo/repository2/03" xmlns:common="http://schemas.android.com/repository/android/common/02">"#), tools)
+        XCTAssertTrue(tools.contains(#"<localPackage path="platform-tools" obsolete="false"><revision><major>37</major><minor>0</minor><micro>1</micro>"#), tools)
+        XCTAssertTrue(tools.contains(#"<license id="android-sdk-license" type="text">Terms &amp; Conditions"#), tools)
+        XCTAssertFalse(tools.contains("archive") || tools.contains("channelRef"), tools)
+        let image = try String(contentsOf: sdk.appending(
+            path: "system-images/android-36/google_apis_playstore/arm64-v8a/package.xml"), encoding: .utf8)
+        XCTAssertTrue(image.contains(#"<common:repository xmlns:sys-img="http://schemas.android.com/sdk/android/repo/sys-img2/03" xmlns:common="http://schemas.android.com/repository/android/common/02">"#), image)
+        XCTAssertTrue(image.contains("<api-level>36</api-level>") && image.contains(#"<license id="android-sdk-arm-dbt-license""#), image)
+        for xml in [tools, image] { XCTAssertTrue(XMLParser(data: Data(xml.utf8)).parse(), xml) }
+        // The acceptance sdkmanager reads: the SHA-1 of the license's text as its `TrimStringAdapter` reads it, here
+        // "Terms & Conditions\n\nThis is the Android Software Development Kit License Agreement". Android Studio's
+        // own files hold the same for Google's lists ("24333f8a…" for android-sdk-license).
         let accepted = try String(contentsOf: sdk.appending(path: "licenses/android-sdk-license"), encoding: .utf8)
-        XCTAssertTrue(accepted.contains(AndroidSDKLicenses.hash(licenses[0])), accepted)
+        XCTAssertTrue(accepted.contains("de540f8d0752e87e0d65cd4b16675d49c027640e"), accepted)
+        XCTAssertEqual(AndroidSDKLicenses.sdkmanagerText(
+            "  1. Introduction\n\n  1.1 The Android SDK is licensed\n      to you   subject\tto the terms.\n\n\nJanuary 16, 2019\n"),
+            "1. Introduction\n\n1.1 The Android SDK is licensed to you subject\tto the terms.\n\n\nJanuary 16, 2019")
         // The AVD, as Android Studio describes one, on the image just unpacked.
         let avds = home.appending(path: ".android/avd", directoryHint: .isDirectory)
         let config = try String(contentsOf: avds.appending(path: "Yardlet_Phone.avd/config.ini"), encoding: .utf8)

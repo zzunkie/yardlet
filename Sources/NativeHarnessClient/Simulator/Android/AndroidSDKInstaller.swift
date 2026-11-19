@@ -7,8 +7,9 @@ import FoundationNetworking
 /// Gets an Android SDK for the simulator panel without Java: Google's package lists (the repository and its Google
 /// Play system images) name each package's archive, size, SHA-1 and license. Yardlet downloads the missing ones,
 /// checks each against its SHA-1, unpacks it where sdkmanager would (each archive holds one folder with its
-/// `source.properties`, which Android Studio and sdkmanager read), writes the license's acceptance as sdkmanager does
-/// (the SHA-1 of its text in `licenses/<id>`), and makes one AVD as Android Studio's files describe it. What is
+/// `source.properties`), writes beside it the `package.xml` sdkmanager writes from the list (`AndroidSDKPackageXML`),
+/// writes the license's acceptance as sdkmanager does (`AndroidSDKLicenses`), and makes one AVD as Android Studio's
+/// files describe it. What is
 /// already in the SDK folder stays: the folder is the one Android Studio or the environment names, else Android
 /// Studio's own place, made then. Removing a package removes only the folder at the revision Yardlet unpacked.
 struct AndroidSDKInstaller: SimulatorInstaller {
@@ -84,6 +85,9 @@ struct AndroidSDKInstaller: SimulatorInstaller {
                 try files.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try files.moveItem(at: top, to: destination)
                 made.append(destination)
+                if let xml = package.packageXML {
+                    try Data(xml.utf8).write(to: destination.appending(path: "package.xml"), options: .atomic)
+                }
                 if let license = plan.licenses.first(where: { $0.id == package.license }) {
                     try AndroidSDKLicenses.accept(license, in: plan.sdkRoot)
                 }
@@ -210,6 +214,8 @@ struct AndroidSDKInstallPlan: Equatable, Sendable {
         var url: URL
         var size: Int64
         var sha1: String
+        /// The `package.xml` to write in its folder.
+        var packageXML: String?
     }
 
     struct AVD: Equatable, Sendable {
@@ -240,19 +246,20 @@ enum AndroidSDKPlanner {
                      host: AndroidSDKHost, hasAVDs: Bool, fileExists: (URL) -> Bool,
                      installedImages: [AndroidSDKPackages.InstalledImage]) -> AndroidSDKInstallPlan {
         var downloads: [AndroidSDKInstallPlan.Download] = []
-        func add(_ package: AndroidSDKCatalog.Package?, archiveFor host: AndroidSDKHost?) {
+        func add(_ package: AndroidSDKCatalog.Package?, from catalog: AndroidSDKCatalog, archiveFor host: AndroidSDKHost?) {
             guard let package, let archive = package.archives.first(where: {
                 ($0.hostOS == nil || $0.hostOS == host?.os) && ($0.hostArch == nil || $0.hostArch == host?.arch)
             }) else { return }
             downloads.append(.init(path: package.path, folder: package.path.replacingOccurrences(of: ";", with: "/"),
                                    revision: package.revision, name: package.displayName, license: package.license,
-                                   url: archive.url, size: archive.size, sha1: archive.sha1))
+                                   url: archive.url, size: archive.size, sha1: archive.sha1,
+                                   packageXML: AndroidSDKPackageXML.text(for: package, in: catalog)))
         }
         if !fileExists(sdkRoot.appending(path: "platform-tools/\(AndroidSDK.program("adb"))")) {
-            add(repository.newestStable(path: "platform-tools"), archiveFor: host)
+            add(repository.newestStable(path: "platform-tools"), from: repository, archiveFor: host)
         }
         if !fileExists(sdkRoot.appending(path: "emulator/\(AndroidSDK.program("emulator"))")) {
-            add(repository.newestStable(path: "emulator"), archiveFor: host)
+            add(repository.newestStable(path: "emulator"), from: repository, archiveFor: host)
         }
         var avd: AndroidSDKInstallPlan.AVD?
         if !hasAVDs {
@@ -261,7 +268,7 @@ enum AndroidSDKPlanner {
                             imageFolder: image.folder + "/", apiLevel: image.apiLevel, tag: image.tag,
                             tagDisplay: image.tagDisplay, abi: image.abi)
             } else if let image = systemImages.newestImage(tag: "google_apis_playstore", abi: host.abi) {
-                add(image, archiveFor: nil)
+                add(image, from: systemImages, archiveFor: nil)
                 avd = .init(name: AndroidSDKInstaller.avdName, displayName: "Yardlet Phone (API \(image.apiLevel ?? 0))",
                             imageFolder: image.path.replacingOccurrences(of: ";", with: "/") + "/",
                             apiLevel: image.apiLevel ?? 0, tag: image.tag ?? "google_apis_playstore",
@@ -299,10 +306,16 @@ struct AndroidSDKCatalog: Equatable, Sendable {
         var tagDisplay: String?
         var abi: String?
         var archives: [Archive]
+        /// The package as the list writes it, `<remotePackage …>…</remotePackage>`.
+        var element = ""
     }
 
     var packages: [Package] = []
     var licenses: [String: String] = [:]
+    /// The licenses as the list writes them, and the namespaces its root element declares (`xmlns:sdk="…"`), which a
+    /// package's `package.xml` keeps.
+    var licenseElements: [String: String] = [:]
+    var namespaces: [String] = []
 
     /// The newest package at `path` on the stable channel.
     func newestStable(path: String) -> Package? {
@@ -321,14 +334,22 @@ struct AndroidSDKCatalog: Equatable, Sendable {
     }
 
     static func parse(_ data: Data, base: URL) -> AndroidSDKCatalog {
-        let reader = Reader(base: base)
-        SimpleXML.read(String(decoding: data, as: UTF8.self),
-                       start: reader.start, text: { reader.text += $0 }, end: reader.end)
-        return reader.catalog
+        let document = String(decoding: data, as: UTF8.self)
+        let reader = Reader(base: base, elements: AndroidSDKPackageXML.elements(named: "remotePackage", in: document))
+        SimpleXML.read(document, start: reader.start, text: { reader.text += $0 }, end: reader.end)
+        var catalog = reader.catalog
+        catalog.namespaces = AndroidSDKPackageXML.namespaces(in: document)
+        for element in AndroidSDKPackageXML.elements(named: "license", in: document) {
+            if let id = AndroidSDKPackageXML.attribute("id", of: element) { catalog.licenseElements[id] = String(element) }
+        }
+        return catalog
     }
 
     private final class Reader {
         let base: URL
+        /// The packages as the list writes them, in its order.
+        let elements: [Substring]
+        private var started = 0
         var catalog = AndroidSDKCatalog()
         private var path: [String] = []
         var text = ""
@@ -337,7 +358,10 @@ struct AndroidSDKCatalog: Equatable, Sendable {
         private var revision: [String: String] = [:]
         private var archive: (os: String?, arch: String?, size: Int64, sha1: String, url: String)?
 
-        init(base: URL) { self.base = base }
+        init(base: URL, elements: [Substring]) {
+            self.base = base
+            self.elements = elements
+        }
 
         func start(_ name: String, _ attributes: [String: String]) {
             let element = name.split(separator: ":").last.map(String.init) ?? name
@@ -347,7 +371,11 @@ struct AndroidSDKCatalog: Equatable, Sendable {
             case "license" where package == nil:
                 license = attributes["id"]
             case "remotePackage":
-                package = Package(path: attributes["path"] ?? "", revision: "", displayName: "", archives: [])
+                let path = attributes["path"] ?? ""
+                let element = started < elements.count ? elements[started] : ""
+                started += 1
+                package = Package(path: path, revision: "", displayName: "", archives: [],
+                                  element: AndroidSDKPackageXML.attribute("path", of: element) == path ? String(element) : "")
                 revision = [:]
             case "uses-license":
                 package?.license = attributes["ref"]
@@ -366,7 +394,8 @@ struct AndroidSDKCatalog: Equatable, Sendable {
             let parent = path.last
             switch element {
             case "license" where package == nil:
-                // sdkmanager hashes the text as the list holds it, untrimmed.
+                // The text as the list holds it, which the person reads; its acceptance hashes the text as
+                // sdkmanager reads it (`AndroidSDKLicenses.sdkmanagerText`).
                 if let license { catalog.licenses[license] = text }
                 license = nil
             case _ where ["major", "minor", "micro", "preview"].contains(element) && parent == "revision"
@@ -409,6 +438,94 @@ struct AndroidSDKCatalog: Equatable, Sendable {
             }
             text = ""
         }
+    }
+}
+
+/// The `package.xml` sdkmanager writes in each package's folder, which Google's tools read for what is installed (the
+/// Android CLI that sdkmanager now hands to knows a package's revision only from it): the list's `remotePackage` as
+/// a `localPackage`, without its channel and archives, after its license, under a `repository` root that declares
+/// the list's namespaces, so its `xsi:type` keeps its meaning. The list's own text is kept as it is.
+enum AndroidSDKPackageXML {
+    static let commonNamespace = "http://schemas.android.com/repository/android/common/02"
+
+    static func text(for package: AndroidSDKCatalog.Package, in catalog: AndroidSDKCatalog) -> String? {
+        let element = package.element
+        guard let open = element.firstIndex(of: ">"),
+              let close = element.range(of: "</remotePackage>", options: .backwards) else { return nil }
+        var body = String(element[element.index(after: open)..<close.lowerBound])
+        for (start, end) in [("<channelRef", "/>"), ("<archives>", "</archives>")] {
+            if let from = body.range(of: start), let to = body[from.upperBound...].range(of: end) {
+                body.removeSubrange(from.lowerBound..<to.upperBound)
+            }
+        }
+        var declarations = catalog.namespaces
+        let declared = declarations.compactMap(declaration)
+        let prefix: String
+        if let common = declared.first(where: { $0.uri == commonNamespace }) {
+            prefix = common.prefix
+        } else {
+            prefix = declared.contains { $0.prefix == "common" } ? "repository-common" : "common"
+            declarations.append("xmlns:\(prefix)=\"\(commonNamespace)\"")
+        }
+        let license = package.license.flatMap { catalog.licenseElements[$0] }.map { "\n" + $0 } ?? ""
+        return """
+        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <\(prefix):repository \(declarations.joined(separator: " "))>\(license)
+        <localPackage path="\(package.path)" obsolete="false">\(body)</localPackage>
+        </\(prefix):repository>
+
+        """
+    }
+
+    /// Each element named `name` as the document writes it, in order, outside comments.
+    static func elements(named name: String, in document: String) -> [Substring] {
+        var found: [Substring] = []
+        var index = document.startIndex
+        while let open = document[index...].firstIndex(of: "<") {
+            let rest = document[open...]
+            if rest.hasPrefix("<!--") {
+                index = rest.range(of: "-->")?.upperBound ?? document.endIndex
+                continue
+            }
+            let tag = rest.dropFirst()
+            if tag.hasPrefix(name), tag.dropFirst(name.count).first.map({ $0.isWhitespace || $0 == ">" }) == true,
+               let close = rest.range(of: "</\(name)>") {
+                found.append(document[open..<close.upperBound])
+                index = close.upperBound
+            } else {
+                index = document.index(after: open)
+            }
+        }
+        return found
+    }
+
+    /// The namespaces the root element declares, `xmlns:sdk="…"`, as the document writes them.
+    static func namespaces(in document: String) -> [String] {
+        var index = document.startIndex
+        while let open = document[index...].firstIndex(of: "<") {
+            let rest = document[open...]
+            guard rest.hasPrefix("<?") || rest.hasPrefix("<!") else {
+                let tag = rest[..<(rest.firstIndex(of: ">") ?? rest.endIndex)]
+                return tag.split(whereSeparator: \.isWhitespace).map(String.init).filter { declaration($0) != nil }
+            }
+            index = (rest.hasPrefix("<!--") ? rest.range(of: "-->")?.upperBound : rest.firstIndex(of: ">"))
+                ?? document.endIndex
+        }
+        return []
+    }
+
+    /// An attribute of an element's start tag, as written.
+    static func attribute(_ name: String, of element: Substring) -> String? {
+        let tag = element[..<(element.firstIndex(of: ">") ?? element.endIndex)]
+        guard let start = tag.range(of: " \(name)=\"") else { return nil }
+        return tag[start.upperBound...].split(separator: "\"", maxSplits: 1).first.map(String.init)
+    }
+
+    private static func declaration(_ text: String) -> (prefix: String, uri: String)? {
+        guard text.hasPrefix("xmlns:"), let equals = text.firstIndex(of: "=") else { return nil }
+        let value = text[text.index(after: equals)...]
+        guard value.count >= 2, value.first == "\"", value.last == "\"" else { return nil }
+        return (String(text[text.index(text.startIndex, offsetBy: 6)..<equals]), String(value.dropFirst().dropLast()))
     }
 }
 
@@ -576,10 +693,25 @@ enum AndroidSDKPackages {
     }
 }
 
-/// A license's acceptance as sdkmanager writes it: the SHA-1 of its text on a line of `licenses/<id>`.
+/// A license's acceptance as sdkmanager writes and reads it: on a line of `licenses/<id>`, the SHA-1 of the license's
+/// text as sdkmanager reads it from the list, not as the list holds it. Android Studio, sdkmanager and Gradle take
+/// only that hash for an accepted license.
 enum AndroidSDKLicenses {
     static func hash(_ license: SimulatorLicense) -> String {
-        Insecure.SHA1.hash(data: Data(license.text.utf8)).map { String(format: "%02x", $0) }.joined()
+        Insecure.SHA1.hash(data: Data(sdkmanagerText(license.text).utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The text as sdkmanager reads a license (its `TrimStringAdapter`): spaces and tabs after whitespace dropped, a
+    /// line end that stands alone made a space, runs of spaces made one, and both ends trimmed as Java's `trim` does
+    /// (every character up to the space). Paragraph breaks stay.
+    static func sdkmanagerText(_ text: String) -> String {
+        var value = text.replacingOccurrences(of: #"(?<=[ \t\n\x0B\f\r])[ \t]*"#, with: "", options: .regularExpression)
+        value = value.replacingOccurrences(of: #"(?<!\n)\n(?!\n)"#, with: " ", options: .regularExpression)
+        value = value.replacingOccurrences(of: " +", with: " ", options: .regularExpression)
+        let scalars = value.unicodeScalars
+        guard let first = scalars.firstIndex(where: { $0.value > 0x20 }),
+              let last = scalars.lastIndex(where: { $0.value > 0x20 }) else { return "" }
+        return String(scalars[first...last])
     }
 
     static func accept(_ license: SimulatorLicense, in sdkRoot: URL) throws {

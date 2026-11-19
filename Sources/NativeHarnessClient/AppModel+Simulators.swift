@@ -67,9 +67,13 @@ extension AppModel {
             simulatorTools.handoffs.removeAll()
             simulatorInstalls.cancelAll()
         }
-        Task { await simulators.setEnabled(isOn) }
-        // Turned off, not merely found off at launch: offer to remove what Yardlet installed and is still as it left it.
-        if wasOn, !isOn { Task { await offerToRemoveSimulatorInstalls() } }
+        Task {
+            await simulators.setEnabled(isOn)
+            // Turned off, not merely found off at launch: once the devices Yardlet started have stopped, which an
+            // emulator does by writing its snapshot into its AVD, offer to remove what Yardlet installed and is still
+            // as it left it.
+            if wasOn, !isOn { await offerToRemoveSimulatorInstalls() }
+        }
     }
 
     func offerToRemoveSimulatorInstalls() async {

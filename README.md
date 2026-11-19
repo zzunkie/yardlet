@@ -298,6 +298,9 @@ launched in the background, and calls the agents' simulator tools through that c
 Android screen and the Simulator tab with an Android emulator, with an AVD they make in a folder of their own and
 delete afterwards (the panel check also connects it over `adb connect`, as a device on the network); they need the
 Android SDK with an installed system image and leave other emulators, devices and the adb server alone.
+`./scripts/simulator-qa/run-android-install-check.sh` installs the Android SDK for real through the tab into a temporary
+home and removes it again (about 2.3 GB), and `./scripts/simulator-qa/run-android-device-check.sh <serial>` checks the
+tab with a real phone on USB that is awake and unlocked, opening only Settings on it.
 
 Bundles include the in-window browser (Chromium Embedded Framework in a separate browser host
 process). The script uses the CEF distribution pinned for the bundle's architecture in

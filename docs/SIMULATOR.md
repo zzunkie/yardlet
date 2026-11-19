@@ -101,9 +101,10 @@ accepts what the tab shows; Cancel stops a download, and a failed one says why w
   the emulator for the Mac, and, when there is no AVD at all, the newest Google Play system image for the Mac's ABI
   (unless one is already in the SDK) and an AVD on it named `Yardlet_Phone`. The tab shows the total size and the
   licenses' full text; Accept and Download starts it. No Java is needed: Yardlet downloads each archive, checks it
-  against the SHA-1 the list gives, unpacks its one folder where sdkmanager would (each holds its
-  `source.properties`, which Android Studio and sdkmanager read), records each license's acceptance as sdkmanager
-  does (the SHA-1 of its text on a line of `licenses/<id>`), and writes the AVD's `<name>.ini` and `config.ini` as
+  against the SHA-1 the list gives, unpacks its one folder where sdkmanager would, writes in it the `package.xml`
+  sdkmanager writes from the list (Google's tools read a package's revision from it), records each license's acceptance as sdkmanager
+  does (on a line of `licenses/<id>`, the SHA-1 of its text as sdkmanager reads it, with the list's line breaks
+  inside a paragraph and its indents taken out), and writes the AVD's `<name>.ini` and `config.ini` as
   Android Studio does. The SDK folder is the existing one the environment, the login shell's `PATH` or Android
   Studio's place names, else Android Studio's place (`~/Library/Android/sdk`), made then. A failed install removes
   what it made.
@@ -116,7 +117,8 @@ Yardlet writes down what it installed (`Simulator/installed.json` in its Applica
 empty): each iOS runtime by the identifier `simctl runtime list` gives it, each Android package by its folder and
 the revision it unpacked, the AVD, and the SDK folder when Yardlet made it.
 
-Turning Settings › General › Simulator off asks whether to remove them, listing each with its size; Keep leaves them.
+Turning Settings › General › Simulator off asks whether to remove them, listing each with its size, once the devices
+Yardlet started have stopped (an emulator writes its quick-boot snapshot into its AVD as it stops); Keep leaves them.
 Only what is still as Yardlet left it is listed: a runtime `simctl` still lists as deletable, a package whose
 `source.properties` still names the revision Yardlet unpacked (one Android Studio updated is no longer Yardlet's),
 an AVD still there. Removing runs `xcrun simctl runtime delete <identifier>` for a runtime and deletes the package
@@ -356,6 +358,17 @@ automation.
   Shut Down, and the agent tools ask for it on the real device's card in the task, then take its screenshot, press
   Recents and read it with a snapshot. The QA app sends adb commands only to emulators and that address, so
   a phone plugged into the Mac is neither asked anything nor listed.
+- `scripts/simulator-qa/run-android-install-check.sh` runs Install for Android for real in a QA app with a temporary
+  home, about 2.3 GB from Google: the offer from Google's lists, the download's progress, the packages checked and
+  unpacked with their `package.xml`, the licenses' acceptance, the AVD made, started without a window and shown live;
+  Google's command-line tools then read the SDK in a sandbox (the Android CLI must know each package's revision, and
+  avdmanager must load the AVD), and turning the switch off stops the emulator before it asks, then removes only what
+  Yardlet installed. The QA app talks to an adb server of its own in a sandbox without USB, the network or other
+  emulators' ports, so no phone and no other emulator is asked anything.
+- `scripts/simulator-qa/run-android-device-check.sh <serial>` checks a real phone on USB that is awake and unlocked:
+  listed by the serial number it reports, Settings opened on it and scrolled through the tab, the agent tools'
+  screenshot, swipe and snapshot after its card, then Home, and with the switch off, the server on the phone ended
+  and its file gone. Nothing else on the phone is opened, changed or installed.
 - `scripts/simulator-qa/run-panel-check.sh` does the same in the running app: a QA bundle launched in the
   background with a temporary home follows the switch, lists and attaches its simulator, shows it live through
   the bundle's simulator host, takes a click, and closes the tab when the switch turns off. Before that,
