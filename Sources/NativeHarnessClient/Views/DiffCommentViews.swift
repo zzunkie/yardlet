@@ -67,6 +67,7 @@ struct DiffCommentCard: View {
     @ViewBuilder
     private var editor: some View {
         TextField(L10n.string("Add a comment…"), text: $editedText, axis: .vertical)
+            .wrapsBetweenWords()
             .focused($isFocused)
             .onSubmit(save)
             .onExitCommand(perform: cancel)

@@ -238,6 +238,7 @@ struct ConversationQuestionStepsView<Finish: View>: View {
             } else {
                 TextField(placeholder, text: text, axis: .vertical)
                     .lineLimit(1...4)
+                    .wrapsBetweenWords()
             }
         }
         .disabled(!isAnswerable)

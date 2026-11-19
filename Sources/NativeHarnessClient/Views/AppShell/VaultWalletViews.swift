@@ -187,6 +187,7 @@ struct VaultAddressSheet: View {
             GridRow {
                 walletLabel(L10n.string("Street"))
                 TextField(L10n.string("Street"), text: $address.street, axis: .vertical).lineLimit(2...4)
+                    .wrapsBetweenWords()
             }
             row(L10n.string("City"), $address.city)
             row(L10n.string("State or province"), $address.region)

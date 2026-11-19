@@ -70,6 +70,13 @@ final class TranscriptProseRenderingTests: XCTestCase {
             if value != nil { struck.append(storage.attributedSubstring(from: range).string) }
         }
         XCTAssertEqual(struck, ["still"])
+        // Lines break between words, as `Text` breaks them: Korean at its spaces, not between any two syllables.
+        var strategies: [NSParagraphStyle.LineBreakStrategy] = []
+        storage.enumerateAttribute(.paragraphStyle, in: NSRange(location: 0, length: storage.length)) { value, _, _ in
+            if let style = value as? NSParagraphStyle { strategies.append(style.lineBreakStrategy) }
+        }
+        XCTAssertFalse(strategies.isEmpty)
+        XCTAssertTrue(strategies.allSatisfy { $0 == .standard }, "\(strategies.map(\.rawValue))")
         XCTAssertEqual(texts.last?.string, "That is all.")
         XCTAssertGreaterThan(first.frame.height, 300, "The text is laid out whole")
     }

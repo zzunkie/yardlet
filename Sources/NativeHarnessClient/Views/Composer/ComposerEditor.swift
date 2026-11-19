@@ -320,6 +320,7 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
         // It grows with its text from the line limit's lower bound; past its upper bound the editor
         // scrolls it (`scrollsPastLines`), which also gives it its font and style.
         TextField(suggestion ?? placeholder, text: $draft.text, axis: .vertical)
+            .wrapsBetweenWords()
             .frame(minHeight: metrics.minTextHeight, alignment: .topLeading)
             .focused(isFocused)
             .accessibilityLabel(placeholder)

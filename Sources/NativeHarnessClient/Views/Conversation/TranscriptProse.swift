@@ -356,6 +356,9 @@ struct TranscriptProseBuilder {
     private func paragraphStyle(context: Context, spacingAfter: CGFloat, spacingBefore: CGFloat = 0,
                                 lineSpacing: CGFloat? = nil) -> NSMutableParagraphStyle {
         let paragraph = NSMutableParagraphStyle()
+        // Between words, as `Text` wraps: a new paragraph style has no strategy, and Korean in it
+        // wraps between any two syllables.
+        paragraph.lineBreakStrategy = .standard
         paragraph.lineSpacing = lineSpacing ?? ParityTheme.proseLineSpacing * style.scale
         paragraph.paragraphSpacing = spacingAfter
         paragraph.paragraphSpacingBefore = spacingBefore
