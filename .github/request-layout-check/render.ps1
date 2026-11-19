@@ -6,7 +6,7 @@ New-Item -ItemType Directory $out -Force | Out-Null
 $proc=$null
 try {
 Add-Type -AssemblyName System.Windows.Forms,System.Drawing,UIAutomationClient,UIAutomationTypes,WindowsBase
-Add-Type @'
+Add-Type -ReferencedAssemblies System.Drawing @'
 using System;
 using System.Runtime.InteropServices;
 public static class QaWindow {
@@ -15,6 +15,9 @@ public static class QaWindow {
  [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr context);
  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x,int y);
+ [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
+ [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(System.Drawing.Point point);
+ [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd,out uint processId);
  public struct Rect { public int Left, Top, Right, Bottom; }
 }
 '@
@@ -208,9 +211,22 @@ Choose 'QA Question';Start-Request 'QA QUESTION';Shot 'question'
 $hover=Find-Control $ct::RadioButton @('Detailed')
 if ($hover) {
     $b=$hover.Current.BoundingRectangle
-    [void][QaWindow]::SetCursorPos([int]($b.Left+$b.Width/2),[int]($b.Top+$b.Height/2))
+    [void][QaWindow]::SetWindowPos($hwnd,[IntPtr](-1),0,0,0,0,3)
+    [void][QaWindow]::SetForegroundWindow($hwnd)
+    $point=New-Object Drawing.Point ([int]($b.Left+$b.Width/2)),([int]($b.Top+$b.Height/2))
+    [void][QaWindow]::SetCursorPos($point.X,$point.Y)
+    $hit=[QaWindow]::WindowFromPoint($point)
+    [uint32]$hitPid=0
+    [void][QaWindow]::GetWindowThreadProcessId($hit,[ref]$hitPid)
+    ("Pointer target matches app: "+($hitPid -eq $proc.Id)) | Set-Content (Join-Path $out 'hover-target.txt')
     Start-Sleep -Milliseconds 550
     Shot 'question-hover'
+    $rect=New-Object QaWindow+Rect; [void][QaWindow]::GetWindowRect($hwnd,[ref]$rect)
+    $bmp=[Drawing.Bitmap]::new($rect.Right-$rect.Left,$rect.Bottom-$rect.Top)
+    $graphics=[Drawing.Graphics]::FromImage($bmp)
+    $graphics.CopyFromScreen($rect.Left,$rect.Top,0,0,$bmp.Size)
+    $bmp.Save((Join-Path $out 'hover-display.png'),[Drawing.Imaging.ImageFormat]::Png)
+    $graphics.Dispose();$bmp.Dispose()
 }
 $detail=Find-Control $ct::RadioButton @('Detailed')
 if ($detail) {$detail.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select();Start-Sleep -Milliseconds 300;Shot 'question-selected'}
