@@ -1,6 +1,8 @@
 import AppKit
+import AVFoundation
 import ImageIO
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Small previews of images sent, viewed or returned in a conversation. A local file, an inline
 /// `data:` image or a tool's bytes are decoded off the main thread at a bounded size, and only the
@@ -42,6 +44,7 @@ final class TranscriptImageThumbnails: @unchecked Sendable {
     /// Each image's size in points, read from its header alone, so a picture takes its place before it is
     /// decoded and keeps it while its bitmap is let go. Small, so many are kept.
     private let sizes = NSCache<NSString, NSValue>()
+    private let durations = NSCache<NSString, NSNumber>()
     /// Set only by tests: NSCache may drop entries whenever the system is short of memory, as on a
     /// heavily loaded machine, so a test that checks caching keeps its entries here as well.
     private let kept: NSMutableDictionary?
@@ -96,7 +99,49 @@ final class TranscriptImageThumbnails: @unchecked Sendable {
 
     func preview(for url: URL, size: Size = .tile) async -> Preview {
         if let cached = cachedPreview(for: url, size: size) { return cached }
+        if Self.isMovie(url) { return await poster(for: url, size: size) }
         return await decode(key: Self.key(url.absoluteString, size), size: size) { Self.readOriginal(url) }
+    }
+
+    /// Whether `url` is a video file, whose preview is a frame of it.
+    static func isMovie(_ url: URL) -> Bool {
+        url.isFileURL && UTType(filenameExtension: url.pathExtension)?.conforms(to: .movie) == true
+    }
+
+    /// A video's frame a moment in (its first is often black), decoded off the main thread at a bounded size.
+    private func poster(for url: URL, size: Size) async -> Preview {
+        let key = Self.key(url.absoluteString, size)
+        let pixels = switch size {
+        case .tile: Self.longSidePixels
+        case .detail: Self.detailLongSidePixels
+        case .inline: Self.inlineLongSidePixels
+        }
+        let asset = AVURLAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: pixels, height: pixels)
+        let seconds = (try? await asset.load(.duration).seconds).flatMap { $0.isFinite ? $0 : nil } ?? 0
+        let at = CMTime(seconds: min(1, seconds / 10), preferredTimescale: 600)
+        let preview: Preview
+        if let image = try? await generator.image(at: at).image { preview = .image(image) } else { preview = .unavailable }
+        var cost = key.utf8.count
+        if case let .image(image) = preview { cost += image.bytesPerRow * image.height }
+        cache.setObject(Entry(preview), forKey: key as NSString, cost: cost)
+        keep(Entry(preview), for: key as NSString)
+        return preview
+    }
+
+    /// A video's or a sound's length in seconds, once `pointSize(for:)` or `duration(of:)` has read it.
+    func cachedDuration(of url: URL) -> Double? {
+        durations.object(forKey: url.absoluteString as NSString)?.doubleValue
+    }
+
+    func duration(of url: URL) async -> Double? {
+        if let cached = cachedDuration(of: url) { return cached }
+        guard let seconds = try? await AVURLAsset(url: url).load(.duration).seconds, seconds.isFinite, seconds > 0
+        else { return nil }
+        durations.setObject(NSNumber(value: seconds), forKey: url.absoluteString as NSString)
+        return seconds
     }
 
     /// The preview of bytes a tool returned, cached under `key` (`cachedPreview(forKey:size:)`).
@@ -123,6 +168,18 @@ final class TranscriptImageThumbnails: @unchecked Sendable {
     func pointSize(for url: URL) async -> CGSize? {
         guard Self.canPreview(url) else { return nil }
         if let cached = cachedPointSize(for: url) { return cached }
+        if Self.isMovie(url) {
+            // A video's picture, turned as it plays; a sound alone has none.
+            let asset = AVURLAsset(url: url)
+            guard let track = try? await asset.loadTracks(withMediaType: .video).first,
+                  let (natural, transform) = try? await track.load(.naturalSize, .preferredTransform) else { return nil }
+            let rect = CGRect(origin: .zero, size: natural).applying(transform)
+            let size = CGSize(width: abs(rect.width).rounded(), height: abs(rect.height).rounded())
+            guard size.width > 0, size.height > 0 else { return nil }
+            sizes.setObject(NSValue(size: size), forKey: url.absoluteString as NSString)
+            _ = await duration(of: url)
+            return size
+        }
         let size = await Task.detached(priority: .utility) { () -> CGSize? in
             guard let data = Self.readOriginal(url), let source = CGImageSourceCreateWithData(data as CFData, nil)
             else { return nil }

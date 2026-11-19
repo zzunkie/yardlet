@@ -302,6 +302,8 @@ private struct FilePlayerView: View {
 struct NativeFilePlayer: NSViewRepresentable {
     let player: AVPlayer
     let audioOnly: Bool
+    /// Full screen and picture in picture, which a video in the conversation offers as the Codex app's does.
+    var allowsFullScreen = false
     var onFailure: () -> Void = {}
     final class Coordinator {
         var observation: NSKeyValueObservation?
@@ -312,7 +314,8 @@ struct NativeFilePlayer: NSViewRepresentable {
         let view = AVPlayerView()
         view.controlsStyle = .inline
         view.videoGravity = .resizeAspect
-        view.showsFullScreenToggleButton = false
+        view.showsFullScreenToggleButton = allowsFullScreen && !audioOnly
+        view.allowsPictureInPicturePlayback = allowsFullScreen && !audioOnly
         view.updatesNowPlayingInfoCenter = false
         view.player = player
         context.coordinator.observation = player.currentItem?.observe(\.status, options: [.initial, .new]) { item, _ in

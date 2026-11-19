@@ -1,4 +1,6 @@
 import AppKit
+import AVFoundation
+import AVKit
 import Markdown
 import SwiftUI
 import UniformTypeIdentifiers
@@ -18,7 +20,11 @@ import UniformTypeIdentifiers
 enum TranscriptPictureTarget: Equatable {
     /// An image file or an inline `data:` image, drawn in place.
     case image(URL)
-    /// A file that is not an image (a video, a document): a link to it.
+    /// A video file, played in place.
+    case movie(URL)
+    /// A sound file, played in place.
+    case audio(URL)
+    /// Any other file (a document): a link to it.
     case file(URL)
     /// A web address: a link to it, never fetched.
     case web(URL)
@@ -61,12 +67,28 @@ enum TranscriptPictureTarget: Equatable {
         }
         let standardized = file.standardizedFileURL
         let type = UTType(filenameExtension: standardized.pathExtension)
-        self = type?.conforms(to: .image) == true ? .image(standardized) : .file(standardized)
+        if type?.conforms(to: .image) == true {
+            self = .image(standardized)
+        } else if type?.conforms(to: .movie) == true {
+            self = .movie(standardized)
+        } else if type?.conforms(to: .audio) == true {
+            self = .audio(standardized)
+        } else {
+            self = .file(standardized)
+        }
     }
 
     var isImage: Bool {
         if case .image = self { return true }
         return false
+    }
+
+    /// Whether it is drawn at a size of its own that a row may scale: an image or a video.
+    var scales: Bool {
+        switch self {
+        case .image, .movie: true
+        case .audio, .file, .web, .none: false
+        }
     }
 
     private static let linkCharacters = CharacterSet(charactersIn:
@@ -101,7 +123,7 @@ struct TranscriptMarkdownPictures: View {
                 let target = TranscriptPictureTarget(picture.source, workspace: workspaceURL)
                 TranscriptMarkdownPictureView(picture: picture, target: target,
                                               isOneOfSeveral: isOneOfSeveral) { url in open(url) }
-                    .layoutValue(key: TranscriptPictureRows.Scales.self, value: target.isImage)
+                    .layoutValue(key: TranscriptPictureRows.Scales.self, value: target.scales)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -168,8 +190,12 @@ private struct TranscriptMarkdownPictureView: View {
         switch target {
         case let .image(url):
             TranscriptPictureImage(url: url, name: picture.label, link: link, isOneOfSeveral: isOneOfSeveral) { open(url) }
+        case let .movie(url):
+            TranscriptPictureMovie(url: url, name: picture.label, isOneOfSeveral: isOneOfSeveral)
+        case let .audio(url):
+            TranscriptPictureSound(url: url, name: picture.label)
         case let .file(url):
-            TranscriptPictureLink(name: picture.label, systemImage: Self.symbol(for: url), help: url.path(percentEncoded: false)) {
+            TranscriptPictureLink(name: picture.label, systemImage: "doc", help: url.path(percentEncoded: false)) {
                 openURL(url)
             }
         case let .web(url):
@@ -184,12 +210,6 @@ private struct TranscriptMarkdownPictureView: View {
         }
     }
 
-    private static func symbol(for url: URL) -> String {
-        let type = UTType(filenameExtension: url.pathExtension)
-        if type?.conforms(to: .movie) == true { return "play.rectangle" }
-        if type?.conforms(to: .audio) == true { return "waveform" }
-        return "doc"
-    }
 }
 
 /// An image file or inline image drawn at its own size within the conversation, and its name where it cannot be read.
@@ -481,5 +501,187 @@ struct TranscriptPictureRows: Layout {
         let gaps = spacing * CGFloat(max(row.count - 1, 0))
         guard aspects > 0 else { return maximumHeight }
         return min(maximumHeight, max(0, width - fixed - gaps) / aspects)
+    }
+}
+
+/// The video or sound playing in the conversation now: starting another pauses it, as one plays at a time.
+@MainActor
+final class TranscriptMediaPlayback {
+    static let shared = TranscriptMediaPlayback()
+    private weak var playing: AVPlayer?
+
+    func start(_ player: AVPlayer) {
+        if let playing, playing !== player { playing.pause() }
+        playing = player
+        player.play()
+    }
+}
+
+/// A video an answer names: its frame at its own size, with its length and a play button, until it is played in place.
+/// No player exists until then, and the frame is drawn only while it is on screen, as a picture's is.
+private struct TranscriptPictureMovie: View {
+    let url: URL
+    let name: String
+    let isOneOfSeveral: Bool
+
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @State private var read: (url: URL, size: CGSize?)?
+    @State private var player: AVPlayer?
+    @State private var failed = false
+
+    var body: some View {
+        let maxHeight = (isOneOfSeveral ? TranscriptMarkdownPictures.maximumHeightOfSeveral
+                                        : TranscriptMarkdownPictures.maximumHeight) * interfaceScale
+        Group {
+            switch size {
+            case let size?? where !failed:
+                ConversationToolImageFrame(pixelSize: size, maxHeight: maxHeight) {
+                    if let player {
+                        NativeFilePlayer(player: player, audioOnly: false, allowsFullScreen: true, onFailure: { failed = true })
+                    } else {
+                        Button(action: play) {
+                            TranscriptPictureBitmap(url: url, size: isOneOfSeveral ? .detail : .inline)
+                                .overlay { playBadge }
+                        }
+                        .buttonStyle(.plain)
+                        .parityPointer()
+                        .accessibilityLabel(name)
+                        .help(L10n.string("Play"))
+                    }
+                }
+                .background(Color.black.opacity(0.85))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay { RoundedRectangle(cornerRadius: 8).stroke(ParityTheme.separator) }
+                .contextMenu {
+                    Button(L10n.string("Show in Finder")) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                }
+            case nil where !failed:
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(ParityTheme.subtleFill)
+                    .frame(width: min(maxHeight * 1.6, 360 * interfaceScale), height: maxHeight / 2)
+                    .accessibilityLabel(name)
+            default:
+                // Not a video this Mac can play: a link that opens it in the Files panel.
+                TranscriptPictureFileLink(url: url, name: name, systemImage: "play.rectangle")
+            }
+        }
+        .task(id: url) {
+            guard size == nil else { return }
+            let size = await TranscriptImageThumbnails.shared.pointSize(for: url)
+            guard !Task.isCancelled else { return }
+            read = (url, size)
+        }
+    }
+
+    private var size: CGSize?? {
+        if let read, read.url == url { return read.size }
+        return TranscriptImageThumbnails.shared.cachedPointSize(for: url).map { .some($0) }
+    }
+
+    private var playBadge: some View {
+        ZStack(alignment: .bottomTrailing) {
+            Image(systemName: "play.fill")
+                .font(.system(size: 20 * interfaceScale, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 52 * interfaceScale, height: 52 * interfaceScale)
+                .background(.black.opacity(0.55), in: Circle())
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if let duration = TranscriptImageThumbnails.shared.cachedDuration(of: url) {
+                Text(TranscriptMediaDuration.text(duration))
+                    .font(.system(size: 11 * interfaceScale, weight: .medium).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6 * interfaceScale)
+                    .padding(.vertical, 2 * interfaceScale)
+                    .background(.black.opacity(0.6), in: Capsule())
+                    .padding(8 * interfaceScale)
+            }
+        }
+    }
+
+    private func play() {
+        let player = AVPlayer(url: url)
+        self.player = player
+        TranscriptMediaPlayback.shared.start(player)
+    }
+}
+
+/// A sound an answer names: a row with its name and length, played in place.
+private struct TranscriptPictureSound: View {
+    let url: URL
+    let name: String
+
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @State private var duration: Double?
+    @State private var player: AVPlayer?
+    @State private var failed = false
+
+    var body: some View {
+        if failed {
+            TranscriptPictureFileLink(url: url, name: name, systemImage: "waveform")
+        } else if let player {
+            NativeFilePlayer(player: player, audioOnly: true, onFailure: { failed = true })
+                .frame(width: 360 * interfaceScale, height: 44 * interfaceScale)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+        } else {
+            Button(action: play) {
+                HStack(spacing: 8 * interfaceScale) {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 11 * interfaceScale, weight: .semibold))
+                        .frame(width: 24 * interfaceScale, height: 24 * interfaceScale)
+                        .background(ParityTheme.selectedFill, in: Circle())
+                    Text(name)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if let duration {
+                        Text(TranscriptMediaDuration.text(duration))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .font(.system(size: 13 * interfaceScale))
+                .padding(.horizontal, 8 * interfaceScale)
+                .frame(height: 36 * interfaceScale)
+                .frame(maxWidth: 360 * interfaceScale, alignment: .leading)
+                .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 8))
+                .contentShape(RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(.plain)
+            .parityPointer()
+            .help(L10n.string("Play"))
+            .accessibilityLabel(name)
+            .task(id: url) {
+                let seconds = await TranscriptImageThumbnails.shared.duration(of: url)
+                guard !Task.isCancelled else { return }
+                duration = seconds
+            }
+        }
+    }
+
+    private func play() {
+        let player = AVPlayer(url: url)
+        self.player = player
+        TranscriptMediaPlayback.shared.start(player)
+    }
+}
+
+/// A file the conversation cannot play or draw, as a link that opens it in the Files panel.
+private struct TranscriptPictureFileLink: View {
+    let url: URL
+    let name: String
+    let systemImage: String
+
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        TranscriptPictureLink(name: name, systemImage: systemImage, help: url.path(percentEncoded: false)) { openURL(url) }
+    }
+}
+
+/// A length as a player shows it: 0:42, 3:05, 1:02:07.
+enum TranscriptMediaDuration {
+    static func text(_ seconds: Double) -> String {
+        let total = Int(seconds.rounded())
+        let hours = total / 3_600, minutes = total / 60 % 60, rest = total % 60
+        return hours > 0 ? String(format: "%d:%02d:%02d", hours, minutes, rest) : String(format: "%d:%02d", minutes, rest)
     }
 }

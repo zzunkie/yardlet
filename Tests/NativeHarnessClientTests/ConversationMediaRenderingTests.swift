@@ -1,4 +1,6 @@
 import AppKit
+import AVFoundation
+import AVKit
 import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
@@ -27,6 +29,9 @@ final class ConversationMediaRenderingTests: XCTestCase {
                             dpi: 144, hue: 0.02)
         try Self.writeChart(to: workspace.appending(path: "after.png"), pixels: CGSize(width: 900, height: 600),
                             dpi: 144, hue: 0.33)
+        // A two-second screen recording and a three-second sound.
+        try Self.writeMovie(to: workspace.appending(path: "docs/flow.mov"), pixels: CGSize(width: 1_280, height: 800))
+        try Self.writeSound(to: workspace.appending(path: "voice.m4a"))
         // A phone screenshot, taller than it is wide.
         try Self.writeChart(to: workspace.appending(path: "phone.png"), pixels: CGSize(width: 750, height: 1_624),
                             dpi: 144, hue: 0.75)
@@ -108,6 +113,28 @@ final class ConversationMediaRenderingTests: XCTestCase {
         print("media long conversation: mounted \(Self.bitmaps(in: host.hosting).count) pictures, drawn \(drawnAtEnd.count) at the end and \(drawnAtTop.count) at the top")
     }
 
+    /// A video plays in place once pressed, and only then has a player; starting a sound pauses it.
+    func testAVideoPlaysInPlaceWhenPressed() throws {
+        let answer = "The flow: ![flow recording](docs/flow.mov)\n\nThe note: ![voice note](voice.m4a)"
+        let size = NSSize(width: 900, height: 1_000)
+        let host = WindowlessRender.Host(
+            conversation(.claudeCode, entries: entries(answer: answer)).frame(width: size.width, height: size.height),
+            size: size, appearance: .dark)
+        defer { host.close() }
+        host.settle(until: { Self.bitmaps(in: host.hosting).contains(where: \.isDrawn) })
+        XCTAssertTrue(Self.players(in: host.hosting).isEmpty, "no player before the video is played")
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: "flow recording"))
+        host.settle(until: { Self.players(in: host.hosting).count == 1 })
+        let video = try XCTUnwrap(Self.players(in: host.hosting).first?.player)
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: "voice note"))
+        host.settle(until: { Self.players(in: host.hosting).count == 2 })
+        XCTAssertEqual(video.rate, 0, "starting the sound pauses the video")
+    }
+
+    private static func players(in view: NSView) -> [AVPlayerView] {
+        ((view as? AVPlayerView).map { [$0] } ?? []) + view.subviews.flatMap { players(in: $0) }
+    }
+
     private static func bitmaps(in view: NSView) -> [TranscriptPictureBitmapView] {
         ((view as? TranscriptPictureBitmapView).map { [$0] } ?? []) + view.subviews.flatMap { bitmaps(in: $0) }
     }
@@ -137,6 +164,10 @@ final class ConversationMediaRenderingTests: XCTestCase {
     A picture on the web: ![badge](https://example.com/badge.png)
 
     A recording of the flow, with a long description: ![screen recording of the onboarding flow from the first launch](docs/flow.mov)
+
+    The voice note: ![voice note](voice.m4a)
+
+    A document: ![the spec](docs/spec.pdf)
     """
 
     private static let codexAnswer = """
@@ -189,6 +220,63 @@ final class ConversationMediaRenderingTests: XCTestCase {
     }
 
     // MARK: - Pictures
+
+    /// A two-second H.264 movie of bars that move, at `pixels`.
+    static func writeMovie(to url: URL, pixels: CGSize) throws {
+        let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: Int(pixels.width), AVVideoHeightKey: Int(pixels.height)
+        ])
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey as String: Int(pixels.width), kCVPixelBufferHeightKey as String: Int(pixels.height)
+        ])
+        writer.add(input)
+        XCTAssertTrue(writer.startWriting())
+        writer.startSession(atSourceTime: .zero)
+        for frame in 0..<20 {
+            while !input.isReadyForMoreMediaData { RunLoop.current.run(until: Date().addingTimeInterval(0.005)) }
+            var buffer: CVPixelBuffer?
+            CVPixelBufferPoolCreatePixelBuffer(nil, try XCTUnwrap(adaptor.pixelBufferPool), &buffer)
+            let pixelBuffer = try XCTUnwrap(buffer)
+            CVPixelBufferLockBaseAddress(pixelBuffer, [])
+            let context = try XCTUnwrap(CGContext(
+                data: CVPixelBufferGetBaseAddress(pixelBuffer), width: Int(pixels.width), height: Int(pixels.height),
+                bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(pixelBuffer),
+                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue))
+            context.setFillColor(NSColor(white: 0.12, alpha: 1).cgColor)
+            context.fill(CGRect(origin: .zero, size: pixels))
+            for bar in 0..<6 {
+                context.setFillColor(NSColor(hue: 0.08 + CGFloat(bar) * 0.1, saturation: 0.7, brightness: 0.9, alpha: 1).cgColor)
+                let height = pixels.height * (0.2 + 0.6 * abs(sin(Double(bar + frame) * 0.4)))
+                context.fill(CGRect(x: 60 + CGFloat(bar) * (pixels.width - 120) / 6, y: 60, width: (pixels.width - 120) / 6 - 20,
+                                    height: height))
+            }
+            CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
+            adaptor.append(pixelBuffer, withPresentationTime: CMTime(value: CMTimeValue(frame), timescale: 10))
+        }
+        input.markAsFinished()
+        let done = expectation(description: "movie written")
+        writer.finishWriting { done.fulfill() }
+        XCTWaiter().wait(for: [done], timeout: 30)
+        XCTAssertEqual(writer.status, .completed)
+    }
+
+    /// A three-second tone as AAC.
+    static func writeSound(to url: URL) throws {
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1))
+        let file = try AVAudioFile(forWriting: url, settings: [
+            AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 44_100, AVNumberOfChannelsKey: 1
+        ])
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 44_100 * 3))
+        buffer.frameLength = buffer.frameCapacity
+        let samples = try XCTUnwrap(buffer.floatChannelData?[0])
+        for index in 0..<Int(buffer.frameLength) { samples[index] = Float(sin(Double(index) * 2 * .pi * 440 / 44_100) * 0.2) }
+        try file.write(from: buffer)
+    }
+
+    private static func expectation(description: String) -> XCTestExpectation { XCTestExpectation(description: description) }
 
     /// A bar chart of `pixels` at `dpi`, in one hue, as a PNG.
     static func writeChart(to url: URL, pixels: CGSize, dpi: Double, hue: CGFloat) throws {
