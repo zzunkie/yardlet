@@ -264,6 +264,21 @@ struct ComposerCommandOptions: Equatable {
     var readsGitRepository = false
     /// An explicit `/` typed into a detached task's composer reads the session's catalog.
     var readsCatalogWhenTypedDetached = false
+    /// Rows the task composer adds to the list where its window can open the task's harness settings
+    /// sheet: a command the harness answers only in its own terminal, which opens the sheet at its
+    /// section instead of reaching the harness, whether chosen from the list or sent.
+    var harnessSettingsCommands: [ComposerHarnessSettingsCommand] = []
+}
+
+/// A row of the typed `/` list that opens the task's harness settings sheet at `section`.
+struct ComposerHarnessSettingsCommand: Equatable {
+    let command: ProviderComposerCommand
+    let section: HarnessSettingsSection
+
+    /// Whether `name` is the row's command or one of its aliases.
+    func answers(_ name: String) -> Bool {
+        command.name == name || (command.aliases ?? []).contains(name)
+    }
 }
 
 /// The bottom row's mode control.
@@ -357,10 +372,14 @@ enum ComposerSessionOptionsProjection {
             options.bashMode = true
             options.draftRetention = ComposerDraftRetention(harness: harness)
             options.followUp = ComposerFollowUpOptions(policy: .claudeCode, delivery: .providerInput)
+            let commands = providerCapabilities?.composerCommands ?? []
             options.commands = ComposerCommandOptions(
-                source: .provider(providerCapabilities?.composerCommands ?? []), selection: .insert,
+                source: .provider(commands), selection: .insert,
                 preparation: .providerSettings, error: providerCapabilities?.errors.first,
-                readsCatalogWhenTypedDetached: true)
+                readsCatalogWhenTypedDetached: true,
+                harnessSettingsCommands: ClaudeComposerCommands.pluginManager(given: commands).map {
+                    [ComposerHarnessSettingsCommand(command: $0, section: .plugins)]
+                } ?? [])
         }
         options.contextUsage = providerUsage
         options.usageBreakdowns = ComposerUsageBreakdown.provider(providerUsage)

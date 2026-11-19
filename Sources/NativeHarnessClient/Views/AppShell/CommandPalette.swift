@@ -12,6 +12,20 @@ struct CommandPaletteItem: Identifiable {
     let action: () -> Void
 }
 
+extension CommandPaletteItem {
+    /// The task's harness settings sheet, for every harness: its controls, and its skills and
+    /// plugins with their switches.
+    static func harnessSettings(for session: SessionRecord, action: @escaping () -> Void) -> CommandPaletteItem {
+        CommandPaletteItem(
+            id: "harness-settings-\(session.id)",
+            title: L10n.string("Harness settings…"),
+            subtitle: L10n.string("The task's harness controls, skills and plugins."),
+            systemName: "slider.horizontal.3",
+            action: action
+        )
+    }
+}
+
 /// Pure keyboard-selection behavior for the command palette. Keeping the wraparound rule
 /// outside the view makes the native keyboard path deterministic and directly testable.
 enum CommandPaletteSelection {

@@ -15,7 +15,8 @@ struct HarnessSettingsSheet: View {
     let onRefresh: () -> Void
     let onCommand: (HarnessSettingsCommand) -> Void
     let onDismiss: () -> Void
-    /// A section to open on (`controls`, `skills`, `plugins`); a DEBUG fixture selector.
+    /// A section to open on (`controls`, `skills`, `plugins`): Codex's Skills list and Claude Code's
+    /// `/plugin` ask for theirs, and a DEBUG fixture names one.
     var initialSection: String? = nil
 
     @State private var section: HarnessSettingsSection = .controls
@@ -65,15 +66,16 @@ struct HarnessSettingsSheet: View {
 
     private var showsSectionPicker: Bool { content.sections.count > 1 }
 
-    /// The chosen section, or Controls when the provider no longer reports it.
+    /// The chosen section, or Controls until the provider reports it (Claude Code's plugins arrive
+    /// after the sheet opens) or once it no longer does.
     private var visibleSection: HarnessSettingsSection {
-        content.sections.contains(section) ? section : .controls
+        content.section(named: section.rawValue)
     }
 
     private func applyInitialPresentationIfNeeded() {
         guard !didApplyInitialPresentation else { return }
         didApplyInitialPresentation = true
-        let initial = content.section(named: initialSection)
+        let initial = initialSection.flatMap(HarnessSettingsSection.init(rawValue:)) ?? .controls
         section = initial
         focusedSection = initial
     }

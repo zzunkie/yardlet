@@ -717,6 +717,18 @@ off with its own command, the row has a switch, and Yardlet changes nothing else
   `local` scope) belong to that repository's `.claude/` files and are not listed. Skills outside plugins have no command
   that turns them off and are not listed. Listing and switching start no session and no model turn.
 
+**Where the sheet opens.** With a task open, for any harness:
+
+- **⌘K:** "Harness settings…" among the task's commands, at the sheet's first section.
+- **Codex's Skills list in the composer:** "Manage skills…" under a divider at its bottom, at Skills.
+- **Claude Code's `/plugin` (or `/plugins`) in the composer,** chosen from the typed `/` list or sent: the draft is
+  cleared and the sheet opens at Plugins, where the account's plugins are listed and switched. Claude Code manages
+  plugins with `/plugin` in its terminal only: 2.1.327 neither lists it in a stream-JSON session's commands nor runs
+  it there, and answers "/plugin isn't available in this environment" without a model turn. The composer adds the row
+  only while the CLI lists no command of either name, so a CLI that lists its own `/plugin` gets it
+  (`ClaudeComposerCommands.pluginManager(given:)`).
+- **An error card in the conversation,** from its "Harness settings" button where the card offers one.
+
 Yardlet keeps none of these values. The sheet reads them from the harness each time it opens, so a change made in the
 harness's own app or CLI shows there, and removing Yardlet leaves what the same change in the harness's own app would.
 A switch shows what the harness last reported: a refused change leaves it where it was, and the harness's reason shows
@@ -747,8 +759,10 @@ Verification: `HarnessSettingsSheetTests` (which rows have switches and the line
 `HarnessSettingsSwitchTests.testClaudeCodePluginSwitchesGoThroughTheHarnessAndFailClosed` (listing without starting the
 task, a switch the harness applies, one it refuses, and the line for a linked and an unlinked `settings.json`),
 `ClaudeAdapterTests.testAccountPluginsAreTheAccountsOwnInstallsAndASwitchReadsTheCLIsResult` (what is read from the
-CLI's output), `HarnessSettingsSheetRenderingTests` (`.build/harness-settings-qa/<language>-claude-code-plugins-*` and
-`-codex-skills-*`, light and dark), and the opt-in live checks
+CLI's output), `ComposerSessionOptionsProjectionTests.testCommandListsComeFromEachProvidersOwnSource` (the `/plugin`
+row and when it gives way to the CLI's own), `HarnessSettingsSheetRenderingTests`
+(`.build/harness-settings-qa/<language>-claude-code-plugins-*`, `-codex-skills-*`, `-palette-*` and
+`-skills-popover-*`, light and dark), and the opt-in live checks
 `ClaudeAdapterLiveTests.testLiveAccountPluginSwitchesInATemporaryConfigFolder` and
 `CodexAdapterLiveTests.testLiveSkillSwitchInATemporaryHome`, which run the real CLIs in temporary folders.
 

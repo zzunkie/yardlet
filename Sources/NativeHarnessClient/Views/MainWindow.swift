@@ -139,6 +139,9 @@ struct MainWindow: View {
     @FocusState private var focusedTaskSurface: TaskSurface?
     /// The task whose harness settings sheet is open.
     @State private var harnessSettingsSession: SessionRecord?
+    /// The section the sheet opens at: Skills from Codex's Skills list, Plugins from Claude Code's
+    /// `/plugin`, or the first one.
+    @State private var harnessSettingsSection: HarnessSettingsSection?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.yardletInterfaceScale) private var interfaceScale
@@ -381,8 +384,9 @@ struct MainWindow: View {
             } })
     }
 
-    private func presentHarnessSettings(_ session: SessionRecord) {
+    private func presentHarnessSettings(_ session: SessionRecord, section: HarnessSettingsSection? = nil) {
         rememberShellFocus()
+        harnessSettingsSection = section
         harnessSettingsSession = session
     }
 
@@ -1734,6 +1738,7 @@ struct MainWindow: View {
                 Task { await model.selectCodexRunLocation(location, for: session) }
             },
             refreshConnectors: { await model.refreshMCPServers(for: session) },
+            showHarnessSettings: { presentHarnessSettings(session, section: $0) },
             prepareCodexCommands: { await model.prepareCodexComposerCommands(for: session) },
             answerApproval: { allowing in model.answerOldestApproval(in: session.id, allowing: allowing) }
         )
@@ -2728,7 +2733,7 @@ struct MainWindow: View {
                 onRefresh: { Task { await actions.refresh(source) } },
                 onCommand: { actions.perform($0) },
                 onDismiss: { harnessSettingsSession = nil },
-                initialSection: model.initialCodexCapabilitySection
+                initialSection: harnessSettingsSection?.rawValue ?? model.initialCodexCapabilitySection
             )
             .task {
                 await actions.open(source, sourceIsLoaded: model.hasLoadedHarnessSettings(for: session))
@@ -3114,6 +3119,9 @@ struct MainWindow: View {
                     shortcut: TaskCommandShortcut.toggleSessionRail,
                     action: toggleSessionRail
                 ), at: 0)
+                if let session = model.store.selectedSession {
+                    panelItems.append(.harnessSettings(for: session) { presentHarnessSettings(session) })
+                }
             }
             items.insert(contentsOf: panelItems, at: min(3, items.count))
         }

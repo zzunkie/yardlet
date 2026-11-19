@@ -487,6 +487,64 @@ final class HarnessSettingsSheetRenderingTests: XCTestCase {
                                                      atomically: true, encoding: .utf8)
     }
 
+    /// Two of the ways to the sheet: its row in ⌘K among the task's commands, and "Manage skills…"
+    /// under a divider at the bottom of the composer's Skills popover.
+    func testTheWaysToTheSheetDraw() throws {
+        let directory = try WindowlessRender.directory("harness-settings-qa")
+        let fixture = VisualFixtureScenario.makeConversation(
+            workspaceURL: URL(filePath: "/fixture/yardlet"), initialTaskSurface: nil
+        )
+        let codexSession = try XCTUnwrap(fixture.sessions.first { $0.harness == .codex })
+        let skills = Array(try XCTUnwrap(fixture.codexCapabilities[codexSession.id]).skills.prefix(4))
+        XCTAssertFalse(skills.isEmpty)
+        let language = L10n.string("Done") == "완료" ? "ko" : "en"
+        func command(_ id: String, _ title: String, _ subtitle: String, _ symbol: String) -> CommandPaletteItem {
+            CommandPaletteItem(id: id, title: L10n.string(title), subtitle: L10n.string(subtitle), systemName: symbol, action: {})
+        }
+        let palette = [
+            command("new-task", "New task", "Choose a project and harness to start a task.", "square.and.pencil"),
+            command("toggle-sidebar", "Hide sidebar", "Change the task navigation layout.", "sidebar.left"),
+            command("toggle-side-panel", "Show side panel", "Review, browser, files and side chat beside the conversation.",
+                    "sidebar.right"),
+            command("toggle-terminal", "Show terminal", "A shell in the task's folder below the conversation.", "terminal"),
+            .harnessSettings(for: codexSession) {},
+            command("archived-tasks", "Archived tasks", "Show archived tasks, read them and restore them.", "archivebox"),
+            command("settings", "Settings", "Change appearance, notifications, and app preferences.", "gearshape.2")
+        ]
+        let renders: [(name: String, size: NSSize, view: AnyView, last: String)] = [
+            ("palette", NSSize(width: 520, height: 420),
+             AnyView(CommandPaletteView(items: palette, onSelect: { _ in })), L10n.string("Settings")),
+            ("skills-popover", NSSize(width: 220, height: 40 + CGFloat(skills.count) * 24),
+             AnyView(SkillsPopoverHost(skills: skills)), L10n.string("Manage skills…"))
+        ]
+        for render in renders {
+            let captures = try WindowlessRender.hostedInBothAppearances("\(language)-\(render.name)", in: directory,
+                                                                        size: render.size) {
+                render.view.environment(\.colorScheme, $0.colorScheme)
+            }
+            for capture in captures {
+                XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 12), render.name)
+            }
+            let host = WindowlessRender.Host(render.view, size: render.size)
+            host.settle()
+            let buttons = host.accessibilityElements().filter { $0.role == "AXButton" }.map(\.label)
+            host.close()
+            XCTAssertEqual(buttons.last { $0 != L10n.string("Cancel") }, render.last, render.name)
+            XCTAssertTrue(buttons.contains(L10n.string("Harness settings…")) || render.name != "palette", render.name)
+        }
+    }
+
+    private struct SkillsPopoverHost: View {
+        let skills: [CodexSkillSummary]
+        @FocusState private var focused: String?
+
+        var body: some View {
+            ComposerSkillsList(skills: skills, focusedSkill: $focused, onInsert: { _ in }, onManage: {})
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .background(ParityTheme.elevated)
+        }
+    }
+
     private func sheet(
         _ session: SessionRecord, _ content: HarnessSettingsSheetContent, section: String?
     ) -> HarnessSettingsSheet {

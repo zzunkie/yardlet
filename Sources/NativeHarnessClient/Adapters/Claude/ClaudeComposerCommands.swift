@@ -51,6 +51,19 @@ enum ClaudeComposerCommands {
         return result
     }
 
+    /// Claude Code manages plugins with `/plugin` (alias `/plugins`) in its terminal interface only. The
+    /// session Yardlet runs neither lists it nor runs it: 2.1.327 answers "/plugin isn't available in this
+    /// environment" without a model turn. While the CLI lists no command of that name, the task composer
+    /// offers it as the harness settings sheet's Plugins section, where the account's plugins are turned
+    /// on and off (docs/PROVIDER_CONNECTIONS.md, "Skill and plugin switches").
+    static func pluginManager(given commands: [ProviderComposerCommand]) -> ProviderComposerCommand? {
+        let names: Set<String> = ["plugin", "plugins"]
+        guard !commands.contains(where: { names.contains($0.name) || ($0.aliases ?? []).contains(where: names.contains) })
+        else { return nil }
+        return ProviderComposerCommand(name: "plugin", description: L10n.string("Turn plugins on and off in harness settings"),
+                                       argumentHint: "", aliases: ["plugins"])
+    }
+
     static func validateSubmission(_ text: String, commands: [ProviderComposerCommand] = []) throws {
         guard !isSessionReset(text, commands: commands) else {
             throw HarnessAdapterError.capabilityUnavailable(

@@ -39,6 +39,9 @@ struct ComposerActions {
     var selectCodexRunLocation: (CodexRunLocation) -> Void = { _ in }
     /// Rereads the session's MCP servers when the connector list opens. Starts nothing.
     var refreshConnectors: () async -> Void = {}
+    /// Opens the task's harness settings sheet at a section: Codex's Skills list and Claude Code's
+    /// `/plugin` lead there. Nil where the composer has no task sheet to open.
+    var showHarnessSettings: ((HarnessSettingsSection) -> Void)? = nil
 
     // MARK: Codex commands
 
@@ -68,7 +71,7 @@ struct ComposerActions {
     var shape: [Bool] {
         [submitCodex != nil, submitFollowUp != nil, removeQueued != nil, retryQueued != nil, moveQueued != nil,
          sendQueuedNow != nil, stopAndSendQueued != nil, editQueued != nil, resumeQueue != nil, runCodexCommand != nil,
-         escape != nil, tab != nil]
+         escape != nil, tab != nil, showHarnessSettings != nil]
     }
 
     /// Applies a session control's choice by the path its provider takes.

@@ -539,6 +539,10 @@
 "Modes unavailable: %@" = "Modes unavailable: %@";
 "Skills unavailable: %@" = "Skills unavailable: %@";
 "Plugins unavailable: %@" = "Plugins unavailable: %@";
+"Harness settings…" = "Harness settings…";
+"The task's harness controls, skills and plugins." = "The task's harness controls, skills and plugins.";
+"Manage skills…" = "Manage skills…";
+"Turn plugins on and off in harness settings" = "Turn plugins on and off in harness settings";
 "Applies to all tasks on this account, starting with new tasks." = "Applies to all tasks on this account, starting with new tasks.";
 "Applies to all tasks on the accounts that share these settings, starting with new tasks." = "Applies to all tasks on the accounts that share these settings, starting with new tasks.";
 "Couldn't turn on %@: %@" = "Couldn't turn on %@: %@";

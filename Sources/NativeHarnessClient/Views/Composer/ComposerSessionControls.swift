@@ -28,6 +28,8 @@ struct ComposerSessionControls: View {
     /// Turns Codex's Plan mode off. Without it the Plan indicator is not drawn.
     var onTurnOffPlanMode: (() -> Void)? = nil
     var onInsertSkill: (CodexSkillSummary) -> Void = { _ in }
+    /// The Skills list's last row, "Manage skills…", where the composer can open the task's sheet.
+    var onManageSkills: (() -> Void)? = nil
     /// The context window's "Compact session", where the task's composer can compact.
     var compact: ComposerContextUsageDetails.Compact? = nil
     /// The model control shortens its words when the row cannot give it its whole width, as a task
@@ -63,7 +65,7 @@ struct ComposerSessionControls: View {
                 .fixedSize()
         }
         if let skills = options.skills {
-            ComposerSkillsControl(skills: skills.skills, onInsert: onInsertSkill)
+            ComposerSkillsControl(skills: skills.skills, onInsert: onInsertSkill, onManage: onManageSkills)
         }
         if options.isLoadingSettings || isPreparing {
             ProgressView()
@@ -332,6 +334,8 @@ struct ComposerPermissionMenu: View {
 private struct ComposerSkillsControl: View {
     let skills: [CodexSkillSummary]
     let onInsert: (CodexSkillSummary) -> Void
+    /// Opens the task's harness settings at Skills, where each skill is turned on and off.
+    var onManage: (() -> Void)? = nil
 
     @State private var isPresented = false
     @State private var opensFromKeyboard = false
@@ -352,18 +356,14 @@ private struct ComposerSkillsControl: View {
         .accessibilityLabel(L10n.string("Skills"))
         .help(L10n.string("Insert skill"))
         .popover(isPresented: $isPresented) {
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(skills) { skill in
-                    Button(skill.displayName) {
-                        dismiss()
-                        onInsert(skill)
-                    }
-                    .parityPointer()
-                    .focused($focusedSkill, equals: skill.id)
-                }
-            }
-            .padding(8)
-            .frame(minWidth: 170, alignment: .leading)
+            ComposerSkillsList(skills: skills, focusedSkill: $focusedSkill, onInsert: { skill in
+                dismiss()
+                onInsert(skill)
+            }, onManage: onManage.map { manage in {
+                dismiss()
+                // The sheet opens once the popover has gone.
+                DispatchQueue.main.async { manage() }
+            } })
             .onAppear { if opensFromKeyboard { focusedSkill = skills.first?.id } }
             .onExitCommand { dismiss() }
         }
@@ -380,6 +380,35 @@ private struct ComposerSkillsControl: View {
     private func dismiss() {
         returnsFocus = true
         isPresented = false
+    }
+}
+
+/// What the composer's Skills popover lists: each skill to insert into the next message, then
+/// "Manage skills…" under a divider where the task's harness settings can open.
+struct ComposerSkillsList: View {
+    static let manageRowID = "manage-skills"
+
+    let skills: [CodexSkillSummary]
+    var focusedSkill: FocusState<String?>.Binding
+    let onInsert: (CodexSkillSummary) -> Void
+    var onManage: (() -> Void)?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(skills) { skill in
+                Button(skill.displayName) { onInsert(skill) }
+                    .parityPointer()
+                    .focused(focusedSkill, equals: skill.id)
+            }
+            if let onManage {
+                if !skills.isEmpty { Divider().padding(.vertical, 2) }
+                Button(L10n.string("Manage skills…"), action: onManage)
+                    .parityPointer()
+                    .focused(focusedSkill, equals: Self.manageRowID)
+            }
+        }
+        .padding(8)
+        .frame(minWidth: 170, alignment: .leading)
     }
 }
 

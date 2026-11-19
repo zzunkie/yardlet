@@ -539,6 +539,10 @@
 "Modes unavailable: %@" = "모드를 불러올 수 없음: %@";
 "Skills unavailable: %@" = "스킬을 불러올 수 없음: %@";
 "Plugins unavailable: %@" = "플러그인을 불러올 수 없음: %@";
+"Harness settings…" = "하네스 설정…";
+"The task's harness controls, skills and plugins." = "이 작업 하네스의 제어, 스킬, 플러그인을 엽니다.";
+"Manage skills…" = "스킬 관리…";
+"Turn plugins on and off in harness settings" = "하네스 설정에서 플러그인을 켜고 끕니다";
 "Applies to all tasks on this account, starting with new tasks." = "이 계정의 모든 작업에 적용되며, 새 작업부터 반영됩니다.";
 "Applies to all tasks on the accounts that share these settings, starting with new tasks." = "이 설정을 함께 쓰는 모든 계정의 작업에 적용되며, 새 작업부터 반영됩니다.";
 "Couldn't turn on %@: %@" = "%@ 켜기 실패: %@";

@@ -436,10 +436,21 @@ final class ComposerSessionOptionsProjectionTests: XCTestCase {
                                                            providerUsage: nil, isAttached: true)
         XCTAssertEqual(claude.commands?.source, .provider(state.composerCommands))
         XCTAssertEqual(claude.commands?.error, "Claude Code could not list its commands")
+        // `/plugin` runs only in Claude Code's terminal, so the composer offers it as the sheet's
+        // Plugins section, by either name, until the CLI lists a command of that name itself.
+        let manager = claude.commands?.harnessSettingsCommands.first
+        XCTAssertEqual(claude.commands?.harnessSettingsCommands.count, 1)
+        XCTAssertEqual(manager?.section, .plugins)
+        XCTAssertEqual(manager.map { ["plugin", "plugins", "review"].map($0.answers) }, [true, true, false])
+        state.composerCommands.append(ProviderComposerCommand(name: "plugins", description: "", argumentHint: ""))
+        let listed = ComposerSessionOptionsProjection.make(harness: .claudeCode, session: nil, providerCapabilities: state,
+                                                           providerUsage: nil, isAttached: true)
+        XCTAssertEqual(listed.commands?.harnessSettingsCommands, [])
         let codex = ComposerSessionOptionsProjection.make(harness: .codex, session: nil, providerCapabilities: state,
                                                           providerUsage: nil, isAttached: true)
         XCTAssertEqual(codex.commands?.source, .codexCatalog)
         XCTAssertNil(codex.commands?.error, "Codex's list is its own catalog, not the provider state's")
+        XCTAssertEqual(codex.commands?.harnessSettingsCommands, [])
     }
 
     // MARK: - Wiring

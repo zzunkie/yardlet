@@ -520,7 +520,8 @@ struct PromptComposer: View {
                 options: options, placement: .leading, onChoose: { actions.apply($0) },
                 onPrepare: actions.prepareProviderSettings,
                 onTurnOffPlanMode: actions.runCodexCommand.map { run in { run(.planMode) } },
-                onInsertSkill: insertSkill
+                onInsertSkill: insertSkill,
+                onManageSkills: actions.showHarnessSettings.map { show in { show(.skills) } }
             )
         }
     }
@@ -656,6 +657,12 @@ struct PromptComposer: View {
             runShellCommand()
             return
         }
+        // A command the harness answers only in its terminal opens the sheet instead of being sent.
+        if composerDraft.attachments.isEmpty, let section = harnessSettingsSection(for: composerDraft.text) {
+            composerDraft.clear()
+            actions.showHarnessSettings?(section)
+            return
+        }
         switch composerDraft.takeMessage(options: options, action: action, submitsCodexDraft: actions.submitCodex != nil,
                                          submitsFollowUp: actions.submitFollowUp != nil) {
         case let .codexDraft(draft, action)?: actions.submitCodex?(draft, action)
@@ -707,10 +714,19 @@ struct PromptComposer: View {
         case .codexCatalog?:
             actions.runCodexCommand == nil ? [] : CodexComposerCommands.catalog(codexCommandContext)
         case let .provider(commands)?:
-            commands
+            commands + (actions.showHarnessSettings == nil ? [] : options.commands?.harnessSettingsCommands.map(\.command) ?? [])
         case nil:
             []
         }
+    }
+
+    /// The section of the task's harness settings that `text`, a `/command` alone, opens: a row the
+    /// composer added for a command the harness answers only in its own terminal.
+    private func harnessSettingsSection(for text: String) -> HarnessSettingsSection? {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard actions.showHarnessSettings != nil, text.first == "/" else { return nil }
+        let name = String(text.dropFirst())
+        return options.commands?.harnessSettingsCommands.first { $0.answers(name) }?.section
     }
 
     private var codexCommandContext: CodexComposerCommandContext {
@@ -758,6 +774,12 @@ struct PromptComposer: View {
         isSelectingCommand = openComposerMenu != nil
         requestedMenuReturn = nil
         openComposerMenu = nil
+        if let section = harnessSettingsSection(for: command.invocation) {
+            // As a Codex command runs: the typed `/name` leaves the draft and nothing is sent.
+            if ComposerCommands.query(in: composerDraft.text) != nil { composerDraft.text = "" }
+            actions.showHarnessSettings?(section)
+            return
+        }
         if options.commands?.selection == .runCodexCommand,
            let codexCommand = CodexComposerCommands.command(for: command, in: codexCommandContext) {
             runCodexCommand(codexCommand)
