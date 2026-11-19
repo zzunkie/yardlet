@@ -62,7 +62,12 @@ $tree=[System.Windows.Automation.TreeScope]::Descendants
 $AE=[System.Windows.Automation.AutomationElement]
 $ct=[System.Windows.Automation.ControlType]
 $main=$AE::FromHandle($hwnd)
-function Items { return $main.FindAll($tree,[System.Windows.Automation.Condition]::TrueCondition) }
+function Items {
+    for ($attempt=0;$attempt -lt 8;$attempt++) {
+        try {return $AE::FromHandle($hwnd).FindAll($tree,[System.Windows.Automation.Condition]::TrueCondition)}
+        catch {if ($attempt -eq 7) {throw}; Start-Sleep -Milliseconds 150}
+    }
+}
 function Choose($name) {
     for ($attempt=0;$attempt -lt 15;$attempt++) {
         $option=@(Items | Where-Object { $_.Current.ControlType -eq $ct::ListItem -and $_.Current.Name -like "*$name*" })[0]
