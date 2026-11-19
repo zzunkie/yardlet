@@ -80,17 +80,17 @@ struct CommandPaletteView: View {
                     .font(.system(size: 15))
                     .focused($isSearchFocused)
                     .accessibilityLabel(L10n.string("Search tasks and commands"))
-                    .onSubmit { runSelected() }
-                    .onKeyPress(.downArrow) {
+                    .onMacShortcutSubmit(.paletteChoose) { runSelected() }
+                    .onKeyPress(MacShortcut.paletteNext.binding.key) {
                         moveSelection(by: 1)
                         return .handled
                     }
-                    .onKeyPress(.upArrow) {
+                    .onKeyPress(MacShortcut.palettePrevious.binding.key) {
                         moveSelection(by: -1)
                         return .handled
                     }
                 Button(L10n.string("Cancel")) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
+                    .keyboardShortcut(MacShortcut.paletteClose.binding)
                     .controlSize(.small)
             }
             .padding(14)

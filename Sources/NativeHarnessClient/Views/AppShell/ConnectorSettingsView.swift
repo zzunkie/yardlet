@@ -509,7 +509,7 @@ private struct ConnectorRow: View {
                 token = ""
             }
             Button(L10n.string("Connect"), action: connectWithToken)
-                .keyboardShortcut(.defaultAction)
+                .keyboardShortcut(MacShortcut.confirmDialog.binding)
                 .disabled(token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .controlSize(.small)
@@ -533,7 +533,7 @@ private struct ConnectorRow: View {
                     clientSecret = ""
                 }
                 Button(L10n.string("Sign in"), action: connectWithClient)
-                    .keyboardShortcut(.defaultAction)
+                    .keyboardShortcut(MacShortcut.confirmDialog.binding)
                     .disabled(clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }

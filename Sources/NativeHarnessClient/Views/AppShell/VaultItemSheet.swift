@@ -349,9 +349,9 @@ struct VaultItemSheet: View {
             }
             Spacer(minLength: 8)
             Button(L10n.string("Cancel"), action: onDone)
-                .keyboardShortcut(.cancelAction)
+                .keyboardShortcut(MacShortcut.dismiss.binding)
             Button(L10n.string("Save"), action: save)
-                .keyboardShortcut(.defaultAction)
+                .keyboardShortcut(MacShortcut.confirmDialog.binding)
                 .disabled(!canSave)
         }
         .padding(.horizontal, 20)

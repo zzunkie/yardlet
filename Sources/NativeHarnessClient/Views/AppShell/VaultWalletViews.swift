@@ -147,8 +147,8 @@ private struct VaultWalletSheetFrame<Fields: View>: View {
                     Text(failure).font(SettingsMetrics.detailFont).foregroundStyle(.red).lineLimit(2)
                 }
                 Spacer(minLength: 8)
-                Button(L10n.string("Cancel"), action: onCancel).keyboardShortcut(.cancelAction)
-                Button(L10n.string("Save"), action: onSave).keyboardShortcut(.defaultAction).disabled(!canSave)
+                Button(L10n.string("Cancel"), action: onCancel).keyboardShortcut(MacShortcut.dismiss.binding)
+                Button(L10n.string("Save"), action: onSave).keyboardShortcut(MacShortcut.confirmDialog.binding).disabled(!canSave)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 12)

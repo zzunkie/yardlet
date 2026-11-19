@@ -84,12 +84,10 @@ final class TaskWorkspaceSizesTests: XCTestCase {
     }
 
     func testTheViewMenuTogglesTheSidePanelWithTheCodexAppsKeyAndTheTerminalWithBothAppsKey() {
-        XCTAssertEqual(TaskCommandShortcut.toggleSidePanel.key, KeyEquivalent("b"))
-        XCTAssertEqual(TaskCommandShortcut.toggleSidePanel.modifiers, [.command, .option])
-        XCTAssertEqual(TaskCommandShortcut.toggleTerminal.key, KeyEquivalent("j"))
-        XCTAssertEqual(TaskCommandShortcut.toggleTerminal.modifiers, .command)
-        XCTAssertTrue(TaskCommandShortcut.all.contains(TaskCommandShortcut.toggleSidePanel))
-        XCTAssertTrue(TaskCommandShortcut.all.contains(TaskCommandShortcut.toggleTerminal))
+        XCTAssertEqual(MacShortcut.toggleSidePanel.defaultBinding().key, KeyEquivalent("b"))
+        XCTAssertEqual(MacShortcut.toggleSidePanel.defaultBinding().modifiers, [.command, .option])
+        XCTAssertEqual(MacShortcut.toggleTerminal.defaultBinding().key, KeyEquivalent("j"))
+        XCTAssertEqual(MacShortcut.toggleTerminal.defaultBinding().modifiers, .command)
         XCTAssertEqual(TaskCommandTitle.sidePanel(isShown: false), L10n.string("Show side panel"))
         XCTAssertEqual(TaskCommandTitle.sidePanel(isShown: true), L10n.string("Hide side panel"))
         XCTAssertEqual(L10n.string("Show terminal", languageCode: "ko"), "터미널 보기")

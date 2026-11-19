@@ -407,26 +407,29 @@ final class RemoteBrowserPageView: NSView, @preconcurrency NSTextInputClient, NS
     // MARK: Keys
 
     override func keyDown(with event: NSEvent) {
-        if event.modifierFlags.contains(.command), let key = event.commandShortcutKey {
-            switch key {
-            case "v":
+        let key = MacShortcutEvent(event)
+        let editing: [MacShortcut] = [.browserPaste, .browserSelectAll, .browserUndo, .browserRedo, .browserCopy, .browserCut]
+        if let command = editing.first(where: { $0.matches(key) }) {
+            switch command {
+            case .browserPaste:
                 // This Mac's clipboard, typed: the host's is not the person's here.
                 if let text = NSPasteboard.general.string(forType: .string), !text.isEmpty {
                     browser?.input(.text(String(text.prefix(RemoteProtocol.maxTabInputCharacters))))
                 }
-            case "a", "z":
-                browser?.input(.key((event.modifierFlags.contains(.shift) ? "Shift+Meta+" : "Meta+") + key))
-            case "c", "x":
+            case .browserSelectAll, .browserUndo, .browserRedo:
+                browser?.input(.key((event.modifierFlags.contains(.shift) ? "Shift+Meta+" : "Meta+") + String(command.definition.key.character)))
+            case .browserCopy, .browserCut:
                 // ⌘C and ⌘X alone: ⌥⌘C and the others are the browser's own keys.
                 guard browser?.copiesFromPage == true, event.modifierFlags.isDisjoint(with: [.shift, .option, .control]) else {
                     return super.keyDown(with: event)
                 }
-                browser?.copy(cut: key == "x")
+                browser?.copy(cut: command == .browserCut)
             default:
                 super.keyDown(with: event)
             }
             return
         }
+        if event.modifierFlags.contains(.command) { super.keyDown(with: event); return }
         if inputContext?.handleEvent(event) != true { interpretKeyEvents([event]) }
     }
 

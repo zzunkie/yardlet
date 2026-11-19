@@ -2929,7 +2929,7 @@ struct MainWindow: View {
                     systemName: direction == .right
                         ? "rectangle.righthalf.inset.filled"
                         : "rectangle.bottomhalf.inset.filled",
-                    shortcut: SplitCommandShortcut.split(direction),
+                    shortcut: (direction == .right ? MacShortcut.splitRight : .splitDown).binding,
                     action: { splitFocusedPane(direction) }
                 )
             )
@@ -2941,7 +2941,7 @@ struct MainWindow: View {
                     title: L10n.string("Close pane"),
                     subtitle: L10n.string("Take the task out of the split view; it keeps its own row."),
                     systemName: "rectangle.badge.xmark",
-                    shortcut: SplitCommandShortcut.closePane,
+                    shortcut: MacShortcut.closePane.binding,
                     action: { model.splits.closePane() }
                 )
             )
@@ -2952,7 +2952,7 @@ struct MainWindow: View {
                         title: SplitCommandTitle.focus(direction),
                         subtitle: L10n.string("Move the pane focus inside this split view."),
                         systemName: SplitCommandTitle.focusSymbol(direction),
-                        shortcut: SplitCommandShortcut.focusPane(direction),
+                        shortcut: MacShortcut.focus(direction).binding,
                         action: { model.splits.moveFocus(direction) }
                     )
                 )
@@ -3022,7 +3022,7 @@ struct MainWindow: View {
                 title: L10n.string("New task"),
                 subtitle: L10n.string("Choose a project and harness to start a task."),
                 systemName: "square.and.pencil",
-                shortcut: TaskCommandShortcut.newTask,
+                shortcut: MacShortcut.newTask.binding,
                 action: showNewTask
             ),
             CommandPaletteItem(
@@ -3032,7 +3032,7 @@ struct MainWindow: View {
                     : L10n.string("Show sidebar"),
                 subtitle: L10n.string("Change the task navigation layout."),
                 systemName: "sidebar.left",
-                shortcut: TaskCommandShortcut.toggleSidebar,
+                shortcut: MacShortcut.toggleSidebar.binding,
                 action: toggleSidebar
             ),
             CommandPaletteItem(
@@ -3040,7 +3040,7 @@ struct MainWindow: View {
                 title: TaskCommandTitle.activity(isShown: isActivityShown),
                 subtitle: L10n.string("Turn the sidebar activity view on or off"),
                 systemName: "bell",
-                shortcut: TaskCommandShortcut.toggleActivityView,
+                shortcut: MacShortcut.toggleActivityView.binding,
                 action: toggleActivity
             ),
             CommandPaletteItem(
@@ -3083,7 +3083,7 @@ struct MainWindow: View {
                 title: L10n.string("Settings"),
                 subtitle: L10n.string("Change appearance, notifications, and app preferences."),
                 systemName: "gearshape.2",
-                shortcut: YardletAppShortcut.settings,
+                shortcut: MacShortcut.settings.binding,
                 action: { presentSettings() }
             )
         ]
@@ -3096,7 +3096,7 @@ struct MainWindow: View {
                     title: TaskCommandTitle.sidePanel(isShown: panels.trailingSurfaceID != nil),
                     subtitle: L10n.string("Review, browser, files and side chat beside the conversation."),
                     systemName: TaskPanelSymbol.sidePanel,
-                    shortcut: TaskCommandShortcut.toggleSidePanel,
+                    shortcut: MacShortcut.toggleSidePanel.binding,
                     action: { toggleTaskPanel(TaskSurfaceNavigationProjection.sidePanelToggleID) }
                 ),
                 CommandPaletteItem(
@@ -3105,7 +3105,7 @@ struct MainWindow: View {
                     subtitle: L10n.string(TerminalLocation.current() == .right ? "A shell in the task's folder in the side panel."
                                                                                : "A shell in the task's folder below the conversation."),
                     systemName: TaskPanelSymbol.terminal,
-                    shortcut: TaskCommandShortcut.toggleTerminal,
+                    shortcut: MacShortcut.toggleTerminal.binding,
                     action: { toggleTaskPanel(TaskSurface.terminal.rawValue) }
                 )
             ]
@@ -3116,7 +3116,7 @@ struct MainWindow: View {
                     title: sessionRail.toggleTitle(for: model.store.selectedSessionID),
                     subtitle: L10n.string("The task's environment, settings, context, changes and progress beside the conversation."),
                     systemName: TaskPanelSymbol.sessionRail,
-                    shortcut: TaskCommandShortcut.toggleSessionRail,
+                    shortcut: MacShortcut.toggleSessionRail.binding,
                     action: toggleSessionRail
                 ), at: 0)
                 if let session = model.store.selectedSession {
@@ -3164,7 +3164,7 @@ struct MainWindow: View {
                         title: L10n.string("Mark task as unread"),
                         subtitle: session.title,
                         systemName: "circlebadge",
-                        shortcut: TaskCommandShortcut.markUnread,
+                        shortcut: MacShortcut.markUnread.binding,
                         action: { Task { await model.store.markUnread(id: session.id) } }
                     )
                 )

@@ -89,7 +89,7 @@ struct AgentRunConversationSheet: View {
                 }
                 Spacer()
                 Button(L10n.string("Done")) { dismiss() }
-                    .keyboardShortcut(.defaultAction)
+                    .keyboardShortcut(MacShortcut.confirmDialog.binding)
             }
             .padding(12)
             Divider()

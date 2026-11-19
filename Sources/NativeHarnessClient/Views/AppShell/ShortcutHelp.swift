@@ -29,7 +29,7 @@ extension KeyboardShortcut {
 
     private static func keyText(_ key: Character) -> String {
         switch key {
-        // ⇧Tab arrives as the back-tab character (`TabCommandShortcut.previousTab`).
+        // ⇧Tab arrives as the back-tab character (`MacShortcut.previousTab.binding`).
         case "\t", "\u{19}": "⇥"
         case "\r": "↩"
         case "\u{1B}": "⎋"

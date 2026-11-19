@@ -37,10 +37,7 @@ enum ComposerExternalInput: Equatable {
 
     /// ⌘V as the Paste menu item sees it, under any input source (`NSEvent.commandShortcutKey`).
     static func isPasteShortcut(_ event: NSEvent) -> Bool {
-        event.type == .keyDown
-            && event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-                .subtracting([.capsLock, .numericPad, .function]) == .command
-            && event.commandShortcutKey == "v"
+        event.type == .keyDown && MacShortcut.pasteAttachment.matches(MacShortcutEvent(event))
     }
 }
 
@@ -106,9 +103,7 @@ final class ComposerExternalInputView: NSView {
 
     /// Backspace, unmodified, in this composer's empty editor with no composition in progress.
     func handleDeleteInEmptyText(_ event: NSEvent) -> Bool {
-        guard let onDeleteInEmptyText, event.type == .keyDown, event.keyCode == 51,
-              event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-                .subtracting([.capsLock, .numericPad, .function]).isEmpty,
+        guard let onDeleteInEmptyText, event.type == .keyDown, MacShortcut.leaveBash.matches(MacShortcutEvent(event)),
               let window, event.window === window,
               let editor = window.firstResponder as? NSTextView, editor.isEditable, editor.string.isEmpty,
               !editor.hasMarkedText(), owns(editor) else { return false }

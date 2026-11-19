@@ -86,42 +86,6 @@ enum TaskCommandTitle {
     }
 }
 
-/// The Codex app's `defaultKeybindings` for these commands, where they do not clash with Yardlet's
-/// own: `⌘⇧[` / `⌘⇧]` move between sidebar rows, `⌥⌘A` opens the next task needing attention, `⌥⌘U`
-/// toggles the activity view (`togglePriorityFilter`), `⌘⇧S` toggles the sidebar, `⌥⌘P` pins, `⌘⇧U`
-/// marks unread, and `⌘⇧A` archives. `⌘1`–`⌘4` stay with the task surfaces. The session rail has no
-/// shortcut in either app; `⌃⌘I` is macOS's own for showing and hiding an inspector (SwiftUI's
-/// `InspectorCommands`), the trailing column the rail is. The terminal is `⌘J` in both apps (the
-/// Claude app's `toggle_terminal_pane`, the Codex app's `toggleBottomPanel`), and the side panel is
-/// the Codex app's `toggleSidePanel` `⌘⌥B` (the Claude app has a key per pane instead). The model menu
-/// opens with the Codex app's `composer.openModelPicker` `⌃⇧M`; the Claude app's `⌘⇧I` (model) and `⌘⇧E`
-/// (effort) are the Codex app's personality settings and file tree, so they are left out. Back and
-/// Forward are `⌘[` / `⌘]` in both apps (the Claude app's Go menu, the Codex app's `navigateBack` and
-/// `navigateForward`), which also give them the mouse's back and forward buttons.
-enum TaskCommandShortcut {
-    static let toggleSidebar = KeyboardShortcut("s", modifiers: [.command, .shift])
-    static let previousTask = KeyboardShortcut("[", modifiers: [.command, .shift])
-    static let nextTask = KeyboardShortcut("]", modifiers: [.command, .shift])
-    static let nextTaskNeedingAttention = KeyboardShortcut("a", modifiers: [.command, .option])
-    static let toggleActivityView = KeyboardShortcut("u", modifiers: [.command, .option])
-    static let togglePinned = KeyboardShortcut("p", modifiers: [.command, .option])
-    static let markUnread = KeyboardShortcut("u", modifiers: [.command, .shift])
-    static let archive = KeyboardShortcut("a", modifiers: [.command, .shift])
-    static let toggleSessionRail = KeyboardShortcut("i", modifiers: [.command, .control])
-    static let toggleSidePanel = KeyboardShortcut("b", modifiers: [.command, .option])
-    static let toggleTerminal = KeyboardShortcut("j", modifiers: .command)
-    static let openModelMenu = KeyboardShortcut("m", modifiers: [.control, .shift])
-    static let back = KeyboardShortcut("[", modifiers: .command)
-    static let forward = KeyboardShortcut("]", modifiers: .command)
-
-    /// File › New task, the Codex app's `newThread` (⌘N). Its New Window has no shortcut.
-    static let newTask = KeyboardShortcut("n", modifiers: .command)
-
-    static let all = [toggleSidebar, previousTask, nextTask, nextTaskNeedingAttention, toggleActivityView,
-                      togglePinned, markUnread, archive, toggleSessionRail, toggleSidePanel, toggleTerminal, openModelMenu,
-                      back, forward]
-}
-
 /// The Codex app's Open Terminal key, `Control+\``, beside the View menu's ⌘J, which the menu cannot
 /// give one item twice. Its window takes it before the focused view does, as it takes a menu's key, so it
 /// works with the terminal focused (whose shell would read it as Control-@). Off while a sheet is up.
@@ -131,9 +95,7 @@ struct TerminalToggleKey: NSViewRepresentable {
 
     /// Control and the key left of 1, whatever character the keyboard's layout gives it.
     static func matches(_ event: NSEvent) -> Bool {
-        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            .subtracting([.capsLock, .numericPad, .function])
-        return modifiers == .control && (event.keyCode == 50 || event.charactersIgnoringModifiers == "`")
+        MacShortcut.terminalAlternate.matches(MacShortcutEvent(event))
     }
 
     func makeNSView(context: Context) -> KeyView { KeyView() }
@@ -179,7 +141,7 @@ struct YardletTaskCommands: Commands {
         // As the Codex app's File menu: New task takes ⌘N, and New Window stays without a shortcut.
         CommandGroup(replacing: .newItem) {
             Button(L10n.string("New task")) { task?.newTask?() }
-                .keyboardShortcut(TaskCommandShortcut.newTask)
+                .keyboardShortcut(MacShortcut.newTask.binding)
                 .disabled(task?.newTask == nil)
             Button(L10n.string("New Window")) { openWindow(id: "main") }
         }
@@ -187,54 +149,54 @@ struct YardletTaskCommands: Commands {
             Button(TaskCommandTitle.sidebar(isVisible: task?.isSidebarVisible ?? true)) {
                 task?.toggleSidebar()
             }
-            .keyboardShortcut(TaskCommandShortcut.toggleSidebar)
+            .keyboardShortcut(MacShortcut.toggleSidebar.binding)
             .disabled(task == nil)
             Button(task?.sessionRail?.toggleTitle(for: task?.shownTaskID) ?? L10n.string("Show session rail")) {
                 task?.toggleSessionRail()
             }
-            .keyboardShortcut(TaskCommandShortcut.toggleSessionRail)
+            .keyboardShortcut(MacShortcut.toggleSessionRail.binding)
             .disabled(task?.shownTaskID == nil)
             Button(TaskCommandTitle.sidePanel(isShown: task?.panels?.trailingSurfaceID != nil)) {
                 task?.toggleSidePanel()
             }
-            .keyboardShortcut(TaskCommandShortcut.toggleSidePanel)
+            .keyboardShortcut(MacShortcut.toggleSidePanel.binding)
             .disabled(task?.panels == nil)
             Button(TaskCommandTitle.terminal(isShown: task?.panels?.showsTerminal == true)) {
                 task?.toggleTerminal()
             }
-            .keyboardShortcut(TaskCommandShortcut.toggleTerminal)
+            .keyboardShortcut(MacShortcut.toggleTerminal.binding)
             .disabled(task?.panels == nil)
 
             Divider()
 
             Button(L10n.string("Back")) { task?.goBack?() }
-                .keyboardShortcut(TaskCommandShortcut.back)
+                .keyboardShortcut(MacShortcut.back.binding)
                 .disabled(task?.goBack == nil)
             Button(L10n.string("Forward")) { task?.goForward?() }
-                .keyboardShortcut(TaskCommandShortcut.forward)
+                .keyboardShortcut(MacShortcut.forward.binding)
                 .disabled(task?.goForward == nil)
         }
         CommandMenu(Text(L10n.string("Task"))) {
             Button(L10n.string("Previous task")) {
                 if let row = task?.targets.previousRow { task?.activate(row) }
             }
-            .keyboardShortcut(TaskCommandShortcut.previousTask)
+            .keyboardShortcut(MacShortcut.previousTask.binding)
             .disabled(task?.targets.previousRow == nil)
             Button(L10n.string("Next task")) {
                 if let row = task?.targets.nextRow { task?.activate(row) }
             }
-            .keyboardShortcut(TaskCommandShortcut.nextTask)
+            .keyboardShortcut(MacShortcut.nextTask.binding)
             .disabled(task?.targets.nextRow == nil)
             Button(L10n.string("Next task needing attention")) {
                 if let id = task?.targets.sessionNeedingAttention { task?.activate(.session(id)) }
             }
-            .keyboardShortcut(TaskCommandShortcut.nextTaskNeedingAttention)
+            .keyboardShortcut(MacShortcut.nextTaskNeedingAttention.binding)
             .disabled(task?.targets.sessionNeedingAttention == nil)
             Button(TaskCommandTitle.activity(isShown: task?.isActivityShown ?? false)) { task?.toggleActivity() }
-                .keyboardShortcut(TaskCommandShortcut.toggleActivityView)
+                .keyboardShortcut(MacShortcut.toggleActivityView.binding)
                 .disabled(task == nil)
             Button(L10n.string("Select model")) { task?.openModelMenu?() }
-                .keyboardShortcut(TaskCommandShortcut.openModelMenu)
+                .keyboardShortcut(MacShortcut.openModelMenu.binding)
                 .disabled(task?.openModelMenu == nil)
             // No key: Escape stops a turn from the composer, and the window's other views keep theirs.
             Button(L10n.string("Stop")) { task?.stop?() }
@@ -245,17 +207,17 @@ struct YardletTaskCommands: Commands {
             Button(TaskCommandTitle.pin(task?.targets.pin)) {
                 if let target = task?.targets.pin { task?.togglePinned(target) }
             }
-            .keyboardShortcut(TaskCommandShortcut.togglePinned)
+            .keyboardShortcut(MacShortcut.togglePinned.binding)
             .disabled(task?.targets.pin == nil)
             Button(L10n.string("Mark task as unread")) {
                 if let id = task?.targets.markUnread { task?.markUnread(id) }
             }
-            .keyboardShortcut(TaskCommandShortcut.markUnread)
+            .keyboardShortcut(MacShortcut.markUnread.binding)
             .disabled(task?.targets.markUnread == nil)
             Button(L10n.string("Archive task")) {
                 if let id = task?.targets.archive { task?.archive(id) }
             }
-            .keyboardShortcut(TaskCommandShortcut.archive)
+            .keyboardShortcut(MacShortcut.archive.binding)
             .disabled(task?.targets.archive == nil)
 
             Divider()

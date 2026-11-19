@@ -57,10 +57,10 @@ struct CalendarDayRunsList: View {
         .focusable(interactions: .edit)
         .focused($isFocused)
         .focusEffectDisabled()
-        .onKeyPress(.downArrow) { move(by: 1) }
-        .onKeyPress(.upArrow) { move(by: -1) }
-        .onKeyPress(.return) { perform() }
-        .onKeyPress(.space) { perform() }
+        .onKeyPress(MacShortcut.nextItem.binding.key) { move(by: 1) }
+        .onKeyPress(MacShortcut.previousItem.binding.key) { move(by: -1) }
+        .onKeyPress(MacShortcut.chooseItem.binding.key) { perform() }
+        .onKeyPress(MacShortcut.chooseItemSpace.binding.key) { perform() }
         .onChange(of: isFocused) { _, focused in
             if focused, highlighted == nil { highlighted = lines(now: Date()).first?.id }
         }

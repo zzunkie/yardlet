@@ -59,14 +59,14 @@ private struct YardletSettingsCommands: Commands {
             Button(L10n.string("Settings…")) {
                 isPresentingSettings = true
             }
-            .keyboardShortcut(YardletAppShortcut.settings)
+            .keyboardShortcut(MacShortcut.settings.binding)
             .disabled(isPresentingSettings == nil)
         }
         CommandGroup(after: .newItem) {
             Button(L10n.string("Search tasks and commands")) {
                 isPresentingCommandPalette = true
             }
-            .keyboardShortcut("k", modifiers: .command)
+            .keyboardShortcut(MacShortcut.palette.binding)
             .disabled(isPresentingCommandPalette == nil)
             Button(L10n.string("Import conversation…")) {
                 isPresentingImport = true

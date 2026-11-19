@@ -34,7 +34,7 @@ struct PersonalAgentActivityView: View {
             openURL(url)
             return .handled
         })
-        .onExitCommand(perform: close)
+        .onMacShortcutExit(perform: close)
     }
 
     private var header: some View {

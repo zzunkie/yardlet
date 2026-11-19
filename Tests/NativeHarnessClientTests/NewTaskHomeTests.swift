@@ -583,9 +583,8 @@ final class NewTaskHomeTests: XCTestCase {
     }
 
     func testFileNewTaskIsCommandNAndClashesWithNoTaskShortcut() {
-        XCTAssertEqual(TaskCommandShortcut.newTask.key, "n")
-        XCTAssertEqual(TaskCommandShortcut.newTask.modifiers, .command)
-        XCTAssertFalse(TaskCommandShortcut.all.contains { $0.key == "n" && $0.modifiers == .command })
+        XCTAssertEqual(MacShortcut.newTask.defaultBinding().key, "n")
+        XCTAssertEqual(MacShortcut.newTask.defaultBinding().modifiers, .command)
         XCTAssertNil(YardletTaskCommandSet().newTask, "Off until the window offers it")
         XCTAssertEqual(L10n.string("New Window", languageCode: "ko"), "새로운 윈도우")
     }

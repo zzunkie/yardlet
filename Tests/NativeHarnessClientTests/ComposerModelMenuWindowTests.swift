@@ -137,8 +137,8 @@ final class ComposerModelMenuWindowTests: XCTestCase {
         host.settle()
         XCTAssertNil(host.window.childWindows?.first { $0.className.contains("Popover") })
 
-        XCTAssertEqual(TaskCommandShortcut.openModelMenu.key, KeyEquivalent("m"))
-        XCTAssertEqual(TaskCommandShortcut.openModelMenu.modifiers, [.control, .shift])
+        XCTAssertEqual(MacShortcut.openModelMenu.defaultBinding().key, KeyEquivalent("m"))
+        XCTAssertEqual(MacShortcut.openModelMenu.defaultBinding().modifiers, [.control, .shift])
         focus.move(to: .modelMenu)
         let expected = ModelMenuCatalogFixture.expected(for: .codex)
         let popover = try XCTUnwrap(waitForPopover(of: host, rows: expected.efforts), "No popover")

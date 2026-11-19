@@ -29,7 +29,7 @@ struct ScheduleImportSheet: View {
                 Text(L10n.string("Import Schedules from Other Apps")).font(.headline)
                 Spacer()
                 Button(L10n.string("Done"), action: onDismiss)
-                    .keyboardShortcut(.cancelAction)
+                    .keyboardShortcut(MacShortcut.dismiss.binding)
             }
             Text(L10n.string("Scheduled tasks in the Claude app and Codex automations. Importing copies them; the originals stay as they are."))
                 .font(.callout).foregroundStyle(.secondary)
@@ -147,7 +147,7 @@ struct ScheduleImportSheet: View {
                 importedCount = onImport(chosen)
                 selection = []
             }
-            .keyboardShortcut(.defaultAction)
+            .keyboardShortcut(MacShortcut.confirmDialog.binding)
             .disabled(chosen.isEmpty)
         }
     }

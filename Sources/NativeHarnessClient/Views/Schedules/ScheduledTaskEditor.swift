@@ -365,12 +365,12 @@ struct ScheduledTaskEditor: View {
             }
             Spacer()
             Button(L10n.string("Cancel"), action: onCancel)
-                .keyboardShortcut(.cancelAction)
+                .keyboardShortcut(MacShortcut.dismiss.binding)
             Button(L10n.string(existing == nil ? "Create" : "Save")) {
                 onSave(draft.schedule(projects: projects, existing: existing, now: now(), calendar: calendar,
                                       targetHarness: draft.mode == .continueTask ? targetTask?.harness : nil))
             }
-            .keyboardShortcut(.defaultAction)
+            .keyboardShortcut(MacShortcut.confirmDialog.binding)
             .parityProminentButton()
             .disabled(problem != nil || !canSave(draft))
         }

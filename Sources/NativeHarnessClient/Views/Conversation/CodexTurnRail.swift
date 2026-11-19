@@ -113,11 +113,11 @@ struct CodexTurnRail: View, Equatable {
         .focusable()
         .focused($isFocused)
         .focusSection()
-        .onKeyPress(.upArrow) {
+        .onKeyPress(MacShortcut.previousItem.binding.key) {
             moveFocus(by: -1)
             return .handled
         }
-        .onKeyPress(.downArrow) {
+        .onKeyPress(MacShortcut.nextItem.binding.key) {
             moveFocus(by: 1)
             return .handled
         }

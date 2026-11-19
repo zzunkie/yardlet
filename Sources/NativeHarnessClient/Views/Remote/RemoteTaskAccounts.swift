@@ -20,7 +20,7 @@ struct RemoteTaskAccounts: View {
                 Spacer(minLength: 8)
                 Button { Task { await refresh(force: true) } } label: { Image(systemName: "arrow.clockwise") }
                     .help(L10n.string("Refresh usage"))
-                Button(L10n.string("Done")) { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(L10n.string("Done")) { dismiss() }.keyboardShortcut(MacShortcut.dismiss.binding)
             }
             if let error { Text(error).font(.caption).foregroundStyle(.orange) }
             if let accounts, accounts.allSatisfy({ $0.current == true }) {

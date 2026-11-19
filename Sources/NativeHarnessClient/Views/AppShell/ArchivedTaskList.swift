@@ -104,7 +104,7 @@ struct ArchivedTaskList: View {
             .accessibilitySortPriority(ParityAccessibility.sidebarPrimary - 2)
         }
         .background(ParityTheme.sidebar)
-        .onExitCommand(perform: onBack)
+        .onMacShortcutExit(perform: onBack)
         .focusSection()
     }
 }

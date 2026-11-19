@@ -70,7 +70,7 @@ struct DiffCommentCard: View {
             .wrapsBetweenWords()
             .focused($isFocused)
             .onSubmit(save)
-            .onExitCommand(perform: cancel)
+            .onMacShortcutExit(perform: cancel)
             .accessibilityLabel(title)
             .scrollsPastLines(12)
             .textFieldStyle(.plain)

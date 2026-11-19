@@ -76,12 +76,12 @@ struct AccountRemovalSheet: View {
             }
             HStack {
                 Spacer()
-                Button(L10n.string("Cancel"), action: onCancel).keyboardShortcut(.cancelAction)
+                Button(L10n.string("Cancel"), action: onCancel).keyboardShortcut(MacShortcut.dismiss.binding)
                 Button(L10n.string(movesTasks ? "Move and Remove" : "Remove from List")) {
                     if movesTasks, let target { onMove(target) } else if !movesTasks { onRemove() }
                 }
                 .parityProminentButton()
-                .keyboardShortcut(.defaultAction)
+                .keyboardShortcut(MacShortcut.confirmDialog.binding)
                 .disabled(movesTasks && target == nil)
             }
         }

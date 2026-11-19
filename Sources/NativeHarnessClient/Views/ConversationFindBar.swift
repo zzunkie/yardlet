@@ -60,12 +60,12 @@ struct ConversationFindBar: View {
                         // Shift-Return reaches here too if the key press handler below did not see it.
                         find.submit(backward: NSApp.currentEvent?.modifierFlags.contains(.shift) == true)
                     }
-                    .onKeyPress(.return, phases: .down) { press in
+                    .onKeyPress(MacShortcut.previousFindMatch.binding.key, phases: .down) { press in
                         guard press.modifiers.contains(.shift), !fieldHasMarkedText else { return .ignored }
                         find.submit(backward: true)
                         return .handled
                     }
-                    .onExitCommand(perform: close)
+                    .onMacShortcutExit(perform: close)
                 Rectangle()
                     .fill(ParityTheme.strongSeparator)
                     .frame(width: 1, height: 16)
@@ -79,10 +79,10 @@ struct ConversationFindBar: View {
             if !find.normalizedQuery.isEmpty {
                 HStack(spacing: 6) {
                     iconButton("chevron.up", label: L10n.string("Previous result"),
-                               shortcut: ConversationFindShortcut.previous, action: find.previous)
+                               shortcut: MacShortcut.previousResult.binding, action: find.previous)
                         .disabled(!find.hasMatches)
                     iconButton("chevron.down", label: L10n.string("Next result"),
-                               shortcut: ConversationFindShortcut.next, action: find.next)
+                               shortcut: MacShortcut.nextResult.binding, action: find.next)
                         .disabled(!find.hasMatches)
                     Spacer(minLength: 8)
                     Text(statusText)

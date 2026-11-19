@@ -105,21 +105,21 @@ struct ComposerMenuList: View {
         .focusable()
         .focusEffectDisabled()
         .focused($isFocused)
-        .onKeyPress(.downArrow) { move(by: 1) }
-        .onKeyPress(.upArrow) { move(by: -1) }
-        .onKeyPress(.return) { choose() }
-        .onKeyPress(.space) { choose() }
-        .onKeyPress(.rightArrow) {
+        .onKeyPress(MacShortcut.nextItem.binding.key) { move(by: 1) }
+        .onKeyPress(MacShortcut.previousItem.binding.key) { move(by: -1) }
+        .onKeyPress(MacShortcut.chooseItem.binding.key) { choose() }
+        .onKeyPress(MacShortcut.chooseItemSpace.binding.key) { choose() }
+        .onKeyPress(MacShortcut.rightItem.binding.key) {
             guard let entry = highlightedEntry, entry.opensList else { return .ignored }
             entry.action?()
             return .handled
         }
-        .onKeyPress(.leftArrow) {
+        .onKeyPress(MacShortcut.leftItem.binding.key) {
             guard let onBack else { return .ignored }
             onBack()
             return .handled
         }
-        .onExitCommand(perform: onDismiss)
+        .onMacShortcutExit(perform: onDismiss)
         .onAppear {
             isFocused = true
             if highlightsFirstRow { highlighted = choosable.first?.id }

@@ -161,7 +161,7 @@ struct ComposerModeControl: View {
             ComposerProviderOptionMenu(selector: selector, isEnabled: canChoose, onSelect: onSelect,
                                        onDismiss: { isPresented = false })
                 .frame(width: 264)
-                .onExitCommand { isPresented = false }
+                .onMacShortcutExit { isPresented = false }
         }
         .onChange(of: isPresented) { _, shown in
             guard !shown, ParityInteraction.currentEventIsKeyboard else { return }
@@ -244,7 +244,7 @@ struct ComposerPermissionControl: View {
         .onAppear {
             if opensFromKeyboard { focusedChoice = slot.selector?.choices.first?.value }
         }
-        .onExitCommand { dismiss() }
+        .onMacShortcutExit { dismiss() }
     }
 
     private func present() {
@@ -365,7 +365,7 @@ private struct ComposerSkillsControl: View {
                 DispatchQueue.main.async { manage() }
             } })
             .onAppear { if opensFromKeyboard { focusedSkill = skills.first?.id } }
-            .onExitCommand { dismiss() }
+            .onMacShortcutExit { dismiss() }
         }
         .onChange(of: isPresented) { _, shown in
             guard !shown else { return }

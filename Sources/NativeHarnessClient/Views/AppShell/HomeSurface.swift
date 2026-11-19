@@ -1093,7 +1093,7 @@ private struct NewTaskComposer: View {
                                   error: commandError, onSelect: insertCommand)
         }
         .padding(5).frame(width: 340)
-        .onExitCommand { addMenuPage = nil }
+        .onMacShortcutExit { addMenuPage = nil }
     }
 
     private func loadCommands() {

@@ -45,14 +45,14 @@ struct AccountHomeShareSheet: View {
             }
             HStack {
                 Spacer()
-                Button(L10n.string("Cancel"), action: onCancel).keyboardShortcut(.cancelAction)
+                Button(L10n.string("Cancel"), action: onCancel).keyboardShortcut(MacShortcut.dismiss.binding)
                 if request.found != nil {
                     Button(L10n.string("Add As It Is"), action: onKeep)
                 }
                 if plan.hasChanges {
                     Button(L10n.string(request.found == nil ? "Make Links" : "Link and Add"), action: onShare)
                         .parityProminentButton()
-                        .keyboardShortcut(.defaultAction)
+                        .keyboardShortcut(MacShortcut.confirmDialog.binding)
                 }
             }
         }

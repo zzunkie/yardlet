@@ -440,7 +440,7 @@ struct CodexVisualizationExpanded: View {
                     .truncationMode(.tail)
                 Spacer()
                 Button(L10n.string("Done"), action: close)
-                    .keyboardShortcut(.cancelAction)
+                    .keyboardShortcut(MacShortcut.dismiss.binding)
             }
             .padding(14)
             Divider()

@@ -175,7 +175,7 @@ struct TaskSuggestionOptionsPopover: View {
                 .controlSize(.small)
                 .parityPointer()
                 .disabled(!menus.canStart)
-                .keyboardShortcut(.defaultAction)
+                .keyboardShortcut(MacShortcut.confirmDialog.binding)
             }
         }
         .font(.system(size: 13 * interfaceScale))

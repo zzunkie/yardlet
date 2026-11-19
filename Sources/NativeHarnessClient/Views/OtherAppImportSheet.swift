@@ -96,7 +96,7 @@ struct OtherAppImportSheet: View {
                 Text(L10n.string("Import Conversations from Other Apps")).font(.headline)
                 Spacer()
                 Button(L10n.string("Done"), action: onDismiss)
-                    .keyboardShortcut(.cancelAction)
+                    .keyboardShortcut(MacShortcut.dismiss.binding)
                     .disabled(isImporting)
             }
             Text(L10n.string("Conversations from the Claude and Codex apps, Claude Code and Codex run elsewhere, and Antigravity CLI. Their history stays where it is."))
@@ -228,7 +228,7 @@ struct OtherAppImportSheet: View {
             }
             Spacer()
             Button(L10n.string("Import")) { Task { await importSelection() } }
-                .keyboardShortcut(.defaultAction)
+                .keyboardShortcut(MacShortcut.confirmDialog.binding)
                 .disabled(selection.isEmpty || isImporting)
         }
     }

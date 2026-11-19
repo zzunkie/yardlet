@@ -319,19 +319,19 @@ struct ConversationQuestionStepsView<Finish: View>: View {
     private func handle(_ press: KeyPress, step: ConversationQuestionStep) -> KeyPress.Result {
         guard isAnswerable, focus == .form else { return .ignored }
         switch press.key {
-        case .leftArrow:
+        case MacShortcut.leftItem.binding.key:
             move(by: -1)
             return .handled
-        case .rightArrow:
+        case MacShortcut.rightItem.binding.key:
             move(by: 1)
             return .handled
-        case .return:
+        case MacShortcut.chooseItem.binding.key:
             goOn(from: step)
             return .handled
         default:
             break
         }
-        guard press.modifiers.isEmpty, let number = Int(press.characters), (1...9).contains(number) else {
+        guard press.modifiers.isEmpty, let number = MacShortcut.numberedOption(press.characters, command: MacShortcut.answerOption) else {
             return .ignored
         }
         if step.options.indices.contains(number - 1) {

@@ -344,7 +344,7 @@ struct PersonalAgentsContent: View {
                             .overlay(alignment: .top) { Rectangle().fill(ParityTheme.separator).frame(height: 1) }
                             .shadow(color: .black.opacity(0.12), radius: 12, x: -2)
                             .padding(.top, PersonalAgentConversationView.headerHeight)
-                            .onExitCommand(perform: toggleDetails)
+                            .onMacShortcutExit(perform: toggleDetails)
                             .transition(.move(edge: .trailing))
                     }
                 }

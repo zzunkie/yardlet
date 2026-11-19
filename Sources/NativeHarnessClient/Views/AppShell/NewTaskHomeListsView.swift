@@ -169,10 +169,10 @@ struct NewTaskHomeLists: View {
         .focusable(!layout.entries.isEmpty, interactions: .edit)
         .focused(focus, equals: part)
         .focusEffectDisabled()
-        .onKeyPress(.upArrow) { handle(.up, layout: layout) }
-        .onKeyPress(.downArrow) { handle(.down, layout: layout) }
-        .onKeyPress(.return) { handle(.return, layout: layout) }
-        .onKeyPress(keys: [.tab, KeyEquivalent(Character(UnicodeScalar(NSBackTabCharacter)!))]) { _ in
+        .onKeyPress(MacShortcut.previousItem.binding.key) { handle(.up, layout: layout) }
+        .onKeyPress(MacShortcut.nextItem.binding.key) { handle(.down, layout: layout) }
+        .onKeyPress(MacShortcut.chooseItem.binding.key) { handle(.return, layout: layout) }
+        .onKeyPress(keys: [MacShortcut.nextGroup.binding.key, MacShortcut.previousGroup.binding.key]) { _ in
             handle(.tab, layout: layout)
         }
         .onChange(of: layout.entries, initial: true) { _, entries in onListed(part, entries) }

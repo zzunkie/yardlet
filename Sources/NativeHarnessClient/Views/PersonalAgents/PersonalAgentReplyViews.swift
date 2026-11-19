@@ -133,7 +133,7 @@ struct PersonalAgentReplyArea<Composer: View>: View {
                                             rows: rows)
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { panelHeight = $0 }
                         .padding(.horizontal, -Self.inset)
-                        .onExitCommand(perform: escape)
+                        .onMacShortcutExit(perform: escape)
                         // Each thread its own place, following, drawn range and earlier reads; the composer stays.
                         .id(thread.rootID)
                         .offset(y: -composerHeight)

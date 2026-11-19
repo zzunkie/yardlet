@@ -175,7 +175,7 @@ final class WindowDragState {
     private func watchEscape() {
         guard escapeMonitor == nil else { return }
         escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard event.keyCode == 53, let self, let subject = self.subject else { return event }
+            guard MacShortcut.cancelDrag.matches(MacShortcutEvent(event)), let self, let subject = self.subject else { return event }
             self.cancelled = subject
             self.cancel()
             return nil

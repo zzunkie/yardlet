@@ -155,7 +155,7 @@ struct AddProviderConnectionView: View {
                 Button(L10n.string(home == nil ? "Continue to sign in" : "Use this account")) { add() }
                     .parityProminentButton()
                     .disabled(runtimeSelections.knownURL(for: harness) == nil || (harness == .pi && provider.isEmpty && home == nil))
-                    .keyboardShortcut(.defaultAction)
+                    .keyboardShortcut(MacShortcut.confirmDialog.binding)
             }
             Spacer(minLength: 0)
         }.padding(28).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

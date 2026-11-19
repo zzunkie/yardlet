@@ -219,3 +219,18 @@ requirement to copy Claude's warm light palette or Codex's every theme override.
    A static image cannot prove interaction or performance; use the relevant contract test as well.
 5. Update this mapping with the implementation. Do not create a second palette or another component
    for one provider. Identity options require a separate choice before applying them to product UI.
+
+## Mac keyboard shortcuts
+
+The Mac command registry (`MacShortcut`) gives each application shortcut a stable identifier,
+title, scope and default key. The existing menu, focused view or window monitor dispatches it.
+Menu commands continue to participate in System Settings > Keyboard > Keyboard Shortcuts > App Shortcuts.
+
+| Where the keyboard is | Default behavior |
+| --- | --- |
+| App and window menus | ⌘, opens Settings, ⌘K searches tasks and commands, and ⌘N opens New task. The Task, View, Edit, File, Window and Split View menus show the available keys for the current window. |
+| Task window | ⌘1–4 select task surfaces. ⌃1–9 open pinned rows in sidebar order. ⌃Tab and ⌃⇧Tab move between window tabs, or between tasks when only one tab is open. ⌘⌥ and an arrow focus an adjacent pane. |
+| Composer | The existing send preference decides whether Return sends or inserts a line. The alternate follow-up uses ⌘Return or ⇧⌘Return. Typed commands and mentions take precedence over submission. Marked text stays with the input method. In the empty composer the send keys can allow one pending request, and Escape can deny one before stopping a turn. |
+| Terminal | ⌘J and Control-backtick toggle the terminal. The latter is handled by the window while its panel commands are enabled. ⇧⌘L attaches a shared terminal selection; the terminal and shell handle their own input. |
+| Browser page | The focused page handles editing, navigation, zoom, find, address and browser-tab commands. The window's task-surface bindings take precedence where registered. The address field has its own suggestion keys. See [Browser host](BROWSER_HOST.md). |
+| Other focused controls | The palette and lists navigate a selection; the model picker and question form have numbered choices. Image previews handle navigation and zoom. Mail composition and the Simulator screen have their own commands. Standard text editing, dialog acceptance, cancellation and focus traversal follow the native control. |

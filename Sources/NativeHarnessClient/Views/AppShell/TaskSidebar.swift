@@ -418,15 +418,15 @@ struct TaskSidebar: View {
                 .focusable()
                 .focusEffectDisabled()
                 .focused($isTaskListFocused)
-                .onKeyPress(.downArrow) {
+                .onKeyPress(MacShortcut.nextItem.binding.key) {
                     moveSelection(by: 1)
                     return .handled
                 }
-                .onKeyPress(.upArrow) {
+                .onKeyPress(MacShortcut.previousItem.binding.key) {
                     moveSelection(by: -1)
                     return .handled
                 }
-                .onKeyPress(.return) {
+                .onKeyPress(MacShortcut.chooseItem.binding.key) {
                     guard navigationSelection != .home else { return .ignored }
                     onActivate(navigationSelection)
                     return .handled
@@ -2072,13 +2072,13 @@ private struct TaskRow: View {
                     TaskRowActionButton(
                         systemName: session.isPinned ? "pin.fill" : "pin",
                         label: session.isPinned ? L10n.string("Unpin") : L10n.string("Pin"),
-                        shortcut: isSelected ? TaskCommandShortcut.togglePinned : nil,
+                        shortcut: isSelected ? MacShortcut.togglePinned.binding : nil,
                         action: { hoverCard?.dismiss(); onTogglePinned() }
                     )
                     TaskRowActionButton(
                         systemName: "archivebox",
                         label: L10n.string("Archive"),
-                        shortcut: isSelected ? TaskCommandShortcut.archive : nil,
+                        shortcut: isSelected ? MacShortcut.archive.binding : nil,
                         action: { hoverCard?.dismiss(); onArchive() }
                     )
                 }

@@ -298,7 +298,7 @@ struct PromptComposer: View {
         .onAppear {
             if keyboardOpenedComposerMenu == .commands { focusedComposerControl = .commandSearch }
         }
-        .onExitCommand { dismissComposerMenu() }
+        .onMacShortcutExit { dismissComposerMenu() }
     }
 
     private var showsPausedCodexQueue: Bool {
@@ -593,7 +593,7 @@ struct PromptComposer: View {
                                 focusedComposerControl = .queueAction
                             }
                         }
-                        .onExitCommand { dismissComposerMenu() }
+                        .onMacShortcutExit { dismissComposerMenu() }
                     }
                 }
                 // Stop stops what was started last: a running shell command before the turn.

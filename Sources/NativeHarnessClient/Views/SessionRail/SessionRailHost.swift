@@ -252,7 +252,7 @@ struct SessionRailRaisedLayer<Rail: View>: View {
                     Rectangle().fill(ParityTheme.separator).frame(width: 1)
                 }
                 .shadow(color: .black.opacity(0.14), radius: 16, x: -4)
-                .onExitCommand(perform: onDismiss)
+                .onMacShortcutExit(perform: onDismiss)
         }
     }
 }

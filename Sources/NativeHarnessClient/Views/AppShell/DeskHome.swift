@@ -301,10 +301,10 @@ struct DeskHome<Switch: View, Bottom: View>: View {
             .focusable(!entries(desk).isEmpty, interactions: .edit)
             .focused(focus, equals: .desk)
             .focusEffectDisabled()
-            .onKeyPress(.upArrow) { handle(.up, in: desk) }
-            .onKeyPress(.downArrow) { handle(.down, in: desk) }
-            .onKeyPress(.return) { handle(.return, in: desk) }
-            .onKeyPress(keys: [.tab, KeyEquivalent(Character(UnicodeScalar(NSBackTabCharacter)!))]) { _ in handle(.tab, in: desk) }
+            .onKeyPress(MacShortcut.previousItem.binding.key) { handle(.up, in: desk) }
+            .onKeyPress(MacShortcut.nextItem.binding.key) { handle(.down, in: desk) }
+            .onKeyPress(MacShortcut.chooseItem.binding.key) { handle(.return, in: desk) }
+            .onKeyPress(keys: [MacShortcut.nextGroup.binding.key, MacShortcut.previousGroup.binding.key]) { _ in handle(.tab, in: desk) }
     }
 
     // MARK: - Zones

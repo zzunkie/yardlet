@@ -297,15 +297,15 @@ final class SimulatorScreenView: NSView, SimulatorScreenSubscriber {
         guard window?.firstResponder === self, event.type == .keyDown, let device = configuration?.device else {
             return super.performKeyEquivalent(with: event)
         }
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function])
-        switch (flags, event.commandShortcutKey) {
-        case ([.command, .shift], "h"):
+        let key = MacShortcutEvent(event)
+        switch [MacShortcut.simulatorHome, .simulatorLock, .simulatorClose].first(where: { $0.matches(key) }) {
+        case .simulatorHome:
             onPersonInput?()
             screens.press(.home, on: device)
-        case (.command, "l"):
+        case .simulatorLock:
             onPersonInput?()
             screens.press(.lock, on: device)
-        case (.command, "w"):
+        case .simulatorClose:
             onCloseTab?()
         default:
             // The window's keys and the menus' come first; a key none of them takes reaches `keyDown`.

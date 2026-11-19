@@ -53,7 +53,7 @@ struct LegacyRemoteScheduleList: View {
                 .padding(.bottom, 12)
             }
         }
-        .onExitCommand(perform: back)
+        .onMacShortcutExit(perform: back)
         .onChange(of: model.selection, initial: true) { _, selection in
             // A schedule chosen while its group is folded shows, as on the Mac.
             guard case let .schedule(id) = selection, let section = model.schedules.schedule(id)?.section,

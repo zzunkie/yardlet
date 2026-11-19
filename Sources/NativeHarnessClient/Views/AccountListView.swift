@@ -110,7 +110,7 @@ struct AccountList: View {
                     } ?? false)
             }
             if let onDone {
-                Button(L10n.string("Done"), action: onDone).keyboardShortcut(.cancelAction)
+                Button(L10n.string("Done"), action: onDone).keyboardShortcut(MacShortcut.dismiss.binding)
             }
         }
     }

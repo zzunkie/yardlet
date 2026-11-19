@@ -1,12 +1,6 @@
 import AppKit
 import SwiftUI
 
-/// Shortcuts the app menu and the sidebar's account menu share, so both show the same keys.
-enum YardletAppShortcut {
-    /// Yardlet › Settings…
-    static let settings = KeyboardShortcut(",", modifiers: .command)
-}
-
 /// Who the sidebar's account button names: the person signed in to this Mac. Yardlet has no
 /// account of its own and holds several provider accounts at once, each task on its own, so the
 /// button names the one person all of them belong to rather than one provider's account (the
@@ -131,7 +125,7 @@ struct SidebarAccountMenu: Equatable {
         refreshing: Bool = false
     ) -> SidebarAccountMenu {
         var settings = [Item(destination: .settings, title: L10n.string("Settings…"), systemName: "gearshape",
-                             shortcut: YardletAppShortcut.settings)]
+                             shortcut: MacShortcut.settings.binding)]
         // The sections reached from elsewhere, the harness accounts first as the sidebar's Connections
         // opens them; the ones a window offers.
         for section in [SettingsSection.accounts, .connectors, .remote, .harnesses]
@@ -263,7 +257,7 @@ final class SidebarAccountMenuController: NSObject {
         menuItem.representedObject = SidebarAccountMenuChoice(item.destination)
         if let shortcut = item.shortcut {
             menuItem.keyEquivalent = String(shortcut.key.character)
-            menuItem.keyEquivalentModifierMask = Self.modifierMask(shortcut.modifiers)
+            menuItem.keyEquivalentModifierMask = shortcut.modifiers.shortcutFlags
         }
         if let harness = item.harness {
             menuItem.image = MenuBarItemMarks.harness(harness)
@@ -274,15 +268,6 @@ final class SidebarAccountMenuController: NSObject {
         menuItem.toolTip = item.help
         menuItem.isEnabled = item.isEnabled
         return menuItem
-    }
-
-    static func modifierMask(_ modifiers: EventModifiers) -> NSEvent.ModifierFlags {
-        var mask: NSEvent.ModifierFlags = []
-        if modifiers.contains(.command) { mask.insert(.command) }
-        if modifiers.contains(.shift) { mask.insert(.shift) }
-        if modifiers.contains(.option) { mask.insert(.option) }
-        if modifiers.contains(.control) { mask.insert(.control) }
-        return mask
     }
 
     @objc func choose(_ sender: NSMenuItem) {

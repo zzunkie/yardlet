@@ -183,7 +183,7 @@ struct SettingsCenterView: View {
                     .font(.system(size: 14, weight: .semibold))
                 Spacer()
                 Button(L10n.string("Done")) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
+                    .keyboardShortcut(MacShortcut.dismiss.binding)
                     .disabled(accountCenter.loginController.isRunning)
                     .help(accountCenter.loginController.isRunning ? L10n.string("Finish or cancel the sign-in first") : "")
                     .controlSize(.small)
@@ -232,11 +232,11 @@ struct SettingsCenterView: View {
                 .focused($isSectionListFocused)
                 .accessibilityLabel(L10n.string("Settings sections"))
                 .accessibilityValue(section.title)
-                .onKeyPress(.downArrow) {
+                .onKeyPress(MacShortcut.nextItem.binding.key) {
                     moveSection(by: 1)
                     return .handled
                 }
-                .onKeyPress(.upArrow) {
+                .onKeyPress(MacShortcut.previousItem.binding.key) {
                     moveSection(by: -1)
                     return .handled
                 }

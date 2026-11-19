@@ -162,14 +162,14 @@ struct UsageResetConfirmationContent: View {
             ProgressView().controlSize(.small)
             Text(L10n.string("Resetting your limits…")).font(.callout).foregroundStyle(.secondary)
         case .answered?:
-            Button(L10n.string("Done"), action: close).keyboardShortcut(.defaultAction)
+            Button(L10n.string("Done"), action: close).keyboardShortcut(MacShortcut.confirmDialog.binding)
         case .failed?:
-            Button(L10n.string("Cancel"), action: close).keyboardShortcut(.cancelAction)
-            Button(L10n.string("Try again"), action: use).keyboardShortcut(.defaultAction)
+            Button(L10n.string("Cancel"), action: close).keyboardShortcut(MacShortcut.dismiss.binding)
+            Button(L10n.string("Try again"), action: use).keyboardShortcut(MacShortcut.confirmDialog.binding)
         case nil:
-            Button(L10n.string("Cancel"), action: close).keyboardShortcut(.cancelAction)
+            Button(L10n.string("Cancel"), action: close).keyboardShortcut(MacShortcut.dismiss.binding)
             Button(L10n.string("Use Reset"), action: use)
-                .keyboardShortcut(.defaultAction)
+                .keyboardShortcut(MacShortcut.confirmDialog.binding)
                 .disabled((resets?.availableCount ?? 0) == 0 || isChecking)
         }
     }

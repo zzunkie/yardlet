@@ -291,22 +291,22 @@ final class WindowTabsTests: XCTestCase {
     }
 
     func testTabKeysAreMacOSsAndDoNotTakeYardletsOwn() {
-        let tabs = [TabCommandShortcut.newTab, TabCommandShortcut.closeTab, TabCommandShortcut.closeWindow,
-                    TabCommandShortcut.reopenClosedTab, TabCommandShortcut.nextTab, TabCommandShortcut.previousTab]
+        let tabs = [MacShortcut.newTab.defaultBinding(), MacShortcut.closeTab.defaultBinding(), MacShortcut.closeWindow.defaultBinding(),
+                    MacShortcut.reopenClosedTab.defaultBinding(), MacShortcut.nextTab.defaultBinding(), MacShortcut.previousTab.defaultBinding()]
         let splitKeys = [KeyboardShortcut("d", modifiers: [.command, .shift]),
                          KeyboardShortcut("d", modifiers: [.command, .shift, .option]),
                          KeyboardShortcut("w", modifiers: [.command, .control])]
-        for shortcut in TaskCommandShortcut.all + [TaskCommandShortcut.newTask] + splitKeys {
+        for shortcut in [MacShortcut.newTask.defaultBinding()] + splitKeys {
             XCTAssertFalse(tabs.contains(shortcut), "\(shortcut)")
         }
         XCTAssertEqual(Set(tabs.map { "\($0.key.character)\($0.modifiers.rawValue)" }).count, tabs.count)
         // A keyboard's ⇧Tab is the back-tab character.
-        XCTAssertEqual(TabCommandShortcut.previousTab.key.character, "\u{19}")
-        XCTAssertEqual(TabCommandShortcut.nextTab.key, .tab)
+        XCTAssertEqual(MacShortcut.previousTab.defaultBinding().key.character, "\u{19}")
+        XCTAssertEqual(MacShortcut.nextTab.defaultBinding().key, .tab)
         // Tooltips show the menu's own key, written as the menu writes it.
-        XCTAssertEqual(ShortcutHelp.text("Hide sidebar", TaskCommandShortcut.toggleSidebar), "Hide sidebar (⇧⌘S)")
-        XCTAssertEqual(TaskCommandShortcut.toggleSidePanel.displayText, "⌥⌘B")
-        XCTAssertEqual(TabCommandShortcut.previousTab.displayText, "⌃⇧⇥")
+        XCTAssertEqual(ShortcutHelp.text("Hide sidebar", MacShortcut.toggleSidebar.defaultBinding()), "Hide sidebar (⇧⌘S)")
+        XCTAssertEqual(MacShortcut.toggleSidePanel.defaultBinding().displayText, "⌥⌘B")
+        XCTAssertEqual(MacShortcut.previousTab.defaultBinding().displayText, "⌃⇧⇥")
         XCTAssertEqual(ShortcutHelp.text("Close tab", nil), "Close tab")
     }
 }

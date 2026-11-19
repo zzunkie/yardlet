@@ -1,12 +1,12 @@
 import SwiftUI
 
 extension TaskSurface {
-    var keyboardShortcut: KeyEquivalent {
+    var shortcutCommand: MacShortcut {
         switch self {
-        case .chat: "1"
-        case .diff: "2"
-        case .terminal: "3"
-        case .browser: "4"
+        case .chat: .surfaceChat
+        case .diff: .surfaceReview
+        case .terminal: .surfaceTerminal
+        case .browser: .surfaceBrowser
         }
     }
 }
@@ -99,7 +99,7 @@ struct TaskSurfaceControls: View {
             if registersShortcuts {
                 ForEach(shortcutSurfaces.filter { !unavailableSurfaces.contains($0) }) { surface in
                     Button { act(surface) } label: { EmptyView() }
-                        .keyboardShortcut(surface.keyboardShortcut, modifiers: .command)
+                        .keyboardShortcut(surface.shortcutCommand.binding)
                         .focusable(false).hidden().accessibilityHidden(true)
                 }
             }
@@ -142,7 +142,7 @@ struct TaskSurfaceControls: View {
         .parityPointer()
         .accessibilityLabel(findTitle(find))
         .accessibilityAddTraits(find.isPresented ? .isSelected : [])
-        .help(ShortcutHelp.text(findTitle(find), find.isPresented ? nil : ConversationFindShortcut.find))
+        .help(ShortcutHelp.text(findTitle(find), find.isPresented ? nil : MacShortcut.conversationFind.binding))
     }
 
     private func label(_ symbol: String, isActive: Bool) -> some View {
@@ -220,9 +220,9 @@ struct TaskSurfaceControls: View {
     /// The View menu's key for what the button does: the rail, the side panel or the terminal.
     private func menuShortcut(_ surface: TaskSurface) -> KeyboardShortcut? {
         switch surface {
-        case .diff: TaskCommandShortcut.toggleSessionRail
-        case .browser: TaskCommandShortcut.toggleSidePanel
-        case .terminal: TaskCommandShortcut.toggleTerminal
+        case .diff: MacShortcut.toggleSessionRail.binding
+        case .browser: MacShortcut.toggleSidePanel.binding
+        case .terminal: MacShortcut.toggleTerminal.binding
         case .chat: nil
         }
     }

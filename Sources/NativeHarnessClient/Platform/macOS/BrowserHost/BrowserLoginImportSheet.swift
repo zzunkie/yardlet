@@ -161,9 +161,9 @@ struct BrowserLoginImportSheet: View {
             }
             Spacer(minLength: 8)
             Button(L10n.string("Cancel"), role: .cancel, action: onDone)
-                .keyboardShortcut(.cancelAction)
+                .keyboardShortcut(MacShortcut.dismiss.binding)
             Button(L10n.string("Import"), action: start)
-                .keyboardShortcut(.defaultAction)
+                .keyboardShortcut(MacShortcut.confirmDialog.binding)
                 .disabled((chosen.isEmpty && !withHistory) || profile == nil || isImporting)
         }
         .padding(.horizontal, 20)

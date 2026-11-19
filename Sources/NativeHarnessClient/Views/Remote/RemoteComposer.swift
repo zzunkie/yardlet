@@ -252,7 +252,7 @@ struct RemoteComposer: View {
         }
         .padding(5)
         .frame(width: 340)
-        .onExitCommand { menu = nil }
+        .onMacShortcutExit { menu = nil }
     }
 
     /// The host's commands as the local list draws them.

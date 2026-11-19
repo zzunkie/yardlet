@@ -113,7 +113,7 @@ struct HarnessSettingsSheet: View {
                 action: onRefresh
             )
             Button(L10n.string("Done"), action: onDismiss)
-                .keyboardShortcut(.defaultAction)
+                .keyboardShortcut(MacShortcut.confirmDialog.binding)
         }
         .padding(.horizontal, 18)
         .frame(height: 58)
@@ -133,11 +133,11 @@ struct HarnessSettingsSheet: View {
         .accessibilityLabel(L10n.string("Harness settings sections"))
         .accessibilityValue(visibleSection.title)
         .accessibilityHint(L10n.string("Use the left and right arrow keys to switch sections."))
-        .onKeyPress(.leftArrow) {
+        .onKeyPress(MacShortcut.leftItem.binding.key) {
             moveSection(by: -1)
             return .handled
         }
-        .onKeyPress(.rightArrow) {
+        .onKeyPress(MacShortcut.rightItem.binding.key) {
             moveSection(by: 1)
             return .handled
         }

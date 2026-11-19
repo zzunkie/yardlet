@@ -1504,16 +1504,16 @@ struct BrowserHostPane: View {
                     controller.addressSelectionChanged(in: note.object)
                 }
                 // Chrome's keys for its dropdown; each passes on to the field while the suggestions are closed.
-                .onKeyPress(.downArrow) { controller.moveSuggestion(by: 1) ? .handled : .ignored }
-                .onKeyPress(.upArrow) { controller.moveSuggestion(by: -1) ? .handled : .ignored }
-                .onKeyPress(keys: [.tab, KeyEquivalent("\u{19}")], phases: [.down, .repeat]) { press in
+                .onKeyPress(MacShortcut.addressNext.binding.key) { controller.moveSuggestion(by: 1) ? .handled : .ignored }
+                .onKeyPress(MacShortcut.addressPrevious.binding.key) { controller.moveSuggestion(by: -1) ? .handled : .ignored }
+                .onKeyPress(keys: [MacShortcut.addressNextTab.binding.key, MacShortcut.addressPreviousTab.binding.key], phases: [.down, .repeat]) { press in
                     let back = press.modifiers.contains(.shift) || press.key == KeyEquivalent("\u{19}")
                     return controller.moveSuggestion(by: back ? -1 : 1) ? .handled : .ignored
                 }
-                .onKeyPress(.deleteForward, phases: .down) { press in
+                .onKeyPress(MacShortcut.addressRemove.binding.key, phases: .down) { press in
                     press.modifiers.contains(.shift) && controller.removeSuggestion() ? .handled : .ignored
                 }
-                .onExitCommand { controller.escapeAddress() }
+                .onMacShortcutExit { controller.escapeAddress() }
                 .padding(.horizontal, 10)
                 .frame(height: 30)
                 .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 7))
@@ -1751,7 +1751,7 @@ struct BrowserHostPane: View {
                 .textFieldStyle(.plain)
                 .onSubmit { controller.find() }
                 .onChange(of: controller.findText) { _, _ in controller.findTextChanged() }
-                .onExitCommand { controller.closeFind() }
+                .onMacShortcutExit { controller.closeFind() }
             if let result = controller.findResult {
                 Text(verbatim: result.matches == 0 ? L10n.string("No results") : "\(result.activeMatch)/\(result.matches)")
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)

@@ -39,24 +39,6 @@ struct YardletTabCommandSet {
     var reopenClosedTab: () -> Void = {}
 }
 
-/// macOS's own keys for tabs, as Safari, Finder and Terminal have them: ⌘T New Tab, ⌘W Close Tab
-/// (the window's last tab closes the window, as Close did), ⌘⇧W Close Window, ⌘⇧T Reopen Closed
-/// Tab, ⌃Tab and ⌃⇧Tab Show Next / Previous Tab. The Claude app's Code tab and the Codex app use
-/// ⌃Tab, ⌘W and ⌘⇧T the same way for sessions and panel tabs. `⌘⇧[` / `⌘⇧]` stay with the sidebar's
-/// previous and next task, and `⌘1`–`⌘9` with the task surfaces and pinned rows. With one tab, ⌃Tab
-/// and ⌃⇧Tab are the next and previous task, as in the Claude app's Code sidebar (the Codex app's
-/// ⌃Tab does nothing without a second tab).
-enum TabCommandShortcut {
-    static let newTab = KeyboardShortcut("t", modifiers: .command)
-    static let closeTab = KeyboardShortcut("w", modifiers: .command)
-    static let closeWindow = KeyboardShortcut("w", modifiers: [.command, .shift])
-    static let reopenClosedTab = KeyboardShortcut("t", modifiers: [.command, .shift])
-    static let nextTab = KeyboardShortcut(.tab, modifiers: .control)
-    /// A keyboard sends ⇧Tab as the back-tab character, which a menu item matches only when its
-    /// key is that character (`NSBackTabCharacter`), not Tab with Shift.
-    static let previousTab = KeyboardShortcut(KeyEquivalent("\u{19}"), modifiers: [.control, .shift])
-}
-
 struct YardletTabCommands: Commands {
     @FocusedValue(\.yardletSplitCommands) private var split
     @FocusedValue(\.yardletTaskCommands) private var task
@@ -66,39 +48,39 @@ struct YardletTabCommands: Commands {
     var body: some Commands {
         CommandGroup(after: .newItem) {
             Button(L10n.string("New Tab")) { tabs?.newTab() }
-                .keyboardShortcut(TabCommandShortcut.newTab)
+                .keyboardShortcut(MacShortcut.newTab.binding)
                 .disabled(tabs == nil)
         }
         CommandGroup(replacing: .saveItem) {
             if let tabs, tabs.canCloseTab {
                 Button(L10n.string("Close Tab")) { tabs.closeTab() }
-                    .keyboardShortcut(TabCommandShortcut.closeTab)
+                    .keyboardShortcut(MacShortcut.closeTab.binding)
                 Button(L10n.string("Close Window")) { NSApp.keyWindow?.performClose(nil) }
-                    .keyboardShortcut(TabCommandShortcut.closeWindow)
+                    .keyboardShortcut(MacShortcut.closeWindow.binding)
             } else {
                 Button(L10n.string("Close")) { NSApp.keyWindow?.performClose(nil) }
-                    .keyboardShortcut(TabCommandShortcut.closeTab)
+                    .keyboardShortcut(MacShortcut.closeTab.binding)
             }
             Button(L10n.string("Reopen Closed Tab")) { tabs?.reopenClosedTab() }
-                .keyboardShortcut(TabCommandShortcut.reopenClosedTab)
+                .keyboardShortcut(MacShortcut.reopenClosedTab.binding)
                 .disabled(!(tabs?.canReopenClosedTab ?? false))
         }
         CommandGroup(before: .windowArrangement) {
             if tabs?.canCloseTab ?? false {
                 Button(L10n.string("Show Previous Tab")) { tabs?.selectPreviousTab() }
-                    .keyboardShortcut(TabCommandShortcut.previousTab)
+                    .keyboardShortcut(MacShortcut.previousTab.binding)
                 Button(L10n.string("Show Next Tab")) { tabs?.selectNextTab() }
-                    .keyboardShortcut(TabCommandShortcut.nextTab)
+                    .keyboardShortcut(MacShortcut.nextTab.binding)
             } else {
                 Button(L10n.string("Previous task")) {
                     if let row = task?.targets.previousRow { task?.activate(row) }
                 }
-                .keyboardShortcut(TabCommandShortcut.previousTab)
+                .keyboardShortcut(MacShortcut.previousTab.binding)
                 .disabled(task?.targets.previousRow == nil)
                 Button(L10n.string("Next task")) {
                     if let row = task?.targets.nextRow { task?.activate(row) }
                 }
-                .keyboardShortcut(TabCommandShortcut.nextTab)
+                .keyboardShortcut(MacShortcut.nextTab.binding)
                 .disabled(task?.targets.nextRow == nil)
             }
             Divider()
@@ -136,15 +118,6 @@ enum SplitCommandTitle {
         }
     }
 
-    static func focusShortcut(_ direction: PaneFocusDirection) -> KeyEquivalent {
-        switch direction {
-        case .left: .leftArrow
-        case .right: .rightArrow
-        case .up: .upArrow
-        case .down: .downArrow
-        }
-    }
-
     static func focusSymbol(_ direction: PaneFocusDirection) -> String {
         switch direction {
         case .left: "arrow.left"
@@ -155,36 +128,19 @@ enum SplitCommandTitle {
     }
 }
 
-/// `⌘1`–`⌘4` stay bound to the session-layer surfaces, so the window layer uses `⌘⇧D`,
-/// `⌘⌥⇧D`, `⌘⌃W`, `⌘⌥` arrows, and `⌃1`–`⌃9` for pinned rows.
-/// The Split View menu's keys, which the command palette and the pane header's close button name too.
-enum SplitCommandShortcut {
-    static let splitRight = KeyboardShortcut("d", modifiers: [.command, .shift])
-    static let splitDown = KeyboardShortcut("d", modifiers: [.command, .shift, .option])
-    static let closePane = KeyboardShortcut("w", modifiers: [.command, .control])
-
-    static func split(_ direction: SplitDirection) -> KeyboardShortcut {
-        direction == .right ? splitRight : splitDown
-    }
-
-    static func focusPane(_ direction: PaneFocusDirection) -> KeyboardShortcut {
-        KeyboardShortcut(SplitCommandTitle.focusShortcut(direction), modifiers: [.command, .option])
-    }
-}
-
 struct YardletWindowLayerCommands: Commands {
     @FocusedValue(\.yardletSplitCommands) private var split
 
     var body: some Commands {
         CommandMenu(Text(L10n.string("Split View"))) {
             Button(SplitCommandTitle.split(.right)) { split?.splitRight() }
-                .keyboardShortcut(SplitCommandShortcut.splitRight)
+                .keyboardShortcut(MacShortcut.splitRight.binding)
                 .disabled(!(split?.canSplitRight ?? false))
             Button(SplitCommandTitle.split(.down)) { split?.splitDown() }
-                .keyboardShortcut(SplitCommandShortcut.splitDown)
+                .keyboardShortcut(MacShortcut.splitDown.binding)
                 .disabled(!(split?.canSplitDown ?? false))
             Button(L10n.string("Close pane")) { split?.closePane() }
-                .keyboardShortcut(SplitCommandShortcut.closePane)
+                .keyboardShortcut(MacShortcut.closePane.binding)
                 .disabled(!(split?.canClosePane ?? false))
             Button(L10n.string("End split view")) { split?.dissolve() }
                 .disabled(!(split?.canClosePane ?? false))
@@ -204,7 +160,7 @@ struct YardletWindowLayerCommands: Commands {
 
             ForEach(PaneFocusDirection.allCases, id: \.self) { direction in
                 Button(SplitCommandTitle.focus(direction)) { split?.focusPane(direction) }
-                    .keyboardShortcut(SplitCommandShortcut.focusPane(direction))
+                    .keyboardShortcut(MacShortcut.focus(direction).binding)
                     .disabled(!(split?.canClosePane ?? false))
             }
 
@@ -220,7 +176,7 @@ struct YardletWindowLayerCommands: Commands {
                             Text(item.title)
                         }
                     }
-                    .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .control)
+                    .keyboardShortcut(MacShortcut.pinnedRow(index + 1).binding)
                 }
             }
         }

@@ -34,7 +34,7 @@ struct ComposerContextUsageIndicator: View {
                                                 compact.run()
                                             }
                                         }, limit: limit)
-                .onExitCommand { isPresented = false }
+                .onMacShortcutExit { isPresented = false }
         }
         .accessibilityLabel(L10n.string("Context window"))
         .accessibilityValue(summary.summaryText ?? L10n.string("Unavailable"))
@@ -415,17 +415,17 @@ struct HarnessIntelligencePicker: View {
         .focusable()
         .focusEffectDisabled()
         .focused($isFocused)
-        .onKeyPress(keys: [.leftArrow, .rightArrow]) { press in
+        .onKeyPress(keys: [MacShortcut.leftItem.binding.key, MacShortcut.rightItem.binding.key]) { press in
             guard !showsModels, let reasoningSelector else { return .ignored }
-            stepEffort(reasoningSelector, by: press.key == .leftArrow ? -1 : 1)
+            stepEffort(reasoningSelector, by: press.key == MacShortcut.leftItem.binding.key ? -1 : 1)
             return .handled
         }
-        .onKeyPress(.return) {
+        .onKeyPress(MacShortcut.chooseItem.binding.key) {
             onDismiss()
             return .handled
         }
         .onKeyPress(characters: .decimalDigits, phases: .down) { press in
-            guard showsModels, let modelSelector, let digit = Int(press.characters), digit >= 1,
+            guard showsModels, let modelSelector, let digit = MacShortcut.numberedOption(press.characters, command: MacShortcut.modelOption),
                   digit <= min(9, modelSelector.choices.count) else { return .ignored }
             pickModel(modelSelector.choices[digit - 1], in: modelSelector)
             return .handled

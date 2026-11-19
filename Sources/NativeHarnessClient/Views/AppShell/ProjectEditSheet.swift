@@ -64,7 +64,7 @@ struct ProjectEditSheet: View {
                     commitName()
                     dismiss()
                 }
-                .keyboardShortcut(.defaultAction)
+                .keyboardShortcut(MacShortcut.confirmDialog.binding)
             }
         }
         .padding(22)

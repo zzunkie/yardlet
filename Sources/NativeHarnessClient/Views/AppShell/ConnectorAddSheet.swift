@@ -281,7 +281,7 @@ struct ConnectorAddSheet: View {
             HStack {
                 Spacer()
                 Button(L10n.string("Done"), action: onClose)
-                    .keyboardShortcut(.cancelAction)
+                    .keyboardShortcut(MacShortcut.dismiss.binding)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
@@ -768,7 +768,7 @@ struct ConnectorAddSheet: View {
                     ProgressView().controlSize(.small)
                 } else {
                     Button(L10n.string("Connect")) { addWithToken(preset) }
-                        .keyboardShortcut(.defaultAction)
+                        .keyboardShortcut(MacShortcut.confirmDialog.binding)
                         .disabled(token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
@@ -857,7 +857,7 @@ struct ConnectorAddSheet: View {
                         entryError(Self.customID)
                         Spacer()
                         Button(L10n.string("Add and connect"), action: addCustom)
-                            .keyboardShortcut(.defaultAction)
+                            .keyboardShortcut(MacShortcut.confirmDialog.binding)
                             .controlSize(.small)
                             .disabled(customURL == nil)
                     }

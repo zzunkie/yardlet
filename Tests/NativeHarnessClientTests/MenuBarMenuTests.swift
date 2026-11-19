@@ -554,25 +554,9 @@ final class MenuBarMenuTests: XCTestCase {
     }
 
     func testToggleActivityViewIsOptionCommandUAndClashesWithNoOtherShortcut() {
-        XCTAssertEqual(key(TaskCommandShortcut.toggleActivityView), key(KeyboardShortcut("u", modifiers: [.command, .option])))
+        XCTAssertEqual(key(MacShortcut.toggleActivityView.defaultBinding()), key(KeyboardShortcut("u", modifiers: [.command, .option])))
 
-        // Every other shortcut the menu bar and the window bind (Settings, the command palette, New
-        // task, Find, Split View, pinned rows, the task surfaces).
-        var others: [KeyboardShortcut] = [
-            KeyboardShortcut(",", modifiers: .command), KeyboardShortcut("k", modifiers: .command),
-            KeyboardShortcut("n", modifiers: .command), KeyboardShortcut("f", modifiers: .command),
-            KeyboardShortcut("g", modifiers: .command), KeyboardShortcut("g", modifiers: [.command, .shift]),
-            KeyboardShortcut("d", modifiers: [.command, .shift]), KeyboardShortcut("d", modifiers: [.command, .shift, .option]),
-            KeyboardShortcut("w", modifiers: [.command, .control]),
-            // The terminal's second key (`TerminalToggleKey`).
-            KeyboardShortcut("`", modifiers: .control),
-        ]
-        others += PaneFocusDirection.allCases.map {
-            KeyboardShortcut(SplitCommandTitle.focusShortcut($0), modifiers: [.command, .option])
-        }
-        others += (1...9).map { KeyboardShortcut(KeyEquivalent(Character(String($0))), modifiers: .control) }
-        others += TaskSurface.allCases.map { KeyboardShortcut($0.keyboardShortcut, modifiers: .command) }
-        let all = (TaskCommandShortcut.all + others).map(key)
+        let all = MacShortcut.all.filter { $0.definition.scope == "Window" }.map { key($0.defaultBinding()) }
         XCTAssertEqual(Set(all).count, all.count, "A shortcut is bound twice: \(all)")
     }
 

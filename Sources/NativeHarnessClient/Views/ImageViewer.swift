@@ -282,10 +282,10 @@ struct ImageViewer: View {
                     .disabled(!model.hasImage)
                 }
                 ImageViewerButton(systemName: copied ? "checkmark" : "doc.on.doc", title: L10n.string("Copy Image"),
-                                  shortcut: "⌘C") {
+                                  shortcut: MacShortcut.imageCopy.binding.displayText) {
                     copied = model.copy()
                 }
-                .keyboardShortcut("c", modifiers: .command)
+                .keyboardShortcut(MacShortcut.imageCopy.binding)
                 .disabled(!model.hasImage)
                 .task(id: copied) {
                     guard copied else { return }
@@ -298,7 +298,7 @@ struct ImageViewer: View {
                 .disabled(!model.hasImage)
                 ImageViewerButton(systemName: "xmark", title: L10n.string("Close image preview"), shortcut: "Esc",
                                   action: close)
-                    .keyboardShortcut(.cancelAction)
+                    .keyboardShortcut(MacShortcut.imageClose.binding)
             }
             .padding(.horizontal, 14)
         }
@@ -329,10 +329,10 @@ struct ImageViewer: View {
             let enabled = previous ? model.canShowPrevious : model.canShowNext
             ImageViewerButton(systemName: previous ? "chevron.left" : "chevron.right",
                               title: L10n.string(previous ? "Previous image" : "Next image"),
-                              shortcut: previous ? "←" : "→", size: 36) {
+                              shortcut: (previous ? MacShortcut.imagePrevious : .imageNext).binding.displayText, size: 36) {
                 previous ? model.showPrevious() : model.showNext()
             }
-            .keyboardShortcut(previous ? .leftArrow : .rightArrow, modifiers: [])
+            .keyboardShortcut((previous ? MacShortcut.imagePrevious : .imageNext).binding)
             .disabled(!enabled)
             .frame(width: 64 * interfaceScale)
         } else {
@@ -594,13 +594,11 @@ final class ImageViewerCanvasView: NSScrollView {
 
     override func keyDown(with event: NSEvent) {
         if zoom(forKey: event) { return }
-        guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else {
-            return super.keyDown(with: event)
-        }
-        switch event.keyCode {
-        case 53: onClose?()
-        case 123: onPrevious?()
-        case 124: onNext?()
+        let key = MacShortcutEvent(event)
+        switch [MacShortcut.imageClose, .imagePrevious, .imageNext].first(where: { $0.matches(key) }) {
+        case .imageClose: onClose?()
+        case .imagePrevious: onPrevious?()
+        case .imageNext: onNext?()
         default: super.keyDown(with: event)
         }
     }
@@ -612,12 +610,12 @@ final class ImageViewerCanvasView: NSScrollView {
     /// ⌘+ (or ⌘=) and ⌘− zoom in steps and ⌘0 fits again, as in the Codex app, wherever the keyboard is
     /// in the window while the viewer shows.
     private func zoom(forKey event: NSEvent) -> Bool {
-        guard event.type == .keyDown,
-              event.modifierFlags.intersection([.command, .control, .option]) == .command else { return false }
-        switch event.commandShortcutKey ?? "" {
-        case "=", "+": zoom(.in)
-        case "-": zoom(.out)
-        case "0": zoom(.fit)
+        guard event.type == .keyDown else { return false }
+        let key = MacShortcutEvent(event)
+        switch [MacShortcut.imageZoomIn, .imageZoomOut, .imageFit].first(where: { $0.matches(key) }) {
+        case .imageZoomIn: zoom(.in)
+        case .imageZoomOut: zoom(.out)
+        case .imageFit: zoom(.fit)
         default: return false
         }
         return true

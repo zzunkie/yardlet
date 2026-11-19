@@ -135,7 +135,7 @@ struct HarnessCenterView: View {
                     if returnsSetupToTask { model.useFinishedSignIn() }
                     dismiss()
                 }
-                    .keyboardShortcut(.cancelAction)
+                    .keyboardShortcut(MacShortcut.dismiss.binding)
                     .disabled(model.loginController.isRunning)
                     .controlSize(.small)
                     .parityPointer()

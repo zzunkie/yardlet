@@ -618,7 +618,7 @@ final class BrowserHostView: NSView, @preconcurrency NSTextInputClient, MouseHis
     // MARK: Keys
 
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53, !hasMarkedText(), onEscape?() == true { return }
+        if MacShortcut.browserEscape.matches(MacShortcutEvent(event)), !hasMarkedText(), onEscape?() == true { return }
         keyDown(event) { [self] in
             if inputContext?.handleEvent(event) != true {
                 interpretKeyEvents([event])
@@ -703,37 +703,28 @@ final class BrowserHostView: NSView, @preconcurrency NSTextInputClient, MouseHis
         guard window?.firstResponder === self, event.type == .keyDown else {
             return super.performKeyEquivalent(with: event)
         }
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        let shift = flags.contains(.shift)
-        // ⌃Tab and ⌃⇧Tab move between the task's tabs while the page has focus.
-        if event.keyCode == 48, flags.subtracting(.shift) == .control {
-            onShortcut?(shift ? .previousTab : .nextTab)
-            return true
-        }
-        guard flags.contains(.command), let key = event.commandShortcutKey else {
-            return super.performKeyEquivalent(with: event)
-        }
-        if !shift, flags.subtracting([.command, .numericPad]).isEmpty,
-           let number = Int(key), (1...9).contains(number) {
-            onShortcut?(.selectTab(number))
-            return true
-        }
-        switch key {
-        case "t": onShortcut?(shift ? .reopenClosedTab : .newTab)
-        case "w" where !shift: onShortcut?(.closeTab)
-        case "c": edit(.copy)
-        case "x": edit(.cut)
-        case "v": edit(.paste)
-        case "a": edit(.selectAll)
-        case "z": edit(shift ? .redo : .undo)
-        case "=", "+": zoom(.zoomIn)
-        case "-": zoom(.zoomOut)
-        case "0": zoom(.reset)
-        case "f": onShortcut?(.find)
-        case "l": onShortcut?(.focusAddress)
-        case "r": onShortcut?(.reload)
-        case "[": onShortcut?(.back)
-        case "]": onShortcut?(.forward)
+        let key = MacShortcutEvent(event)
+        switch MacShortcut.browserPageCommands.first(where: { $0.matches(key) }) {
+        case .browserNext: onShortcut?(.nextTab)
+        case .browserPrevious: onShortcut?(.previousTab)
+        case let .browserTab(number): onShortcut?(.selectTab(number))
+        case .browserNew: onShortcut?(.newTab)
+        case .browserReopen: onShortcut?(.reopenClosedTab)
+        case .browserClose: onShortcut?(.closeTab)
+        case .browserCopy: edit(.copy)
+        case .browserCut: edit(.cut)
+        case .browserPaste: edit(.paste)
+        case .browserSelectAll: edit(.selectAll)
+        case .browserUndo: edit(.undo)
+        case .browserRedo: edit(.redo)
+        case .browserZoomIn: zoom(.zoomIn)
+        case .browserZoomOut: zoom(.zoomOut)
+        case .browserReset: zoom(.reset)
+        case .browserFind: onShortcut?(.find)
+        case .browserAddress: onShortcut?(.focusAddress)
+        case .browserReload: onShortcut?(.reload)
+        case .browserBack: onShortcut?(.back)
+        case .browserForward: onShortcut?(.forward)
         default: return super.performKeyEquivalent(with: event)
         }
         return true

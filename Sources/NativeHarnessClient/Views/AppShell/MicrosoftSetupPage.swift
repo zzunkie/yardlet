@@ -200,7 +200,7 @@ struct MicrosoftSetupPage: View {
                         clientID = ""
                         tenant = ""
                     }
-                    .keyboardShortcut(.defaultAction)
+                    .keyboardShortcut(MacShortcut.confirmDialog.binding)
                     .disabled(!idValidation.isValid || tenantValidation.message != nil)
                 }
             }

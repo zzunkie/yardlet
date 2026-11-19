@@ -228,7 +228,7 @@ struct GoogleSetupPage: View {
                         ProgressView().controlSize(.small)
                     } else {
                         Button(L10n.string("Save"), action: saveApp)
-                            .keyboardShortcut(.defaultAction)
+                            .keyboardShortcut(MacShortcut.confirmDialog.binding)
                             .disabled(!idValidation.isValid || !secretValidation.isValid)
                     }
                 }

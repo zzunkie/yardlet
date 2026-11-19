@@ -21,18 +21,18 @@ struct TitleBarSidebarPart: View {
             ParityIconButton(
                 systemName: "sidebar.left",
                 help: isSidebarVisible ? L10n.string("Hide sidebar") : L10n.string("Show sidebar"),
-                shortcut: TaskCommandShortcut.toggleSidebar,
+                shortcut: MacShortcut.toggleSidebar.binding,
                 action: onToggleSidebar
             )
             WindowDragRegion().frame(minWidth: 4, maxWidth: .infinity)
             if isSidebarVisible, let activityToggle {
                 ActivityViewButton(toggle: activityToggle)
             }
-            // ⌘N is File › New task (`TaskCommandShortcut.newTask`), which does the same.
+            // ⌘N is File › New task (`MacShortcut.newTask.binding`), which does the same.
             ParityIconButton(
                 systemName: "square.and.pencil",
                 help: L10n.string("New task"),
-                shortcut: TaskCommandShortcut.newTask,
+                shortcut: MacShortcut.newTask.binding,
                 action: onNewTask
             )
         }
@@ -284,7 +284,7 @@ struct ActivityViewButton: View {
         }
         .buttonStyle(.borderless)
         .parityPointer()
-        .help(ShortcutHelp.text(toggle.help, TaskCommandShortcut.toggleActivityView))
+        .help(ShortcutHelp.text(toggle.help, MacShortcut.toggleActivityView.binding))
         .accessibilityLabel(toggle.accessibilityLabel)
         .accessibilityHint(L10n.string("See chats that are unread, active, or awaiting a response"))
         .accessibilityAddTraits(toggle.isOn ? .isSelected : [])

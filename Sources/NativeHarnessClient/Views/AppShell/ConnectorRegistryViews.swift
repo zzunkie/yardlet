@@ -203,7 +203,7 @@ struct ConnectorRegistrySection: View {
                     .accessibilityLabel(L10n.string("Paste your API key"))
                     .onSubmit { add(entry, url: url, header: header) }
                 Button(L10n.string("Connect")) { add(entry, url: url, header: header) }
-                    .keyboardShortcut(.defaultAction)
+                    .keyboardShortcut(MacShortcut.confirmDialog.binding)
                     .disabled(key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             .controlSize(.small)
@@ -345,7 +345,7 @@ struct ConnectorProgramPage: View {
                     ProgressView().controlSize(.small)
                 } else {
                     Button(L10n.string("Run on this Mac"), action: run)
-                        .keyboardShortcut(.defaultAction)
+                        .keyboardShortcut(MacShortcut.confirmDialog.binding)
                         .disabled(!draft.isReady(values))
                 }
             }

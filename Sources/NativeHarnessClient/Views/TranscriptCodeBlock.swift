@@ -130,7 +130,7 @@ struct TranscriptFullCodeSheet: View {
                 Spacer()
                 TranscriptCopyButton(title: L10n.string("Copy code")) { text }
                 Button(L10n.string("Done"), action: done)
-                    .keyboardShortcut(.cancelAction)
+                    .keyboardShortcut(MacShortcut.dismiss.binding)
             }
             .padding(14)
             Divider()

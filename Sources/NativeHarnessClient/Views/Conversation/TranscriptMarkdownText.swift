@@ -403,7 +403,7 @@ private struct TranscriptMarkdownTable: View {
                     Spacer()
                     Button(L10n.string("Copy table"), action: copy)
                     Button(L10n.string("Done")) { showsExpanded = false }
-                        .keyboardShortcut(.cancelAction)
+                        .keyboardShortcut(MacShortcut.dismiss.binding)
                 }
                 .padding(14)
                 Divider()

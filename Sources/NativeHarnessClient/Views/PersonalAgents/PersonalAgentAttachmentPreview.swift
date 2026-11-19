@@ -44,7 +44,7 @@ struct PersonalAgentAttachmentPreview: View {
                         catch { saveFailed = true }
                     }
                 }
-                Button(L10n.string("Done"), action: close).keyboardShortcut(.cancelAction)
+                Button(L10n.string("Done"), action: close).keyboardShortcut(MacShortcut.dismiss.binding)
             }
             .padding(16)
             .fixedSize(horizontal: false, vertical: true)

@@ -401,7 +401,7 @@ struct SplitPaneHeader<Identity: View, Controls: View>: View {
             .parityPointer()
             .foregroundStyle(.secondary)
             // ⌃⌘W closes the focused pane only.
-            .help(ShortcutHelp.text(L10n.string("Close pane"), isFocused ? SplitCommandShortcut.closePane : nil))
+            .help(ShortcutHelp.text(L10n.string("Close pane"), isFocused ? MacShortcut.closePane.binding : nil))
             .accessibilityLabel(L10n.string("Close pane"))
         }
         .padding(.horizontal, 8)

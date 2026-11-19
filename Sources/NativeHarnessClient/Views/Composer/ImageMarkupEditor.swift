@@ -306,13 +306,13 @@ struct ImageMarkupEditor: View {
                 }
             }
             ParityIconButton(systemName: "arrow.uturn.backward", help: L10n.string("Undo")) { model.undo() }
-                .keyboardShortcut("z", modifiers: .command)
+                .keyboardShortcut(MacShortcut.markupUndo.binding)
                 .disabled(model.marks.isEmpty)
             Spacer(minLength: 8)
             Button(L10n.string("Cancel")) { finish(nil) }
-                .keyboardShortcut(.cancelAction)
+                .keyboardShortcut(MacShortcut.dismiss.binding)
             Button(L10n.string("Done")) { finish(model.marks) }
-                .keyboardShortcut(.defaultAction)
+                .keyboardShortcut(MacShortcut.confirmDialog.binding)
                 .parityProminentButton()
         }
         .controlSize(.small)

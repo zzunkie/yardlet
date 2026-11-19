@@ -82,7 +82,7 @@ struct MailComposeView: View {
                 Label(L10n.string("Send"), systemImage: "paperplane.fill")
             }
             .buttonStyle(MailPrimaryButtonStyle())
-            .keyboardShortcut(.return, modifiers: .command)
+            .keyboardShortcut(MacShortcut.sendMail.binding)
             .disabled(isGoing)
         }
         .padding(.horizontal, 16)

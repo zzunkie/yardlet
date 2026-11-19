@@ -1228,8 +1228,8 @@ final class NativeTerminalView: TerminalView {
         guard attachSelection != nil else { return super.menu(for: event) }
         let menu = NSMenu()
         let attach = NSMenuItem(title: L10n.string("Attach Selection to Message"),
-                                action: #selector(attachSelectionToMessage(_:)), keyEquivalent: "l")
-        attach.keyEquivalentModifierMask = [.command, .shift]
+                                action: #selector(attachSelectionToMessage(_:)), keyEquivalent: String(MacShortcut.attachSelection.binding.key.character))
+        attach.keyEquivalentModifierMask = MacShortcut.attachSelection.binding.modifiers.shortcutFlags
         attach.target = self
         menu.addItem(attach)
         menu.addItem(.separator())
@@ -1240,8 +1240,7 @@ final class NativeTerminalView: TerminalView {
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if attachSelection != nil, window?.firstResponder === self,
-           event.modifierFlags.intersection(.deviceIndependentFlagsMask) == [.command, .shift],
-           event.commandShortcutKey == "l" {
+           MacShortcut.attachSelection.matches(MacShortcutEvent(event)) {
             attachSelectionToMessage(nil)
             return true
         }

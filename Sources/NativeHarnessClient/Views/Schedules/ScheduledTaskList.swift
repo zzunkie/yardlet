@@ -94,7 +94,7 @@ struct ScheduledTaskList: View {
             .disabled(!actions.canImport)
         }
         .background(ParityTheme.sidebar)
-        .onExitCommand(perform: onBack)
+        .onMacShortcutExit(perform: onBack)
         .focusSection()
         .onChange(of: selection, initial: true) { _, id in
             // A schedule chosen from elsewhere, as a conversation's Open does, shows even in a folded group.

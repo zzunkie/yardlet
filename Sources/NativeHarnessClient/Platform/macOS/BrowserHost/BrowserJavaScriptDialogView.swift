@@ -51,11 +51,11 @@ struct BrowserJavaScriptDialogView: View {
             .focusable(dialog.kind != .prompt)
             .focusEffectDisabled()
             .focused($focus, equals: .buttons)
-            .onKeyPress(.return) {
+            .onKeyPress(MacShortcut.confirmDialog.binding.key) {
                 controller.answerJavaScriptDialog(accept: true)
                 return .handled
             }
-            .onExitCommand { controller.answerJavaScriptDialog(accept: dialog.kind == .alert) }
+            .onMacShortcutExit { controller.answerJavaScriptDialog(accept: dialog.kind == .alert) }
             .padding(.top, 24)
             .padding(.horizontal, 16)
             .accessibilityElement(children: .contain)
