@@ -96,6 +96,8 @@ struct ConversationTimeline: View {
     @State private var turnFocusRequest = 0
     @State private var scrollState = TranscriptScrollFollowState()
     @State private var showsFileRewind = false
+    /// The web images the person loaded in this conversation, in memory while its view is kept.
+    @State private var webImages = TranscriptWebImages()
     @State private var rowListScroller = ConversationRowListScroller()
     /// Where the row list was last asked to go, and how many times it has been.
     @State private var rowTarget: ConversationRowTarget?
@@ -377,6 +379,7 @@ struct ConversationTimeline: View {
         .background {
             if placement.paintsCanvas { ParityTheme.canvas }
         }
+        .environment(\.transcriptWebImages, webImages)
         .task(id: revealed.progress) { await revealArrivedTurns(revealed.progress) }
         // Shown again in kept views (`TaskSurfaceHost`), a history result is gone to as on a first show.
         .onDisappear { handledInitialSearch = false }

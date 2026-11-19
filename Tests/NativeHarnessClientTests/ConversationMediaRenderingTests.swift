@@ -131,6 +131,84 @@ final class ConversationMediaRenderingTests: XCTestCase {
         XCTAssertEqual(video.rate, 0, "starting the sound pauses the video")
     }
 
+    /// A web image stays its name and host until the person asks for it, then draws from memory as a file does, and
+    /// its bytes go with the conversation that loaded them. Nothing is fetched here: the load is the test's.
+    func testAWebImageLoadsOnlyWhenAskedAndStaysInMemory() async throws {
+        let png = try Data(contentsOf: workspace.appending(path: "before.png"))
+        let address = try XCTUnwrap(URL(string: "https://images.example.com/chart.png"))
+        let source = "The chart: ![latency chart](https://images.example.com/chart.png)"
+        let picture = TranscriptMarkdownPicture(source: address.absoluteString, alt: "latency chart", title: nil, link: nil)
+        let directory = try WindowlessRender.directory("chat-media-qa")
+        for appearance in WindowlessRender.Appearance.allCases {
+            let fetched = LockedCount()
+            let webImages = TranscriptWebImages(fetch: { _ in fetched.increment(); return png })
+            let size = NSSize(width: 720, height: 360)
+            let host = WindowlessRender.Host(
+                TranscriptMarkdownPictures(pictures: [picture], fullSource: source, dialect: .standard)
+                    .environment(\.transcriptWebImages, webImages)
+                    .padding(20).frame(width: size.width, height: size.height, alignment: .topLeading)
+                    .background(ParityTheme.canvas),
+                size: size, appearance: appearance)
+            defer { host.close() }
+            host.settle()
+            XCTAssertEqual(fetched.value, 0, "Nothing is fetched before the person asks")
+            XCTAssertTrue(Self.bitmaps(in: host.hosting).isEmpty)
+            try WindowlessRender.writePNG(try host.capture().bitmap, to: directory.appending(
+                path: "web-image-asked-\(appearance.suffix).png"))
+
+            XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Load image")))
+            await host.settle(until: { Self.bitmaps(in: host.hosting).contains(where: \.isDrawn) })
+            XCTAssertEqual(fetched.value, 1)
+            let memory = try XCTUnwrap(webImages.loaded(address))
+            XCTAssertEqual(memory.scheme, TranscriptMemoryImages.scheme, "Kept in memory, not on disk")
+            XCTAssertEqual(TranscriptMarkdownPictures.images(in: source, dialect: .standard, workspace: workspace,
+                                                             webImages: webImages).map(\.url), [memory],
+                           "The image preview opens it with the message's other images")
+            try WindowlessRender.writePNG(try host.capture().bitmap, to: directory.appending(
+                path: "web-image-loaded-\(appearance.suffix).png"))
+        }
+
+        // The bytes go with the conversation that loaded them.
+        var webImages: TranscriptWebImages? = TranscriptWebImages(fetch: { _ in png })
+        webImages?.load(address)
+        try await waitUntil { webImages?.loaded(address) != nil }
+        let memory = try XCTUnwrap(webImages?.loaded(address))
+        XCTAssertNotNil(TranscriptMemoryImages.shared.data(for: memory))
+        webImages = nil
+        try await waitUntil { TranscriptMemoryImages.shared.data(for: memory) == nil }
+    }
+
+    /// Where a web image may be fetched from: `https` to a public address, never a private, loopback, link-local,
+    /// shared or reserved one, written as a name or a number.
+    func testAWebImageIsFetchedOnlyFromAPublicHTTPSAddress() throws {
+        for address in ["93.184.215.14", "2606:2800:21f:cb07:6820:80da:af6b:8b2c", "8.8.8.8"] {
+            XCTAssertTrue(TranscriptWebImageLoader.isPublic(address: address), address)
+        }
+        for address in ["127.0.0.1", "10.1.2.3", "172.16.0.1", "172.31.255.255", "192.168.1.1", "169.254.169.254",
+                        "100.64.0.1", "0.0.0.0", "224.0.0.1", "198.18.0.1", "::1", "::", "fe80::1", "fd00::1", "ff02::1",
+                        "::ffff:127.0.0.1", "::ffff:10.0.0.1", "64:ff9b::a00:1", "fe80::1%en0", "not an address"] {
+            XCTAssertFalse(TranscriptWebImageLoader.isPublic(address: address), address)
+        }
+        for url in ["http://93.184.215.14/a.png", "https://127.0.0.1/a.png", "https://localhost/a.png",
+                    "https://[::1]/a.png", "https://169.254.169.254/latest/meta-data", "https://10.0.0.1/a.png",
+                    "file:///etc/hosts", "data:image/png;base64,AAAA"] {
+            XCTAssertFalse(TranscriptWebImageLoader.isAllowed(try XCTUnwrap(URL(string: url))), url)
+        }
+        XCTAssertTrue(TranscriptWebImageLoader.isAllowed(try XCTUnwrap(URL(string: "https://93.184.215.14/a.png"))))
+    }
+
+    /// For review, not for CI: a real fetch of `YARDLET_WEB_IMAGE_QA_URL` (an image) and of `YARDLET_WEB_IMAGE_QA_PAGE`
+    /// (a page, refused). Skipped unless both are set.
+    func testARealWebImageLoadsForReview() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        let image = try XCTUnwrap(environment["YARDLET_WEB_IMAGE_QA_URL"].flatMap(URL.init(string:)) ?? { throw XCTSkip() }())
+        let page = try XCTUnwrap(environment["YARDLET_WEB_IMAGE_QA_PAGE"].flatMap(URL.init(string:)) ?? { throw XCTSkip() }())
+        let data = await TranscriptWebImageLoader.load(image)
+        XCTAssertNotNil(data.flatMap { CGImageSourceCreateWithData($0 as CFData, nil) }, "An image, read as one")
+        let refused = await TranscriptWebImageLoader.load(page)
+        XCTAssertNil(refused, "A page is not an image")
+    }
+
     private static func players(in view: NSView) -> [AVPlayerView] {
         ((view as? AVPlayerView).map { [$0] } ?? []) + view.subviews.flatMap { players(in: $0) }
     }
@@ -300,4 +378,12 @@ final class ConversationMediaRenderingTests: XCTestCase {
         CGImageDestinationAddImage(destination, image, [kCGImagePropertyDPIWidth: dpi, kCGImagePropertyDPIHeight: dpi] as CFDictionary)
         XCTAssertTrue(CGImageDestinationFinalize(destination))
     }
+}
+
+/// A count a `@Sendable` closure can raise.
+private final class LockedCount: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var value: Int { lock.withLock { count } }
+    func increment() { lock.withLock { count += 1 } }
 }

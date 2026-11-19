@@ -26,7 +26,7 @@ enum TranscriptPictureTarget: Equatable {
     case audio(URL)
     /// Any other file (a document): a link to it.
     case file(URL)
-    /// A web address: a link to it, never fetched.
+    /// A web address: a link to it, fetched only when the person asks (`TranscriptWebImages`).
     case web(URL)
     /// Nothing this Mac can show.
     case none
@@ -106,6 +106,7 @@ struct TranscriptMarkdownPictures: View {
     @Environment(\.yardletInterfaceScale) private var interfaceScale
     @Environment(\.openImageViewer) private var openImageViewer
     @Environment(\.pauseTranscriptFollowing) private var pauseFollowing
+    @Environment(\.transcriptWebImages) private var webImages
 
     /// A picture alone, as tall as this at most: a phone screenshot stays within a screenful.
     static let maximumHeight: CGFloat = 480
@@ -131,23 +132,33 @@ struct TranscriptMarkdownPictures: View {
 
     /// Opens the message's images over the window at `url`'s.
     private func open(_ url: URL) {
-        let items = Self.images(in: fullSource, dialect: dialect, workspace: workspaceURL)
+        let items = Self.images(in: fullSource, dialect: dialect, workspace: workspaceURL, webImages: webImages)
         guard let index = items.firstIndex(where: { $0.url == url }) else { return }
         pauseFollowing()
         openImageViewer(ImageViewerRequest(
             items: items.map { ImageViewerItem(name: $0.name, source: .url($0.url)) }, index: index))
     }
 
-    /// The images a message's Markdown shows, in order, that this Mac can read.
-    static func images(in source: String, dialect: TranscriptMarkdownDialect, workspace: URL?) -> [(name: String, url: URL)] {
+    /// The images a message's Markdown shows, in order, that this Mac can read: its files and inline images, and the
+    /// web images the person loaded.
+    @MainActor
+    static func images(in source: String, dialect: TranscriptMarkdownDialect, workspace: URL?,
+                       webImages: TranscriptWebImages? = nil) -> [(name: String, url: URL)] {
         var found: [(name: String, url: URL)] = []
         func visit(_ blocks: [TranscriptMarkdownBlock]) {
             for block in blocks {
                 switch block {
                 case let .pictures(pictures):
                     for picture in pictures {
-                        guard case let .image(url) = TranscriptPictureTarget(picture.source, workspace: workspace),
-                              TranscriptImageThumbnails.shared.cachedPreview(for: url, size: .inline).map(\.isImage) ?? true
+                        let url: URL
+                        switch TranscriptPictureTarget(picture.source, workspace: workspace) {
+                        case let .image(image): url = image
+                        case let .web(web):
+                            guard let loaded = webImages?.loaded(web) else { continue }
+                            url = loaded
+                        default: continue
+                        }
+                        guard TranscriptImageThumbnails.shared.cachedPreview(for: url, size: .inline).map(\.isImage) ?? true
                         else { continue }
                         found.append((picture.label, url))
                     }
@@ -199,17 +210,62 @@ private struct TranscriptMarkdownPictureView: View {
                 openURL(url)
             }
         case let .web(url):
-            // A web picture inside a link (a badge) leads where the link does.
-            let destination = link ?? url
-            TranscriptPictureLink(name: picture.label, systemImage: "globe", detail: destination.host(),
-                                  help: destination.absoluteString) {
-                openURL(destination)
-            }
+            TranscriptPictureWeb(url: url, name: picture.label, link: link, isOneOfSeveral: isOneOfSeveral, open: open)
         case .none:
             TranscriptPictureLink(name: picture.label, systemImage: "photo", help: picture.source, action: nil)
         }
     }
 
+}
+
+/// A web image: its name and host with "Load image" until the person asks for it, then the image drawn in place as a
+/// local one is. Without a conversation to keep it in, and for plain `http`, it stays a link.
+private struct TranscriptPictureWeb: View {
+    let url: URL
+    let name: String
+    /// The link around the picture, which a click on its name opens instead of the image's address.
+    let link: URL?
+    let isOneOfSeveral: Bool
+    let open: (URL) -> Void
+
+    @Environment(\.openURL) private var openURL
+    @Environment(\.transcriptWebImages) private var webImages
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
+
+    var body: some View {
+        let destination = link ?? url
+        let phase = webImages?.phase(url)
+        if case let .loaded(memory)? = phase {
+            TranscriptPictureImage(url: memory, name: name, link: destination, isOneOfSeveral: isOneOfSeveral) { open(memory) }
+        } else {
+            HStack(spacing: 8 * interfaceScale) {
+                TranscriptPictureLink(name: name, systemImage: "globe", detail: destination.host(),
+                                      help: url.absoluteString) {
+                    openURL(destination)
+                }
+                if let webImages, url.scheme?.lowercased() == "https" {
+                    switch phase {
+                    case .loading?:
+                        ProgressView()
+                            .controlSize(.small)
+                            .accessibilityLabel(L10n.string("Loading"))
+                    case .failed?:
+                        Text(L10n.string("Couldn't load the image."))
+                            .font(.system(size: 12 * interfaceScale))
+                            .foregroundStyle(.secondary)
+                        Button(L10n.string("Try again")) { webImages.load(url) }
+                            .buttonStyle(.link)
+                            .font(.system(size: 12 * interfaceScale))
+                    default:
+                        Button(L10n.string("Load image")) { webImages.load(url) }
+                            .buttonStyle(.link)
+                            .font(.system(size: 12 * interfaceScale))
+                            .help(L10n.format("Loads it from %@, without cookies.", url.host() ?? url.absoluteString))
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// An image file or inline image drawn at its own size within the conversation, and its name where it cannot be read.

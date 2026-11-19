@@ -56,7 +56,7 @@ final class TranscriptImageThumbnails: @unchecked Sendable {
     }
 
     static func canPreview(_ url: URL) -> Bool {
-        url.isFileURL || url.scheme == "data"
+        url.isFileURL || url.scheme == "data" || url.scheme == TranscriptMemoryImages.scheme
     }
 
     func cachedPreview(for url: URL, size: Size = .tile) -> Preview? {
@@ -76,6 +76,16 @@ final class TranscriptImageThumbnails: @unchecked Sendable {
 
     private static func key(_ key: String, _ size: Size) -> String {
         size == .tile ? key : key + "#" + size.rawValue
+    }
+
+    /// Forgets everything kept for `url`: its previews at each size and its size.
+    func forget(_ url: URL) {
+        for size in [Size.tile, .detail, .inline] {
+            let key = Self.key(url.absoluteString, size) as NSString
+            cache.removeObject(forKey: key)
+            if let kept { keptLock.withLock { kept.removeObject(forKey: key) } }
+        }
+        sizes.removeObject(forKey: url.absoluteString as NSString)
     }
 
     /// Forgets `url`'s preview, as NSCache does to any entry when the system is short of memory or
@@ -239,6 +249,8 @@ final class TranscriptImageThumbnails: @unchecked Sendable {
                   values.isRegularFile == true, let size = values.fileSize, size <= maximumFileBytes else { return nil }
             return try? Data(contentsOf: url, options: .mappedIfSafe)
         }
+        // A web image the person loaded, in memory (`TranscriptMemoryImages`).
+        if url.scheme == TranscriptMemoryImages.scheme { return TranscriptMemoryImages.shared.data(for: url) }
         // `data:image/<type>;base64,<payload>`, no larger than an inline image may be.
         guard url.scheme == "data" else { return nil }
         let text = url.absoluteString

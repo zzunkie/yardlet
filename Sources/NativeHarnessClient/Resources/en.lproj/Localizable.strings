@@ -2812,6 +2812,9 @@
 "Copy table" = "Copy table";
 "Expand table" = "Expand table";
 "Expand visualization" = "Expand visualization";
+"Load image" = "Load image";
+"Couldn't load the image." = "Couldn't load the image.";
+"Loads it from %@, without cookies." = "Loads it from %@, without cookies.";
 "Table" = "Table";
 "Copy command" = "Copy command";
 "Copy output" = "Copy output";

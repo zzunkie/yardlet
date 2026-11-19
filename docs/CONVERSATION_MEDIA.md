@@ -11,9 +11,17 @@ it stands, in a paragraph, a list or a quote; the words around it stay their par
 the `.pictures` block of `TranscriptMarkdownDocument`). Images separated only by spaces share one block.
 
 - **Sources.** A path relative to the task's folder, an absolute path, `~/`, `file:` and `data:image/`, resolved as a
-  link in the message is. A file outside the task's folder is drawn too: only the person sees it. A web address is
-  never fetched: it is a chip with the alt text and the host that opens the address as a link in the conversation
-  does. A file that is not an image, larger than 64 MB or not there is a chip with its name.
+  link in the message is. A file outside the task's folder is drawn too: only the person sees it. A file that is not
+  an image, larger than 64 MB or not there is a chip with its name.
+- **Web images** (`TranscriptWebImages`). A web address is never fetched on its own, since the address a model wrote
+  can carry what it read. It is a chip with the alt text and the host, which opens the address as a link in the
+  conversation does, and, for `https`, "Load image", whose help names the host. Only that click fetches it
+  (`TranscriptWebImageLoader`): `https` only, redirects included; never a private, loopback, link-local, shared or
+  reserved address, checked when the host is resolved and against the addresses the connection reached (behind a
+  proxy, only the resolved host); an ephemeral session with no cookies, cache, credentials or referrer; only a
+  response whose type is an image other than SVG, at most 20 MB. The bytes stay in memory
+  (`TranscriptMemoryImages`, read by the picture path as a file is) while the conversation's view is kept, and are
+  never written to disk or Yardlet's index. A load that fails says so, with "Try again". Plain `http` stays a link.
 - **Size.** One image is as wide as the message at most, never larger than its own size (its DPI counted, so a
   Retina screenshot is half its pixels) and at most 480 points tall. Several share rows: each row's images take one
   height that fills the width together, at most 240 points, and a row wraps where they would be under 140 points.
