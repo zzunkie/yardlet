@@ -772,7 +772,6 @@ struct MainWindow: View {
     private func paneCell(_ pane: SplitPane, split: SplitGroup) -> some View {
         let session = sessionRecord(pane.sessionID)
         let isFocused = pane.id == split.focusedPaneID
-        let needsApproval = session?.status == .waitingForApproval
         let order = split.panes.firstIndex { $0.id == pane.id } ?? 0
         let frame = split.root.frames()[pane.id]
         let isAtWindowTop = !hasTabBar && frame?.y == 0
@@ -797,12 +796,11 @@ struct MainWindow: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ParityTheme.canvas)
+        // Only the focused pane is outlined. A pane waiting on an approval says so in its own progress
+        // line and the request docked above its composer, the one place the task view marks it in orange.
         .overlay {
             Rectangle()
-                .strokeBorder(
-                    needsApproval ? Color.orange : (isFocused ? ParityTheme.strongSeparator : .clear),
-                    lineWidth: needsApproval ? 2 : 1
-                )
+                .strokeBorder(isFocused ? ParityTheme.strongSeparator : .clear, lineWidth: 1)
                 .allowsHitTesting(false)
         }
         .contentShape(Rectangle())
