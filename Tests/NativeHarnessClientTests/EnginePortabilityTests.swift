@@ -20,7 +20,9 @@ final class EnginePortabilityTests: XCTestCase {
     private static let forbiddenModules = [
         "SwiftUI", "AppKit", "UIKit", "Cocoa", "WebKit", "SwiftTerm", "Darwin", "Security",
         "UserNotifications", "CryptoKit", "CoreServices", "Carbon", "ServiceManagement",
-        "IOKit", "CoreGraphics", "QuartzCore", "Combine", "OSLog", "os"
+        "IOKit", "CoreGraphics", "QuartzCore", "Combine", "OSLog", "os",
+        // Links the Linux host to libxml2, which several distributions do not install.
+        "FoundationXML"
     ]
 
     private static let rules: [(name: String, pattern: String)] = [

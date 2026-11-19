@@ -154,6 +154,8 @@ final class SimulatorInstallTests: XCTestCase {
         XCTAssertEqual(name, L10n.string("Android SDK and emulator"))
         XCTAssertEqual(bytes, archives.totalSize)
         XCTAssertEqual(licenses.map(\.id), ["android-sdk-license", "android-sdk-arm-dbt-license"])
+        // The text as an XML parser hands it on: references replaced, line ends as `\n`.
+        XCTAssertTrue(licenses[0].text.hasPrefix("Terms & Conditions\n\nThis is"), licenses[0].text)
         XCTAssertEqual(downloaded.all, [], "nothing downloads before the person accepts")
 
         let items = try await installer.install(try XCTUnwrap(offer), for: check) { _ in }
@@ -372,7 +374,7 @@ private struct AndroidFixtureArchives: Sendable {
         let image = try archive("arm64-v8a-36_r07.zip", top: "arm64-v8a",
                                 contents: ["system.img": "image"], revision: "7")
         totalSize = tools.0 + emulator.0 + image.0
-        let license = "Terms and Conditions\n\nThis is the Android Software Development Kit License Agreement\n"
+        let license = "Terms &amp; Conditions\r\n\nThis is the Android Software Development Kit License Agreement\n"
         let arm = "Terms and Conditions\n\nThis is the Android SDK ARM DBT License Agreement\n"
         repository = Data("""
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>

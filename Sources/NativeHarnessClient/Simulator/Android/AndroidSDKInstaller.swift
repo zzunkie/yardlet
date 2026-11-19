@@ -3,9 +3,6 @@ import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
-#if canImport(FoundationXML)
-import FoundationXML
-#endif
 
 /// Gets an Android SDK for the simulator panel without Java: Google's package lists (the repository and its Google
 /// Play system images) name each package's archive, size, SHA-1 and license. Yardlet downloads the missing ones,
@@ -325,17 +322,16 @@ struct AndroidSDKCatalog: Equatable, Sendable {
 
     static func parse(_ data: Data, base: URL) -> AndroidSDKCatalog {
         let reader = Reader(base: base)
-        let parser = XMLParser(data: data)
-        parser.delegate = reader
-        parser.parse()
+        SimpleXML.read(String(decoding: data, as: UTF8.self),
+                       start: reader.start, text: { reader.text += $0 }, end: reader.end)
         return reader.catalog
     }
 
-    private final class Reader: NSObject, XMLParserDelegate {
+    private final class Reader {
         let base: URL
         var catalog = AndroidSDKCatalog()
         private var path: [String] = []
-        private var text = ""
+        var text = ""
         private var license: String?
         private var package: Package?
         private var revision: [String: String] = [:]
@@ -343,8 +339,7 @@ struct AndroidSDKCatalog: Equatable, Sendable {
 
         init(base: URL) { self.base = base }
 
-        func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?,
-                    attributes: [String: String] = [:]) {
+        func start(_ name: String, _ attributes: [String: String]) {
             let element = name.split(separator: ":").last.map(String.init) ?? name
             path.append(element)
             text = ""
@@ -365,9 +360,7 @@ struct AndroidSDKCatalog: Equatable, Sendable {
             }
         }
 
-        func parser(_ parser: XMLParser, foundCharacters string: String) { text += string }
-
-        func parser(_ parser: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName: String?) {
+        func end(_ name: String) {
             let element = path.popLast() ?? name
             let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
             let parent = path.last
@@ -417,6 +410,115 @@ struct AndroidSDKCatalog: Equatable, Sendable {
             text = ""
         }
     }
+}
+
+/// Reads XML as Google's package lists write it, without Foundation's XML parser, which on Linux would tie the engine
+/// to libxml2: elements with their attributes, text with the predefined and numeric character references, CDATA,
+/// comments, and the declaration. Line ends are read as `\n`, as an XML parser hands them on.
+enum SimpleXML {
+    static func read(_ document: String, start: (String, [String: String]) -> Void, text: (String) -> Void,
+                     end: (String) -> Void) {
+        let xml = document.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+        var index = xml.startIndex
+        while index < xml.endIndex {
+            guard let open = xml[index...].firstIndex(of: "<") else {
+                text(decode(xml[index...]))
+                return
+            }
+            if open > index { text(decode(xml[index..<open])) }
+            let rest = xml[open...]
+            if rest.hasPrefix("<!--") {
+                index = rest.range(of: "-->").map(\.upperBound) ?? xml.endIndex
+            } else if rest.hasPrefix("<![CDATA[") {
+                let body = rest.index(open, offsetBy: 9)
+                let close = xml[body...].range(of: "]]>")
+                text(String(xml[body..<(close?.lowerBound ?? xml.endIndex)]))
+                index = close?.upperBound ?? xml.endIndex
+            } else if rest.hasPrefix("<?") || rest.hasPrefix("<!") {
+                index = rest.firstIndex(of: ">").map { xml.index(after: $0) } ?? xml.endIndex
+            } else {
+                guard let close = tagEnd(in: xml, from: open) else { return }
+                var tag = xml[xml.index(after: open)..<close]
+                index = xml.index(after: close)
+                if tag.hasPrefix("/") {
+                    end(String(tag.dropFirst()).trimmingCharacters(in: .whitespaces).localName)
+                    continue
+                }
+                let empty = tag.hasSuffix("/")
+                if empty { tag = tag.dropLast() }
+                let name = String(tag.prefix { !$0.isWhitespace })
+                start(name.localName, attributes(tag.dropFirst(name.count)))
+                if empty { end(name.localName) }
+            }
+        }
+    }
+
+    /// The `>` that ends the tag starting at `open`, past any `>` inside a quoted attribute value.
+    private static func tagEnd(in xml: String, from open: String.Index) -> String.Index? {
+        var quote: Character?
+        var index = xml.index(after: open)
+        while index < xml.endIndex {
+            let character = xml[index]
+            if let current = quote {
+                if character == current { quote = nil }
+            } else if character == "\"" || character == "'" {
+                quote = character
+            } else if character == ">" {
+                return index
+            }
+            index = xml.index(after: index)
+        }
+        return nil
+    }
+
+    private static func attributes(_ text: Substring) -> [String: String] {
+        var found: [String: String] = [:]
+        var rest = text[...]
+        while let equals = rest.firstIndex(of: "=") {
+            let name = rest[..<equals].trimmingCharacters(in: .whitespacesAndNewlines)
+            var value = rest[rest.index(after: equals)...].drop { $0.isWhitespace }
+            guard let quote = value.first, quote == "\"" || quote == "'" else { break }
+            value = value.dropFirst()
+            guard let close = value.firstIndex(of: quote) else { break }
+            found[name.localName] = decode(value[..<close])
+            rest = value[value.index(after: close)...]
+        }
+        return found
+    }
+
+    /// Text with `&lt;`, `&gt;`, `&amp;`, `&quot;`, `&apos;` and `&#…;` references replaced.
+    static func decode(_ text: Substring) -> String {
+        guard text.contains("&") else { return String(text) }
+        var result = ""
+        var rest = text
+        while let amp = rest.firstIndex(of: "&") {
+            result += rest[..<amp]
+            guard let semicolon = rest[amp...].firstIndex(of: ";") else { break }
+            let entity = rest[rest.index(after: amp)..<semicolon]
+            switch entity {
+            case "lt": result += "<"
+            case "gt": result += ">"
+            case "amp": result += "&"
+            case "quot": result += "\""
+            case "apos": result += "'"
+            default:
+                let number = entity.hasPrefix("#x") ? UInt32(entity.dropFirst(2), radix: 16)
+                    : entity.hasPrefix("#") ? UInt32(entity.dropFirst()) : nil
+                if let number, let scalar = Unicode.Scalar(number) {
+                    result.unicodeScalars.append(scalar)
+                } else {
+                    result += rest[amp...semicolon]
+                }
+            }
+            rest = rest[rest.index(after: semicolon)...]
+        }
+        return result + rest
+    }
+}
+
+private extension String {
+    /// The name without its namespace prefix.
+    var localName: String { split(separator: ":").last.map(String.init) ?? self }
 }
 
 /// What is unpacked in an SDK folder, read from each package's `source.properties`.
