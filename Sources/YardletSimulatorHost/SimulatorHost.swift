@@ -13,6 +13,8 @@ final class SimulatorHost: @unchecked Sendable {
     private let queue = DispatchQueue(label: "Yardlet simulator host")
     private let screenshotQueue = DispatchQueue(label: "Yardlet simulator host screenshots", qos: .userInitiated,
                                                 attributes: .concurrent)
+    /// Loaded at the first tree asked for, on the main queue, where trees are read (`AccessibilityTree`).
+    private var tree: AccessibilityTree??
     // On `queue`.
     private var sessions: [UUID: DeviceSession] = [:]
     private var deviceSet: AnyObject?
@@ -48,6 +50,24 @@ final class SimulatorHost: @unchecked Sendable {
             screenshotQueue.async { [output] in
                 do {
                     output.write(.screenshot(request: request, image: try session.screenshot(format: format)))
+                } catch {
+                    output.write(.requestFailed(request: request, message: "\(error)"))
+                }
+            }
+        case .accessibilityTree(let request, let device):
+            guard let session = sessions[device] else {
+                output.write(.requestFailed(request: request, message: "the helper has not attached \(device.uuidString)"))
+                return
+            }
+            DispatchQueue.main.async { [self, output] in
+                if tree == nil { tree = .some(AccessibilityTree.load()) }
+                guard let tree = tree ?? nil else {
+                    return output.write(.requestFailed(request: request, message:
+                        "this macOS has no accessibility translation for simulators (AccessibilityPlatformTranslation)"))
+                }
+                do {
+                    let read = try session.accessibilityElements(with: tree)
+                    output.write(.accessibilityTree(request: request, elements: read.elements, truncated: read.truncated))
                 } catch {
                     output.write(.requestFailed(request: request, message: "\(error)"))
                 }

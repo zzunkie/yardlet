@@ -296,12 +296,12 @@ They start no model turn and change no files or harness.
 
 ### Simulator tools
 
-Nine tools, `simulator_list`, `simulator_attach`, `simulator_detach`, `simulator_screenshot`, `simulator_tap`,
-`simulator_swipe`, `simulator_type`, `simulator_press` and `simulator_handoff`, see and drive the iOS simulator, Android
-emulator or Android device the task attached, the one its Simulator tab shows, and hand it to the person as
-`browser_handoff` hands a tab (`SimulatorToolCatalog`). They are listed while Settings → General → Simulator was on as
-the session started or resumed and a platform's devices can be used, and are not in the fallback list built into the
-server. Their arguments, the person's approval of each device, the coordinates and the limits are in
+Ten tools, `simulator_list`, `simulator_attach`, `simulator_detach`, `simulator_screenshot`, `simulator_snapshot`,
+`simulator_tap`, `simulator_swipe`, `simulator_type`, `simulator_press` and `simulator_handoff`, see and drive the iOS
+simulator, Android emulator or Android device the task attached, the one its Simulator tab shows, and hand it to the
+person as `browser_handoff` hands a tab (`SimulatorToolCatalog`). They are listed while Settings → General → Simulator
+was on as the session started or resumed and a platform's devices can be used, and are not in the fallback list built
+into the server. Their arguments, the person's approval of each device, the coordinates and the limits are in
 [SIMULATOR](SIMULATOR.md), "Agent tools".
 
 ### Session tools

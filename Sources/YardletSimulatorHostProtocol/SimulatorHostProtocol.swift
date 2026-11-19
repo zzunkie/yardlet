@@ -126,6 +126,9 @@ public enum SimulatorHostCommand: Codable, Equatable, Sendable {
     case key(device: UUID, usage: SimulatorKeyUsage, phase: SimulatorPressPhase)
     /// Types the text on the hardware keyboard, key by key, as the device's keyboard layout reads the keys.
     case typeText(device: UUID, text: SimulatorKeyboardText)
+    /// The accessibility elements of the app in front, as the device's accessibility runtime describes them, their
+    /// frames in points. Answered with `accessibilityTree` or `requestFailed`.
+    case accessibilityTree(request: Int, device: UUID)
     /// Whether the helper holds screen recording permission, can read the home folder or can open a network
     /// connection (it should do none of these), checked without asking the person or sending anything. Answered with
     /// `diagnosis`.
@@ -196,6 +199,34 @@ public struct SimulatorScreenshot: Codable, Equatable, Sendable {
     }
 }
 
+/// An element of an app's accessibility tree: what it is, what it says, and where it is on the screen in points from
+/// its top left.
+public struct SimulatorAccessibilityElement: Codable, Equatable, Sendable {
+    /// The macOS accessibility role the element translates to (`AXButton`, `AXTextField`, `AXStaticText`).
+    public var role: String
+    public var label: String?
+    public var value: String?
+    public var identifier: String?
+    public var x: Double
+    public var y: Double
+    public var width: Double
+    public var height: Double
+    public var children: [SimulatorAccessibilityElement]
+
+    public init(role: String, label: String? = nil, value: String? = nil, identifier: String? = nil, x: Double,
+                y: Double, width: Double, height: Double, children: [SimulatorAccessibilityElement] = []) {
+        self.role = role
+        self.label = label
+        self.value = value
+        self.identifier = identifier
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.children = children
+    }
+}
+
 public enum SimulatorHostEvent: Codable, Equatable, Sendable {
     /// SimulatorKit loaded from the Xcode named by version (`27.2 (27B52)`), with every part the helper uses.
     /// `capabilities` names the optional ones it found: `digitizerTouch` (touches reach system layers such as
@@ -211,6 +242,9 @@ public enum SimulatorHostEvent: Codable, Equatable, Sendable {
     case deviceFailed(device: UUID, message: String)
     case frame(SimulatorFrame)
     case screenshot(request: Int, image: SimulatorScreenshot)
+    /// The app in front's elements, in the tree they form; `truncated` when the helper stopped at its limit of elements
+    /// or time.
+    case accessibilityTree(request: Int, elements: [SimulatorAccessibilityElement], truncated: Bool)
     case requestFailed(request: Int, message: String)
     /// Input the device did not take, or a command for a device the helper has not attached.
     case commandFailed(device: UUID, message: String)

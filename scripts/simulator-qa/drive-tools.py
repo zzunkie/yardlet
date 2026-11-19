@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Calls the simulator tools through the QA bundle's yardlet-mcp, as a harness would, from the launch the panel
 fixture wrote (SimulatorPanelQA): the list, a tool before any attach, the attach (which waits on the person's card,
-which the fixture allows), screenshots the screen's size, the platform's buttons, taps and swipes, a paste in Korean
-and keys into a search field, arguments out of bounds, and handoffs: one left to time out, then answered with I'm done
-by the fixture, and one it declines. On iOS the search is the home screen's, on Android the Settings app's, which the
-script opens with adb as an agent's own tools would. Writes every reply to tools.json and each screenshot to
-tool-<n>.<format> in the output folder, and prints one line for each check. Exits 1 when a check failed.
+which the fixture allows), screenshots the screen's size, snapshots and a tap by an element's reference, the
+platform's buttons, taps and swipes, a paste in Korean and keys into a search field, arguments out of bounds, and
+handoffs: one left to time out, then answered with I'm done by the fixture, and one it declines. On iOS the search is
+the home screen's, on Android the Settings app's, which the script opens with adb as an agent's own tools would. Writes
+every reply to tools.json and each screenshot to tool-<n>.<format> in the output folder, and prints one line for each
+check. Exits 1 when a check failed.
 
 usage: drive-tools.py LAUNCH_JSON DEVICE_ID OUTPUT_FOLDER [ios | android ADB]
 """
@@ -85,9 +86,9 @@ def main():
                            "clientInfo": {"name": "simulator-qa", "version": "1"}})
     process.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
     listed = [tool["name"] for tool in request("tools/list")["result"]["tools"]]
-    expected = ["simulator_list", "simulator_attach", "simulator_detach", "simulator_screenshot", "simulator_tap",
-                "simulator_swipe", "simulator_type", "simulator_press", "simulator_handoff"]
-    check("list: the task has the nine simulator tools", all(name in listed for name in expected),
+    expected = ["simulator_list", "simulator_attach", "simulator_detach", "simulator_screenshot", "simulator_snapshot",
+                "simulator_tap", "simulator_swipe", "simulator_type", "simulator_press", "simulator_handoff"]
+    check("list: the task has the ten simulator tools", all(name in listed for name in expected),
           ", ".join(name for name in listed if name.startswith("simulator_")))
 
     devices = call("simulator_list")
@@ -134,6 +135,16 @@ def main():
     finish(process, output, replies, checks)
 
 
+def reference(snapshot, marker):
+    """The reference on the snapshot's line that holds `marker`."""
+    for line in snapshot["text"].splitlines():
+        if marker in line:
+            found = re.search(r"\[ref=(@e\d+)\]", line)
+            if found:
+                return found.group(1)
+    return None
+
+
 def drive_ios(call, check, steps, width, height):
     # The Settings icon on an iPhone's first home screen page.
     settings = (round(0.843 * width), round(0.492 * height))
@@ -141,6 +152,19 @@ def drive_ios(call, check, steps, width, height):
     steps([
         ("simulator_press", {"button": "home"}, 2),
         ("simulator_tap", {"x": settings[0], "y": settings[1]}, 4),
+    ])
+    # Settings' rows carry identifiers in any language: General's reference opens General.
+    first = call("simulator_snapshot")
+    general = reference(first, "[id=com.apple.settings.general]")
+    check("simulator_snapshot: Settings' elements with references", not first["isError"] and general is not None,
+          first["text"][:600])
+    if general:
+        steps([("simulator_tap", {"ref": general}, 2)])
+        opened = call("simulator_snapshot")
+        check("simulator_tap by reference: General opened", not opened["isError"]
+              and "[id=com.apple.settings.general]" not in opened["text"] and opened["text"] != first["text"],
+              opened["text"][:600])
+    steps([
         ("simulator_swipe", {"x": middle, "y": round(0.74 * height), "x2": middle, "y2": round(0.34 * height)}, 2),
     ])
     scrolled = call("simulator_screenshot", {"format": "jpeg"})
@@ -185,11 +209,18 @@ def drive_android(call, check, steps, adb, serial, width, height):
                             capture_output=True, text=True, timeout=30)
     check("adb: Settings' search opens", opened.returncode == 0 and "Complete" in opened.stdout, opened.stderr[:300])
     time.sleep(2)
+    # UI Automator's tree names the search field by its resource id, in any language.
+    search = call("simulator_snapshot")
+    field = reference(search, "[id=open_search_view_edit_text]")
+    check("simulator_snapshot: the search field with a reference", not search["isError"] and field is not None,
+          search["text"][:600])
     steps([
-        ("simulator_tap", {"x": round(0.45 * width), "y": round(0.088 * height)}, 1),
+        ("simulator_tap", {"ref": field} if field else {"x": round(0.45 * width), "y": round(0.088 * height)}, 1),
         ("simulator_type", {"text": "안녕하세요 Yardlet"}, 2),
     ])
     call("simulator_screenshot")
+    typed = call("simulator_snapshot")
+    check("simulator_snapshot: the pasted text in the field", "Yardlet" in typed["text"], typed["text"][:600])
     steps([
         ("simulator_press", {"key": "select_all"}, 0.5),
         ("simulator_press", {"key": "delete"}, 0.5),

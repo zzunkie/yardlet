@@ -340,6 +340,30 @@ final class SimulatorCenterTests: XCTestCase {
         XCTAssertTrue(mixed.text.contains("The person is using Phone A"), mixed.text)
         tools.lastPersonInput = { _ in nil }
 
+        // A snapshot reads the elements through what says nothing, scrubbed, with references for those on the screen;
+        // a tap by reference taps the element's middle.
+        driver.tree = SimulatorUITree(elements: [SimulatorUIElement(
+            role: "AXApplication", label: "Settings", frame: SimulatorUIRect(x: 0, y: 0, width: 402, height: 874),
+            children: [SimulatorUIElement(role: "AXGroup", frame: SimulatorUIRect(x: 0, y: 0, width: 402, height: 874), children: [
+                SimulatorUIElement(role: "AXButton", label: "General", identifier: "com.apple.settings.general",
+                                   frame: SimulatorUIRect(x: 16, y: 380, width: 370, height: 52)),
+                SimulatorUIElement(role: "AXStaticText", label: "ghp_" + String(repeating: "a", count: 36),
+                                   frame: SimulatorUIRect(x: 16, y: 900, width: 370, height: 52))
+            ])])])
+        driver.events = []
+        let snapshot = await run(SimulatorToolCatalog.snapshot, in: second)
+        XCTAssertTrue(snapshot.text.contains("- application \"Settings\" [ref=@e1]\n  - button \"General\" "
+            + "[id=com.apple.settings.general] [ref=@e2]\n  - static text"), snapshot.text)
+        XCTAssertTrue(snapshot.text.contains("[off screen]") && !snapshot.text.contains("ghp_aaaa"), snapshot.text)
+        let byReference = await run(SimulatorToolCatalog.tap, ["ref": .string("@e2")], in: second)
+        XCTAssertTrue(byReference.text.contains("button “General”"), byReference.text)
+        XCTAssertEqual(driver.events, [.touch(.down, 201.0 / 402, 406.0 / 874), .touch(.up, 201.0 / 402, 406.0 / 874)])
+        let unknown = await run(SimulatorToolCatalog.tap, ["ref": .string("@e9")], in: second)
+        XCTAssertEqual(unknown.failure?.kind, .notFound)
+        let both = await run(SimulatorToolCatalog.tap, ["ref": .string("@e2"), "x": .integer(1), "y": .integer(1)],
+                             in: second)
+        XCTAssertEqual(both.failure?.kind, .invalidArguments)
+
         // A handoff waits for the person's answer in the tab's bar, as browser_handoff does: unanswered, the device
         // stays handed over and a call waits again; a message from the person, or the turn's end, ends the wait.
         tools.handoffPollInterval = .milliseconds(5)
@@ -473,7 +497,7 @@ final class SimulatorCenterTests: XCTestCase {
         let onToken = try XCTUnwrap(broker.agentToolServer(for: on, workspaceRoots: [])?.environment[AgentToolEnvironment.token])
         let names = await listed(on, onToken)
         XCTAssertEqual(names, SimulatorToolCatalog.tools.map(\.name))
-        XCTAssertEqual(names.count, 9)
+        XCTAssertEqual(names.count, 10)
         handler.simulatorPlatformIsUsable = false
         let unusable = await listed(on, onToken)
         XCTAssertEqual(unusable, [], "No platform's devices can be used")
@@ -488,9 +512,9 @@ final class SimulatorCenterTests: XCTestCase {
                                                         tool: SimulatorToolCatalog.list, arguments: .object([:])))
         XCTAssertEqual(refused.failure?.kind, .refused)
         let stillOn = await listed(on, onToken)
-        XCTAssertEqual(stillOn.count, 9, "A task keeps what the switch was as it started")
+        XCTAssertEqual(stillOn.count, 10, "A task keeps what the switch was as it started")
         let missing = await broker.handle(AgentToolCall(token: onToken, session: on.uuidString,
-                                                        tool: SimulatorToolCatalog.tap, arguments: .object(["x": .integer(1)])))
+                                                        tool: SimulatorToolCatalog.swipe, arguments: .object(["x": .integer(1)])))
         XCTAssertEqual(missing.failure?.kind, .invalidArguments, "Checked against the listed schema first")
         XCTAssertEqual(handler.calls, [])
         XCTAssertFalse(AgentToolCatalog.builtInTools.contains { $0.name.hasPrefix("simulator_") })
@@ -618,6 +642,8 @@ private final class RecordingSimulatorDriver: SimulatorDeviceDriving {
     let buttons: [SimulatorToolButton] = [.home, .lock, .volumeUp, .volumeDown, .action]
     let screen: SimulatorToolScreen
     var events: [Event] = []
+    /// What `simulator_snapshot` reads.
+    var tree = SimulatorUITree(elements: [])
 
     init(screen: SimulatorToolScreen) {
         self.screen = screen
@@ -645,6 +671,8 @@ private final class RecordingSimulatorDriver: SimulatorDeviceDriving {
 
     func typeKeys(_ text: String, on device: SimulatorDevice) async throws { events.append(.keys(text)) }
 
+    func snapshot(of device: SimulatorDevice) async throws -> SimulatorUITree { tree }
+
     func release(_ device: SimulatorDevice) {}
 }
 
@@ -658,4 +686,5 @@ private final class FakeSimulatorToolHandler: SimulatorToolHandling {
         calls.append(name)
         return .text("ran")
     }
+
 }

@@ -98,6 +98,8 @@ protocol SimulatorDeviceDriving: AnyObject {
     /// Types ASCII text on the hardware keyboard, which the device reads with its own keyboard layout, returning once
     /// it is typed.
     func typeKeys(_ text: String, on device: SimulatorDevice) async throws
+    /// The accessibility elements of the app in front, their frames in the screen's units.
+    func snapshot(of device: SimulatorDevice) async throws -> SimulatorUITree
     /// The task's tools let go of the device.
     func release(_ device: SimulatorDevice)
 }

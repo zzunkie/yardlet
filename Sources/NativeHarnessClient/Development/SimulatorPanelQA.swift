@@ -403,8 +403,8 @@ final class SimulatorPanelQA {
         screens.pressNavigation(.home, on: identity)
 
         // The agents' tools: listed as a real device; the first use in this task asks on the real device's card, which
-        // says what it can reach; allowed, a screenshot is its screen in dp and Recents reaches it. The approval holds
-        // in this task only.
+        // says what it can reach; allowed, a screenshot is its screen in dp, Recents reaches it and a snapshot reads its
+        // elements. The approval holds in this task only.
         let tools = model.simulatorTools
         tools.drivers[.android] = MacAndroidEmulatorDriver(screens: MacSimulatorScreens.shared)
         let list = await tools.run(tool: SimulatorToolCatalog.list, arguments: .object([:]), task: session)
@@ -438,6 +438,13 @@ final class SimulatorPanelQA {
         let moved = await waitUntil(.seconds(10)) { (view.frameDisplay.current?.frame.sequence ?? 0) > pressedAt + 5 }
         check("connected: allowed, the tools take its screenshot in dp and press Recents on it",
               !shot.isError && shot.text.contains("dp") && !press.isError && moved, "\(shot.text) | \(press.text)")
+        // A snapshot reads it through UI Automator as an emulator's is, with references to tap.
+        screens.pressNavigation(.home, on: identity)
+        try? await Task.sleep(for: .seconds(2))
+        let snapshot = await tools.run(tool: SimulatorToolCatalog.snapshot, arguments: .object([:]), task: session)
+        check("connected: a snapshot reads its elements with references",
+              !snapshot.isError && snapshot.text.contains("dp") && snapshot.text.contains("[ref=@e1]"),
+              String(snapshot.text.prefix(600)))
         screens.pressNavigation(.home, on: identity)
     }
 

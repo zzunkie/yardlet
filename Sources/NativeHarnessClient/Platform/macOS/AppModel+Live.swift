@@ -103,6 +103,8 @@ extension AppModel {
             wireSimulatorScreens(to: model)
             model.simulatorTools.drivers[.iOS] = MacIOSSimulatorDriver(screens: MacSimulatorScreens.shared)
             model.simulatorTools.drivers[.android] = MacAndroidEmulatorDriver(screens: MacSimulatorScreens.shared)
+            // A snapshot's text loses what the browser tools' results lose: values the vault filled, keys and tokens.
+            model.simulatorTools.scrub = { MacAgentToolService.shared.broker.scrubPageText($0) }
             wireSimulatorInstalls(to: model)
             model.coordinationLog.fileURL = storageRootURL.appending(path: "logs/task-coordination.log")
             model.followRuntimeChoices()

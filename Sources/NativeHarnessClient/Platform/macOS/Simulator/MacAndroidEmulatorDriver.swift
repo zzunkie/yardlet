@@ -14,6 +14,7 @@ final class MacAndroidEmulatorDriver: SimulatorDeviceDriving {
     static let strokeTime = 0.03
 
     let buttons: [SimulatorToolButton] = [.back, .home, .recents, .power, .volumeUp, .volumeDown]
+    var runner: any CLICommandRunning = LiveCLICommandRunner()
     private let screens: any SimulatorToolScreens
 
     init(screens: any SimulatorToolScreens) {
@@ -121,6 +122,28 @@ final class MacAndroidEmulatorDriver: SimulatorDeviceDriving {
             throw SimulatorDriveError(message: error.description)
         }
         await Self.wait(Self.strokeTime + Double(text.utf8.count) * 0.005)
+    }
+
+    /// The screen's elements from UI Automator (`uiautomator dump`), in dp.
+    func snapshot(of device: SimulatorDevice) async throws -> SimulatorUITree {
+        let (client, target) = try attached(device)
+        let screen: SimulatorScreen
+        do {
+            screen = try await client.screen(of: target)
+        } catch let error as ScrcpyProtocolError {
+            throw SimulatorDriveError(message: error.description)
+        }
+        let dump = await runner.run(CLICommand(executable: target.adb,
+                                               arguments: ["-s", target.serial] + AndroidUITree.dumpArguments,
+                                               timeout: .seconds(20)))
+        guard dump.succeeded, let tree = AndroidUITree.parse(dump.stdout, pixelsPerDp: screen.scale) else {
+            // UI Automator waits for the screen to settle, and gives up while something on it keeps moving.
+            let said = (dump.stdout + " " + dump.stderr).trimmingCharacters(in: .whitespacesAndNewlines)
+            throw SimulatorDriveError(message: "UI Automator did not read the screen"
+                + (said.isEmpty ? "" : ": \(said.prefix(300))") + ". An animation that keeps running stops it; a "
+                + "screenshot still works")
+        }
+        return tree
     }
 
     func release(_ device: SimulatorDevice) {

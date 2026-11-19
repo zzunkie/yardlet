@@ -184,6 +184,26 @@ final class AndroidSimulatorTests: XCTestCase {
         XCTAssertEqual(ScrcpyPosition(fractionX: 1, y: .nan, frameWidth: 576, frameHeight: 1280),
                        ScrcpyPosition(x: 575, y: 0, screenWidth: 576, screenHeight: 1280))
 
+        // UI Automator's dump, written to the command's output and named after it, gives elements in dp.
+        let dump = """
+            <?xml version='1.0' encoding='UTF-8' standalone='yes' ?><hierarchy rotation="0"><node index="0" text="" \
+            resource-id="" class="android.widget.FrameLayout" content-desc="" clickable="false" bounds="[0,0][1080,2400]">\
+            <node index="0" text="Search settings" resource-id="com.example:id/search_field" \
+            class="android.widget.EditText" content-desc="" checkable="false" clickable="true" password="false" \
+            bounds="[189,147][1080,273]" /><node index="1" text="" resource-id="android:id/switch_widget" \
+            class="android.widget.Switch" content-desc="Wi-Fi" checkable="true" checked="true" clickable="true" \
+            bounds="[900,400][1050,505]" /></node></hierarchy>UI hierchary dumped to: /dev/tty
+            """
+        let tree = try XCTUnwrap(AndroidUITree.parse(dump, pixelsPerDp: 2.625))
+        XCTAssertEqual(tree.elements.map(\.role), ["group"])
+        XCTAssertEqual(tree.elements.first?.children, [
+            SimulatorUIElement(role: "text field", label: "Search settings", identifier: "search_field",
+                               frame: SimulatorUIRect(x: 72, y: 56, width: 891 / 2.625, height: 48)),
+            SimulatorUIElement(role: "switch", label: "Wi-Fi", value: "checked", identifier: "switch_widget",
+                               frame: SimulatorUIRect(x: 900 / 2.625, y: 400 / 2.625, width: 150 / 2.625, height: 40))
+        ])
+        XCTAssertNil(AndroidUITree.parse("ERROR: could not get idle state.", pixelsPerDp: 2.625))
+
         // A key goes by its place on the keyboard, and each event carries the modifiers held, as Android reads them.
         var keyboard = AndroidKeyboard()
         let shift = SimulatorKeyboard.leftShift, letterA = try XCTUnwrap(SimulatorKeyUsage(0x04))

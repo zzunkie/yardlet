@@ -15,6 +15,7 @@ package enum SimulatorToolCatalog {
     package static let type = "simulator_type"
     package static let press = "simulator_press"
     package static let handoff = "simulator_handoff"
+    package static let snapshot = "simulator_snapshot"
 
     /// The longest a tap, a swipe or a press may last, in seconds.
     package static let longestDuration = 10.0
@@ -119,15 +120,31 @@ package enum SimulatorToolCatalog {
             readOnly: true
         ),
         AgentToolDefinition(
+            name: snapshot,
+            title: "Simulator snapshot",
+            description: "Read the attached device's screen as a tree of the app's accessibility elements in text: each "
+                + "element's role, label, value and id. Elements on the screen carry references such as @e3, which "
+                + "simulator_tap takes in place of x and y; the references belong to the latest snapshot, so take "
+                + "another once the screen changes. Text that looks like a key or token is hidden. References are the "
+                + "tools' own and the user never sees them: name an element to the user by its label.",
+            inputSchema: object([:]),
+            readOnly: true
+        ),
+        AgentToolDefinition(
             name: tap,
             title: "Tap simulator",
-            description: "Tap the attached device's screen at a point \(coordinate). A duration over 0.5 seconds is a "
-                + "long press.",
+            description: "Tap the attached device's screen at a point \(coordinate), or the middle of an element by "
+                + "its reference from the latest simulator_snapshot. A duration over 0.5 seconds is a long press.",
             inputSchema: object([
                 "x": number("Horizontal position \(coordinate).", minimum: 0),
                 "y": number("Vertical position \(coordinate).", minimum: 0),
+                "ref": .object([
+                    "type": .string("string"),
+                    "description": .string("An element's reference from the latest simulator_snapshot, such as @e3, "
+                        + "in place of x and y.")
+                ]),
                 "duration": number("Seconds to hold, at most 10.", minimum: 0, maximum: longestDuration)
-            ], required: ["x", "y"]),
+            ]),
             readOnly: false
         ),
         AgentToolDefinition(

@@ -143,6 +143,12 @@ final class DeviceSession: @unchecked Sendable {
 
     /// The screen at the device's size in points. The device may draw while the pixels are read, so the read is
     /// repeated until the surface's seed shows no change across it.
+    /// The app in front's accessibility elements, in points.
+    func accessibilityElements(with tree: AccessibilityTree) throws
+        -> (elements: [SimulatorAccessibilityElement], truncated: Bool) {
+        try tree.elements(of: device)
+    }
+
     func screenshot(format: SimulatorImageFormat) throws -> SimulatorScreenshot {
         guard let surface = queue.sync(execute: { framebuffer }) else { throw HostError("the device shows no screen") }
         guard FrameCopier.pixelFormat(of: surface) != nil else { throw HostError("the screen's pixel format is not one the helper reads") }

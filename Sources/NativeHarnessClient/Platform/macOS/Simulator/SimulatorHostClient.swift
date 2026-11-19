@@ -95,6 +95,16 @@ final class SimulatorHostClient {
         return image
     }
 
+    /// The accessibility elements of the app in front, in points, and whether the helper stopped at its limit.
+    func accessibilityTree(of device: UUID) async throws -> (elements: [SimulatorAccessibilityElement], truncated: Bool) {
+        let request = nextRequest
+        let answer = try await ask(request) { .accessibilityTree(request: request, device: device) }
+        guard case .accessibilityTree(_, let elements, let truncated) = answer else {
+            throw Failure.request("the helper answered with no accessibility tree")
+        }
+        return (elements, truncated)
+    }
+
     func touch(_ phase: SimulatorTouchPhase, at point: SimulatorPoint, on device: UUID) {
         process?.send(.touch(device: device, phase: phase, point: point))
     }
@@ -191,7 +201,7 @@ final class SimulatorHostClient {
         case .detached(let device, _):
             screens[device] = nil
             onEvent?(event)
-        case .screenshot(let request, _), .diagnosis(let request, _, _, _, _):
+        case .screenshot(let request, _), .accessibilityTree(let request, _, _), .diagnosis(let request, _, _, _, _):
             requests.removeValue(forKey: request)?.resume(returning: event)
         case .requestFailed(let request, let message):
             requests.removeValue(forKey: request)?.resume(throwing: Failure.request(message))

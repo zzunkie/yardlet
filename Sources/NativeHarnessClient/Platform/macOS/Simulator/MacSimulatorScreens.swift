@@ -414,8 +414,8 @@ final class MacSimulatorScreens: SimulatorToolScreens {
             NSLog("Yardlet simulator screen of %@ let go: %@", device.value, reason)
             links[device] = .failed(.lost)
             onDeviceLetGo(device)
-        case .commandFailed, .ready, .unsupported, .attached, .deviceFailed, .frame, .screenshot, .requestFailed,
-             .diagnosis:
+        case .commandFailed, .ready, .unsupported, .attached, .deviceFailed, .frame, .screenshot, .accessibilityTree,
+             .requestFailed, .diagnosis:
             break
         }
     }

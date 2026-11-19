@@ -16,9 +16,9 @@ enum SimulatorPanelShowing: Equatable, Sendable {
 /// (`SimulatorDeviceDriving`). The checks that keep an agent to its own device live here, in code: a tool acts only on
 /// the task's attached device, which only `simulator_attach` attaches; the person allows each device before a task's
 /// agent first uses it, whatever the task's permission mode (`SimulatorApprovals`); positions stay on the screen, and
-/// durations, counts and text within their limits. A real Android device's approval holds only in the task it was
-/// given in, and its card says what the device can reach.
-/// `simulator_handoff` hands the attached device to the person and waits, as `browser_handoff` hands a tab over.
+/// durations, counts and text within their limits; a snapshot's text is scrubbed as the browser tools' results are.
+/// A real Android device's approval holds only in the task it was given in, and its card says what the device can
+/// reach. `simulator_handoff` hands the attached device to the person and waits, as `browser_handoff` hands a tab over.
 @MainActor
 final class SimulatorAgentTools {
     /// How long after the person's last input on a device the tools say they are using it, as the browser tools say
@@ -52,10 +52,16 @@ final class SimulatorAgentTools {
     var handoffWaitCeiling: @MainActor (UUID) -> Duration = { _ in .seconds(25 * 60) }
     /// How often `simulator_handoff` reads the person's answer.
     var handoffPollInterval: Duration = .milliseconds(250)
+    /// What no result may carry: values the browser's vault filled and text shaped like a key or token, as the
+    /// browser tools' results lose them (`AgentToolBroker.scrubPageText`).
+    var scrub: @MainActor (String) -> String = { CredentialText.scrub($0) }
     /// The waits inside a tap or a swipe; tests pass one that does not wait.
     var sleep: @Sendable (Double) async -> Void = { seconds in
         try? await Task.sleep(for: .milliseconds(Int64((seconds * 1000).rounded())))
     }
+
+    /// Each task's latest snapshot: the device it read and the elements its references name.
+    private var snapshots: [UUID: (device: SimulatorDeviceIdentity, refs: [String: SimulatorSnapshot.Target])] = [:]
 
     init(center: @escaping @MainActor () -> SimulatorCenter, approvals: SimulatorApprovals,
          drivers: [SimulatorPlatform: any SimulatorDeviceDriving] = [:]) {
@@ -71,8 +77,8 @@ final class SimulatorAgentTools {
         case SimulatorToolCatalog.attach: return await attach(arguments, task: task)
         case SimulatorToolCatalog.detach: return detach(task)
         case SimulatorToolCatalog.handoff: return await handOff(arguments, task: task)
-        case SimulatorToolCatalog.screenshot, SimulatorToolCatalog.tap, SimulatorToolCatalog.swipe,
-             SimulatorToolCatalog.type, SimulatorToolCatalog.press:
+        case SimulatorToolCatalog.screenshot, SimulatorToolCatalog.snapshot, SimulatorToolCatalog.tap,
+             SimulatorToolCatalog.swipe, SimulatorToolCatalog.type, SimulatorToolCatalog.press:
             return await act(tool, arguments, task: task)
         default: return .error("Unknown Yardlet tool: \(tool)")
         }
@@ -83,6 +89,7 @@ final class SimulatorAgentTools {
     func taskRemoved(_ task: UUID) {
         approvals.taskRemoved(task)
         handoffs.end(for: task)
+        snapshots[task] = nil
     }
 
     /// The task's turn ended: a device it handed to the person is no longer handed over, as a browser tab is not.
@@ -141,6 +148,7 @@ final class SimulatorAgentTools {
         case let .failed(device, message):
             return Self.didNotStart(device, message)
         case let .attached(attachment):
+            snapshots[task] = nil
             var lines = ["Attached \(attachment.device.name) (\(attachment.device.osName)) to this task. "
                 + "Its id is \(attachment.device.toolID): \(Self.ownToolsLine(attachment.device))"]
             switch await screen(of: attachment.device) {
@@ -172,6 +180,7 @@ final class SimulatorAgentTools {
         let device = center.device(identity)
         let wasStarted = center.startedByYardlet[identity] != nil
         handoffs.end(for: task)
+        snapshots[task] = nil
         center.detach(task)
         if let device, center.attachment(of: task) == nil, !center.claims.keys.contains(identity) {
             drivers[device.platform]?.release(device)
@@ -275,7 +284,7 @@ final class SimulatorAgentTools {
         }
         var result: AgentToolResult
         do {
-            result = try await perform(tool, arguments, on: device, screen: screen, driver: driver)
+            result = try await perform(tool, arguments, on: device, screen: screen, driver: driver, task: task)
         } catch let error as SimulatorDriveError {
             result = .failure("\(tool) did not finish on \(device.name): \(error.message)", .outcomeUnknown,
                               retry: .afterChecking)
@@ -294,7 +303,7 @@ final class SimulatorAgentTools {
     }
 
     private func perform(_ tool: String, _ arguments: ToolJSON, on device: SimulatorDevice, screen: SimulatorToolScreen,
-                         driver: any SimulatorDeviceDriving) async throws -> AgentToolResult {
+                         driver: any SimulatorDeviceDriving, task: UUID) async throws -> AgentToolResult {
         let units = Self.units(device.platform)
         switch tool {
         case SimulatorToolCatalog.screenshot:
@@ -304,8 +313,31 @@ final class SimulatorAgentTools {
                 .image(data: image.data.base64EncodedString(), mimeType: "image/\(format.rawValue)"),
                 .text("Screenshot of \(device.name), \(image.width)×\(image.height) \(units).")
             ])
+        case SimulatorToolCatalog.snapshot:
+            let tree = try await driver.snapshot(of: device)
+            let scrub = self.scrub
+            let rendered = SimulatorSnapshot.render(tree, screen: screen, scrub: { scrub($0) })
+            snapshots[task] = (device.identity, rendered.refs)
+            return .text("Snapshot of \(device.name)'s screen, \(screen.width)×\(screen.height) \(units); simulator_tap "
+                + "takes a reference in place of x and y.\n" + rendered.text)
         case SimulatorToolCatalog.tap:
-            guard let x = Self.number(arguments["x"]), let y = Self.number(arguments["y"]),
+            var element: SimulatorSnapshot.Target?
+            if let ref = arguments["ref"]?.stringValue {
+                guard let snapshot = snapshots[task], snapshot.device == device.identity else {
+                    return .failure("There is no snapshot of \(device.name) to take \(ref) from. Take one with "
+                        + "simulator_snapshot.", .notFound, retry: .withChanges,
+                        details: ["next": .string(SimulatorToolCatalog.snapshot)])
+                }
+                let name = ref.hasPrefix("@") ? ref : "@" + ref
+                guard let target = snapshot.refs[name] else {
+                    return .failure("The latest snapshot has no \(ref): its references go up to "
+                        + "@e\(snapshot.refs.count). Take another snapshot if the screen changed.", .notFound,
+                        retry: .withChanges, details: ["next": .string(SimulatorToolCatalog.snapshot)])
+                }
+                element = target
+            }
+            guard let x = element?.frame.midX ?? Self.number(arguments["x"]),
+                  let y = element?.frame.midY ?? Self.number(arguments["y"]),
                   let point = SimulatorScreenFraction(x: x, y: y, on: screen) else {
                 return Self.offScreen(screen, units: units)
             }
@@ -313,7 +345,8 @@ final class SimulatorAgentTools {
             try driver.touch(.down, at: point, on: device)
             await sleep(duration ?? Self.tapHold)
             try driver.touch(.up, at: point, on: device)
-            let place = "(\(BrowserAgentTools.format(x)), \(BrowserAgentTools.format(y)))"
+            var place = "(\(BrowserAgentTools.format(x.rounded())), \(BrowserAgentTools.format(y.rounded())))"
+            if let element { place = "the middle of \(element.name) at " + place }
             if let duration, duration > SimulatorToolCatalog.longPress {
                 return .text("Long-pressed \(place) on \(device.name) for \(BrowserAgentTools.format(duration)) seconds.")
             }
@@ -396,6 +429,16 @@ final class SimulatorAgentTools {
         case SimulatorToolCatalog.screenshot:
             if let format = arguments["format"]?.stringValue, SimulatorToolImageFormat(rawValue: format) == nil {
                 return invalid("format is png or jpeg.")
+            }
+        case SimulatorToolCatalog.tap:
+            let hasPoint = arguments["x"] != nil || arguments["y"] != nil
+            if let ref = arguments["ref"] {
+                guard !hasPoint else { return invalid("Give ref or x and y, not both.") }
+                guard let name = ref.stringValue, !name.isEmpty else {
+                    return invalid("ref is a reference from the latest simulator_snapshot, such as @e3.")
+                }
+            } else if number(arguments["x"]) == nil || number(arguments["y"]) == nil {
+                return invalid("Give x and y, or ref: an element's reference from the latest simulator_snapshot.")
             }
         case SimulatorToolCatalog.type:
             let text = arguments["text"]?.stringValue ?? ""

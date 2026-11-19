@@ -109,8 +109,25 @@ final class MacIOSSimulatorDriver: SimulatorDeviceDriving {
         await Self.wait(Double(text.unicodeScalars.count) * Self.strokeTime)
     }
 
+    /// The app in front's elements, from the simulator host's reading of the device's accessibility runtime.
+    func snapshot(of device: SimulatorDevice) async throws -> SimulatorUITree {
+        let (udid, client) = try attached(device)
+        do {
+            let read = try await client.accessibilityTree(of: udid)
+            return SimulatorUITree(elements: read.elements.map(Self.element), truncated: read.truncated)
+        } catch let failure as SimulatorHostClient.Failure {
+            throw SimulatorDriveError(message: failure.description)
+        }
+    }
+
     func release(_ device: SimulatorDevice) {
         screens.releaseForTools(device.identity)
+    }
+
+    private static func element(_ read: SimulatorAccessibilityElement) -> SimulatorUIElement {
+        SimulatorUIElement(role: read.role, label: read.label, value: read.value, identifier: read.identifier,
+                           frame: SimulatorUIRect(x: read.x, y: read.y, width: read.width, height: read.height),
+                           children: read.children.map(element))
     }
 
     // MARK: - Private
