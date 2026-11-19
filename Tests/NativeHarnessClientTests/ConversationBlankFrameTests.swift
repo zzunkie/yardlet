@@ -305,9 +305,11 @@ final class ConversationBlankFrameTests: XCTestCase {
         let window = try makeWindow([.claude("Short", turns: 3), .savedCodex("Saved", turns: 60, cached: true)])
         defer { window.close() }
         window.show(0)
-        window.measure("open a saved Codex task over its reading cache", seconds: 1.5) { window.select(1) }
-        XCTAssertEqual(window.model.codexPresentationBySessionID[window.tasks[1].id]?.thread?.turns.count, 5,
-                       "The thread's newest page took the cache's place")
+        let saved = window.tasks[1].id
+        let newestPage = { window.model.codexPresentationBySessionID[saved]?.thread?.turns.count }
+        window.measure("open a saved Codex task over its reading cache", seconds: 1.5,
+                       settled: { newestPage() == 5 }) { window.select(1) }
+        XCTAssertEqual(newestPage(), 5, "The thread's newest page took the cache's place")
         window.report()
     }
 
@@ -1065,17 +1067,20 @@ final class ConversationBlankFrameTests: XCTestCase {
         }
 
         /// Reads every frame while `change` runs and for `seconds` after, and on to the first frame when
-        /// none came by then.
+        /// none came by then, and on until `settled` holds.
         /// - Parameter loads: the conversation is loading when the measurement starts: it may draw
         ///   nothing (a loading spinner) until its history arrives, and never again after.
-        func measure(_ name: String, seconds: TimeInterval = 1.5, loads: Bool = false, _ change: () -> Void) {
+        /// - Parameter settled: what the change brings in its own time, such as a read that replaces
+        ///   the cache; its frames are read too.
+        func measure(_ name: String, seconds: TimeInterval = 1.5, loads: Bool = false,
+                     settled: () -> Bool = { true }, _ change: () -> Void) {
             probe.record(name)
             change()
             if seconds > 0 { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
             // A loaded Mac can spend the whole window without a display cycle (a CI runner drew no frame
             // in 1.5 s of a switch); the window then reads on to the first frame the change drew.
             let deadline = Date().addingTimeInterval(testWaitLimitSeconds)
-            while probe.frames.isEmpty, Date() < deadline { probe.run(probe.action, for: 0.01) }
+            while probe.frames.isEmpty || !settled(), Date() < deadline { probe.run(probe.action, for: 0.01) }
             probe.stop()
             measurements.append((name, probe.result, loads))
             print("[blank-frames] \(name): \(probe.summary)")
