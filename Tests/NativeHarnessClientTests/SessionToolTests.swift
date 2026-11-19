@@ -1818,6 +1818,10 @@ final class SessionToolTests: XCTestCase {
         await fixture.adapter.emit(.sessionStatusChanged(.running), for: notified.id)
         await fixture.adapter.emit(.assistantMessageCompleted("Onboarding is clear; pricing is not."), for: notified.id)
         try await waitUntil { notified.lastWords != nil }
+        // One waits on the person when the quit comes; no runtime is left to hear an answer after it.
+        await fixture.adapter.emit(.permissionRequested(PermissionRequest(id: "perm-cut", title: "Run swift build",
+                                                                         detail: nil, command: "swift build")), for: polled.id)
+        try await waitUntil { polled.state == .waitingForApproval }
         XCTAssertTrue(model.activeLocalSessions.contains { $0.id == fixture.caller.id },
                       "Its own turn is over, but quitting would cut off its subagents")
 
@@ -1844,6 +1848,11 @@ final class SessionToolTests: XCTestCase {
         XCTAssertEqual(outcomes.last?.answer, "Onboarding is clear; pricing is not.")
         XCTAssertEqual(after.railAgentRuns(hostedBy: fixture.caller.id).map(\.state), [.interrupted, .interrupted, .interrupted],
                        "The Agents card shows them as they ended")
+        XCTAssertTrue(after.sessionToolRequests(in: fixture.caller.id).isEmpty, "No card waits on a subagent the quit ended")
+        XCTAssertFalse(after.sessionToolWaitsForPerson(in: fixture.caller.id))
+        XCTAssertEqual(after.sessionTools.run(polled.id)?.entries.compactMap { entry -> TranscriptPermissionState? in
+            if case let .permission(_, state) = entry.content { state } else { nil }
+        }, [.expired])
         // Only the callers that did not turn the message off are told: in the background, and inside the call.
         let told = await fixture.adapter.prompts(for: fixture.caller.id).compactMap(TaskMessage.parse)
         XCTAssertEqual(Set(told.map(\.senderID)), [notified.id.uuidString, waited.id.uuidString])

@@ -435,6 +435,7 @@ extension AppModel {
         run.state = state
         // One the quit cut off answered nothing yet; what it said last is its answer so far.
         run.answer = run.latestAnswer ?? (state == .interrupted ? run.lastWords : nil) ?? run.answer
+        run.expirePendingRequests()
         for consumer in run.consumers { consumer.cancel() }
         run.consumers = []
         agentTools?.releaseAgentTools(for: run.id)
@@ -488,6 +489,8 @@ extension AppModel {
             run.state = .interrupted
             run.answer = kept.answer
             run.entries = kept.entries
+            // A request an earlier Yardlet kept as waiting has no runtime left to answer it.
+            run.expirePendingRequests()
             sessionTools.add(run)
             if interrupted.tellsCaller { waitedFor.append(interrupted) }
         }

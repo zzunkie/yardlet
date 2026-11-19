@@ -353,8 +353,10 @@ final class AgentRun: Identifiable {
     var name: String { ConversationSubagent.name(asked: prompt) ?? label }
 
     /// The requests it waits on the person for, named for it: they wait in the calling task's
-    /// conversation beside the task's own.
+    /// conversation beside the task's own. One that ended waits on no one: the runtime that would
+    /// hear an answer ended with it.
     var pendingRequests: [ConversationRequest] {
+        guard !state.isFinished else { return [] }
         // A Codex thread's are read from its requests alone: they are checked on every state it streams.
         let requests = if let codexThread {
             CodexConversationProjection.pendingRequests(in: codexThread)
@@ -366,6 +368,19 @@ final class AgentRun: Identifiable {
             request.title = L10n.format("%@: %@", name, request.title)
             return request
         }
+    }
+
+    /// Once it ended, what it still asked can no longer be answered: its conversation, shown and
+    /// kept, reads those requests as expired, as a task's do when its turn ends.
+    func expirePendingRequests() {
+        var expired = entries
+        var changed = false
+        for index in expired.indices {
+            guard case let .permission(request, .pending) = expired[index].content else { continue }
+            expired[index].content = .permission(request, state: .expired)
+            changed = true
+        }
+        if changed { entries = expired }
     }
 }
 
