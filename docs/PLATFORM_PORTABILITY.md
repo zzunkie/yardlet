@@ -448,6 +448,11 @@ swift build --product NativeHarnessClient --force-resolved-versions
 Windows/scripts/place-bootstrapper.ps1 -Binaries (swift build --show-bin-path)
 ```
 
+The app's own module compiles for static linking (`-static`), as its libraries do. Swift's build system leaves an
+executable's module out of that, and Swift on Windows would then export the module's public declarations from
+`NativeHarnessClient.exe`, and in a debug build, with testability, every internal one, past the 65,535 exports a PE
+file can hold.
+
 `windows-engine.yml` builds the Windows app for the same pull requests and branches, beside the
 engine, as a check to read, and runs the Windows layer's own tests (`Tests/YardletWindowsTests/`) against it. They
 build with `YARDLET_WINDOWS_TESTS=1`, which declares their target and leaves out the release's windowed entry point:

@@ -123,6 +123,14 @@ let appTarget: Target = windowsApp
         resources: [
             .process("Resources")
         ],
+        // Swift's build system compiles a library's module for static linking but not an executable's own, and
+        // Swift on Windows exports such a module's public declarations from the executable, every internal one too
+        // in a debug build, whose testability makes them visible to tests. A PE file holds at most 65,535 exports,
+        // which the debug app reached. Nothing uses the app's, so its module compiles as its libraries do (as SwiftPM's
+        // native build system compiles every module on Windows). The tests link the app's testable variant, a library.
+        swiftSettings: [
+            .unsafeFlags(["-static"], .when(platforms: [.windows]))
+        ],
         // A release build is a windowed application with no console; a debug build keeps one for
         // print.
         linkerSettings: windowsTests ? [] : [
