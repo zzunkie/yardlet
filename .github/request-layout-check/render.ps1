@@ -251,6 +251,12 @@ if ($hover) {
     Start-Sleep -Milliseconds 350
     $physical=$hover.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Current.IsSelected
     ("Physical click selected the same option: "+$physical) | Add-Content (Join-Path $out 'hover-target.txt')
+    $unchecked=Find-Control $ct::RadioButton @('Summary')
+    $u=$unchecked.Current.BoundingRectangle
+    [void][QaWindow]::SetCursorPos([int]($u.Left+14),[int]($u.Top+14))
+    [QaWindow]::mouse_event(1,1,0,0,[UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 550
+    Shot 'hover-after-activation' 
 }
 $detail=Find-Control $ct::RadioButton @('Detailed')
 if ($detail) {$detail.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select();Start-Sleep -Milliseconds 300;Shot 'question-selected'}
