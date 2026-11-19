@@ -174,8 +174,7 @@ struct NewTaskHomeLists: View {
         .onMacKeyPress(.chooseItem) { handle(.return, layout: layout) }
         .onKeyPress { press in
             guard MacShortcut.nextGroup.matches(press) || MacShortcut.previousGroup.matches(press) else { return .ignored }
-            return
-            handle(.tab, layout: layout)
+            return handle(.tab, layout: layout)
         }
         .onChange(of: layout.entries, initial: true) { _, entries in onListed(part, entries) }
         .onChange(of: NewTaskHomeProjectFacts(summaries: summaries, idle: idle), initial: true) { _, facts in
