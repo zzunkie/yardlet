@@ -280,7 +280,6 @@ extension AppModel {
         // Its conversation opens with the prompt, as a task's opens with the person's message.
         if run.harness != .codex {
             run.builder.appendUser(run.prompt)
-            run.entries = run.builder.entries
         }
         let draft = CodexComposerDraft(inputs: [.text(run.prompt)])
         if run.harness == .codex {
@@ -301,7 +300,6 @@ extension AppModel {
         let appliesConversation = run.codexState == nil || run.harness != .codex
         if appliesConversation {
             run.builder.apply(payload)
-            run.entries = run.builder.entries
         }
         switch payload {
         case let .sessionStatusChanged(status):
@@ -391,7 +389,6 @@ extension AppModel {
                 try await adapter.respond(to: requestID, decision: decision, in: handle)
             }
             run.builder.resolvePermission(id: requestID, decision: decision)
-            run.entries = run.builder.entries
             if run.state == .waitingForApproval, run.pendingRequests.isEmpty { run.state = .running }
         } catch {
             run.lastError = error.localizedDescription
@@ -435,7 +432,7 @@ extension AppModel {
         run.state = state
         // One the quit cut off answered nothing yet; what it said last is its answer so far.
         run.answer = run.latestAnswer ?? (state == .interrupted ? run.lastWords : nil) ?? run.answer
-        run.expirePendingRequests()
+        run.finishTranscript(run.entries)
         for consumer in run.consumers { consumer.cancel() }
         run.consumers = []
         agentTools?.releaseAgentTools(for: run.id)
@@ -488,9 +485,8 @@ extension AppModel {
                                depth: (sessionTools.run(kept.callerID)?.depth ?? 0) + 1, startedAt: kept.startedAt)
             run.state = .interrupted
             run.answer = kept.answer
-            run.entries = kept.entries
             // A request an earlier Yardlet kept as waiting has no runtime left to answer it.
-            run.expirePendingRequests()
+            run.finishTranscript(kept.entries)
             sessionTools.add(run)
             if interrupted.tellsCaller { waitedFor.append(interrupted) }
         }

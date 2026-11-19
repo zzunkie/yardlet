@@ -62,21 +62,17 @@ final class SessionToolRenderingTests: XCTestCase {
         let working = AgentRun(callerID: host, hostTaskID: host, harness: .claudeCode, model: "sonnet",
                                prompt: "Find the concurrency bug in UploadQueue.swift", workspaceURL: Self.workspace, depth: 1)
         working.state = .running
-        working.entries = [
-            TranscriptEntry(content: .user(text: working.prompt)),
-            TranscriptEntry(content: .activity(HarnessActivity(
-                id: "c1", kind: "Read", title: "Read",
-                input: #"{"file_path":"/work/uploader/Sources/Uploader/UploadQueue.swift"}"#), state: .running))
-        ]
+        working.builder.appendUser(working.prompt)
+        working.builder.apply(.activityStarted(HarnessActivity(
+            id: "c1", kind: "Read", title: "Read",
+            input: #"{"file_path":"/work/uploader/Sources/Uploader/UploadQueue.swift"}"#)))
         let request = PermissionRequest(id: "perm-build", title: "Bash", detail: "Build the package",
                                         command: "swift build --build-tests")
         let asking = AgentRun(callerID: host, hostTaskID: host, harness: .openCode, model: "kimi-k2",
                               prompt: "Check whether the build breaks", workspaceURL: Self.workspace, depth: 1)
         asking.state = .waitingForApproval
-        asking.entries = [
-            TranscriptEntry(content: .user(text: asking.prompt)),
-            TranscriptEntry(content: .permission(request, state: .pending))
-        ]
+        asking.builder.appendUser(asking.prompt)
+        asking.builder.apply(.permissionRequested(request))
         // One waits for room to start: it reads Pending and can be stopped.
         let queued = AgentRun(callerID: host, hostTaskID: host, harness: .codex, model: "gpt-5.5",
                               prompt: "Update the upload retry doc", workspaceURL: Self.workspace, depth: 1)

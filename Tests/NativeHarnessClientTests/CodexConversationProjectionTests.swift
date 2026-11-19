@@ -137,11 +137,9 @@ final class CodexConversationProjectionTests: XCTestCase {
         let host = UUID()
         let run = AgentRun(callerID: host, hostTaskID: host, harness: .codex, prompt: "Check the build",
                            workspaceURL: workspace, depth: 1)
-        var builder = TranscriptBuilder()
-        builder.appendUser("Check the build")
-        builder.apply(.assistantMessageCompleted("Looking."))
-        builder.apply(.permissionRequested(PermissionRequest(id: "perm", title: "Run tests", detail: nil, command: "swift test")))
-        run.entries = builder.entries
+        run.builder.appendUser("Check the build")
+        run.builder.apply(.assistantMessageCompleted("Looking."))
+        run.builder.apply(.permissionRequested(PermissionRequest(id: "perm", title: "Run tests", detail: nil, command: "swift test")))
         run.codexState = state([])
         XCTAssertEqual(run.pendingRequests.map(\.id), ["perm"])
         XCTAssertEqual(run.pendingRequests.first?.title, L10n.format("%@: %@", run.name, "Run tests"))

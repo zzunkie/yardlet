@@ -4,6 +4,7 @@ struct TranscriptBuilder: Sendable {
     /// The entries, which note what changed since a publication last took the change (`takeChange()`).
     private var list = TranscriptEntryList()
     var entries: [TranscriptEntry] { list.elements }
+    var pendingPermissionEntries: [TranscriptEntry] { list.pendingPermissionIndices.map { list[$0] } }
     private var currentAssistantEntryID: UUID?
     private var currentReasoningEntryID: UUID?
     /// The answer and thinking entries streamed since the last completed message, in order. A
@@ -151,8 +152,8 @@ struct TranscriptBuilder: Sendable {
             )
 
         case let .permissionExpired(requestID):
-            for index in entries.indices {
-                if case let .permission(request, .pending) = entries[index].content, request.id == requestID {
+            for index in list.pendingPermissionIndices {
+                if let request = list[index].pendingPermission, request.id == requestID {
                     list[index].content = .permission(request, state: .expired)
                 }
             }
@@ -288,19 +289,16 @@ struct TranscriptBuilder: Sendable {
     }
 
     private mutating func expirePendingPermissions() {
-        for index in entries.indices {
-            if case let .permission(request, .pending) = entries[index].content {
+        for index in list.pendingPermissionIndices {
+            if let request = list[index].pendingPermission {
                 list[index].content = .permission(request, state: .expired)
             }
         }
     }
 
     mutating func resolvePermission(id: String, decision: PermissionDecision) {
-        guard let index = entries.lastIndex(where: { entry in
-            guard case let .permission(request, state) = entry.content else { return false }
-            return request.id == id && state == .pending
-        }) else { return }
-        guard case let .permission(request, _) = entries[index].content else { return }
+        guard let index = list.pendingPermissionIndices.reversed().first(where: { list[$0].pendingPermission?.id == id }),
+              let request = list[index].pendingPermission else { return }
         list[index].content = .permission(
             request,
             state: decision == .allow ? .allowed : .denied

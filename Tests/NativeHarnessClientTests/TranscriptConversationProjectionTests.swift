@@ -146,6 +146,7 @@ final class TranscriptConversationProjectionTests: XCTestCase {
         XCTAssertTrue(turn.showsHeader, "The folded work's \"Work details\" control")
     }
 
+    @MainActor
     func testPendingRequestsAreHeldAndAnsweredOnesStayInTheWork() {
         let request = entry(0, .user(text: "Go"))
         let plain = PermissionRequest(id: "plain", title: "Run", detail: "why", command: "pwd", toolCallID: "t")
@@ -193,6 +194,33 @@ final class TranscriptConversationProjectionTests: XCTestCase {
         }
         XCTAssertEqual(resolved.map(\.state), [.answered, .expired(message: nil)])
         XCTAssertEqual(resolved.map(\.responses), [[], []])
+
+        for harness in [HarnessKind.claudeCode, .openCode] {
+            let host = UUID()
+            let run = AgentRun(callerID: host, hostTaskID: host, harness: harness, prompt: "Check changes",
+                               workspaceURL: FileManager.default.temporaryDirectory, depth: 1)
+            func checkRequests(line: UInt = #line) {
+                let projected = run.presentation().turns.flatMap(\.requests).map { request in
+                    var named = request
+                    named.title = L10n.format("%@: %@", run.name, request.title)
+                    return named
+                }
+                XCTAssertEqual(run.pendingRequests, projected, line: line)
+            }
+
+            run.builder = TranscriptBuilder(limit: 6)
+            run.builder.apply(.permissionRequested(plain))
+            run.builder.appendUser("Another turn")
+            for request in [options, asked, plan, plain] { run.builder.apply(.permissionRequested(request)) }
+            checkRequests()
+            run.builder.resolvePermission(id: plain.id, decision: .allow) // Only the newest with this ID.
+            run.builder.apply(.permissionExpired(asked.id))
+            checkRequests()
+            run.builder.apply(.assistantDelta("Working")) // Trims the older pending request.
+            checkRequests()
+            run.builder.apply(.turnCompleted)
+            checkRequests()
+        }
     }
 
     func testTheLastErrorOrLimitIsTheOutcomeAndEarlierOnesStayWhereTheyHappened() {

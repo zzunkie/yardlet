@@ -297,14 +297,12 @@ private final class AgentsRailFixture {
     /// What became of the task's two suggestions, as the window's chips and rail rows share it.
     let suggestions = TaskSuggestionStore(repository: InMemoryTaskSuggestionRepository())
     let startedSuggestions = Box<[String]>([])
-    private var runBuilder: TranscriptBuilder
 
     /// What the app does with an answer to the subagent's request (`respondToAgentRun`): the
     /// subagent's conversation records it and it goes back to work.
     func answer(_ id: String, _ decision: PermissionDecision) {
         decisions.value.append((id, decision))
-        runBuilder.resolvePermission(id: id, decision: decision)
-        run.entries = runBuilder.entries
+        run.builder.resolvePermission(id: id, decision: decision)
         run.state = .running
     }
     let opened = Box<[UUID]>([])
@@ -320,15 +318,12 @@ private final class AgentsRailFixture {
         let prompt = "Check the migration\nThen report what breaks"
         run = AgentRun(callerID: session.id, hostTaskID: session.id, harness: .codex, model: "gpt-5.5", prompt: prompt,
                        workspaceURL: folder, depth: 1, startedAt: Date().addingTimeInterval(-95))
-        var runBuilder = TranscriptBuilder()
-        runBuilder.appendUser(prompt)
-        runBuilder.apply(.assistantMessageCompleted("I'll run the migration tests first."))
-        runBuilder.apply(.permissionRequested(PermissionRequest(id: "perm-1", title: "Run swift test --filter Migration",
+        run.builder.appendUser(prompt)
+        run.builder.apply(.assistantMessageCompleted("I'll run the migration tests first."))
+        run.builder.apply(.permissionRequested(PermissionRequest(id: "perm-1", title: "Run swift test --filter Migration",
                                                                 detail: nil, command: "swift test --filter Migration")))
-        run.entries = runBuilder.entries
         run.state = .waitingForApproval
         request = try XCTUnwrap(run.pendingRequests.first)
-        self.runBuilder = runBuilder
 
         var builder = TranscriptBuilder()
         builder.appendUser("Split up the parser work")

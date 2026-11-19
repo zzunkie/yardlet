@@ -222,7 +222,8 @@ final class AgentRun: Identifiable {
     /// Called on every change of `state` (`SessionToolCenter.add`).
     @ObservationIgnored var stateDidChange: (@MainActor (AgentRun) -> Void)?
     /// The subagent's conversation: the shared transcript, or a Codex thread's.
-    var entries: [TranscriptEntry] = []
+    private(set) var entries: [TranscriptEntry] = []
+    private var pendingPermissionEntries: [TranscriptEntry] = []
     /// Set on every state the thread streams, and each differs from the last: its observers hear of it
     /// without the two being compared first, which in a long turn cost as much as the state itself.
     var codexState: CodexTaskState? {
@@ -268,7 +269,14 @@ final class AgentRun: Identifiable {
 
     @ObservationIgnored var adapter: (any HarnessAdapter)?
     @ObservationIgnored var handle: HarnessSessionHandle?
-    @ObservationIgnored var builder = TranscriptBuilder()
+    @ObservationIgnored var builder = TranscriptBuilder() {
+        didSet {
+            entries = builder.entries
+            // A transcript delta leaves observers of requests alone unless a request itself changed.
+            let pending = builder.pendingPermissionEntries
+            if pendingPermissionEntries != pending { pendingPermissionEntries = pending }
+        }
+    }
     @ObservationIgnored var hasStartedTurn = false
     /// The harness reported work for the prompt, so a "ready" it reports next ends the turn rather
     /// than reporting the connection.
@@ -327,8 +335,7 @@ final class AgentRun: Identifiable {
         codexState?.thread?.turns.isEmpty == false ? codexState : nil
     }
 
-    /// The last answer of its latest turn (`AppModel.latestAnswer`). A Codex thread's is read from
-    /// its messages alone: a subagent reads it on every state it streams.
+    /// The last answer of its latest turn, read when a tool returns its result or the run ends.
     var latestAnswer: String? {
         if let codexThread { return CodexConversationProjection.latestAnswer(in: codexThread, workspaceURL: workspaceURL) }
         return AppModel.latestAnswer(in: presentation())
@@ -357,11 +364,13 @@ final class AgentRun: Identifiable {
     /// hear an answer ended with it.
     var pendingRequests: [ConversationRequest] {
         guard !state.isFinished else { return [] }
-        // A Codex thread's are read from its requests alone: they are checked on every state it streams.
         let requests = if let codexThread {
             CodexConversationProjection.pendingRequests(in: codexThread)
         } else {
-            presentation().turns.flatMap(\.requests).filter { $0.state == .pending }
+            pendingPermissionEntries.compactMap { entry -> ConversationRequest? in
+                guard let request = entry.pendingPermission else { return nil }
+                return TranscriptConversationProjection.conversationRequest(request, state: .pending, entry: entry)
+            }
         }
         return requests.map { request in
             var request = request
@@ -372,15 +381,14 @@ final class AgentRun: Identifiable {
 
     /// Once it ended, what it still asked can no longer be answered: its conversation, shown and
     /// kept, reads those requests as expired, as a task's do when its turn ends.
-    func expirePendingRequests() {
+    func finishTranscript(_ entries: [TranscriptEntry]) {
         var expired = entries
-        var changed = false
         for index in expired.indices {
             guard case let .permission(request, .pending) = expired[index].content else { continue }
             expired[index].content = .permission(request, state: .expired)
-            changed = true
         }
-        if changed { entries = expired }
+        self.entries = expired
+        pendingPermissionEntries = []
     }
 }
 

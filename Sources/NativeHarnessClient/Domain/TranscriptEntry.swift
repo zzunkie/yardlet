@@ -102,6 +102,11 @@ struct TranscriptEntry: Codable, Equatable, Identifiable, Sendable {
     /// the saved shape then.
     var turnStoppedAt: Date?
 
+    var pendingPermission: PermissionRequest? {
+        if case let .permission(request, .pending) = content { return request }
+        return nil
+    }
+
     init(
         id: UUID = UUID(),
         createdAt: Date = Date(),

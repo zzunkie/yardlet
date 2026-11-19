@@ -25,6 +25,8 @@ struct TranscriptChange: Equatable, Sendable {
 /// and replacing a range, so whatever changes the entries is noted, however it changes them.
 struct TranscriptEntryList: RandomAccessCollection, MutableCollection, RangeReplaceableCollection, Sendable {
     private(set) var elements: [TranscriptEntry]
+    /// Positions of answerable permissions, in transcript order even when older entries are trimmed.
+    private(set) var pendingPermissionIndices = IndexSet()
     private var change: TranscriptChange
 
     init() {
@@ -35,6 +37,7 @@ struct TranscriptEntryList: RandomAccessCollection, MutableCollection, RangeRepl
     /// Entries of which nothing is known: the first change taken says so.
     init(_ elements: [TranscriptEntry]) {
         self.elements = elements
+        pendingPermissionIndices = IndexSet(elements.indices.filter { elements[$0].pendingPermission != nil })
         change = .unknown
     }
 
@@ -44,6 +47,11 @@ struct TranscriptEntryList: RandomAccessCollection, MutableCollection, RangeRepl
     subscript(position: Int) -> TranscriptEntry {
         get { elements[position] }
         set {
+            if newValue.pendingPermission != nil {
+                pendingPermissionIndices.insert(position)
+            } else if elements[position].pendingPermission != nil {
+                pendingPermissionIndices.remove(position)
+            }
             elements[position] = newValue
             change.kept = Swift.min(change.kept, position)
         }
@@ -51,6 +59,13 @@ struct TranscriptEntryList: RandomAccessCollection, MutableCollection, RangeRepl
 
     mutating func replaceSubrange<C: Collection>(_ subrange: Range<Int>, with newElements: C)
         where C.Element == TranscriptEntry {
+        if !pendingPermissionIndices.isEmpty, subrange.lowerBound < endIndex {
+            pendingPermissionIndices.remove(integersIn: subrange)
+            pendingPermissionIndices.shift(startingAt: subrange.upperBound, by: newElements.count - subrange.count)
+        }
+        for (offset, entry) in newElements.enumerated() where entry.pendingPermission != nil {
+            pendingPermissionIndices.insert(subrange.lowerBound + offset)
+        }
         elements.replaceSubrange(subrange, with: newElements)
         if subrange.lowerBound == 0, newElements.isEmpty {
             // The oldest entries went; the rest moved up as they were.
