@@ -896,8 +896,8 @@ final class RequestCard {
         return block
     }
 
-    /// Selection wins over hover; a choice at rest has no fill. Pointer events use their sender since
-    /// the native element keeps its event handlers after the Swift wrapper goes out of scope.
+    /// The card keeps the row alive in its refresher. The native pointer event's generic sender
+    /// need not be the same Swift wrapper as the border that paints the option.
     private func optionRow(isAnswerable: Bool, isPicked: @escaping () -> Bool) -> Border {
         let row = Border()
         row.cornerRadius = ConversationStyle.corners(8)
@@ -908,15 +908,15 @@ final class RequestCard {
             let idle = hovered && isAnswerable ? WindowsTheme.hoverFill : ConversationStyle.clear
             target.background = (picked ? WindowsTheme.selectedFill : idle).brush
         }
-        row.pointerEntered.addHandler { sender, _ in
-            guard let border = sender as? Border else { return }
+        row.pointerEntered.addHandler { [weak row] _, _ in
+            guard let row else { return }
             hovered = true
-            paint(border)
+            paint(row)
         }
-        row.pointerExited.addHandler { sender, _ in
-            guard let border = sender as? Border else { return }
+        row.pointerExited.addHandler { [weak row] _, _ in
+            guard let row else { return }
             hovered = false
-            paint(border)
+            paint(row)
         }
         refreshers.append {
             picked = isPicked()
