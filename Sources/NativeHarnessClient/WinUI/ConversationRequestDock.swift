@@ -12,7 +12,7 @@ final class ConversationRequestDock {
     private let edges = [Border(), Border()]
     private var edgeCount = 0
     private var front: RequestCard?
-    private var needsInitialScroll = false
+    private var previousScrollEnd: Double?
     private var layoutCheckPending = false
 
     init() {
@@ -63,7 +63,7 @@ final class ConversationRequestDock {
         guard front !== card else { return }
         front = card
         slot.children.clear()
-        needsInitialScroll = card != nil
+        previousScrollEnd = nil
         view.visibility = card == nil ? .collapsed : .visible
         if let card {
             card.place(in: slot)
@@ -83,8 +83,8 @@ final class ConversationRequestDock {
         frame.margin = Thickness(left: 0, top: Double(edgeCount) * 6, right: 0, bottom: 0)
     }
 
-    /// Open a tall card at its buttons once. A streaming update must leave the person's scroll and
-    /// any text they have started entering alone.
+    /// Open at the answers and keep them visible when the viewport or card changes size. If the
+    /// person scrolled up to read the request, leave that position alone.
     private func scheduleLayoutCheck() {
         guard front != nil, !layoutCheckPending else { return }
         layoutCheckPending = true
@@ -93,10 +93,13 @@ final class ConversationRequestDock {
             defer { self.layoutCheckPending = false }
             guard self.front != nil else { return }
             try? self.scroll.updateLayout()
-            self.outline.visibility = self.scroll.scrollableHeight > 0 ? .visible : .collapsed
-            guard self.needsInitialScroll, self.scroll.viewportHeight > 0, self.slot.actualHeight > 0 else { return }
-            self.needsInitialScroll = false
-            _ = try? self.scroll.changeView(nil, self.scroll.scrollableHeight, nil, true)
+            guard self.scroll.viewportHeight > 0, self.slot.actualHeight > 0 else { return }
+            let end = self.scroll.scrollableHeight
+            self.outline.visibility = end > 0 ? .visible : .collapsed
+            guard end != self.previousScrollEnd else { return }
+            let followedEnd = self.previousScrollEnd.map { self.scroll.verticalOffset >= $0 - 1 } ?? true
+            self.previousScrollEnd = end
+            if followedEnd { _ = try? self.scroll.changeView(nil, end, nil, true) }
         }
     }
 }
