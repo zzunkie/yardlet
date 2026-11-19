@@ -48,39 +48,39 @@ struct YardletTabCommands: Commands {
     var body: some Commands {
         CommandGroup(after: .newItem) {
             Button(L10n.string("New Tab")) { tabs?.newTab() }
-                .keyboardShortcut(MacShortcut.newTab.binding)
+                .keyboardShortcut(MacShortcut.newTab.menuBinding)
                 .disabled(tabs == nil)
         }
         CommandGroup(replacing: .saveItem) {
             if let tabs, tabs.canCloseTab {
                 Button(L10n.string("Close Tab")) { tabs.closeTab() }
-                    .keyboardShortcut(MacShortcut.closeTab.binding)
+                    .keyboardShortcut(MacShortcut.closeTab.menuBinding)
                 Button(L10n.string("Close Window")) { NSApp.keyWindow?.performClose(nil) }
-                    .keyboardShortcut(MacShortcut.closeWindow.binding)
+                    .keyboardShortcut(MacShortcut.closeWindow.menuBinding)
             } else {
                 Button(L10n.string("Close")) { NSApp.keyWindow?.performClose(nil) }
-                    .keyboardShortcut(MacShortcut.closeTab.binding)
+                    .keyboardShortcut(MacShortcut.closeTab.menuBinding)
             }
             Button(L10n.string("Reopen Closed Tab")) { tabs?.reopenClosedTab() }
-                .keyboardShortcut(MacShortcut.reopenClosedTab.binding)
+                .keyboardShortcut(MacShortcut.reopenClosedTab.menuBinding)
                 .disabled(!(tabs?.canReopenClosedTab ?? false))
         }
         CommandGroup(before: .windowArrangement) {
             if tabs?.canCloseTab ?? false {
                 Button(L10n.string("Show Previous Tab")) { tabs?.selectPreviousTab() }
-                    .keyboardShortcut(MacShortcut.previousTab.binding)
+                    .keyboardShortcut(MacShortcut.previousTab.menuBinding)
                 Button(L10n.string("Show Next Tab")) { tabs?.selectNextTab() }
-                    .keyboardShortcut(MacShortcut.nextTab.binding)
+                    .keyboardShortcut(MacShortcut.nextTab.menuBinding)
             } else {
                 Button(L10n.string("Previous task")) {
                     if let row = task?.targets.previousRow { task?.activate(row) }
                 }
-                .keyboardShortcut(MacShortcut.previousTab.binding)
+                .keyboardShortcut(MacShortcut.previousTab.menuBinding)
                 .disabled(task?.targets.previousRow == nil)
                 Button(L10n.string("Next task")) {
                     if let row = task?.targets.nextRow { task?.activate(row) }
                 }
-                .keyboardShortcut(MacShortcut.nextTab.binding)
+                .keyboardShortcut(MacShortcut.nextTab.menuBinding)
                 .disabled(task?.targets.nextRow == nil)
             }
             Divider()
@@ -134,13 +134,13 @@ struct YardletWindowLayerCommands: Commands {
     var body: some Commands {
         CommandMenu(Text(L10n.string("Split View"))) {
             Button(SplitCommandTitle.split(.right)) { split?.splitRight() }
-                .keyboardShortcut(MacShortcut.splitRight.binding)
+                .keyboardShortcut(MacShortcut.splitRight.menuBinding)
                 .disabled(!(split?.canSplitRight ?? false))
             Button(SplitCommandTitle.split(.down)) { split?.splitDown() }
-                .keyboardShortcut(MacShortcut.splitDown.binding)
+                .keyboardShortcut(MacShortcut.splitDown.menuBinding)
                 .disabled(!(split?.canSplitDown ?? false))
             Button(L10n.string("Close pane")) { split?.closePane() }
-                .keyboardShortcut(MacShortcut.closePane.binding)
+                .keyboardShortcut(MacShortcut.closePane.menuBinding)
                 .disabled(!(split?.canClosePane ?? false))
             Button(L10n.string("End split view")) { split?.dissolve() }
                 .disabled(!(split?.canClosePane ?? false))
@@ -160,7 +160,7 @@ struct YardletWindowLayerCommands: Commands {
 
             ForEach(PaneFocusDirection.allCases, id: \.self) { direction in
                 Button(SplitCommandTitle.focus(direction)) { split?.focusPane(direction) }
-                    .keyboardShortcut(MacShortcut.focus(direction).binding)
+                    .keyboardShortcut(MacShortcut.focus(direction).menuBinding)
                     .disabled(!(split?.canClosePane ?? false))
             }
 
@@ -176,7 +176,7 @@ struct YardletWindowLayerCommands: Commands {
                             Text(item.title)
                         }
                     }
-                    .keyboardShortcut(MacShortcut.pinnedRow(index + 1).binding)
+                    .keyboardShortcut(MacShortcut.pinnedRow(index + 1).menuBinding)
                 }
             }
         }

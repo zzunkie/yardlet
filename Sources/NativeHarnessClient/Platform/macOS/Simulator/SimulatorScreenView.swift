@@ -294,11 +294,15 @@ final class SimulatorScreenView: NSView, SimulatorScreenSubscriber {
     // MARK: - Keys
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        guard window?.firstResponder === self, event.type == .keyDown, let device = configuration?.device else {
-            return super.performKeyEquivalent(with: event)
-        }
+        performSimulatorShortcut(event, customizedOnly: false) || super.performKeyEquivalent(with: event)
+    }
+
+    private func performSimulatorShortcut(_ event: NSEvent, customizedOnly: Bool) -> Bool {
+        guard window?.firstResponder === self, event.type == .keyDown, let device = configuration?.device else { return false }
         let key = MacShortcutEvent(event)
-        switch [MacShortcut.simulatorHome, .simulatorLock, .simulatorClose].first(where: { $0.matches(key) }) {
+        switch [MacShortcut.simulatorHome, .simulatorLock, .simulatorClose].first(where: {
+            (!customizedOnly || $0.isCustomized) && $0.matches(key)
+        }) {
         case .simulatorHome:
             onPersonInput?()
             screens.press(.home, on: device)
@@ -309,12 +313,13 @@ final class SimulatorScreenView: NSView, SimulatorScreenSubscriber {
             onCloseTab?()
         default:
             // The window's keys and the menus' come first; a key none of them takes reaches `keyDown`.
-            return super.performKeyEquivalent(with: event)
+            return false
         }
         return true
     }
 
     override func keyDown(with event: NSEvent) {
+        if !MacShortcutPreferences.shared.snapshot.overrides.isEmpty, performSimulatorShortcut(event, customizedOnly: true) { return }
         // A held key repeats on the device.
         guard !event.isARepeat, let device = configuration?.device,
               let usage = SimulatorKeyMap.usage(forKeyCode: event.keyCode) else { return }

@@ -282,7 +282,7 @@ struct ImageViewer: View {
                     .disabled(!model.hasImage)
                 }
                 ImageViewerButton(systemName: copied ? "checkmark" : "doc.on.doc", title: L10n.string("Copy Image"),
-                                  shortcut: MacShortcut.imageCopy.binding.displayText) {
+                                  shortcut: MacShortcut.imageCopy.binding?.displayText) {
                     copied = model.copy()
                 }
                 .keyboardShortcut(MacShortcut.imageCopy.binding)
@@ -296,7 +296,7 @@ struct ImageViewer: View {
                     model.save(over: model.canvas?.window ?? NSApp.keyWindow)
                 }
                 .disabled(!model.hasImage)
-                ImageViewerButton(systemName: "xmark", title: L10n.string("Close image preview"), shortcut: "Esc",
+                ImageViewerButton(systemName: "xmark", title: L10n.string("Close image preview"), shortcut: MacShortcut.imageClose.isCustomized ? MacShortcut.imageClose.binding?.displayText : "Esc",
                                   action: close)
                     .keyboardShortcut(MacShortcut.imageClose.binding)
             }
@@ -329,7 +329,7 @@ struct ImageViewer: View {
             let enabled = previous ? model.canShowPrevious : model.canShowNext
             ImageViewerButton(systemName: previous ? "chevron.left" : "chevron.right",
                               title: L10n.string(previous ? "Previous image" : "Next image"),
-                              shortcut: (previous ? MacShortcut.imagePrevious : .imageNext).binding.displayText, size: 36) {
+                              shortcut: (previous ? MacShortcut.imagePrevious : .imageNext).binding?.displayText, size: 36) {
                 previous ? model.showPrevious() : model.showNext()
             }
             .keyboardShortcut((previous ? MacShortcut.imagePrevious : .imageNext).binding)
@@ -344,7 +344,7 @@ struct ImageViewer: View {
 
     private var footer: some View {
         HStack(spacing: 2) {
-            ImageViewerButton(systemName: "minus", title: L10n.string("Zoom Out"), shortcut: "⌘−", fill: false) {
+            ImageViewerButton(systemName: "minus", title: L10n.string("Zoom Out"), shortcut: MacShortcut.imageZoomOut.isCustomized ? MacShortcut.imageZoomOut.binding?.displayText : "⌘−", fill: false) {
                 model.zoom(.out)
             }
             let fits = model.fitsWindow
@@ -360,10 +360,10 @@ struct ImageViewer: View {
             }
             .buttonStyle(.plain)
             .parityPointer()
-            .help(fits ? L10n.string("Actual Size") : "\(L10n.string("Zoom to Fit")) (⌘0)")
+            .help(fits ? L10n.string("Actual Size") : ShortcutHelp.text(L10n.string("Zoom to Fit"), MacShortcut.imageFit.binding))
             .accessibilityLabel(L10n.string(fits ? "Actual Size" : "Zoom to Fit"))
             .accessibilityValue(Text(verbatim: percent))
-            ImageViewerButton(systemName: "plus", title: L10n.string("Zoom In"), shortcut: "⌘+", fill: false) {
+            ImageViewerButton(systemName: "plus", title: L10n.string("Zoom In"), shortcut: MacShortcut.imageZoomIn.isCustomized ? MacShortcut.imageZoomIn.binding?.displayText : "⌘+", fill: false) {
                 model.zoom(.in)
             }
         }
@@ -604,6 +604,8 @@ final class ImageViewerCanvasView: NSScrollView {
     }
 
     override func cancelOperation(_ sender: Any?) {
+        if MacShortcut.imageClose.isCustomized, let event = NSApp.currentEvent, event.type == .keyDown,
+           !MacShortcut.imageClose.matches(MacShortcutEvent(event)) { return }
         onClose?()
     }
 

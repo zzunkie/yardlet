@@ -139,7 +139,7 @@ struct RemoteNewTaskView: View {
         VStack(alignment: .leading, spacing: 10) {
             ComposerEditor(
                 draft: draft, placeholder: NewTaskComposerText.placeholder(harnessName: form.harnessName),
-                accessibilityHint: L10n.format("Press %@ to start the task", sendShortcut.sendKeyName), metrics: .newTask,
+                accessibilityHint: sendShortcut.sendKeyName.isEmpty ? nil : L10n.format("Press %@ to start the task", sendShortcut.sendKeyName), metrics: .newTask,
                 input: nil, onExternalInput: form.acceptsAttachments ? { receive($0) } : nil, mentionRoots: [],
                 mentionSearch: mentionSearch,
                 onInsertMention: { RemoteComposerMentionIndex.insert($0, replacing: $1, into: draft) },

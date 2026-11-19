@@ -81,11 +81,11 @@ struct CommandPaletteView: View {
                     .focused($isSearchFocused)
                     .accessibilityLabel(L10n.string("Search tasks and commands"))
                     .onMacShortcutSubmit(.paletteChoose) { runSelected() }
-                    .onKeyPress(MacShortcut.paletteNext.binding.key) {
+                    .onMacKeyPress(.paletteNext) {
                         moveSelection(by: 1)
                         return .handled
                     }
-                    .onKeyPress(MacShortcut.palettePrevious.binding.key) {
+                    .onMacKeyPress(.palettePrevious) {
                         moveSelection(by: -1)
                         return .handled
                     }

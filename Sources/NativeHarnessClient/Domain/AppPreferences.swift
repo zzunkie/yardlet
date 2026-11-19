@@ -162,6 +162,16 @@ enum SendShortcut: String, CaseIterable, Identifiable, Sendable {
     var alternateSymbol: String { self == .return ? "Ctrl+Enter" : "Ctrl+Shift+Enter" }
     var sendKeyName: String { sendSymbol }
     var alternateKeyName: String { alternateSymbol }
+#elseif os(macOS)
+    var sendSymbol: String { MacShortcutPreferences.shared.binding(for: .composerSend, send: self)?.displayText ?? "" }
+    var alternateSymbol: String { MacShortcutPreferences.shared.binding(for: .composerAlternate, send: self)?.displayText ?? "" }
+    var sendKeyName: String {
+        MacShortcut.composerSend.isCustomized || sendSymbol.isEmpty ? sendSymbol : (self == .return ? "Return" : "Command-Return")
+    }
+    var alternateKeyName: String {
+        MacShortcut.composerAlternate.isCustomized || alternateSymbol.isEmpty ? alternateSymbol :
+            (self == .return ? "Command-Return" : "Shift-Command-Return")
+    }
 #else
     /// The key that sends in this mode whatever the draft, as a menu writes it.
     var sendSymbol: String { self == .return ? "↩" : "⌘↩" }

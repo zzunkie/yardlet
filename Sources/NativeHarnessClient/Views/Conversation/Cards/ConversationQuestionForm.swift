@@ -318,20 +318,20 @@ struct ConversationQuestionStepsView<Finish: View>: View {
 
     private func handle(_ press: KeyPress, step: ConversationQuestionStep) -> KeyPress.Result {
         guard isAnswerable, focus == .form else { return .ignored }
-        switch press.key {
-        case MacShortcut.leftItem.binding.key:
+        switch true {
+        case MacShortcut.leftItem.matches(press):
             move(by: -1)
             return .handled
-        case MacShortcut.rightItem.binding.key:
+        case MacShortcut.rightItem.matches(press):
             move(by: 1)
             return .handled
-        case MacShortcut.chooseItem.binding.key:
+        case MacShortcut.chooseItem.matches(press):
             goOn(from: step)
             return .handled
         default:
             break
         }
-        guard press.modifiers.isEmpty, let number = MacShortcut.numberedOption(press.characters, command: MacShortcut.answerOption) else {
+        guard let number = MacShortcut.numberedOption(press, command: MacShortcut.answerOption, requiresPlain: true) else {
             return .ignored
         }
         if step.options.indices.contains(number - 1) {

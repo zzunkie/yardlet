@@ -34,12 +34,20 @@ extension KeyboardShortcut {
         case "\r": "↩"
         case "\u{1B}": "⎋"
         case "\u{08}", "\u{7F}": "⌫"
+        case "\u{F728}": "⌦"
+        case "\u{F729}": "↖"
+        case "\u{F72B}": "↘"
+        case "\u{F72C}": "⇞"
+        case "\u{F72D}": "⇟"
         case " ": "Space"
         case "\u{F700}": "↑"
         case "\u{F701}": "↓"
         case "\u{F702}": "←"
         case "\u{F703}": "→"
-        default: String(key).uppercased()
+        default:
+            if let scalar = key.unicodeScalars.first, (0xF704...0xF726).contains(scalar.value) {
+                "F\(scalar.value - 0xF703)"
+            } else { String(key).uppercased() }
         }
     }
 }

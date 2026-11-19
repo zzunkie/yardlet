@@ -318,13 +318,19 @@ enum FollowUpPolicy: Equatable, Sendable {
     /// follow-up setting, `preferred`) and where the key that sends the other way sends it (the
     /// other). A harness that cannot steer names the send key alone.
     func runningPlaceholder(preferred: FollowUpMode, keys: SendShortcut) -> String {
-        guard steers else { return "\(keys.sendSymbol) \(Self.afterTurnPhrase)" }
-        return "\(keys.sendSymbol) \(phrase(for: preferred)) · \(keys.alternateSymbol) \(phrase(for: preferred.other))"
+        func label(_ key: String, _ text: String) -> String { key.isEmpty ? text : "\(key) \(text)" }
+        guard steers else { return label(keys.sendSymbol, Self.afterTurnPhrase) }
+        return [label(keys.sendSymbol, phrase(for: preferred)), label(keys.alternateSymbol, phrase(for: preferred.other))].joined(separator: " · ")
     }
 
     /// `runningPlaceholder` with the keys in words, for VoiceOver.
     func returnHint(preferred: FollowUpMode, keys: SendShortcut) -> String {
-        guard steers else { return L10n.format("%@ key: %@.", keys.sendKeyName, Self.afterTurnPhrase) }
+        let primary = keys.sendKeyName
+        let alternate = keys.alternateKeyName
+        guard !primary.isEmpty else {
+            return steers && !alternate.isEmpty ? L10n.format("%@ key: %@.", alternate, phrase(for: preferred.other)) : ""
+        }
+        guard steers && !alternate.isEmpty else { return L10n.format("%@ key: %@.", primary, steers ? phrase(for: preferred) : Self.afterTurnPhrase) }
         return L10n.format("%@ key: %@. %@ key: %@.", keys.sendKeyName, phrase(for: preferred),
                            keys.alternateKeyName, phrase(for: preferred.other))
     }

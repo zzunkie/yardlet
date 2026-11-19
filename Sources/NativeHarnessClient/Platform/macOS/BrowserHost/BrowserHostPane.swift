@@ -1504,14 +1504,16 @@ struct BrowserHostPane: View {
                     controller.addressSelectionChanged(in: note.object)
                 }
                 // Chrome's keys for its dropdown; each passes on to the field while the suggestions are closed.
-                .onKeyPress(MacShortcut.addressNext.binding.key) { controller.moveSuggestion(by: 1) ? .handled : .ignored }
-                .onKeyPress(MacShortcut.addressPrevious.binding.key) { controller.moveSuggestion(by: -1) ? .handled : .ignored }
-                .onKeyPress(keys: [MacShortcut.addressNextTab.binding.key, MacShortcut.addressPreviousTab.binding.key], phases: [.down, .repeat]) { press in
-                    let back = press.modifiers.contains(.shift) || press.key == KeyEquivalent("\u{19}")
+                .onMacKeyPress(.addressNext) { controller.moveSuggestion(by: 1) ? .handled : .ignored }
+                .onMacKeyPress(.addressPrevious) { controller.moveSuggestion(by: -1) ? .handled : .ignored }
+                .onKeyPress(phases: [.down, .repeat]) { press in
+                    guard MacShortcut.addressNextTab.matches(press) || MacShortcut.addressPreviousTab.matches(press) else { return .ignored }
+                    let back = MacShortcut.addressPreviousTab.matches(press) ||
+                        (MacShortcutPreferences.shared.snapshot.overrides[MacShortcut.addressNextTab.id] == nil && press.modifiers.contains(.shift))
                     return controller.moveSuggestion(by: back ? -1 : 1) ? .handled : .ignored
                 }
-                .onKeyPress(MacShortcut.addressRemove.binding.key, phases: .down) { press in
-                    press.modifiers.contains(.shift) && controller.removeSuggestion() ? .handled : .ignored
+                .onMacKeyPress(.addressRemove, phases: .down) { press in
+                    (MacShortcutPreferences.shared.snapshot.overrides[MacShortcut.addressRemove.id] != nil || press.modifiers.contains(.shift)) && controller.removeSuggestion() ? .handled : .ignored
                 }
                 .onMacShortcutExit { controller.escapeAddress() }
                 .padding(.horizontal, 10)

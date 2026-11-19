@@ -329,24 +329,37 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
             .onSubmit {
                 // The field editor's Return: a plain one, or one an input method passed on after
                 // committing its composition, which the key handler noted.
-                takeReturn(fieldContext.takeComposedReturn()
-                    ?? ComposerReturnKey(event: NSApp.currentEvent, sendShortcut: sendShortcut, draft: draft.text) ?? .send)
+                if !MacShortcut.composerSend.isCustomized && !MacShortcut.composerAlternate.isCustomized
+                    && !MacShortcut.composerNewline.isCustomized {
+                    takeReturn(fieldContext.takeComposedReturn()
+                        ?? ComposerReturnKey(event: NSApp.currentEvent, sendShortcut: sendShortcut, draft: draft.text) ?? .send)
+                } else if let composed = fieldContext.takeComposedReturn() { takeReturn(composed) }
+                else if let event = NSApp.currentEvent, event.type == .keyDown {
+                    if let chord = MacKeyChord(event: MacShortcutEvent(event)),
+                       let action = ComposerReturnKey.resolve(chord, send: sendShortcut, draft: draft.text) {
+                        takeReturn(action)
+                    } else if event.keyCode == 36 || event.keyCode == 76 {
+                        fieldContext.insertLine(into: draft)
+                    }
+                } else { takeReturn(.send) }
             }
             .onMacShortcutExit(.composerEscape) {
                 if typedCommandQuery != nil { dismissedCommandText = draft.text }
                 else if typedMention != nil { dismissedMentionText = draft.text }
                 else { onEscape() }
             }
-            .onKeyPress(.return, phases: [.down, .repeat]) { press in
+            .onKeyPress(keys: ComposerReturnKey.keys(send: sendShortcut), phases: [.down, .repeat]) { press in
                 // The send shortcut says which Return sends, adds a line or sends the other way
                 // (`ComposerReturnKey`); a plain Return that sends reaches `onSubmit` through the field
                 // editor and Option-Return adds a line there. While an input method composes, the key
                 // is the input method's: it commits the composition first, and `onSubmit` then does
                 // what this Return asks, never a send for a line.
-                guard let key = ComposerReturnKey(press.modifiers, sendShortcut: sendShortcut, draft: draft.text)
-                else { return .ignored }
+                let chord = MacKeyChord(KeyboardShortcut(press.key, modifiers: press.modifiers))
+                guard let key = ComposerReturnKey.resolve(chord, send: sendShortcut, draft: draft.text) else {
+                    return .ignored
+                }
                 if fieldContext.hasMarkedText {
-                    fieldContext.composedReturn = key
+                    if press.key == .return { fieldContext.composedReturn = key }
                     return .ignored
                 }
                 fieldContext.composedReturn = nil
@@ -354,19 +367,19 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
                 // calling the `onSubmit` of an earlier evaluation until its text changes, and that
                 // one chooses from the list as it was then: nothing, when the list was read after
                 // the last keystroke.
-                guard key != .send || press.modifiers.contains(.command) || typedListTakesReturn else { return .ignored }
+                guard press.key != .return || key != .send || !press.modifiers.intersection([.control, .shift, .command, .option]).isEmpty || typedListTakesReturn else { return .ignored }
                 takeReturn(key)
                 return .handled
             }
-            .onKeyPress(MacShortcut.previousSuggestion.binding.key) { moveHighlight(by: -1) }
-            .onKeyPress(MacShortcut.nextSuggestion.binding.key) { moveHighlight(by: 1) }
+            .onMacKeyPress(.previousSuggestion) { moveHighlight(by: -1) }
+            .onMacKeyPress(.nextSuggestion) { moveHighlight(by: 1) }
             // → in the empty composer takes the suggestion too, as the Claude app's composer does.
-            .onKeyPress(MacShortcut.acceptSuggestion.binding.key) {
+            .onMacKeyPress(.acceptSuggestion) {
                 guard suggestion != nil, draft.text.isEmpty, !fieldContext.hasMarkedText,
                       takeSuggestion?() == true else { return .ignored }
                 return .handled
             }
-            .onKeyPress(MacShortcut.complete.binding.key, phases: [.down, .repeat]) { press in
+            .onMacKeyPress(.complete, phases: [.down, .repeat]) { press in
                 if typedCommandQuery != nil {
                     guard !ComposerFieldEditor.hasMarkedText, let command = highlightedCommand else { return .ignored }
                     commands?.choose(command)
@@ -380,11 +393,11 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
                 // The suggested next message, as the Claude app's composer takes it on Tab. While an
                 // input method composes, the key is the input method's and nothing is taken.
                 if ComposerTypedLists.takesSuggestion(
-                    modifiers: press.modifiers, isRepeat: press.phase == .repeat,
+                    modifiers: MacShortcutPreferences.shared.snapshot.overrides[MacShortcut.complete.id] == nil ? press.modifiers : [], isRepeat: press.phase == .repeat,
                     hasMarkedText: fieldContext.hasMarkedText, take: takeSuggestion) { return .handled }
                 // Then, on the new-task screen, its lists take the keyboard, on the same plain Tab.
                 return ComposerTypedLists.takesSuggestion(
-                    modifiers: press.modifiers, isRepeat: press.phase == .repeat,
+                    modifiers: MacShortcutPreferences.shared.snapshot.overrides[MacShortcut.complete.id] == nil ? press.modifiers : [], isRepeat: press.phase == .repeat,
                     hasMarkedText: fieldContext.hasMarkedText, take: onTab)
                     ? .handled : .ignored
             }
@@ -543,6 +556,34 @@ enum ComposerReturnKey: Equatable {
     case alternate
     case newline
 
+    var command: MacShortcut {
+        switch self {
+        case .send: .composerSend
+        case .alternate: .composerAlternate
+        case .newline: .composerNewline
+        }
+    }
+
+    static func keys(send: SendShortcut) -> Set<KeyEquivalent> {
+        let prefs = MacShortcutPreferences.shared
+        return Set([KeyEquivalent.return] + [Self.send, .alternate, .newline].compactMap {
+            prefs.binding(for: $0.command, send: send)?.key
+        })
+    }
+
+    static func resolve(_ chord: MacKeyChord, send: SendShortcut, draft: String,
+                        preferences: MacShortcutPreferences = .shared) -> Self? {
+        let overrides = preferences.snapshot.overrides
+        if !overrides.isEmpty {
+            for action in [Self.send, .alternate, .newline] {
+                if let value = overrides[action.command.id], MacKeyChord(notation: value) == chord { return action }
+            }
+        }
+        guard chord.key == "\r", let action = Self(chord.modifiers, sendShortcut: send, draft: draft),
+              overrides.isEmpty || overrides[action.command.id] == nil else { return nil }
+        return action
+    }
+
     /// Caps Lock does not count.
     init?(_ modifiers: EventModifiers, sendShortcut: SendShortcut, draft: String) {
         let flags = modifiers.intersection([.shift, .option, .control, .command])
@@ -569,11 +610,11 @@ enum ComposerReturnKey: Equatable {
 /// screen.
 enum ComposerShortcut {
     /// The key that sends whatever the draft: Return, or ⌘Return with the ⌘Return shortcuts.
-    static func send(_ sendShortcut: SendShortcut) -> KeyboardShortcut {
-        MacShortcut.composerSend.defaultBinding(send: sendShortcut)
+    static func send(_ sendShortcut: SendShortcut) -> KeyboardShortcut? {
+        MacShortcutPreferences.shared.binding(for: .composerSend, send: sendShortcut)
     }
-    static var stop: KeyboardShortcut { MacShortcut.composerEscape.binding }
-    static var start: KeyboardShortcut { MacShortcut.start.binding }
+    static var stop: KeyboardShortcut? { MacShortcut.composerEscape.binding }
+    static var start: KeyboardShortcut? { MacShortcut.start.binding }
 }
 
 /// The keys that answer the oldest tool approval a task waits on from its composer (the approvals a
@@ -586,11 +627,19 @@ enum ComposerShortcut {
 /// The request card names the keys on its buttons' tooltips.
 enum ComposerApprovalKey {
     static func allow(_ sendShortcut: SendShortcut) -> [KeyboardShortcut] {
-        let commandReturn = MacShortcut.composerSend.defaultBinding(send: .commandReturn)
-        return sendShortcut.returnSends("") ? [MacShortcut.composerSend.defaultBinding(), commandReturn] : [commandReturn]
+        let prefs = MacShortcutPreferences.shared
+        var bindings = [KeyboardShortcut]()
+        if sendShortcut == .commandReturnForMultiline, prefs.snapshot.overrides[MacShortcut.composerSend.id] == nil {
+            bindings.append(MacShortcut.composerSend.defaultBinding())
+        }
+        if let send = ComposerShortcut.send(sendShortcut) { bindings.append(send) }
+        if sendShortcut == .return, let alternate = prefs.binding(for: .composerAlternate, send: sendShortcut) {
+            bindings.append(alternate)
+        }
+        return bindings
     }
 
-    static var deny: [KeyboardShortcut] { [ComposerShortcut.stop] }
+    static var deny: [KeyboardShortcut] { [ComposerShortcut.stop].compactMap { $0 } }
 }
 
 /// The composer field's window and the Return an input method took while composing: a reference

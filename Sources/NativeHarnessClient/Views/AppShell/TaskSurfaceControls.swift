@@ -124,10 +124,7 @@ struct TaskSurfaceControls: View {
         .accessibilityValue(isActive(surface) ? L10n.string("Selected") : "")
         .accessibilityHint(L10n.string("Show or hide this task panel"))
         .help(ShortcutHelp.text(controlTitle(surface), menuShortcut(surface)))
-        .onMoveCommand { direction in
-            if direction == .left { move(from: surface, by: -1) }
-            if direction == .right { move(from: surface, by: 1) }
-        }
+        .modifier(SurfaceKeyboardMove { move(from: surface, by: $0) })
     }
 
     /// The bar is the conversation's own (`ConversationFindBar`): the button opens it as Edit › Find does,
@@ -286,6 +283,23 @@ private struct OptionalSurfaceFocus: ViewModifier {
             content.focused(binding, equals: surface)
         } else {
             content
+        }
+    }
+}
+
+
+private struct SurfaceKeyboardMove: ViewModifier {
+    var move: (Int) -> Void
+
+    func body(content: Content) -> some View {
+        content.onMoveCommand { direction in
+            if direction == .left, !MacShortcut.leftItem.isCustomized { move(-1) }
+            if direction == .right, !MacShortcut.rightItem.isCustomized { move(1) }
+        }
+        .onKeyPress { press in
+            if MacShortcut.leftItem.isCustomized, MacShortcut.leftItem.matches(press) { move(-1); return .handled }
+            if MacShortcut.rightItem.isCustomized, MacShortcut.rightItem.matches(press) { move(1); return .handled }
+            return .ignored
         }
     }
 }

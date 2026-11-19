@@ -13,6 +13,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case yardletAccount
     case general
     case appearance
+    case keyboardShortcuts
     case notifications
     case instructions
     case connectors
@@ -45,6 +46,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .yardletAccount: L10n.string("Yardlet Account")
         case .general: L10n.string("General")
         case .appearance: L10n.string("Appearance")
+        case .keyboardShortcuts: L10n.string("Keyboard shortcuts")
         case .notifications: L10n.string("Notifications")
         case .instructions: L10n.string("Yardlet Instructions")
         case .accounts: L10n.string("Harness Accounts")
@@ -62,6 +64,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .yardletAccount: "person.crop.circle"
         case .general: "gearshape"
         case .appearance: "circle.lefthalf.filled"
+        case .keyboardShortcuts: "keyboard"
         case .notifications: "bell"
         case .instructions: "text.quote"
         case .accounts: "person.2"
@@ -78,7 +81,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     var group: Group? {
         switch self {
         case .yardletAccount: nil
-        case .general, .appearance, .notifications, .instructions: .personal
+        case .general, .appearance, .keyboardShortcuts, .notifications, .instructions: .personal
         case .connectors, .vault, .remote: .integrations
         case .harnesses, .accounts, .usage, .cliUpdates: .harnesses
         }
@@ -96,6 +99,9 @@ enum SettingsSection: String, CaseIterable, Identifiable {
                           hasUsage: Bool = false) -> [SettingsSection] {
         allCases.filter { section in
             switch section {
+#if !os(macOS)
+            case .keyboardShortcuts: false
+#endif
             case .yardletAccount: hasYardletAccount
             case .accounts, .harnesses: hasAccounts
             case .usage: hasUsage
@@ -434,7 +440,8 @@ extension YardletSetting {
     static let followUpBehavior = YardletSetting(
         id: "follow_up_behavior", section: .general, generalGroup: .tasks, symbol: "text.append", title: L10n.string("Follow-up behavior"),
         keysHint: { keys in
-            L10n.format("While a turn runs, %@ sends this way and %@ the other way", keys.sendKeyName, keys.alternateKeyName)
+            guard !keys.sendKeyName.isEmpty, !keys.alternateKeyName.isEmpty else { return "" }
+            return L10n.format("While a turn runs, %@ sends this way and %@ the other way", keys.sendKeyName, keys.alternateKeyName)
         },
         values: choices(FollowUpMode.self, title: \.title),
         storage: .choice(key: FollowUpMode.preferenceKey, defaultValue: FollowUpMode.steer.rawValue))

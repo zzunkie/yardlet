@@ -1222,20 +1222,45 @@ final class NativeTerminalView: TerminalView {
     weak var session: NativeTerminalSession?
     var process: LocalProcess! { session?.process }
     /// Attaches the selected text to the task's message; nil while the terminal is not shared.
-    var attachSelection: ((String) -> Void)?
+    var attachSelection: ((String) -> Void)? { didSet { updateAttachmentMonitor() } }
 
     override func menu(for event: NSEvent) -> NSMenu? {
         guard attachSelection != nil else { return super.menu(for: event) }
         let menu = NSMenu()
         let attach = NSMenuItem(title: L10n.string("Attach Selection to Message"),
-                                action: #selector(attachSelectionToMessage(_:)), keyEquivalent: String(MacShortcut.attachSelection.binding.key.character))
-        attach.keyEquivalentModifierMask = MacShortcut.attachSelection.binding.modifiers.shortcutFlags
+                                action: #selector(attachSelectionToMessage(_:)), keyEquivalent: MacShortcut.attachSelection.binding.map { String($0.key.character) } ?? "")
+        attach.keyEquivalentModifierMask = MacShortcut.attachSelection.binding?.modifiers.shortcutFlags ?? []
         attach.target = self
         menu.addItem(attach)
         menu.addItem(.separator())
         menu.addItem(withTitle: L10n.string("Copy"), action: #selector(copy(_:)), keyEquivalent: "c").target = self
         menu.addItem(withTitle: L10n.string("Paste"), action: #selector(paste(_:)), keyEquivalent: "v").target = self
         return menu
+    }
+
+    private var attachmentMonitor: Any?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateAttachmentMonitor()
+    }
+
+    /// SwiftTerm owns keyDown. A recording without Command needs to reach the shared terminal's
+    /// attachment action before the shell; its normal menu equivalent needs no monitor.
+    private func updateAttachmentMonitor() {
+        let watches = window != nil && attachSelection != nil && MacShortcut.attachSelection.isCustomized
+            && MacShortcut.attachSelection.binding?.modifiers.contains(.command) == false
+        if !watches, let attachmentMonitor {
+            NSEvent.removeMonitor(attachmentMonitor)
+            self.attachmentMonitor = nil
+        } else if watches && attachmentMonitor == nil {
+            attachmentMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self, let window = self.window, event.window === window, window.firstResponder === self,
+                      !self.hasMarkedText(), MacShortcut.attachSelection.matches(MacShortcutEvent(event)) else { return event }
+                self.attachSelectionToMessage(nil)
+                return nil
+            }
+        }
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {

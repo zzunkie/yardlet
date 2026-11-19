@@ -415,17 +415,17 @@ struct HarnessIntelligencePicker: View {
         .focusable()
         .focusEffectDisabled()
         .focused($isFocused)
-        .onKeyPress(keys: [MacShortcut.leftItem.binding.key, MacShortcut.rightItem.binding.key]) { press in
-            guard !showsModels, let reasoningSelector else { return .ignored }
-            stepEffort(reasoningSelector, by: press.key == MacShortcut.leftItem.binding.key ? -1 : 1)
+        .onKeyPress { press in
+            guard !showsModels, let reasoningSelector, MacShortcut.leftItem.matches(press) || MacShortcut.rightItem.matches(press) else { return .ignored }
+            stepEffort(reasoningSelector, by: MacShortcut.leftItem.matches(press) ? -1 : 1)
             return .handled
         }
-        .onKeyPress(MacShortcut.chooseItem.binding.key) {
+        .onMacKeyPress(.chooseItem) {
             onDismiss()
             return .handled
         }
-        .onKeyPress(characters: .decimalDigits, phases: .down) { press in
-            guard showsModels, let modelSelector, let digit = MacShortcut.numberedOption(press.characters, command: MacShortcut.modelOption),
+        .onKeyPress(phases: .down) { press in
+            guard showsModels, let modelSelector, let digit = MacShortcut.numberedOption(press, command: MacShortcut.modelOption, requiresPlain: false),
                   digit <= min(9, modelSelector.choices.count) else { return .ignored }
             pickModel(modelSelector.choices[digit - 1], in: modelSelector)
             return .handled

@@ -51,8 +51,8 @@ struct VaultPickerView: View {
                 .onSubmit {
                     if let item = rows.first(where: { $0.id == selected }) ?? rows.first { onPick(item) }
                 }
-                .onKeyPress(MacShortcut.nextItem.binding.key) { move(by: 1, in: rows) }
-                .onKeyPress(MacShortcut.previousItem.binding.key) { move(by: -1, in: rows) }
+                .onMacKeyPress(.nextItem) { move(by: 1, in: rows) }
+                .onMacKeyPress(.previousItem) { move(by: -1, in: rows) }
                 .accessibilityLabel(L10n.string("Search passwords"))
             if !query.isEmpty {
                 Button {

@@ -94,12 +94,12 @@ enum TaskSidePanelTabs {
     static func choices(canOpenSideChat: Bool, offersReview: Bool? = nil,
                         offersSimulator: Bool = false) -> [WorkSurfaceTab] {
         let review = WorkSurfaceTab(id: "diff", title: L10n.string("Review"), systemName: "plus.rectangle",
-                                    shortcut: MacShortcut.surfaceReview.binding.displayText)
+                                    shortcut: MacShortcut.surfaceReview.binding?.displayText)
         // The View menu's key for the terminal, which the title bar's button names too (⌘3 also opens it).
         let terminal = WorkSurfaceTab(id: "terminal", title: L10n.string("Terminal"), systemName: "terminal",
-                                      shortcut: MacShortcut.toggleTerminal.binding.displayText)
+                                      shortcut: MacShortcut.toggleTerminal.binding?.displayText)
         let browser = WorkSurfaceTab(id: "browser", title: L10n.string("Browser"), systemName: "globe",
-                                     shortcut: MacShortcut.surfaceBrowser.binding.displayText)
+                                     shortcut: MacShortcut.surfaceBrowser.binding?.displayText)
         let files = WorkSurfaceTab(id: "files", title: L10n.string("Files"), systemName: "folder")
         let sideChat = WorkSurfaceTab(id: "sideChat", title: L10n.string("Side chat"),
                                       systemName: "bubble.left.and.bubble.right", isAvailable: canOpenSideChat)

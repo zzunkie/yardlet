@@ -180,9 +180,9 @@ struct ImportConversationSheet: View {
         .focusable()
         .accessibilityLabel(L10n.string("Import conversation"))
         .accessibilityHint(L10n.string("Use the arrow keys to select a history result, then press Return."))
-        .onKeyPress(MacShortcut.nextItem.binding.key) { moveSelection(by: 1); return .handled }
-        .onKeyPress(MacShortcut.previousItem.binding.key) { moveSelection(by: -1); return .handled }
-        .onKeyPress(MacShortcut.chooseItem.binding.key) {
+        .onMacKeyPress(.nextItem) { moveSelection(by: 1); return .handled }
+        .onMacKeyPress(.previousItem) { moveSelection(by: -1); return .handled }
+        .onMacKeyPress(.chooseItem) {
             guard let conversation = page.conversations.first(where: { $0.id == selectedID }), canImport(conversation)
             else { return .ignored }
             Task { await importConversation(conversation) }

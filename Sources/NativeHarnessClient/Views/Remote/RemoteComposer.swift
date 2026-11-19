@@ -69,7 +69,7 @@ struct RemoteComposer: View {
         ComposerEditor(
             draft: draft, placeholder: placeholder,
             accessibilityHint: isRunning ? policy.returnHint(preferred: preferred, keys: sendShortcut)
-                : L10n.format("Press %@ to send", sendShortcut.sendKeyName),
+                : (sendShortcut.sendKeyName.isEmpty ? nil : L10n.format("Press %@ to send", sendShortcut.sendKeyName)),
             metrics: .task(), input: nil, onExternalInput: acceptsAttachments ? { receive($0) } : nil, mentionRoots: [],
             mentionSearch: mentionSearch,
             onInsertMention: { RemoteComposerMentionIndex.insert($0, replacing: $1, into: draft) },

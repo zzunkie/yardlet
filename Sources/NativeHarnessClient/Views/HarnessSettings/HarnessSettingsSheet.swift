@@ -133,11 +133,11 @@ struct HarnessSettingsSheet: View {
         .accessibilityLabel(L10n.string("Harness settings sections"))
         .accessibilityValue(visibleSection.title)
         .accessibilityHint(L10n.string("Use the left and right arrow keys to switch sections."))
-        .onKeyPress(MacShortcut.leftItem.binding.key) {
+        .onMacKeyPress(.leftItem) {
             moveSection(by: -1)
             return .handled
         }
-        .onKeyPress(MacShortcut.rightItem.binding.key) {
+        .onMacKeyPress(.rightItem) {
             moveSection(by: 1)
             return .handled
         }

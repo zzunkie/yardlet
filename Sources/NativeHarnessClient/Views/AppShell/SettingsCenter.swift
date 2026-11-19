@@ -83,6 +83,7 @@ struct SettingsCenterView: View {
     @State private var setupExpanded = false
     @AppStorage(YardletPreferenceKeys.appearance) private var appearanceRawValue =
         YardletAppearancePreference.system.rawValue
+    @State private var shortcutEditor: ShortcutEditor
     @State private var themeDraft: AppearanceThemeDraft
     @AppStorage(YardletPreferenceKeys.interfaceSize) private var interfaceSizeRawValue =
         YardletInterfaceSizePreference.standard.rawValue
@@ -141,8 +142,10 @@ struct SettingsCenterView: View {
         lidHelper: LidSleepHelper? = nil,
         launchAtLogin: LaunchAtLogin? = nil,
         remoteHost: RemoteHostModel? = nil,
-        themeDraft: AppearanceThemeDraft? = nil
+        themeDraft: AppearanceThemeDraft? = nil,
+        shortcutEditor: ShortcutEditor? = nil
     ) {
+        _shortcutEditor = State(initialValue: shortcutEditor ?? ShortcutEditor())
         _themeDraft = State(initialValue: themeDraft ?? AppearanceThemeDraft())
         self.size = size
         self.connectors = connectors
@@ -232,11 +235,11 @@ struct SettingsCenterView: View {
                 .focused($isSectionListFocused)
                 .accessibilityLabel(L10n.string("Settings sections"))
                 .accessibilityValue(section.title)
-                .onKeyPress(MacShortcut.nextItem.binding.key) {
+                .onMacKeyPress(.nextItem) {
                     moveSection(by: 1)
                     return .handled
                 }
-                .onKeyPress(MacShortcut.previousItem.binding.key) {
+                .onMacKeyPress(.previousItem) {
                     moveSection(by: -1)
                     return .handled
                 }
@@ -246,7 +249,13 @@ struct SettingsCenterView: View {
                     .frame(width: 1)
 
                 Group {
-                    if section.isConnectionSection, let accounts {
+                    if section == .keyboardShortcuts {
+                        VStack(alignment: .leading, spacing: 14) {
+                            detailHeader
+                            KeyboardShortcutsSettings(editor: shortcutEditor)
+                        }
+                        .padding(20)
+                    } else if section.isConnectionSection, let accounts {
                         // These pages scroll their own lists under a fixed search and filter row.
                         VStack(alignment: .leading, spacing: 0) {
                             detailHeader.padding(.horizontal, 20).padding(.top, 20)
@@ -437,6 +446,8 @@ struct SettingsCenterView: View {
                     }
                 }
                 .disabled(!isRemoteWritable)
+            case .keyboardShortcuts:
+                EmptyView() // Owns its search field above the scrolling list.
             case .appearance:
                 appearanceDetail
             case .notifications:

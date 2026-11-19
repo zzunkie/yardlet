@@ -105,16 +105,16 @@ struct ComposerMenuList: View {
         .focusable()
         .focusEffectDisabled()
         .focused($isFocused)
-        .onKeyPress(MacShortcut.nextItem.binding.key) { move(by: 1) }
-        .onKeyPress(MacShortcut.previousItem.binding.key) { move(by: -1) }
-        .onKeyPress(MacShortcut.chooseItem.binding.key) { choose() }
-        .onKeyPress(MacShortcut.chooseItemSpace.binding.key) { choose() }
-        .onKeyPress(MacShortcut.rightItem.binding.key) {
+        .onMacKeyPress(.nextItem) { move(by: 1) }
+        .onMacKeyPress(.previousItem) { move(by: -1) }
+        .onMacKeyPress(.chooseItem) { choose() }
+        .onMacKeyPress(.chooseItemSpace) { choose() }
+        .onMacKeyPress(.rightItem) {
             guard let entry = highlightedEntry, entry.opensList else { return .ignored }
             entry.action?()
             return .handled
         }
-        .onKeyPress(MacShortcut.leftItem.binding.key) {
+        .onMacKeyPress(.leftItem) {
             guard let onBack else { return .ignored }
             onBack()
             return .handled

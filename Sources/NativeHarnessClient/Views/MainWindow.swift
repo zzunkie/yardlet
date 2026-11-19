@@ -2636,6 +2636,7 @@ struct MainWindow: View {
                 lidHelper: model.lidSleepHelper,
                 launchAtLogin: model.launchAtLogin
             )
+            .onAppear { MacShortcutPreferences.shared.readSystemAssignments(pinned: pinnedRows(lists).map(\.title), menu: NSApp.mainMenu) }
         }
         .sheet(item: $connectorAddStart, onDismiss: finishShellModal) { start in
             if let center = model.connectorCenter {
@@ -2662,6 +2663,7 @@ struct MainWindow: View {
         .focusedSceneValue(\.yardletImportPresented, modalBinding($isPresentingImport))
         .focusedSceneValue(\.yardletOtherAppImportPresented, modalBinding($isPresentingOtherAppImport))
         .focusedSceneValue(\.yardletRefreshFromOtherApps, refreshFromOtherApps)
+        .onAppear { MacShortcutPreferences.shared.readSystemAssignments(pinned: pinnedRows(lists).map(\.title), menu: NSApp.mainMenu) }
         .focusedSceneValue(\.yardletSplitCommands, splitCommands(lists))
         .focusedSceneValue(\.yardletTaskCommands, taskCommands(lists))
         .background(TerminalToggleKey(isEnabled: !hasPresentedModal && panelOwnerID != nil) {
@@ -2669,6 +2671,7 @@ struct MainWindow: View {
         })
         .focusedSceneValue(\.yardletConversationFind, conversationFind)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            MacShortcutPreferences.shared.readSystemAssignments(pinned: pinnedRows(lists).map(\.title), menu: NSApp.mainMenu)
             Task { await model.refreshVisibleProviderTitles() }
         }
         .onChange(of: model.store.selectedSessionID) { previous, current in

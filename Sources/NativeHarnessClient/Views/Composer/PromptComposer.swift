@@ -314,7 +314,7 @@ struct PromptComposer: View {
             accessibilityHint: isBashMode
                 ? L10n.string("Bash mode. Press Escape to return to chat.")
                 : runningFollowUp?.returnHint(preferred: followUpMode, keys: sendShortcut)
-                    ?? L10n.format("Press %@ to send", sendShortcut.sendKeyName),
+                    ?? (sendShortcut.sendKeyName.isEmpty ? nil : L10n.format("Press %@ to send", sendShortcut.sendKeyName)),
             metrics: .task(chipsTop: showsPausedCodexQueue ? 6 : 9),
             input: inputPolicy, mentionRoots: mentionRoots, commands: editorCommands,
             bashModeAvailable: bashModeAvailable,

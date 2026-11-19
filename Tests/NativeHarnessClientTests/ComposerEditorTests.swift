@@ -572,7 +572,7 @@ final class ComposerEditorTests: XCTestCase {
         }
         XCTAssertEqual(SendShortcut.allCases.map(\.sendSymbol), ["↩", "⌘↩", "⌘↩"])
         XCTAssertEqual(SendShortcut.allCases.map(\.alternateSymbol), ["⌘↩", "⇧⌘↩", "⇧⌘↩"])
-        XCTAssertEqual(SendShortcut.allCases.map { ComposerShortcut.send($0).displayText }, ["↩", "⌘↩", "⌘↩"],
+        XCTAssertEqual(SendShortcut.allCases.map { ComposerShortcut.send($0)?.displayText }, ["↩", "⌘↩", "⌘↩"],
                        "The send button's tooltip names the key that sends")
 
         // The Return an input method passes on after committing its composition reaches `onSubmit`;

@@ -111,10 +111,10 @@ enum MacShortcut: Hashable, Identifiable {
         case .surfaceReview: .init("Window", "Review", "2", .command)
         case .surfaceTerminal: .init("Window", "Terminal", "3", .command)
         case .surfaceBrowser: .init("Window", "Browser", "4", .command)
-        case .composerSend: .init("Composer", "Send", .return, [])
+        case .composerSend: .init("Composer", "Send or allow once", .return, [])
         case .composerAlternate: .init("Composer", "Send alternate follow-up", .return, .command)
         case .composerNewline: .init("Composer", "Insert newline", .return, .shift)
-        case .composerEscape: .init("Composer", "Dismiss or stop", .escape, [])
+        case .composerEscape: .init("Composer", "Dismiss, deny or stop", .escape, [])
         case .start: .init("Composer", "Start task", .return, .command)
         case .acceptSuggestion: .init("Composer", "Accept suggestion", .rightArrow, [])
         case .complete: .init("Composer", "Complete selection", .tab, [])
@@ -197,7 +197,33 @@ enum MacShortcut: Hashable, Identifiable {
         return KeyboardShortcut(item.key, modifiers: item.modifiers)
     }
 
-    var binding: KeyboardShortcut { defaultBinding() }
+    var isCustomized: Bool {
+        let overrides = MacShortcutPreferences.shared.snapshot.overrides
+        return !overrides.isEmpty && overrides[id] != nil
+    }
+
+    var binding: KeyboardShortcut? { MacShortcutPreferences.shared.binding(for: self) }
+
+    /// AppKit applies title-specific user equivalents itself. Giving them back as the app's base
+    /// binding would also assign them to a different title of the same command.
+    var menuBinding: KeyboardShortcut? {
+        let prefs = MacShortcutPreferences.shared
+        if prefs.snapshot.system.contains(where: { $0.commands.contains(self) }) { return defaultBinding() }
+        return prefs.binding(for: self)
+    }
+
+    @MainActor func matches(_ press: KeyPress) -> Bool {
+        let state = MacShortcutPreferences.shared.snapshot
+        if !state.overrides.isEmpty, let value = state.overrides[id] {
+            guard let chord = MacKeyChord(notation: value) else { return false }
+            return MacKeyChord(KeyboardShortcut(press.key, modifiers: press.modifiers)) == chord
+                || (NSApp.currentEvent.flatMap { event in
+                    guard event.type == .keyDown else { return nil as MacKeyChord? }
+                    return MacKeyChord(event: MacShortcutEvent(event))
+                } == chord)
+        }
+        return press.key == definition.key
+    }
 
     static func focus(_ direction: PaneFocusDirection) -> Self {
         switch direction {
@@ -254,7 +280,22 @@ struct MacShortcutEvent {
 extension MacShortcut {
     /// The original browser responder accepts extra modifiers for editing and navigation. Its
     /// tab-number keys and Control-Tab have always required the narrower masks below.
-    func matches(_ event: MacShortcutEvent) -> Bool {
+    func matches(_ event: MacShortcutEvent, in preferences: MacShortcutPreferences = .shared) -> Bool {
+        let state = preferences.snapshot
+        if !state.system.isEmpty, state.system.contains(where: { $0.chord.matches(event) }) {
+            return false // Let the system's menu item take its key.
+        }
+        if !state.overrides.isEmpty, let value = state.overrides[id] {
+            guard let chord = MacKeyChord(notation: value) else { return false }
+            return chord.matches(event)
+        }
+        return matchesDefault(event)
+    }
+
+    func matchesDefault(_ event: MacShortcutEvent) -> Bool {
+        if case let .browserTab(number) = self {
+            return event.flags.subtracting(.numericPad) == .command && Int(event.character ?? "") == number
+        }
         let item = definition
         let key = String(item.key.character)
         let flags = event.flags
@@ -262,8 +303,6 @@ extension MacShortcut {
         switch self {
         case .browserNext, .browserPrevious:
             return event.keyCode == 48 && flags == required
-        case .browserTab:
-            return flags.subtracting(.numericPad) == required && Int(event.character ?? "") == Int(key)
         case .browserNew, .browserReopen, .browserClose, .browserUndo, .browserRedo:
             return flags.contains(.command) && flags.contains(.shift) == required.contains(.shift) && event.character == key
         case .browserZoomIn, .browserZoomOut, .browserReset, .browserBack, .browserForward,
@@ -289,9 +328,16 @@ extension MacShortcut {
         }
     }
 
-    static func numberedOption(_ character: String, command: (Int) -> Self) -> Int? {
-        guard let number = Int(character), (1...9).contains(number),
-              Int(String(command(number).definition.key.character)) == number else { return nil }
+    @MainActor static func numberedOption(_ press: KeyPress, command: (Int) -> Self, requiresPlain: Bool) -> Int? {
+        let state = MacShortcutPreferences.shared.snapshot
+        if !state.overrides.isEmpty {
+            for number in 1...9 {
+                let item = command(number)
+                if state.overrides[item.id] != nil && item.matches(press) { return number }
+            }
+        }
+        guard !requiresPlain || press.modifiers.isEmpty, let number = Int(press.characters), (1...9).contains(number),
+              state.overrides.isEmpty || state.overrides[command(number).id] == nil else { return nil }
         return number
     }
 
@@ -305,36 +351,45 @@ extension MacShortcut {
 
 
 extension View {
+    /// For the original key keep SwiftUI's native key-filtered handler (including its repeat
+    /// policy). A recorded chord also checks modifiers and the Command layout of the current event.
     @ViewBuilder
-    func onMacShortcutExit(_ command: MacShortcut = .dismiss, perform: @escaping () -> Void) -> some View {
-        let shortcut = command.binding
-        if shortcut.key == .escape && shortcut.modifiers.isEmpty {
-            onExitCommand(perform: perform)
-        } else {
-            onKeyPress(shortcut.key, phases: .down) { press in
-                guard press.modifiers.intersection([.control, .option, .shift, .command]) == shortcut.modifiers else {
-                    return .ignored
+    func onMacKeyPress(_ command: MacShortcut, phases: KeyPress.Phases = [.down, .repeat],
+                       perform: @escaping (KeyPress) -> KeyPress.Result) -> some View {
+        let state = MacShortcutPreferences.shared.snapshot
+        if let value = state.overrides[command.id] {
+            if !value.isEmpty {
+                onKeyPress(phases: phases) { press in
+                    guard command.matches(press), !ComposerFieldEditor.hasMarkedText else { return .ignored }
+                    return perform(press)
                 }
-                perform()
-                return .handled
-            }
+            } else { self }
+        } else {
+            onKeyPress(command.definition.key, phases: phases, action: perform)
         }
     }
 
-    /// Use the field's submit action so the input method can commit marked text before submission.
+    @ViewBuilder
+    func onMacKeyPress(_ command: MacShortcut, perform: @escaping () -> KeyPress.Result) -> some View {
+        if command.isCustomized { onMacKeyPress(command) { _ in perform() } }
+        else { onKeyPress(command.definition.key, action: perform) }
+    }
+
+    @ViewBuilder
+    func onMacShortcutExit(_ command: MacShortcut = .dismiss, perform: @escaping () -> Void) -> some View {
+        if MacShortcutPreferences.shared.snapshot.overrides[command.id] == nil {
+            onExitCommand(perform: perform)
+        } else {
+            onMacKeyPress(command, phases: .down) { _ in perform(); return .handled }
+        }
+    }
+
     @ViewBuilder
     func onMacShortcutSubmit(_ command: MacShortcut, perform: @escaping () -> Void) -> some View {
-        let shortcut = command.binding
-        if shortcut.key == .return && shortcut.modifiers.isEmpty {
+        if MacShortcutPreferences.shared.snapshot.overrides[command.id] == nil {
             onSubmit(perform)
         } else {
-            onKeyPress(shortcut.key, phases: .down) { press in
-                guard press.modifiers.intersection([.control, .option, .shift, .command]) == shortcut.modifiers else {
-                    return .ignored
-                }
-                perform()
-                return .handled
-            }
+            onMacKeyPress(command, phases: .down) { _ in perform(); return .handled }
         }
     }
 }

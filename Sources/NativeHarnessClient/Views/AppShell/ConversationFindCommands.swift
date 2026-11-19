@@ -20,13 +20,13 @@ struct YardletConversationFindCommands: Commands {
         CommandGroup(after: .pasteboard) {
             Divider()
             Button(L10n.string("Find")) { find?.openFromKeyWindow() }
-                .keyboardShortcut(MacShortcut.conversationFind.binding)
+                .keyboardShortcut(MacShortcut.conversationFind.menuBinding)
                 .disabled(find == nil)
             Button(L10n.string("Next result")) { find?.next() }
-                .keyboardShortcut(MacShortcut.nextResult.binding)
+                .keyboardShortcut(MacShortcut.nextResult.menuBinding)
                 .disabled(find == nil)
             Button(L10n.string("Previous result")) { find?.previous() }
-                .keyboardShortcut(MacShortcut.previousResult.binding)
+                .keyboardShortcut(MacShortcut.previousResult.menuBinding)
                 .disabled(find == nil)
         }
     }

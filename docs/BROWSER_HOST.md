@@ -274,7 +274,7 @@ change and when Yardlet quits (`StateFileWriter`). Chromium's own `History` in e
   (`YardletBrowserHostApplication`). Without it key events are stamped seconds late, and when an SPA navigates on
   input stamped earlier than the page opened, Blink's soft navigation CHECK ends the renderer (section 3, "Renderer
   exit").
-- Shortcuts (when the panel view has focus): ⌘C/⌘X/⌘V/⌘A/⌘Z/⇧⌘Z, ⌘+/⌘−/⌘0 zoom in and out, ⌘F find, ⌘L address field, ⌘R
+- Default shortcuts when the panel view has focus (see [Mac keyboard shortcuts](DESIGN_SYSTEM.md#mac-keyboard-shortcuts) to change them): ⌘C/⌘X/⌘V/⌘A/⌘Z/⇧⌘Z, ⌘+/⌘−/⌘0 zoom in and out, ⌘F find, ⌘L address field, ⌘R
   reload, ⌘[/⌘] back and forward. Each is read by what its key types with ⌘, as the menu bar reads it, so a Korean or
   other non-Latin input source takes them too. Tabs (only when the window's focus is on the page): ⌘T new panel browser
   tab, ⌘W close this tab (the panel tab closing rule), ⌘⇧T reopen a closed tab as a new tab, ⌃Tab and ⌃⇧Tab next and

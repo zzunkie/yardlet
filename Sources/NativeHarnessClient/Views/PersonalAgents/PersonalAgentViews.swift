@@ -1283,7 +1283,7 @@ private struct PersonalAgentComposer: View {
                 .font(.caption).foregroundStyle(.secondary)
             }
             ComposerEditor(draft: draft.editor, placeholder: L10n.string("Message your dot…"),
-                accessibilityHint: L10n.format("Press %@ to send", sendShortcut.sendKeyName), metrics: .task(),
+                accessibilityHint: (sendShortcut.sendKeyName.isEmpty ? nil : L10n.format("Press %@ to send", sendShortcut.sendKeyName)), metrics: .task(),
                 input: nil, onExternalInput: externalInput, mentionRoots: [], commands: nil,
                 isCommandMenuOpen: false, isMenuOpen: false, showsChips: !draft.files.isEmpty,
                 isFocused: $focused, onSubmit: submit, onEscape: onEscape) {

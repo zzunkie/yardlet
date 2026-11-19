@@ -418,15 +418,15 @@ struct TaskSidebar: View {
                 .focusable()
                 .focusEffectDisabled()
                 .focused($isTaskListFocused)
-                .onKeyPress(MacShortcut.nextItem.binding.key) {
+                .onMacKeyPress(.nextItem) {
                     moveSelection(by: 1)
                     return .handled
                 }
-                .onKeyPress(MacShortcut.previousItem.binding.key) {
+                .onMacKeyPress(.previousItem) {
                     moveSelection(by: -1)
                     return .handled
                 }
-                .onKeyPress(MacShortcut.chooseItem.binding.key) {
+                .onMacKeyPress(.chooseItem) {
                     guard navigationSelection != .home else { return .ignored }
                     onActivate(navigationSelection)
                     return .handled

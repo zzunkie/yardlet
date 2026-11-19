@@ -134,7 +134,7 @@ enum RemoteHostSettingsProjection {
             hasCLIUpdates: settings?.cliUpdates != nil,
             hasInstructions: settings?.instructions != nil,
             hasUsage: settings?.usage != nil
-        ).filter { $0 != .appearance && $0 != .notifications }
+        ).filter { $0 != .appearance && $0 != .keyboardShortcuts && $0 != .notifications }
     }
 
     static func generalRows(_ settings: RemoteHostSettings?) -> [YardletSetting] {

@@ -53,6 +53,7 @@ final class BrowserHostView: NSView, @preconcurrency NSTextInputClient, MouseHis
     /// The view joined or left a window.
     var onWindowChange: (() -> Void)?
     var onShortcut: ((BrowserPanelShortcut) -> Void)?
+    var shortcutPreferences = MacShortcutPreferences.shared
     /// Escape while the panel picks an element ends picking instead of reaching the page; true when it did.
     var onEscape: (() -> Bool)?
     weak var accessibilitySource: BrowserAccessibilitySource?
@@ -618,7 +619,9 @@ final class BrowserHostView: NSView, @preconcurrency NSTextInputClient, MouseHis
     // MARK: Keys
 
     override func keyDown(with event: NSEvent) {
-        if MacShortcut.browserEscape.matches(MacShortcutEvent(event)), !hasMarkedText(), onEscape?() == true { return }
+        if MacShortcut.browserEscape.matches(MacShortcutEvent(event), in: shortcutPreferences), !hasMarkedText(), onEscape?() == true { return }
+        if !hasMarkedText(), !shortcutPreferences.snapshot.overrides.isEmpty,
+           performPageShortcut(event, customizedOnly: true) { return }
         keyDown(event) { [self] in
             if inputContext?.handleEvent(event) != true {
                 interpretKeyEvents([event])
@@ -703,8 +706,17 @@ final class BrowserHostView: NSView, @preconcurrency NSTextInputClient, MouseHis
         guard window?.firstResponder === self, event.type == .keyDown else {
             return super.performKeyEquivalent(with: event)
         }
+        if shortcutPreferences.snapshot.overrides[MacShortcut.browserEscape.id] != nil, !hasMarkedText(), MacShortcut.browserEscape.matches(MacShortcutEvent(event), in: shortcutPreferences),
+           onEscape?() == true { return true }
+        return performPageShortcut(event, customizedOnly: false) || super.performKeyEquivalent(with: event)
+    }
+
+    private func performPageShortcut(_ event: NSEvent, customizedOnly: Bool) -> Bool {
         let key = MacShortcutEvent(event)
-        switch MacShortcut.browserPageCommands.first(where: { $0.matches(key) }) {
+        let overrides = shortcutPreferences.snapshot.overrides
+        switch MacShortcut.browserPageCommands.first(where: {
+            (!customizedOnly || overrides[$0.id] != nil) && $0.matches(key, in: shortcutPreferences)
+        }) {
         case .browserNext: onShortcut?(.nextTab)
         case .browserPrevious: onShortcut?(.previousTab)
         case let .browserTab(number): onShortcut?(.selectTab(number))
@@ -725,7 +737,7 @@ final class BrowserHostView: NSView, @preconcurrency NSTextInputClient, MouseHis
         case .browserReload: onShortcut?(.reload)
         case .browserBack: onShortcut?(.back)
         case .browserForward: onShortcut?(.forward)
-        default: return super.performKeyEquivalent(with: event)
+        default: return false
         }
         return true
     }

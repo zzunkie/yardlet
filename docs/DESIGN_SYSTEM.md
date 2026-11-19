@@ -234,3 +234,18 @@ Menu commands continue to participate in System Settings > Keyboard > Keyboard S
 | Terminal | ⌘J and Control-backtick toggle the terminal. The latter is handled by the window while its panel commands are enabled. ⇧⌘L attaches a shared terminal selection; the terminal and shell handle their own input. |
 | Browser page | The focused page handles editing, navigation, zoom, find, address and browser-tab commands. The window's task-surface bindings take precedence where registered. The address field has its own suggestion keys. See [Browser host](BROWSER_HOST.md). |
 | Other focused controls | The palette and lists navigate a selection; the model picker and question form have numbered choices. Image previews handle navigation and zoom. Mail composition and the Simulator screen have their own commands. Standard text editing, dialog acceptance, cancellation and focus traversal follow the native control. |
+
+Settings > Keyboard shortcuts searches by command, scope or current key. Click a key to record a
+replacement, clear it or restore the default. If another command uses the requested key, the editor
+names it before offering to clear its binding and assign the new one. Cancel preserves both bindings.
+Restoring all shortcuts removes the Mac shortcut preference. Commands that share a factory key keep
+their original focus and priority when restored.
+
+A shortcut assigned in macOS App Shortcuts takes precedence. The editor shows the assigned key
+and its owner, and directs changes to System Settings > Keyboard > Keyboard Shortcuts > App Shortcuts.
+It reads those assignments when Settings opens or the app becomes active. If macOS assigns a command,
+Yardlet drops its own override for that command. The recorder also identifies standard shortcuts for
+Spotlight, input sources and app switching. macOS can consume those keys before a recorder receives them.
+
+The list configures this Mac. Agent settings tools continue to expose the composer's existing send
+preference. Recording a key and confirming the displacement of another command take place in the editor.

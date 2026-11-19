@@ -58,10 +58,10 @@ struct ConversationFindBar: View {
                     .accessibilityLabel(L10n.string("Find in chat"))
                     .onSubmit {
                         // Shift-Return reaches here too if the key press handler below did not see it.
-                        find.submit(backward: NSApp.currentEvent?.modifierFlags.contains(.shift) == true)
+                        find.submit(backward: !MacShortcut.previousFindMatch.isCustomized && NSApp.currentEvent?.modifierFlags.contains(.shift) == true)
                     }
-                    .onKeyPress(MacShortcut.previousFindMatch.binding.key, phases: .down) { press in
-                        guard press.modifiers.contains(.shift), !fieldHasMarkedText else { return .ignored }
+                    .onMacKeyPress(.previousFindMatch, phases: .down) { press in
+                        guard MacShortcut.previousFindMatch.isCustomized || press.modifiers.contains(.shift), !fieldHasMarkedText else { return .ignored }
                         find.submit(backward: true)
                         return .handled
                     }

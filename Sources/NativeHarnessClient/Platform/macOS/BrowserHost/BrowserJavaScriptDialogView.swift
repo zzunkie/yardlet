@@ -51,7 +51,7 @@ struct BrowserJavaScriptDialogView: View {
             .focusable(dialog.kind != .prompt)
             .focusEffectDisabled()
             .focused($focus, equals: .buttons)
-            .onKeyPress(MacShortcut.confirmDialog.binding.key) {
+            .onMacKeyPress(.confirmDialog) {
                 controller.answerJavaScriptDialog(accept: true)
                 return .handled
             }

@@ -236,7 +236,7 @@ struct YardletHelpCommands: Commands {
     var body: some Commands {
         CommandGroup(replacing: .help) {
             Button(L10n.string("Yardlet Help")) { NSWorkspace.shared.open(Self.helpURL) }
-                .keyboardShortcut(MacShortcut.help.binding)
+                .keyboardShortcut(MacShortcut.help.menuBinding)
             Divider()
             Button(L10n.string("Report a Problem…")) { report() }
             Button(L10n.string("Show Diagnostic Logs")) { DiagnosticLogFolders.show() }

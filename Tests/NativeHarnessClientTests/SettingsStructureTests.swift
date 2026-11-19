@@ -12,7 +12,7 @@ final class SettingsStructureTests: XCTestCase {
         XCTAssertEqual(all.first, .yardletAccount, "The Yardlet account comes first, as both apps put the account first")
         XCTAssertNil(SettingsSection.yardletAccount.group)
         XCTAssertEqual(SettingsSection.Group.allCases.map { group in all.filter { $0.group == group } }, [
-            [.general, .appearance, .notifications, .instructions],
+            [.general, .appearance, .keyboardShortcuts, .notifications, .instructions],
             [.connectors, .vault, .remote],
             [.harnesses, .accounts, .usage, .cliUpdates],
         ])
