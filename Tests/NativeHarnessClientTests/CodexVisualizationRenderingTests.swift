@@ -115,6 +115,19 @@ final class CodexVisualizationRenderingTests: XCTestCase {
             XCTAssertTrue(webView.superview === row, "Back in its row")
             XCTAssertEqual(controller.display.state, .live)
 
+            // Its row drawn again in the other appearance finds the page still live and gives it that appearance.
+            let changedTo = { (dark: Bool) in CodexVisualizationStates.shared.state(key)?.contains("\"changedToDark\":\(dark)") == true }
+            await host.settle(until: { changedTo(appearance == .dark) }, timeout: 10)
+            host.close()
+            let other: WindowlessRender.Appearance = appearance == .dark ? .light : .dark
+            let again = WindowlessRender.Host(
+                conversation(itemID: itemID, answer: "Here is the chart.\n\n::codex-inline-vis{file=\"probe.html\"}\n\nDone.")
+                    .frame(width: 900, height: 700),
+                size: NSSize(width: 900, height: 700), appearance: other)
+            defer { again.close() }
+            await again.settle(until: { changedTo(other == .dark) }, timeout: 10)
+            XCTAssertTrue(changedTo(other == .dark), "A row drawn again tells its live page the appearance it is drawn in")
+
             // The pool keeps views live past their rows; another suite counts the live ones.
             await controller.park()
         }

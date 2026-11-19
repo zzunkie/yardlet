@@ -60,7 +60,9 @@ struct ConnectorViewCard<Fallback: View>: View {
                         .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
                 }
             }
-            .onChange(of: colorScheme) { _, scheme in controller.setDark(scheme == .dark) }
+            // Also as the card appears: a row drawn again finds its pooled page still live, in the appearance it
+            // started with.
+            .onChange(of: colorScheme, initial: true) { _, scheme in controller.setDark(scheme == .dark) }
             .accessibilityElement(children: .contain)
             .accessibilityLabel(L10n.string("Connector view"))
         }
