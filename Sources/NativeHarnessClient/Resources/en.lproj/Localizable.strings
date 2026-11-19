@@ -1304,6 +1304,7 @@
 "More allow options" = "More allow options";
 "Applies to this session only" = "Applies to this session only";
 "Switches this session to %@ mode" = "Switches this session to %@ mode";
+"Saves to local project settings" = "Saves to local project settings";
 "Saves to local project settings on this Mac" = "Saves to local project settings on this Mac";
 "Saves to shared project settings" = "Saves to shared project settings";
 "Saves to user settings for all projects" = "Saves to user settings for all projects";

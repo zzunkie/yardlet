@@ -2,17 +2,8 @@ import Foundation
 import UWP
 import WinUI
 
-/// The one card for a request a provider asks the person to answer, drawn from the same `ConversationRequest` the
-/// Mac's `ConversationRequestCard` draws and in its look: a tile with the request's mark in its state's color, the
-/// state ("Approval needed") over the request's title, what the request would do (an edit's diff as the file change
-/// card draws it, a file's new contents, a command), and the provider's own options as the Mac's gray buttons, the
-/// prominent one in Yardlet's accent and last. A choice or free-text question is asked one at a time
-/// (`ConversationQuestionStepper`) with its options as filled rows, the picked option's preview beside them where
-/// they have previews, and Skip; a plan comes to review with what to change, and an MCP form field by field
-/// (`CodexMCPElicitationForm`). Each answer goes back by its route; a form's route is made from what was entered
-/// (`ConversationRequest.route(for:input:)`), and an answer stays off until the form can be sent. Once answered, the
-/// card reads as the answer it got. The timeline keeps one card per request, so what a form holds stays while its
-/// turn redraws.
+/// A provider's pending request and its answers. Once the person answers, the same card moves into
+/// the turn as a compact record, keeping its form input until the provider records the answer.
 @MainActor
 final class RequestCard {
     let view = Border()
@@ -24,6 +15,7 @@ final class RequestCard {
     /// Asks before an answer goes, where one needs it; false leaves the card as it was.
     var confirm: (@MainActor (ConversationRequest, ConversationRequestResponse) async -> Bool)?
     private var note: String?
+    private var answeredByComposerKeys: Bool
     /// The task's folder, which a previewed edit's path is read against.
     private let workspaceURL: URL?
     private var input = ConversationRequestFormInput()
@@ -41,26 +33,26 @@ final class RequestCard {
     private var fields: [Control] = []
 
     init(request: ConversationRequest, respond: ((ConversationRequest, ConversationRequestResponse) -> Void)?,
-         note: String?, workspaceURL: URL? = nil) {
+         note: String?, workspaceURL: URL? = nil, answeredByComposerKeys: Bool = false) {
         self.request = request
         self.respond = respond
         self.note = note
         self.workspaceURL = workspaceURL
+        self.answeredByComposerKeys = answeredByComposerKeys
         // A waiting question that takes one answer starts on its first option, as both apps start it.
         if request.state == .pending, let form = request.form { input.preselect(form.questionSteps) }
-        content.spacing = WindowsTheme.proseBlockSpacing
         view.child = content
-        view.padding = Thickness(left: 12, top: 12, right: 12, bottom: 12)
-        view.cornerRadius = ConversationStyle.corners(11)
-        view.borderThickness = Thickness(left: 1, top: 1, right: 1, bottom: 1)
         draw()
     }
 
     /// The request as it stands; the card draws again only when it changed, keeping what its form holds.
     func update(_ request: ConversationRequest, respond: ((ConversationRequest, ConversationRequestResponse) -> Void)?,
-                note: String?) {
+                note: String?, answeredByComposerKeys: Bool = false) {
+        let canRespondChanged = (self.respond == nil) != (respond == nil)
         self.respond = respond
-        guard request != self.request || note != self.note else { return }
+        guard request != self.request || note != self.note || canRespondChanged
+                || answeredByComposerKeys != self.answeredByComposerKeys else { return }
+        self.answeredByComposerKeys = answeredByComposerKeys
         self.request = request
         self.note = note
         draw()
@@ -92,17 +84,29 @@ final class RequestCard {
         fields = []
         view.isHitTestVisible = true
         content.opacity = 1
-        let tint = Self.tint(request.state)
-        view.background = tint.opacity(0.05).brush
-        view.borderBrush = tint.opacity(0.24).brush
-        content.children.append(header(tint: tint))
-        if let detail = request.detail, !detail.isEmpty, request.preview?.repeats(detail) != true {
+        let pending = request.state == .pending
+        content.spacing = pending ? 12 : 8
+        view.background = pending ? WindowsTheme.elevated.brush : nil
+        view.borderBrush = pending ? WindowsTheme.strongSeparator.brush : nil
+        view.cornerRadius = ConversationStyle.corners(WindowsTheme.panelCornerRadius)
+        let inset: Double = pending ? 12 : 0
+        let line: Double = pending ? 1 : 0
+        view.padding = Thickness(left: inset, top: inset, right: inset, bottom: inset)
+        view.borderThickness = Thickness(left: line, top: line, right: line, bottom: line)
+        guard pending else {
+            drawAnswered()
+            return
+        }
+
+        content.children.append(header())
+        if request.descriptionHeadline == nil, let detail = request.detail, !detail.isEmpty,
+           request.preview?.repeats(detail) != true {
             content.children.append(Self.text(detail, size: ConversationStyle.calloutSize, muted: true))
         }
         if let preview = request.preview {
             content.children.append(previewView(preview))
         } else if let command = request.command {
-            content.children.append(Self.labeledBox(L10n.string("Command"), Self.code(command)))
+            content.children.append(Self.code(command))
         }
         // The provider's own reasons and fields (Codex); a free-text question shows its questions instead.
         if !isFreeText, let context = request.codexContext { providerContext(context) }
@@ -116,12 +120,12 @@ final class RequestCard {
         case let .planReview(plan):
             planReview(plan)
         case let .mcpForm(form):
-            mcpForm(form)
+            mcpForm(form, in: content)
         case nil:
             break
         }
 
-        if request.state == .pending, !drawsAnswers {
+        if !drawsAnswers {
             if !responses.isEmpty {
                 content.children.append(answerRow(responses))
             } else if respond == nil {
@@ -131,8 +135,6 @@ final class RequestCard {
                     ?? L10n.string("This Codex request needs a structured response."),
                     size: ConversationStyle.captionSize, muted: true))
             }
-        } else {
-            stateNote()
         }
         refresh()
     }
@@ -142,52 +144,74 @@ final class RequestCard {
         return false
     }
 
-    /// The request's mark on a tile in its state's color, and the state over the title (the Mac's header).
-    private func header(tint: Tint) -> UIElement {
-        let mark = ConversationStyle.icon(icon, size: 14, brush: tint.solid.brush)
-        mark.horizontalAlignment = .center
-        let tile = Border()
-        tile.width = 28
-        tile.height = 28
-        tile.cornerRadius = ConversationStyle.corners(7)
-        tile.background = tint.opacity(0.1).brush
-        tile.verticalAlignment = .top
-        tile.child = mark
-        let state = Self.text(request.stateTitle, size: ConversationStyle.captionSize, semibold: true)
-        state.foreground = tint.solid.brush
+    private func header() -> UIElement {
         let words = StackPanel()
-        words.spacing = 3
-        words.children.append(state)
-        words.children.append(Self.text(request.title, size: ConversationStyle.calloutSize, semibold: true))
-        let row = Grid()
-        row.columnSpacing = 10
+        words.spacing = 2
+        if let headline = request.descriptionHeadline {
+            words.children.append(Self.text(request.title, size: ConversationStyle.captionSize, muted: true))
+            words.children.append(Self.text(headline, size: ConversationStyle.calloutSize, semibold: true))
+        } else {
+            words.children.append(Self.text(request.title, size: ConversationStyle.calloutSize, semibold: true))
+        }
+        if let method = request.method, !method.isEmpty { try? ToolTipService.setToolTip(words, method) }
+        return words
+    }
+
+    private func drawAnswered() {
+        let outcome = StackPanel()
+        outcome.spacing = 4
+        let line = Grid()
+        line.columnSpacing = 6
         for width in [GridLength(value: 0, gridUnitType: .auto), GridLength(value: 1, gridUnitType: .star)] {
             let column = ColumnDefinition()
             column.width = width
-            row.columnDefinitions.append(column)
+            line.columnDefinitions.append(column)
         }
-        row.children.append(tile)
+        let symbol: String = switch request.state {
+        case .allowed, .answered: ConversationStyle.Glyph.check
+        case .denied, .rejected: ConversationStyle.Glyph.cancel
+        case .pending, .expired: ConversationStyle.Glyph.clock
+        }
+        line.children.append(ConversationStyle.icon(symbol, size: 13))
+        let detail = request.outcomeDetail ?? ""
+        let subject = [request.title, detail].filter { !$0.isEmpty }.joined(separator: " ")
+        let words = ConversationStyle.text("\(request.stateTitle) · \(subject)", size: ConversationStyle.calloutSize,
+                                           tone: .secondary, wraps: false)
         try? Grid.setColumn(words, 1)
-        row.children.append(words)
-        if let method = request.method, !method.isEmpty { try? ToolTipService.setToolTip(row, method) }
-        return row
+        line.children.append(words)
+        if let method = request.method, !method.isEmpty { try? ToolTipService.setToolTip(line, method) }
+        outcome.children.append(line)
+        switch request.state {
+        case let .expired(message?), let .rejected(message):
+            if !message.isEmpty { outcome.children.append(Self.text(message, size: ConversationStyle.captionSize, muted: true)) }
+        default:
+            break
+        }
+        content.children.append(outcome)
+        switch request.form {
+        case .choices, .freeText:
+            let steps = request.form?.questionSteps ?? []
+            let answers = request.recordedAnswers ?? sent.map { $0.answers(for: steps) }
+            content.children.append(Self.answerDetail(questionSummary(steps, answers: answers)))
+        case let .mcpForm(form):
+            let fields = StackPanel()
+            fields.spacing = 12
+            mcpForm(form, in: fields)
+            content.children.append(Self.answerDetail(fields))
+        case let .planReview(plan):
+            planReview(plan)
+        case nil:
+            break
+        }
     }
 
-    /// The request's mark, as the Mac's for its kind and state.
-    private var icon: String {
-        let (isQuestion, isPlan): (Bool, Bool) = switch request.form {
-        case .choices, .freeText, .mcpForm: (true, false)
-        case .planReview: (false, true)
-        case nil: (false, false)
-        }
-        typealias Glyph = ConversationStyle.Glyph
-        switch request.state {
-        case .pending: return isQuestion ? Glyph.question : isPlan ? Glyph.list : Glyph.shield
-        case .allowed, .answered: return Glyph.check
-        case .denied: return Glyph.cancel
-        case .expired: return Glyph.clock
-        case .rejected: return Glyph.error
-        }
+    private static func answerDetail(_ detail: UIElement) -> Border {
+        let bar = Border()
+        bar.borderBrush = WindowsTheme.strongSeparator.brush
+        bar.borderThickness = Thickness(left: 2, top: 0, right: 0, bottom: 0)
+        bar.padding = Thickness(left: 10, top: 0, right: 0, bottom: 0)
+        bar.child = detail
+        return bar
     }
 
     // MARK: - What the request would do
@@ -209,12 +233,10 @@ final class RequestCard {
             return diffBox(path: path, diff: diff, emptyText: L10n.string("Empty file"), summary: lines)
         case let .command(command, description):
             let stack = StackPanel()
-            stack.spacing = 6
-            if let description {
+            stack.spacing = 8
+            if request.descriptionHeadline == nil, let description {
                 stack.children.append(Self.text(description, size: ConversationStyle.calloutSize, muted: true))
             }
-            stack.children.append(ConversationStyle.text(L10n.string("Command"), size: ConversationStyle.captionSize,
-                                                         tone: .tertiary, semibold: true))
             stack.children.append(Self.code(command.text))
             if command.omittedLineCount > 0 {
                 stack.children.append(Self.text(L10n.format("%lld more lines", Int64(command.omittedLineCount)),
@@ -265,32 +287,11 @@ final class RequestCard {
         for refresher in refreshers { refresher() }
     }
 
-    /// Why an answered card ended the way it did, in the provider's words.
-    private func stateNote() {
-        switch request.state {
-        case let .expired(message?) where !message.isEmpty:
-            content.children.append(Self.text(message, size: ConversationStyle.captionSize, muted: true))
-        case let .rejected(message) where !message.isEmpty:
-            let line = Self.text(message, size: ConversationStyle.captionSize)
-            line.foreground = ConversationStyle.red.solid.brush
-            content.children.append(line)
-        default:
-            break
-        }
-    }
-
     // MARK: - Questions
 
-    /// The provider's own questions, one at a time while the request waits, and each with its answer once it is
-    /// answered, as the Mac's question form (`ConversationQuestionStepsView`): the question's label and its place among
-    /// several, the question, its options as filled rows (the picked one's preview beside them where they have
-    /// previews), the person's own answer, then Skip and Next, or on the last question the answers. Returns whether
-    /// the answers are drawn in the form, in its last question's row.
+    /// Shows one pending question and its choices. An answerable form puts its controls on the last
+    /// question's row and handles its own navigation.
     private func questionForm(_ steps: [ConversationQuestionStep]) -> Bool {
-        guard request.state == .pending else {
-            questionSummary(steps, answers: request.recordedAnswers ?? sent.map { $0.answers(for: steps) })
-            return false
-        }
         let stepper = ConversationQuestionStepper(steps: steps, index: questionIndex)
         guard let step = stepper.current else { return false }
         let isAnswerable = answersForm
@@ -416,9 +417,7 @@ final class RequestCard {
         return grid
     }
 
-    /// One of the provider's options as the Mac's filled row: a radio button for a question that takes one answer,
-    /// a check box for one that takes several, its label (semibold once picked) over its description, on a fill
-    /// that darkens once it is picked.
+    /// A radio or check box, with the provider's label above its description.
     private func optionControl(_ step: ConversationQuestionStep, _ option: PermissionQuestionOption,
                                isAnswerable: Bool) -> UIElement {
         let label = StackPanel()
@@ -437,12 +436,8 @@ final class RequestCard {
             self.customChosen.remove(step.id)
             self.refresh()
         }
-        let row = Self.optionRow()
-        refreshers.append {
-            let picked = isPicked()
-            row.background = (picked ? WindowsTheme.selectedFill : WindowsTheme.subtleFill).brush
-            title.fontWeight = UWP.FontWeight(weight: picked ? 600 : 400)
-        }
+        let row = optionRow(isAnswerable: isAnswerable, isPicked: isPicked)
+        refreshers.append { title.fontWeight = UWP.FontWeight(weight: isPicked() ? 600 : 400) }
         if step.allowsMultipleSelections {
             let box = CheckBox()
             box.content = label
@@ -513,9 +508,8 @@ final class RequestCard {
         grid.children.append(mark)
         try? Grid.setColumn(field, 1)
         grid.children.append(field)
-        let row = Self.optionRow()
+        let row = optionRow(isAnswerable: isAnswerable, isPicked: isChosen)
         row.child = grid
-        refreshers.append { row.background = (isChosen() ? WindowsTheme.selectedFill : WindowsTheme.subtleFill).brush }
         return row
     }
 
@@ -607,7 +601,7 @@ final class RequestCard {
 
     /// An answered form as both apps show one: each question, and under it what it was answered with, or that it
     /// was not answered. With no answers known it lists the questions alone.
-    private func questionSummary(_ steps: [ConversationQuestionStep], answers: [String: ConversationQuestionAnswer]?) {
+    private func questionSummary(_ steps: [ConversationQuestionStep], answers: [String: ConversationQuestionAnswer]?) -> StackPanel {
         let list = StackPanel()
         list.spacing = 10
         for step in steps {
@@ -637,7 +631,7 @@ final class RequestCard {
             }
             list.children.append(block)
         }
-        content.children.append(list)
+        return list
     }
 
     // MARK: - Plan review
@@ -669,9 +663,9 @@ final class RequestCard {
 
     /// Each field under the server's title and description, with what it takes and, once something is entered,
     /// why it cannot be sent yet. An answered form shows what was sent.
-    private func mcpForm(_ form: CodexMCPElicitationForm) {
+    private func mcpForm(_ form: CodexMCPElicitationForm, in panel: StackPanel) {
         for field in form.fields {
-            content.children.append(form.recorded != nil ? sentRow(form, field) : fieldView(form, field))
+            panel.children.append(form.recorded != nil ? sentRow(form, field) : fieldView(form, field))
         }
     }
 
@@ -786,7 +780,42 @@ final class RequestCard {
 
     /// The answers in one row, the prominent one last.
     private func answerRow(_ responses: [ConversationRequestResponse]) -> UIElement {
-        Self.buttonRow(responses.map { answerButton($0) })
+        let controls = ConversationRequestResponses.controls(responses).map { control -> FrameworkElement in
+            switch control {
+            case let .answer(response): answerButton(response)
+            case let .widerAllows(wider): widerAllowsButton(wider)
+            }
+        }
+        return Self.buttonRow(controls)
+    }
+
+    /// The narrowest broad allow on the face, and every choice with its scope in the native split menu.
+    private func widerAllowsButton(_ wider: [ConversationRequestResponse]) -> SplitButton {
+        let first = wider[0]
+        let button = SplitButton()
+        let title = ConversationAllowScope(first)?.name ?? first.title
+        button.content = title
+        button.cornerRadius = ConversationStyle.corners(6)
+        button.click.addHandler { [weak self] _, _ in self?.send(first) }
+        try? AutomationProperties.setName(button, title)
+        try? AutomationProperties.setHelpText(button, L10n.string("More allow options"))
+        try? ToolTipService.setToolTip(button, first.title)
+        let menu = MenuFlyout()
+        for response in wider {
+            let scope = ConversationAllowScope(response)
+            let text = scope.map { $0.name + "\n" + $0.scope } ?? response.title
+            let item = ComposerParts.menuItem(text) { [weak self] in self?.send(response) }
+            try? ToolTipService.setToolTip(item, response.title)
+            refreshers.append { [unowned self] in
+                item.isEnabled = self.request.route(for: response, input: self.input) != nil
+            }
+            menu.items.append(item)
+        }
+        button.flyout = menu
+        refreshers.append { [unowned self] in
+            button.isEnabled = wider.contains { self.request.route(for: $0, input: self.input) != nil }
+        }
+        return button
     }
 
     /// An answer, on only while the form can be sent with it: the prominent one in Yardlet's accent, the others gray.
@@ -795,8 +824,37 @@ final class RequestCard {
         let button = response.role == .primary
             ? ConversationStyle.prominentButton(response.title, action: send)
             : ConversationStyle.grayButton(response.title, action: send)
+        if let key = composerKey(for: response) {
+            let words = TextBlock()
+            words.text = response.title
+            words.verticalAlignment = .center
+            let cap = Border()
+            cap.cornerRadius = ConversationStyle.corners(4)
+            cap.borderThickness = Thickness(left: 1, top: 1, right: 1, bottom: 1)
+            let keyColor = response.role == .primary ? ConversationStyle.prominentForeground : WindowsTheme.secondaryText
+            cap.borderBrush = keyColor.brush
+            cap.padding = Thickness(left: 4, top: 0, right: 4, bottom: 0)
+            cap.verticalAlignment = .center
+            cap.opacity = 0.85
+            let keyText = TextBlock()
+            keyText.text = key
+            keyText.fontSize = ConversationStyle.captionSize
+            keyText.foreground = keyColor.brush
+            cap.child = keyText
+            button.content = ConversationStyle.row([words, cap])
+            try? ToolTipService.setToolTip(button, "\(response.title) (\(key))")
+        }
         refreshers.append { [unowned self] in button.isEnabled = self.request.route(for: response, input: self.input) != nil }
         return button
+    }
+
+    /// The two keys the empty Windows task composer can give, only on the request they answer.
+    private func composerKey(for response: ConversationRequestResponse) -> String? {
+        guard answeredByComposerKeys,
+              let pending = NotificationApprovalProjection.pendingRequest(for: request) else { return nil }
+        if response.route == pending.allowOnce { return "Enter" }
+        if response.route == pending.deny { return "Esc" }
+        return nil
     }
 
     /// Sends `response` by the route the form makes of it, once the person agreed where `confirm` asks. One answer per
@@ -827,48 +885,43 @@ final class RequestCard {
     /// Radio buttons answer one question or field of this request together.
     private func groupName(_ id: String) -> String { "\(request.id)\n\(id)" }
 
-    private static func tint(_ state: ConversationRequestState) -> Tint {
-        switch state {
-        case .pending: ConversationStyle.orange
-        case .allowed, .answered: ConversationStyle.green
-        case .denied, .rejected: ConversationStyle.red
-        case .expired: ConversationStyle.gray
-        }
-    }
-
     private static func text(_ string: String, size: Double = ConversationStyle.bodySize, semibold: Bool = false,
                              muted: Bool = false) -> TextBlock {
         ConversationStyle.text(string, size: size, tone: muted ? .secondary : .primary, semibold: semibold)
     }
 
-    /// A command or a field's text in the code font, in a box.
-    private static func code(_ string: String) -> Border {
-        let block = ConversationStyle.text(string, size: ConversationStyle.smallCodeSize)
+    private static func code(_ string: String) -> TextBlock {
+        let block = ConversationStyle.text(string, size: ConversationStyle.codeSize)
         block.fontFamily = ConversationStyle.codeFont()
-        let box = Border()
-        box.background = WindowsTheme.subtleFill.brush
-        box.cornerRadius = ConversationStyle.corners(6)
-        box.padding = Thickness(left: 10, top: 8, right: 10, bottom: 8)
-        box.child = block
-        return box
+        return block
     }
 
-    /// `content` under a small title (the Mac's labeled box).
-    private static func labeledBox(_ title: String, _ content: UIElement) -> UIElement {
-        let stack = StackPanel()
-        stack.spacing = 6
-        stack.children.append(ConversationStyle.text(title, size: ConversationStyle.captionSize, tone: .tertiary,
-                                                     semibold: true))
-        stack.children.append(content)
-        return stack
-    }
-
-    /// The fill an option's row sits on.
-    private static func optionRow() -> Border {
+    /// Selection wins over hover; a choice at rest has no fill. Pointer events use their sender since
+    /// the native element keeps its event handlers after the Swift wrapper goes out of scope.
+    private func optionRow(isAnswerable: Bool, isPicked: @escaping () -> Bool) -> Border {
         let row = Border()
-        row.background = WindowsTheme.subtleFill.brush
         row.cornerRadius = ConversationStyle.corners(8)
         row.padding = Thickness(left: 10, top: 4, right: 10, bottom: 4)
+        var hovered = false
+        var picked = false
+        func paint(_ target: Border) {
+            let idle = hovered && isAnswerable ? WindowsTheme.hoverFill : ConversationStyle.clear
+            target.background = (picked ? WindowsTheme.selectedFill : idle).brush
+        }
+        row.pointerEntered.addHandler { sender, _ in
+            guard let border = sender as? Border else { return }
+            hovered = true
+            paint(border)
+        }
+        row.pointerExited.addHandler { sender, _ in
+            guard let border = sender as? Border else { return }
+            hovered = false
+            paint(border)
+        }
+        refreshers.append {
+            picked = isPicked()
+            paint(row)
+        }
         return row
     }
 
@@ -887,7 +940,7 @@ final class RequestCard {
 
     /// `buttons` in one row on the right, or where they do not fit side by side, stacked on the right, as the Mac's
     /// card stacks its answers. The buttons keep their own widths either way, which is what the row is measured by.
-    private static func buttonRow(_ buttons: [Button]) -> Grid {
+    private static func buttonRow(_ buttons: [FrameworkElement]) -> Grid {
         let row = StackPanel()
         row.orientation = .horizontal
         row.spacing = 8

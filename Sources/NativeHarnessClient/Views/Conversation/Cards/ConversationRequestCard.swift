@@ -53,7 +53,7 @@ struct ConversationRequestCard: View {
     /// do, and its answers.
     private var pendingCard: some View {
         let responses = offeredResponses
-        let usesDescriptionAsHeadline = descriptionHeadline != nil
+        let usesDescriptionAsHeadline = request.descriptionHeadline != nil
         return VStack(alignment: .leading, spacing: 12) {
             header
 
@@ -152,7 +152,7 @@ struct ConversationRequestCard: View {
                 Text(request.title)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                if let detail = outcomeDetail {
+                if let detail = request.outcomeDetail {
                     Text(detail)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -163,22 +163,6 @@ struct ConversationRequestCard: View {
             stateNote
         }
         .help(request.method ?? "")
-    }
-
-    /// What the request was about, on its outcome line: the provider's own words (a Codex request's reason or
-    /// question) when it gave any, otherwise the request's detail.
-    private var outcomeDetail: String? {
-        if let message = request.codexContext?.messages.first { return message }
-        if let detail = request.detail, !detail.isEmpty { return detail }
-        return nil
-    }
-
-    /// The headline is the provider's description of a call (Claude Code's "Run the unit tests") when it gave
-    /// one, under the tool's name; otherwise the request's own title.
-    private var descriptionHeadline: String? {
-        guard formKind == .none, case let .command(_, description)? = request.preview,
-              let description, !description.isEmpty else { return nil }
-        return description
     }
 
     /// What the card offers while the request waits, by what the host can carry back.
@@ -207,7 +191,7 @@ struct ConversationRequestCard: View {
     /// secondary colour when the provider described the call.
     private var header: some View {
         VStack(alignment: .leading, spacing: 2) {
-            if let headline = descriptionHeadline {
+            if let headline = request.descriptionHeadline {
                 Text(request.title)
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
@@ -226,20 +210,6 @@ struct ConversationRequestCard: View {
         .help(request.method ?? "")
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)
-    }
-
-    private enum FormKind {
-        case question
-        case plan
-        case none
-    }
-
-    private var formKind: FormKind {
-        switch request.form {
-        case .choices, .freeText, .mcpForm: .question
-        case .planReview: .plan
-        case nil: .none
-        }
     }
 
     /// An answerable card is not an approval, so its resolved state reads as the answer it was.
@@ -360,7 +330,7 @@ struct ConversationRequestCard: View {
     /// The answers right-aligned in one row, the prominent one last; stacked when the row does not
     /// fit the card.
     private func responseButtons(_ responses: [ConversationRequestResponse]) -> some View {
-        let controls = Self.controls(responses)
+        let controls = ConversationRequestResponses.controls(responses)
         return ViewThatFits(in: .horizontal) {
             HStack(spacing: 8) {
                 Spacer(minLength: 0)
@@ -377,33 +347,8 @@ struct ConversationRequestCard: View {
         }
     }
 
-    /// One control of the card's row: an answer's own button, or the wider allows as one split button.
-    enum AnswerControl {
-        case answer(ConversationRequestResponse)
-        case widerAllows([ConversationRequestResponse])
-    }
-
-    /// The answers as the row draws them. The wider allows (the secondary answers between the denials and
-    /// "Allow") become one split button when Yardlet can name their scope or there are several, as the
-    /// Claude app keeps "Always allow" short and its scopes in the button's menu; otherwise each keeps its
-    /// own button.
-    static func controls(_ responses: [ConversationRequestResponse]) -> [AnswerControl] {
-        let wider = responses.filter { $0.role == .secondary }
-        guard let first = wider.first, wider.count > 1 || ConversationAllowScope(first) != nil
-        else { return responses.map(AnswerControl.answer) }
-        var controls: [AnswerControl] = []
-        for response in responses {
-            if response.role != .secondary {
-                controls.append(.answer(response))
-            } else if response == first {
-                controls.append(.widerAllows(wider))
-            }
-        }
-        return controls
-    }
-
     @ViewBuilder
-    private func answerControl(_ control: AnswerControl) -> some View {
+    private func answerControl(_ control: ConversationRequestResponses.AnswerControl) -> some View {
         switch control {
         case let .answer(response): responseButton(response)
         case let .widerAllows(wider): widerAllowsButton(wider)

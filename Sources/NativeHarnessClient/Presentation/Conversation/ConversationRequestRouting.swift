@@ -80,6 +80,31 @@ extension ConversationRequest {
 
 /// The answers of a shared-transcript request.
 enum ConversationRequestResponses {
+    /// One control of the card's row: an answer's own button, or the wider allows as one split button.
+    enum AnswerControl {
+        case answer(ConversationRequestResponse)
+        case widerAllows([ConversationRequestResponse])
+    }
+
+    /// The answers as the row draws them. The wider allows (the secondary answers between the denials and
+    /// "Allow") become one split button when Yardlet can name their scope or there are several, as the
+    /// Claude app keeps "Always allow" short and its scopes in the button's menu; otherwise each keeps its
+    /// own button.
+    static func controls(_ responses: [ConversationRequestResponse]) -> [AnswerControl] {
+        let wider = responses.filter { $0.role == .secondary }
+        guard let first = wider.first, wider.count > 1 || ConversationAllowScope(first) != nil
+        else { return responses.map(AnswerControl.answer) }
+        var controls: [AnswerControl] = []
+        for response in responses {
+            if response.role != .secondary {
+                controls.append(.answer(response))
+            } else if response == first {
+                controls.append(.widerAllows(wider))
+            }
+        }
+        return controls
+    }
+
     /// A question form: submit what was picked.
     static var questions: [ConversationRequestResponse] {
         [.init(LocalizedText("Submit answers"), role: .primary, route: .structured)]
@@ -141,7 +166,11 @@ struct ConversationAllowScope: Equatable {
             // the words that name them all.
             switch argument?.key {
             case ".claude/settings.local.json":
+                #if os(macOS)
                 return (LocalizedText("Always allow"), LocalizedText("Saves to local project settings on this Mac"))
+                #else
+                return (LocalizedText("Always allow"), LocalizedText("Saves to local project settings"))
+                #endif
             case "shared .claude/settings.json":
                 return (LocalizedText("Always allow"), LocalizedText("Saves to shared project settings"))
             default:
@@ -164,6 +193,22 @@ struct ConversationAllowScope: Equatable {
 // MARK: - Words
 
 extension ConversationRequest {
+    /// What the request was about, on its outcome line: the provider's own words (a Codex request's reason or
+    /// question) when it gave any, otherwise the request's detail.
+    var outcomeDetail: String? {
+        if let message = codexContext?.messages.first { return message }
+        if let detail, !detail.isEmpty { return detail }
+        return nil
+    }
+
+    /// The headline is the provider's description of a call (Claude Code's "Run the unit tests") when it gave
+    /// one, under the tool's name; otherwise the request's own title.
+    var descriptionHeadline: String? {
+        guard form == nil, case let .command(_, description)? = preview,
+              let description, !description.isEmpty else { return nil }
+        return description
+    }
+
     /// What the card says above the request's title, for every platform's card: a question or form
     /// reads as the answer it got, a plan review as the plan's fate, anything else as an approval.
     var stateTitle: String {

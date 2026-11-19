@@ -1304,6 +1304,7 @@
 "More allow options" = "허용 옵션 더 보기";
 "Applies to this session only" = "이 세션에만 적용";
 "Switches this session to %@ mode" = "이 세션을 %@ 모드로 전환";
+"Saves to local project settings" = "프로젝트 로컬 설정에 저장";
 "Saves to local project settings on this Mac" = "이 Mac의 프로젝트 로컬 설정에 저장";
 "Saves to shared project settings" = "프로젝트의 공유 설정에 저장";
 "Saves to user settings for all projects" = "사용자 설정에 저장해 모든 프로젝트에 적용";

@@ -80,6 +80,7 @@
     "Microsoft.UI.Xaml.Controls.ProgressRing",
     "Microsoft.UI.Xaml.Controls.HyperlinkButton",
     "Microsoft.UI.Xaml.Controls.DropDownButton",
+    "Microsoft.UI.Xaml.Controls.SplitButton",
     "Microsoft.UI.Xaml.Controls.Flyout",
     "Microsoft.UI.Xaml.Controls.MenuFlyout",
     "Microsoft.UI.Xaml.Controls.MenuFlyoutItem",
