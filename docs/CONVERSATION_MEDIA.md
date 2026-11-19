@@ -1,8 +1,8 @@
 # Media in the conversation
 
 What an answer shows in place besides its words: the pictures its Markdown names, the videos and sounds it names,
-and the visualizations the Codex app's `visualize` skill writes. Everything here is drawn on the Mac for the person
-only; nothing of it reaches a harness or a model, and none of it has a setting.
+its Mermaid diagrams, and the visualizations the Codex app's `visualize` skill writes. Everything here is drawn on the
+Mac for the person only; nothing of it reaches a harness or a model, and none of it has a setting.
 
 ## Pictures
 
@@ -43,6 +43,44 @@ it in place (`TranscriptPictureMovie`, `TranscriptPictureSound`).
 - One plays at a time across the app (`TranscriptMediaPlayback`): starting another pauses it. The controls are the
   Files panel's (`AVPlayerView`), with full screen and picture in picture.
 - Any other file is a chip that opens it in the Files panel.
+
+## Mermaid diagrams
+
+A ```` ```mermaid ```` block in an answer, from any harness, is drawn as its diagram, as the Codex and Claude apps
+draw one (the `.mermaid` block of `TranscriptMarkdownDocument`, `TranscriptMermaidBlock`).
+
+- **Which blocks.** A fenced block whose language is `mermaid` (in any case), at the top of a message or in a list or
+  a quote, once its closing fence has come. One still streaming is a code block until then, and an empty one stays
+  one.
+- **Drawing** (`MermaidDiagrams`). Yardlet ships Mermaid 11.17.2 unchanged
+  (`Sources/NativeHarnessClient/Resources/Mermaid/mermaid.min.js`, 3,572,661 bytes; its notices are in
+  THIRD_PARTY_NOTICES.md); only the Mac app carries it. It runs in one offscreen web view with nothing of Yardlet's:
+  its own non-persistent data store, one document from Yardlet's scheme under the policy `default-src 'none';
+  script-src 'none'; style-src 'unsafe-inline'; img-src data:`, so nothing is fetched and the page runs no script of
+  its own, and Mermaid in an isolated content world, read from the app's resources as text. It navigates nowhere else
+  and opens no window, download, dialog, camera or microphone. Mermaid runs with `securityLevel: "strict"`: labels'
+  HTML is sanitized and click callbacks are off, which a diagram's own `%%{init}%%` cannot change. Its SVG stays in
+  that web view; what leaves it is a picture of it, a PNG at twice its size in points (fewer pixels past 16 million),
+  on a transparent background. The light appearance uses Mermaid's `default` theme and the dark one its `dark`
+  theme, in the system font.
+- **Only what is on screen.** A block asks for its diagram when it comes on screen and withdraws the request if it
+  leaves before Mermaid starts on it; Mermaid draws one diagram at a time. The picture is kept in memory by its
+  source and appearance (up to 32 MB of PNG or 1,000 diagrams, the oldest let go first), so a block scrolled back
+  into view, another with the same source, or the conversation drawn again shows it without Mermaid. Its bitmap is
+  decoded off the main thread while it is on screen and let go when it leaves, as a picture's is. Changing the
+  appearance draws the diagram again for the new one, its place kept meanwhile. The web view goes 30 seconds after
+  the last diagram; one that does not finish a diagram within 10 seconds goes at once.
+- **Size.** As wide as the message at most and never larger than its own size, centred in a frame with a code
+  block's background and border.
+- **Actions.** A click, or "Expand diagram" on hover, opens it in the image preview over the window, on its
+  appearance's background. Also on hover, "Copy code" and "Show source", which shows the code block with "Show
+  diagram" in its header to go back. The context menu adds Copy Image. Find searches the source; while find's
+  current match is in a diagram, the block shows its code with the match marked.
+- **When it is not drawn.** Until its diagram is drawn, and when Mermaid cannot draw it (a syntax error, a source
+  past 50,000 characters, a diagram it does not finish), the block is the code block it was, without an error. The
+  Windows app shows the code block.
+- **Leaving nothing behind.** There is no setting. The pictures are in memory only, and the web view is gone once
+  no diagram is being drawn.
 
 ## Codex visualizations
 

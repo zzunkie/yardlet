@@ -161,6 +161,24 @@ final class TranscriptMarkdownDocumentTests: XCTestCase {
                        String(repeating: "print(\"한글 👩🏽‍💻\")\r\n", count: 300) + "// FULL-END")
     }
 
+    /// A Mermaid block is a diagram once its closing fence has come, at the top or in a list or a quote; one still
+    /// streaming, closed only by a fence shorter than its opening one, or empty, is code.
+    func testAMermaidBlockIsADiagramOnceItsFenceCloses() {
+        let flow = "flowchart LR\n  A --> B"
+        XCTAssertEqual(TranscriptMarkdownDocument("Before\n\n```mermaid\n\(flow)\n```\n\nAfter").blocks,
+                       [.paragraph("Before"), .mermaid(flow), .paragraph("After")])
+        XCTAssertEqual(TranscriptMarkdownDocument("~~~ Mermaid\n\(flow)\n~~~~").blocks, [.mermaid(flow)])
+        XCTAssertEqual(TranscriptMarkdownDocument("```mermaid\n\(flow)").blocks, [.code(language: "mermaid", text: flow)])
+        XCTAssertEqual(TranscriptMarkdownDocument("````mermaid\n\(flow)\n```").blocks,
+                       [.code(language: "mermaid", text: flow + "\n```")])
+        XCTAssertEqual(TranscriptMarkdownDocument("```mermaid\n```").blocks, [.code(language: "mermaid", text: "")])
+        let listed = "- Steps:\n\n  ```mermaid\n  \(flow.replacingOccurrences(of: "\n", with: "\n  "))\n  ```"
+        XCTAssertEqual(TranscriptMarkdownDocument(listed).block(at: [0, 0, 1]), .mermaid(flow))
+        XCTAssertEqual(TranscriptCopyPayload.code(in: listed, blockPath: [0, 0, 1]), flow)
+        XCTAssertEqual(TranscriptMarkdownDocument("> ```mermaid\n> \(flow.replacingOccurrences(of: "\n", with: "\n> "))\n> ```")
+            .block(at: [0, 0]), .mermaid(flow))
+    }
+
     func testDeepContainersRemainBoundedAndKeepTheirContentVisible() {
         let source = String(repeating: "> ", count: 48) + "DEEP-END"
         let document = TranscriptMarkdownDocument(source)

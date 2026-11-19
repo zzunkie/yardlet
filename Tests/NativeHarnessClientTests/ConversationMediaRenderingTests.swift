@@ -7,8 +7,8 @@ import UniformTypeIdentifiers
 import XCTest
 @testable import NativeHarnessClient
 
-/// Pictures an answer's Markdown names (`![alt](source)`) and a Codex inline visualization, drawn in a
-/// conversation at two widths and in both appearances. Review images go to `.build/chat-media-qa/`;
+/// Pictures an answer's Markdown names (`![alt](source)`), its Mermaid diagrams and a Codex inline visualization, drawn
+/// in a conversation at two widths and in both appearances. Review images go to `.build/chat-media-qa/`;
 /// set `YARDLET_MEDIA_QA_LABEL` to name a run (for example `before`).
 @MainActor
 final class ConversationMediaRenderingTests: XCTestCase {
@@ -111,6 +111,105 @@ final class ConversationMediaRenderingTests: XCTestCase {
         XCTAssertLessThanOrEqual(drawnAtTop.count, 3)
         XCTAssertTrue(drawnAtEnd.allSatisfy { !$0.isDrawn }, "the pictures scrolled away keep no bitmap")
         print("media long conversation: mounted \(Self.bitmaps(in: host.hosting).count) pictures, drawn \(drawnAtEnd.count) at the end and \(drawnAtTop.count) at the top")
+    }
+
+    /// Mermaid blocks draw as diagrams, a flowchart and a sequence diagram, and again when the appearance changes; a
+    /// block Mermaid cannot read stays its code.
+    func testMermaidBlocksDrawAsDiagramsInBothAppearances() throws {
+        let directory = try WindowlessRender.directory("chat-media-qa")
+        let size = NSSize(width: 900, height: 1_400)
+        // The window's appearance is the conversation's, so changing it changes the diagrams'.
+        let host = WindowlessRender.Host(
+            conversation(.claudeCode, entries: entries(answer: Self.mermaidAnswer))
+                .frame(width: size.width, height: size.height, alignment: .top)
+                .background(ParityTheme.canvas),
+            size: size, appearance: .light)
+        defer { host.close() }
+        for appearance in WindowlessRender.Appearance.allCases {
+            host.window.appearance = NSAppearance(named: appearance.appKitName)
+            let isDark = appearance == .dark
+            let drawn = [Self.flowchart, Self.sequenceDiagram].map { MermaidDiagrams.Key(source: $0, isDark: isDark) }
+            let broken = MermaidDiagrams.Key(source: Self.brokenDiagram, isDark: isDark)
+            host.settle(until: {
+                drawn.allSatisfy { MermaidDiagrams.shared.cached($0) != nil } && MermaidDiagrams.shared.cached(broken) != nil
+                    && Self.diagrams(in: host.hosting).filter(\.isDrawn).count == 2
+            })
+            host.settle(passes: 5)
+            guard case .failed? = MermaidDiagrams.shared.cached(broken) else { return XCTFail("Mermaid cannot read it") }
+            XCTAssertEqual(Self.diagrams(in: host.hosting).count, 2, "the block Mermaid cannot read stays its code")
+            try WindowlessRender.writePNG(try host.capture().bitmap, to: directory.appending(
+                path: "mermaid\(label)-\(appearance.suffix)-900.png"))
+        }
+    }
+
+    /// A long conversation with a diagram in every answer draws only the diagrams that come on screen, each once:
+    /// one scrolled back into view is drawn from what was kept, without Mermaid.
+    func testALongConversationDrawsOnlyTheDiagramsOnScreen() throws {
+        // Sources no earlier test drew, so the shared cache does not answer for them.
+        let run = UUID().uuidString
+        var entries: [TranscriptEntry] = []
+        for turn in 0..<120 {
+            let at = start.addingTimeInterval(Double(turn) * 10)
+            entries.append(TranscriptEntry(createdAt: at, content: .user(text: "Turn \(turn): draw the flow.")))
+            entries.append(TranscriptEntry(createdAt: at.addingTimeInterval(2), content: .assistant(text: """
+                Turn \(turn):
+
+                ```mermaid
+                flowchart LR
+                  A[Request \(turn)] --> B{Cached?} --> C[Reply \(turn)]
+                  %% \(run)
+                ```
+
+                It holds.
+                """, isStreaming: false)))
+        }
+        let size = NSSize(width: 900, height: 900)
+        let host = WindowlessRender.Host(
+            conversation(.claudeCode, entries: entries).frame(width: size.width, height: size.height).background(ParityTheme.canvas),
+            size: size, appearance: .light)
+        defer { host.close() }
+        let diagrams = MermaidDiagrams.shared
+        let before = diagrams.renderCount
+        host.settle(until: { Self.diagrams(in: host.hosting).contains(where: \.isDrawn) })
+        host.settle(passes: 10)
+        let mounted = Self.mermaidBlocks(in: host.hosting)
+        let onScreenAtEnd = mounted.filter(\.isOnScreen).count
+        let drawnAtEnd = Self.diagrams(in: host.hosting).filter(\.isDrawn)
+        let rendersAtEnd = diagrams.renderCount - before
+        XCTAssertGreaterThan(mounted.count, rendersAtEnd + 2, "the conversation should mount more diagrams than it draws")
+        XCTAssertGreaterThan(rendersAtEnd, 0)
+        XCTAssertLessThanOrEqual(rendersAtEnd, onScreenAtEnd, "only the diagrams on screen are drawn")
+
+        // The reader's own scrolling, which stops the conversation following its end: a notch of the wheel, then on.
+        let scroll = try XCTUnwrap(Self.scrollView(in: host.hosting))
+        func read(to y: (NSView) -> CGFloat) throws {
+            let document = try XCTUnwrap(scroll.documentView)
+            let towardTop = (y(document) < scroll.contentView.bounds.minY) == document.isFlipped
+            let event = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1,
+                                              wheel1: towardTop ? 3 : -3, wheel2: 0, wheel3: 0))
+            scroll.scrollWheel(with: try XCTUnwrap(NSEvent(cgEvent: event)))
+            host.settle(passes: 2)
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: y(document)))
+            scroll.reflectScrolledClipView(scroll.contentView)
+        }
+
+        // Up through what is mounted: the diagrams now in view are drawn, those left behind let their bitmaps go.
+        try read { $0.isFlipped ? 0 : $0.bounds.height - scroll.contentView.bounds.height }
+        host.settle(until: { Self.diagrams(in: host.hosting).contains { $0.isDrawn && !drawnAtEnd.contains($0) } })
+        host.settle(passes: 10)
+        let drawnAtTop = Self.diagrams(in: host.hosting).filter(\.isDrawn)
+        let onScreenAtTop = Self.mermaidBlocks(in: host.hosting).filter(\.isOnScreen).count
+        let rendersAtTop = diagrams.renderCount - before
+        XCTAssertGreaterThan(rendersAtTop, rendersAtEnd)
+        XCTAssertLessThanOrEqual(rendersAtTop - rendersAtEnd, onScreenAtTop, "only the diagrams on screen are drawn")
+        XCTAssertTrue(drawnAtEnd.allSatisfy { !$0.isDrawn }, "the diagrams scrolled away keep no bitmap")
+
+        // Back down: the diagrams there show again from what was kept.
+        try read { $0.isFlipped ? $0.bounds.height - scroll.contentView.bounds.height : 0 }
+        host.settle(until: { Self.diagrams(in: host.hosting).contains { $0.isDrawn && !drawnAtTop.contains($0) } })
+        host.settle(passes: 20)
+        XCTAssertEqual(diagrams.renderCount - before, rendersAtTop, "a diagram scrolled back into view is not drawn again")
+        print("mermaid long conversation: mounted \(mounted.count) blocks, \(onScreenAtEnd) on screen at the end; Mermaid drew \(rendersAtEnd) at the end, \(rendersAtTop) after scrolling to the top (\(onScreenAtTop) on screen there) and \(diagrams.renderCount - before) after scrolling back")
     }
 
     /// A video plays in place once pressed, and only then has a player; starting a sound pauses it.
@@ -219,6 +318,14 @@ final class ConversationMediaRenderingTests: XCTestCase {
         ((view as? TranscriptPictureBitmapView).map { [$0] } ?? []) + view.subviews.flatMap { bitmaps(in: $0) }
     }
 
+    private static func diagrams(in view: NSView) -> [TranscriptMermaidBitmapView] {
+        ((view as? TranscriptMermaidBitmapView).map { [$0] } ?? []) + view.subviews.flatMap { diagrams(in: $0) }
+    }
+
+    private static func mermaidBlocks(in view: NSView) -> [TranscriptOnScreenSignalView] {
+        ((view as? TranscriptOnScreenSignalView).map { [$0] } ?? []) + view.subviews.flatMap { mermaidBlocks(in: $0) }
+    }
+
     private static func scrollView(in view: NSView) -> NSScrollView? {
         func all(_ view: NSView) -> [NSScrollView] {
             ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap(all)
@@ -248,6 +355,51 @@ final class ConversationMediaRenderingTests: XCTestCase {
     The voice note: ![voice note](voice.m4a)
 
     A document: ![the spec](docs/spec.pdf)
+    """
+
+    private static let flowchart = """
+    flowchart TD
+      Client([Client]) --> Edge[Edge cache]
+      Edge -->|hit| Reply[Send cached reply]
+      Edge -->|miss| API[API server]
+      API --> DB[(Postgres)]
+      API --> Queue[[Job queue]]
+      Queue --> Worker[Thumbnail worker]
+      DB --> API --> Reply
+    """
+
+    private static let sequenceDiagram = """
+    sequenceDiagram
+      participant App
+      participant Server
+      participant IdP as Identity provider
+      App->>Server: POST /session
+      Server->>IdP: Verify the code
+      IdP-->>Server: Token
+      Note right of Server: Keeps the token for 1 hour
+      Server-->>App: 201 Created
+    """
+
+    private static let brokenDiagram = "flowchart LR\n  A[Start --> B"
+
+    private static let mermaidAnswer = """
+    The request path, with the cache in front:
+
+    ```mermaid
+    \(flowchart)
+    ```
+
+    And the sign-in, step by step:
+
+    ```mermaid
+    \(sequenceDiagram)
+    ```
+
+    A block Mermaid cannot read stays its code:
+
+    ```mermaid
+    \(brokenDiagram)
+    ```
     """
 
     private static let codexAnswer = """

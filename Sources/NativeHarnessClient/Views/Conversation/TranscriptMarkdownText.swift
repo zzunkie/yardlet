@@ -229,6 +229,11 @@ private struct TranscriptMarkdownBlockView: View {
                 TranscriptCopyPayload.code(in: fullSource, blockPath: path, dialect: dialect)
             }
 
+        case let .mermaid(text):
+            TranscriptMermaidBlock(text: text, findKey: .block(path)) {
+                TranscriptCopyPayload.code(in: fullSource, blockPath: path, dialect: dialect)
+            }
+
         case let .table(headers, rows, alignments):
             TranscriptMarkdownTable(headers: headers, rows: rows, alignments: alignments, path: path)
 

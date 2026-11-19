@@ -54,6 +54,9 @@ enum MarkdownView {
             return quote
         case let .code(language, code):
             return codeBlock(language: language, code: code)
+        case let .mermaid(code):
+            // The Windows app does not draw diagrams; the block stays the code it is.
+            return codeBlock(language: "mermaid", code: code)
         case let .table(headers, rows, _):
             return table(headers: headers, rows: rows, tone: tone)
         case .divider:

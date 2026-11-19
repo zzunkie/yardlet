@@ -189,7 +189,8 @@ enum ConversationFindEngine {
                     for (offset, item) in items.enumerated() { visit(item.blocks, path: path + [offset]) }
                 case let .blockQuote(quoted):
                     visit(quoted, path: path)
-                case let .code(_, text):
+                case let .code(_, text), let .mermaid(text):
+                    // A diagram shows its source while find's current match is in it.
                     segments.append(.init(key: .block(path), text: TranscriptCodeWindow(text).text))
                 case let .table(headers, rows, _):
                     for (column, header) in headers.enumerated() {

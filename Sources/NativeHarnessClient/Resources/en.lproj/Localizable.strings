@@ -2829,6 +2829,10 @@
 "Load image" = "Load image";
 "Couldn't load the image." = "Couldn't load the image.";
 "Loads it from %@, without cookies." = "Loads it from %@, without cookies.";
+"Diagram" = "Diagram";
+"Show diagram" = "Show diagram";
+"Show source" = "Show source";
+"Expand diagram" = "Expand diagram";
 "Table" = "Table";
 "Copy command" = "Copy command";
 "Copy output" = "Copy output";

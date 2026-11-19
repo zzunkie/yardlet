@@ -59,7 +59,7 @@ final class CodexDirectiveLiveShapesTests: XCTestCase {
             case .suggestedTask: counts["suggested tasks", default: 0] += 1
             case .visualization: counts["visualizations", default: 0] += 1
             case .pictures: counts["pictures", default: 0] += 1
-            case .code, .divider: break
+            case .code, .mermaid, .divider: break
             }
         }
     }

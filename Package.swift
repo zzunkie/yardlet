@@ -62,7 +62,9 @@ let simulatorHost = true
 #else
 let simulatorHost = false
 #endif
-let macOSLayers = ["Views", "Browser", "Development", "Platform/macOS", "NativeHarnessClientApp.swift"]
+// The Mermaid script only the Mac's conversation runs (docs/CONVERSATION_MEDIA.md, "Mermaid diagrams") goes with the
+// Mac's screens.
+let macOSLayers = ["Views", "Browser", "Development", "Platform/macOS", "NativeHarnessClientApp.swift", "Resources/Mermaid"]
 let windowsLayers = ["WinUI", "Platform/Windows"]
 let linuxLayers = ["Platform/Linux"]
 // The parts the Mac app and the Linux host build from the same POSIX calls: file access that follows no link

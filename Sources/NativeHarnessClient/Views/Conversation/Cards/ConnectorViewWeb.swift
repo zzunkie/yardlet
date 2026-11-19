@@ -551,7 +551,9 @@ class ConversationOnScreenView: NSView {
     }
 
     func checkOnScreen() {
-        let now = window != nil && !isHiddenOrHasHiddenAncestor && !visibleRect.isEmpty
+        // A view that does not clip to its bounds (the default since macOS 14) reports as visible whatever of its
+        // clipping ancestors is, inside its bounds or not.
+        let now = window != nil && !isHiddenOrHasHiddenAncestor && !visibleRect.intersection(bounds).isEmpty
         guard now != isOnScreen else { return }
         isOnScreen = now
         onScreenChanged?(now)

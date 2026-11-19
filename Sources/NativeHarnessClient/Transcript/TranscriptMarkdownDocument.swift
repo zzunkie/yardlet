@@ -8,6 +8,9 @@ enum TranscriptMarkdownBlock: Equatable, Sendable {
     case orderedList(start: Int, items: [TranscriptMarkdownListItem], isLoose: Bool = false)
     case blockQuote([TranscriptMarkdownBlock])
     case code(language: String?, text: String)
+    /// A ```` ```mermaid ```` block whose closing fence has come: its source, which the Mac draws as a diagram
+    /// and elsewhere is the code block it is. One still streaming, without its closing fence, or empty is `.code`.
+    case mermaid(String)
     case table(headers: [TranscriptInlineContent], rows: [[TranscriptInlineContent]], alignments: [TranscriptTableAlignment] = [])
     case divider
     /// The pictures a paragraph shows (`![alt](source)`), one after another between its words.
@@ -228,7 +231,11 @@ struct TranscriptMarkdownDocument: Equatable, Sendable {
             case let quote as BlockQuote:
                 return .blockQuote(quote.children.flatMap { blocks($0, depth: depth + 1) })
             case let code as CodeBlock:
-                return .code(language: code.language, text: codeText(code))
+                let text = codeText(code)
+                if code.language?.lowercased() == "mermaid", isClosedFence(code), !text.allSatisfy(\.isWhitespace) {
+                    return .mermaid(text)
+                }
+                return .code(language: code.language, text: text)
             case let table as Table:
                 let alignments: [TranscriptTableAlignment] = table.columnAlignments.map {
                     switch $0 {
@@ -333,6 +340,23 @@ struct TranscriptMarkdownDocument: Equatable, Sendable {
             return (end..<start - 1).contains { index in
                 lines.indices.contains(index) && lines[index].allSatisfy { $0.isWhitespace || $0 == ">" }
             }
+        }
+
+        /// Whether a fenced block's closing fence is there: its last line is a fence of its opening character at least
+        /// as long as the opening one, with nothing after it. A block still streaming runs to the end of the text.
+        private func isClosedFence(_ code: CodeBlock) -> Bool {
+            guard let range = code.range else { return false }
+            let first = range.lowerBound.line - 1, last = range.upperBound.line - 1
+            guard first < last, lines.indices.contains(first), lines.indices.contains(last) else { return false }
+            // Source columns count UTF-8 bytes.
+            let opening = lines[first].utf8.dropFirst(max(0, range.lowerBound.column - 1))
+            guard let mark = opening.first, mark == UInt8(ascii: "`") || mark == UInt8(ascii: "~") else { return false }
+            let length = opening.prefix { $0 == mark }.count
+            // A list's indent or a quote's marks come before the fence.
+            let space: Set<UInt8> = [UInt8(ascii: " "), UInt8(ascii: "\t")]
+            let closing = lines[last].utf8.drop { space.contains($0) || $0 == UInt8(ascii: ">") }
+            let run = closing.prefix { $0 == mark }.count
+            return run >= length && closing.dropFirst(run).allSatisfy(space.contains)
         }
 
         private func codeText(_ code: CodeBlock) -> String {

@@ -14,7 +14,7 @@ extension TranscriptMarkdownBlock {
         case let .unorderedList(items, _), let .orderedList(_, items, _):
             items.allSatisfy { $0.blocks.allSatisfy(\.isProse) }
         case let .blockQuote(blocks): blocks.allSatisfy(\.isProse)
-        case .table, .pictures, .suggestedTask, .details, .reviewComments, .visualization: false
+        case .table, .pictures, .suggestedTask, .details, .reviewComments, .visualization, .mermaid: false
         }
     }
 }
@@ -347,7 +347,7 @@ struct TranscriptProseBuilder {
             if context.marker != nil { markerParagraph(context: context, into: output) }
             rule(context: context, spacingAfter: spacingAfter, into: output)
 
-        case .table, .pictures, .suggestedTask, .details, .reviewComments, .visualization:
+        case .table, .pictures, .suggestedTask, .details, .reviewComments, .visualization, .mermaid:
             // Not prose (`isProse`); a run never holds one.
             break
         }

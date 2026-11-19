@@ -6,6 +6,8 @@ struct TranscriptCodeBlock: View {
     let text: String
     /// Where this block sits in its message, for find's marks.
     var findKey: ConversationFindSegmentKey? = nil
+    /// A control of the block's own before Copy, such as a diagram's "Show diagram".
+    var accessory: AnyView? = nil
     let copyPayload: () -> String?
     @Environment(\.yardletInterfaceScale) private var interfaceScale
     @Environment(\.yardletCodeFont) private var codeFont
@@ -36,6 +38,7 @@ struct TranscriptCodeBlock: View {
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 12)
+                if let accessory { accessory }
                 if let run = terminalRun.run, let command = TerminalCodeBlockCommand.command(language: language, code: text) {
                     TranscriptRunInTerminalButton { run(command) }
                 }

@@ -51,9 +51,10 @@ enum TranscriptCopyPayload {
     }
 
     static func code(in source: String, blockPath: [Int], dialect: TranscriptMarkdownDialect = .standard) -> String? {
-        guard case let .code(_, text) = TranscriptMarkdownDocument(source, dialect: dialect).block(at: blockPath)
-        else { return nil }
-        return text
+        switch TranscriptMarkdownDocument(source, dialect: dialect).block(at: blockPath) {
+        case let .code(_, text)?, let .mermaid(text)?: text
+        default: nil
+        }
     }
 }
 

@@ -2829,6 +2829,10 @@
 "Load image" = "이미지 불러오기";
 "Couldn't load the image." = "이미지를 불러오지 못했습니다.";
 "Loads it from %@, without cookies." = "쿠키 없이 %@에서 불러옵니다.";
+"Diagram" = "다이어그램";
+"Show diagram" = "다이어그램 보기";
+"Show source" = "원문 보기";
+"Expand diagram" = "다이어그램 펼치기";
 "Table" = "표";
 "Copy command" = "명령어 복사";
 "Copy output" = "출력 복사";

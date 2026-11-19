@@ -283,6 +283,8 @@ if [[ -d "$RESOURCE_BUNDLE" ]]; then
     # incremental SwiftPM resource bundle or the previous application bundle.
     # The vault for agents reads which hosts are public suffixes from here (VaultSite.swift).
     /usr/bin/ditto "$RESOURCE_BUNDLE/public_suffix_list.dat" "$RESOURCES_DIR/public_suffix_list.dat"
+    # The conversation draws Mermaid diagrams with this release (docs/CONVERSATION_MEDIA.md, "Mermaid diagrams").
+    /usr/bin/ditto "$RESOURCE_BUNDLE/mermaid.min.js" "$RESOURCES_DIR/mermaid.min.js"
     rm -rf "$RESOURCES_DIR/HarnessLogos"
     logo_assets=("$PROJECT_ROOT/Sources/NativeHarnessClient/Resources/HarnessLogos"/*.png(N))
     if (( ${#logo_assets} > 0 )); then
