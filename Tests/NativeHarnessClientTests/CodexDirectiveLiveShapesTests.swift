@@ -58,6 +58,7 @@ final class CodexDirectiveLiveShapesTests: XCTestCase {
                 counts["comments", default: 0] += comments.count
             case .suggestedTask: counts["suggested tasks", default: 0] += 1
             case .visualization: counts["visualizations", default: 0] += 1
+            case .pictures: counts["pictures", default: 0] += 1
             case .code, .divider: break
             }
         }

@@ -234,6 +234,9 @@ private struct TranscriptMarkdownBlockView: View {
         case .divider:
             Divider()
 
+        case let .pictures(pictures):
+            TranscriptMarkdownPictures(pictures: pictures, fullSource: fullSource, dialect: dialect)
+
         case let .suggestedTask(task):
             CodexSuggestedTaskCard(task: task)
 

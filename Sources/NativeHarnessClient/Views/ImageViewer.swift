@@ -153,8 +153,15 @@ final class ImageViewerModel {
     @discardableResult
     func copy(to pasteboard: NSPasteboard = .general) -> Bool {
         guard case let .image(image, data) = content else { return false }
+        return Self.copy(data, image: image, to: pasteboard)
+    }
+
+    /// An image's original bytes and a TIFF copy on `pasteboard`, so it pastes into any app.
+    @discardableResult
+    static func copy(_ data: Data, image: NSImage? = nil, to pasteboard: NSPasteboard = .general) -> Bool {
+        guard let image = image ?? NSImage(data: data) else { return false }
         let entry = NSPasteboardItem()
-        if let type = Self.type(of: data) {
+        if let type = type(of: data) {
             entry.setData(data, forType: NSPasteboard.PasteboardType(type.identifier))
         }
         if let tiff = image.tiffRepresentation { entry.setData(tiff, forType: .tiff) }

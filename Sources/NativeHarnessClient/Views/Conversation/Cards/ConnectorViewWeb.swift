@@ -401,12 +401,15 @@ final class MCPAppViewPool {
     }
 }
 
-/// The row's place for a view's web view. It tells the pool when it comes on screen and leaves it, from the
-/// conversation's scroll view: each turn is drawn in a hosting view of its own (`ConversationTurnHost`), which a
-/// SwiftUI scroll position does not reach. Only a change of being on screen is told.
-final class MCPAppContainerView: NSView {
+/// The row's place for a view's web view (`ConversationOnScreenView`).
+final class MCPAppContainerView: ConversationOnScreenView {}
+
+/// A place in the conversation that tells when it comes on screen and leaves it, from the conversation's scroll
+/// view: each turn is drawn in a hosting view of its own (`ConversationTurnHost`), which a SwiftUI scroll position does
+/// not reach. Only a change of being on screen is told.
+class ConversationOnScreenView: NSView {
     var onScreenChanged: (@MainActor (Bool) -> Void)?
-    private var isOnScreen = false
+    private(set) var isOnScreen = false
     /// Removed when the view leaves its window, which it does before it goes.
     private var observers: [NSObjectProtocol] = []
 

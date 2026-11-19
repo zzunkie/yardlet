@@ -67,6 +67,9 @@ enum MarkdownView {
             panel.children.append(ConversationStyle.text(summary, tone: tone, semibold: true))
             panel.children.append(stack(blocks, tone: tone))
             return panel
+        case let .pictures(pictures):
+            // The Windows app does not draw pictures yet; their descriptions keep the words the Mac showed before.
+            return text(TranscriptInlineContent(plainText: pictures.map(\.label).joined(separator: " ")), tone: .secondary)
         case .suggestedTask, .reviewComments, .visualization:
             return nil
         }

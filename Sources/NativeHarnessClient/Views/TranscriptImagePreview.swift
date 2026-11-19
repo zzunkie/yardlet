@@ -14,10 +14,11 @@ final class TranscriptImageThumbnails: @unchecked Sendable {
         case unavailable
     }
 
-    /// How large a preview is decoded: a tile (a thumbnail, cropped to fill), or a call's opened
-    /// details, where the image is shown whole up to the conversation's width.
+    /// How large a preview is decoded: a tile (a thumbnail, cropped to fill), a call's opened
+    /// details, where the image is shown whole up to the conversation's width, or a picture an answer
+    /// shows on its own, as wide as the conversation on a 2x display.
     enum Size: String, Sendable {
-        case tile, detail
+        case tile, detail, inline
     }
 
     /// Pixels on a preview's shorter side: an 80 pt tile on a 2x display, with headroom for the
@@ -26,6 +27,8 @@ final class TranscriptImageThumbnails: @unchecked Sendable {
     static let longSidePixels = 1_024
     /// Pixels on a detail preview's longer side: a 320 pt high screenshot on a 2x display.
     static let detailLongSidePixels = 1_280
+    /// Pixels on an inline picture's longer side: the conversation's 768 pt column on a 2x display.
+    static let inlineLongSidePixels = 1_600
     /// A larger file is not read for a preview; the attachment shows as its name instead.
     static let maximumFileBytes = 64 * 1_048_576
 
@@ -36,6 +39,9 @@ final class TranscriptImageThumbnails: @unchecked Sendable {
 
     // NSCache is thread-safe; an inline image's key is its data URL, so the key counts toward the cost.
     private let cache = NSCache<NSString, Entry>()
+    /// Each image's size in points, read from its header alone, so a picture takes its place before it is
+    /// decoded and keeps it while its bitmap is let go. Small, so many are kept.
+    private let sizes = NSCache<NSString, NSValue>()
     /// Set only by tests: NSCache may drop entries whenever the system is short of memory, as on a
     /// heavily loaded machine, so a test that checks caching keeps its entries here as well.
     private let kept: NSMutableDictionary?
@@ -108,6 +114,35 @@ final class TranscriptImageThumbnails: @unchecked Sendable {
         return preview
     }
 
+    /// The size `url`'s image is drawn at, in points: its pixels at its own resolution, as the image viewer and the
+    /// Files panel draw it (a 144 dpi screenshot at half its pixels). Nil when it cannot be read as an image.
+    func cachedPointSize(for url: URL) -> CGSize? {
+        sizes.object(forKey: url.absoluteString as NSString)?.sizeValue
+    }
+
+    func pointSize(for url: URL) async -> CGSize? {
+        guard Self.canPreview(url) else { return nil }
+        if let cached = cachedPointSize(for: url) { return cached }
+        let size = await Task.detached(priority: .utility) { () -> CGSize? in
+            guard let data = Self.readOriginal(url), let source = CGImageSourceCreateWithData(data as CFData, nil)
+            else { return nil }
+            return Self.pointSize(of: source)
+        }.value
+        if let size { sizes.setObject(NSValue(size: size), forKey: url.absoluteString as NSString) }
+        return size
+    }
+
+    private static func pointSize(of source: CGImageSource) -> CGSize? {
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              var width = properties[kCGImagePropertyPixelWidth] as? CGFloat,
+              var height = properties[kCGImagePropertyPixelHeight] as? CGFloat,
+              width > 0, height > 0 else { return nil }
+        // EXIF orientations 5 to 8 turn the picture a quarter.
+        if let orientation = properties[kCGImagePropertyOrientation] as? Int, orientation >= 5 { swap(&width, &height) }
+        let dpi = (properties[kCGImagePropertyDPIWidth] as? CGFloat).flatMap { $0 > 0 ? $0 : nil } ?? 72
+        return CGSize(width: (width * 72 / dpi).rounded(), height: (height * 72 / dpi).rounded())
+    }
+
     /// The original bytes, for the image viewer.
     func originalData(for url: URL) async -> Data? {
         await Task.detached(priority: .userInitiated) { Self.readOriginal(url) }.value
@@ -127,6 +162,7 @@ final class TranscriptImageThumbnails: @unchecked Sendable {
         let pixels = switch size {
         case .tile: min(longSide, longSidePixels, Int((Double(shortSidePixels) * aspect).rounded(.up)))
         case .detail: min(longSide, detailLongSidePixels)
+        case .inline: min(longSide, inlineLongSidePixels)
         }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,

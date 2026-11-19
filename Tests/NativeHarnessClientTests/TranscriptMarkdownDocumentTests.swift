@@ -169,4 +169,31 @@ final class TranscriptMarkdownDocumentTests: XCTestCase {
         }
         XCTAssertTrue(fallback.plainText.hasSuffix("DEEP-END"))
     }
+
+    /// A paragraph's pictures stand where they are written, between its words; pictures with only white space
+    /// between them are one block, a link around a picture alone keeps it a picture, and the same holds in a list.
+    func testPicturesSplitTheirParagraphWhereTheyStand() {
+        let document = TranscriptMarkdownDocument("""
+            Before: ![chart](docs/a.png "Latency") after **it**.
+
+            ![one](1.png)
+            ![two](2.png) [![badge](b.svg)](https://example.com)
+
+            - item ![shot](~/s.png)
+
+            Empty ![nothing]() stays words.
+            """)
+
+        XCTAssertEqual(document.blocks, [
+            .paragraph("Before:"),
+            .pictures([TranscriptMarkdownPicture(source: "docs/a.png", alt: "chart", title: "Latency")]),
+            .paragraph("after **it**."),
+            .pictures([TranscriptMarkdownPicture(source: "1.png", alt: "one"), TranscriptMarkdownPicture(source: "2.png", alt: "two"),
+                       TranscriptMarkdownPicture(source: "b.svg", alt: "badge", link: "https://example.com")]),
+            .unorderedList([TranscriptMarkdownListItem(blocks: [
+                .paragraph("item"), .pictures([TranscriptMarkdownPicture(source: "~/s.png", alt: "shot")])
+            ])]),
+            .paragraph("Empty nothing stays words.")
+        ])
+    }
 }

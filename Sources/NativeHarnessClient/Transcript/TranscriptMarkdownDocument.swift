@@ -10,6 +10,8 @@ enum TranscriptMarkdownBlock: Equatable, Sendable {
     case code(language: String?, text: String)
     case table(headers: [TranscriptInlineContent], rows: [[TranscriptInlineContent]], alignments: [TranscriptTableAlignment] = [])
     case divider
+    /// The pictures a paragraph shows (`![alt](source)`), one after another between its words.
+    case pictures([TranscriptMarkdownPicture])
     // The cards a Codex message's directives draw (`CodexMessageDirectives`).
     case suggestedTask(CodexSuggestedTask)
     /// A disclosure: its summary, whether it starts open, and the Markdown inside it.
@@ -40,6 +42,26 @@ struct TranscriptMarkdownListItem: Equatable, Sendable, ExpressibleByStringLiter
 
 enum TranscriptTableAlignment: Equatable, Sendable {
     case leading, center, trailing
+}
+
+/// A picture a message's Markdown shows: `![alt](source "title")`, or a link around one alone
+/// (`[![alt](source)](link)`), as both apps draw an image an answer names.
+struct TranscriptMarkdownPicture: Equatable, Sendable {
+    /// The source as written: a path, a `file:` or `data:` address, or a web address.
+    let source: String
+    let alt: String
+    var title: String? = nil
+    /// The link around the picture, if any.
+    var link: String? = nil
+
+    /// What names the picture where it is not drawn: its description, or the last part of its source.
+    var label: String {
+        let alt = alt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !alt.isEmpty { return alt }
+        if source.hasPrefix("data:") { return L10n.string("Image") }
+        let path = source.split(separator: "?", maxSplits: 1).first.map(String.init) ?? source
+        return path.split(separator: "/").last.map(String.init)?.removingPercentEncoding ?? source
+    }
 }
 
 /// The blocks a message's Markdown was last read into, by the source each was read from: its top-level
@@ -99,7 +121,11 @@ struct TranscriptMarkdownDocument: Equatable, Sendable {
     private static func blocks(_ source: String, reading: Reading?) -> [TranscriptMarkdownBlock] {
         let document = Document(parsing: source, options: [.disableSmartOpts])
         let context = SourceContext(source)
-        return document.children.map { context.topLevelBlock($0, reading: reading) }
+        return document.children.flatMap { markup -> [TranscriptMarkdownBlock] in
+            // A paragraph with pictures is its words and its pictures in turn; it is read anew each time.
+            if let paragraph = markup as? Paragraph, let split = context.pictureBlocks(paragraph) { return split }
+            return [context.topLevelBlock(markup, reading: reading)]
+        }
     }
 
     /// A Codex message's Markdown with its directive cards in place; a disclosure's Markdown is read the
@@ -200,7 +226,7 @@ struct TranscriptMarkdownDocument: Equatable, Sendable {
             case let list as OrderedList:
                 return .orderedList(start: Int(list.startIndex), items: list.listItems.map { item($0, depth: depth) }, isLoose: isLoose(list))
             case let quote as BlockQuote:
-                return .blockQuote(quote.children.map { block($0, depth: depth + 1) })
+                return .blockQuote(quote.children.flatMap { blocks($0, depth: depth + 1) })
             case let code as CodeBlock:
                 return .code(language: code.language, text: codeText(code))
             case let table as Table:
@@ -219,9 +245,54 @@ struct TranscriptMarkdownDocument: Equatable, Sendable {
             }
         }
 
+        /// The blocks `markup` reads as: a paragraph with pictures is its words and its pictures in turn.
+        private func blocks(_ markup: any Markup, depth: Int) -> [TranscriptMarkdownBlock] {
+            if depth < 24, let paragraph = markup as? Paragraph, let split = pictureBlocks(paragraph) { return split }
+            return [block(markup, depth: depth)]
+        }
+
+        /// A paragraph's words and pictures in the order written, or nil when it shows no picture. Consecutive
+        /// pictures, with nothing but white space or a line break between them, are one block; the words around
+        /// them keep their styles and links.
+        func pictureBlocks(_ paragraph: Paragraph) -> [TranscriptMarkdownBlock]? {
+            let children = Array(paragraph.children)
+            guard children.contains(where: { TranscriptMarkdownPicture($0) != nil }) else { return nil }
+            var result: [TranscriptMarkdownBlock] = []
+            var words: [any Markup] = []
+            var pictures: [TranscriptMarkdownPicture] = []
+            func flushWords() {
+                let content = TranscriptInlineContent(inlines: words)
+                words = []
+                guard !content.plainText.allSatisfy(\.isWhitespace) else { return }
+                result.append(.paragraph(content))
+            }
+            for child in children {
+                if let picture = TranscriptMarkdownPicture(child) {
+                    if pictures.isEmpty { flushWords() }
+                    pictures.append(picture)
+                } else if !pictures.isEmpty, Self.isSpace(child) {
+                    continue
+                } else {
+                    if !pictures.isEmpty { result.append(.pictures(pictures)); pictures = [] }
+                    words.append(child)
+                }
+            }
+            if !pictures.isEmpty { result.append(.pictures(pictures)) }
+            flushWords()
+            return result
+        }
+
+        private static func isSpace(_ markup: any Markup) -> Bool {
+            switch markup {
+            case is SoftBreak, is LineBreak: true
+            case let text as Markdown.Text: text.string.allSatisfy(\.isWhitespace)
+            default: false
+            }
+        }
+
         private func item(_ item: ListItem, depth: Int) -> TranscriptMarkdownListItem {
             TranscriptMarkdownListItem(
-                blocks: item.children.map { block($0, depth: depth + 1) },
+                blocks: item.children.flatMap { blocks($0, depth: depth + 1) },
                 checked: item.checkbox.map { $0 == .checked }
             )
         }
@@ -282,5 +353,20 @@ struct TranscriptMarkdownDocument: Equatable, Sendable {
                 return String(line) + ending
             }.joined()
         }
+    }
+}
+
+extension TranscriptMarkdownPicture {
+    /// The picture `markup` shows: an image with a source, or a link around one alone.
+    init?(_ markup: any Markup) {
+        if let image = markup as? Markdown.Image {
+            guard let source = image.source?.trimmingCharacters(in: .whitespaces), !source.isEmpty else { return nil }
+            self.init(source: source, alt: image.plainText, title: image.title.flatMap { $0.isEmpty ? nil : $0 })
+            return
+        }
+        guard let link = markup as? Markdown.Link, link.childCount == 1, let inner = link.child(at: 0),
+              var picture = TranscriptMarkdownPicture(inner) else { return nil }
+        picture.link = link.destination.flatMap { $0.isEmpty ? nil : $0 }
+        self = picture
     }
 }

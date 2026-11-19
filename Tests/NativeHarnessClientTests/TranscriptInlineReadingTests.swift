@@ -78,14 +78,15 @@ final class TranscriptInlineReadingTests: XCTestCase {
     }
 
     func testNestedStylesCombineWithoutLosingCodeOrEscapes() throws {
-        let value = try content(#"***both*** and **`code`** and ~~old~~ &amp; ![alt](image.png)"#)
-        XCTAssertEqual(value.plainText, "both and code and old & alt")
+        // A picture is a block of its own (`TranscriptMarkdownDocumentTests`); inside a link it is its words.
+        let value = try content(#"***both*** and **`code`** and ~~old~~ &amp; [see ![alt](image.png)](notes.md)"#)
+        XCTAssertEqual(value.plainText, "both and code and old & see alt")
         let both = try XCTUnwrap(value.attributed.runs.first)
         XCTAssertEqual(both.inlinePresentationIntent, [.emphasized, .stronglyEmphasized])
         let code = try XCTUnwrap(value.attributed.runs.first { $0.inlinePresentationIntent?.contains(.code) == true })
         XCTAssertEqual(code.inlinePresentationIntent, [.code, .stronglyEmphasized])
         XCTAssertTrue(value.attributed.runs.contains { $0.inlinePresentationIntent?.contains(.strikethrough) == true })
-        XCTAssertTrue(value.attributed.runs.compactMap(\.link).isEmpty)
+        XCTAssertEqual(value.attributed.runs.compactMap(\.link).map(\.relativeString), ["notes.md"])
     }
 
     /// Only two tildes strike; one stays a tilde, as a range ("240~400ms") or "about" ("~5") writes it.

@@ -207,8 +207,8 @@ enum ConversationFindEngine {
                     // A disclosure's summary and the Markdown inside it, which a match opens.
                     segments.append(.init(key: .block(path), text: summary))
                     visit(inside, path: path)
-                case .suggestedTask, .reviewComments, .visualization:
-                    // A card's labels are not the message's words.
+                case .suggestedTask, .reviewComments, .visualization, .pictures:
+                    // A card's labels and a picture's description are not the message's words.
                     break
                 }
             }

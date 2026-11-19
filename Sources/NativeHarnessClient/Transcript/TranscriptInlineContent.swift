@@ -18,6 +18,20 @@ struct TranscriptInlineContent: Equatable, Sendable, ExpressibleByStringLiteral 
         attributed = TranscriptAutolink.apply(to: Self.render(markup))
     }
 
+    /// Some of a paragraph's inline children, as `init(markup:)` reads the whole paragraph; white space and
+    /// line breaks at either end, where a picture stood, are left out.
+    init(inlines: [any Markup]) {
+        var rendered = AttributedString()
+        for inline in inlines { rendered += Self.render(inline) }
+        while let first = rendered.characters.first, first.isWhitespace {
+            rendered.removeSubrange(rendered.startIndex..<rendered.characters.index(after: rendered.startIndex))
+        }
+        while let last = rendered.characters.last, last.isWhitespace {
+            rendered.removeSubrange(rendered.characters.index(before: rendered.endIndex)..<rendered.endIndex)
+        }
+        attributed = TranscriptAutolink.apply(to: rendered)
+    }
+
     /// One line of Markdown as a summary or a card shows it: its words with their inline styles and
     /// links, without the marks that start a heading, quote or list item. A line that is no words to
     /// Markdown, a fence or a rule, stays as written.
