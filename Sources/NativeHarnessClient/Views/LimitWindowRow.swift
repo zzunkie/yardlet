@@ -78,7 +78,7 @@ struct LimitWindowBar: View {
         // A hidden glyph gives the row its line height and baseline; the bar draws over it, so
         // the column's width decides the cells and the cells never decide the column.
         Text(verbatim: "█")
-            .font(font)
+            .font(font).fontDesign(nil)
             .hidden()
             .frame(maxWidth: .infinity, alignment: .leading)
             .overlay(alignment: .leading) {
@@ -86,7 +86,7 @@ struct LimitWindowBar: View {
                     (Text(verbatim: String(repeating: "█", count: filled)).foregroundStyle(tint.map(AnyShapeStyle.init)
                         ?? AnyShapeStyle(.primary))
                         + Text(verbatim: String(repeating: "░", count: max(cells - filled, 0))))
-                        .font(font)
+                        .font(font).fontDesign(nil)
                         .lineLimit(1)
                         .fixedSize()
                 }

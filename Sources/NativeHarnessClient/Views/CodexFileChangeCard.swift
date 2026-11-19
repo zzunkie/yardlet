@@ -217,6 +217,7 @@ struct CodexFileDiffBox<FileLink: View>: View {
 /// preview. Approval cards draw a requested change with it too; their lines have no numbers and
 /// may carry a caption in place of a hunk rule.
 struct CodexDiffPreviewLines: View {
+    nonisolated static let lineTintOpacity = 0.1
     static let visibleLineLimit = 14
 
     let lines: [CodexFileChangeCardProjection.Preview.Line]
@@ -277,7 +278,7 @@ struct CodexDiffPreviewLines: View {
                     .textSelection(.enabled)
                     .padding(.trailing, 10)
             }
-            .font(codeFont.font(ofSize: codeFont.size(11, scale: interfaceScale)))
+            .font(codeFont.font(ofSize: codeFont.size(11, scale: interfaceScale))).fontDesign(nil)
             .lineLimit(1)
         }
     }
@@ -300,8 +301,8 @@ struct CodexDiffPreviewLines: View {
 
     private func background(for kind: CodexFileChangeCardProjection.Preview.Line.Kind) -> Color {
         switch kind {
-        case .addition: .green.opacity(0.1)
-        case .deletion: .red.opacity(0.1)
+        case .addition: .green.opacity(Self.lineTintOpacity)
+        case .deletion: .red.opacity(Self.lineTintOpacity)
         case .context, .separator: .clear
         }
     }

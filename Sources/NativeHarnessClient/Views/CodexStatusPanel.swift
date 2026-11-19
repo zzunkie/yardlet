@@ -77,7 +77,7 @@ struct CodexStatusPanel: View {
                     cells(row, at: index)
                 }
             }
-            .font(.system(size: 12 * interfaceScale, design: .monospaced))
+            .font(.system(size: 12 * interfaceScale, design: .monospaced)).fontDesign(nil)
             .lineSpacing(3 * interfaceScale)
             .padding(.horizontal, 10)
             .padding(.top, 4)

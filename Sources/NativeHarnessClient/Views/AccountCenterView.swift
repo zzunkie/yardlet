@@ -941,7 +941,7 @@ struct ConnectionCenterContent: View {
                         .foregroundStyle(.green)
                     if let label = remote.label {
                         Text(label)
-                            .font(.system(size: 10.5, design: .monospaced))
+                            .font(.system(size: 10.5, design: .monospaced)).fontDesign(nil)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
                             .textSelection(.enabled)
@@ -962,7 +962,7 @@ struct ConnectionCenterContent: View {
                     .font(.system(size: 10.5))
                     .foregroundStyle(.green)
                 Text(runtime.path(percentEncoded: false))
-                    .font(.system(size: 10.5, design: .monospaced))
+                    .font(.system(size: 10.5, design: .monospaced)).fontDesign(nil)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                     .textSelection(.enabled)
@@ -1171,7 +1171,7 @@ struct ConnectionCenterContent: View {
                                 .font(.system(size: 9.5, weight: .medium))
                                 .foregroundStyle(.secondary)
                             Text(code)
-                                .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                                .font(.system(size: 15, weight: .semibold, design: .monospaced)).fontDesign(nil)
                                 .textSelection(.enabled)
                         }
                         Spacer()
@@ -1400,7 +1400,7 @@ private struct AccountLoginTerminalHost: NSViewRepresentable {
         view.nativeForegroundColor = NativeTerminalSession.foregroundColor
         view.nativeBackgroundColor = NativeTerminalSession.backgroundColor
         view.layer?.backgroundColor = NativeTerminalSession.backgroundColor.cgColor
-        view.caretColor = ParityTheme.accentColor(for: context.environment.yardletAccent)
+        view.caretColor = context.environment.yardletColorTheme.accent(in: ThemeMode(context.environment.colorScheme))
         view.getTerminal().setCursorStyle(CursorStyle.steadyBlock)
         view.metalBufferingMode = MetalBufferingMode.perFrameAggregated
         try? view.setUseMetal(false)
@@ -1411,7 +1411,7 @@ private struct AccountLoginTerminalHost: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: LocalProcessTerminalView, context: Context) {
-        let accent = ParityTheme.accentColor(for: context.environment.yardletAccent)
+        let accent = context.environment.yardletColorTheme.accent(in: ThemeMode(context.environment.colorScheme))
         if nsView.caretColor != accent { nsView.caretColor = accent }
         if isVisible, !context.coordinator.wasVisible,
            let view = nsView as? AccountLoginTerminalView {

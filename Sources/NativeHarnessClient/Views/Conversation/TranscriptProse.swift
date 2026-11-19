@@ -31,6 +31,8 @@ struct TranscriptProseStyle: Equatable {
     var isDark = false
     var workspaceURL: URL?
     var codeFont = YardletCodeFont.standard
+    var uiFont = InterfaceFont.system
+    var text: ThemeRGB?
 }
 
 extension NSAttributedString.Key {
@@ -213,7 +215,7 @@ struct TranscriptProseBuilder {
                       monospaced: Bool = false) -> NSFont {
         var font = monospaced
             ? style.codeFont.nsFont(ofSize: size, weight: weight)
-            : NSFont.systemFont(ofSize: size, weight: weight)
+            : style.uiFont.font(size: size, weight: weight)
         if italic {
             let descriptor = font.fontDescriptor.withSymbolicTraits(.italic)
             font = NSFont(descriptor: descriptor, size: size) ?? font
@@ -222,7 +224,7 @@ struct TranscriptProseBuilder {
     }
 
     private func markerFont() -> NSFont {
-        let base = NSFont.systemFont(ofSize: bodySize)
+        let base = style.uiFont.font(size: bodySize)
         let descriptor = base.fontDescriptor.addingAttributes([
             .featureSettings: [[NSFontDescriptor.FeatureKey.typeIdentifier: kNumberSpacingType,
                                 NSFontDescriptor.FeatureKey.selectorIdentifier: kMonospacedNumbersSelector]]
@@ -235,7 +237,7 @@ struct TranscriptProseBuilder {
     /// `block` as text, ending in a newline unless it is the message's last.
     func piece(_ block: TranscriptProseBlock, isFirst: Bool, isLast: Bool) -> TranscriptProsePiece {
         let output = Output()
-        append(block.block, path: block.path, context: Context(),
+        append(block.block, path: block.path, context: Context(color: style.text?.nsColor ?? .labelColor),
                spacingAfter: isLast ? 0 : ParityTheme.proseBlockSpacing, into: output)
         // TextKit 2 puts a paragraph's line spacing above its first line too, except for the text's
         // first paragraph. Every gap between paragraphs gives that much back, and a paragraph with less
@@ -321,7 +323,7 @@ struct TranscriptProseBuilder {
         case let .blockQuote(blocks):
             var inner = context
             inner.indent += TranscriptProseMetrics.quoteIndent
-            inner.color = .secondaryLabelColor
+            inner.color = style.text?.nsColor.withAlphaComponent(0.70) ?? .secondaryLabelColor
             let first = output.paragraphs.count
             if blocks.isEmpty {
                 emptyParagraph(context: inner, spacingAfter: spacingAfter, into: output)
@@ -490,7 +492,7 @@ struct TranscriptProseBuilder {
         let range = NSRange(location: 0, length: code.length)
         code.addAttribute(.font, value: font(size: codeSize, monospaced: true), range: range)
         code.enumerateAttribute(.foregroundColor, in: range) { value, run, _ in
-            if value == nil { code.addAttribute(.foregroundColor, value: NSColor.labelColor, range: run) }
+            if value == nil { code.addAttribute(.foregroundColor, value: style.text?.nsColor ?? NSColor.labelColor, range: run) }
         }
         // One paragraph, so its frame is one rectangle; a copy gives its lines back.
         code.mutableString.replaceOccurrences(of: "\n", with: "\u{2028}", options: [], range: range)

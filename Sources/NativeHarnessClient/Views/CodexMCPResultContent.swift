@@ -87,7 +87,7 @@ private struct CodexMCPResultLink: View {
                 }
                 if link.uri != link.label, !link.uri.isEmpty {
                     Text(verbatim: link.uri)
-                        .font(.system(size: 11 * interfaceScale, design: .monospaced))
+                        .font(.system(size: 11 * interfaceScale, design: .monospaced)).fontDesign(nil)
                         .foregroundStyle(.secondary)
                         .lineLimit(3)
                         .truncationMode(.middle)

@@ -49,7 +49,7 @@ struct TranscriptErrorCard: View {
                         .foregroundStyle(.secondary)
                     ScrollView {
                         Text(message)
-                            .font(.system(.caption, design: .monospaced))
+                            .font(.system(.caption, design: .monospaced)).fontDesign(nil)
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }

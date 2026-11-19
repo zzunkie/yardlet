@@ -184,6 +184,7 @@ struct YardletSetting: Identifiable {
         /// A switch, "on" or "off".
         case onOff
         case choices([Choice])
+        case color
     }
 
     enum Storage {
@@ -237,6 +238,7 @@ struct YardletSetting: Identifiable {
         switch values {
         case .onOff: [Choice(value: Self.on, title: L10n.string("On")), Choice(value: Self.off, title: L10n.string("Off"))]
         case let .choices(choices): choices
+        case .color: []
         }
     }
 
@@ -697,14 +699,6 @@ extension YardletSetting {
 /// Settings' own.
 @MainActor
 enum YardletSettingCatalog {
-    private static var appearance: [YardletSetting] {
-#if os(macOS)
-        [.theme, .accent, .interfaceSize, .codeFontSize]
-#else
-        [.theme, .interfaceSize, .codeFontSize]
-#endif
-    }
-
     static let all: [YardletSetting] = [
         .language, .showInMenuBar, .launchAtLogin, .mailbox, .calendar, .simulator, .checkForUpdates,
         .sendShortcut, .followUpBehavior, .nextMessageSuggestions, .claudeContextLimit, .idleCompaction, .autoFixFailingCI, .showTaskServers, .continueAfterRestart,
@@ -712,7 +706,7 @@ enum YardletSettingCatalog {
         .agentBrowserTools, .keepCookies, .searchSuggestions, .pageSuggestions, .memorySaver, .memorySaverLevel,
         .hideKeysAndTokens,
         .shareTerminal, .terminalLocation,
-    ] + appearance + [
+    ] + PlatformAppearanceSettings.all + [
         .personalAgentMessages, .newMail,
         .turnCompletionNotifications, .approvalNotifications, .questionNotifications, .notificationSound,
         .yardletInstructions, .dailyEvaluation,

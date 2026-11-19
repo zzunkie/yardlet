@@ -304,7 +304,7 @@ struct ConversationRequestCard: View {
         }
         if context.isEmpty, request.command == nil, let method = request.method {
             Text(method)
-                .font(.system(size: 12, design: .monospaced))
+                .font(.system(size: 12, design: .monospaced)).fontDesign(nil)
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)

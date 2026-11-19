@@ -141,7 +141,7 @@ struct MicrosoftSetupPage: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(L10n.string("Microsoft app saved")).font(.callout.weight(.medium))
                 Text([center.microsoftApp?.clientID, center.microsoftApp?.tenant].compactMap { $0 }.joined(separator: " · "))
-                    .font(.caption.monospaced())
+                    .font(.caption.monospaced()).fontDesign(nil)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -221,7 +221,7 @@ struct MicrosoftSetupPage: View {
                     Text(service.shortName)
                         .frame(width: 64, alignment: .leading)
                     Text(service.scopes.joined(separator: " "))
-                        .font(.caption.monospaced())
+                        .font(.caption.monospaced()).fontDesign(nil)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .font(.caption)

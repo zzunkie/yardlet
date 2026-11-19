@@ -41,7 +41,10 @@ extension EnvironmentValues {
 }
 
 extension EnvironmentValues {
-    @Entry var yardletAccent = YardletAccentPreference.system
+    var yardletAccent: YardletAccentPreference {
+        get { yardletColorTheme.preset }
+        set { yardletColorTheme.preset = newValue }
+    }
 }
 
 private struct AccentStyle: ShapeStyle, Hashable {
@@ -49,6 +52,18 @@ private struct AccentStyle: ShapeStyle, Hashable {
     var role: Role = .accent
 
     func resolve(in environment: EnvironmentValues) -> Color.Resolved {
+        let mode = ThemeMode(environment.colorScheme)
+        let theme = environment.yardletColorTheme
+        if theme[mode] != ThemeColors() {
+            let accent = Color(nsColor: theme.accent(in: mode)).resolve(in: environment)
+            switch role {
+            case .accent: return accent
+            case .text:
+                return ThemeContrast.readableAccent(theme, in: environment)
+            case .onAccent:
+                return (ThemeContrast.luminance(accent) > 0.179 ? Color.black : .white).resolve(in: environment)
+            }
+        }
         let color = switch role {
         case .accent: ParityTheme.accentColor(for: environment.yardletAccent)
         case .text: ParityTheme.linkTextColor(for: environment.yardletAccent)
@@ -160,22 +175,26 @@ enum ParityTheme {
             : NSColor(calibratedRed: 0.42, green: 0.52, blue: 0.02, alpha: 1)
     })
 
-    static let canvas = Color(nsColor: NSColor(name: "YardletCanvas") { appearance in
+    static let canvas = Color(ThemeSurface.canvas)
+    static let originalCanvas = Color(nsColor: NSColor(name: "YardletCanvas") { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             ? NSColor(calibratedWhite: 0.075, alpha: 1)
             : NSColor(calibratedWhite: 0.995, alpha: 1)
     })
-    static let sidebar = Color(nsColor: NSColor(name: "YardletSidebar") { appearance in
+    static let sidebar = Color(ThemeSurface.sidebar)
+    static let originalSidebar = Color(nsColor: NSColor(name: "YardletSidebar") { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             ? NSColor(calibratedWhite: 0.105, alpha: 1)
             : NSColor(calibratedWhite: 0.965, alpha: 1)
     })
-    static let elevated = Color(nsColor: NSColor(name: "YardletElevated") { appearance in
+    static let elevated = Color(ThemeSurface.elevated)
+    static let originalElevated = Color(nsColor: NSColor(name: "YardletElevated") { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             ? NSColor(calibratedWhite: 0.135, alpha: 1)
             : .white
     })
-    static let input = Color(nsColor: NSColor(name: "YardletInput") { appearance in
+    static let input = Color(ThemeSurface.input)
+    static let originalInput = Color(nsColor: NSColor(name: "YardletInput") { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             ? NSColor(calibratedWhite: 0.155, alpha: 1)
             : .white

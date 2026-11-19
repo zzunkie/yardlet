@@ -149,7 +149,7 @@ struct AppStoreConnectSetupPage: View {
                 Button(keyFile == nil ? L10n.string("Choose .p8 File…") : L10n.string("Choose Another…"), action: chooseFile)
                 if let keyFile {
                     Label(keyFile.lastPathComponent, systemImage: "key")
-                        .font(.caption.monospaced())
+                        .font(.caption.monospaced()).fontDesign(nil)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)

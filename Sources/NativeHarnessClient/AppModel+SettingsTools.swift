@@ -44,17 +44,17 @@ extension AppModel {
         let asks = sessionToolAsksPerson(caller)
         let entries = YardletSettingCatalog.all.compactMap { setting -> SettingEntry? in
             guard let value = setting.value(in: context) else { return nil }
-            let isSwitch = if case .onOff = setting.values { true } else { false }
+            let kind = switch setting.values { case .onOff: "switch"; case .choices: "choice"; case .color: "color" }
             return SettingEntry(
                 id: setting.id, section: setting.section.title, title: setting.title,
-                help: setting.help.isEmpty ? nil : setting.help, kind: isSwitch ? "switch" : "choice", value: value,
-                choices: isSwitch ? nil : setting.choices.map { SettingChoice(value: $0.value, title: $0.title, detail: $0.detail) },
+                help: setting.help.isEmpty ? nil : setting.help, kind: kind, value: value,
+                choices: kind != "choice" ? nil : setting.choices.map { SettingChoice(value: $0.value, title: $0.title, detail: $0.detail) },
                 asksThePerson: setting.asksEveryTime || asks)
         }
         return .text(SessionToolText.json(SettingListing(
             settings: entries,
             note: "The settings Settings shows now; one that shows only while another is on is listed while it is. A "
-                + "switch's value is on or off, a choice's one of its choices' values. asksThePerson: update_setting "
+                + "switch takes on or off, a choice takes a listed value, and a color takes #RRGGBB or default. asksThePerson: update_setting "
                 + "waits for the person's approval card.")))
     }
 
@@ -71,7 +71,7 @@ extension AppModel {
             return .failure("Not changed: Settings does not show “\(setting.title)”\(why).", .refused, retry: .no)
         }
         guard let value = Self.settingValue(arguments["value"], of: setting) else {
-            let allowed = setting.choices.map(\.value).joined(separator: ", ")
+            let allowed = if case .color = setting.values { "#RRGGBB or default" } else { setting.choices.map(\.value).joined(separator: ", ") }
             return .failure("Not changed: “\(setting.title)” takes \(allowed).", .invalidArguments, retry: .withChanges,
                             details: ["values": .array(setting.choices.map { .string($0.value) })])
         }
@@ -130,6 +130,10 @@ extension AppModel {
         case let .bool(isOn)?: text = isOn ? YardletSetting.on : YardletSetting.off
         case let .string(string)?: text = string.trimmingCharacters(in: .whitespacesAndNewlines)
         default: return nil
+        }
+        if case .color = setting.values {
+            if text.lowercased() == "default" { return "default" }
+            return ThemeRGB(text)?.hex
         }
         if case .onOff = setting.values {
             switch text.lowercased() {

@@ -60,7 +60,7 @@ struct RemoteBrowserPanel: View {
             }
             TextField(L10n.string("Search or enter address"), text: $address)
                 .textFieldStyle(.plain)
-                .font(.callout.monospaced())
+                .font(.callout.monospaced()).fontDesign(nil)
                 .focused($addressFocused)
                 .disabled(!browser.canControlTabs)
                 .onSubmit { submittedAddress = true; browser.openAddress(address); addressFocused = false }

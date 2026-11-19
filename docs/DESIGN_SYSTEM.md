@@ -104,6 +104,30 @@ rendering, and do not use an accent alone to communicate essential state. If acc
 meet contrast, retain primary text and put the accent in a supporting detail rather than inventing
 a second accent color. Composition options must work with any preset; color is not an identity vote.
 
+### Custom appearance
+
+In Settings > Appearance on the Mac, the Light and Dark columns each set an accent, a background
+and a text color. Save applies the draft to open windows. The chosen background moves the canvas,
+sidebar, elevated panels, input and review surfaces together, preserving the brightness differences
+between them. The interface font offers the system, serif and rounded faces with native fallback.
+Code keeps its own font and size. The accent preset supplies both accents until a column overrides
+one. Selecting another preset replaces both accent overrides.
+
+Reset to defaults restores the system accent, the native surface and label colors, and the system
+interface font in a single action. It also clears a preset saved by an earlier version. The theme
+is stored in app preferences. The agent can set `light_accent_color`, `light_background_color`,
+`light_text_color` and their `dark_` counterparts to an opaque sRGB `#RRGGBB` or `default`.
+The interface font setting is `ui_font`.
+
+The settings page and `update_setting` validate the same candidate palette before writing it.
+Primary text requires 4.5:1 against its background. Accent requires 3:1. These checks include the
+sidebar selection and conversation bubble. The error red, waiting line's orange and diff
+addition/removal colors keep their native values. Each fixed color requires the lower of 3:1
+and its contrast on the corresponding default background in that appearance, using the same
+accent preset. Diff checks composite the change tint over its surface, including a selected line
+and an inline preview. A failed save identifies the appearance and pair, its measured contrast
+and its required contrast. The last saved palette stays active.
+
 ### Motion and geometry
 
 `ParityMotion.easeOut` is 150 ms; `easeInOut` is 160 ms. Existing hover overrides use 100 ms.

@@ -62,6 +62,8 @@ struct WorkspaceFileReader: NSViewRepresentable {
         // In the code font, at its size for the 12 points the reader was given.
         let codeFont = context.environment.yardletCodeFont
         let font = codeFont.nsFont(ofSize: codeFont.size(fontSize))
+        let themeText = context.environment.yardletColorTheme[ThemeMode(context.environment.colorScheme)].text
+        text.baseTextColor = themeText?.nsColor ?? .labelColor
         let changed = coordinator.documentID != document.id || coordinator.font != font
             || text.documentLength != document.utf16Length
         coordinator.isApplying = true
@@ -179,6 +181,18 @@ final class WorkspaceFileTextView: NSTextView {
     private var lineWindow: LineWindow?
     private var lineHeight: CGFloat = 15
     private var attributes: [NSAttributedString.Key: Any] = [:]
+    var baseTextColor = NSColor.labelColor {
+        didSet {
+            guard oldValue != baseTextColor else { return }
+            attributes[.foregroundColor] = baseTextColor
+            if lineWindow != nil, let storage = textStorage {
+                storage.addAttribute(.foregroundColor, value: baseTextColor, range: NSRange(location: 0, length: storage.length))
+            } else {
+                colored = IndexSet()
+                colorLinesInView()
+            }
+        }
+    }
     private var addsLineBreak = false
     private var isPrepared = false
     /// The colors by UTF-16 range, in order, for the text as it was when they were worked out.
@@ -215,7 +229,7 @@ final class WorkspaceFileTextView: NSTextView {
         let style = NSMutableParagraphStyle()
         style.minimumLineHeight = lineHeight
         style.maximumLineHeight = lineHeight
-        attributes = [.font: font, .foregroundColor: NSColor.labelColor, .paragraphStyle: style]
+        attributes = [.font: font, .foregroundColor: baseTextColor, .paragraphStyle: style]
         tokens = document.tokens
         // Read-only access does not make a small source file a large-file preview.
         // Editable documents keep their full storage; read-only documents choose by size.
@@ -409,7 +423,7 @@ final class WorkspaceFileTextView: NSTextView {
         colored.formUnion(missing)
         storage.beginEditing()
         for range in missing.rangeView {
-            storage.addAttribute(.foregroundColor, value: NSColor.labelColor,
+            storage.addAttribute(.foregroundColor, value: baseTextColor,
                                  range: NSRange(location: range.lowerBound, length: range.count))
             // The range in the text the colors were worked out for.
             let from = Self.before(range.lowerBound, edits), to = Self.before(range.upperBound, edits)

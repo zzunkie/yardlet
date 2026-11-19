@@ -85,7 +85,7 @@ struct SlackSetupPage: View {
             HStack(spacing: 6) {
                 Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
                 Text(slack.oauthClientID ?? "")
-                    .font(.caption.monospaced())
+                    .font(.caption.monospaced()).fontDesign(nil)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                 Spacer(minLength: 6)

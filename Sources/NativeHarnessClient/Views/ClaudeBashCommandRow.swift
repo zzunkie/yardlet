@@ -52,7 +52,7 @@ struct ClaudeBashCommandRow: View {
         let terminalCommand = ConversationRunInTerminalButton.offer(command, runInTerminal)
         VStack(alignment: .leading, spacing: 5) {
             Text(TranscriptCodeBlock.highlighted(command, language: "bash", isDark: colorScheme == .dark))
-                .font(codeFont.font(ofSize: codeFont.size(12.5, scale: interfaceScale)))
+                .font(codeFont.font(ofSize: codeFont.size(12.5, scale: interfaceScale))).fontDesign(nil)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -84,7 +84,7 @@ struct ClaudeBashCommandRow: View {
     private func output(for run: ClaudeShellCommandRun?) -> some View {
         let content = outputContent(for: run)
         let text = Text(verbatim: content.text)
-            .font(codeFont.font(ofSize: codeFont.size(12, scale: interfaceScale)))
+            .font(codeFont.font(ofSize: codeFont.size(12, scale: interfaceScale))).fontDesign(nil)
             .foregroundStyle(content.isError ? Color.red : Color.secondary)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)

@@ -69,6 +69,33 @@ import XCTest
         }
     }
 
+    func testThemeProtectsFixedColorsOnTheirDefaultAndCustomBackgrounds() throws {
+        var theme = MacColorTheme(preset: .ink)
+        XCTAssertTrue(ThemeContrast.failures(for: theme).isEmpty)
+        theme.light.background = ThemeRGB("#A0A0A0")
+        let failures = ThemeContrast.failures(for: theme)
+        let waiting = try XCTUnwrap(failures.first { $0.mode == .light && $0.pair == L10n.string("Waiting line / background") })
+        var light = EnvironmentValues()
+        light.colorScheme = .light
+        let baseline = Self.contrast(Color.orange.resolve(in: light), ParityTheme.originalCanvas.resolve(in: light))
+        XCTAssertEqual(waiting.required, min(3, baseline), accuracy: 0.001)
+        XCTAssertLessThan(waiting.measured, waiting.required)
+        XCTAssertTrue(failures.contains { $0.pair == L10n.string("Diff addition / background") })
+        theme.dark.accent = ThemeRGB("#181818")
+        XCTAssertTrue(ThemeContrast.failures(for: theme).contains { $0.mode == .dark && $0.required == 3 &&
+            $0.pair == L10n.string("Accent / background") })
+    }
+
+    func testTheRequestCommandKeepsItsCodeFontWhenTheInterfaceUsesSerif() throws {
+        func render(_ theme: MacColorTheme) throws -> Data {
+            let bitmap = try WindowlessRender.bitmap(CodexBoundedOutput(text: "swift test --filter LayoutTests", folds: false)
+                .frame(width: 320).environment(\.yardletCodeFont, YardletCodeFont(name: "Menlo", points: 14))
+                .modifier(MacThemeContent(theme: theme)))
+            return try WindowlessRender.pngData(bitmap)
+        }
+        XCTAssertEqual(try render(MacColorTheme()), try render(MacColorTheme(font: .serif)))
+    }
+
     private static func contrast(_ a: Color.Resolved, _ b: Color.Resolved) -> Float {
         func luminance(_ c: Color.Resolved) -> Float {
             0.2126 * c.linearRed + 0.7152 * c.linearGreen + 0.0722 * c.linearBlue

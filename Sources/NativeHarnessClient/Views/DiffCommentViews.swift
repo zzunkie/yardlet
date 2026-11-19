@@ -119,7 +119,7 @@ struct DiffCommentCard: View {
 
     private var cardBackground: some View {
         RoundedRectangle(cornerRadius: 8)
-            .fill(Color(nsColor: .textBackgroundColor))
+            .fill(Color(ThemeSurface.review))
             .overlay { RoundedRectangle(cornerRadius: 8).fill(ParityTheme.subtleFill) }
     }
 

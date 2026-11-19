@@ -55,6 +55,8 @@ struct CodexItemCard: View {
 /// bound, since a fold would hide part of what is approved.
 struct CodexBoundedOutput: View {
     @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @Environment(\.yardletCodeFont) private var codeFont
+    @Environment(\.yardletColorTheme) private var theme
     let text: String
     var characterLimit: Int = 2_400
     var monospaced = true
@@ -70,10 +72,9 @@ struct CodexBoundedOutput: View {
                     .frame(height: 280 * interfaceScale)
             } else {
                 Text(window.text)
-                    .font(.system(
-                        size: (monospaced ? 11 : 13.5) * interfaceScale,
-                        design: monospaced ? .monospaced : .default
-                    ))
+                    .font(monospaced ? codeFont.font(ofSize: codeFont.size(11, scale: interfaceScale))
+                                     : .system(size: 13.5 * interfaceScale))
+                    .fontDesign(monospaced ? nil : theme.font.design)
                     .foregroundStyle(monospaced ? Color.secondary : Color.primary)
                     .lineSpacing(monospaced ? 0 : 3)
                     .textSelection(.enabled)
@@ -135,7 +136,7 @@ struct CodexCommandOutput: View {
                     .frame(height: 280 * interfaceScale)
             } else {
                 Text(window.text)
-                    .font(codeFont.font(ofSize: codeFont.size(11, scale: interfaceScale)))
+                    .font(codeFont.font(ofSize: codeFont.size(11, scale: interfaceScale))).fontDesign(nil)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)

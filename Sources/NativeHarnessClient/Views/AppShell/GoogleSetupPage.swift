@@ -165,7 +165,7 @@ struct GoogleSetupPage: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(L10n.string("Google OAuth app saved in your keychain")).font(.callout.weight(.medium))
                 Text(center.googleAppClientID ?? "")
-                    .font(.caption.monospaced())
+                    .font(.caption.monospaced()).fontDesign(nil)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -267,7 +267,7 @@ struct GoogleSetupPage: View {
                     Text(scope.service.shortName)
                         .frame(width: 56, alignment: .leading)
                     Text(scope.shortName)
-                        .font(.caption.monospaced())
+                        .font(.caption.monospaced()).fontDesign(nil)
                     Text(scope.classification.word)
                         .foregroundStyle(scope.classification == .restricted ? AnyShapeStyle(.orange) : AnyShapeStyle(.tertiary))
                     if ownAppOnly.contains(scope.service) {

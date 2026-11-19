@@ -737,7 +737,7 @@ struct DeskWaitingRow: View, @MainActor Equatable {
     private func detailText(_ detail: (text: String, isCommand: Bool)) -> some View {
         if detail.isCommand {
             Text(detail.text)
-                .font(.system(size: 12.5, design: .monospaced))
+                .font(.system(size: 12.5, design: .monospaced)).fontDesign(nil)
                 .lineLimit(1)
                 .truncationMode(.tail)
         } else {

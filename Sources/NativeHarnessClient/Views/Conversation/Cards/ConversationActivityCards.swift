@@ -23,7 +23,7 @@ struct ConversationSubagentCard: View {
         ) {
             if let detail = subagent.detail, !detail.isEmpty {
                 Text(detail)
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(.system(size: 11, design: .monospaced)).fontDesign(nil)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
             }
@@ -281,7 +281,7 @@ struct ConversationActivityText: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             Text(text)
-                .font(codeFont.font(ofSize: codeFont.size(11, scale: interfaceScale)))
+                .font(codeFont.font(ofSize: codeFont.size(11, scale: interfaceScale))).fontDesign(nil)
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)

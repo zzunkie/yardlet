@@ -86,6 +86,24 @@ final class WindowStructureQATests: XCTestCase {
                 detail: "Verify the conversation and composer.", command: "swift test --filter LayoutTests"), state: .pending))
         ]
         model.splits.activate(.session(task.id))
+        let draft = AppearanceThemeDraft(defaults: defaults)
+        if let custom = ProcessInfo.processInfo.environment["YARDLET_RENDER_THEME"] {
+            draft.draft.dark.background = ThemeRGB("#101820")
+            draft.draft.dark.text = ThemeRGB("#EDF6FF")
+            draft.draft.dark.accent = ThemeRGB("#94DCCA")
+            draft.draft.light.accent = ThemeRGB("#268B8B")
+            draft.draft.light.background = ThemeRGB("#FFFFFF")
+            draft.draft.light.text = ThemeRGB("#243D4A")
+            draft.draft.font = .serif
+            draft.save()
+            XCTAssertTrue(draft.failures.isEmpty, draft.failures.map(\.message).description)
+            if custom == "invalid" {
+                draft.draft.light.background = ThemeRGB("#E8EEF1")
+                draft.draft.light.text = ThemeRGB("#FAFAFA")
+                draft.save()
+                XCTAssertFalse(draft.failures.isEmpty)
+            }
+        }
         for appearance in WindowlessRender.Appearance.allCases {
             let size = NSSize(width: 1160, height: 760)
             let host = WindowlessRender.Host(YardletWindowPreferences(usesVisualFixture: false) {
@@ -96,7 +114,7 @@ final class WindowStructureQATests: XCTestCase {
             XCTAssertFalse(host.window.isVisible)
             try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "main-\(appearance.suffix).png"))
             let sheet = WindowlessRender.Host(YardletWindowPreferences(usesVisualFixture: false) {
-                SettingsCenterView(initialSection: SettingsSection.appearance.rawValue)
+                SettingsCenterView(initialSection: SettingsSection.appearance.rawValue, themeDraft: draft)
                     .environment(\.colorScheme, appearance.colorScheme)
             }.defaultAppStorage(defaults), size: SettingsCenterView.preferredSize, appearance: appearance, alpha: 0)
             defer { sheet.close() }

@@ -375,7 +375,7 @@ struct ConversationAgentMessage: View {
                     label
                 } else if let providerPhase {
                     Text(providerPhase)
-                        .font(.caption2.monospaced())
+                        .font(.caption2.monospaced()).fontDesign(nil)
                         .foregroundStyle(.tertiary)
                 }
                 TranscriptMarkdownText(text: shownText, characterLimit: ConversationLayout.messageCharacterLimit,

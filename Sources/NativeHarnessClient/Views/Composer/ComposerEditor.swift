@@ -143,6 +143,7 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
         self.footer = footer()
     }
 
+    @Environment(\.yardletColorTheme) private var theme
     @Environment(\.yardletInterfaceScale) private var interfaceScale
     @Environment(\.taskKeyboardFocus) private var keyboardFocus
     /// Which Return sends (`ComposerReturnKey`).
@@ -217,7 +218,7 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
             .textFieldStyle(.plain)
             .font(isBashMode
                 ? .system(size: 13 * interfaceScale, design: .monospaced)
-                : ParityTheme.conversationFont(scale: interfaceScale))
+                : ParityTheme.conversationFont(scale: interfaceScale)).fontDesign(isBashMode ? .monospaced : theme.font.design)
             .padding(metrics.text)
 
             if let notice = draft.notice {

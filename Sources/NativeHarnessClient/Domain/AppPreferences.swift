@@ -21,7 +21,7 @@ enum YardletAppearancePreference: String, CaseIterable, Identifiable {
 }
 
 /// One accent for controls, selections and links in the Mac app.
-enum YardletAccentPreference: String, CaseIterable, Identifiable, Sendable {
+enum YardletAccentPreference: String, CaseIterable, Identifiable, Sendable, Codable {
     case system, ink, grove, iris
 
     var id: Self { self }
@@ -36,7 +36,39 @@ enum YardletAccentPreference: String, CaseIterable, Identifiable, Sendable {
     }
 
     static func current(in defaults: UserDefaults = .yardlet) -> Self {
-        defaults.string(forKey: YardletPreferenceKeys.accent).flatMap(Self.init(rawValue:)) ?? .system
+        PlatformAppearanceSettings.accent(in: defaults)
+    }
+}
+
+/// Opaque eight-bit sRGB, stored and exposed to agents as #RRGGBB.
+struct ThemeRGB: Hashable, Codable {
+    let value: Int
+
+    init?(_ hex: String) {
+        guard hex.utf8.count == 7, hex.first == "#",
+              hex.dropFirst().allSatisfy({ $0.isASCII && $0.isHexDigit }),
+              let value = Int(hex.dropFirst(), radix: 16) else { return nil }
+        self.value = value
+    }
+
+    init(red: UInt8, green: UInt8, blue: UInt8) {
+        value = Int(red) << 16 | Int(green) << 8 | Int(blue)
+    }
+
+    var hex: String { String(format: "#%06X", value) }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let hex = try container.decode(String.self)
+        guard let color = Self(hex) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Expected #RRGGBB")
+        }
+        self = color
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(hex)
     }
 }
 

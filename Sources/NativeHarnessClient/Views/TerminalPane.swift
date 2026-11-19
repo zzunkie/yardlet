@@ -34,6 +34,7 @@ private struct TerminalSplitHalf<Content: View>: View {
     let title: String
     let onClose: () -> Void
     @ViewBuilder let content: () -> Content
+    @Environment(\.yardletColorTheme) private var theme
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -50,7 +51,7 @@ private struct TerminalSplitHalf<Content: View>: View {
             .font(.caption)
             .padding(.leading, 12).padding(.trailing, 4)
             .frame(height: 26)
-            .background(Color(nsColor: TerminalAppearance.background(isDark: colorScheme == .dark)))
+            .background(Color(nsColor: theme[ThemeMode(colorScheme)].background?.nsColor ?? TerminalAppearance.background(isDark: colorScheme == .dark)))
             content()
         }
     }
@@ -90,6 +91,7 @@ struct TerminalPane: View {
     @State private var hasStarted: Bool
     @FocusState private var isStartFocused: Bool
     @Environment(\.taskKeyboardFocus) private var keyboardFocus
+    @Environment(\.yardletColorTheme) private var theme
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.yardletInterfaceScale) private var interfaceScale
     @Environment(\.yardletCodeFont) private var codeFont
@@ -266,7 +268,7 @@ struct TerminalPane: View {
                       attachSelection: attachSelection(title: title(of: shell, in: titles)))
         .id(shell.generation)
         .padding(.horizontal, 10).padding(.bottom, 8)
-        .background(Color(nsColor: TerminalAppearance.background(isDark: colorScheme == .dark)))
+        .background(Color(nsColor: theme[ThemeMode(colorScheme)].background?.nsColor ?? TerminalAppearance.background(isDark: colorScheme == .dark)))
         .task {
             guard shell.focusesWhenShown else { return }
             shell.focusesWhenShown = false
@@ -990,23 +992,29 @@ private struct SwiftTermHost: NSViewRepresentable {
             try? view.setUseMetal(false)
             return view
         }
-        applyAppearance(to: view, coordinator: context.coordinator)
+        applyAppearance(to: view, colors: context.environment.yardletColorTheme[ThemeMode(context.environment.colorScheme)],
+                        coordinator: context.coordinator)
         (view as? NativeTerminalView)?.attachSelection = attachSelection
         return TerminalViewHost(terminal: view)
     }
 
     func updateNSView(_ nsView: TerminalViewHost, context: Context) {
-        let accent = ParityTheme.accentColor(for: context.environment.yardletAccent)
+        let accent = context.environment.yardletColorTheme.accent(in: ThemeMode(context.environment.colorScheme))
         if nsView.terminal.caretColor != accent { nsView.terminal.caretColor = accent }
-        applyAppearance(to: nsView.terminal, coordinator: context.coordinator)
+        applyAppearance(to: nsView.terminal, colors: context.environment.yardletColorTheme[ThemeMode(context.environment.colorScheme)],
+                        coordinator: context.coordinator)
         (nsView.terminal as? NativeTerminalView)?.attachSelection = attachSelection
     }
 
-    private func applyAppearance(to view: TerminalView, coordinator: Coordinator) {
+    private func applyAppearance(to view: TerminalView, colors: ThemeColors, coordinator: Coordinator) {
+        if coordinator.isDark != isDark || coordinator.colors != colors {
+            let background = colors.background?.nsColor ?? TerminalAppearance.background(isDark: isDark)
+            view.nativeForegroundColor = colors.text?.nsColor ?? TerminalAppearance.foreground(isDark: isDark)
+            view.nativeBackgroundColor = background
+            view.layer?.backgroundColor = background.cgColor
+            coordinator.colors = colors
+        }
         if coordinator.isDark != isDark {
-            view.nativeForegroundColor = TerminalAppearance.foreground(isDark: isDark)
-            view.nativeBackgroundColor = TerminalAppearance.background(isDark: isDark)
-            view.layer?.backgroundColor = TerminalAppearance.background(isDark: isDark).cgColor
             view.installColors(TerminalAppearance.palette(isDark: isDark))
             coordinator.isDark = isDark
         }
@@ -1028,6 +1036,7 @@ private struct SwiftTermHost: NSViewRepresentable {
     final class Coordinator {
         let session: NativeTerminalSession
         var isDark: Bool?
+        var colors: ThemeColors?
         var font: NSFont?
 
         init(session: NativeTerminalSession) {

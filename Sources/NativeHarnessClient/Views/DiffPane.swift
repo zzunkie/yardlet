@@ -106,7 +106,7 @@ struct DiffPane: View {
                     diffContent
                 }
             }
-            .background(Color(nsColor: .textBackgroundColor))
+            .background(Color(ThemeSurface.review))
         }
         .sheet(item: $discardRequest) { request in
             GitDiscardReviewSheet(request: request, onCancel: { discardRequest = nil }, onDiscard: {
@@ -570,7 +570,7 @@ private struct CodexChangeContext: View {
                         Image(systemName: change.isVerified ? "checkmark.shield" : "xmark.shield")
                             .foregroundStyle(change.isVerified ? .green : .red)
                         Text(change.locationLabel)
-                            .font(.caption.monospaced())
+                            .font(.caption.monospaced()).fontDesign(nil)
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Spacer(minLength: 0)

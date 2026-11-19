@@ -312,7 +312,7 @@ struct ConnectorProgramPage: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(L10n.string("What runs")).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 Text(draft.commandLine(values))
-                    .font(.system(.callout, design: .monospaced))
+                    .font(.system(.callout, design: .monospaced)).fontDesign(nil)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -380,7 +380,7 @@ struct ConnectorProgramPage: View {
         return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 8) {
                 Text(label)
-                    .font(.caption.monospaced())
+                    .font(.caption.monospaced()).fontDesign(nil)
                     .frame(width: 190, alignment: .leading)
                     .lineLimit(1)
                     .truncationMode(.middle)

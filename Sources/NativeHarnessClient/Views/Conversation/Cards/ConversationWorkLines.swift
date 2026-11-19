@@ -435,7 +435,7 @@ struct ConversationWorkLine: View, Equatable {
             VStack(alignment: .leading, spacing: 6) {
                 if showsCommand {
                     Text(verbatim: command.command)
-                        .font(codeFont.font(ofSize: codeFont.size(11, scale: interfaceScale)))
+                        .font(codeFont.font(ofSize: codeFont.size(11, scale: interfaceScale))).fontDesign(nil)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.trailing, 26)

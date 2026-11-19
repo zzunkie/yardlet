@@ -142,7 +142,7 @@ struct FileRewindPreviewContent: View {
             if let error = result.error { Text(error).foregroundStyle(.secondary) }
             if let files = result.filesChanged {
                 if files.isEmpty { Text(L10n.string("No file changes.")) }
-                ForEach(files, id: \.self) { Text($0).font(.system(.caption, design: .monospaced)).lineLimit(2) }
+                ForEach(files, id: \.self) { Text($0).font(.system(.caption, design: .monospaced)).fontDesign(nil).lineLimit(2) }
             }
             if let insertions = result.insertions, let deletions = result.deletions {
                 Text("+\(insertions) / −\(deletions)").font(.caption)

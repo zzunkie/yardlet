@@ -35,7 +35,7 @@ struct TranscriptCodeBlock: View {
         return VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text(language ?? L10n.string("Code"))
-                    .font(.caption.monospaced())
+                    .font(.caption.monospaced()).fontDesign(nil)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 12)
                 if let accessory { accessory }
@@ -50,7 +50,7 @@ struct TranscriptCodeBlock: View {
             Divider()
             ScrollView(.horizontal) {
                 Text(code)
-                    .font(codeFont.font(ofSize: codeFont.size(12.5, scale: interfaceScale)))
+                    .font(codeFont.font(ofSize: codeFont.size(12.5, scale: interfaceScale))).fontDesign(nil)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: true, vertical: false)
                     .padding(12)

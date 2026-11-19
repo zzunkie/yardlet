@@ -251,7 +251,7 @@ struct VaultItemSheet: View {
                 ForEach(Array(previousPasswords.enumerated()), id: \.offset) { _, previous in
                     HStack(alignment: .firstTextBaseline, spacing: 10) {
                         Text(verbatim: previous.password)
-                            .font(.callout.monospaced())
+                            .font(.callout.monospaced()).fontDesign(nil)
                             .textSelection(.enabled)
                             .lineLimit(1)
                             .truncationMode(.middle)

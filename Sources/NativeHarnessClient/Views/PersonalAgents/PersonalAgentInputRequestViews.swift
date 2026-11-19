@@ -151,7 +151,7 @@ struct PersonalAgentRequestCard: View {
             DisclosureGroup(L10n.string("Full parameters")) {
                 ScrollView {
                     Text(DotsJSONText.pretty(parameters))
-                        .font(.system(.caption, design: .monospaced))
+                        .font(.system(.caption, design: .monospaced)).fontDesign(nil)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -168,7 +168,7 @@ struct PersonalAgentRequestCard: View {
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.tertiary)
             Text(value)
-                .font(.system(.caption, design: .monospaced))
+                .font(.system(.caption, design: .monospaced)).fontDesign(nil)
                 .textSelection(.enabled)
                 .lineLimit(6)
                 .fixedSize(horizontal: false, vertical: true)

@@ -24,7 +24,7 @@ struct TranscriptProseText: NSViewRepresentable {
 
     func updateNSView(_ view: TranscriptProseContainerView, context: Context) {
         let environment = context.environment
-        view.setLinkAccent(environment.yardletAccent)
+        view.setLinkAccent(in: environment)
         view.fullSource = fullSource
         view.dialect = dialect
         view.openURL = environment.openURL
@@ -157,14 +157,19 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
 
     /// An already displayed message changes its links in place. Underlining keeps a link visible
     /// when the accent needs primary text to meet contrast.
-    private var linkAccent: YardletAccentPreference?
+    private var linkTheme: MacColorTheme?
+    private var linkScheme: ColorScheme?
 
-    func setLinkAccent(_ accent: YardletAccentPreference) {
-        guard linkAccent != accent else { return }
-        linkAccent = accent
+    func setLinkAccent(in environment: EnvironmentValues) {
+        let theme = environment.yardletColorTheme, mode = ThemeMode(environment.colorScheme)
+        guard linkTheme != theme || linkScheme != mode.scheme else { return }
+        linkTheme = theme
+        linkScheme = mode.scheme
+        let color = theme[mode] == ThemeColors() ? ParityTheme.linkTextColor(for: theme.preset)
+            : ThemeContrast.linkText(theme)
         textView.linkTextAttributes = [
-            .foregroundColor: ParityTheme.linkTextColor(for: accent),
-            .underlineStyle: NSUnderlineStyle.single.rawValue, .underlineColor: ParityTheme.accentColor(for: accent),
+            .foregroundColor: color,
+            .underlineStyle: NSUnderlineStyle.single.rawValue, .underlineColor: theme.accent(in: mode),
             .cursor: NSCursor.pointingHand
         ]
     }

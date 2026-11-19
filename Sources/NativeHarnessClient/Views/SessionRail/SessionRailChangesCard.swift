@@ -385,7 +385,7 @@ struct SessionRailCheckRow: View {
         case let .loaded(text):
             ScrollView {
                 Text(text.isEmpty ? L10n.string("No failed steps were logged.") : text)
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(.system(size: 10, design: .monospaced)).fontDesign(nil)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(6)

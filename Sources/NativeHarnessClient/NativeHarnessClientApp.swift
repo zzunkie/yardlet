@@ -781,6 +781,7 @@ struct YardletWindowPreferences<Content: View>: View {
     @ViewBuilder let content: Content
     @AppStorage(YardletPreferenceKeys.appearance) private var appearanceRawValue =
         YardletAppearancePreference.system.rawValue
+    @AppStorage(MacColorTheme.key) private var themeData = Data()
     @AppStorage(YardletPreferenceKeys.accent) private var accent = YardletAccentPreference.system
     @AppStorage(YardletPreferenceKeys.interfaceSize) private var interfaceSizeRawValue =
         YardletInterfaceSizePreference.standard.rawValue
@@ -790,17 +791,21 @@ struct YardletWindowPreferences<Content: View>: View {
     var body: some View {
         if appliesInterfaceSize {
             content
-                .environment(\.yardletAccent, accent)
+                .modifier(MacThemeContent(theme: effectiveTheme))
                 .preferredColorScheme(effectiveColorScheme)
                 .environment(\.yardletInterfaceScale, effectiveInterfaceSize.scale)
                 .environment(\.yardletCodeFont, effectiveCodeFont)
                 .dynamicTypeSize(effectiveInterfaceSize.dynamicTypeSize)
         } else {
             content
-                .environment(\.yardletAccent, accent)
+                .modifier(MacThemeContent(theme: effectiveTheme))
                 .preferredColorScheme(effectiveColorScheme)
                 .environment(\.yardletCodeFont, effectiveCodeFont)
         }
+    }
+
+    private var effectiveTheme: MacColorTheme {
+        usesVisualFixture ? MacColorTheme() : MacColorTheme.read(themeData, legacy: accent)
     }
 
     /// A visual fixture draws in the standard code font, as in the standard interface size.

@@ -205,7 +205,7 @@ struct RemoteSettingsView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(L10n.format("%@ wants to connect to this Mac", request.name)).font(SettingsMetrics.titleFont)
                 Text(verbatim: Self.spaced(request.code))
-                    .font(.system(size: 22, weight: .semibold, design: .monospaced))
+                    .font(.system(size: 22, weight: .semibold, design: .monospaced)).fontDesign(nil)
                     .accessibilityLabel(L10n.string("Link code"))
                     .accessibilityValue(request.code)
                 Text(L10n.string("Allow it if the phone shows the same number."))

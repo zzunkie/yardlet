@@ -128,6 +128,7 @@ private struct TranscriptMarkdownBlocksView: View {
 /// A run of prose blocks in one text view, with the look and find marks of the message around it.
 private struct TranscriptProseRun: View {
     @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @Environment(\.yardletColorTheme) private var theme
     @Environment(\.yardletCodeFont) private var codeFont
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.transcriptWorkspaceURL) private var workspaceURL
@@ -143,7 +144,7 @@ private struct TranscriptProseRun: View {
         TranscriptProseText(
             blocks: blocks, fullSource: fullSource, dialect: dialect,
             style: TranscriptProseStyle(scale: interfaceScale, isDark: colorScheme == .dark, workspaceURL: workspaceURL,
-                                        codeFont: codeFont),
+                                        codeFont: codeFont, uiFont: theme.font, text: theme[ThemeMode(colorScheme)].text),
             // Only the message holding the current match follows find's scroll requests.
             find: TranscriptProseFind(query: findSlot?.query, active: active,
                                       scrollToken: active == nil ? nil : conversationFind?.scrollRequest?.token,
@@ -157,6 +158,7 @@ private struct TranscriptProseRun: View {
 /// answers around it (`ConversationSelection`), as wide as its longest line, and marked by find as
 /// the message's one text.
 struct TranscriptPlainText: View {
+    @Environment(\.yardletColorTheme) private var theme
     @Environment(\.yardletInterfaceScale) private var interfaceScale
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.conversationFindSlot) private var findSlot
@@ -168,7 +170,8 @@ struct TranscriptPlainText: View {
         TranscriptProseText(
             blocks: [TranscriptProseBlock(block: .paragraph(TranscriptInlineContent(plainText: text)), path: [])],
             fullSource: text, dialect: .standard,
-            style: TranscriptProseStyle(scale: interfaceScale, isDark: colorScheme == .dark),
+            style: TranscriptProseStyle(scale: interfaceScale, isDark: colorScheme == .dark,
+                                       uiFont: theme.font, text: theme[ThemeMode(colorScheme)].text),
             find: TranscriptProseFind(query: findSlot?.query, active: active,
                                       scrollToken: active == nil ? nil : conversationFind?.scrollRequest?.token,
                                       model: conversationFind),

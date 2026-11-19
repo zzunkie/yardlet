@@ -14,7 +14,7 @@ struct VaultLiveCode: View {
             let remaining = secret.period - Int(context.date.timeIntervalSince1970) % secret.period
             HStack(spacing: 8) {
                 Text(verbatim: Self.grouped(code))
-                    .font(.system(.body, design: .monospaced).weight(.medium))
+                    .font(.system(.body, design: .monospaced).weight(.medium)).fontDesign(nil)
                 VaultCodeTimer(remaining: remaining, period: secret.period)
                 Button {
                     Self.copy(code)

@@ -83,7 +83,7 @@ struct SettingsCenterView: View {
     @State private var setupExpanded = false
     @AppStorage(YardletPreferenceKeys.appearance) private var appearanceRawValue =
         YardletAppearancePreference.system.rawValue
-    @AppStorage(YardletPreferenceKeys.accent) private var accent = YardletAccentPreference.system
+    @State private var themeDraft: AppearanceThemeDraft
     @AppStorage(YardletPreferenceKeys.interfaceSize) private var interfaceSizeRawValue =
         YardletInterfaceSizePreference.standard.rawValue
     /// Read by each window as it changes (`YardletWindowPreferences`).
@@ -140,8 +140,10 @@ struct SettingsCenterView: View {
         usage: SettingsUsageContext? = nil,
         lidHelper: LidSleepHelper? = nil,
         launchAtLogin: LaunchAtLogin? = nil,
-        remoteHost: RemoteHostModel? = nil
+        remoteHost: RemoteHostModel? = nil,
+        themeDraft: AppearanceThemeDraft? = nil
     ) {
+        _themeDraft = State(initialValue: themeDraft ?? AppearanceThemeDraft())
         self.size = size
         self.connectors = connectors
         self.vault = vault
@@ -606,40 +608,28 @@ struct SettingsCenterView: View {
 
     /// Theme, interface size and the code font as rows of one group, each control at the row's end.
     private var appearanceDetail: some View {
-        SettingsGroup {
-            SettingsRow(setting: .theme) {
-                Picker(YardletSetting.theme.title, selection: $appearanceRawValue) {
-                    ForEach(YardletAppearancePreference.allCases) { preference in
-                        Text(preference.title).tag(preference.rawValue)
+        VStack(alignment: .leading, spacing: 18) {
+            SettingsGroup {
+                SettingsRow(setting: .theme) {
+                    Picker(YardletSetting.theme.title, selection: $appearanceRawValue) {
+                        ForEach(YardletAppearancePreference.allCases) { preference in
+                            Text(preference.title).tag(preference.rawValue)
+                        }
                     }
+                    .labelsHidden().pickerStyle(.segmented).fixedSize()
                 }
-                .labelsHidden().pickerStyle(.segmented).fixedSize()
-            }
-            Divider()
-            SettingsRow(setting: .accent) {
-                HStack(spacing: 8) {
-                    Circle().fill(ParityTheme.accent)
-                        .overlay { Circle().strokeBorder(ParityTheme.strongSeparator) }
-                        .frame(width: 12, height: 12).accessibilityHidden(true)
-                    Picker(YardletSetting.accent.title, selection: $accent) {
-                        ForEach(YardletAccentPreference.allCases) { preset in
-                            Text(preset.title).tag(preset)
+                Divider()
+                SettingsRow(setting: .interfaceSize) {
+                    Picker(YardletSetting.interfaceSize.title, selection: $interfaceSizeRawValue) {
+                        ForEach(YardletInterfaceSizePreference.allCases) { preference in
+                            Text(preference.title).tag(preference.rawValue)
                         }
                     }
                     .labelsHidden().fixedSize()
                 }
             }
-            Divider()
-            SettingsRow(setting: .interfaceSize) {
-                Picker(YardletSetting.interfaceSize.title, selection: $interfaceSizeRawValue) {
-                    ForEach(YardletInterfaceSizePreference.allCases) { preference in
-                        Text(preference.title).tag(preference.rawValue)
-                    }
-                }
-                .labelsHidden().fixedSize()
-            }
-            Divider()
-            codeFontDetail
+            AppearanceThemeEditor(model: themeDraft)
+            SettingsGroup { codeFontDetail }
         }
     }
 
@@ -671,7 +661,7 @@ struct SettingsCenterView: View {
                 }
             }
             Text(TranscriptCodeBlock.highlighted(Self.codeFontSample, language: "swift", isDark: colorScheme == .dark))
-                .font(codeFont.font(ofSize: codeFont.size(12.5, scale: interfaceScale)))
+                .font(codeFont.font(ofSize: codeFont.size(12.5, scale: interfaceScale))).fontDesign(nil)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(12)

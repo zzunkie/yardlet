@@ -331,7 +331,7 @@ struct RedirectURIField: View {
                 .font(SettingsMetrics.detailFont)
                 .foregroundStyle(.secondary)
             Text(ConnectorOAuth.registeredClientRedirectURI.absoluteString)
-                .font(SettingsMetrics.detailFont.monospaced())
+                .font(SettingsMetrics.detailFont.monospaced()).fontDesign(nil)
                 .textSelection(.enabled)
             Button {
                 TranscriptClipboard.copy(ConnectorOAuth.registeredClientRedirectURI.absoluteString)
@@ -427,7 +427,7 @@ private struct ConnectorRow: View {
                 .font(SettingsMetrics.detailFont)
                 .foregroundStyle(.secondary)
             Text(code)
-                .font(.callout.monospaced().weight(.semibold))
+                .font(.callout.monospaced().weight(.semibold)).fontDesign(nil)
                 .textSelection(.enabled)
             Button {
                 TranscriptClipboard.copy(code)

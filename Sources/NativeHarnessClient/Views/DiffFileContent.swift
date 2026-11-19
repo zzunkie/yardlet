@@ -36,6 +36,8 @@ struct DiffMarkdownPreview {
 /// "Request changes" (`wham.diff.contextMenu.requestChanges`). A comment waits in the task's draft
 /// until the next message carries it.
 struct DiffFileContent: View {
+    nonisolated static let lineTintOpacity = 0.075
+    nonisolated static let selectionOpacity = 0.14
     let file: DiffFile
     let width: CGFloat
     let showsHeader: Bool
@@ -178,14 +180,14 @@ struct DiffFileContent: View {
                 choose(line, extending: NSEvent.modifierFlags.contains(.shift))
             }
             Text(line.text.isEmpty ? " " : line.text)
-                .font(codeFont.font(ofSize: codeFont.size(12, scale: interfaceScale), weight: Self.weight(for: line.kind)))
+                .font(codeFont.font(ofSize: codeFont.size(12, scale: interfaceScale), weight: Self.weight(for: line.kind))).fontDesign(nil)
                 .textSelection(.enabled).foregroundStyle(Self.foreground(for: line.kind))
                 .fixedSize(horizontal: true, vertical: false)
                 .padding(.horizontal, 10).padding(.vertical, 3)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Self.background(for: line.kind))
-        .background(isSelected ? ParityTheme.accent.opacity(0.14) : .clear)
+        .background(isSelected ? ParityTheme.accent.opacity(Self.selectionOpacity) : .clear)
         .onHover { hovering in
             if hovering { hoveredLineID = line.id } else if hoveredLineID == line.id { hoveredLineID = nil }
         }
@@ -198,7 +200,7 @@ struct DiffFileContent: View {
 
     private func lineNumber(_ number: Int?, width: CGFloat) -> some View {
         Text(number.map(String.init) ?? "")
-            .font(codeFont.font(ofSize: codeFont.size(11, scale: interfaceScale)))
+            .font(codeFont.font(ofSize: codeFont.size(11, scale: interfaceScale))).fontDesign(nil)
             .foregroundStyle(.secondary)
             .frame(width: width - 6, alignment: .trailing).padding(.trailing, 6)
             .padding(.vertical, 3)
@@ -313,8 +315,8 @@ struct DiffFileContent: View {
 
     private static func background(for kind: DiffLineKind) -> Color {
         switch kind {
-        case .addition: .green.opacity(0.075)
-        case .deletion: .red.opacity(0.075)
+        case .addition: .green.opacity(Self.lineTintOpacity)
+        case .deletion: .red.opacity(Self.lineTintOpacity)
         case .hunkHeader: .blue.opacity(0.055)
         case .fileHeader: ParityTheme.subtleFill
         default: .clear

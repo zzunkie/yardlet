@@ -2995,6 +2995,43 @@ final class SessionToolTests: XCTestCase {
         await bypass.model.shutdown()
     }
 
+    func testAppearanceColorsUseTheSameContrastCheckInSettingsAndInTheTool() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("ColorThemeTool")))
+        defaults.set("iris", forKey: YardletPreferenceKeys.accent)
+        let fixture = try Fixture(callerOptions: [ClaudeLaunchOption.permissionMode: ClaudePermissionMode.bypassPermissions],
+                                  preferences: defaults)
+        defer { fixture.tearDown() }
+        let editor = AppearanceThemeDraft(defaults: defaults)
+        let listed = try await listedSettings(fixture.model, from: fixture.caller)
+        XCTAssertEqual(listed.filter { $0.kind == "color" }.count, 6)
+        XCTAssertEqual(editor.saved.preset, .iris)
+
+        editor.draft.light.text = ThemeRGB("#FFFFFF")
+        editor.save()
+        let failure = try XCTUnwrap(editor.failures.first { $0.pair == L10n.string("Text / background") })
+        XCTAssertEqual(failure.required, 4.5)
+        let refused = await call(fixture.model, "update_setting", ["id": "light_text_color", "value": "#ffffff"],
+                                 from: fixture.caller)
+        XCTAssertTrue(refused.isError)
+        XCTAssertTrue(refused.text.contains(failure.message), refused.text)
+        XCTAssertNil(defaults.data(forKey: MacColorTheme.key))
+
+        editor.draft.light.text = nil
+        editor.draft.dark.background = ThemeRGB("#101820")
+        let accepted = await call(fixture.model, "update_setting", ["id": "ui_font", "value": "rounded"],
+                                  from: fixture.caller)
+        XCTAssertFalse(accepted.isError, accepted.text)
+        editor.save()
+        XCTAssertTrue(editor.failures.isEmpty, editor.failures.map(\.message).description)
+        XCTAssertEqual(MacColorTheme.current(in: defaults).font, .rounded, "A concurrent edit survives Save")
+        XCTAssertEqual(MacColorTheme.current(in: defaults).dark.background?.hex, "#101820")
+        editor.reset()
+        XCTAssertEqual(MacColorTheme.current(in: defaults), MacColorTheme())
+        XCTAssertNil(defaults.object(forKey: MacColorTheme.key))
+        XCTAssertNil(defaults.object(forKey: YardletPreferenceKeys.accent))
+        await fixture.model.shutdown()
+    }
+
     /// A plain setting changes where Settings reads it, so the open Settings shows it, with no card for a task
     /// that runs without asking and the task's card for one that asks.
     func testAPlainSettingChangesWhereSettingsReadsItAndAsksOnlyWhereTheCallerAsks() async throws {

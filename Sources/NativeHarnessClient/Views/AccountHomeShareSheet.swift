@@ -65,7 +65,7 @@ struct AccountHomeShareSheet: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(L10n.string(title)).font(.system(size: 12, weight: .semibold))
                 Text(names.joined(separator: ", "))
-                    .font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary)
+                    .font(.system(size: 12, design: .monospaced)).fontDesign(nil).foregroundStyle(.secondary)
                     .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
             }
         }

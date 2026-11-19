@@ -60,15 +60,17 @@ struct TranscriptTextReader: NSViewRepresentable {
         let codeFont = context.environment.yardletCodeFont
         let font: NSFont = monospaced
             ? codeFont.nsFont(ofSize: codeFont.size(fontSize))
-            : .systemFont(ofSize: fontSize)
-        let changed = view.string != text || view.font != font
+            : context.environment.yardletColorTheme.font.font(size: fontSize)
+        let color = context.environment.yardletColorTheme[ThemeMode(context.environment.colorScheme)].text?.nsColor ?? .labelColor
+        let changed = view.string != text || view.font != font || view.textColor != color
         guard changed else { return }
         if view.font != font { view.font = font }
+        if view.textColor != color { view.textColor = color }
         if view.string != text {
             let old = view.string
             if text.hasPrefix(old), let storage = view.textStorage {
                 storage.append(NSAttributedString(string: String(text.dropFirst(old.count)), attributes: [
-                    .font: font, .foregroundColor: NSColor.labelColor
+                    .font: font, .foregroundColor: color
                 ]))
             } else {
                 view.string = text

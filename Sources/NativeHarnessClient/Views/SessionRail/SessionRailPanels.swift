@@ -135,7 +135,7 @@ struct BackgroundOutputPane: View {
                                     .foregroundStyle(.secondary)
                             }
                             Text(output.text)
-                                .font(.system(size: 11.5, design: .monospaced))
+                                .font(.system(size: 11.5, design: .monospaced)).fontDesign(nil)
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             Color.clear.frame(height: 1).id("end")

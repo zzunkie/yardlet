@@ -72,7 +72,7 @@ package enum SettingsToolCatalog {
     private static let updateTool = AgentToolDefinition(
         name: update,
         title: "Change a Yardlet setting",
-        description: "Change one Yardlet setting from list_settings, as its switch or choice in Settings changes it. "
+        description: "Change one Yardlet setting from list_settings, as its control in Settings changes it. "
             + "Some ask the person on an approval card first, and a declined card changes nothing.",
         inputSchema: .object([
             "type": .string("object"),
@@ -84,7 +84,7 @@ package enum SettingsToolCatalog {
                 "value": .object([
                     "type": .string("string"),
                     "description": .string("One of the setting's values from list_settings: \"on\" or \"off\" for a "
-                        + "switch.")
+                        + "switch, a listed choice, or #RRGGBB or default for a color.")
                 ])
             ]),
             "required": .array([.string("id"), .string("value")]),

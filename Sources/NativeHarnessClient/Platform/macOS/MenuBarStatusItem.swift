@@ -272,7 +272,7 @@ enum MenuBarItemMarks {
             case .waitingInBrowser?: symbol("globe", .systemOrange, weight: .semibold, in: rect)
             case .running?: dot(.secondaryLabelColor, in: rect)
             case .reconnecting?: symbol("network.slash", .secondaryLabelColor, weight: .medium, in: rect)
-            case .unread?: dot(ParityTheme.accentColor(for: .current()), in: rect)
+            case .unread?: dot(MacColorTheme.current().accent(in: NSAppearance.currentDrawing().bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .dark : .light), in: rect)
             case .failed?: symbol("exclamationmark.triangle", .systemRed, weight: .semibold, in: rect)
             case .usageLimit?: symbol("gauge.with.dots.needle.100percent", .systemOrange, weight: .medium, in: rect)
             case nil: break

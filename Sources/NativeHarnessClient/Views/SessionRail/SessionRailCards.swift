@@ -557,7 +557,7 @@ struct SessionRailBackgroundTasksCard: View {
                         .font(.system(size: 11 * interfaceScale))
                         .foregroundStyle(.secondary)
                     Text(terminal.command.isEmpty ? L10n.string("Background terminal") : terminal.command)
-                        .font(.system(size: 12 * interfaceScale, design: .monospaced))
+                        .font(.system(size: 12 * interfaceScale, design: .monospaced)).fontDesign(nil)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
