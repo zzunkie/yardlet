@@ -30,6 +30,9 @@ struct ComposerSessionControls: View {
     var onInsertSkill: (CodexSkillSummary) -> Void = { _ in }
     /// The context window's "Compact session", where the task's composer can compact.
     var compact: ComposerContextUsageDetails.Compact? = nil
+    /// The model control shortens its words when the row cannot give it its whole width, as a task
+    /// composer's last row does when Send and the controls beside it are all that is left on it.
+    var shortensModelToFit = false
 
     @State private var isPreparing = false
 
@@ -89,7 +92,7 @@ struct ComposerSessionControls: View {
             ComposerModelControl(menu: model.menu, onPrepare: onPrepare, onSetOption: { id, value in
                 if let choice = model.apply.choice(id: id, value: value) { onChoose(choice) }
             }, openRequest: modelOpenRequest, isDisabled: isDisabled, registersTaskFocus: registersTaskFocus)
-            .fixedSize()
+            .fixedSize(horizontal: !shortensModelToFit, vertical: true)
         }
     }
 }

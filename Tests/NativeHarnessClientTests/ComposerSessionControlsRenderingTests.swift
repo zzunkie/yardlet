@@ -75,6 +75,30 @@ final class ComposerSessionControlsRenderingTests: XCTestCase {
         // The Claude app's numbers: "64k / 256k (25%)".
         XCTAssertEqual(value("codex", L10n.string("Context window"))?.hasSuffix("(25%)"), true)
         XCTAssertEqual(value("claude", L10n.string("Context window"))?.hasSuffix("(60%)"), true)
+        // In a pane too narrow for the row, Send stays in view: the model control drops its effort and
+        // then shortens, as both apps' do, rather than push Send past the composer's edge.
+        for (name, view) in composers {
+            let size = NSSize(width: 220, height: 220)
+            let host = WindowlessRender.Host(view.frame(width: size.width, height: size.height, alignment: .bottom), size: size)
+            host.settle()
+            let send = try XCTUnwrap(Self.frame(of: L10n.string("Send"), in: host.hosting), name)
+            XCTAssertTrue(host.window.frame.contains(send), "\(name): \(send) outside \(host.window.frame)")
+            host.close()
+        }
+    }
+
+    /// The screen frame of the first element the accessibility tree names `label`.
+    private static func frame(of label: String, in root: NSView) -> NSRect? {
+        WindowlessRender.withAccessibilityTree {
+            func find(_ node: AnyObject) -> NSRect? {
+                for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
+                    if (child.accessibilityLabel?() ?? nil) == label { return child.accessibilityFrame?() }
+                    if let frame = find(child) { return frame }
+                }
+                return nil
+            }
+            return find(root)
+        }
     }
 
     func testNewTaskComposersDrawInBothAppearances() async throws {

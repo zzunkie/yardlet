@@ -148,7 +148,9 @@ enum ParityAccessibility {
 
 struct ParityComposerControl: View {
     let title: String
-    /// Dimmer words after the title ("High" after "Opus 5.5"), after a middle dot.
+    /// Dimmer words after the title ("High" after "Opus 5.5"), after a middle dot. A row too narrow
+    /// for both drops them before it shortens the title, as the Codex app's composer drops the
+    /// reasoning effort after the model; what is left then shortens, as both apps' labels do.
     var detail: String? = nil
     var systemName: String?
     var showsChevron = false
@@ -166,11 +168,12 @@ struct ParityComposerControl: View {
                 Image(systemName: systemName)
                     .font(.system(size: 11.5 * interfaceScale, weight: .medium))
             }
-            ParityLabelWidth(limit: detail == nil ? 138 : 196) {
-                label
-                    .font(.system(size: 13 * interfaceScale, weight: .medium))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+            ViewThatFits(in: .horizontal) {
+                ParityLabelWidth(limit: detail == nil ? 138 : 196) { styled(label) }
+                if detail != nil {
+                    // Shortened from its end, as both apps shorten a model's name.
+                    ParityLabelWidth(limit: 138) { styled(Text(title), truncation: .tail) }
+                }
             }
             if showsChevron {
                 Image(systemName: "chevron.down")
@@ -197,6 +200,13 @@ struct ParityComposerControl: View {
     private var label: Text {
         guard let detail else { return Text(title) }
         return Text(title) + Text(" · \(detail)").foregroundStyle(.tertiary)
+    }
+
+    private func styled(_ text: Text, truncation: Text.TruncationMode = .middle) -> some View {
+        text
+            .font(.system(size: 13 * interfaceScale, weight: .medium))
+            .lineLimit(1)
+            .truncationMode(truncation)
     }
 }
 

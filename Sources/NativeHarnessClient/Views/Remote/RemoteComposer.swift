@@ -112,7 +112,6 @@ struct RemoteComposer: View {
             AnyLayout(ControlRowLayout(pinsTrailingActions: true)) {
                 inputControls
                 actionControls
-                    .fixedSize(horizontal: true, vertical: false)
             }
             .padding(.leading, 10).padding(.trailing, 9).padding(.bottom, 9)
         }
@@ -163,7 +162,7 @@ struct RemoteComposer: View {
             if let options {
                 ComposerSessionControls(options: options, placement: .trailing, isDisabled: !model.isConnected,
                                         registersTaskFocus: false, onChoose: choose, onPrepare: prepareSettings,
-                                        compact: model.railCompact(taskID))
+                                        compact: model.railCompact(taskID), shortensModelToFit: true)
             }
             if isSending { ProgressView().controlSize(.small) }
             if isRunning {

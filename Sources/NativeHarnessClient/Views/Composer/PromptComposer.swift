@@ -375,8 +375,8 @@ struct PromptComposer: View {
         } footer: {
             composerFooterLayout {
                 composerInputControls
+                // Send stays in view however narrow the pane: the model control shortens first.
                 composerActionControls
-                    .fixedSize(horizontal: true, vertical: false)
             }
             .padding(.leading, 10)
             .padding(.trailing, 9)
@@ -530,7 +530,7 @@ struct PromptComposer: View {
             ComposerSessionControls(
                 options: options, placement: .trailing, modelOpenRequest: modelPickerRequest,
                 onChoose: { actions.apply($0) }, onPrepare: actions.prepareProviderSettings,
-                compact: compactAction
+                compact: compactAction, shortensModelToFit: true
             )
             if isRunning || isShellCommandRunning {
                 // A shell command runs on its own; it is not queued or steered into a turn.
