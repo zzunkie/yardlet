@@ -201,8 +201,10 @@ final class ConversationMediaRenderingTests: XCTestCase {
     /// (a page, refused). Skipped unless both are set.
     func testARealWebImageLoadsForReview() async throws {
         let environment = ProcessInfo.processInfo.environment
-        let image = try XCTUnwrap(environment["YARDLET_WEB_IMAGE_QA_URL"].flatMap(URL.init(string:)) ?? { throw XCTSkip() }())
-        let page = try XCTUnwrap(environment["YARDLET_WEB_IMAGE_QA_PAGE"].flatMap(URL.init(string:)) ?? { throw XCTSkip() }())
+        guard let image = environment["YARDLET_WEB_IMAGE_QA_URL"].flatMap(URL.init(string:)),
+              let page = environment["YARDLET_WEB_IMAGE_QA_PAGE"].flatMap(URL.init(string:)) else {
+            throw XCTSkip("Set YARDLET_WEB_IMAGE_QA_URL and YARDLET_WEB_IMAGE_QA_PAGE")
+        }
         let data = await TranscriptWebImageLoader.load(image)
         XCTAssertNotNil(data.flatMap { CGImageSourceCreateWithData($0 as CFData, nil) }, "An image, read as one")
         let refused = await TranscriptWebImageLoader.load(page)
