@@ -144,15 +144,15 @@ final class AttentionRenderingTests: XCTestCase {
         func says(_ title: String, _ state: String) -> Bool {
             spoken.contains { $0.contains(title) && $0.contains(state) } || spoken.contains(state)
         }
-        XCTAssertTrue(says("Approve the index migration", L10n.string("Awaiting input")), elements.description)
-        XCTAssertTrue(says("Pick the icon set", L10n.string("Awaiting answer")), elements.description)
+        XCTAssertTrue(says("Approve the index migration", L10n.string("Needs approval")), elements.description)
+        XCTAssertTrue(says("Pick the icon set", L10n.string("Needs answer")), elements.description)
         XCTAssertTrue(says("Fix the flaky sampler test", L10n.string("Task encountered a system error")),
                       elements.description)
         XCTAssertTrue(says("Run the full test suite", L10n.string("Session limit reached")), elements.description)
         XCTAssertTrue(says("Summarize the crash reports", L10n.string("Unread response")), elements.description)
         XCTAssertFalse(spoken.contains { $0.contains("Approve the index migration") && $0.contains(L10n.string("Running")) })
         let website = try XCTUnwrap(elements.first { $0.label.contains("Website") })
-        XCTAssertTrue(website.value.contains(L10n.string("Awaiting input")), elements.description)
+        XCTAssertTrue(website.value.contains(L10n.string("Needs approval")), elements.description)
     }
 
     func testTheActivityViewListsTasksNeedingAttentionAcrossProjects() throws {

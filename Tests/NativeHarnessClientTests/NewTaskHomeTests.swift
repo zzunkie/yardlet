@@ -156,7 +156,7 @@ final class NewTaskHomeTests: XCTestCase {
                            "The sidebar row's mark for \(row.session.title)")
         }
         XCTAssertEqual(rows.map(\.status.accessibilityName), [
-            L10n.string("Awaiting answer"), L10n.string("Awaiting input"),
+            L10n.string("Needs answer"), L10n.string("Needs approval"),
             L10n.string("Task encountered a system error"), L10n.string("Unread response"),
         ])
         XCTAssertEqual(rows.map(\.canMarkRead), [false, false, true, true], "A waiting task stays until it is answered")

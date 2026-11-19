@@ -835,7 +835,7 @@ final class NewTaskHomeRenderingTests: XCTestCase {
                                               to: directory.appending(path: "\(name)-\(appearance.suffix).png"))
                 let elements = host.accessibilityElements()
                 let report = elements.map(\.description).joined(separator: "\n")
-                XCTAssertTrue(elements.contains { $0.value == L10n.string("Approval required") }, report)
+                XCTAssertTrue(elements.contains { $0.role == "AXButton" && $0.label == L10n.string("Deny") }, report)
                 XCTAssertTrue(elements.contains { $0.role == "AXStaticText" && $0.value.hasSuffix("--label bug --draft") },
                               "The card shows the whole command: \(report)")
 
@@ -925,7 +925,7 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         try press("\r", keyCode: 36, in: host)
         host.settle(passes: 10)
         let elements = host.accessibilityElements()
-        XCTAssertTrue(elements.contains { $0.value == L10n.string("Approval required") },
+        XCTAssertTrue(elements.contains { $0.role == "AXButton" && $0.label == L10n.string("Deny") },
                       "The first waiting line is answered in the composer's place: "
                       + elements.map(\.description).joined(separator: "\n"))
     }
@@ -1059,7 +1059,7 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         XCTAssertTrue(shows("home-reply-question-wide", "What should the flag that sets the retry count be called?"),
                       report["home-reply-question-wide"]!)
         XCTAssertTrue(shows("home-reply-question-wide", "--max-retries"))
-        XCTAssertTrue(shows("home-reply-approval-wide", L10n.string("Approval required")), report["home-reply-approval-wide"]!)
+        XCTAssertTrue(shows("home-reply-approval-wide", L10n.string("Deny")), report["home-reply-approval-wide"]!)
         XCTAssertTrue(shows("home-reply-approval-narrow", "swift run yardlet-index migrate --apply"),
                       report["home-reply-approval-narrow"]!)
     }
@@ -1128,7 +1128,7 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         try press(down, keyCode: 125, in: host)
         try press("\r", keyCode: 36, in: host)
         XCTAssertEqual(opened.count, 1, "Return answers it rather than opening it")
-        XCTAssertTrue(shows(L10n.string("Approval required")))
+        XCTAssertTrue(shows(L10n.string("Deny")))
         replies.draft(approve.id).text = "A reply to finish later"
         try press("\u{1b}", keyCode: 53, in: host)
         XCTAssertTrue(shows(L10n.format("What should we build in %@?", "yardlet")))

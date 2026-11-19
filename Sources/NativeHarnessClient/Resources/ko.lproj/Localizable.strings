@@ -1793,8 +1793,7 @@
 "Working" = "작업 중";
 "Unread" = "읽지 않음";
 /* 사이드바 상태 점과 중첩 세션. Claude 앱(ion-dist i18n ko-KR)의 말. */
-"Awaiting input" = "입력 대기 중";
-"Awaiting answer" = "답변 대기 중";
+"Needs answer" = "답변 필요";
 "Unread response" = "읽지 않은 응답";
 "Hide nested sessions" = "중첩된 세션 숨기기";
 "Show nested sessions" = "중첩된 세션 표시";

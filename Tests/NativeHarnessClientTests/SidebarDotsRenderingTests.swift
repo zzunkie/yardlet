@@ -138,10 +138,10 @@ final class SidebarDotsRenderingTests: XCTestCase {
             projects: projects, sessions: sessions, details: details, splits: [split], collapsed: collapsed, selected: idle))
         let spoken = elements.map { "\($0.label) = \($0.value)" }
         func says(_ title: String, _ state: String) -> Bool { spoken.contains { $0.contains(title) && $0.contains(state) } }
-        XCTAssertTrue(says("Approve the index migration", L10n.string("Awaiting input")), spoken.description)
-        XCTAssertTrue(says("Pick the icon set", L10n.string("Awaiting answer")), spoken.description)
+        XCTAssertTrue(says("Approve the index migration", L10n.string("Needs approval")), spoken.description)
+        XCTAssertTrue(says("Pick the icon set", L10n.string("Needs answer")), spoken.description)
         XCTAssertTrue(says("Push the release notes", L10n.string("Reconnecting")), spoken.description)
-        XCTAssertTrue(says("Choose the first settings fix", L10n.string("Awaiting answer")), spoken.description)
+        XCTAssertTrue(says("Choose the first settings fix", L10n.string("Needs answer")), spoken.description)
         XCTAssertTrue(says("Fix the flaky sampler test", L10n.string("Task encountered a system error")), spoken.description)
         XCTAssertTrue(says("Run the full test suite", L10n.string("Session limit reached")), spoken.description)
         XCTAssertTrue(says("Build the release bundle", L10n.string("Running")), spoken.description)
@@ -149,7 +149,7 @@ final class SidebarDotsRenderingTests: XCTestCase {
         XCTAssertTrue(says("Summarize the crash reports", L10n.string("Unread response")), spoken.description)
         XCTAssertTrue(says("Polish the onboarding copy", "131"), spoken.description)
         XCTAssertTrue(says("Translate the release notes", L10n.string("Running")), spoken.description)
-        XCTAssertTrue(says("Website", L10n.string("Awaiting input")), spoken.description)
+        XCTAssertTrue(says("Website", L10n.string("Needs approval")), spoken.description)
         XCTAssertTrue(says("Docs", L10n.string("Session limit reached")), spoken.description)
         XCTAssertFalse(spoken.contains { $0.contains("Approve the index migration") && $0.contains(L10n.string("Running")) })
     }

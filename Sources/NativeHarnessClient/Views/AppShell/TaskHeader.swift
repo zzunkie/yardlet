@@ -279,7 +279,9 @@ struct TaskHeaderActivity: View {
         case .waitingForApproval, .failed:
             Image(systemName: status == .failed ? "exclamationmark.triangle" : "exclamationmark.shield")
                 .font(.system(size: 12))
-                .foregroundStyle(status == .failed ? Color.red : Color.orange)
+                // Failure in red; a waiting request in the secondary colour, as the conversation's
+                // progress line is the one place a task's view marks it in orange.
+                .foregroundStyle(status == .failed ? Color.red : Color.secondary)
                 .accessibilityLabel(status.displayName)
                 .help(status.displayName)
         case .ready, .completed:

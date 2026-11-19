@@ -461,9 +461,10 @@ enum ComposerSessionOptionsProjection {
         let hasPending = session.status == .waitingForApproval || pendingRequestCount > 0
         let supportsRequests = ConversationSessionStatusProjection.supportsPermissionRequests(harness)
         var selector = liveSelector
-        if selector == nil, harness == .claudeCode, !hasPending {
+        if selector == nil, harness == .claudeCode {
             // A Claude task not attached yet shows the mode it will launch in (without a saved one,
             // the launch flag's default) and its modes; opening the menu reads them from the CLI.
+            // A waiting request does not hide it: the conversation and its card say what waits.
             selector = claudeModeSelector(current: session.providerOptions[ClaudeLaunchOption.permissionMode])
         }
         if selector == nil, harness == .antigravityCLI {
@@ -475,10 +476,9 @@ enum ComposerSessionOptionsProjection {
         let title: String
         if let selector {
             title = ProviderCapabilityAccessibility.selectedChoiceName(for: selector)
-        } else if hasPending {
-            title = L10n.string("Approval required")
         } else {
-            title = supportsRequests ? L10n.string("On request") : L10n.string("Unavailable")
+            // The policy itself, also while a request waits: a waiting request means the task asks.
+            title = supportsRequests || hasPending ? L10n.string("On request") : L10n.string("Unavailable")
         }
         let choiceCount = selector?.choices.count ?? 0
         var slot = ComposerPermissionSlot(

@@ -1795,8 +1795,7 @@
 "Working" = "Working";
 "Unread" = "Unread";
 /* Sidebar status dots and nested sessions, in the Claude app's words (ion-dist i18n). */
-"Awaiting input" = "Awaiting input";
-"Awaiting answer" = "Awaiting answer";
+"Needs answer" = "Needs answer";
 "Unread response" = "Unread response";
 "Hide nested sessions" = "Hide nested sessions";
 "Show nested sessions" = "Show nested sessions";

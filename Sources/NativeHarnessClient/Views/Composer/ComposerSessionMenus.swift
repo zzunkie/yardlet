@@ -323,19 +323,18 @@ struct ComposerContextUsageDetails: View {
 /// The heading of every harness's permissions menu: what the next turn runs with.
 struct ComposerPermissionHeader: View {
     let value: String
-    let hasPendingPermission: Bool
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: hasPendingPermission ? "exclamationmark.shield.fill" : "checkmark.shield")
+            Image(systemName: "checkmark.shield")
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(hasPendingPermission ? .orange : .secondary)
+                .foregroundStyle(.secondary)
             Text(L10n.string("Permissions"))
                 .font(.callout.weight(.semibold))
             Spacer()
             Text(value)
                 .font(.caption.weight(.medium))
-                .foregroundStyle(hasPendingPermission ? .orange : .secondary)
+                .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)

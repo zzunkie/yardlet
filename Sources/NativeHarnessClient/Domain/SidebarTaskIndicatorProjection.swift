@@ -42,8 +42,8 @@ enum SidebarTaskStatus: Equatable, Sendable {
     /// has them (`tM90hqjWj0`, `L+gTSub4gg`, `nDyaq/M7Oj`, `74N95hPFV6`).
     var accessibilityName: String {
         switch self {
-        case .awaitingApproval: L10n.string("Awaiting input")
-        case .needsInput: L10n.string("Awaiting answer")
+        case .awaitingApproval: L10n.string("Needs approval")
+        case .needsInput: L10n.string("Needs answer")
         case .waitingInBrowser: L10n.string("Waiting in the browser")
         case let .failed(message):
             L10n.string(message.map(ProviderSignIn.asksToSignIn) == true ? "Not signed in" : "Task encountered a system error")

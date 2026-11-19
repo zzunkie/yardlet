@@ -345,8 +345,8 @@ final class MenuBarMenuTests: XCTestCase {
             XCTAssertEqual(item.accessibilityLabel(),
                            ([item.title, "Yardlet"] + [status?.accessibilityName].compactMap { $0 }).joined(separator: ", "))
         }
-        XCTAssertEqual(items[1].accessibilityLabel(), "Task 0, Yardlet, \(L10n.string("Awaiting input"))")
-        XCTAssertEqual(items[2].accessibilityLabel(), "Task 1, Yardlet, \(L10n.string("Awaiting answer"))")
+        XCTAssertEqual(items[1].accessibilityLabel(), "Task 0, Yardlet, \(L10n.string("Needs approval"))")
+        XCTAssertEqual(items[2].accessibilityLabel(), "Task 1, Yardlet, \(L10n.string("Needs answer"))")
         XCTAssertEqual(items[3].accessibilityLabel(), "Task 2, Yardlet, \(L10n.string("Running"))")
         // An account line shows its harness's mark and keeps the windows' resets in its help.
         let account = try XCTUnwrap(items.first { $0.title.hasPrefix("jordan") })

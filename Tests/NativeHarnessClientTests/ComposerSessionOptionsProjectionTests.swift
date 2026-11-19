@@ -235,11 +235,11 @@ final class ComposerSessionOptionsProjectionTests: XCTestCase {
             providerCapabilities: Fixtures.claudeDetachedCapabilities, providerUsage: nil, isAttached: false).permission)
         XCTAssertEqual(unsaved.title, L10n.string("Manual"))
 
-        // A pending request, with no selector: the control says so and points at the card.
+        // A pending request, with no selector: the control keeps naming the policy and points at the card.
         let waiting = Fixtures.session(.openCode, status: .waitingForApproval)
         let pending = try XCTUnwrap(ComposerSessionOptionsProjection.make(
             harness: .openCode, session: waiting, providerCapabilities: nil, providerUsage: nil, isAttached: true).permission)
-        XCTAssertEqual(pending.title, L10n.string("Approval required"))
+        XCTAssertEqual(pending.title, L10n.string("On request"))
         XCTAssertTrue(pending.hasPendingRequest)
         XCTAssertEqual(pending.explanation, .init(
             text: L10n.string("Review the pending request card to approve or deny this action."), icon: "hand.raised.fill"))

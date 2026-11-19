@@ -192,9 +192,11 @@ struct ComposerPermissionControl: View {
         Button(action: present) {
             ParityComposerControl(
                 title: slot.title,
-                systemName: slot.hasPendingRequest ? "exclamationmark.shield" : "checkmark.shield",
+                systemName: "checkmark.shield",
                 showsChevron: true,
-                tint: slot.hasPendingRequest || slot.isElevated ? .orange : .secondary,
+                // Orange marks a policy that lifts the sandbox or skips asking; a waiting request is
+                // the conversation's to show, on its progress line.
+                tint: slot.isElevated ? .orange : .secondary,
                 isActive: isPresented
             )
         }
@@ -281,7 +283,7 @@ struct ComposerPermissionMenu: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ComposerPermissionHeader(value: slot.title, hasPendingPermission: slot.hasPendingRequest)
+            ComposerPermissionHeader(value: slot.title)
             Divider()
             if slot.showsChoices, let selector = slot.selector {
                 if let description = selector.description, !description.isEmpty {
