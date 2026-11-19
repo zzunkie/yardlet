@@ -15,6 +15,7 @@ public static class QaWindow {
  [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr context);
  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x,int y);
+ [DllImport("user32.dll")] public static extern void mouse_event(uint flags,int dx,int dy,uint buttons,UIntPtr extra);
  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(System.Drawing.Point point);
  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd,out uint processId);
@@ -213,12 +214,16 @@ if ($hover) {
     $b=$hover.Current.BoundingRectangle
     [void][QaWindow]::SetWindowPos($hwnd,[IntPtr](-1),0,0,0,0,3)
     [void][QaWindow]::SetForegroundWindow($hwnd)
-    $point=New-Object Drawing.Point ([int]($b.Left+$b.Width/2)),([int]($b.Top+$b.Height/2))
+    [void][QaWindow]::SetCursorPos([int]($screen.Left+12),[int]($screen.Top+64))
+    Start-Sleep -Milliseconds 150
+    $point=New-Object Drawing.Point ([int]($b.Left+15)),([int]($b.Top+15))
     [void][QaWindow]::SetCursorPos($point.X,$point.Y)
+    [QaWindow]::mouse_event(1,1,0,0,[UIntPtr]::Zero)
+    $target=$AE::FromPoint([Windows.Point]::new($point.X,$point.Y))
     $hit=[QaWindow]::WindowFromPoint($point)
     [uint32]$hitPid=0
     [void][QaWindow]::GetWindowThreadProcessId($hit,[ref]$hitPid)
-    ("Pointer target matches app: "+($hitPid -eq $proc.Id)) | Set-Content (Join-Path $out 'hover-target.txt')
+    ("Pointer target matches app: "+($hitPid -eq $proc.Id)+". Element: "+$target.Current.Name) | Set-Content (Join-Path $out 'hover-target.txt')
     Start-Sleep -Milliseconds 550
     Shot 'question-hover'
     $rect=New-Object QaWindow+Rect; [void][QaWindow]::GetWindowRect($hwnd,[ref]$rect)
