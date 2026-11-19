@@ -95,6 +95,8 @@ enum PerfBenchFixture {
         }
     }
     static var eventPulseEnabled: Bool { !CommandLine.arguments.contains("--ui-fixture-perf-no-event-pulse") }
+    /// Whether each phase leaves a picture of the window (`run.sh --keep`, the only run that keeps them).
+    static var picturesEnabled: Bool { CommandLine.arguments.contains("--ui-fixture-perf-pictures") }
 
     /// The `codex-switch` scene's tasks; the first is the shown task.
     static func switchTaskID(_ index: Int) -> UUID {
@@ -345,7 +347,8 @@ private final class PerfBenchRunner {
         record["scene"] = scene.rawValue
         record["pid"] = Int(getpid())
         record["diagnostics"] = ["hangLogEnabled": MainThreadHangLog.isEnabled, "memoryCensusEnabled": PerfMemoryCensus.isEnabled,
-                                  "eventPulseEnabled": PerfBenchFixture.eventPulseEnabled]
+                                  "eventPulseEnabled": PerfBenchFixture.eventPulseEnabled,
+                                  "picturesEnabled": PerfBenchFixture.picturesEnabled]
         let processStart = ProcessClock.startDate()
         guard await waitUntil(.seconds(20), { self.mainWindow() != nil }), let window = mainWindow() else {
             problems.append("no window")
@@ -1202,8 +1205,11 @@ private final class PerfBenchRunner {
         if let objectsAtStart, let objectsAtEnd { entry["objectsAtStart"] = objectsAtStart; entry["objectsAtEnd"] = objectsAtEnd }
         phases.append(entry)
         // What the window held at the phase's end, for a person to look at; AppKit draws it, the browser's
-        // pages included, so it needs no screen recording and nothing measured waits for it.
-        if let content = window?.contentView,
+        // pages included, so it needs no screen recording and nothing measured waits for it. Drawing it in
+        // software (the window's transparency layers and shadows) frees tens of MiB of large blocks that macOS
+        // takes back only when it wants the memory, so the next phase's footprint would count them on one day
+        // and not on another: only a run that keeps the pictures draws them.
+        if PerfBenchFixture.picturesEnabled, let content = window?.contentView,
            let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds) {
             content.cacheDisplay(in: content.bounds, to: bitmap)
             try? bitmap.representation(using: .png, properties: [:])?.write(to: output.appending(path: "\(marker).png"))

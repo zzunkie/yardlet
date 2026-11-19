@@ -26,7 +26,7 @@
 # --compare      a result file, or a commit whose newest result to compare with (default: the newest
 #                earlier result)
 # --tolerance    how much worse a number must be to be marked, as a fraction (default 0.15)
-# --keep         keep the QA copy, its home and the logs in .build/perf-bench/run
+# --keep         keep the QA copy, its home and the logs in .build/perf-bench/run, and a picture of each phase
 # --cycle-seconds duration of memory-cycle's fixed-history revisits (10..86400, default 60)
 # --cycle-rest-seconds recovery interval after revisits (15..3600, default 15)
 # --hang-log     main-thread diagnostics in the QA process only (on or off, default on)
@@ -179,9 +179,9 @@ cat > "$out/meta.json" <<EOF
  "startedAt": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')", "machine": $(machine_info), "loadAtStart": $(load_average),
  "repeat": $repeat, "appArguments": "${app_arguments[*]}"}
 EOF
-/usr/bin/python3 - "$out/meta.json" "$TOOLS/contract.json" "$micro" "$app_scenes" "$cycle_seconds" "$cycle_rest_seconds" "$hang_log" "$memory_census" "$event_pulse" $scenes <<'PY'
+/usr/bin/python3 - "$out/meta.json" "$TOOLS/contract.json" "$micro" "$app_scenes" "$cycle_seconds" "$cycle_rest_seconds" "$hang_log" "$memory_census" "$event_pulse" "$keep" $scenes <<'PY'
 import json, sys
-path, contract_path, micro, app_scenes, cycle_seconds, cycle_rest_seconds, hang_log, memory_census, event_pulse, *scenes = sys.argv[1:]
+path, contract_path, micro, app_scenes, cycle_seconds, cycle_rest_seconds, hang_log, memory_census, event_pulse, keep, *scenes = sys.argv[1:]
 contract = json.load(open(contract_path))
 meta = json.load(open(path))
 if len(scenes) != len(set(scenes)):
@@ -190,7 +190,8 @@ meta['plan'] = {'scenes': {name: contract['scenes'][name] for name in scenes} if
                 'micro': contract['micro'] if micro == '1' else [],
                 'metrics': {name: contract.get('metrics', {}).get(name, {}) for name in scenes} if app_scenes == '1' else {}}
 meta['parameters'] = {'memoryCycleSeconds': int(cycle_seconds), 'memoryCycleRestSeconds': int(cycle_rest_seconds),
-                      'hangLogEnabled': hang_log == 'on', 'memoryCensusEnabled': memory_census == '1', 'eventPulseEnabled': event_pulse == '1'}
+                      'hangLogEnabled': hang_log == 'on', 'memoryCensusEnabled': memory_census == '1', 'eventPulseEnabled': event_pulse == '1',
+                      'picturesEnabled': keep == '1'}
 with open(path, 'w') as stream:
     json.dump(meta, stream, indent=2)
 PY
@@ -246,6 +247,7 @@ PY
         extra+=(--ui-fixture-perf-cycle-rest-seconds="$cycle_rest_seconds" --ui-fixture-perf-hang-log="$hang_log")
         (( memory_census )) && extra+=(--ui-fixture-perf-memory-census)
         (( ! event_pulse )) && extra+=(--ui-fixture-perf-no-event-pulse)
+        (( keep )) && extra+=(--ui-fixture-perf-pictures)
         app_pid=$("$QA/qa-launch.sh" "$qa_app" "$qa_home" "$out/logs/$name.log" -- \
             --ui-fixture=perf --ui-fixture-perf-scene="$scene" --ui-fixture-perf-dir="$bench" $extra $app_arguments \
             -AppleLanguages "(en)" -AppleLocale en_US)

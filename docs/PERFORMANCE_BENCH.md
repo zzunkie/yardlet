@@ -240,8 +240,8 @@ beside the median summary. Inspect those rounds for outliers; the budget itself 
 median. Old result JSON files remain usable as comparisons. Collecting old raw folders without a run
 plan cannot establish that every intended check ran and therefore reports a failed validity check.
 Compare the same phase durations, especially `parameters.memoryCycleSeconds`; a 30-minute cycle is not
-equivalent to the default one-minute cycle. Phase pictures are retained beside every round's result
-when `--keep` is used.
+equivalent to the default one-minute cycle. Phase pictures are drawn, and retained beside every round's
+result, only when `--keep` is used (`parameters.picturesEnabled`).
 
 
 
@@ -252,9 +252,12 @@ when `--keep` is used.
   `--repeat 3` (each number is then the median of the rounds) on both commits.
 - A scene with `problems`, or a phase whose `published` count is near zero while it should stream,
   measured something other than what it says; fix the scene before reading its numbers.
-- Each phase leaves a picture of the window at its end, `<n>-<phase>.png`, in the scene's folder under
-  `.build/perf-bench/run/browser-host-qa/bench/scenes/` (kept with `--keep`). AppKit draws it, the
-  browser's pages included, so it needs no screen recording; it shows what a phase measured.
+- With `--keep`, each phase leaves a picture of the window at its end, `<n>-<phase>.png`, in the scene's
+  folder under `.build/perf-bench/run/browser-host-qa/bench/scenes/`. AppKit draws it, the browser's pages
+  included, so it needs no screen recording; it shows what a phase measured. Drawing it in software frees
+  tens of MiB of large blocks that macOS takes back only when it wants the memory, and until then they
+  count in the app's footprint: the next phase's memory numbers of a run with `--keep` can be higher, by
+  more on a Mac with memory to spare. A run without `--keep` draws no pictures.
 
 The bench measures the app with the fixture's model: an in-memory task index, no account checks,
 pull request lookups, network watch or task resource sampling, which the live app runs besides. Those
