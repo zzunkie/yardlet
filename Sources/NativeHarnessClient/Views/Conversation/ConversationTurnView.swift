@@ -38,6 +38,7 @@ struct ConversationTurnOffers: Equatable, Sendable {
     let autoContinueResetsAt: Date?
     let canContinue: Bool
     let switchError: String?
+    let docksRequests: Bool
 
     @MainActor
     init(turn: ConversationTurn, context: ConversationItemContext, handlers: ConversationTurnHandlers) {
@@ -57,6 +58,7 @@ struct ConversationTurnOffers: Equatable, Sendable {
         autoContinueResetsAt = notices?.autoContinueResetsAt
         canContinue = notices?.canContinue ?? false
         switchError = notices?.switchError
+        docksRequests = context.docksRequests
     }
 }
 
@@ -287,11 +289,15 @@ struct ConversationTurnView: View, Equatable {
                 outcomeCard(outcome)
             }
 
-            // The composer's keys answer the oldest request a notification could answer (`ComposerApprovalKey`).
-            let keyed = turn.requests.first { NotificationApprovalProjection.pendingRequest(for: $0) != nil }?.id
-            ForEach(turn.requests) { request in
-                ConversationRequestCard(request: request, actions: context.actions,
-                                        answeredByComposerKeys: request.id == keyed)
+            // In a side panel the requests wait under their turn; a task's own conversation docks them
+            // above its composer (`ConversationRequestDock`).
+            if !context.docksRequests {
+                // The composer's keys answer the oldest request a notification could answer (`ComposerApprovalKey`).
+                let keyed = turn.requests.first { NotificationApprovalProjection.pendingRequest(for: $0) != nil }?.id
+                ForEach(turn.requests) { request in
+                    ConversationRequestCard(request: request, actions: context.actions,
+                                            answeredByComposerKeys: request.id == keyed)
+                }
             }
 
             // Questions Codex asked while it goes on working wait for the person under the turn, as the

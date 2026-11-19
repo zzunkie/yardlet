@@ -9,6 +9,9 @@ struct ConversationItemContext {
     /// The limit card that offers to continue: the one the task continues from
     /// (`UsageLimitContinuation.card`), or a Codex task's last turn's.
     var limitCardEntryID: UUID? = nil
+    /// The conversation docks its waiting requests above the composer (`ConversationRequestDock`), so its
+    /// turns do not draw them.
+    var docksRequests = false
 }
 
 /// One item of a turn, drawn from its normalized `kind` with one card per kind, whatever the harness:

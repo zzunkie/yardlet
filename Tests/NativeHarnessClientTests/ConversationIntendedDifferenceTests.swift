@@ -13,17 +13,30 @@ final class ConversationIntendedDifferenceTests: XCTestCase {
 
     // MARK: - M12a: one request card, D1
 
-    /// A Codex thread with requests in every state. The renderer pins only waiting requests
-    /// under their turn, in one order, with the one request card's answers; an answered request is
-    /// in the work where it happened, so a finished turn folds it.
+    /// A Codex thread with requests in every state. In a side panel the renderer pins only waiting
+    /// requests under their turn, in one order, with the one request card's answers; an answered request
+    /// is in the work where it happened, so a finished turn folds it. A task's own conversation docks the
+    /// waiting ones above its composer instead: the first of them whole, the others behind it.
     func testCodexRequestsUseTheOneCardAndOnlyWaitingOnesStayUnderTheTurn() throws {
         let state = codexRequestsFixture()
         let actions = ConversationActions(retryTurn: { _ in }, forkCodexTurn: { _ in }, implementCodexPlan: { _ in })
         let size = NSSize(width: 760, height: 1_400)
         let directory = try WindowlessRender.directory("conversation-m12-qa")
+
+        let docked = try ConversationDrawing.draw(ConversationTimeline(
+            source: .codex(state, workspaceURL: workspace, historySelection: nil), actions: actions
+        ), size: size, appearance: .light)
+        try WindowlessRender.writePNG(docked.capture.bitmap, to: directory.appending(path: "codex-requests-docked-light.png"))
+        let dockedText = docked.elements.map(\.description)
+        let refusedInWork = try XCTUnwrap(dockedText.firstIndex { $0.contains("refused-reason") }, dockedText.joined(separator: "\n"))
+        let front = try XCTUnwrap(dockedText.firstIndex { $0.contains("shared-reason") }, dockedText.joined(separator: "\n"))
+        XCTAssertLessThan(refusedInWork, front, "The dock comes after the conversation's turns")
+        XCTAssertFalse(dockedText.contains { $0.contains("alone-reason") || $0.contains("future-reason") },
+                       "The requests after the first wait behind it: \(dockedText)")
+
         for appearance in WindowlessRender.Appearance.allCases {
             let new = try ConversationDrawing.draw(ConversationTimeline(
-                source: .codex(state, workspaceURL: workspace, historySelection: nil), actions: actions
+                source: .codex(state, workspaceURL: workspace, historySelection: nil), placement: .panel, actions: actions
             ), size: size, appearance: appearance)
             try WindowlessRender.writePNG(new.capture.bitmap,
                                           to: directory.appending(path: "codex-requests-\(appearance.suffix).png"))
