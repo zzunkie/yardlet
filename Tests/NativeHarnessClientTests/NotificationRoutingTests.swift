@@ -85,6 +85,10 @@ final class NotificationRoutingTests: XCTestCase {
         let target = SystemNotificationTarget(sessionID: sessionID, requestID: "bash-1")
         let userInfo: [AnyHashable: Any] = target.userInfo
         XCTAssertEqual(SystemNotificationTarget(userInfo: userInfo), target)
+        // A device handed to the person: its click shows the task's Simulator tab.
+        let handoff = SystemNotificationTarget(sessionID: sessionID, simulator: true)
+        XCTAssertEqual(SystemNotificationTarget(userInfo: handoff.userInfo as [AnyHashable: Any]), handoff)
+        XCTAssertFalse(SystemNotificationTarget(userInfo: userInfo)?.simulator ?? true)
 
         XCTAssertEqual(
             LocalSystemNotificationCenter.response(actionIdentifier: UNNotificationDefaultActionIdentifier, userInfo: userInfo),

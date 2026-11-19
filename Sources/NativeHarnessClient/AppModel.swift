@@ -6849,7 +6849,10 @@ final class AppModel {
         // A failure auto-fix held while the task worked may go now, and so may a change to its tools
         // that waited for the turn's end.
         if follows.contains(.autoFix) { pullRequestDetails.taskBecameIdle(id) }
-        if follows.contains(.toolChanges) { agentTools?.taskTurnEnded(id) }
+        if follows.contains(.toolChanges) {
+            agentTools?.taskTurnEnded(id)
+            simulatorTools.taskTurnEnded(id)
+        }
         if follows.contains(.accountMove) {
             taskMayHaveSettled(id)
             continuations.switchAccountAfterTurn(id)

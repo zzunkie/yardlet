@@ -16,6 +16,8 @@ struct SimulatorPanelServices {
     var installs: SimulatorInstalls? = nil
     /// Opens a store page (Xcode's, in the App Store).
     var openURL: @MainActor (URL) -> Void = { _ in }
+    /// The devices agents handed to the person (`simulator_handoff`), whose bar the tab shows above the device.
+    var handoffs: SimulatorHandoffs? = nil
 }
 
 private struct SimulatorPanelKey: EnvironmentKey {
@@ -66,6 +68,12 @@ struct SimulatorPane: View {
                     platformButtons(device)
                 }
                 if device != nil { deviceMenu }
+            }
+            if let handoffs = services.handoffs, let handoff = handoffs.waiting(for: task), handoff.device == attached {
+                // As `browser_handoff`'s bar over a tab.
+                BrowserHandoffBar(title: L10n.string("The agent handed this device to you"), reason: handoff.reason,
+                                  decline: { handoffs.answer(.declined, for: task) },
+                                  done: { handoffs.answer(.done, for: task) })
             }
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

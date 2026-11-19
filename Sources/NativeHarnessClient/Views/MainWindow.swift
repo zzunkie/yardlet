@@ -2440,7 +2440,8 @@ struct MainWindow: View {
         SimulatorPanelServices(center: model.simulators, screens: .shared,
                                taskTitle: { [model] id in model.store.sessions.first { $0.id == id }?.title },
                                approvals: model.simulatorTools.approvals,
-                               installs: model.simulatorInstalls, openURL: { NSWorkspace.shared.open($0) })
+                               installs: model.simulatorInstalls, openURL: { NSWorkspace.shared.open($0) },
+                               handoffs: model.simulatorTools.handoffs)
     }
 
     /// What the window gives a task's rail.

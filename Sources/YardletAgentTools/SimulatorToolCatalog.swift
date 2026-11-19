@@ -14,6 +14,7 @@ package enum SimulatorToolCatalog {
     package static let swipe = "simulator_swipe"
     package static let type = "simulator_type"
     package static let press = "simulator_press"
+    package static let handoff = "simulator_handoff"
 
     /// The longest a tap, a swipe or a press may last, in seconds.
     package static let longestDuration = 10.0
@@ -25,6 +26,8 @@ package enum SimulatorToolCatalog {
     package static let longPress = 0.5
     /// How long a swipe lasts when the call does not say.
     package static let defaultSwipeDuration = 0.3
+    /// How long `simulator_handoff` waits when the call does not say, in seconds, as `browser_handoff` does.
+    package static let defaultHandoffWait = 600.0
 
     /// The buttons `simulator_press` takes: iOS's and Android's (each platform takes its own).
     package static let buttons = ["home", "lock", "volume_up", "volume_down", "action", "back", "recents", "power"]
@@ -176,6 +179,25 @@ package enum SimulatorToolCatalog {
                     "description": .string("How many times to press. Defaults to 1, at most 50.")
                 ])
             ]),
+            readOnly: false
+        ),
+        AgentToolDefinition(
+            name: handoff,
+            title: "Hand simulator to person",
+            description: "Hand the attached device to the person for a step only they can take on it, such as signing "
+                + "in with their own account, approving a payment or solving a CAPTCHA, and wait for them. The task's "
+                + "side panel shows the device in its Simulator tab with the reason and Done and Decline buttons, and "
+                + "Yardlet notifies the person. Returns when they answer or after timeout seconds (default 600); until "
+                + "they answer or your turn ends the device stays handed to them, and calling again waits again. Take "
+                + "a screenshot afterwards to see where they left it.",
+            inputSchema: object([
+                "reason": .object([
+                    "type": .string("string"),
+                    "description": .string("What the person is to do on the device, shown to them.")
+                ]),
+                "timeout": number("Seconds to wait. Defaults to 600; a harness's own limit on one call may be shorter.",
+                                  minimum: 0)
+            ], required: ["reason"]),
             readOnly: false
         )
     ]

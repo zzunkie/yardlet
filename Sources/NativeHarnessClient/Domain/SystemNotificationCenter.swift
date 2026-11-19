@@ -37,6 +37,7 @@ struct SystemNotificationTarget: Equatable, Sendable {
     static let sessionKey = "yardletSessionID"
     static let requestKey = "yardletRequestID"
     static let browserTabKey = "yardletBrowserTab"
+    static let simulatorKey = "yardletSimulator"
     static let personalAgentKey = "yardletPersonalAgent"
     static let mailThreadKey = "yardletMailThread"
     static let remoteHostKey = "yardletRemoteHost"
@@ -48,16 +49,19 @@ struct SystemNotificationTarget: Equatable, Sendable {
     var requestID: String?
     /// The browser tab a notification is about (the task's side-panel tab key): a click shows it in the task's panel.
     var browserTab: UUID?
+    /// The notification is about the task's Simulator tab: a click shows it in the task's panel.
+    var simulator = false
     var personalAgent: PersonalAgentReveal?
     /// The mailbox thread a new-mail notification is about.
     var mailThread: MailThreadKey?
     /// A task of another Mac this one follows, by the host's ID here and the task's ID there.
     var remoteTask: RemoteTaskReveal?
 
-    init(sessionID: UUID, requestID: String? = nil, browserTab: UUID? = nil) {
+    init(sessionID: UUID, requestID: String? = nil, browserTab: UUID? = nil, simulator: Bool = false) {
         self.sessionID = sessionID
         self.requestID = requestID
         self.browserTab = browserTab
+        self.simulator = simulator
     }
 
     init(personalAgent: PersonalAgentReveal) {
@@ -96,7 +100,8 @@ struct SystemNotificationTarget: Equatable, Sendable {
         }
         guard let text = userInfo[Self.sessionKey] as? String, let id = UUID(uuidString: text) else { return nil }
         self.init(sessionID: id, requestID: (userInfo[Self.requestKey] as? String).flatMap { $0.isEmpty ? nil : $0 },
-                  browserTab: (userInfo[Self.browserTabKey] as? String).flatMap(UUID.init(uuidString:)))
+                  browserTab: (userInfo[Self.browserTabKey] as? String).flatMap(UUID.init(uuidString:)),
+                  simulator: userInfo[Self.simulatorKey] as? String == "1")
     }
 
     var userInfo: [String: String] {
@@ -104,6 +109,7 @@ struct SystemNotificationTarget: Equatable, Sendable {
         if let sessionID { info[Self.sessionKey] = sessionID.uuidString }
         if let requestID { info[Self.requestKey] = requestID }
         if let browserTab { info[Self.browserTabKey] = browserTab.uuidString }
+        if simulator { info[Self.simulatorKey] = "1" }
         if let personalAgent, let data = try? JSONEncoder().encode(personalAgent) {
             info[Self.personalAgentKey] = String(decoding: data, as: UTF8.self)
         }

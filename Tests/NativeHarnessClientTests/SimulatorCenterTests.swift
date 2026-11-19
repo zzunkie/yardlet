@@ -340,6 +340,45 @@ final class SimulatorCenterTests: XCTestCase {
         XCTAssertTrue(mixed.text.contains("The person is using Phone A"), mixed.text)
         tools.lastPersonInput = { _ in nil }
 
+        // A handoff waits for the person's answer in the tab's bar, as browser_handoff does: unanswered, the device
+        // stays handed over and a call waits again; a message from the person, or the turn's end, ends the wait.
+        tools.handoffPollInterval = .milliseconds(5)
+        driver.events = []
+        var started: [String] = []
+        var settled: [String] = []
+        tools.handoffStarted = { _, _, handoff in started.append(handoff.reason) }
+        tools.handoffs.onSettled = { settled.append($0) }
+        let handedOver = Task { await run(SimulatorToolCatalog.handoff, ["reason": .string("Sign in")], in: second) }
+        try await waitUntil { tools.handoffs.waiting(for: second) != nil }
+        let signIn = try XCTUnwrap(tools.handoffs.waiting(for: second))
+        XCTAssertEqual(signIn.device, .iOSSimulator(udid: phoneA))
+        tools.handoffs.answer(.done, for: second)
+        let done = await handedOver.value
+        XCTAssertTrue(done.text.contains("said they are done on Phone A"), done.text)
+        XCTAssertNil(tools.handoffs.handoff(for: second))
+        XCTAssertEqual(settled, [signIn.notice])
+        let unanswered = await run(SimulatorToolCatalog.handoff, ["reason": .string("Pay"), "timeout": .integer(0)],
+                                   in: second)
+        XCTAssertTrue(unanswered.text.contains("has not answered") && unanswered.text.contains("waits again"),
+                      unanswered.text)
+        let pay = try XCTUnwrap(tools.handoffs.waiting(for: second))
+        let again = Task { await run(SimulatorToolCatalog.handoff, ["reason": .string("Pay with the test card")], in: second) }
+        try await waitUntil { tools.handoffs.waiting(for: second)?.reason == "Pay with the test card" }
+        XCTAssertEqual(started, ["Sign in", "Pay"], "Calling again waits on the same handoff")
+        tools.handoffs.answer(.personSentMessage, for: second)
+        let message = await again.value
+        XCTAssertTrue(message.text.contains("sent you a message"), message.text)
+        _ = await run(SimulatorToolCatalog.handoff, ["reason": .string("Approve"), "timeout": .integer(0)], in: second)
+        tools.taskTurnEnded(second)
+        XCTAssertNil(tools.handoffs.waiting(for: second), "The bar goes with the turn")
+        XCTAssertEqual(settled.count, 3)
+        XCTAssertEqual(settled[1], pay.notice)
+        for arguments in [["reason": ToolJSON.string(" ")], ["reason": .string("Sign in"), "timeout": .integer(-1)]] {
+            let refused = await run(SimulatorToolCatalog.handoff, arguments, in: second)
+            XCTAssertEqual(refused.failure?.kind, .invalidArguments, refused.text)
+        }
+        XCTAssertEqual(driver.events, [], "A handoff sends the device nothing")
+
         // The device menu takes the approval back; asked again, declined, nothing reaches the device.
         XCTAssertTrue(SimulatorDeviceMenu.make(for: second, in: center, taskTitle: { _ in nil }, approvals: tools.approvals)
             .items.contains(.revokeAgentAccess))
@@ -434,7 +473,7 @@ final class SimulatorCenterTests: XCTestCase {
         let onToken = try XCTUnwrap(broker.agentToolServer(for: on, workspaceRoots: [])?.environment[AgentToolEnvironment.token])
         let names = await listed(on, onToken)
         XCTAssertEqual(names, SimulatorToolCatalog.tools.map(\.name))
-        XCTAssertEqual(names.count, 8)
+        XCTAssertEqual(names.count, 9)
         handler.simulatorPlatformIsUsable = false
         let unusable = await listed(on, onToken)
         XCTAssertEqual(unusable, [], "No platform's devices can be used")
@@ -449,7 +488,7 @@ final class SimulatorCenterTests: XCTestCase {
                                                         tool: SimulatorToolCatalog.list, arguments: .object([:])))
         XCTAssertEqual(refused.failure?.kind, .refused)
         let stillOn = await listed(on, onToken)
-        XCTAssertEqual(stillOn.count, 8, "A task keeps what the switch was as it started")
+        XCTAssertEqual(stillOn.count, 9, "A task keeps what the switch was as it started")
         let missing = await broker.handle(AgentToolCall(token: onToken, session: on.uuidString,
                                                         tool: SimulatorToolCatalog.tap, arguments: .object(["x": .integer(1)])))
         XCTAssertEqual(missing.failure?.kind, .invalidArguments, "Checked against the listed schema first")

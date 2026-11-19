@@ -2,8 +2,9 @@ import SwiftUI
 
 /// The agent handed a browser tab to the person (`browser_handoff`): what it asks, and the answers it waits for, in a bar
 /// above the page. The Mac's browser panel and a window following another Mac's tasks (docs/REMOTE_PROTOCOL.md §15.25)
-/// show the same bar.
+/// show the same bar, and the Simulator tab shows it above a device handed over (`simulator_handoff`).
 struct BrowserHandoffBar: View {
+    var title = L10n.string("The agent handed this tab to you")
     let reason: String
     let decline: () -> Void
     let done: () -> Void
@@ -12,7 +13,7 @@ struct BrowserHandoffBar: View {
         HStack(spacing: 10) {
             Image(systemName: "hand.point.up.left").foregroundStyle(.tint)
             VStack(alignment: .leading, spacing: 2) {
-                Text(L10n.string("The agent handed this tab to you"))
+                Text(title)
                     .font(.callout.weight(.semibold))
                 Text(reason)
                     .font(.callout)

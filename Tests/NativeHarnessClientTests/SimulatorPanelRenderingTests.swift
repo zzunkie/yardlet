@@ -109,6 +109,22 @@ final class SimulatorPanelRenderingTests: XCTestCase {
                            to: directory.appending(path: name("off")),
                            showing: [L10n.string("This simulator is off."), L10n.string("Turn On")])
 
+            // A device the agent handed to the person (simulator_handoff): its reason, with Decline and I'm done, in a
+            // bar above the device, as browser_handoff's over a tab.
+            let handoffs = SimulatorHandoffs()
+            let reason = "Sign in with your test account, then come back."
+            _ = handoffs.handOff(phone, reason: reason, for: task)
+            try await draw(center, task: task, attached: phone, titles: titles, appearance: appearance,
+                           handoffs: handoffs, to: directory.appending(path: name("handoff")),
+                           showing: [L10n.string("The agent handed this device to you"), reason,
+                                     L10n.string("Decline"), L10n.string("I'm done")])
+            handoffs.answer(.done, for: task)
+            try await draw(center, task: task, attached: phone, titles: titles, appearance: appearance,
+                           handoffs: handoffs, to: directory.appending(path: name("handoff-answered")),
+                           showing: [L10n.string("This simulator is off.")]) { words in
+                XCTAssertFalse(words.contains(reason), "The bar goes once the person answers: \(words)")
+            }
+
             // An Xcode the helper does not support yet: the device lists and runs, and its screen says why.
             let unsupported = SimulatorCenter(backends: [PanelFakeBackend()])
             await unsupported.setEnabled(true)
@@ -241,12 +257,12 @@ final class SimulatorPanelRenderingTests: XCTestCase {
     private func draw(_ center: SimulatorCenter, task: UUID, attached: SimulatorDeviceIdentity?,
                       titles: [UUID: String], appearance: WindowlessRender.Appearance,
                       helper: String = "/nonexistent/Yardlet Simulator Host",
-                      installs: SimulatorInstalls? = nil, to url: URL,
+                      installs: SimulatorInstalls? = nil, handoffs: SimulatorHandoffs? = nil, to url: URL,
                       showing expected: [String], check: ([String]) -> Void = { _ in }) async throws {
         let screens = MacSimulatorScreens()
         screens.executable = URL(filePath: helper)
         let services = SimulatorPanelServices(center: center, screens: screens, taskTitle: { titles[$0] },
-                                              installs: installs)
+                                              installs: installs, handoffs: handoffs)
         let tab = TaskSidePanelTabs.simulatorTab(device: attached.flatMap(center.device))
         let files = try XCTUnwrap(TaskSidePanelTabs.tab("files", selectedFilePath: nil))
         let navigation = WorkSurfaceNavigation(

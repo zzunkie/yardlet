@@ -18,6 +18,7 @@ enum SimulatorPanelShowing: Equatable, Sendable {
 /// agent first uses it, whatever the task's permission mode (`SimulatorApprovals`); positions stay on the screen, and
 /// durations, counts and text within their limits. A real Android device's approval holds only in the task it was
 /// given in, and its card says what the device can reach.
+/// `simulator_handoff` hands the attached device to the person and waits, as `browser_handoff` hands a tab over.
 @MainActor
 final class SimulatorAgentTools {
     /// How long after the person's last input on a device the tools say they are using it, as the browser tools say
@@ -32,6 +33,8 @@ final class SimulatorAgentTools {
 
     var center: @MainActor () -> SimulatorCenter
     let approvals: SimulatorApprovals
+    /// The devices handed to the person, which the tasks' Simulator tabs show.
+    let handoffs = SimulatorHandoffs()
     var drivers: [SimulatorPlatform: any SimulatorDeviceDriving]
     /// Asks the person, on a card in the calling task, to let the task's agent use the device, and waits for the
     /// answer: true to go ahead. The app asks (`AppModel.asksToUseSimulator`); without it (tests) the answer is no.
@@ -43,6 +46,12 @@ final class SimulatorAgentTools {
     /// A task's title, for a device another task's agent uses.
     var taskTitle: @MainActor (UUID) -> String? = { _ in nil }
     var now: @MainActor () -> Date = { Date() }
+    /// A device was handed to the person: the app shows the task's Simulator tab and notifies them.
+    var handoffStarted: @MainActor (UUID, SimulatorDevice, SimulatorHandoff) -> Void = { _, _, _ in }
+    /// The longest one call from the task's harness may wait (`SessionToolPolicy.waitCeiling`).
+    var handoffWaitCeiling: @MainActor (UUID) -> Duration = { _ in .seconds(25 * 60) }
+    /// How often `simulator_handoff` reads the person's answer.
+    var handoffPollInterval: Duration = .milliseconds(250)
     /// The waits inside a tap or a swipe; tests pass one that does not wait.
     var sleep: @Sendable (Double) async -> Void = { seconds in
         try? await Task.sleep(for: .milliseconds(Int64((seconds * 1000).rounded())))
@@ -61,6 +70,7 @@ final class SimulatorAgentTools {
         case SimulatorToolCatalog.list: return await list(for: task)
         case SimulatorToolCatalog.attach: return await attach(arguments, task: task)
         case SimulatorToolCatalog.detach: return detach(task)
+        case SimulatorToolCatalog.handoff: return await handOff(arguments, task: task)
         case SimulatorToolCatalog.screenshot, SimulatorToolCatalog.tap, SimulatorToolCatalog.swipe,
              SimulatorToolCatalog.type, SimulatorToolCatalog.press:
             return await act(tool, arguments, task: task)
@@ -68,9 +78,16 @@ final class SimulatorAgentTools {
         }
     }
 
-    /// The task went away: a real device's approval for it goes too.
+    /// The task went away: a real device's approval for it goes too, and a device it handed to the person is theirs no
+    /// more.
     func taskRemoved(_ task: UUID) {
         approvals.taskRemoved(task)
+        handoffs.end(for: task)
+    }
+
+    /// The task's turn ended: a device it handed to the person is no longer handed over, as a browser tab is not.
+    func taskTurnEnded(_ task: UUID) {
+        handoffs.turnEnded(for: task)
     }
 
     // MARK: - simulator_list
@@ -154,6 +171,7 @@ final class SimulatorAgentTools {
         guard let identity = center.attachment(of: task) else { return .text("This task has no attached device.") }
         let device = center.device(identity)
         let wasStarted = center.startedByYardlet[identity] != nil
+        handoffs.end(for: task)
         center.detach(task)
         if let device, center.attachment(of: task) == nil, !center.claims.keys.contains(identity) {
             drivers[device.platform]?.release(device)
@@ -163,6 +181,72 @@ final class SimulatorAgentTools {
             text += " As Yardlet started it, it shuts down 10 minutes after no task attaches it."
         }
         return .text(text)
+    }
+
+    // MARK: - simulator_handoff
+
+    /// Hands the attached device to the person and waits: for their Done or Decline in the Simulator tab's bar, for
+    /// a message they send the task, for the end of the agent's turn, or for the timeout, after which the device stays
+    /// theirs and a call waits again.
+    private func handOff(_ arguments: ToolJSON, task: UUID) async -> AgentToolResult {
+        let center = center()
+        guard let identity = center.attachment(of: task) else { return await notAttached(task) }
+        if let invalid = Self.checkWithoutScreen(SimulatorToolCatalog.handoff, arguments) { return invalid }
+        let known = center.device(identity)
+            ?? SimulatorDevice(identity: identity, name: identity.value, state: .off, osName: "", osVersion: "")
+        if let declined = await approval(of: known, for: task) { return declined }
+        let device: SimulatorDevice
+        switch await center.prepareAttachedDevice(for: task) {
+        case let .attached(prepared): device = prepared.device
+        case let .refused(refusal): return refused(refusal, task: task)
+        case let .failed(device, message): return Self.didNotStart(device, message)
+        }
+        let reason = String((arguments["reason"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            .prefix(500))
+        let asked = Self.number(arguments["timeout"]) ?? SimulatorToolCatalog.defaultHandoffWait
+        // A day at most before the conversion, which a larger number would overflow.
+        let timeout = min(Duration.milliseconds(Int64((min(asked, 86_400) * 1000).rounded())), handoffWaitCeiling(task))
+        let started = handoffs.handOff(device.identity, reason: reason, for: task)
+        if started.isNew { handoffStarted(task, device, started.handoff) }
+        center.noteToolUse(for: task)
+        defer { center.noteToolUse(for: task) }
+        let start = ContinuousClock.now
+        func waited() -> String {
+            BrowserAgentTools.format(Double((ContinuousClock.now - start).components.seconds)) + " seconds"
+        }
+        while true {
+            guard let handoff = handoffs.handoff(for: task), handoff.id == started.handoff.id,
+                  center.isEnabled, center.attachment(of: task) == device.identity else {
+                handoffs.end(for: task)
+                return .failure("\(device.name) was let go from this task before the person answered.", .notFound,
+                                retry: .withChanges, details: ["next": .string(SimulatorToolCatalog.attach)])
+            }
+            switch handoff.answer {
+            case .done?:
+                handoffs.end(for: task)
+                return .text("The person said they are done on \(device.name), after \(waited()). Take a screenshot to "
+                    + "see where they left it.")
+            case .declined?:
+                handoffs.end(for: task)
+                return .text("The person declined to do this on \(device.name), after \(waited()). The device is as they "
+                    + "left it.")
+            case .personSentMessage?:
+                handoffs.end(for: task)
+                return .text("The person sent you a message instead of doing this on \(device.name), after "
+                    + "\(waited()). " + PersonsMessageAnswer.followUp + " The device is as they left it.")
+            case .turnEnded?:
+                handoffs.end(for: task)
+                return .text("The task's turn ended before the person answered; \(device.name) is no longer handed to "
+                    + "them.")
+            case nil:
+                break
+            }
+            if ContinuousClock.now - start >= timeout || Task.isCancelled {
+                return .text("The person has not answered after \(waited()). \(device.name) stays handed to them, with "
+                    + "its bar in the Simulator tab, until they answer or your turn ends; simulator_handoff waits again.")
+            }
+            try? await Task.sleep(for: handoffPollInterval)
+        }
     }
 
     // MARK: - Tools on the attached device
@@ -328,6 +412,16 @@ final class SimulatorAgentTools {
                         + "lines), and this text has “\(Character(other))”. method paste enters any text.")
                 }
             default: return invalid("method is paste or keys.")
+            }
+        case SimulatorToolCatalog.handoff:
+            guard let reason = arguments["reason"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !reason.isEmpty else {
+                return invalid("simulator_handoff needs a reason: what the person is to do on the device.")
+            }
+            if arguments["timeout"] != nil {
+                guard let timeout = number(arguments["timeout"]), timeout >= 0 else {
+                    return invalid("timeout is in seconds, 0 or more.")
+                }
             }
         case SimulatorToolCatalog.press:
             let button = arguments["button"]?.stringValue

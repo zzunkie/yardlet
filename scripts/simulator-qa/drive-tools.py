@@ -2,10 +2,10 @@
 """Calls the simulator tools through the QA bundle's yardlet-mcp, as a harness would, from the launch the panel
 fixture wrote (SimulatorPanelQA): the list, a tool before any attach, the attach (which waits on the person's card,
 which the fixture allows), screenshots the screen's size, the platform's buttons, taps and swipes, a paste in Korean
-and keys into a search field, and arguments out of bounds. On iOS the search is the home screen's, on Android the
-Settings app's, which the script opens with adb as an agent's own tools would. Writes every reply to tools.json and
-each screenshot to tool-<n>.<format> in the output folder, and prints one line for each check. Exits 1 when a check
-failed.
+and keys into a search field, arguments out of bounds, and handoffs: one left to time out, then answered with I'm done
+by the fixture, and one it declines. On iOS the search is the home screen's, on Android the Settings app's, which the
+script opens with adb as an agent's own tools would. Writes every reply to tools.json and each screenshot to
+tool-<n>.<format> in the output folder, and prints one line for each check. Exits 1 when a check failed.
 
 usage: drive-tools.py LAUNCH_JSON DEVICE_ID OUTPUT_FOLDER [ios | android ADB]
 """
@@ -86,8 +86,8 @@ def main():
     process.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
     listed = [tool["name"] for tool in request("tools/list")["result"]["tools"]]
     expected = ["simulator_list", "simulator_attach", "simulator_detach", "simulator_screenshot", "simulator_tap",
-                "simulator_swipe", "simulator_type", "simulator_press"]
-    check("list: the task has the eight simulator tools", all(name in listed for name in expected),
+                "simulator_swipe", "simulator_type", "simulator_press", "simulator_handoff"]
+    check("list: the task has the nine simulator tools", all(name in listed for name in expected),
           ", ".join(name for name in listed if name.startswith("simulator_")))
 
     devices = call("simulator_list")
@@ -117,6 +117,17 @@ def main():
         drive_android(call, check, steps, adb, device, width, height)
     else:
         drive_ios(call, check, steps, width, height)
+
+    # The fixture answers a handoff by its reason: it leaves the first to time out, then presses I'm done or Decline.
+    waited = call("simulator_handoff", {"reason": "QA: wait out the timeout", "timeout": 3})
+    check("simulator_handoff: unanswered, it times out and stays handed over", not waited["isError"]
+          and "has not answered" in waited["text"] and "waits again" in waited["text"], waited["text"])
+    done = call("simulator_handoff", {"reason": "QA: press I'm done", "timeout": 120})
+    check("simulator_handoff: called again, the person's I'm done reaches the agent", not done["isError"]
+          and "said they are done" in done["text"], done["text"])
+    declined = call("simulator_handoff", {"reason": "QA: press Decline", "timeout": 120})
+    check("simulator_handoff: the person's Decline reaches the agent", not declined["isError"]
+          and "declined" in declined["text"], declined["text"])
 
     detached = call("simulator_detach")
     check("simulator_detach", not detached["isError"] and "Let go of" in detached["text"], detached["text"])

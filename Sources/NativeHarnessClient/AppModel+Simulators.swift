@@ -64,6 +64,7 @@ extension AppModel {
             endSimulatorScreens()
             // The person's approvals of devices go with the feature (`SimulatorApprovals`).
             simulatorTools.approvals.removeAll()
+            simulatorTools.handoffs.removeAll()
             simulatorInstalls.cancelAll()
         }
         Task { await simulators.setEnabled(isOn) }
@@ -97,7 +98,45 @@ extension AppModel: SimulatorToolHandling {
         tools.taskTitle = { [weak self] id in self?.store.sessions.first { $0.id == id }?.title }
         tools.showPanel = { [weak self] task in self?.showSimulatorTab(for: task) ?? .notShown }
         tools.lastPersonInput = { [weak self] device in self?.simulators.lastPersonInput(on: device) }
+        tools.handoffStarted = { [weak self] task, device, handoff in
+            self?.simulatorHandoffStarted(task, device: device, handoff: handoff)
+        }
+        tools.handoffWaitCeiling = { [weak self] task in self?.handoffWaitCeiling(for: task) ?? .seconds(25 * 60) }
+        tools.handoffs.onSettled = { [weak self] notice in
+            self?.systemNotificationCenter.removeNotifications(identifiers: [notice])
+        }
         return tools
+    }
+
+    /// The agent handed the task's device to the person (`simulator_handoff`), as `browser_handoff` hands a tab over:
+    /// the task's panel shows its Simulator tab, with the agent's reason and Done and Decline in a bar above the device,
+    /// and a notification tells the person; a click opens the task with its panel on the tab. The notification goes
+    /// when the handoff is answered or ends (`SimulatorHandoffs.onSettled`).
+    func simulatorHandoffStarted(_ task: UUID, device: SimulatorDevice, handoff: SimulatorHandoff) {
+        guard store.sessions.contains(where: { $0.id == task }) else { return }
+        showHandedOverSimulator(of: task)
+        let title = store.sessions.first { $0.id == task }?.title ?? ""
+        let handoffs = simulatorTools.handoffs
+        Task {
+            guard (await systemNotificationCenter.authorization()).isDeliverable,
+                  handoffs.waiting(for: task)?.id == handoff.id else { return }
+            await systemNotificationCenter.post(SystemNotification(
+                title: L10n.format("The agent needs you on %@", device.name),
+                body: title.isEmpty ? handoff.reason : "\(title): \(handoff.reason)",
+                identifier: handoff.notice, target: SystemNotificationTarget(sessionID: task, simulator: true)))
+            // The handoff may have ended while the notification was on its way.
+            if handoffs.waiting(for: task)?.id != handoff.id {
+                systemNotificationCenter.removeNotifications(identifiers: [handoff.notice])
+            }
+        }
+    }
+
+    /// The task's panel shows its Simulator tab, the task in front staying: a device handed to the person, and a click on
+    /// its notification.
+    func showHandedOverSimulator(of task: UUID) {
+        let workspace = taskWorkspaces.state(for: task)
+        workspace.setPanels(TaskSurfaceNavigationProjection.showing(TaskSurfaceNavigationProjection.simulatorID,
+                                                                    in: workspace.panels))
     }
 
     /// `simulator_attach` shows the task's Simulator tab, as the Claude app's attach shows its device, unless the

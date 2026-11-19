@@ -10,9 +10,11 @@ import YardletSimulatorHostProtocol
 /// launcher offers Simulator after Browser; the tab lists the devices; the device picked shows live through the
 /// bundle's simulator host, and a click on Settings opens it; the agent's simulator tools, called through the bundle's
 /// `yardlet-mcp` by the script (drive-tools.py), ask the person once on the task's card, which the fixture captures and
-/// allows, and add the Simulator tab beside the tab the person uses; turning the switch off closes the tab, takes
-/// Simulator out of the launcher, lets the device go and removes the approval. Captures
-/// `{launcher,list,live,settings,approval,tools,off}-{light,dark}.png` and writes `result.json`; the device is never
+/// allows, and add the Simulator tab beside the tab the person uses; their handoff shows the Simulator tab with its bar,
+/// which the fixture captures and, by the handoff's reason, leaves to time out or answers with I'm done or Decline;
+/// turning the switch off closes the tab, takes Simulator out of the launcher, lets the device go and removes the
+/// approval. Captures `{launcher,list,live,settings,approval,handoff,tools,off}-{light,dark}.png` and writes
+/// `result.json`; the device is never
 /// started or stopped here.
 ///
 /// With `YARDLET_SIMULATOR_QA_ANDROID_AVD` instead, run by scripts/simulator-qa/run-android-panel-check.sh against a
@@ -20,7 +22,8 @@ import YardletSimulatorHostProtocol
 /// screen through the bundle's scrcpy server with Back, Home and Recents in the tab's header, Recents and a swipe
 /// through the tab, the screen turned to landscape, the agent's tools as above (drive-tools.py with `android`), whose
 /// paste leaves the device's clipboard as it was, and, with the switch off, the tab closed and the stream and the
-/// server on the device ended. Captures `android-{list,live,recents,drawer,turned,approval,tools,off}-{light,dark}.png`.
+/// server on the device ended. Captures
+/// `android-{list,live,recents,drawer,turned,approval,handoff,tools,off}-{light,dark}.png`.
 /// With `YARDLET_SIMULATOR_QA_ANDROID_CONNECTED` as well, the address the script connected the same emulator at
 /// (`adb connect 127.0.0.1:<port>`), it is then checked as a real device is: listed by the serial number it reports,
 /// live and driven through the tab, never started or stopped by Yardlet, and used by the agents' tools after the real
@@ -173,6 +176,11 @@ final class SimulatorPanelQA {
         try? "ready".write(to: output.appending(path: "tools-ready"), atomically: true, encoding: .utf8)
         let done = output.appending(path: "tools-done").path(percentEncoded: false)
         var cards = 0
+        // The panel before the first handoff, which shows the Simulator tab, and the handoffs' answers by the fixture.
+        var placement = workspace.panels
+        var handoffShown: Bool?
+        var answers: [SimulatorHandoff.Answer] = []
+        let handoffs = model.simulatorTools.handoffs
         let deadline = ContinuousClock.now + .seconds(300)
         while !FileManager.default.fileExists(atPath: done), ContinuousClock.now < deadline {
             if let approval = model.sessionTools.approvals(for: session).first {
@@ -181,6 +189,18 @@ final class SimulatorPanelQA {
                 await capture(window, prefix + "approval")
                 model.sessionTools.answer(approval.id, allow: true)
             }
+            if let handoff = handoffs.waiting(for: session) {
+                if handoffShown == nil {
+                    handoffShown = workspace.panels.trailingSurfaceID == Navigation.simulatorID
+                    try? await Task.sleep(for: .seconds(1))
+                    await capture(window, prefix + "handoff")
+                }
+                let answer: SimulatorHandoff.Answer? = handoff.reason.hasPrefix("QA: press I'm done") ? .done
+                    : handoff.reason.hasPrefix("QA: press Decline") ? .declined : nil
+                if let answer, handoffs.answer(answer, for: session) { answers.append(answer) }
+            } else if handoffShown == nil {
+                placement = workspace.panels
+            }
             try? await Task.sleep(for: .milliseconds(200))
         }
         check("tools: the script's calls ended", FileManager.default.fileExists(atPath: done), "")
@@ -188,8 +208,13 @@ final class SimulatorPanelQA {
         check("tools: a simulator's approval holds for every task",
               model.simulatorTools.approvals.isApproved(identity, for: UUID()), "")
         check("tools: the Simulator tab joined beside the tab the person uses",
-              workspace.panels.trailingTabs.contains(Navigation.simulatorID) && workspace.panels.trailingSurfaceID == "files",
-              "\(workspace.panels)")
+              placement.trailingTabs.contains(Navigation.simulatorID) && placement.trailingSurfaceID == "files",
+              "\(placement)")
+        check("tools: a handoff shows the Simulator tab with its bar", handoffShown == true,
+              "\(String(describing: handoffShown))")
+        check("tools: the fixture answered the handoffs as the person, I'm done then Decline", answers == [.done, .declined],
+              "\(answers)")
+        check("tools: no handoff waits once the calls ended", handoffs.handoff(for: session) == nil, "")
         workspace.setPanels(Navigation.showing(Navigation.simulatorID, in: workspace.panels))
         try? await Task.sleep(for: .seconds(2))
         await capture(window, prefix + "tools")

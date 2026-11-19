@@ -71,6 +71,8 @@ extension AppModel {
             revealTask(sessionID)
             // A browser tab's notification opens the task's panel on that tab.
             if let tab = target.browserTab { showBrowserTab(tab, under: sessionID) }
+            // A device handed to the person: the task's panel shows its Simulator tab.
+            if target.simulator { showHandedOverSimulator(of: sessionID) }
             return .opened
         }
         if store.archivedSessions == nil { try? await store.loadArchivedSessions() }
@@ -120,7 +122,8 @@ extension AppModel {
         default: break
         }
         let requests = pendingApprovals(in: session).filter { $0.declinedByMessage != nil }
-        return requests.isEmpty && browserHandoffWaits[sessionID]?.isEmpty != false ? nil : requests
+        return requests.isEmpty && browserHandoffWaits[sessionID]?.isEmpty != false
+            && simulatorTools.handoffs.waiting(for: sessionID) == nil ? nil : requests
     }
 
     /// Answers what the task waited on when the person's message went, as the harness's own app lets the person type
@@ -130,10 +133,12 @@ extension AppModel {
     /// - Each request is declined once (`NotificationApprovalProjection.declinedByMessage`). Claude Code, which reads a
     ///   denial's words, is told the person sent a message instead and did not refuse, as it closes an approval itself
     ///   when a new message arrives while one waits.
-    /// - Each tab handed to the person ends its wait as that message (`BrowserHandoff.Answer.personSentMessage`).
+    /// - Each tab handed to the person ends its wait as that message (`BrowserHandoff.Answer.personSentMessage`), and
+    ///   so does a device handed to them (`SimulatorHandoff.Answer.personSentMessage`).
     /// A request only its card answers keeps waiting.
     func answerWaits(_ requests: [NotificationApprovalProjection.PendingRequest], forPersonsMessageIn sessionID: UUID) async {
         endBrowserWaitsForPersonsMessage(in: sessionID)
+        simulatorTools.handoffs.answer(.personSentMessage, for: sessionID)
         for request in requests {
             // An earlier answer can end the turn and the rest with it.
             guard let route = request.declinedByMessage,
