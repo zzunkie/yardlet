@@ -1,0 +1,51 @@
+# Render a built Windows app on the disposable runner. This verification branch is not merged.
+name: Check Windows request layout
+on:
+  push:
+    branches: [qa/windows-request-layout]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  render:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Set the fixture folder
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'request-layout'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          "QA_ROOT=$root" >> $env:GITHUB_ENV
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: windows-app-bin
+          path: ${{ env.QA_ROOT }}/bin
+          run-id: 44548553749
+          github-token: ${{ github.token }}
+      - name: Install the packaged Windows runtime
+        shell: pwsh
+        run: Windows/scripts/install-windows-app-runtime.ps1 -Url https://aka.ms/windowsappsdk/2.6/2.6.5/windowsappruntimeinstall-x64.exe
+      - name: Render the local fixtures
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory "$env:QA_ROOT\mock","$env:QA_ROOT\workspace" | Out-Null
+          $src = '.github/request-layout-check'
+          & "$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /r:System.Web.Extensions.dll "/out:$env:QA_ROOT\mock\claude.exe" "$src\FakeClaude.cs"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -I "$src\fixtures.py"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item "$src\sample.txt" $env:QA_ROOT
+          & "$src\render.ps1"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: request-layout
+          retention-days: 7
+          path: |
+            ${{ env.QA_ROOT }}/render/*.png
+            ${{ env.QA_ROOT }}/render/*.txt
