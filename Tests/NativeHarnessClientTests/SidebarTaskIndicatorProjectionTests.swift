@@ -59,8 +59,8 @@ final class SidebarTaskIndicatorProjectionTests: XCTestCase {
     }
 
     func testEachStateIsNamedInTheClaudeAppsWords() throws {
-        XCTAssertEqual(SidebarTaskStatus.awaitingApproval.accessibilityName, L10n.string("Awaiting input"))
-        XCTAssertEqual(SidebarTaskStatus.needsInput.accessibilityName, L10n.string("Awaiting answer"))
+        XCTAssertEqual(SidebarTaskStatus.awaitingApproval.accessibilityName, L10n.string("Needs approval"))
+        XCTAssertEqual(SidebarTaskStatus.needsInput.accessibilityName, L10n.string("Needs answer"))
         XCTAssertEqual(SidebarTaskStatus.failed(message: nil).accessibilityName,
                        L10n.string("Task encountered a system error"))
         XCTAssertEqual(SidebarTaskStatus.running.accessibilityName, L10n.string("Running"))
@@ -83,12 +83,13 @@ final class SidebarTaskIndicatorProjectionTests: XCTestCase {
                        L10n.string("Session limit reached") + "\n" + (ProviderNoticeText.limitReset(limit) ?? ""))
         XCTAssertEqual(SidebarTaskStatus.running.help, L10n.string("Running"))
 
-        // The Korean catalog has the Claude app's own Korean for the marks (ion-dist `ko-KR`), and
-        // the Codex app's for the failure, which the Claude app names by each kind of error.
+        // The Korean catalog names the two waits by what they need, the Claude app's own Korean for the
+        // other marks (ion-dist `ko-KR`), and the Codex app's for the failure, which the Claude app names
+        // by each kind of error.
         let korean = try XCTUnwrap(Bundle.module.path(forResource: "Localizable", ofType: "strings", inDirectory: "ko.lproj"))
         let catalog = try XCTUnwrap(NSDictionary(contentsOfFile: korean) as? [String: String])
-        XCTAssertEqual(catalog["Awaiting input"], "입력 대기 중")
-        XCTAssertEqual(catalog["Awaiting answer"], "답변 대기 중")
+        XCTAssertEqual(catalog["Needs approval"], "승인 필요")
+        XCTAssertEqual(catalog["Needs answer"], "답변 필요")
         XCTAssertEqual(catalog["Task encountered a system error"], "작업에 시스템 오류가 발생했습니다")
         XCTAssertEqual(catalog["Running"], "실행 중")
         XCTAssertEqual(catalog["Unread response"], "읽지 않은 응답")

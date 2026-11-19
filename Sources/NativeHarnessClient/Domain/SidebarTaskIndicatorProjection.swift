@@ -1,13 +1,14 @@
 import Foundation
 
 /// A task's state at the end of its sidebar row, drawn as the Claude app's Code session list draws
-/// it: one small mark at the row's end (`status-dot`, 6 pt), named in the Claude app's words. The
-/// states and their order came from the Codex app's task row (`codex.localTaskRow.*`). The cases
-/// run from the most urgent; a collapsed project or a split view shows its most urgent task's.
+/// it: one small mark at the row's end (`status-dot`, 6 pt), named in the Claude app's words except the
+/// two waits, which say what they need. The states and their order came from the Codex app's task row
+/// (`codex.localTaskRow.*`). The cases run from the most urgent; a collapsed project or a split view
+/// shows its most urgent task's.
 enum SidebarTaskStatus: Equatable, Sendable {
-    /// A command, file change or permission waits: the Claude app's "Awaiting input".
+    /// A command, file change or permission waits on an approval: "Needs approval".
     case awaitingApproval
-    /// The task asked a question: the Claude app's "Awaiting answer".
+    /// The task asked a question: "Needs answer".
     case needsInput
     /// A tab of the task's browser waits on the person (`TaskAttentionDetail.browserWait`).
     case waitingInBrowser
