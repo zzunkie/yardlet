@@ -26,7 +26,7 @@ struct ConversationTurnContext {
 /// One turn, laid out as the Mac's `ConversationTurnView` lays it out for every harness: what was sent, the provider's
 /// notices, the header (how long it worked, which folds the work once a final answer began, `foldsWork`), the work
 /// (its plan, then everything in the order it happened, runs of calls folded on their summary lines), the answers,
-/// while it runs the one live line, then how it ended and the requests still waiting, pinned under it. A folded turn
+/// while it runs the one live line, then how it ended. The timeline docks pending requests above the composer. A folded turn
 /// keeps in view what the rule every harness shares keeps (`workKeptWhenFolded`), parted at the messages sent into it
 /// (`workStretches`). What the person opened and folded stays as the turn is drawn again
 /// (`ConversationDisclosureChoices`); the timeline keeps one element per turn while the turn is shown.
@@ -96,7 +96,6 @@ final class ConversationTurnElement {
             view.children.append(line)
         }
         if let outcome = turn.outcome { view.children.append(outcomeCard(outcome, isTurnOutcome: true)) }
-        for request in turn.requests { context.card(request, turn).place(in: view) }
         followTime()
     }
 

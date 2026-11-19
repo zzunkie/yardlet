@@ -31,7 +31,7 @@ final class MainWindow {
     private let taskFrame = Grid()
     private var header: TaskHeader?
     private var keys: TaskKeys?
-    private let timeline = ConversationTimeline()
+    private let timeline = ConversationTimeline(answersFromComposer: true)
     /// The shown task's composer, as the Mac's.
     private let composer: TaskComposer
     private var projectionCaches: [SessionRecord.ID: ConversationProjectionCache] = [:]
@@ -253,9 +253,10 @@ final class MainWindow {
     private func showConversation() {
         conversationGeneration += 1
         let generation = conversationGeneration
-        let (session, presentation, error, hasTasks, notices) = withObservationTracking {
+        let (session, presentation, error, loading, hasTasks, notices) = withObservationTracking {
             let session = selectedSession
             return (session, session.map(presentation(of:)), session.flatMap { model.errorBySessionID[$0.id] },
+                    session.map { model.isReadingSavedConversation($0.id) } ?? false,
                     !model.store.sessions.isEmpty, session.flatMap { model.providerNotices(for: $0) })
         } onChange: { [weak self] in
             Task { @MainActor in
@@ -277,7 +278,7 @@ final class MainWindow {
             if let session { log.write("showing: \(session.title)") }
             composer.show(session?.id)
         }
-        let placeholder = session != nil ? error : hasTasks ? L10n.string("Choose a task") : L10n.string("No tasks")
+        let placeholder = session != nil ? (error ?? (loading ? L10n.string("Loading…") : nil)) : hasTasks ? L10n.string("Choose a task") : L10n.string("No tasks")
         timeline.workspaceURL = session?.workspaceURL
         timeline.notices = notices
         timeline.show(presentation, conversationID: session?.id.uuidString, placeholder: placeholder)

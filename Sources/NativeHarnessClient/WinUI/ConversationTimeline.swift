@@ -10,7 +10,10 @@ import WinUI
 /// long the conversation is. A host's conversation (`RemoteConversationModel`) and a task's own draw through it.
 @MainActor
 final class ConversationTimeline {
-    let view = ScrollViewer()
+    let view = Grid()
+    private let history = ScrollViewer()
+    private let dock = ConversationRequestDock()
+    private let answersFromComposer: Bool
     private let stack = StackPanel()
     private let turnsPanel = StackPanel()
     private let loadMore = Button()
@@ -53,7 +56,17 @@ final class ConversationTimeline {
     /// What the limit card last drew of the notices, so a change to them draws the latest turn again.
     private var limitState: LimitState?
 
-    init() {
+    init(answersFromComposer: Bool = false) {
+        self.answersFromComposer = answersFromComposer
+        let transcriptRow = RowDefinition()
+        transcriptRow.height = GridLength(value: 1, gridUnitType: .star)
+        let dockRow = RowDefinition()
+        dockRow.height = GridLength(value: 0, gridUnitType: .auto)
+        view.rowDefinitions.append(transcriptRow)
+        view.rowDefinitions.append(dockRow)
+        view.children.append(history)
+        try? Grid.setRow(dock.view, 1)
+        view.children.append(dock.view)
         stack.spacing = ConversationStyle.turnSpacing
         stack.padding = Thickness(left: WindowsTheme.conversationInset, top: ConversationStyle.topPadding,
                                   right: WindowsTheme.conversationInset, bottom: ConversationStyle.bottomPadding)
@@ -61,16 +74,20 @@ final class ConversationTimeline {
         // its content by the width the content asks for, so a stretched column whose turns asked for less stood
         // to the right of the middle.
         stack.horizontalAlignment = .center
-        view.sizeChanged.addHandler { [weak self] _, _ in self?.fitColumn() }
+        view.sizeChanged.addHandler { [weak self] _, _ in
+            guard let self else { return }
+            self.fitColumn()
+            self.dock.fit(height: self.view.actualHeight)
+        }
         turnsPanel.spacing = ConversationStyle.turnSpacing
-        view.horizontalScrollBarVisibility = .disabled
+        history.horizontalScrollBarVisibility = .disabled
         loadMore.content = L10n.string("Load more history")
         loadMore.visibility = .collapsed
         loadMore.horizontalAlignment = .center
         loadMore.click.addHandler { [weak self] _, _ in self?.showMore() }
         stack.children.append(loadMore)
         stack.children.append(turnsPanel)
-        view.content = stack
+        history.content = stack
     }
 
     /// The conversation `conversationID` names, or `placeholder` in its place while there is none. Another
@@ -82,6 +99,8 @@ final class ConversationTimeline {
             self.conversationID = conversationID
             opensAtEnd = true
             window = ConversationTurnWindow()
+            dock.show(nil, count: 0)
+            self.placeholder = nil
             turnsPanel.children.clear()
             drawn = [:]
             order = []
@@ -90,13 +109,18 @@ final class ConversationTimeline {
         guard let presentation, !presentation.turns.isEmpty else {
             shown = nil
             loadMore.visibility = .collapsed
+            dock.show(nil, count: 0)
+            let placeholder = placeholder ?? (presentation == nil ? nil : L10n.string("Start a conversation"))
             guard self.placeholder != placeholder || !order.isEmpty else { return }
             turnsPanel.children.clear()
             drawn = [:]
             order = []
             self.placeholder = placeholder
             if let placeholder {
-                turnsPanel.children.append(ConversationStyle.text(placeholder, tone: .secondary))
+                let label = ConversationStyle.text(placeholder, size: 13, tone: .secondary)
+                label.horizontalAlignment = .center
+                label.margin = Thickness(left: 0, top: 96 - ConversationStyle.topPadding, right: 0, bottom: 0)
+                turnsPanel.children.append(label)
             }
             return
         }
@@ -139,7 +163,13 @@ final class ConversationTimeline {
         let limitChanged = limit != limitState
         limitState = limit
         var next: [String: ConversationTurnElement] = [:]
+        var front: RequestCard?
+        var pendingCount = 0
         for turn in presentation.turns {
+            if front == nil, let first = turn.requests.first {
+                front = card(for: first, in: turn, answeredByComposerKeys: answersFromComposer)
+            }
+            pendingCount += turn.requests.count
             if let element = drawn[turn.id] {
                 // The limit card the task continues from is the latest turn's.
                 let limitRedraws = limitChanged && turn.id == presentation.turns.last?.id
@@ -165,6 +195,7 @@ final class ConversationTimeline {
         }
         drawn = next
         order = ids
+        dock.show(front, count: pendingCount)
         if followsEnd { scrollToEnd() }
     }
 
@@ -172,11 +203,11 @@ final class ConversationTimeline {
     /// stops at the end it had, above them.
     private func scrollToEnd() {
         try? view.updateLayout()
-        _ = try? view.changeView(nil, view.scrollableHeight, nil, true)
+        _ = try? history.changeView(nil, history.scrollableHeight, nil, true)
     }
 
     private var isAtEnd: Bool {
-        view.verticalOffset >= view.scrollableHeight - 48
+        history.verticalOffset >= history.scrollableHeight - 48
     }
 
     private func turnContext(harness: HarnessKind) -> ConversationTurnContext {
@@ -190,14 +221,16 @@ final class ConversationTimeline {
     }
 
     /// The card for `request` as it stands, the same one while the request is in the turn.
-    private func card(for request: ConversationRequest, in turn: ConversationTurn) -> RequestCard {
+    private func card(for request: ConversationRequest, in turn: ConversationTurn,
+                      answeredByComposerKeys: Bool = false) -> RequestCard {
         let key = turn.id + "\n" + request.id
         if let card = cards[key] {
-            card.update(request, respond: respond, note: requestNote)
+            card.update(request, respond: respond, note: requestNote, answeredByComposerKeys: answeredByComposerKeys)
             card.confirm = confirmAnswer
             return card
         }
-        let card = RequestCard(request: request, respond: respond, note: requestNote, workspaceURL: workspaceURL)
+        let card = RequestCard(request: request, respond: respond, note: requestNote, workspaceURL: workspaceURL,
+                               answeredByComposerKeys: answeredByComposerKeys)
         card.confirm = confirmAnswer
         cards[key] = card
         return card

@@ -271,18 +271,15 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   composer (`AppModel.beginCodexEdit`, `AppModel.beginClaudeEdit`) with the Mac's banner and Cancel edit above it,
   and a failed turn's error card offers Edit request, which puts its request back in the composer. Sizes are the
   Mac's, except that none goes under 12, Windows' Caption size.
-- **Requests.** `WinUI/RequestCard.swift` draws the `ConversationRequest` the Mac's request card draws, in its look,
-  waiting or answered where it happened in the work: the request's mark on a tile in its state's color, the state over
-  the title, what the request would do (an edit's diff, a file's new contents or a command,
-  `PermissionRequestPreviewProjection`), and the provider's own options as the Mac's gray buttons, the prominent one in
-  the accent; questions one at a time with their options as filled rows (radio buttons or check boxes), the picked
-  option's preview beside them where the options have previews, the person's own answer, Skip and Next
-  (`ConversationQuestionStepper`);
-  a plan with what to change; and an MCP form field by field with what each field takes and why it cannot be sent yet
-  (`CodexMCPElicitationForm`). An answer goes back by the route the form makes of what was entered
-  (`ConversationRequest.route(for:input:)`), carried out as the Mac's card carries it out, and an answered form reads
-  as its answers. The card's state title and an MCP field's words come from the engine, as the Mac's do. The timeline
-  keeps one card per request, so a form keeps what was entered while its turn redraws.
+- **Requests.** A task's oldest pending request stays above the composer. Up to two edges behind it show that
+  more requests are waiting. The dock takes at most 60% of the conversation height and a tall card opens scrolled
+  to its answers. The card has a neutral background and border. When a command has a description, the tool name
+  appears above it. Deny comes first, wider allows share a split button when the engine groups them, and the
+  primary answer comes last. The local task's oldest approval shows its composer's Enter and Escape keys.
+  Questions use the engine's stepper, with a preview where available, a custom answer, Skip and Next. Only a
+  hovered or selected option has a fill. Plans take a change request and MCP forms show their fields and validation.
+  An answer follows the route the engine makes from the form input. Its result stays in the turn as a muted line,
+  with the answers to a question or form underneath. A streaming update preserves the draft in the current card.
 - **Sign-in.** Each harness keeps its own login, and Yardlet runs its own sign-in and reads the result
   (`WinUI/HarnessSignIn.swift`). New task says when the chosen harness's account reads signed out and offers Sign
   in, by the reading the Mac's new task uses, and a turn that failed for its sign-in offers it too. Codex signs in in
