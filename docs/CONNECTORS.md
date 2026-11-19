@@ -1661,7 +1661,8 @@ not part of this. The design record is [MCP_APPS_CONNECTORS](design/MCP_APPS_CON
 - **Hosting** (`MCPAppViewController`). One `WKWebView` per drawn view, in its own non-persistent data store, so it
   shares no cookies or storage with the browser, other views or tasks, and Yardlet's files are not reachable. Two
   documents come from Yardlet's scheme `yardlet-mcp-view` at two random hosts, so two origins: the outer page holds
-  only `<iframe sandbox="allow-scripts allow-same-origin">`, and the view's HTML is served with the Content Security
+  only `<iframe sandbox="allow-scripts allow-same-origin">` (both declaring `color-scheme: light dark`, so the view's
+  `prefers-color-scheme` is the app's appearance), and the view's HTML is served with the Content Security
   Policy built from its `csp` as a response header (`MCPAppCSP`): `default-src 'none'`; scripts and styles inline or
   from `resourceDomains`; images, fonts and media also as `data:`; `connect-src` and `frame-src` only to the declared
   origins (`'none'` without); `object-src 'none'`; `base-uri 'self'` unless declared; `form-action 'none'`. Only plain
@@ -1693,3 +1694,5 @@ not part of this. The design record is [MCP_APPS_CONNECTORS](design/MCP_APPS_CON
   messages reaches a live view.
 - **Leaving nothing behind.** There is no setting. Kept results, read views, web views and their data stores are in
   memory only.
+- Codex visualizations are drawn in the same hosting ([CONVERSATION_MEDIA](CONVERSATION_MEDIA.md), "Codex
+  visualizations").

@@ -271,6 +271,7 @@ struct TaskDetail: View {
             })
             .transformEnvironment(\.conversationLinkPlaces) { $0.browserPanel = openInTaskBrowser }
             .environment(\.transcriptTerminalRun, codeBlockRun)
+            .environment(\.transcriptComposerDraft, TranscriptComposerDraft(draft: { text in draftIntoComposer(text) }))
             .overlay(alignment: .topTrailing) {
                 ConversationFindBar(find: workspaceState.conversationFind)
                     .padding(.top, 8)

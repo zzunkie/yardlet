@@ -228,11 +228,14 @@ struct CodexReviewCommentsCard: View {
     }
 }
 
-/// `codex-inline-vis`: the Codex app runs the visualization's HTML in the conversation (`Erl`). Yardlet
-/// has no such runtime, so it names the visualization and says it cannot show it here, in the Codex
-/// CLI's words for the same case; there is nothing to open.
+/// `codex-inline-vis` where its page could not be drawn (`CodexVisualizationView`): the visualization's name and,
+/// in the Codex CLI's words for the same case, that it cannot be shown here, with a way to try again and its file.
 struct CodexVisualizationCard: View {
     let visualization: CodexVisualization
+    /// Draws it again, where it could be drawn and was not.
+    var retry: (() -> Void)? = nil
+    /// Opens its file in the Files panel.
+    var openFile: (() -> Void)? = nil
 
     @Environment(\.yardletInterfaceScale) private var interfaceScale
 
@@ -253,11 +256,200 @@ struct CodexVisualizationCard: View {
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            if let retry {
+                Button(L10n.string("Show view again"), action: retry)
+                    .buttonStyle(.link)
+                    .font(.system(size: 12 * interfaceScale))
+            }
+            if let openFile {
+                Button(L10n.string("Open file"), action: openFile)
+                    .buttonStyle(.link)
+                    .font(.system(size: 12 * interfaceScale))
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: ParityTheme.panelCornerRadius))
         .overlay { RoundedRectangle(cornerRadius: ParityTheme.panelCornerRadius).stroke(ParityTheme.separator) }
         .accessibilityElement(children: .contain)
+    }
+}
+
+private struct TranscriptItemIDKey: EnvironmentKey {
+    static let defaultValue: String? = nil
+}
+
+extension EnvironmentValues {
+    /// The conversation item whose Markdown is drawn below, which a visualization's page is kept by while its message
+    /// streams.
+    var transcriptItemID: String? {
+        get { self[TranscriptItemIDKey.self] }
+        set { self[TranscriptItemIDKey.self] = newValue }
+    }
+}
+
+/// What the task's area gives a conversation to put words in its composer after what is typed there, without sending
+/// them: a Codex visualization's follow-up. A conversation without a composer of its own has none. Equal while it is
+/// there or not, as `TranscriptTerminalRun` is, so the area's redraws leave the conversation alone.
+struct TranscriptComposerDraft: Equatable {
+    var draft: (@MainActor (String) -> Void)?
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        (lhs.draft == nil) == (rhs.draft == nil)
+    }
+}
+
+private struct TranscriptComposerDraftKey: EnvironmentKey {
+    static let defaultValue = TranscriptComposerDraft()
+}
+
+extension EnvironmentValues {
+    var transcriptComposerDraft: TranscriptComposerDraft {
+        get { self[TranscriptComposerDraftKey.self] }
+        set { self[TranscriptComposerDraftKey.self] = newValue }
+    }
+}
+
+/// A Codex inline visualization drawn in the conversation, as the Codex app draws it: the page the model wrote, in
+/// the sandbox MCP App views use (`MCPAppViewController.startVisualization`), as tall as it reports up to a limit and
+/// scrolling inside past it. A placeholder keeps its place until it is live; one that cannot be drawn is its card.
+/// "Expand visualization" on hover moves the same page into a sheet as wide as the skill's wide layout, as a table
+/// expands, so what the person chose in it stays.
+struct CodexVisualizationView: View {
+    let visualization: CodexVisualization
+    /// The row's identity across redraws.
+    let key: String
+
+    /// Past this the page scrolls inside, so one tall page does not push the conversation away.
+    static let maximumHeight: CGFloat = 1_200
+
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.openURL) private var openURL
+    @Environment(\.transcriptWorkspaceURL) private var workspaceURL
+    @Environment(\.transcriptComposerDraft) private var composerDraft
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @Environment(\.pauseTranscriptFollowing) private var pauseFollowing
+    @Environment(\.revealsSentMessageActions) private var revealsActions
+    @State private var isHovering = false
+    @State private var isExpanded = false
+    @State private var focusBookmark: WindowFocusBookmark?
+
+    var body: some View {
+        let controller = MCPAppViewPool.shared.controller(key)
+        let display = controller.display
+        if display.state == .failed {
+            CodexVisualizationCard(visualization: visualization, retry: { controller.retry() },
+                                   openFile: fileURL.map { url in { openURL(url) } })
+        } else {
+            MCPAppContainer(key: key, controller: controller, start: { [visualization, key, workspaceURL] in
+                let isDark = colorScheme == .dark
+                controller.startVisualization(visualization, key: key, workspace: workspaceURL, isDark: isDark,
+                                              maximumHeight: Self.maximumHeight, openLink: { url in openURL(url) },
+                                              followUp: composerDraft.draft)
+            })
+            .frame(maxWidth: .infinity)
+            .frame(height: display.state == .live || display.state == .parked ? display.height : 240)
+            .background(ParityTheme.subtleFill.opacity(display.state == .live && !isExpanded ? 0 : 1))
+            .overlay {
+                if display.state != .live {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel(L10n.string("Loading"))
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(alignment: .topTrailing) {
+                // In the corner the skill keeps clear for the host's controls.
+                if display.state == .live, isHovering || revealsActions, !isExpanded {
+                    TranscriptBlockButton(systemName: "arrow.up.left.and.arrow.down.right",
+                                          title: L10n.string("Expand visualization"), action: expand)
+                        .padding(4)
+                        .background(ParityTheme.elevated, in: RoundedRectangle(cornerRadius: 6))
+                        .overlay { RoundedRectangle(cornerRadius: 6).stroke(ParityTheme.separator) }
+                        .padding(6)
+                }
+            }
+            .pointerHover { isHovering = $0 }
+            .onChange(of: colorScheme) { _, scheme in controller.setDark(scheme == .dark) }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(visualization.title)
+            .accessibilityActions {
+                if display.state == .live {
+                    Button(L10n.string("Expand visualization"), action: expand)
+                }
+            }
+            .sheet(isPresented: $isExpanded, onDismiss: {
+                focusBookmark?.restore()
+                focusBookmark = nil
+            }) {
+                CodexVisualizationExpanded(title: visualization.title, controller: controller) { isExpanded = false }
+            }
+        }
+    }
+
+    private func expand() {
+        focusBookmark = WindowFocusBookmark(window: NSApp.keyWindow)
+        pauseFollowing()
+        isExpanded = true
+    }
+
+    /// The visualization's file, for "Open file" on its card.
+    private var fileURL: URL? {
+        let file = visualization.file
+        if file.hasPrefix("/") { return URL(filePath: file) }
+        if file.hasPrefix("~/") { return FileManager.default.homeDirectoryForCurrentUser.appending(path: String(file.dropFirst(2))) }
+        return workspaceURL?.appending(path: file)
+    }
+}
+
+/// An expanded visualization: its page moved out of the row into a sheet, at the width the skill designs a wide
+/// visualization for, scrolling inside when taller.
+struct CodexVisualizationExpanded: View {
+    let title: String
+    let controller: MCPAppViewController
+    let close: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(title)
+                    .font(.headline)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer()
+                Button(L10n.string("Done"), action: close)
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(14)
+            Divider()
+            // In the row the page lines up with the message's words; here it keeps off the sheet's edges.
+            MCPAppExpandedPlace(controller: controller)
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(ParityTheme.canvas)
+        }
+        .frame(minWidth: 520, idealWidth: 1_064, minHeight: 360, idealHeight: 760)
+    }
+}
+
+/// The sheet's place for a view's web view, which goes back to its row when the sheet goes.
+struct MCPAppExpandedPlace: NSViewRepresentable {
+    let controller: MCPAppViewController
+
+    func makeCoordinator() -> MCPAppViewController { controller }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        controller.expandedContainer = view
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        if controller.expandedContainer !== view { controller.expandedContainer = view }
+    }
+
+    static func dismantleNSView(_ view: NSView, coordinator controller: MCPAppViewController) {
+        if controller.expandedContainer === view { controller.expandedContainer = nil }
     }
 }

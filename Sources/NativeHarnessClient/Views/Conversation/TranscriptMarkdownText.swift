@@ -191,6 +191,7 @@ extension EnvironmentValues {
 
 private struct TranscriptMarkdownBlockView: View {
     @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @Environment(\.transcriptItemID) private var itemID
     let block: TranscriptMarkdownBlock
     let fullSource: String
     let dialect: TranscriptMarkdownDialect
@@ -249,7 +250,10 @@ private struct TranscriptMarkdownBlockView: View {
             CodexReviewCommentsCard(comments: comments)
 
         case let .visualization(visualization):
-            CodexVisualizationCard(visualization: visualization)
+            // One row's page, kept across redraws (and while its message streams) by the message it is in and
+            // where it stands there.
+            CodexVisualizationView(visualization: visualization,
+                                   key: "codex-visualization:\(itemID ?? String(fullSource.hashValue)):\(path):\(visualization.file)")
         }
     }
 
@@ -365,8 +369,8 @@ private struct TranscriptMarkdownTable: View {
         .overlay(alignment: .topTrailing) {
             if isHovering || revealsActions {
                 HStack(spacing: 2) {
-                    TranscriptTableButton(systemName: "doc.on.doc", title: L10n.string("Copy table"), action: copy)
-                    TranscriptTableButton(systemName: "arrow.up.left.and.arrow.down.right", title: L10n.string("Expand table"),
+                    TranscriptBlockButton(systemName: "doc.on.doc", title: L10n.string("Copy table"), action: copy)
+                    TranscriptBlockButton(systemName: "arrow.up.left.and.arrow.down.right", title: L10n.string("Expand table"),
                                           action: expand)
                 }
                 .padding(4)
@@ -569,8 +573,8 @@ private struct TranscriptScrollEdgeFade: ViewModifier {
     }
 }
 
-/// A small icon button over a table.
-private struct TranscriptTableButton: View {
+/// A small icon button in a block's corner (a table, a visualization), shown on hover.
+struct TranscriptBlockButton: View {
     let systemName: String
     let title: String
     let action: () -> Void

@@ -2811,6 +2811,7 @@
 "Copy link" = "링크 복사";
 "Copy table" = "표 복사";
 "Expand table" = "표 펼치기";
+"Expand visualization" = "시각화 펼치기";
 "Table" = "표";
 "Copy command" = "명령어 복사";
 "Copy output" = "출력 복사";

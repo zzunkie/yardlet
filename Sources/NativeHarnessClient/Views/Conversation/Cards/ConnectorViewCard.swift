@@ -69,7 +69,7 @@ struct ConnectorViewCard<Fallback: View>: View {
 
 /// The AppKit place the pooled web view goes into. Coming on screen draws the view; leaving it lets the pool park
 /// the view once more are live than it keeps.
-private struct MCPAppContainer: NSViewRepresentable {
+struct MCPAppContainer: NSViewRepresentable {
     let key: String
     let controller: MCPAppViewController
     let start: @MainActor () -> Void

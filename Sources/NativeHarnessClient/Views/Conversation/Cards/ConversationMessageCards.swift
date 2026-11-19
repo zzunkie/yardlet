@@ -382,6 +382,7 @@ struct ConversationAgentMessage: View {
                                        dialect: dialect)
                     .environment(\.conversationFindSlot, find?.slot(for: .unit(itemID)))
                     .environment(\.transcriptCopyDetails, shownCopyDetails)
+                    .environment(\.transcriptItemID, itemID)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }

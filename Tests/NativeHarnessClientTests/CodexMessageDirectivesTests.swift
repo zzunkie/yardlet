@@ -176,7 +176,8 @@ final class CodexMessageDirectivesTests: XCTestCase {
         XCTAssertTrue(isOpen)
         XCTAssertTrue(body.hasPrefix("The build failed") && body.hasSuffix(":::note\nan inner container\n:::"), body)
         XCTAssertEqual(blocks[4], .visualization(CodexVisualization(title: "revenue-chart", file: "revenue-chart.html")))
-        XCTAssertEqual(blocks[5], .visualization(CodexVisualization(title: "Growth by month", file: "/tmp/viz/growth.html")))
+        XCTAssertEqual(blocks[5], .visualization(CodexVisualization(title: "Growth by month", file: "/tmp/viz/growth.html",
+                                                                    isWide: true)))
         // A visualization naming no file is no card.
         XCTAssertEqual(blocks[6], .markdown("::codex-inline-vis{title=\"No file\"}"))
 
@@ -231,6 +232,30 @@ final class CodexMessageDirectivesTests: XCTestCase {
         XCTAssertEqual(ConversationAutomationText.agentMessage("See :codex-file-citation{path=\"/a", harness: .claudeCode,
                                                                inHeartbeatTurn: false, isStreaming: true),
                        "See :codex-file-citation{path=\"/a")
+    }
+
+    /// A model writes a visualization as the `visualize` skill teaches: a JSON reference in private-use marks, on a
+    /// line of its own or inside one, or the same without the marks on a line of its own. Each is the card the
+    /// directive draws, and copying leaves it out, as the app does.
+    func testAModelsVisualizationReferenceIsItsCard() {
+        let path = "/Users/me/.codex/visualizations/2026/11/19/01a1f000/layouts.html"
+        let text = "Two layouts, side by side.\n\n\u{E200}visualize\u{E202}{\"path\":\"\(path)\",\"title\":\"첫 화면 배치\","
+            + "\"mode\":\"wide\"}\u{E201}\n\nThe steps one fits a first launch. "
+            + "Then: \u{E200}visualize\u{E202}{\"path\":\"chart.html\"}\u{E201} and more.\n\nvisualize{\"path\":\"plain.html\"}"
+        XCTAssertEqual(CodexMessageDirectives.blocks(text), [
+            .markdown("Two layouts, side by side.\n"),
+            .visualization(CodexVisualization(title: "첫 화면 배치", file: path, isWide: true)),
+            .markdown("\nThe steps one fits a first launch. Then: "),
+            .visualization(CodexVisualization(title: "chart", file: "chart.html")),
+            .markdown(" and more.\n"),
+            .visualization(CodexVisualization(title: "plain", file: "plain.html"))
+        ])
+        XCTAssertEqual(CodexMessageDirectives.copyText(text),
+                       "Two layouts, side by side.\n\n\nThe steps one fits a first launch. Then: \n and more.\n")
+        // Not a reference: no HTML file, or words around it on its line.
+        XCTAssertEqual(CodexMessageDirectives.blocks("visualize{\"path\":\"a.png\"}"), [.markdown("visualize{\"path\":\"a.png\"}")])
+        XCTAssertEqual(CodexMessageDirectives.blocks("Call visualize{\"path\":\"a.html\"} here"),
+                       [.markdown("Call visualize{\"path\":\"a.html\"} here")])
     }
 
     // MARK: - Copy

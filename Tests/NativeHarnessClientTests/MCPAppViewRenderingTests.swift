@@ -247,12 +247,12 @@ final class MCPAppViewRenderingTests: XCTestCase {
         XCTAssertEqual(server.reads.count, 1)
     }
 
-    private static func webView(in view: NSView) -> MCPAppWebView? {
+    static func webView(in view: NSView) -> MCPAppWebView? {
         (view as? MCPAppWebView) ?? view.subviews.lazy.compactMap(webView).first
     }
 
     /// The web view's own picture over the window's capture, which leaves a web view's remote layer out.
-    private static func draw(_ snapshot: NSImage, of webView: NSView, into bitmap: NSBitmapImageRep, hosting: NSView) {
+    static func draw(_ snapshot: NSImage, of webView: NSView, into bitmap: NSBitmapImageRep, hosting: NSView) {
         var frame = webView.convert(webView.bounds, to: hosting)
         if hosting.isFlipped { frame.origin.y = hosting.bounds.height - frame.maxY }
         NSGraphicsContext.saveGraphicsState()

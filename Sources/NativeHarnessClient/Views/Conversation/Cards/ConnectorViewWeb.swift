@@ -54,8 +54,20 @@ final class MCPAppViewController: NSObject {
     weak var container: NSView? {
         didSet { attach() }
     }
+    /// Where the web view is shown instead of its row while the person has it expanded: the same web view, so the
+    /// page keeps what it shows. The pool does not park it meanwhile.
+    weak var expandedContainer: NSView? {
+        didSet {
+            attach()
+            updateScrolling()
+        }
+    }
+    /// The height the page last reported, before the row's limit.
+    private var reportedHeight: CGFloat = 0
     private(set) var webView: MCPAppWebView?
     private var bridge: MCPAppBridge?
+    /// A Codex visualization's bridge, in place of an MCP App's (`startVisualization`).
+    private var visualization: CodexVisualizationBridge?
     private var schemeHandler: MCPAppSchemeHandler?
     private var world: WKContentWorld?
     private var loading: Task<Void, Never>?
@@ -74,6 +86,33 @@ final class MCPAppViewController: NSObject {
                 let (read, bridgeHost) = try await host.load(view, openLink: openLink)
                 guard let self, !Task.isCancelled, self.state == .loading else { return }
                 self.show(read, host: bridgeHost)
+            } catch {
+                guard let self, !Task.isCancelled else { return }
+                self.state = .failed
+            }
+        }
+    }
+
+    /// Reads a Codex inline visualization (`CodexVisualizationPage`) and draws it in the same sandbox as an MCP App
+    /// view, with the visualization's own bridge: its height, links the person clicks, follow-ups for the composer
+    /// and its saved state for the app's run. Does nothing while it is loading or live.
+    func startVisualization(_ visualization: CodexVisualization, key: String, workspace: URL?, isDark: Bool,
+                            maximumHeight: CGFloat, openLink: @escaping @MainActor (URL) -> Void,
+                            followUp: (@MainActor (String) -> Void)?) {
+        guard state == .idle || state == .parked else { return }
+        if display.uri != visualization.file { display.uri = visualization.file }
+        self.isDark = isDark
+        self.maximumHeight = maximumHeight
+        state = .loading
+        let states = CodexVisualizationStates.shared
+        loading = Task { [weak self] in
+            do {
+                let page = try await CodexVisualizationPage.load(file: visualization.file, workspace: workspace,
+                                                                 state: states.state(key))
+                guard let self, !Task.isCancelled, self.state == .loading else { return }
+                let bridge = CodexVisualizationBridge(openLink: openLink, followUp: followUp,
+                                                      saveState: { states.save($0, for: key) })
+                self.show(html: page.html, policy: page.policy, prefersBorder: true, bridge: .visualization(bridge))
             } catch {
                 guard let self, !Task.isCancelled else { return }
                 self.state = .failed
@@ -100,12 +139,14 @@ final class MCPAppViewController: NSObject {
         loading?.cancel()
         loading = nil
         await bridge?.tearDown()
+        visualization = nil
         dismantle()
         if state != .failed { state = .parked }
     }
 
     private func dismantle() {
         bridge = nil
+        visualization = nil
         if let webView {
             webView.stopLoading()
             webView.configuration.userContentController.removeAllScriptMessageHandlers()
@@ -118,10 +159,19 @@ final class MCPAppViewController: NSObject {
         world = nil
     }
 
+    private enum PageBridge {
+        case mcp(MCPAppBridge.Host)
+        case visualization(CodexVisualizationBridge)
+    }
+
     private func show(_ view: MCPAppView, host: MCPAppBridge.Host) {
+        show(html: view.html, policy: view.csp.header, prefersBorder: view.prefersBorder, bridge: .mcp(host))
+    }
+
+    private func show(html: String, policy: String, prefersBorder: Bool?, bridge kind: PageBridge) {
         let outer = "host-" + UUID().uuidString.lowercased()
         let inner = "view-" + UUID().uuidString.lowercased()
-        let handler = MCPAppSchemeHandler(outerHost: outer, viewHost: inner, html: view.html, policy: view.csp.header)
+        let handler = MCPAppSchemeHandler(outerHost: outer, viewHost: inner, html: html, policy: policy)
         let world = WKContentWorld.world(name: "yardlet-mcp-app-" + inner)
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
@@ -130,8 +180,14 @@ final class MCPAppViewController: NSObject {
         configuration.preferences.isElementFullscreenEnabled = false
         configuration.mediaTypesRequiringUserActionForPlayback = .all
         let controller = configuration.userContentController
-        controller.addUserScript(WKUserScript(source: Self.bridgeScript, injectionTime: .atDocumentEnd,
-                                              forMainFrameOnly: true, in: world))
+        switch kind {
+        case .mcp:
+            controller.addUserScript(WKUserScript(source: Self.bridgeScript, injectionTime: .atDocumentEnd,
+                                                  forMainFrameOnly: true, in: world))
+        case .visualization:
+            controller.addUserScript(WKUserScript(source: CodexVisualizationBridge.outerScript(handler: Self.handlerName),
+                                                  injectionTime: .atDocumentStart, forMainFrameOnly: true, in: world))
+        }
         controller.add(MCPAppMessageHandler(self), contentWorld: world, name: Self.handlerName)
         let webView = MCPAppWebView(frame: NSRect(x: 0, y: 0, width: 600, height: height), configuration: configuration)
         webView.navigationDelegate = self
@@ -142,43 +198,69 @@ final class MCPAppViewController: NSObject {
         webView.setValue(false, forKey: "drawsBackground")
         webView.appearance = NSAppearance(named: isDark ? .darkAqua : .aqua)
         webView.allowedHosts = [outer, inner]
-        display.prefersBorder = view.prefersBorder
+        display.prefersBorder = prefersBorder
         self.schemeHandler = handler
         self.world = world
         self.webView = webView
-        let bridge = MCPAppBridge(host: host, context: MCPAppHostContext(isDark: isDark, maximumHeight: Int(maximumHeight))) {
-            [weak self] message in self?.post(message)
-        }
-        bridge.onHeight = { [weak self] reported in
+        let onHeight: @MainActor (Double) -> Void = { [weak self] reported in
             guard let self else { return }
-            let fitted = min(max(CGFloat(reported).rounded(.up), 24), self.maximumHeight)
-            self.height = fitted
-            self.webView?.passesScrollToConversation = CGFloat(reported) <= self.maximumHeight
+            self.reportedHeight = CGFloat(reported)
+            // Expanded, the page is laid out for another width; the row keeps the height it had.
+            guard self.expandedContainer == nil else { return }
+            self.height = min(max(CGFloat(reported).rounded(.up), 24), self.maximumHeight)
+            self.updateScrolling()
         }
-        self.bridge = bridge
+        let isWaiting: @MainActor () -> Bool
+        switch kind {
+        case let .mcp(host):
+            let bridge = MCPAppBridge(host: host, context: MCPAppHostContext(isDark: isDark, maximumHeight: Int(maximumHeight))) {
+                [weak self] message in self?.post(message)
+            }
+            bridge.onHeight = onHeight
+            self.bridge = bridge
+            isWaiting = { [weak self, weak bridge] in bridge != nil && self?.bridge === bridge && bridge?.phase == .loading }
+        case let .visualization(bridge):
+            bridge.onHeight = onHeight
+            bridge.post = { [weak self] text in self?.postToVisualization(text) }
+            self.visualization = bridge
+            isWaiting = { [weak self, weak bridge] in bridge != nil && self?.visualization === bridge && bridge?.phase == .loading }
+        }
         state = .live
         attach()
         webView.load(URLRequest(url: URL(string: "\(Self.scheme)://\(outer)/")!))
         Task { [weak self] in
             try? await Task.sleep(for: Self.initializeLimit)
-            guard let self, self.bridge === bridge, bridge.phase == .loading else { return }
+            guard let self, isWaiting() else { return }
             self.dismantle()
             self.state = .failed
         }
     }
 
-    /// Puts the web view in the row's container, filling it.
+    /// Puts the web view in the place it is shown, filling it.
     private func attach() {
-        guard let webView, let container else { return }
-        guard webView.superview !== container else { return }
+        guard let webView, let place = expandedContainer ?? container else { return }
+        guard webView.superview !== place else { return }
         webView.removeFromSuperview()
-        webView.frame = container.bounds
+        webView.frame = place.bounds
         webView.autoresizingMask = [.width, .height]
-        container.addSubview(webView)
+        place.addSubview(webView)
+    }
+
+    /// A page that fits its row passes scrolling to the conversation; a taller one, or one expanded, scrolls itself.
+    private func updateScrolling() {
+        webView?.passesScrollToConversation = expandedContainer == nil && reportedHeight <= maximumHeight
     }
 
     fileprivate func receive(_ text: String) {
         bridge?.receive(text)
+        visualization?.receive(text)
+    }
+
+    private func postToVisualization(_ text: String) {
+        guard let webView, let world else { return }
+        webView.callAsyncJavaScript(
+            "const port = window.yardletVisualizationPort; if (port) { port.postMessage(JSON.parse(message)); }",
+            arguments: ["message": text], in: nil, in: world, completionHandler: nil)
     }
 
     private func post(_ message: ToolJSON) {
@@ -256,6 +338,7 @@ extension MCPAppViewController: WKNavigationDelegate, WKUIDelegate {
                  initiatedByFrame frame: WKFrameInfo) async -> String? { nil }
 
     private func bridgeOpen(_ url: URL) {
+        visualization?.open(url)
         bridge?.receive(.object(["jsonrpc": .string("2.0"), "id": .string("yardlet-link"),
                                  "method": .string("ui/open-link"), "params": .object(["url": .string(url.absoluteString)])]))
     }
@@ -290,9 +373,9 @@ final class MCPAppSchemeHandler: NSObject, WKURLSchemeHandler {
     /// The outer page: one sandboxed frame for the view, nothing of its own to run.
     var outerDocument: String {
         """
-        <!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;padding:0;height:100%;\
-        background:transparent;overflow:hidden}iframe{display:block;border:0;width:100%;height:100%;\
-        background:transparent;color-scheme:normal}</style></head><body><iframe id="view" \
+        <!doctype html><html><head><meta charset="utf-8"><style>:root{color-scheme:light dark}\
+        html,body{margin:0;padding:0;height:100%;background:transparent;overflow:hidden}iframe{display:block;border:0;\
+        width:100%;height:100%;background:transparent;color-scheme:light dark}</style></head><body><iframe id="view" \
         sandbox="allow-scripts allow-same-origin" src="\(MCPAppViewController.scheme)://\(viewHost)/"></iframe>\
         </body></html>
         """
@@ -377,7 +460,12 @@ final class MCPAppViewPool {
 
     /// The controllers of one task's rows and their web views, by key (tests).
     func controllers(forTask taskID: UUID) -> [String: MCPAppViewController] {
-        controllers.filter { $0.key.hasPrefix(taskID.uuidString) }
+        controllers(withPrefix: taskID.uuidString)
+    }
+
+    /// The controllers whose keys start with `prefix` (tests).
+    func controllers(withPrefix prefix: String) -> [String: MCPAppViewController] {
+        controllers.filter { $0.key.hasPrefix(prefix) }
     }
 
     /// Live views now (tests).
@@ -386,7 +474,9 @@ final class MCPAppViewPool {
     }
 
     private func parkBeyondLimit() {
-        var live = seen.filter { [.live, .loading].contains(controllers[$0]?.display.state) }
+        var live = seen.filter {
+            [.live, .loading].contains(controllers[$0]?.display.state) && controllers[$0]?.expandedContainer == nil
+        }
         while live.count > Self.limit, let oldest = live.first(where: { !onScreen.contains($0) }) {
             live.removeAll { $0 == oldest }
             let controller = controllers[oldest]

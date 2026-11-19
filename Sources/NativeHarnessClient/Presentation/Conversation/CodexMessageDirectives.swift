@@ -13,8 +13,10 @@ import Foundation
 // - `:::task-stub{title=…}` as a "Suggested task" card whose "Use suggestion" opens a new task with
 //   its prompt (`qol`);
 // - `:::github-details{summary=… open=…}` as a disclosure of its Markdown (`Hol`);
-// - `::codex-inline-vis{file=…}` as an inline visualization (`Erl`), which Yardlet cannot run and
-//   draws as a card that says so, as the Codex CLI does.
+// - `::codex-inline-vis{file=…}` as an inline visualization (`Erl`): an HTML file the model wrote, which
+//   Yardlet draws in a sandbox (`CodexVisualizationView`). A model writes it as the `visualize` skill
+//   teaches, `\u{E200}visualize\u{E202}{"path":…,"title":…,"mode":"wide"}\u{E201}`, which the app reads into
+//   that directive (`v0rv.qY` in 26.1106) and Yardlet reads the same way.
 // The directives it acts on rather than draws are `CodexDirectiveMarkup`'s. Everything here applies to
 // a Codex message only; code blocks and code spans stay literal, and a name the app does not draw
 // stays as its text.
@@ -442,6 +444,61 @@ struct CodexSuggestedTask: Equatable, Sendable {
 struct CodexVisualization: Equatable, Sendable {
     let title: String
     let file: String
+    /// `mode: wide`: as wide as the conversation, for a calendar or a desktop mockup.
+    var isWide = false
+
+    init(title: String, file: String, isWide: Bool = false) {
+        self.title = title
+        self.file = file
+        self.isWide = isWide
+    }
+
+    /// The title a visualization without one is named by: its file's name without `.html`.
+    static func title(_ title: String?, file: String) -> String {
+        let written = title?.trimmingCharacters(in: .whitespaces) ?? ""
+        if !written.isEmpty { return written }
+        let name = file.split(separator: "/").last.map(String.init) ?? file
+        return name.hasSuffix(".html") ? String(name.dropLast(5)) : name
+    }
+
+    /// The reference a model writes on a line of its own, in the `visualize` skill's private-use marks or
+    /// without them: `{"path": …}` with an HTML file, an optional title and `"mode": "wide"`.
+    init?(referenceLine line: String) {
+        var text = line.trimmingCharacters(in: .whitespaces)
+        if text.hasPrefix(Self.referenceStart), text.hasSuffix(Self.referenceEnd) {
+            text = String(text.dropFirst().dropLast())
+            guard text.hasPrefix("visualize" + Self.referenceMiddle) else { return nil }
+            text = String(text.dropFirst("visualize".count + 1))
+        } else {
+            guard text.hasPrefix("visualize{"), text.hasSuffix("}") else { return nil }
+            text = String(text.dropFirst("visualize".count))
+        }
+        guard let data = text.data(using: .utf8),
+              let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let path = object["path"] as? String, path.lowercased().hasSuffix(".html") else { return nil }
+        self.init(title: Self.title(object["title"] as? String, file: path), file: path,
+                  isWide: object["mode"] as? String == "wide" || object["wide"] as? Bool == true)
+    }
+
+    static let referenceStart = "\u{E200}"
+    static let referenceMiddle = "\u{E202}"
+    static let referenceEnd = "\u{E201}"
+
+    /// `text` with each private-use reference on a line of its own, where a model wrote one inside a line.
+    static func separatingReferences(_ text: String) -> String {
+        guard text.contains(referenceStart) else { return text }
+        var result = ""
+        var rest = Substring(text)
+        while let start = rest.range(of: referenceStart), let end = rest[start.upperBound...].range(of: referenceEnd) {
+            let before = rest[..<start.lowerBound]
+            result += before
+            if !before.isEmpty, before.last != "\n" { result += "\n" }
+            result += rest[start.lowerBound..<end.upperBound]
+            rest = rest[end.upperBound...]
+            if !rest.isEmpty, rest.first != "\n" { result += "\n" }
+        }
+        return result + rest
+    }
 }
 
 /// The parts of a Codex message: Markdown, and the directive blocks drawn as cards.
@@ -475,6 +532,7 @@ enum CodexMessageDirectives {
     /// Whether `text` may hold anything this draws, so most messages skip the scan.
     static func mayHoldDirectives(_ text: String) -> Bool {
         text.contains(":") && (text.contains("::") || text.contains(":codex-")) || text.contains("【")
+            || text.contains(CodexVisualization.referenceStart) || text.contains("visualize{")
     }
 
     // MARK: - Blocks
@@ -483,7 +541,7 @@ enum CodexMessageDirectives {
     /// container whose closing line never comes.
     static func blocks(_ text: String) -> [CodexMessageBlock] {
         guard mayHoldDirectives(text) else { return [.markdown(text)] }
-        let lines = text.components(separatedBy: "\n")
+        let lines = CodexVisualization.separatingReferences(text).components(separatedBy: "\n")
         var blocks: [CodexMessageBlock] = []
         var pending: [String] = []
         var fence: Fence?
@@ -517,6 +575,12 @@ enum CodexMessageDirectives {
                 let body = lines[(index + 1)..<close].joined(separator: "\n")
                 blocks.append(container(directive, body: body))
                 index = close + 1
+                continue
+            }
+            if let visualization = CodexVisualization(referenceLine: line) {
+                flush()
+                blocks.append(.visualization(visualization))
+                index += 1
                 continue
             }
             if let directive = CodexDirectiveSyntax.wholeLine(line, colons: 2), lineNames.contains(directive.name) {
@@ -592,10 +656,9 @@ enum CodexMessageDirectives {
         case inlineVisualization:
             guard let file = directive.attributes["path"] ?? directive.attributes["file"],
                   !file.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
-            let title = directive.attributes["title"]?.trimmingCharacters(in: .whitespaces)
-            let name = file.split(separator: "/").last.map(String.init) ?? file
-            let fallback = name.hasSuffix(".html") ? String(name.dropLast(5)) : name
-            return .visualization(CodexVisualization(title: title.flatMap { $0.isEmpty ? nil : $0 } ?? fallback, file: file))
+            return .visualization(CodexVisualization(
+                title: CodexVisualization.title(directive.attributes["title"], file: file), file: file,
+                isWide: directive.attributes["mode"] == "wide" || directive.attributes["wide"] == "true"))
         default:
             return nil
         }
@@ -623,7 +686,7 @@ enum CodexMessageDirectives {
         guard mayHoldDirectives(text) else { return text }
         var lines: [String] = []
         var fence: Fence?
-        for line in text.components(separatedBy: "\n") {
+        for line in CodexVisualization.separatingReferences(text).components(separatedBy: "\n") {
             if let open = fence {
                 if open.closes(line) { fence = nil }
                 lines.append(line)
@@ -634,6 +697,7 @@ enum CodexMessageDirectives {
                 lines.append(line)
                 continue
             }
+            if CodexVisualization(referenceLine: line) != nil { continue }
             if let directive = CodexDirectiveSyntax.wholeLine(line, colons: 2),
                directive.name == inlineVisualization || directive.name == liveVisualization {
                 continue
