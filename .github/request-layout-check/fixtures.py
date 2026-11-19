@@ -3,7 +3,7 @@ import sqlite3, uuid, json, time, zipfile, re
 import os
 from tempfile import TemporaryDirectory
 qa=Path(os.environ["QA_ROOT"])
-schema=Path("Sources/NativeHarnessClient/Store/SessionRepository.swift").read_text().split('CREATE TABLE IF NOT EXISTS sessions (',1)[1].split(');',1)[0]
+schema=Path("Sources/NativeHarnessClient/Store/SessionRepository.swift").read_text(encoding="utf-8").split('CREATE TABLE IF NOT EXISTS sessions (',1)[1].split(');',1)[0]
 def uid(): return str(uuid.uuid4()).upper()
 def entry(kind, **value): return dict(id=uid(),createdAt=800000000,content={kind:value})
 def ask(req, status="pending"): return entry("permission",_0=req,state=status)
@@ -34,7 +34,7 @@ with TemporaryDirectory(dir=qa) as tmp:
         sid=uid()
         now=time.time()-n*2
         db.execute("INSERT INTO sessions (id,harness,workspace_path,runtime_path,title,status,created_at,updated_at,title_origin,provider_options) VALUES (?,?,?,?,?,?,?,?,?,?)",(sid,"claude-code",testroot+r"\workspace",testroot+r"\mock\claude.exe",title,status,now,now,"manual",json.dumps(options)))
-        (tr/(sid+".json")).write_text(json.dumps(rows_,ensure_ascii=False))
+        (tr/(sid+".json")).write_text(json.dumps(rows_,ensure_ascii=False),encoding="utf-8")
     db.commit();db.close()
     with zipfile.ZipFile(qa/"fixtures.zip","w",compression=zipfile.ZIP_DEFLATED) as z:
         for p in root.rglob("*"):
