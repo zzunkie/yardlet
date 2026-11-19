@@ -127,7 +127,7 @@ final class SimulatorHostQATests: XCTestCase {
 
         // The agent tools' driver: select-all and delete empty the field, and a paste enters text in any language from
         // the device's clipboard, which then holds what it held before.
-        let driver = MacIOSSimulatorDriver(hosts: AttachedHost(client: client))
+        let driver = MacIOSSimulatorDriver(screens: AttachedHost(client: client))
         let device = SimulatorDevice(identity: .iOSSimulator(udid: setup.device.uuidString), name: "QA device", state: .on,
                                      osName: "", osVersion: "")
         let toolchain = SimulatorToolchain(directory: setup.developerDirectory.path)
@@ -175,20 +175,24 @@ final class SimulatorHostQATests: XCTestCase {
     }
 
     /// The test's own client, attached already, as the driver's host.
-    private final class AttachedHost: SimulatorHostAttaching {
+    private final class AttachedHost: SimulatorToolScreens {
         let client: SimulatorHostClient
 
         init(client: SimulatorHostClient) {
             self.client = client
         }
 
-        func attachForTools(_ device: UUID, with toolchain: SimulatorToolchain) async throws
-            -> (client: SimulatorHostClient, screen: SimulatorScreen) {
-            guard let screen = client.screens[device] else { throw SimulatorHostClient.Failure.device("not attached") }
-            return (client, screen)
+        func attachForTools(_ target: MacSimulatorScreens.Target) async throws -> SimulatorScreen {
+            guard let udid = UUID(uuidString: target.device.value), let screen = client.screens[udid] else {
+                throw SimulatorHostClient.Failure.device("not attached")
+            }
+            return screen
         }
 
-        func releaseForTools(_ device: UUID) {}
+        func releaseForTools(_ device: SimulatorDeviceIdentity) {}
+        func hostClient(of device: SimulatorDeviceIdentity) -> SimulatorHostClient? { client }
+        func androidStream(of device: SimulatorDeviceIdentity)
+            -> (client: AndroidScreenClient, target: AndroidScreenTarget)? { nil }
     }
 
     /// A finger down and up again, as a person taps.

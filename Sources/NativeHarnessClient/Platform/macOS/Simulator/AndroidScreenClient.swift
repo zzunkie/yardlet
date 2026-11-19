@@ -50,9 +50,10 @@ enum AndroidStreamEnd: Equatable, Sendable {
 /// device a panel shows, its stream decoded off the main thread and put on the panels' `SimulatorFrameDisplay`s by a
 /// `SimulatorFrameRouter`, the person's touches and keys sent on its control socket, and screenshots in dp.
 ///
-/// A device's stream runs only while a panel shows it: `showFrames(of:in:pixelWidth:pixelHeight:)` for each panel,
-/// `stopShowingFrames(of:in:)` when it goes, and the last one gone ends the session and the server on the device.
-/// Per frame the main thread does nothing; it handles only panels coming and going and the person's input.
+/// A device's stream runs only while a panel shows it or the agents' tools hold it: `showFrames(of:in:pixelWidth:
+/// pixelHeight:)` for each panel, `stopShowingFrames(of:in:)` when it goes, `holdForTools(_:)` and `releaseForTools(_:)`
+/// for the tools, and the last of them gone ends the session and the server on the device. Per frame the main thread
+/// does nothing; it handles only panels coming and going and input.
 @MainActor
 final class AndroidScreenClient {
     /// Routes each device's frames to the displays that show it.
@@ -74,6 +75,8 @@ final class AndroidScreenClient {
     private var displays: [AndroidScreenTarget: [ObjectIdentifier: (display: SimulatorFrameDisplay, longestSide: Int)]] = [:]
     /// The modifiers each device's stream has held down.
     private var keyboards: [AndroidScreenTarget: AndroidKeyboard] = [:]
+    /// The devices the agents' tools keep a stream running for, with or without a panel showing them.
+    private var toolHolds: Set<AndroidScreenTarget> = []
 
     init(serverFile: @escaping () -> URL? = { ScrcpyServer.bundledFile() },
          runner: any CLICommandRunning = LiveCLICommandRunner(),
@@ -112,8 +115,81 @@ final class AndroidScreenClient {
         frameRouter.remove(display, for: target.frameDevice)
         if displays[target]?.isEmpty == true {
             displays[target] = nil
-            stopStream(target)
+            if !toolHolds.contains(target) { stopStream(target) }
         }
+    }
+
+    // MARK: - Agent tools
+
+    /// The agents' tools use the device: its stream runs, also while no panel shows it, until `releaseForTools(_:)`.
+    /// Returns once the stream sends frames, whose size touches are given in.
+    func holdForTools(_ target: AndroidScreenTarget, timeout: Duration = .seconds(20)) async throws {
+        toolHolds.insert(target)
+        if streams[target] == nil { startStream(target) }
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            guard toolHolds.contains(target), let stream = streams[target] else {
+                throw ScrcpyProtocolError("The emulator's screen stream did not start")
+            }
+            if stream.frameSize != nil { return }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        throw ScrcpyProtocolError("The emulator's screen stream sent no frame")
+    }
+
+    func releaseForTools(_ target: AndroidScreenTarget) {
+        guard toolHolds.remove(target) != nil, displays[target] == nil else { return }
+        stopStream(target)
+    }
+
+    /// A key by Android's own code (`android.view.KeyEvent`), pressed and let go: Power and the volume keys.
+    func press(keycode: UInt32, on target: AndroidScreenTarget) throws {
+        let stream = try running(target)
+        stream.send(.key(.down, keycode: keycode))
+        stream.send(.key(.up, keycode: keycode))
+    }
+
+    /// ASCII text typed as key events the device makes from it (scrcpy's text injection), in pieces the server takes.
+    func type(_ text: String, on target: AndroidScreenTarget) throws {
+        let stream = try running(target)
+        var piece = ""
+        for character in text {
+            if piece.utf8.count + character.utf8.count > ScrcpyControlMessage.textLimit {
+                stream.send(.text(piece))
+                piece = ""
+            }
+            piece.append(character)
+        }
+        if !piece.isEmpty { stream.send(.text(piece)) }
+    }
+
+    /// The text on the device's clipboard; nil when it holds none, which the server does not answer.
+    func clipboard(of target: AndroidScreenTarget) async throws -> String? {
+        let stream = try running(target)
+        do {
+            let answer = try await stream.request(.getClipboard, timeout: .seconds(1)) {
+                if case .clipboard = $0 { true } else { false }
+            }
+            guard case let .clipboard(text) = answer else { return nil }
+            return text
+        } catch where streams[target] === stream {
+            return nil
+        }
+    }
+
+    /// Puts the text on the device's clipboard, and pastes it into the focused field when `paste`; returns once the
+    /// device says it set the clipboard (after it sent the paste key).
+    func setClipboard(_ text: String, paste: Bool, on target: AndroidScreenTarget) async throws {
+        let stream = try running(target)
+        let sequence = stream.nextSequence()
+        _ = try await stream.request(.setClipboard(text, sequence: sequence, paste: paste)) {
+            $0 == .clipboardSet(sequence: sequence)
+        }
+    }
+
+    private func running(_ target: AndroidScreenTarget) throws -> AndroidScreenStream {
+        guard let stream = streams[target] else { throw ScrcpyProtocolError("The emulator's screen stream is not running") }
+        return stream
     }
 
     /// A finger on the screen at a point given as fractions of it. Nothing happens while no stream runs.
@@ -169,6 +245,7 @@ final class AndroidScreenClient {
     func stopAll() {
         for target in Array(streams.keys) { stopStream(target) }
         displays.removeAll()
+        toolHolds.removeAll()
         frameRouter.removeAll()
     }
 
@@ -185,7 +262,9 @@ final class AndroidScreenClient {
     }
 
     private func startStream(_ target: AndroidScreenTarget) {
-        let wanted = ScrcpyVideoOptions(maxSize: displays[target]?.values.map(\.longestSide).max() ?? 0)
+        // A stream for the tools alone is as sharp as a stream can be, for their screenshots.
+        let wanted = ScrcpyVideoOptions(maxSize: displays[target]?.values.map(\.longestSide).max()
+            ?? (toolHolds.contains(target) ? ScrcpyVideoOptions().maxSize : 0))
         if let stream = streams[target] {
             // Starting over costs a key frame's wait: only a panel half again as large as the stream takes a new one.
             guard wanted.maxSize * 2 >= stream.video.maxSize * 3 else { return }
@@ -241,6 +320,10 @@ final class AndroidScreenStream: @unchecked Sendable {
     private let sender: Task<Void, Never>
     private let lock = NSLock()
     private var size: (width: Int, height: Int)?
+    /// Requests waiting for the device's answer: what answers each, and its waiter.
+    private var waiters: [UUID: (answers: @Sendable (ScrcpyDeviceMessage) -> Bool,
+                                 continuation: CheckedContinuation<ScrcpyDeviceMessage, any Error>)] = [:]
+    private var sequence: UInt64 = 0
 
     private let frameSizeChanged: @Sendable (Int, Int) -> Void
 
@@ -279,7 +362,41 @@ final class AndroidScreenStream: @unchecked Sendable {
                 if changed { self.frameSizeChanged(width, height) }
             }
             self.decoder.handle(event)
-        }, ended: ended)
+        }, deviceMessage: { [weak self] message in self?.received(message) }, ended: ended)
+    }
+
+    /// A number for a request the device acknowledges, never 0 (scrcpy's "no acknowledgement").
+    func nextSequence() -> UInt64 {
+        lock.withLock {
+            sequence += 1
+            return sequence
+        }
+    }
+
+    /// Sends a control message and waits for the device message that `answers` it, failing after `timeout`.
+    func request(_ message: ScrcpyControlMessage, timeout: Duration = .seconds(5),
+                 answers: @escaping @Sendable (ScrcpyDeviceMessage) -> Bool) async throws -> ScrcpyDeviceMessage {
+        let id = UUID()
+        return try await withCheckedThrowingContinuation { continuation in
+            lock.withLock { waiters[id] = (answers, continuation) }
+            send(message)
+            Task { [weak self] in
+                try? await Task.sleep(for: timeout)
+                self?.fail(id, ScrcpyProtocolError("The device did not answer in time"))
+            }
+        }
+    }
+
+    private func received(_ message: ScrcpyDeviceMessage) {
+        let waiter = lock.withLock { () -> CheckedContinuation<ScrcpyDeviceMessage, any Error>? in
+            guard let id = waiters.first(where: { $0.value.answers(message) })?.key else { return nil }
+            return waiters.removeValue(forKey: id)?.continuation
+        }
+        waiter?.resume(returning: message)
+    }
+
+    private func fail(_ id: UUID, _ error: any Error) {
+        lock.withLock { waiters.removeValue(forKey: id) }?.continuation.resume(throwing: error)
     }
 
     func send(_ message: ScrcpyControlMessage) {
@@ -289,6 +406,11 @@ final class AndroidScreenStream: @unchecked Sendable {
     func stop() async {
         messages.finish()
         sender.cancel()
+        let waiting = lock.withLock { () -> [CheckedContinuation<ScrcpyDeviceMessage, any Error>] in
+            defer { waiters = [:] }
+            return waiters.values.map(\.continuation)
+        }
+        waiting.forEach { $0.resume(throwing: ScrcpyProtocolError("The emulator's screen stream ended")) }
         await session.stop()
         decoder.close()
     }

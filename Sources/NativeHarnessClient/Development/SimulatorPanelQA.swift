@@ -18,9 +18,10 @@ import YardletSimulatorHostProtocol
 /// With `YARDLET_SIMULATOR_QA_ANDROID_AVD` instead, run by scripts/simulator-qa/run-android-panel-check.sh against a
 /// throwaway emulator it started, the same for Android: the emulator listed beside the iOS simulators, its live
 /// screen through the bundle's scrcpy server with Back, Home and Recents in the tab's header, Recents and a swipe
-/// through the tab, the screen turned to landscape, and, with the switch off, the tab closed and the stream and the
-/// server on the device ended. Captures `android-{list,live,recents,drawer,turned,off}-{light,dark}.png`. With
-/// `YARDLET_SIMULATOR_QA_ANDROID_CONNECTED` as well, the address the script connected the same emulator at
+/// through the tab, the screen turned to landscape, the agent's tools as above (drive-tools.py with `android`), whose
+/// paste leaves the device's clipboard as it was, and, with the switch off, the tab closed and the stream and the
+/// server on the device ended. Captures `android-{list,live,recents,drawer,turned,approval,tools,off}-{light,dark}.png`.
+/// With `YARDLET_SIMULATOR_QA_ANDROID_CONNECTED` as well, the address the script connected the same emulator at
 /// (`adb connect 127.0.0.1:<port>`), it is then checked as a real device is: listed by the serial number it reports,
 /// live and driven through the tab, never started or stopped by Yardlet, and left alone by the agents' tools
 /// (`android-connected-{live,recents}-{light,dark}.png`). adb commands go only to emulators and that address, so a
@@ -146,9 +147,10 @@ final class SimulatorPanelQA {
     /// The agent's tools as a harness calls them: the fixture hands the script the task's `yardlet-mcp` launch
     /// (`tools-launch.json`, then `tools-ready`), and the script's calls run until it writes `tools-done`. Meanwhile
     /// the first use of the device waits on the task's card, which the fixture captures and allows.
-    private func checkAgentTools(_ identity: SimulatorDeviceIdentity, window: NSWindow,
-                                 workspace: TaskWorkspaceState) async {
-        model.simulatorTools.drivers[.iOS] = MacIOSSimulatorDriver(hosts: MacSimulatorScreens.shared)
+    private func checkAgentTools(_ identity: SimulatorDeviceIdentity, window: NSWindow, workspace: TaskWorkspaceState,
+                                 captures prefix: String = "") async {
+        model.simulatorTools.drivers[.iOS] = MacIOSSimulatorDriver(screens: MacSimulatorScreens.shared)
+        model.simulatorTools.drivers[.android] = MacAndroidEmulatorDriver(screens: MacSimulatorScreens.shared)
         model.simulators.detach(session)
         // The person is using another tab: the agent's attach adds the Simulator tab beside it.
         workspace.setPanels(Navigation.showing("files", in: workspace.panels))
@@ -176,7 +178,7 @@ final class SimulatorPanelQA {
             if let approval = model.sessionTools.approvals(for: session).first {
                 cards += 1
                 try? await Task.sleep(for: .seconds(1))
-                await capture(window, "approval")
+                await capture(window, prefix + "approval")
                 model.sessionTools.answer(approval.id, allow: true)
             }
             try? await Task.sleep(for: .milliseconds(200))
@@ -190,7 +192,38 @@ final class SimulatorPanelQA {
               "\(workspace.panels)")
         workspace.setPanels(Navigation.showing(Navigation.simulatorID, in: workspace.panels))
         try? await Task.sleep(for: .seconds(2))
-        await capture(window, "tools")
+        await capture(window, prefix + "tools")
+    }
+
+    /// The Android tools' paste puts back what the emulator's clipboard held: the fixture puts its own text there
+    /// before the script's calls and reads it after them, through the stream the tools use.
+    private func checkAndroidAgentTools(_ identity: SimulatorDeviceIdentity, serial: String, sdk: SimulatorToolchain,
+                                        window: NSWindow, workspace: TaskWorkspaceState) async {
+        let screens = MacSimulatorScreens.shared
+        let target = MacSimulatorScreens.Target(device: identity, adbSerial: serial, toolchain: sdk)
+        let marker = "Yardlet QA clipboard \(UUID().uuidString.prefix(8))"
+        do {
+            _ = try await screens.attachForTools(target)
+            guard let (client, stream) = screens.androidStream(of: identity) else { throw SimulatorDriveError(message: "no stream") }
+            try await client.setClipboard(marker, paste: false, on: stream)
+            let read = try await client.clipboard(of: stream)
+            check("clipboard: the emulator's clipboard reads back through the stream", read == marker, read ?? "nil")
+        } catch {
+            check("clipboard: the emulator's clipboard reads back through the stream", false, "\(error)")
+        }
+        screens.releaseForTools(identity)
+
+        await checkAgentTools(identity, window: window, workspace: workspace, captures: "android-")
+
+        do {
+            _ = try await screens.attachForTools(target)
+            guard let (client, stream) = screens.androidStream(of: identity) else { throw SimulatorDriveError(message: "no stream") }
+            let after = try await client.clipboard(of: stream)
+            check("tools: the paste puts back what the emulator's clipboard held", after == marker, after ?? "nil")
+        } catch {
+            check("tools: the paste puts back what the emulator's clipboard held", false, "\(error)")
+        }
+        screens.releaseForTools(identity)
     }
 
     private func runAndroid(avd: String) async {
@@ -275,6 +308,8 @@ final class SimulatorPanelQA {
             screens.pressNavigation(.home, on: identity)
             try? await Task.sleep(for: .seconds(1))
             if let connected { await runConnected(connected, adb: adb, window: window) }
+
+            await checkAndroidAgentTools(identity, serial: serial, sdk: sdk, window: window, workspace: workspace)
 
             // Turned off: the tab closes, the screen is let go, and the server on the device ends with the stream.
             UserDefaults.yardlet.set(false, forKey: SimulatorPreference.key)

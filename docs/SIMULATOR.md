@@ -260,21 +260,21 @@ A task's agent sees and drives the device its task attached through eight tools 
 (docs/AGENT_BROWSER_TOOLS.md, "Simulator tools"). A task gets them when the switch was on as its session started or
 resumed, as "Agent browser tools" works, while a platform's devices can be used: a running task's list gains them
 once the check finds a usable Xcode or Android SDK, and loses them when the switch turns off, as nothing runs then.
-Android emulators are listed and attached like simulators, but the tools that act on a screen do not drive them yet:
-they say so and leave the emulator attached for the agent's own tools (`adb`). Android devices are the person's in
-the tab and not the tools' yet: `simulator_list` leaves them out, and `simulator_attach` naming one, or a tool on a
-device the person attached in the tab, is refused before anything asks the person or reaches the device.
+Android emulators are driven the same way, through the scrcpy stream their Simulator tab uses ("The screen").
+Android devices are the person's in the tab and not the tools' yet: `simulator_list` leaves them out, and
+`simulator_attach` naming one, or a tool on a device the person attached in the tab, is refused before anything asks
+the person or reaches the device.
 
 | Tool | Arguments | Behavior |
 |---|---|---|
 | `simulator_list` | none | JSON `{devices:[{device, platform, name, os, state, attached, usedBy, startedByYardlet, shown}], note}`: every listed device with its id (an iOS simulator's UDID; an Android emulator's adb serial while it runs, else its AVD name), whether this task attached it, the task whose agent uses it ("this task" or that task's title), whether Yardlet started it and whether a Simulator tab shows it. The note names a platform that cannot be used and why. Read-only |
-| `simulator_attach` | `device` (required: an id or a name) | After the person's approval (below), attaches the device to the task and claims it, starting it when it is off and waiting until it is ready. Shows the task's Simulator tab; while the person uses another tab of the panel, the Simulator tab joins the strip beside it and the result says so. The result gives the id to pass to the agent's own build and install tools (`xcrun simctl install <id> <app>`), the screen's size in points, and whether Yardlet started the device (it then shuts down when unused) or it was on before (another app may be using it). Refused: an unknown id or name, a name several devices share (naming them), a device another task's agent uses (with that task's title), a start past the two devices Yardlet runs for agents; each names the devices that are on and free |
+| `simulator_attach` | `device` (required: an id or a name) | After the person's approval (below), attaches the device to the task and claims it, starting it when it is off and waiting until it is ready. Shows the task's Simulator tab; while the person uses another tab of the panel, the Simulator tab joins the strip beside it and the result says so. The result gives the id to pass to the agent's own build and install tools (`xcrun simctl install <id> <app>`; `adb -s <id> install <apk>` for an emulator), the screen's size in points (dp on Android), and whether Yardlet started the device (it then shuts down when unused) or it was on before (another app may be using it). Refused: an unknown id or name, a name several devices share (naming them), a device another task's agent uses (with that task's title), a start past the two devices Yardlet runs for agents; each names the devices that are on and free |
 | `simulator_detach` | none | Lets go of the attachment and the claim. A device Yardlet started shuts down ten minutes after no task attaches it |
-| `simulator_screenshot` | `format` (png or jpeg) | The screen at its size in points (402×874 for an iPhone 17), which the result names |
+| `simulator_screenshot` | `format` (png or jpeg) | The screen at its size in points (402×874 for an iPhone 17) or dp (411×914 for a Pixel 6), which the result names. An emulator's is the stream's last frame, scaled to dp |
 | `simulator_tap` | `x`, `y` (required), `duration` | One finger down and up at the point; held longer than 0.5 seconds, a long press |
 | `simulator_swipe` | `x`, `y`, `x2`, `y2` (required), `duration` (0.3 by default) | One finger moved in even 16 ms steps from the first point to the second. One that starts within 4 points of an edge is the system's edge gesture, which the description says |
-| `simulator_type` | `text` (required), `method` (`paste`, the default, or `keys`) | `paste` reads the text on the device's clipboard (`simctl pbpaste`), puts the text there (`simctl pbcopy`, given a UTF-8 locale, without which it refuses text outside ASCII), presses ⌘V as hardware keys and puts the earlier text back half a second later. Text in any language goes in as written, and iOS asks no "Allow Paste", since the paste comes from the keyboard. `keys` types ASCII as hardware keys, which the device reads with its own keyboard layout, so the text goes in as written only while that layout is English; the result says so. The agent uses `keys` for a field that refuses a paste (the text does not appear) or when the clipboard cannot be used, as the description and the results say. Yardlet does not judge a paste from the screen, which changes anyway (a blinking cursor, search suggestions). Something other than text on the device's clipboard does not come back |
-| `simulator_press` | `button` or `key`, `count` (1 to 50) | An iPhone's buttons: home, lock, volume_up, volume_down and action (back, recents and power are Android's, refused on an iPhone). Keys: return, delete, tab, escape, space, up, down, left, right and select_all (⌘A) |
+| `simulator_type` | `text` (required), `method` (`paste`, the default, or `keys`) | `paste` reads the text on the device's clipboard (`simctl pbpaste`), puts the text there (`simctl pbcopy`, given a UTF-8 locale, without which it refuses text outside ASCII), presses ⌘V as hardware keys and puts the earlier text back half a second later. Text in any language goes in as written, and iOS asks no "Allow Paste", since the paste comes from the keyboard. `keys` types ASCII as hardware keys, which the device reads with its own keyboard layout, so the text goes in as written only while that layout is English; the result says so. The agent uses `keys` for a field that refuses a paste (the text does not appear) or when the clipboard cannot be used, as the description and the results say. Yardlet does not judge a paste from the screen, which changes anyway (a blinking cursor, search suggestions). Something other than text on the device's clipboard does not come back. On Android, `paste` uses scrcpy's clipboard messages: it asks for the clipboard (`GET_CLIPBOARD`), sets the text with the paste flag (`SET_CLIPBOARD`, which the device acknowledges once it has pressed its paste key), and half a second later sets the earlier text back without pasting; a clipboard with no text, which the device does not answer, is left with empty text. `keys` is scrcpy's text injection (`INJECT_TEXT`): key events the device makes from the text with its own key map |
+| `simulator_press` | `button` or `key`, `count` (1 to 50) | An iPhone's buttons: home, lock, volume_up, volume_down and action (back, recents and power are Android's, refused on an iPhone). An emulator's: back, home, recents, power, volume_up and volume_down, as scrcpy key events with Android's key codes (lock and action are refused). Keys: return, delete, tab, escape, space, up, down, left, right and select_all (⌘A on iOS, Control-A on Android) |
 
 **The person's approval.** The first time a task's agent uses a device, Yardlet asks on the request card in the
 task ("Let this task use the iPhone 17 simulator?"), whatever the task's permission mode, as the Claude app asks once
@@ -296,19 +296,21 @@ declined when the turn stops, or after ten minutes. Declined, the call is `refus
 - Every tool but `simulator_list` and `simulator_attach` acts on the task's attached device, and no tool attaches one
   by itself: a device that is on may be the person's own in Simulator.app or another task's QA device. Without an
   attached device a tool answers `not_found`, naming the devices and `simulator_attach`.
-- Positions are points of the last screenshot, checked to be on the screen. A duration is at most 10 seconds, a count
+- Positions are points (dp on Android) of the last screenshot, checked to be on the screen. A duration is at most 10 seconds, a count
   at most 50, a text at most 1,000 characters; past these the call is `invalid_arguments` with the range, before
   anything reaches the device.
 - Before each tool the device is claimed again and, when the idle rules shut it down, started again under the attach's
   rules, which the result says. Each tool counts as a use for the idle rules.
 - The person's touch, scroll or key on the device in the last 30 seconds is said in the result ("The person is using
   iPhone 17 in a Simulator tab"); it does not stop the agent's input.
-- The tools attach a device through the panels' simulator host, so a device a tab shows and the tools drive is
-  attached once. The tools hold it attached for two minutes after their last call, or until `simulator_detach`.
+- The tools attach a device through the panels' simulator host or, for an emulator, its scrcpy stream, so a device a
+  tab shows and the tools drive is attached once. The tools hold it attached for two minutes after their last call,
+  or until `simulator_detach`; meanwhile an emulator's stream runs whether or not a tab shows it, at up to 1,280
+  pixels on its longer side.
 
 **What the agent's own tools do.** Building, installing, launching, logs and debugging are not simulator tools: the
-agent passes the device's id to its own (`xcrun simctl` in its shell, a build tool's simulator id, Xcode's run
-destination), under its harness's own permissions. Another tool with a session open on the same device (XcodeBuildMCP,
+agent passes the device's id to its own (`xcrun simctl` or `adb` in its shell, a build tool's simulator id, Xcode's
+run destination), under its harness's own permissions. Another tool with a session open on the same device (XcodeBuildMCP,
 Xcode's device interaction) may drive it meanwhile; the tools' descriptions say the agent may leave the input to it,
 and that input from outside Yardlet mixes with theirs.
 
@@ -341,11 +343,13 @@ automation.
 - `scripts/simulator-qa/run-android-check.sh` runs `AndroidScreenQATests` against an AVD it makes in a folder of its
   own, starts without a window and deletes afterwards: how long decoding takes, the first frame, Back, Home and
   Recents, a swipe, typing, a turn, screenshots, and that the stream and the server end with the last tab.
-  `scripts/simulator-qa/run-android-panel-check.sh` does the same in the running app's tab, as below, and then
-  connects the same emulator again at its adb port (`adb connect 127.0.0.1:<port>`), which adb treats as a device
-  reached over the network: the tab lists it by the serial number it reports, shows and drives it, offers no Shut
-  Down, and the agent tools leave it alone. The QA app sends adb commands only to emulators and that address, so a
-  phone plugged into the Mac is neither asked anything nor listed.
+  `scripts/simulator-qa/run-android-panel-check.sh` does the same in the running app's tab, as below, and runs
+  `drive-tools.py` on the emulator: Back, Recents, Home, the volume keys and Power, Settings' search opened with
+  `adb`, a paste in Korean after which the emulator's clipboard holds what it held before, select-all and keys. It
+  then connects the same emulator again at its adb port (`adb connect 127.0.0.1:<port>`), which adb treats as a
+  device reached over the network: the tab lists it by the serial number it reports, shows and drives it, offers no
+  Shut Down, and the agent tools leave it alone. The QA app sends adb commands only to emulators and that address, so
+  a phone plugged into the Mac is neither asked anything nor listed.
 - `scripts/simulator-qa/run-panel-check.sh` does the same in the running app: a QA bundle launched in the
   background with a temporary home follows the switch, lists and attaches its simulator, shows it live through
   the bundle's simulator host, takes a click, and closes the tab when the switch turns off. Before that,

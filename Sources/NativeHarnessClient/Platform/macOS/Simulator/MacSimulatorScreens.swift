@@ -2,6 +2,21 @@ import Foundation
 import Observation
 import YardletSimulatorHostProtocol
 
+/// Where the agents' simulator tools get a running device's screen and input (`MacIOSSimulatorDriver`,
+/// `MacAndroidEmulatorDriver`): the same simulator host and streams the Simulator tabs use, so a device a tab shows and
+/// the tools drive is attached once.
+@MainActor
+protocol SimulatorToolScreens: AnyObject {
+    /// Attaches the running device, or finds it attached, and holds it attached for the tools until
+    /// `releaseForTools(_:)`; returns its screen.
+    func attachForTools(_ target: MacSimulatorScreens.Target) async throws -> SimulatorScreen
+    func releaseForTools(_ device: SimulatorDeviceIdentity)
+    /// The simulator host an attached iOS simulator is in.
+    func hostClient(of device: SimulatorDeviceIdentity) -> SimulatorHostClient?
+    /// An attached Android emulator's stream.
+    func androidStream(of device: SimulatorDeviceIdentity) -> (client: AndroidScreenClient, target: AndroidScreenTarget)?
+}
+
 /// What a panel's screen needs from the simulator host: the display its frames go to, and the size in pixels it
 /// shows the screen at.
 @MainActor
@@ -17,12 +32,12 @@ protocol SimulatorScreenSubscriber: AnyObject {
 /// the last one stops, so going to another tab and back does not attach it again; the iOS helper ends a minute after
 /// it lets go of its last device, and an Android device's stream ends with its last panel. Every panel that shows a
 /// device subscribes with its own size, and each frame is made once, for the largest of them. The agents' simulator
-/// tools attach an iOS simulator through the same helper (`attachForTools`), and hold it attached while they use it,
-/// with or without a panel showing it.
+/// tools attach a device the same way (`attachForTools`), and hold it attached while they use it, with or without a
+/// panel showing it: an iOS simulator in the helper, an Android emulator with its stream running.
 ///
 /// Turning Settings › General › Simulator off ends every helper and stream (`endAll()`).
 @MainActor @Observable
-final class MacSimulatorScreens: SimulatorHostAttaching {
+final class MacSimulatorScreens: SimulatorToolScreens {
     static let shared = MacSimulatorScreens()
 
     /// How long a device stays attached after the last panel stops showing it.
@@ -167,13 +182,12 @@ final class MacSimulatorScreens: SimulatorHostAttaching {
 
     // MARK: - Agent tools
 
-    /// Attaches the iOS simulator for the agents' tools as a panel would, or finds it attached, and holds it attached
-    /// until `releaseForTools(_:)` or a while after this last call.
-    func attachForTools(_ udid: UUID, with toolchain: SimulatorToolchain) async throws
-        -> (client: SimulatorHostClient, screen: SimulatorScreen) {
-        let device = SimulatorDeviceIdentity.iOSSimulator(udid: udid.uuidString)
+    /// Attaches the running device for the agents' tools as a panel would, or finds it attached, and holds it attached
+    /// until `releaseForTools(_:)` or a while after this last call. An Android emulator's stream runs meanwhile, as its
+    /// input goes on it. Returns the device's screen.
+    func attachForTools(_ target: Target) async throws -> SimulatorScreen {
+        let device = target.device
         holdForTools(device)
-        let target = Target(device: device, toolchain: toolchain)
         if let shown = targets[device], shown != target { letGo(device) }
         targets[device] = target
         switch links[device] {
@@ -187,22 +201,43 @@ final class MacSimulatorScreens: SimulatorHostAttaching {
         }
         switch links[device] {
         case let .attached(screen):
-            guard let client = deviceClients[device] else { break }
-            return (client, screen)
+            if let android = androidTarget(device) {
+                do {
+                    try await self.android.holdForTools(android)
+                } catch {
+                    throw SimulatorDriveError(message: "\(SimulatorScreenFailure.emulatorRefused.toolReason): \(error)")
+                }
+                // The stream may have turned the screen meanwhile.
+                if case let .attached(turned) = links[device] { return turned }
+                return screen
+            }
+            guard deviceClients[device] != nil else { break }
+            return screen
         case let .failed(failure):
-            throw SimulatorHostClient.Failure.device(failure.toolReason)
+            throw SimulatorDriveError(message: failure.toolReason)
         case .attaching, nil:
             break
         }
-        throw SimulatorHostClient.Failure.device("the simulator host let go of the device")
+        throw SimulatorDriveError(message: SimulatorScreenFailure.lost.toolReason)
     }
 
-    /// The agents' tools let go of the iOS simulator: it is let go of now, unless a panel shows it.
-    func releaseForTools(_ udid: UUID) {
-        let device = SimulatorDeviceIdentity.iOSSimulator(udid: udid.uuidString)
+    /// The agents' tools let go of the device: it is let go of now, unless a panel shows it.
+    func releaseForTools(_ device: SimulatorDeviceIdentity) {
         guard let hold = toolHolds.removeValue(forKey: device) else { return }
         hold.cancel()
+        if let target = androidTarget(device) { android.releaseForTools(target) }
         release(device)
+    }
+
+    /// The simulator host an iOS simulator the tools attached is attached in: its screenshots, input and keyboard.
+    func hostClient(of device: SimulatorDeviceIdentity) -> SimulatorHostClient? {
+        isAttached(device) ? deviceClients[device] : nil
+    }
+
+    /// An Android emulator the tools attached: its stream's client and the device as the stream knows it.
+    func androidStream(of device: SimulatorDeviceIdentity) -> (client: AndroidScreenClient, target: AndroidScreenTarget)? {
+        guard isAttached(device), let target = androidTarget(device), android.isStreaming(target) else { return nil }
+        return (android, target)
     }
 
     private func holdForTools(_ device: SimulatorDeviceIdentity) {
@@ -210,8 +245,8 @@ final class MacSimulatorScreens: SimulatorHostAttaching {
         toolHolds[device]?.cancel()
         toolHolds[device] = Task { @MainActor [weak self] in
             try? await Task.sleep(for: Self.toolHoldDelay)
-            guard !Task.isCancelled, let udid = UUID(uuidString: device.value) else { return }
-            self?.releaseForTools(udid)
+            guard !Task.isCancelled else { return }
+            self?.releaseForTools(device)
         }
     }
 
@@ -349,6 +384,8 @@ final class MacSimulatorScreens: SimulatorHostAttaching {
             for subscriber in liveSubscribers(of: device) {
                 android.stopShowingFrames(of: target, in: subscriber.frameDisplay)
             }
+            // A stream the tools held on a serial the emulator no longer has.
+            android.releaseForTools(target)
         }
         links[device] = nil
     }

@@ -101,7 +101,8 @@ extension AppModel {
             model.simulators = SimulatorCenter(backends: [MacIOSSimulatorBackend(), AndroidEmulatorBackend()],
                                                record: simulatorStartRecord())
             wireSimulatorScreens(to: model)
-            model.simulatorTools.drivers[.iOS] = MacIOSSimulatorDriver(hosts: MacSimulatorScreens.shared)
+            model.simulatorTools.drivers[.iOS] = MacIOSSimulatorDriver(screens: MacSimulatorScreens.shared)
+            model.simulatorTools.drivers[.android] = MacAndroidEmulatorDriver(screens: MacSimulatorScreens.shared)
             wireSimulatorInstalls(to: model)
             model.coordinationLog.fileURL = storageRootURL.appending(path: "logs/task-coordination.log")
             model.followRuntimeChoices()

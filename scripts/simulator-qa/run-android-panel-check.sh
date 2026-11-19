@@ -5,14 +5,16 @@
 # the background with a temporary home (qa-launch.sh: never active, its windows past every screen) and the DEBUG
 # fixture SimulatorPanelQA (`--ui-fixture-simulator-check`, `YARDLET_SIMULATOR_QA_ANDROID_AVD`). The fixture lists
 # the emulator beside the Mac's iOS simulators, shows it live through the bundle's scrcpy server, presses Recents,
-# swipes through the tab, turns the device, connects the same emulator again over `adb connect 127.0.0.1:<adb port>`
-# and checks it as a real device (listed by the serial number it reports, live and driven, left alone by the agents'
-# tools), turns the switch off and checks the tab closes and the server on the device ends, capturing each step in
-# both appearances. The app sends adb commands only to emulators and that address, so a phone on this Mac is never
-# sent one. However the run ends, the script ends the app by its PID, disconnects the address, stops the emulator with
+# swipes through the tab, turns the device, hands the task's yardlet-mcp launch to drive-tools.py to call the agent's
+# simulator tools with on the emulator (the fixture allows the card they raise, and checks the paste leaves the
+# emulator's clipboard as it was), connects the same emulator again over `adb connect 127.0.0.1:<adb port>` and checks
+# it as a real device (listed by the serial number it reports, live and driven, left alone by the agents' tools),
+# turns the switch off and checks the tab closes and the server on the device ends, capturing each step in both
+# appearances. The app sends adb commands only to emulators and that address, so a phone on this Mac is never sent
+# one. However the run ends, the script ends the app by its PID, disconnects the address, stops the emulator with
 # `emu kill` (by its process ID if it lingers), deletes the AVD, and removes the QA bundle and home; emulators, AVDs,
-# devices and simulators it did not make, and the adb server, are left alone. It exits 1 when a check
-# failed or the fixture did not finish. The captures, result.json and the logs go to
+# devices and simulators it did not make, and the adb server, are left alone. It exits 1 when a check of the fixture
+# or the tools failed or the fixture did not finish. The captures, result.json and the logs go to
 # .build/simulator-qa/android-panel-<time>/.
 #
 #   ANDROID_HOME                     the SDK (~/Library/Android/sdk by default)
@@ -63,6 +65,7 @@ cleanup() {
         kill "$emulator_pid" 2>/dev/null || true
     fi
     print "Stopped and deleted $name"
+    rm -f "$output/tools-launch.json"
     rm -rf "${qa_root:?}/browser-host-qa" "${qa_root:?}/avd"
     rmdir "${qa_root:?}" 2>/dev/null || true
 }
@@ -109,11 +112,24 @@ app_pid=$("$ROOT/scripts/browser-host-qa/qa-launch.sh" "$qa_app" "$qa_home" "$ou
     "ANDROID_AVD_HOME=$avd_home" -- \
     --ui-fixture=conversation --ui-fixture-browser-ignore-occlusion --ui-fixture-simulator-check="$output")
 print "QA app $app_pid"
-deadline=$(( SECONDS + 300 ))
-while [[ ! -e "$output/finished" ]] && kill -0 "$app_pid" 2>/dev/null && (( SECONDS < deadline )); do sleep 1; done
+deadline=$(( SECONDS + 600 ))
+tools=0
+while [[ ! -e "$output/finished" ]] && kill -0 "$app_pid" 2>/dev/null && (( SECONDS < deadline )); do
+    if [[ -e "$output/tools-ready" && ! -e "$output/tools-done" ]]; then
+        set +e
+        /usr/bin/python3 -I "$ROOT/scripts/simulator-qa/drive-tools.py" "$output/tools-launch.json" "$serial" "$output" \
+            android "$adb" | tee "$output/tools.log"
+        tools=${pipestatus[1]}
+        set -e
+        # The launch holds the task's tool token.
+        rm -f "$output/tools-launch.json"
+        print done > "$output/tools-done"
+    fi
+    sleep 1
+done
 
 [[ -e "$output/finished" ]] || { print -u2 "error: the fixture did not finish; see $output/app.log"; exit 1; }
-result=0
+result=$(( tools == 0 ? 0 : 1 ))
 /usr/bin/python3 -I - "$output/result.json" <<'EOF' || result=1
 import json, sys
 checks = json.load(open(sys.argv[1]))["checks"]

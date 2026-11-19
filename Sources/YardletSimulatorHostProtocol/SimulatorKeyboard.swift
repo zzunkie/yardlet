@@ -9,6 +9,7 @@ public enum SimulatorKeyboard {
     public static let leftArrow = SimulatorKeyUsage(0x50)!
     public static let downArrow = SimulatorKeyUsage(0x51)!
     public static let upArrow = SimulatorKeyUsage(0x52)!
+    public static let leftControl = SimulatorKeyUsage(0xE0)!
     public static let leftShift = SimulatorKeyUsage(0xE1)!
     public static let leftCommand = SimulatorKeyUsage(0xE3)!
     public static let letterA = SimulatorKeyUsage(0x04)!

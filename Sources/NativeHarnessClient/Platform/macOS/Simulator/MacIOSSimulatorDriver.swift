@@ -1,20 +1,9 @@
 import Foundation
 import YardletSimulatorHostProtocol
 
-/// Where the agent's simulator tools get a simulator host attached to a booted device: one helper per Xcode, the one
-/// the Simulator tabs use, so a device the tools drive and a tab shows is attached once.
-@MainActor
-protocol SimulatorHostAttaching: AnyObject {
-    /// The client attached to the device, attaching it first when it is not, and the device's screen. The device
-    /// stays attached for the tools until `releaseForTools(_:)`.
-    func attachForTools(_ device: UUID, with toolchain: SimulatorToolchain) async throws
-        -> (client: SimulatorHostClient, screen: SimulatorScreen)
-    func releaseForTools(_ device: UUID)
-}
-
 /// The Mac's iOS simulators for the agent's simulator tools: the screen and input through the simulator host
-/// (`SimulatorHostClient`), and the clipboard through `simctl`, which `simulator_type` pastes from (docs/SIMULATOR.md,
-/// "Agent tools").
+/// (`SimulatorHostClient`) the Simulator tabs use, and the clipboard through `simctl`, which `simulator_type` pastes
+/// from (docs/SIMULATOR.md, "Agent tools").
 @MainActor
 final class MacIOSSimulatorDriver: SimulatorDeviceDriving {
     /// How long the clipboard keeps the pasted text before its earlier text goes back: the app reads the clipboard as
@@ -25,24 +14,17 @@ final class MacIOSSimulatorDriver: SimulatorDeviceDriving {
 
     let buttons: [SimulatorToolButton] = [.home, .lock, .volumeUp, .volumeDown, .action]
     var runner: any CLICommandRunning = LiveCLICommandRunner()
-    private let hosts: any SimulatorHostAttaching
-    /// The client each device the tools prepared is attached in.
-    private var clients: [UUID: SimulatorHostClient] = [:]
+    private let screens: any SimulatorToolScreens
 
-    init(hosts: any SimulatorHostAttaching) {
-        self.hosts = hosts
+    init(screens: any SimulatorToolScreens) {
+        self.screens = screens
     }
 
     func prepare(_ device: SimulatorDevice, with toolchain: SimulatorToolchain) async throws -> SimulatorToolScreen {
-        let udid = try Self.udid(device)
-        do {
-            let attached = try await hosts.attachForTools(udid, with: toolchain)
-            clients[udid] = attached.client
-            return SimulatorToolScreen(width: attached.screen.pointWidth, height: attached.screen.pointHeight)
-        } catch let failure as SimulatorHostClient.Failure {
-            clients[udid] = nil
-            throw SimulatorDriveError(message: failure.description)
-        }
+        _ = try Self.udid(device)
+        let screen = try await screens.attachForTools(MacSimulatorScreens.Target(device: device.identity,
+                                                                                 toolchain: toolchain))
+        return SimulatorToolScreen(width: screen.pointWidth, height: screen.pointHeight)
     }
 
     func screenshot(of device: SimulatorDevice, format: SimulatorToolImageFormat) async throws -> SimulatorToolImage {
@@ -128,9 +110,7 @@ final class MacIOSSimulatorDriver: SimulatorDeviceDriving {
     }
 
     func release(_ device: SimulatorDevice) {
-        guard let udid = UUID(uuidString: device.identity.value) else { return }
-        clients[udid] = nil
-        hosts.releaseForTools(udid)
+        screens.releaseForTools(device.identity)
     }
 
     // MARK: - Private
@@ -144,8 +124,8 @@ final class MacIOSSimulatorDriver: SimulatorDeviceDriving {
 
     private func attached(_ device: SimulatorDevice) throws -> (UUID, SimulatorHostClient) {
         let udid = try Self.udid(device)
-        guard let client = clients[udid], client.screens[udid] != nil else {
-            throw SimulatorDriveError(message: "the simulator host let go of the device")
+        guard let client = screens.hostClient(of: device.identity), client.screens[udid] != nil else {
+            throw SimulatorDriveError(message: SimulatorScreenFailure.lost.toolReason)
         }
         return (udid, client)
     }
