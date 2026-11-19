@@ -47,9 +47,9 @@ several agents and accounts every day, and it is shared for anyone who doesn't h
   with one sign-in. A connector set up once is offered to the agents you run, and can be turned off
   per task.
 - **Built-in browser.** A Chromium panel the agents can drive through browser tools while you watch.
-- **iOS simulators and Android emulators.** A Simulator tab in the side panel shows a simulator of your own
-  Xcode or an emulator of your own Android SDK live and takes your clicks, trackpad and keys, without opening
-  Simulator.app or an emulator window (see [Simulators](docs/SIMULATOR.md)).
+- **iOS simulators, Android emulators and Android devices.** A Simulator tab in the side panel shows a simulator
+  of your own Xcode, an emulator of your own Android SDK or a phone its adb reaches live and takes your clicks,
+  trackpad and keys, without opening Simulator.app or an emulator window (see [Simulators](docs/SIMULATOR.md)).
 - **Personal agents.** Chat with your existing ChatGPT dots alongside coding tasks, with saved drafts
   and native file previews. The account stays with its Codex runtime; no browser needs to stay open
   (see [Personal agents](docs/PERSONAL_AGENTS.md) for current limits).
@@ -296,8 +296,8 @@ launched in the background, and calls the agents' simulator tools through that c
 ([docs/SIMULATOR.md](docs/SIMULATOR.md), "Checking it").
 `./scripts/simulator-qa/run-android-check.sh` and `./scripts/simulator-qa/run-android-panel-check.sh` check the
 Android screen and the Simulator tab with an Android emulator, with an AVD they make in a folder of their own and
-delete afterwards; they need the Android SDK with an installed system image and leave other emulators and the adb
-server alone.
+delete afterwards (the panel check also connects it over `adb connect`, as a device on the network); they need the
+Android SDK with an installed system image and leave other emulators, devices and the adb server alone.
 
 Bundles include the in-window browser (Chromium Embedded Framework in a separate browser host
 process). The script uses the CEF distribution pinned for the bundle's architecture in

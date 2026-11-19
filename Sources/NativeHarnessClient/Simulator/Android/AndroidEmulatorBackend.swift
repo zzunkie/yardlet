@@ -36,13 +36,16 @@ final class LiveAndroidEmulatorLauncher: AndroidEmulatorLaunching, @unchecked Se
     }
 }
 
-/// Android emulators, through the person's own SDK: AVDs from `emulator -list-avds`, the running ones from
-/// `adb devices -l`, each started without a window (`emulator -avd <name> -no-window -gpu host -no-boot-anim
-/// -no-audio -port <port>`), ready once `sys.boot_completed` is set, and stopped with `adb emu kill`, which keeps
-/// the quick-boot snapshot as Android Studio's stop does. An AVD is never started read-only, so what is installed
-/// on it stays, as in Android Studio. An AVD already running elsewhere is used where it runs and not started again.
+/// Android emulators and devices, through the person's own SDK. Emulators: AVDs from `emulator -list-avds`, the
+/// running ones from `adb devices -l`, each started without a window (`emulator -avd <name> -no-window -gpu host
+/// -no-boot-anim -no-audio -port <port>`), ready once `sys.boot_completed` is set, and stopped with `adb emu kill`,
+/// which keeps the quick-boot snapshot as Android Studio's stop does. An AVD is never started read-only, so what is
+/// installed on it stays, as in Android Studio. An AVD already running elsewhere is used where it runs and not
+/// started again.
 ///
-/// Real devices are not listed yet, and no command ever goes to one: every command names an emulator's serial.
+/// Real devices: the phones and tablets adb lists ready, over USB or `adb connect`, each known by the serial number it
+/// reports (`ro.serialno`), never by adb's serial, which a wireless connection changes. Yardlet never turns one on or
+/// off; one that is unauthorized or offline is not listed, as nothing can be read from it.
 struct AndroidEmulatorBackend: SimulatorBackend {
     /// The console ports the emulator takes, even ones; each emulator also takes the odd port above for adb.
     static let consolePorts = Array(stride(from: 5554, through: 5682, by: 2))
@@ -59,6 +62,7 @@ struct AndroidEmulatorBackend: SimulatorBackend {
     var readyTimeout: Duration = .seconds(300)
     var readyPollInterval: Duration = .seconds(1)
     private let launches = Launches()
+    private let connections = Connections()
 
     var platform: SimulatorPlatform { .android }
 
@@ -70,12 +74,13 @@ struct AndroidEmulatorBackend: SimulatorBackend {
     func devices(with toolchain: SimulatorToolchain) async throws -> [SimulatorDevice] {
         let sdk = AndroidSDK(toolchain: toolchain)
         async let avds = runner.run(CLICommand(executable: sdk.emulator, arguments: ["-list-avds"], timeout: .seconds(30)))
-        let running = try await runningEmulators(sdk)
+        let listed = try await adbDevices(sdk)
+        let running = try await runningEmulators(sdk, listed: listed)
         let names = await avds.succeeded ? AndroidDeviceList.avdNames(avds.stdout) : []
         // An AVD running from another AVD folder is listed too: it can be used where it runs.
         let all = names + running.keys.filter { !names.contains($0) }.sorted()
         let home = avdHome()
-        return all.map { name in
+        let emulators = all.map { name in
             let entry = AndroidDeviceList.iniValues(readText(home.appending(path: "\(name).ini")) ?? "")
             let config = entry["path"].flatMap {
                 readText(URL(filePath: $0, directoryHint: .isDirectory).appending(path: "config.ini"))
@@ -92,9 +97,11 @@ struct AndroidEmulatorBackend: SimulatorBackend {
                                    state: state, osName: api.map { "Android API \($0)" } ?? "Android",
                                    osVersion: api ?? "", adbSerial: adb?.serial)
         }
+        return emulators + (await connectedDevices(listed, sdk: sdk))
     }
 
     func boot(_ device: SimulatorDevice, with toolchain: SimulatorToolchain) async throws -> SimulatorBootStart {
+        guard device.identity.kind == .androidEmulator else { throw Self.notTurnedOnOrOff }
         let sdk = AndroidSDK(toolchain: toolchain)
         let avd = device.identity.value
         let listed = try await adbDevices(sdk)
@@ -115,6 +122,7 @@ struct AndroidEmulatorBackend: SimulatorBackend {
     }
 
     func waitUntilReady(_ device: SimulatorDevice, with toolchain: SimulatorToolchain) async throws {
+        guard device.identity.kind == .androidEmulator else { throw Self.notTurnedOnOrOff }
         let sdk = AndroidSDK(toolchain: toolchain)
         let avd = device.identity.value
         let deadline = ContinuousClock.now + readyTimeout
@@ -133,6 +141,7 @@ struct AndroidEmulatorBackend: SimulatorBackend {
     }
 
     func shutDown(_ device: SimulatorDevice, with toolchain: SimulatorToolchain) async throws {
+        guard device.identity.kind == .androidEmulator else { throw Self.notTurnedOnOrOff }
         let sdk = AndroidSDK(toolchain: toolchain)
         let avd = device.identity.value
         guard let serial = try await serial(of: avd, sdk: sdk) else { return }
@@ -172,6 +181,41 @@ struct AndroidEmulatorBackend: SimulatorBackend {
     /// which asks the person for Yardlet's access, and the panel carries no sound.
     static func launchArguments(avd: String, port: Int) -> [String] {
         ["-avd", avd, "-no-window", "-gpu", "host", "-no-boot-anim", "-no-audio", "-port", String(port)]
+    }
+
+    private static let notTurnedOnOrOff = SimulatorCommandError(message: "Yardlet does not turn real devices on or off")
+
+    // MARK: - Real devices
+
+    /// The real devices adb lists ready for commands, in its order. Two connections that report the same serial number
+    /// are one device, the first listed: emulators reached over `adb connect` report their version's.
+    private func connectedDevices(_ listed: [AdbDevice], sdk: AndroidSDK) async -> [SimulatorDevice] {
+        var devices: [SimulatorDevice] = []
+        var connected: Set<String> = []
+        for device in listed where device.emulatorPort == nil && device.state == .device {
+            let connection = device.properties["transport_id"].map { "\(device.serial)\n\($0)" }
+            if let connection { connected.insert(connection) }
+            guard let found = await connectedDevice(device, connection: connection, sdk: sdk),
+                  !devices.contains(where: { $0.identity == found.identity }) else { continue }
+            devices.append(found)
+        }
+        connections.keep(connected)
+        return devices
+    }
+
+    /// A real device, asked once for each connection (adb's transport, which a device that connects again, or another
+    /// device at the same address, does not share): its serial number, name, Android version and API level.
+    private func connectedDevice(_ device: AdbDevice, connection: String?, sdk: AndroidSDK) async -> SimulatorDevice? {
+        if let connection, let known = connections.device(for: connection) { return known }
+        let answer = await adb(sdk, device.serial, ["shell", AndroidDeviceList.connectedDeviceCommand],
+                               timeout: .seconds(10))
+        guard let properties = AndroidDeviceList.connectedDeviceProperties(answer.stdout) else { return nil }
+        let found = SimulatorDevice(identity: .androidDevice(serialNumber: properties.serialNumber),
+                                    name: properties.name, state: .on,
+                                    osName: properties.release.isEmpty ? "Android" : "Android \(properties.release)",
+                                    osVersion: properties.apiLevel, adbSerial: device.serial)
+        if let connection { connections.set(found, for: connection) }
+        return found
     }
 
     // MARK: - adb
@@ -217,12 +261,9 @@ struct AndroidEmulatorBackend: SimulatorBackend {
         return launched
     }
 
-    /// A command to an emulator; a serial that names no emulator is refused, as no real device is used yet.
+    /// A command to one device: an emulator's console commands (`emu`) go only to an emulator's serial.
     private func adb(_ sdk: AndroidSDK, _ serial: String, _ arguments: [String], timeout: Duration) async -> CLICommandResult {
-        guard serial.hasPrefix("emulator-") else {
-            return CLICommandResult(exitCode: -1, stdout: "", stderr: "Only emulators are used")
-        }
-        return await runner.run(CLICommand(executable: sdk.adb, arguments: ["-s", serial] + arguments, timeout: timeout))
+        await runner.run(CLICommand(executable: sdk.adb, arguments: ["-s", serial] + arguments, timeout: timeout))
     }
 
     /// The emulators this Yardlet started, by AVD.
@@ -242,5 +283,15 @@ struct AndroidEmulatorBackend: SimulatorBackend {
             lock.withLock { launches[avd] = Launch(port: port, processID: processID) }
         }
         func remove(avd: String) { lock.withLock { _ = launches.removeValue(forKey: avd) } }
+    }
+
+    /// The real devices read, by connection, while they stay connected.
+    private final class Connections: @unchecked Sendable {
+        private let lock = NSLock()
+        private var devices: [String: SimulatorDevice] = [:]
+
+        func device(for connection: String) -> SimulatorDevice? { lock.withLock { devices[connection] } }
+        func set(_ device: SimulatorDevice, for connection: String) { lock.withLock { devices[connection] = device } }
+        func keep(_ connections: Set<String>) { lock.withLock { devices = devices.filter { connections.contains($0.key) } } }
     }
 }

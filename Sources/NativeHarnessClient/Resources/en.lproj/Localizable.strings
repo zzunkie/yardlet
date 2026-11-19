@@ -4041,7 +4041,7 @@
 "%lld left for a while" = "%lld left for a while";
 "Tasks that need your attention: %lld" = "Tasks that need your attention: %lld";
 "Simulator" = "Simulator";
-"Shows iOS simulators and Android emulators in the side panel, where you can watch and use them." = "Shows iOS simulators and Android emulators in the side panel, where you can watch and use them.";
+"Shows iOS simulators, Android emulators and Android devices in the side panel, where you can watch and use them." = "Shows iOS simulators, Android emulators and Android devices in the side panel, where you can watch and use them.";
 "Another task" = "Another task";
 "Home (⇧⌘H)" = "Home (⇧⌘H)";
 "Xcode can't be found." = "Xcode can't be found.";
@@ -4089,3 +4089,6 @@
 "Yardlet's Android screen server is missing. Reinstall Yardlet to use Android emulators." = "Yardlet's Android screen server is missing. Reinstall Yardlet to use Android emulators.";
 "Yardlet couldn't connect to this emulator." = "Yardlet couldn't connect to this emulator.";
 "The connection to this emulator ended." = "The connection to this emulator ended.";
+"Yardlet couldn't connect to this device." = "Yardlet couldn't connect to this device.";
+"The connection to this device ended." = "The connection to this device ended.";
+"The device's screen can't be shown." = "The device's screen can't be shown.";

@@ -12,10 +12,10 @@ struct AndroidScreenTarget: Hashable, Sendable {
     var adb: URL
     var serial: String
 
-    /// Nil for a device that is not running. Only emulators for now: a phone over USB takes its own approval and
-    /// is added with it.
+    /// Nil for a device that is not running: an emulator or a real device, over USB or `adb connect`, with the serial
+    /// adb reaches it by now.
     init?(identity: SimulatorDeviceIdentity, adbSerial: String?, adb: URL) {
-        guard identity.kind == .androidEmulator, let adbSerial, adbSerial.hasPrefix("emulator-") else { return nil }
+        guard identity.kind.platform == .android, let adbSerial, !adbSerial.isEmpty else { return nil }
         self.identity = identity
         self.adb = adb
         serial = adbSerial

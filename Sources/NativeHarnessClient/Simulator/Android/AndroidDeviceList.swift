@@ -29,7 +29,7 @@ struct AdbDevice: Equatable, Sendable {
     var properties: [String: String]
 
     /// An emulator's console port, which its serial names (`emulator-5554`); nil for a real device, over USB or
-    /// `adb connect`. Only an emulator is ever sent a command until real devices are offered.
+    /// `adb connect`.
     var emulatorPort: Int? {
         guard serial.hasPrefix("emulator-"), let port = Int(serial.dropFirst("emulator-".count)) else { return nil }
         return port
@@ -55,6 +55,32 @@ enum AndroidDeviceList {
             let state = fields[1] == "no" && fields.count > 2 ? "no permissions" : fields[1]
             return AdbDevice(serial: fields[0], state: AdbDeviceState(state), properties: properties)
         }
+    }
+
+    /// What a real device is asked once for each connection, one answer a line: its serial number, model, Android
+    /// version and API level, and the name the person gave it in its settings ("null" when they gave none).
+    static let connectedDeviceCommand = "getprop ro.serialno; getprop ro.product.model; getprop ro.build.version.release; "
+        + "getprop ro.build.version.sdk; settings get global device_name"
+
+    struct ConnectedDeviceProperties: Equatable, Sendable {
+        var serialNumber: String
+        /// The name the person gave the device, else its model.
+        var name: String
+        /// "14"; empty when it did not say.
+        var release: String
+        /// "34"; empty when it did not say.
+        var apiLevel: String
+    }
+
+    /// The answer to `connectedDeviceCommand`; nil when the device gave no serial number or model. A device that has
+    /// no name of its own (or a `settings` that failed) leaves the last line empty or "null".
+    static func connectedDeviceProperties(_ output: String) -> ConnectedDeviceProperties? {
+        let lines = output.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard lines.count >= 4, !lines[0].isEmpty, !lines[1].isEmpty else { return nil }
+        let named = lines.count > 4 && !lines[4].isEmpty && lines[4] != "null" ? lines[4] : nil
+        return ConnectedDeviceProperties(serialNumber: lines[0], name: named ?? lines[1], release: lines[2],
+                                         apiLevel: lines[3])
     }
 
     /// `emulator -list-avds`: one AVD name a line. The emulator may print notices on the same output, which an AVD's

@@ -5,10 +5,13 @@
 # the background with a temporary home (qa-launch.sh: never active, its windows past every screen) and the DEBUG
 # fixture SimulatorPanelQA (`--ui-fixture-simulator-check`, `YARDLET_SIMULATOR_QA_ANDROID_AVD`). The fixture lists
 # the emulator beside the Mac's iOS simulators, shows it live through the bundle's scrcpy server, presses Recents,
-# swipes through the tab, turns the device, turns the switch off and checks the tab closes and the server on the
-# device ends, capturing each step in both appearances. However the run ends, the script ends the app by its PID,
-# stops the emulator with `emu kill` (by its process ID if it lingers), deletes the AVD, and removes the QA bundle and
-# home; emulators, AVDs and simulators it did not make, and the adb server, are left alone. It exits 1 when a check
+# swipes through the tab, turns the device, connects the same emulator again over `adb connect 127.0.0.1:<adb port>`
+# and checks it as a real device (listed by the serial number it reports, live and driven, left alone by the agents'
+# tools), turns the switch off and checks the tab closes and the server on the device ends, capturing each step in
+# both appearances. The app sends adb commands only to emulators and that address, so a phone on this Mac is never
+# sent one. However the run ends, the script ends the app by its PID, disconnects the address, stops the emulator with
+# `emu kill` (by its process ID if it lingers), deletes the AVD, and removes the QA bundle and home; emulators, AVDs,
+# devices and simulators it did not make, and the adb server, are left alone. It exits 1 when a check
 # failed or the fixture did not finish. The captures, result.json and the logs go to
 # .build/simulator-qa/android-panel-<time>/.
 #
@@ -38,6 +41,33 @@ qa_home="$qa_root/browser-host-qa/home"
 avd_home="$qa_root/avd"
 mkdir -p "$output" "$avd_home" "$qa_home"
 
+name="yardlet_sim_qa_$(/usr/bin/openssl rand -hex 3)"
+emulator_pid=""
+app_pid=""
+serial=""
+address=""
+connected=""
+cleanup() {
+    if [[ -n "$app_pid" ]] && kill -0 "$app_pid" 2>/dev/null; then
+        kill "$app_pid" 2>/dev/null || true
+        for _ in {1..50}; do kill -0 "$app_pid" 2>/dev/null || break; sleep 0.1; done
+    fi
+    local pid command
+    /bin/ps -axo pid=,command= | while read -r pid command; do
+        [[ "$command" == "$qa_app/"* || "$command" == "/private$qa_app/"* ]] && kill "$pid" 2>/dev/null || true
+    done
+    [[ -n "$connected" ]] && "$adb" disconnect "$address" >/dev/null 2>&1 || true
+    if [[ -n "$emulator_pid" ]]; then
+        HOME="$qa_home" "$adb" -s "$serial" emu kill >/dev/null 2>&1 || true
+        for _ in {1..60}; do kill -0 "$emulator_pid" 2>/dev/null || break; sleep 0.5; done
+        kill "$emulator_pid" 2>/dev/null || true
+    fi
+    print "Stopped and deleted $name"
+    rm -rf "${qa_root:?}/browser-host-qa" "${qa_root:?}/avd"
+    rmdir "${qa_root:?}" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
 YARDLET_WITHOUT_CEF=1 "$ROOT/scripts/build-app.sh" debug
 "$ROOT/scripts/browser-host-qa/prepare-qa.sh" "$ROOT/.build/Yardlet.app" "$qa_app" com.zzunkie.yardletqa.androidpanel
 
@@ -51,29 +81,8 @@ for candidate in {5600..5680..2}; do
 done
 [[ -n "$port" ]] || { print -u2 "error: no free emulator port between 5600 and 5681"; exit 1; }
 serial="emulator-$port"
+address="127.0.0.1:$((port + 1))"
 
-name="yardlet_sim_qa_$(/usr/bin/openssl rand -hex 3)"
-emulator_pid=""
-app_pid=""
-cleanup() {
-    if [[ -n "$app_pid" ]] && kill -0 "$app_pid" 2>/dev/null; then
-        kill "$app_pid" 2>/dev/null || true
-        for _ in {1..50}; do kill -0 "$app_pid" 2>/dev/null || break; sleep 0.1; done
-    fi
-    local pid command
-    /bin/ps -axo pid=,command= | while read -r pid command; do
-        [[ "$command" == "$qa_app/"* || "$command" == "/private$qa_app/"* ]] && kill "$pid" 2>/dev/null || true
-    done
-    if [[ -n "$emulator_pid" ]]; then
-        HOME="$qa_home" "$adb" -s "$serial" emu kill >/dev/null 2>&1 || true
-        for _ in {1..60}; do kill -0 "$emulator_pid" 2>/dev/null || break; sleep 0.5; done
-        kill "$emulator_pid" 2>/dev/null || true
-    fi
-    print "Stopped and deleted $name"
-    rm -rf "${qa_root:?}/browser-host-qa" "${qa_root:?}/avd"
-    rmdir "${qa_root:?}" 2>/dev/null || true
-}
-trap cleanup EXIT INT TERM
 print "no" | ANDROID_AVD_HOME="$avd_home" "$avdmanager" create avd -n "$name" -k "$image" -d "$profile" >/dev/null
 # The emulator writes its console's token in its HOME, the QA home, where the app's adb reads it; its other
 # files stay in ~/.android as for any emulator.
@@ -90,9 +99,14 @@ done
     print -u2 "error: $name did not finish booting"; exit 1; }
 # A first boot keeps setting up the launcher for a while after it reports booted.
 sleep 15
+# The same emulator at its adb port, as a device reached over `adb connect` is: its serial is the address.
+connected=1
+"$adb" connect "$address" >/dev/null
+"$adb" -s "$address" wait-for-device
 
 app_pid=$("$ROOT/scripts/browser-host-qa/qa-launch.sh" "$qa_app" "$qa_home" "$output/app.log" \
-    "YARDLET_SIMULATOR_QA_ANDROID_AVD=$name" "ANDROID_HOME=$sdk" "ANDROID_AVD_HOME=$avd_home" -- \
+    "YARDLET_SIMULATOR_QA_ANDROID_AVD=$name" "YARDLET_SIMULATOR_QA_ANDROID_CONNECTED=$address" "ANDROID_HOME=$sdk" \
+    "ANDROID_AVD_HOME=$avd_home" -- \
     --ui-fixture=conversation --ui-fixture-browser-ignore-occlusion --ui-fixture-simulator-check="$output")
 print "QA app $app_pid"
 deadline=$(( SECONDS + 300 ))

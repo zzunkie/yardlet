@@ -1,6 +1,7 @@
 #if DEBUG
 import AppKit
 import Foundation
+import YardletAgentTools
 import YardletSimulatorHostProtocol
 
 /// QA for the Simulator tab in the running app (docs/SIMULATOR.md), run by scripts/simulator-qa/run-panel-check.sh with
@@ -18,7 +19,12 @@ import YardletSimulatorHostProtocol
 /// throwaway emulator it started, the same for Android: the emulator listed beside the iOS simulators, its live
 /// screen through the bundle's scrcpy server with Back, Home and Recents in the tab's header, Recents and a swipe
 /// through the tab, the screen turned to landscape, and, with the switch off, the tab closed and the stream and the
-/// server on the device ended. Captures `android-{list,live,recents,drawer,turned,off}-{light,dark}.png`.
+/// server on the device ended. Captures `android-{list,live,recents,drawer,turned,off}-{light,dark}.png`. With
+/// `YARDLET_SIMULATOR_QA_ANDROID_CONNECTED` as well, the address the script connected the same emulator at
+/// (`adb connect 127.0.0.1:<port>`), it is then checked as a real device is: listed by the serial number it reports,
+/// live and driven through the tab, never started or stopped by Yardlet, and left alone by the agents' tools
+/// (`android-connected-{live,recents}-{light,dark}.png`). adb commands go only to emulators and that address, so a
+/// person's own phone on this Mac is neither sent one nor listed.
 @MainActor
 final class SimulatorPanelQA {
     private typealias Navigation = TaskSurfaceNavigationProjection
@@ -199,7 +205,11 @@ final class SimulatorPanelQA {
         let screens = MacSimulatorScreens.shared
 
         // As `AppModel.live()` hands them in: the Mac's iOS simulators and Android emulators.
-        model.simulators = SimulatorCenter(backends: [MacIOSSimulatorBackend(), AndroidEmulatorBackend()])
+        let connected = ProcessInfo.processInfo.environment["YARDLET_SIMULATOR_QA_ANDROID_CONNECTED"]
+        model.simulators = SimulatorCenter(backends: [
+            MacIOSSimulatorBackend(),
+            AndroidEmulatorBackend(runner: QADeviceCommands(connected: Set([connected].compactMap(\.self))))
+        ])
         AppModel.wireSimulatorScreens(to: model)
         model.startSimulators(defaults: .yardlet)
         let center = model.simulators
@@ -264,6 +274,7 @@ final class SimulatorPanelQA {
             _ = await waitUntil(.seconds(20)) { (view.frameDisplay.current?.frame).map { $0.pixelHeight > $0.pixelWidth } ?? false }
             screens.pressNavigation(.home, on: identity)
             try? await Task.sleep(for: .seconds(1))
+            if let connected { await runConnected(connected, adb: adb, window: window) }
 
             // Turned off: the tab closes, the screen is let go, and the server on the device ends with the stream.
             UserDefaults.yardlet.set(false, forKey: SimulatorPreference.key)
@@ -286,6 +297,62 @@ final class SimulatorPanelQA {
         try? await Task.sleep(for: .seconds(1))
         await capture(window, "android-off")
         UserDefaults.yardlet.removeObject(forKey: SimulatorPreference.key)
+    }
+
+    /// The throwaway emulator again, at the address the script connected it, as a real device.
+    private func runConnected(_ address: String, adb: URL, window: NSWindow) async {
+        let center = model.simulators
+        let screens = MacSimulatorScreens.shared
+        let serialNumber = (await adbCommand(adb, address, ["shell", "getprop ro.serialno"]))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let identity = SimulatorDeviceIdentity.androidDevice(serialNumber: serialNumber)
+        var listed = false
+        for _ in 0..<30 where !listed {
+            await center.refreshDevices()
+            listed = center.device(identity)?.adbSerial == address
+            if !listed { try? await Task.sleep(for: .seconds(1)) }
+        }
+        let realDevices = center.devices.filter { $0.identity.kind == .androidDevice }
+        check("connected: listed as a real device by the serial number it reports, and the only one",
+              listed && !serialNumber.isEmpty && realDevices.map(\.adbSerial) == [address],
+              "\(serialNumber) \(realDevices.map { "\($0.name) \($0.adbSerial ?? "")" })")
+        guard listed else { return }
+        await capture(window, "android-connected-list")
+
+        let attached = await center.attach(identity, to: session, by: .person)
+        check("connected: the person attaches it; Yardlet did not start it and offers no Shut Down",
+              { if case let .attached(attachment) = attached { return attachment.isClaimed && !attachment.isStartedByYardlet }
+                return false }()
+                && !SimulatorDeviceMenu.make(for: session, in: center, taskTitle: { _ in nil }).items.contains(.shutDown),
+              "\(attached)")
+        let live = await waitUntil(.seconds(30)) {
+            if case .attached = screens.link(of: identity) { return self.screenView(in: window)?.frameDisplay.current != nil }
+            return false
+        }
+        check("connected: its stream is decoded into the panel", live, "\(String(describing: screens.link(of: identity)))")
+        guard live, let view = screenView(in: window) else { return }
+        screens.pressNavigation(.home, on: identity)
+        try? await Task.sleep(for: .seconds(2))
+        await capture(window, "android-connected-live")
+        let before = view.frameDisplay.current?.frame.sequence ?? 0
+        screens.pressNavigation(.recents, on: identity)
+        let recents = await waitUntil(.seconds(10)) { (view.frameDisplay.current?.frame.sequence ?? 0) > before + 5 }
+        check("connected: Recents reaches it", recents, "")
+        try? await Task.sleep(for: .seconds(1))
+        await capture(window, "android-connected-recents")
+        screens.pressNavigation(.home, on: identity)
+
+        // The agents' tools do not use real devices yet: not listed to them, an attach refused, nothing acted on.
+        let tools = model.simulatorTools
+        let list = await tools.run(tool: SimulatorToolCatalog.list, arguments: .object([:]), task: session)
+        let attach = await tools.run(tool: SimulatorToolCatalog.attach, arguments: .object(["device": .string(address)]),
+                                     task: session)
+        let tap = await tools.run(tool: SimulatorToolCatalog.tap, arguments: .object(["x": .integer(1), "y": .integer(1)]),
+                                  task: session)
+        check("connected: the agents' tools leave it to the person",
+              !list.text.contains(address) && attach.failure?.kind == .refused && tap.failure?.kind == .refused
+                  && model.sessionTools.approvals(for: session).isEmpty,
+              "\(list.text) | \(attach.text) | \(tap.text)")
     }
 
     /// A finger dragged through the screen view over a quarter of a second, between points given as fractions of the
@@ -355,6 +422,21 @@ final class SimulatorPanelQA {
         try? encoder.encode(JSONValue.object(["checks": .array(checks)])).write(to: output.appending(path: "result.json"),
                                                                                   options: .atomic)
         try? "done".write(to: output.appending(path: "finished"), atomically: true, encoding: .utf8)
+    }
+}
+/// The QA app's adb commands: to emulators, and to the one real device the check connected; any other real device on
+/// this Mac, a person's own phone, is never sent one, so it is not listed either.
+private struct QADeviceCommands: CLICommandRunning {
+    let connected: Set<String>
+
+    func run(_ command: CLICommand) async -> CLICommandResult {
+        if let flag = command.arguments.firstIndex(of: "-s"), flag + 1 < command.arguments.count {
+            let serial = command.arguments[flag + 1]
+            guard serial.hasPrefix("emulator-") || connected.contains(serial) else {
+                return CLICommandResult(exitCode: 1, stdout: "", stderr: "not a device of this check")
+            }
+        }
+        return await LiveCLICommandRunner().run(command)
     }
 }
 #endif

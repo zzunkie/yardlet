@@ -354,6 +354,37 @@ final class SimulatorCenterTests: XCTestCase {
         XCTAssertEqual(driver.events, [])
     }
 
+    /// A real Android device is the person's in the Simulator tab, not the agents' yet: the tools do not list it, an
+    /// attach asks nothing and is refused, and a device the person attached is not acted on.
+    func testTheToolsLeaveRealDevicesToThePerson() async throws {
+        let center = SimulatorCenter(backends: [FakeSimulatorBackend([(phoneA, .on)]), ConnectedPhoneBackend()])
+        await center.setEnabled(true)
+        let suite = "SimulatorToolTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let driver = RecordingSimulatorDriver(screen: SimulatorToolScreen(width: 411, height: 914))
+        let tools = SimulatorAgentTools(center: { center }, approvals: SimulatorApprovals(defaults: defaults),
+                                        drivers: [.android: driver])
+        var asked = 0
+        tools.askPerson = { _, _ in
+            asked += 1
+            return true
+        }
+        let task = UUID()
+        let list = await tools.run(tool: SimulatorToolCatalog.list, arguments: .object([:]), task: task)
+        XCTAssertTrue(list.text.contains("Phone A") && !list.text.contains(ConnectedPhoneBackend.phone.name), list.text)
+        let attach = await tools.run(tool: SimulatorToolCatalog.attach,
+                                     arguments: .object(["device": .string("R3CT00TEST")]), task: task)
+        XCTAssertEqual(attach.failure?.kind, .refused, attach.text)
+        XCTAssertNil(center.attachment(of: task))
+        _ = await center.attach(ConnectedPhoneBackend.phone.identity, to: task, by: .person)
+        let tap = await tools.run(tool: SimulatorToolCatalog.tap, arguments: .object(["x": .integer(1), "y": .integer(1)]),
+                                  task: task)
+        XCTAssertEqual(tap.failure?.kind, .refused, tap.text)
+        XCTAssertEqual(asked, 0)
+        XCTAssertEqual(driver.events, [])
+    }
+
     /// A simulator's or an emulator's approval holds for every task and is kept in the preferences the Simulator switch
     /// clears; a real device's holds for its task only and is never written down.
     func testARealDevicesApprovalHoldsForItsTaskOnly() throws {
@@ -419,6 +450,28 @@ final class SimulatorCenterTests: XCTestCase {
         XCTAssertEqual(handler.calls, [])
         XCTAssertFalse(AgentToolCatalog.builtInTools.contains { $0.name.hasPrefix("simulator_") })
     }
+}
+
+/// A phone over USB, on and never turned on or off.
+private struct ConnectedPhoneBackend: SimulatorBackend {
+    static let phone = SimulatorDevice(identity: .androidDevice(serialNumber: "R3CT00TEST"), name: "Test Phone",
+                                       state: .on, osName: "Android 14", osVersion: "34", adbSerial: "R3CT00TEST")
+    let platform = SimulatorPlatform.android
+
+    func check() async -> SimulatorPlatformCheck {
+        SimulatorPlatformCheck(availability: .available, toolchain: SimulatorToolchain(directory: "/srv/sdk"))
+    }
+
+    func devices(with toolchain: SimulatorToolchain) async throws -> [SimulatorDevice] { [Self.phone] }
+    func boot(_ device: SimulatorDevice, with toolchain: SimulatorToolchain) async throws -> SimulatorBootStart {
+        throw SimulatorCommandError(message: "a real device was started")
+    }
+    func waitUntilReady(_ device: SimulatorDevice, with toolchain: SimulatorToolchain) async throws {}
+    func shutDown(_ device: SimulatorDevice, with toolchain: SimulatorToolchain) async throws {
+        throw SimulatorCommandError(message: "a real device was stopped")
+    }
+    func bootIdentity(of device: SimulatorDeviceIdentity, with toolchain: SimulatorToolchain) async
+        -> SimulatorBootIdentity? { nil }
 }
 
 /// Simulators that start and stop at once, each boot with a process of its own.

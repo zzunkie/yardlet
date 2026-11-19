@@ -307,12 +307,12 @@ final class MacSimulatorScreens: SimulatorHostAttaching {
                     guard !Task.isCancelled, self.targets[device] == target else { return }
                     self.attaches[device] = nil
                     NSLog("Yardlet emulator screen of %@: %@", device.value, String(describing: error))
-                    self.links[device] = .failed(.emulatorRefused)
+                    self.links[device] = .failed(.androidRefused(device))
                 }
             }
         } else {
             // An Android device with no adb serial: it is not running.
-            links[device] = .failed(.emulatorRefused)
+            links[device] = .failed(.androidRefused(device))
         }
     }
 
@@ -393,10 +393,10 @@ final class MacSimulatorScreens: SimulatorHostAttaching {
             links[device] = .failed(.emulatorServerMissing)
         case let .couldNotStart(detail):
             NSLog("Yardlet emulator screen of %@: %@", device.value, detail)
-            links[device] = .failed(.emulatorRefused)
+            links[device] = .failed(.androidRefused(device))
         case let .ended(detail):
             if let detail { NSLog("Yardlet emulator screen of %@ ended: %@", device.value, detail) }
-            links[device] = .failed(.emulatorLost)
+            links[device] = .failed(.androidLost(device))
         }
         onDeviceLetGo(device)
     }
@@ -430,6 +430,19 @@ enum SimulatorScreenFailure: Equatable {
     case emulatorRefused
     /// The emulator's stream ended: it shut down, or the connection broke.
     case emulatorLost
+    /// A real Android device is not connected, or its screen's stream did not start.
+    case androidDeviceRefused
+    /// A real Android device's stream ended: it was unplugged, or the connection broke.
+    case androidDeviceLost
+
+    /// An Android emulator's or real device's reason, in its own words.
+    static func androidRefused(_ device: SimulatorDeviceIdentity) -> Self {
+        device.kind.isPhysical ? .androidDeviceRefused : .emulatorRefused
+    }
+
+    static func androidLost(_ device: SimulatorDeviceIdentity) -> Self {
+        device.kind.isPhysical ? .androidDeviceLost : .emulatorLost
+    }
 
     init(_ error: any Error, executable: URL) {
         // A missing helper fails however it was started: sandbox-exec ends at once, or the spawn finds no file.
@@ -458,6 +471,8 @@ enum SimulatorScreenFailure: Equatable {
             L10n.string("Yardlet's Android screen server is missing. Reinstall Yardlet to use Android emulators.")
         case .emulatorRefused: L10n.string("Yardlet couldn't connect to this emulator.")
         case .emulatorLost: L10n.string("The connection to this emulator ended.")
+        case .androidDeviceRefused: L10n.string("Yardlet couldn't connect to this device.")
+        case .androidDeviceLost: L10n.string("The connection to this device ended.")
         }
     }
 
@@ -475,6 +490,8 @@ enum SimulatorScreenFailure: Equatable {
         case .emulatorServerMissing: "Yardlet's scrcpy server is missing from the app; reinstalling Yardlet restores it"
         case .emulatorRefused: "Yardlet couldn't connect to the emulator"
         case .emulatorLost: "the connection to the emulator ended"
+        case .androidDeviceRefused: "Yardlet couldn't connect to the device"
+        case .androidDeviceLost: "the connection to the device ended"
         }
     }
 }

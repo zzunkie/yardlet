@@ -145,8 +145,9 @@ struct SimulatorPane: View {
             case .attaching, nil:
                 ProgressView().controlSize(.small)
             case let .failed(failure):
-                WorkSurfaceEmptyState(title: L10n.string("The simulator's screen can't be shown."), message: failure.message,
-                                      systemName: "iphone.slash") {
+                let title = device.identity.kind.isPhysical ? L10n.string("The device's screen can't be shown.")
+                    : L10n.string("The simulator's screen can't be shown.")
+                WorkSurfaceEmptyState(title: title, message: failure.message, systemName: "iphone.slash") {
                     if failure.canTryAgain {
                         Button(L10n.string("Try Again")) { screens.retry(device.identity) }.controlSize(.small)
                     }

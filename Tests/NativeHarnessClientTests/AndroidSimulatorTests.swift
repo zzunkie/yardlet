@@ -7,7 +7,7 @@ import XCTest
 import YardletSimulatorHostProtocol
 
 final class AndroidSimulatorTests: XCTestCase {
-    func testFindsTheSDKAndListsEmulatorsWithoutTouchingRealDevices() async throws {
+    func testFindsTheSDKAndListsEmulatorsAndRealDevicesByTheirOwnSerialNumbers() async throws {
         let home = URL(filePath: "/Users/test", directoryHint: .isDirectory)
         let candidates = AndroidSDKLocator.candidates(
             environment: ["ANDROID_SDK_ROOT": "/opt/android"], loginShellPath: "/usr/bin:/srv/sdk/platform-tools:/bin",
@@ -38,15 +38,22 @@ final class AndroidSimulatorTests: XCTestCase {
         XCTAssertEqual(AndroidDeviceList.consoleValue("Test_AVD\r\nOK\r\n"), "Test_AVD")
         XCTAssertEqual(AndroidDeviceList.processID(discoveryPath: "/tmp/avd/running/pid_46118.ini"), 46118)
 
-        // Two AVDs, one running elsewhere on 5554; the real device never gets a command.
+        // Two AVDs, one running elsewhere on 5554; a phone over USB and the same phone over Wi-Fi, known by the serial
+        // number it reports, not by adb's; and a phone that has not allowed this Mac, which is asked nothing.
+        let connected = Listing("emulator-5554 device transport_id:9\nTESTSERIAL01 device usb:1-1 transport_id:3\n"
+            + "192.168.0.7:41234 device transport_id:4\nTESTSERIAL02 unauthorized usb:1-2 transport_id:5\n")
         let runner = ScriptedCommands { command in
             switch command.arguments {
             case ["-list-avds"]: "Test_AVD\nOff_AVD\n"
-            case ["devices", "-l"]: "List of devices attached\nemulator-5554 device transport_id:9\nTESTSERIAL01 device usb:1-1\n"
+            case ["devices", "-l"]: "List of devices attached\n" + connected.value
             case ["-s", "emulator-5554", "emu", "avd", "name"]: "Test_AVD\nOK\n"
+            case ["-s", "TESTSERIAL01", "shell", AndroidDeviceList.connectedDeviceCommand],
+                 ["-s", "192.168.0.7:41234", "shell", AndroidDeviceList.connectedDeviceCommand]:
+                "R5CT00TEST\nTest-Phone\n14\n34\nnull\n"
             default: nil
             }
         }
+        func asked(_ serial: String) -> Int { runner.commands.filter { $0.arguments.starts(with: ["-s", serial, "shell"]) }.count }
         let avds = FileManager.default.temporaryDirectory.appending(path: "avds-\(UUID().uuidString)", directoryHint: .isDirectory)
         defer { try? FileManager.default.removeItem(at: avds) }
         try FileManager.default.createDirectory(at: avds.appending(path: "Test_AVD.avd"), withIntermediateDirectories: true)
@@ -54,14 +61,28 @@ final class AndroidSimulatorTests: XCTestCase {
             .write(to: avds.appending(path: "Test_AVD.ini"))
         try Data("avd.ini.displayname=Test Phone API 34\n".utf8).write(to: avds.appending(path: "Test_AVD.avd/config.ini"))
         let backend = AndroidEmulatorBackend(runner: runner, launcher: NoLaunches(), avdHome: { avds })
-        let devices = try await backend.devices(with: SimulatorToolchain(directory: "/srv/sdk"))
-        XCTAssertEqual(devices.map(\.name), ["Test Phone API 34", "Off AVD"])
-        XCTAssertEqual(devices.map(\.state), [.on, .off])
-        XCTAssertEqual(devices.map(\.toolID), ["emulator-5554", "Off_AVD"])
-        XCTAssertEqual(devices[0].osName, "Android API 34")
-        XCTAssertFalse(runner.commands.contains { $0.arguments.contains("TESTSERIAL01") })
-        let start = try await backend.boot(devices[0], with: SimulatorToolchain(directory: "/srv/sdk"))
+        let sdk = SimulatorToolchain(directory: "/srv/sdk")
+        let devices = try await backend.devices(with: sdk)
+        XCTAssertEqual(devices.map(\.name), ["Test Phone API 34", "Off AVD", "Test-Phone"])
+        XCTAssertEqual(devices.map(\.state), [.on, .off, .on])
+        XCTAssertEqual(devices.map(\.toolID), ["emulator-5554", "Off_AVD", "TESTSERIAL01"])
+        XCTAssertEqual(devices.map(\.osName), ["Android API 34", "Android", "Android 14"])
+        XCTAssertEqual(devices[2].identity, .androidDevice(serialNumber: "R5CT00TEST"))
+        XCTAssertEqual(asked("TESTSERIAL02"), 0)
+        let start = try await backend.boot(devices[0], with: sdk)
         XCTAssertEqual(start, .alreadyOn)
+        // A real device is asked once a connection, and Yardlet never turns one on or off.
+        _ = try await backend.devices(with: sdk)
+        XCTAssertEqual(asked("TESTSERIAL01"), 1)
+        connected.value = "TESTSERIAL01 device usb:1-1 transport_id:6\n"
+        _ = try await backend.devices(with: sdk)
+        XCTAssertEqual(asked("TESTSERIAL01"), 2)
+        do {
+            _ = try await backend.boot(devices[2], with: sdk)
+            XCTFail("a real device was started")
+        } catch {}
+        XCTAssertEqual(AndroidDeviceList.connectedDeviceProperties("R5CT00TEST\nSM-G996N\n15\n35\nJo's Phone\n")?.name,
+                       "Jo's Phone")
 
         let arguments = AndroidEmulatorBackend.launchArguments(avd: "Test_AVD", port: 5600)
         XCTAssertEqual(arguments, ["-avd", "Test_AVD", "-no-window", "-gpu", "host", "-no-boot-anim", "-no-audio",
@@ -297,6 +318,17 @@ private final class ScriptedCommands: CLICommandRunning, @unchecked Sendable {
         lock.withLock { received.append(command) }
         guard let output = answer(command) else { return CLICommandResult(exitCode: 1, stdout: "", stderr: "no script") }
         return CLICommandResult(exitCode: 0, stdout: output, stderr: "")
+    }
+}
+
+/// What `adb devices -l` lists after its header, which a test changes as devices come and go.
+private final class Listing: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: String
+    init(_ value: String) { current = value }
+    var value: String {
+        get { lock.withLock { current } }
+        set { lock.withLock { current = newValue } }
     }
 }
 

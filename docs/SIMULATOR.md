@@ -1,16 +1,18 @@
 # Simulators in the side panel
 
-A task's side panel can hold a Simulator tab: an iOS simulator's or an Android emulator's screen, live, which the
-person uses with the mouse, the trackpad and the keyboard as on the device. Yardlet runs the simulators of the
-person's own Xcode without opening Simulator.app, and the emulators of the person's own Android SDK without a
-window, and changes nothing in Xcode's or the SDK's settings or their lists of devices.
+A task's side panel can hold a Simulator tab: an iOS simulator's, an Android emulator's or an Android device's
+screen, live, which the person uses with the mouse, the trackpad and the keyboard as on the device. Yardlet runs the
+simulators of the person's own Xcode without opening Simulator.app, and the emulators of the person's own Android SDK
+without a window, shows the Android phones and tablets that SDK's adb reaches, and changes nothing in Xcode's or the
+SDK's settings or their lists of devices.
 
 The code:
 
 - `Sources/NativeHarnessClient/Simulator/`: the devices, which task attaches and claims each, and the devices
   Yardlet started (`SimulatorCenter`); the Settings switch (`SimulatorPreference`); the device menu's items
   (`SimulatorDeviceMenu`).
-- `Sources/NativeHarnessClient/Simulator/Android/`: the Android SDK and its emulators (`AndroidEmulatorBackend`),
+- `Sources/NativeHarnessClient/Simulator/Android/`: the Android SDK, its emulators and the devices adb reaches
+  (`AndroidEmulatorBackend`),
   and the client side of the scrcpy server's protocol (`ScrcpySession`).
 - `Sources/NativeHarnessClient/Platform/macOS/Simulator/`: the iOS simulators through `simctl`
   (`MacIOSSimulatorBackend`), the simulator host's process and protocol client, the Android screens' streams and
@@ -61,6 +63,14 @@ or `ANDROID_SDK_ROOT` names, the one whose tools are on the login shell's `PATH`
 Android Studio puts it. The emulators are the AVDs in the SDK's AVD folder, which Android Studio's Device Manager
 makes.
 
+Android devices are the phones and tablets that SDK's adb lists ready: over USB once the device allowed this Mac's
+USB debugging, or over the network once the person connected it with `adb connect` (across Tailscale, for one) or
+paired it in Android Studio. One that has not allowed this Mac yet, or does not answer, is not listed. Yardlet asks a
+device, once each time it connects, for the serial number it reports (`getprop ro.serialno`), its model, its Android
+version and the name the person gave it in its settings (`settings get global device_name`), and knows it by that
+serial number, never by adb's serial, which a wireless connection changes and another device can take. Yardlet does
+not connect, pair, turn on or turn off a device.
+
 The tab lists the devices of each platform that can run here and says nothing of the other; only when neither
 can does it say what each one needs, one under the other. Simulator stays in the launcher and the + menu either
 way; the switch is the way to hide it. A saved Simulator tab whose device is attached while Xcode or the Android
@@ -73,7 +83,8 @@ again then. Nothing reads them on a timer.
 ## Picking a device
 
 With no device attached, the tab lists the devices: those that are on first, under Running, then the iOS
-simulators by runtime, newest first, then the Android emulators by API level. A device another task claims says
+simulators by runtime, newest first, then the Android emulators by API level; an Android device, always on while
+it is listed, is under Running. A device another task claims says
 "Used by" and that task's title.
 
 Picking a device attaches it to the task and claims it when no task does. A device that is off starts without a
@@ -86,7 +97,8 @@ port from 5554), ready once the device says it has booted (`sys.boot_completed`)
 does not use the Mac's microphone, so it asks for no microphone access in Yardlet's name; the AVD's own
 settings are not changed. It never starts read-only: what is installed or changed in the device stays, as in
 Android Studio. An emulator already running, from Android Studio for one, is used where it runs and not started
-again. Phones connected over USB are not listed yet, and no command goes to one.
+again. An Android device is shown as it is and never started or stopped, so its device menu has no Shut Down; one
+that goes away, unplugged or out of reach, leaves the list, and its tab lists the devices until it is back.
 
 Yardlet does not create, delete or erase simulators or emulators; that is Xcode's and Android Studio's part.
 
@@ -151,9 +163,9 @@ Mach port. The tab's layer takes it on the host's pipe queue, in a transaction o
 costs the main thread nothing a frame. While nobody can see a tab (its window covered, minimized, on another
 space, the app hidden, or the tab not shown) it asks for no frames, and a still screen sends none.
 
-An Android emulator's screen comes from the scrcpy server (scrcpy 5.0.1), which the app bundle carries unchanged
-as `Contents/Resources/scrcpy-server` and checks against its SHA-256 before each use. When a tab starts showing
-an emulator, Yardlet copies the server to the device's `/data/local/tmp`, starts it with `adb shell`, and connects
+An Android emulator's or device's screen comes from the scrcpy server (scrcpy 5.0.1), which the app bundle carries
+unchanged as `Contents/Resources/scrcpy-server` and checks against its SHA-256 before each use. When a tab starts
+showing one, Yardlet copies the server to the device's `/data/local/tmp`, starts it with `adb shell`, and connects
 to it through an adb forward tunnel, so Yardlet opens no listening port; the server removes its file as it starts.
 The server sends the screen as H.264, at most 1,280 pixels on its longer side and 4 to 8 Mbps, as sharp as the
 largest tab needs. VideoToolbox decodes it off the main thread into IOSurfaces that the tab's layer takes as it
@@ -164,7 +176,8 @@ device turns, the server starts a new capture and the tab turns with it.
 When the host cannot show the device, the tab says "The simulator's screen can't be shown." and why, in its own
 words: the helper is missing from the app (reinstall Yardlet), it couldn't start, it stopped, it couldn't connect to
 the simulator, or the connection ended. For an Android emulator the reasons are that the scrcpy server is missing
-from the app (reinstall Yardlet), Yardlet couldn't connect to the emulator, or the connection ended. Try Again
+from the app (reinstall Yardlet), Yardlet couldn't connect to the emulator, or the connection ended; an Android
+device's tab says "The device's screen can't be shown." with the same reasons for the device. Try Again
 starts the helper or the stream again; a missing helper or server offers none. The error behind it goes to the log
 (`NSLog`), not to the tab. A build run outside an app bundle (`swift run`) starts the `YardletSimulatorHost` built
 beside it.
@@ -172,14 +185,14 @@ beside it.
 ## Input
 
 - A press, a drag and a release are one finger, sent to an iOS simulator's digitizer, or to an Android
-  emulator's touchscreen through the scrcpy server.
+  emulator's or device's touchscreen through the scrcpy server.
 - A trackpad scroll is a finger put down under the pointer (kept off the screen's edges, so it starts no edge
   gesture), dragged by the scroll's distance and lifted when the fingers leave the trackpad; the glide after it is
   the device's own. A mouse wheel's clicks drag the same way, lifted when the wheel rests. HID scroll messages are
   not used: sent to a service an iPhone does not have, they crash the device's `backboardd`.
 - With the screen focused, keys go to the device by their place on the keyboard, past the Mac's input method,
-  so the device's own keyboard layout composes text: to an iOS simulator as HID keys, to an Android emulator as
-  Android key codes, each carrying the modifiers held. Shift, Control, Option and Command go down and up as keys; Caps Lock, which
+  so the device's own keyboard layout composes text: to an iOS simulator as HID keys, to an Android emulator or
+  device as Android key codes, each carrying the modifiers held. Shift, Control, Option and Command go down and up as keys; Caps Lock, which
   switches the device's keyboard between its languages, is pressed once at each change. Held keys are not
   repeated by the Mac; the device repeats them itself. Every key held and the finger are let go when the screen
   loses the keyboard or shows another device.
@@ -203,7 +216,9 @@ A task's agent sees and drives the device its task attached through eight tools 
 resumed, as "Agent browser tools" works, while a platform's devices can be used: a running task's list gains them
 once the check finds a usable Xcode or Android SDK, and loses them when the switch turns off, as nothing runs then.
 Android emulators are listed and attached like simulators, but the tools that act on a screen do not drive them yet:
-they say so and leave the emulator attached for the agent's own tools (`adb`).
+they say so and leave the emulator attached for the agent's own tools (`adb`). Android devices are the person's in
+the tab and not the tools' yet: `simulator_list` leaves them out, and `simulator_attach` naming one, or a tool on a
+device the person attached in the tab, is refused before anything asks the person or reaches the device.
 
 | Tool | Arguments | Behavior |
 |---|---|---|
@@ -225,7 +240,7 @@ declined when the turn stops, or after ten minutes. Declined, the call is `refus
   not allowed yet waits on its card and is declined. It is kept in Yardlet's preferences
   (`YardletSimulatorApprovedDevices`): turning the switch off removes every approval, and removing Yardlet removes its
   preferences with them.
-- A real device's approval holds only in the task it was given in, and only while Yardlet runs; its card adds that
+- A real device's approval, once the tools use real devices, holds only in the task it was given in, and only while Yardlet runs; its card adds that
   with real accounts signed in, the agent can send messages or make payments, and that pictures of its screen are sent
   to the model's provider.
 - "Revoke Agent Access" in the device menu takes an approval back in every task; the next tool on the device asks
@@ -259,8 +274,8 @@ automation.
 
 - `TaskSurfaceNavigationProjectionTests` and `SimulatorCenterTests` check the tab's place in the panel, the
   launcher's order and the device menu's items. `SimulatorCenterTests` also checks the agent tools: the list each task
-  gets, the attached device only, approvals and their reach, positions turned into fractions of the screen, and the
-  limits.
+  gets, the attached device only, approvals and their reach, positions turned into fractions of the screen, the
+  limits, and that they leave Android devices to the person.
 - `SessionToolRenderingTests` draws the approval cards of a simulator and of a real device under
   `.build/session-tools-qa/`.
 - `SimulatorPanelRenderingTests` draws each state of the tab with fictional devices (the list, each missing
@@ -270,13 +285,18 @@ automation.
   simulator it makes, boots without a window and deletes afterwards: the live screen, a click, a trackpad scroll,
   Home and typing, through the helper, and the agent tools' select-all and paste, which puts the device's clipboard
   back. Simulators it did not make are left alone.
-- `AndroidSimulatorTests` check the SDK's lookup and the device list against recorded output, the scrcpy
+- `AndroidSimulatorTests` check the SDK's lookup and the device list against recorded output (Android devices
+  known by the serial number they report, asked once a connection, never started), the scrcpy
   protocol, the decoding of a stream across a rotation, the keys' codes and modifiers, and that the bundle carries
   the server file the client checks.
 - `scripts/simulator-qa/run-android-check.sh` runs `AndroidScreenQATests` against an AVD it makes in a folder of its
   own, starts without a window and deletes afterwards: how long decoding takes, the first frame, Back, Home and
   Recents, a swipe, typing, a turn, screenshots, and that the stream and the server end with the last tab.
-  `scripts/simulator-qa/run-android-panel-check.sh` does the same in the running app's tab, as below.
+  `scripts/simulator-qa/run-android-panel-check.sh` does the same in the running app's tab, as below, and then
+  connects the same emulator again at its adb port (`adb connect 127.0.0.1:<port>`), which adb treats as a device
+  reached over the network: the tab lists it by the serial number it reports, shows and drives it, offers no Shut
+  Down, and the agent tools leave it alone. The QA app sends adb commands only to emulators and that address, so a
+  phone plugged into the Mac is neither asked anything nor listed.
 - `scripts/simulator-qa/run-panel-check.sh` does the same in the running app: a QA bundle launched in the
   background with a temporary home follows the switch, lists and attaches its simulator, shows it live through
   the bundle's simulator host, takes a click, and closes the tab when the switch turns off. Before that,
