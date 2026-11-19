@@ -96,10 +96,17 @@ enum ComposerParts {
         button.minHeight = 0
     }
 
+    struct ControlLabel {
+        let title: TextBlock
+        let detail: TextBlock?
+        var titleLimit: Double { detail == nil ? 138 : 196 }
+    }
+
     /// One of the bottom row's controls (`ParityComposerControl`): an optional symbol, the words, dimmer words after
     /// a middle dot, a chevron where it opens a menu; 24 high, its corners 6, filled under the pointer.
     static func control(title: String, detail: String? = nil, glyph code: String? = nil, chevron: Bool = false,
-                        tint: ThemeColor = WindowsTheme.secondaryText, name: String? = nil) -> Button {
+                        tint: ThemeColor = WindowsTheme.secondaryText, name: String? = nil,
+                        onLabel: ((ControlLabel) -> Void)? = nil) -> Button {
         let button = Button()
         styleFlat(button)
         button.height = controlHeight
@@ -110,13 +117,15 @@ enum ComposerParts {
         row.spacing = 5
         if let code { row.children.append(glyph(code, size: 11.5, color: tint)) }
         let words = label(title, color: tint)
-        words.maxWidth = detail == nil ? 138 : 196
+        let dim = detail.map { label("· \($0)", color: WindowsTheme.tertiaryText) }
+        let controlLabel = ControlLabel(title: words, detail: dim)
+        words.maxWidth = controlLabel.titleLimit
         row.children.append(words)
-        if let detail {
-            let dim = label("· \(detail)", color: WindowsTheme.tertiaryText)
+        if let dim {
             dim.maxWidth = 120
             row.children.append(dim)
         }
+        onLabel?(controlLabel)
         if chevron { row.children.append(glyph(Glyph.chevronDown, size: 8, color: tint)) }
         button.content = row
         // UI Automation names the control by what it is, and reads its value from its words.
@@ -270,16 +279,20 @@ final class ComposerCard {
     let extras = StackPanel()
     private let notice = TextBlock()
     private let grid = Grid()
+    private let bottom = Grid()
+    private var modelLabel: ComposerParts.ControlLabel?
 
     @MainActor struct Metrics {
         var text: Thickness
         var minTextHeight: Double
         var maxTextHeight: Double
         var fontSize: Double
+        var wrapsControls = false
 
         /// Below a conversation (`ComposerEditorMetrics.task`).
         static let task = Metrics(text: Thickness(left: 15, top: 12, right: 15, bottom: 6), minTextHeight: 40,
-                                  maxTextHeight: ComposerKeys.maximumHeight, fontSize: WindowsTheme.bodyFontSize)
+                                  maxTextHeight: ComposerKeys.maximumHeight, fontSize: WindowsTheme.bodyFontSize,
+                                  wrapsControls: true)
         /// New task's (`ComposerEditorMetrics.newTask`).
         static let newTask = Metrics(text: Thickness(left: 16, top: 16, right: 16, bottom: 12), minTextHeight: 44,
                                      maxTextHeight: 250, fontSize: WindowsTheme.bodyFontSize + 1)
@@ -324,13 +337,24 @@ final class ComposerCard {
         try? Grid.setRow(extras, 4)
         grid.children.append(extras)
 
-        let bottom = Grid()
         bottom.margin = Thickness(left: 10, top: 0, right: 9, bottom: 9)
         bottom.columnSpacing = 7
         for width in [GridLength(value: 1, gridUnitType: .star), GridLength(value: 0, gridUnitType: .auto)] {
             let column = ColumnDefinition()
             column.width = width
             bottom.columnDefinitions.append(column)
+        }
+        if metrics.wrapsControls {
+            for _ in 0..<2 {
+                let row = RowDefinition()
+                row.height = GridLength(value: 0, gridUnitType: .auto)
+                bottom.rowDefinitions.append(row)
+            }
+            trailing.horizontalAlignment = .right
+            view.sizeChanged.addHandler { [weak self] _, change in
+                guard let change, change.newSize.width != change.previousSize.width else { return }
+                self?.fitFooter()
+            }
         }
         leading.orientation = .horizontal
         leading.spacing = 4
@@ -347,6 +371,42 @@ final class ComposerCard {
 
         field.gotFocus.addHandler { [weak self] _, _ in self?.view.borderBrush = WindowsTheme.strongSeparator.brush }
         field.lostFocus.addHandler { [weak self] _, _ in self?.view.borderBrush = WindowsTheme.separator.brush }
+    }
+
+    /// The queued actions can change without the card resizing, for example on a running turn.
+    func fitTaskControls(modelLabel: ComposerParts.ControlLabel?) {
+        self.modelLabel = modelLabel
+        fitFooter()
+    }
+
+    private func fitFooter() {
+        let width = view.actualWidth - view.borderThickness.left - view.borderThickness.right
+            - bottom.margin.left - bottom.margin.right
+        guard width > 0 else { return }
+
+        func idealWidth(_ element: UIElement) -> Double {
+            try? element.measure(.init(width: .infinity, height: .infinity))
+            return Double(element.desiredSize.width)
+        }
+        // Measure the full labels first, including after widening a previously narrow window.
+        if let modelLabel {
+            modelLabel.title.maxWidth = modelLabel.titleLimit
+            modelLabel.detail?.visibility = .visible
+        }
+        let fullTrailing = idealWidth(trailing)
+        let wraps = idealWidth(leading) + bottom.columnSpacing + fullTrailing > width
+        try? Grid.setColumnSpan(leading, wraps ? 2 : 1)
+        try? Grid.setRow(trailing, wraps ? 1 : 0)
+        try? Grid.setColumn(trailing, wraps ? 0 : 1)
+        try? Grid.setColumnSpan(trailing, wraps ? 2 : 1)
+        trailing.margin = Thickness(left: 0, top: wraps ? 6 : 0, right: 0, bottom: 0)
+
+        // On its own row the model drops the effort before shortening the name. The context ring,
+        // queue and Send or Stop retain their natural sizes.
+        guard fullTrailing > width, let modelLabel else { return }
+        modelLabel.detail?.visibility = .collapsed
+        let overflow = max(0, idealWidth(trailing) - width)
+        modelLabel.title.maxWidth = max(0, idealWidth(modelLabel.title) - overflow)
     }
 
     /// The text box without a frame or fill of its own in any state; the card draws them.

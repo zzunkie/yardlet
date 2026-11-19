@@ -30,6 +30,9 @@ final class ComposerOptionChips {
     /// Opens the model menu last drawn.
     private var openModel: (() -> Void)?
 
+    /// The current model label, for the task footer to fit between the fixed-size actions.
+    private(set) var modelLabel: ComposerParts.ControlLabel?
+
     /// The controls after + : the mode or Plan indicator, the permissions, and while choices are read, a spinner.
     func leading(_ options: ComposerSessionOptions) -> [UIElement] {
         var controls: [UIElement] = []
@@ -54,10 +57,9 @@ final class ComposerOptionChips {
             break
         }
         if let permission = options.permission {
-            let tint = permission.hasPendingRequest || permission.isElevated ? ComposerParts.orange : WindowsTheme.secondaryText
+            let tint = permission.isElevated ? ComposerParts.orange : WindowsTheme.secondaryText
             let control = ComposerParts.control(title: permission.title,
-                                                glyph: permission.hasPendingRequest ? ComposerParts.Glyph.warning
-                                                    : ComposerParts.Glyph.shield,
+                                                glyph: ComposerParts.Glyph.shield,
                                                 chevron: true, tint: tint, name: L10n.string("Permissions"))
             try? ToolTipService.setToolTip(control, permission.help ?? permission.accessibilityHint)
             let canChoose = permission.canChoose && !permission.preparesBeforeOpening
@@ -107,10 +109,11 @@ final class ComposerOptionChips {
     /// The controls before the queue and Send: the model menu, beside Send as both reference apps place it.
     func trailing(_ options: ComposerSessionOptions) -> [UIElement] {
         openModel = nil
+        modelLabel = nil
         guard let slot = options.model else { return [] }
         let menu = slot.menu
         let control = ComposerParts.control(title: menu.triggerTitle, detail: menu.triggerDetail, chevron: true,
-                                            name: L10n.string("Model"))
+                                            name: L10n.string("Model")) { self.modelLabel = $0 }
         try? ToolTipService.setToolTip(control, L10n.string("Select model"))
         let canChoose = menu.canChoose && !menu.isEmpty
         attach(key: "model", to: control, canChoose: canChoose) { [weak self] in

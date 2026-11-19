@@ -252,6 +252,7 @@ final class RemoteComposer {
         card.trailing.children.clear()
         guard let shown, let taskID else {
             attachments.show(policy: nil)
+            card.fitTaskControls(modelLabel: nil)
             return
         }
         let options = shown.options
@@ -300,6 +301,7 @@ final class RemoteComposer {
         sendButton.visibility = shown.isRunning ? .collapsed : .visible
         card.trailing.children.append(stopButton)
         card.trailing.children.append(sendButton)
+        card.fitTaskControls(modelLabel: options?.model == nil ? nil : chips.modelLabel)
         showSendable()
     }
 

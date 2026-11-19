@@ -199,12 +199,16 @@ final class TaskComposer {
         guard let state else { return }
         let previous = shown
         shown = state
+        let queueChanged = previous?.queue != state.queue
+        if queueChanged { followUpButton.show(count: personQueue.count) }
         if previous?.options != state.options || previous?.isRunning != state.isRunning
             || previous?.canSteer != state.canSteer || previous?.isAttached != state.isAttached
             || previous?.queue.isEmpty != state.queue.isEmpty {
             redrawControls()
+        } else if queueChanged {
+            card.fitTaskControls(modelLabel: chips.modelLabel)
         }
-        if previous?.queue != state.queue || previous?.isQueuePaused != state.isQueuePaused
+        if queueChanged || previous?.isQueuePaused != state.isQueuePaused
             || previous?.options.followUp != state.options.followUp {
             redrawQueue()
         }
@@ -268,6 +272,7 @@ final class TaskComposer {
             card.leading.children.clear()
             card.trailing.children.clear()
             attachments.show(policy: nil)
+            card.fitTaskControls(modelLabel: nil)
             return
         }
         let options = shown.options
@@ -298,6 +303,7 @@ final class TaskComposer {
         sendButton.visibility = shown.isRunning ? .collapsed : .visible
         card.trailing.children.append(stopButton)
         card.trailing.children.append(sendButton)
+        card.fitTaskControls(modelLabel: chips.modelLabel)
     }
 
     /// The context window's "Compact session": Claude Code's `/compact` as the next message, or Codex's Compact,
@@ -324,7 +330,6 @@ final class TaskComposer {
         let carries = sessionID.map { !model.composerDrafts.tasks.draft(for: $0).attachments.isEmpty } ?? false
         ComposerParts.setEnabled(sendButton, sessionID != nil && !held
             && (ComposerKeys.canSend(card.field.text) || carries))
-        followUpButton.show(count: personQueue.count)
     }
 
     // MARK: The queue
