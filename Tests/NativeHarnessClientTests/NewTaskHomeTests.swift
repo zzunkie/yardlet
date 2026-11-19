@@ -485,11 +485,17 @@ final class NewTaskHomeTests: XCTestCase {
         evening.state.runs = [ScheduledTaskRun(slot: time(12), at: time(12), trigger: .scheduled, outcome: .skipped)]
         let off = ScheduledTask(name: "Off", prompt: "", trigger: .daily(ScheduleTime(hour: 20, minute: 0)),
                                 destination: ScheduleDestination(harness: .codex), isEnabled: false)
+        let once = ScheduledTask(name: "Measure the launch", prompt: "", trigger: .once(time(19, 26)),
+                                 destination: ScheduleDestination(harness: .codex))
         let runs = DeskProjection.todayRuns(schedules: [(morning, time(10, day: 10)), (evening, time(17, 40)),
-                                                        (off, time(20))], now: now, calendar: calendar)
-        XCTAssertEqual(runs.map(\.kind), [.ran, .upcoming], "What ran today, then what is still to come; nothing skipped or off")
-        XCTAssertEqual(runs.map(\.at), [time(10), time(17, 40)])
-        XCTAssertEqual(Desk(today: runs).remainingToday, 1)
+                                                        (off, time(20)), (once, time(19, 26))], now: now, calendar: calendar)
+        XCTAssertEqual(runs.map(\.kind), [.ran, .upcoming, .upcoming], "What ran today, then what is still to come; nothing skipped or off")
+        XCTAssertEqual(runs.map(\.at), [time(10), time(17, 40), time(19, 26)])
+        let desk = Desk(today: runs)
+        XCTAssertEqual(desk.remainingToday, 1, "What is left counts the one-off run; the recurring one folds apart")
+        XCTAssertEqual(desk.recurringToday, 1)
+        XCTAssertEqual(desk.listedToday(showsRan: false, showsRecurring: false).map(\.id), [DeskTodayItem.run(runs[2]).id])
+        XCTAssertEqual(desk.axisItems(showsRan: true, showsRecurring: true, calendar: calendar).count, 3)
 
         let key = { MailThreadKey(accountID: UUID(), threadID: $0) }
         let mail = [

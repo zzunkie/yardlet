@@ -1993,7 +1993,6 @@ struct MainWindow: View {
                                             accountMenu: accountMenu, onHome: showNewTask, onShowSchedules: showSchedules,
                                             onSelectSection: selectSection,
                                             onSelectEvent: showEvent,
-                                            onOpenSchedule: showSchedule,
                                             onOpenConnectors: { presentSettings(.connectors) })
                         }
                     }

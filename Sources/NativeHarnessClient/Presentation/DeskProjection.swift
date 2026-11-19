@@ -93,6 +93,9 @@ struct DeskScheduledRun: Equatable, Identifiable, Sendable {
     let at: Date
     let kind: Kind
     var id: String { "\(schedule.id):\(at.timeIntervalSinceReferenceDate)" }
+
+    /// A run still to come of a schedule that comes due again: today's lines fold these into one.
+    var isRecurringToCome: Bool { kind == .upcoming && schedule.trigger.isRecurring }
 }
 
 /// A line of today: a scheduled run, or an event of the calendar's.
@@ -180,8 +183,11 @@ struct Desk: Equatable, Sendable {
     /// How many tasks run now, the header's count: every family's running tasks.
     var running = 0
 
-    /// How many of today's runs are still to come, and of its timed events have not ended.
-    var remainingToday: Int { today.filter { $0.kind == .upcoming }.count + eventsLeft }
+    /// How many of today's one-off runs are still to come, and of its timed events have not ended. The recurring runs
+    /// to come count on their own folded line (`recurringToday`).
+    var remainingToday: Int {
+        today.filter { $0.kind == .upcoming && !$0.schedule.trigger.isRecurring }.count + eventsLeft
+    }
 
     /// Today's lines: the all-day events, then the runs and the timed events by when they start.
     var todayItems: [DeskTodayItem] {
@@ -194,19 +200,32 @@ struct Desk: Equatable, Sendable {
     /// How many of today's runs already ran.
     var ranToday: Int { today.filter { $0.kind == .ran }.count }
 
+    /// How many recurring runs are still to come today: the schedules that come due again with a run left today.
+    var recurringToday: Int { today.filter(\.isRecurringToCome).count }
+
+    /// Today's lines as they show, list or axis alike: the recurring runs still to come fold into one line unless
+    /// `showsRecurring`, and the one-off runs, the failures and the events stand at their times.
+    func shownToday(showsRecurring: Bool) -> [DeskTodayItem] {
+        showsRecurring ? todayItems : todayItems.filter { item in
+            if case let .run(run) = item { !run.isRecurringToCome } else { true }
+        }
+    }
+
     /// Today's lines as a list shows them: the runs that already ran, which ask nothing, fold into one line
-    /// unless `showsRan`. The time axis places every line at its time (`todayItems`).
-    func listedToday(showsRan: Bool) -> [DeskTodayItem] {
-        showsRan ? todayItems : todayItems.filter { item in
+    /// unless `showsRan`, as do the recurring runs to come unless `showsRecurring`.
+    func listedToday(showsRan: Bool, showsRecurring: Bool) -> [DeskTodayItem] {
+        let shown = shownToday(showsRecurring: showsRecurring)
+        return showsRan ? shown : shown.filter { item in
             if case let .run(run) = item { run.kind != .ran } else { true }
         }
     }
 
     /// Today's timed lines as the time axis places them: the runs that already ran fold into one block for each hour
     /// they ran in unless `showsRan`, as the list folds them into one line. A block starts at its hour and ends with
-    /// its last run, at the hour's end at most, so the blocks of two hours never stand side by side.
-    func axisItems(showsRan: Bool, calendar: Calendar = .current) -> [DeskAxisItem] {
-        let timed = todayItems.filter { !$0.isAllDay }
+    /// its last run, at the hour's end at most, so the blocks of two hours never stand side by side. The recurring
+    /// runs to come stay off the axis unless `showsRecurring`, as they stay out of the calendar's hours.
+    func axisItems(showsRan: Bool, showsRecurring: Bool, calendar: Calendar = .current) -> [DeskAxisItem] {
+        let timed = shownToday(showsRecurring: showsRecurring).filter { !$0.isAllDay }
         guard !showsRan else { return timed.map(DeskAxisItem.line) }
         var lines: [DeskAxisItem] = []
         var hours: [Date: (end: Date, count: Int)] = [:]

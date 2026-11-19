@@ -12,7 +12,6 @@ struct CalendarSidebar: View {
     var onShowSchedules: (() -> Void)?
     let onSelectSection: (ShellSection) -> Void
     let onSelectEvent: (CalendarEvent) -> Void
-    let onOpenSchedule: (UUID) -> Void
     let onOpenConnectors: () -> Void
     @Environment(\.yardletInterfaceScale) private var scale
 
@@ -51,38 +50,46 @@ struct CalendarSidebar: View {
 
     private enum Item: Identifiable {
         case event(CalendarEvent)
-        case run(CalendarScheduleSlot)
+        /// A day's runs still to come, folded into one row: how many, from the first one's time.
+        case runs(count: Int, from: Date)
 
         var id: String {
             switch self {
             case let .event(event): "\(event.id.calendar.accountID) \(event.id.calendar.calendarID) \(event.id.eventID) \(event.start.timeIntervalSinceReferenceDate)"
-            case let .run(slot): slot.id
+            case let .runs(_, from): "runs \(from.timeIntervalSinceReferenceDate)"
             }
         }
 
         var start: Date {
             switch self {
             case let .event(event): event.start
-            case let .run(slot): slot.at
+            case let .runs(_, from): from
             }
         }
     }
 
-    /// What has not ended yet in the upcoming days, by day: events, all-day ones first, and the runs while their
-    /// layer shows.
+    /// What has not ended yet in the upcoming days, by day: events, all-day ones first, then the day's runs folded
+    /// into one row while their layer shows, so the runs leave the events their rows.
     private var upcomingByDay: [(day: Date, items: [Item])] {
         let now = Date()
         let calendar = window.calendar
         let range = window.upcomingRange
         var items: [Item] = center.events(in: range).filter { $0.end > now }.map(Item.event)
         if center.showsSchedules {
-            items += CalendarScheduleSlot.slots(of: schedules, in: DateInterval(start: max(now, range.start), end: range.end),
-                                                calendar: calendar).map(Item.run)
+            var runs: [(day: Date, count: Int, from: Date)] = []
+            let toCome = DateInterval(start: max(now, range.start), end: range.end)
+            for slot in CalendarScheduleSlot.slots(of: schedules, in: toCome, calendar: calendar) {
+                let day = calendar.startOfDay(for: slot.at)
+                if runs.last?.day == day { runs[runs.count - 1].count += 1 } else { runs.append((day, 1, slot.at)) }
+            }
+            items += runs.map { Item.runs(count: $0.count, from: $0.from) }
         }
         items.sort { first, second in
             let firstDay = calendar.startOfDay(for: max(first.start, range.start))
             let secondDay = calendar.startOfDay(for: max(second.start, range.start))
             if firstDay != secondDay { return firstDay < secondDay }
+            if case .runs = first { return false }
+            if case .runs = second { return true }
             if case let .event(event) = first, event.isAllDay { return true }
             if case let .event(event) = second, event.isAllDay { return false }
             return first.start < second.start
@@ -120,10 +127,15 @@ struct CalendarSidebar: View {
                                         note: event.awaitsAnswer ? L10n.string("Not replied") : nil,
                                         time: event.isAllDay ? L10n.string("All day") : CalendarText.time(event.start, calendar: window.calendar),
                                         isSelected: window.selection == event.id) { onSelectEvent(event) }
-                case let .run(slot):
-                    CalendarUpcomingRow(title: slot.name, color: nil, note: nil,
-                                        time: CalendarText.time(slot.at, calendar: window.calendar),
-                                        isSelected: false) { onOpenSchedule(slot.scheduleID) }
+                case let .runs(count, from):
+                    CalendarUpcomingRow(title: L10n.format("%lld scheduled runs", count), color: nil, note: nil,
+                                        time: L10n.format("from %@",
+                                                          CalendarText.time(from, calendar: window.calendar)),
+                                        isSelected: false) {
+                        window.show(from, as: .day)
+                        window.selection = nil
+                    }
+                    .accessibilityHint(L10n.string("Show the day's runs"))
                 }
             }
         }
@@ -198,8 +210,8 @@ struct CalendarSidebar: View {
     }
 }
 
-/// A coming event or run: its calendar's color or a clock, its title, "Not replied" for an invitation to answer, and
-/// its time.
+/// A coming event, or a day's runs: its calendar's color or a clock, its title, "Not replied" for an invitation to
+/// answer, and its time.
 private struct CalendarUpcomingRow: View {
     let title: String
     let color: Color?

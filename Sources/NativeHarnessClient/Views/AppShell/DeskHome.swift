@@ -136,6 +136,8 @@ struct DeskHome<Switch: View, Bottom: View>: View {
     @State private var showsAllFinished = false
     /// The line of today's runs that already ran was chosen: a list of today shows them.
     @State private var showsRanToday = false
+    /// The line of today's recurring runs to come was chosen: today shows them at their times.
+    @State private var showsRecurringToday = false
 
     var body: some View {
 #if DEBUG
@@ -396,14 +398,16 @@ struct DeskHome<Switch: View, Bottom: View>: View {
     }
 
     private func todayZone(_ desk: Desk, onAxis: Bool = false) -> some View {
-        DeskTodayZone(items: onAxis ? desk.todayItems : desk.listedToday(showsRan: showsRanToday),
-                      axis: onAxis ? desk.axisItems(showsRan: showsRanToday) : [],
+        DeskTodayZone(items: onAxis ? desk.shownToday(showsRecurring: showsRecurringToday)
+                          : desk.listedToday(showsRan: showsRanToday, showsRecurring: showsRecurringToday),
+                      axis: onAxis ? desk.axisItems(showsRan: showsRanToday, showsRecurring: showsRecurringToday) : [],
                       ran: desk.ranToday, showsRan: showsRanToday,
+                      recurring: desk.recurringToday, showsRecurring: showsRecurringToday,
                       left: desk.remainingToday, countsEvents: desk.showsEvents, now: activity.now,
                       onAxis: onAxis,
                       highlighted: focus.wrappedValue == .desk ? keyboard.highlightedEntry : nil,
                       onOpenSchedule: activity.onOpenSchedule, onOpenEvent: { onAction(.openEvent($0)) },
-                      onToggleRan: { showsRanToday.toggle() })
+                      onToggleRan: { showsRanToday.toggle() }, onToggleRecurring: { showsRecurringToday.toggle() })
     }
 
     /// The desk stands as three zones, with today on a time axis: wide with the calendar on, unless the day is quiet.
@@ -439,15 +443,20 @@ struct DeskHome<Switch: View, Bottom: View>: View {
         return waiting + (standsInZones(desk) ? finished + running : running + finished) + today(desk)
     }
 
-    /// Today's lines in the keyboard's order: on the axis its all-day lines, "Show less" while the runs that ran show,
-    /// then its blocks; in the list its lines, then the line of runs that ran.
+    /// Today's lines in the keyboard's order: on the axis its all-day lines, the line of recurring runs to come,
+    /// "Show less" while the runs that ran show, then its blocks; in the list its lines, then the line of recurring
+    /// runs to come and the line of runs that ran.
     private func today(_ desk: Desk) -> [NewTaskHomeListKeyboard.Entry] {
+        let row = { (id: String) in NewTaskHomeListKeyboard.Entry.row(.desk(.today), id) }
+        let recurring = desk.recurringToday > 0 ? [row(DeskTodayZone.recurringLineID)] : []
         if standsInZones(desk) {
-            return desk.todayItems.filter(\.isAllDay).map { .row(.desk(.today), $0.id) }
+            return desk.todayItems.filter(\.isAllDay).map { row($0.id) }
+                + recurring
                 + (showsRanToday && desk.ranToday > 0 ? [.toggle(.desk(.today))] : [])
-                + desk.axisItems(showsRan: showsRanToday).map { .row(.desk(.today), $0.id) }
+                + desk.axisItems(showsRan: showsRanToday, showsRecurring: showsRecurringToday).map { row($0.id) }
         }
-        return desk.listedToday(showsRan: showsRanToday).map { .row(.desk(.today), $0.id) }
+        return desk.listedToday(showsRan: showsRanToday, showsRecurring: showsRecurringToday).map { row($0.id) }
+            + recurring
             + (desk.ranToday > 0 ? [.toggle(.desk(.today))] : [])
     }
 
@@ -481,12 +490,17 @@ struct DeskHome<Switch: View, Bottom: View>: View {
                 guard let taskID = UUID(uuidString: id) else { return .ignored }
                 onAction(.openTask(taskID))
             case .today:
+                if id == DeskTodayZone.recurringLineID {
+                    showsRecurringToday.toggle()
+                    return .handled
+                }
                 switch desk.todayItems.first(where: { $0.id == id }) {
                 case let .run(run): onAction(.openSchedule(run.schedule.id))
                 case let .event(event): onAction(.openEvent(event))
                 case nil:
                     // An hour of runs that ran, folded on the axis.
-                    guard case .ran = desk.axisItems(showsRan: showsRanToday).first(where: { $0.id == id }) else { return .ignored }
+                    guard case .ran = desk.axisItems(showsRan: showsRanToday, showsRecurring: showsRecurringToday)
+                        .first(where: { $0.id == id }) else { return .ignored }
                     showsRanToday = true
                 }
             }
@@ -898,10 +912,11 @@ struct DeskFinishedRow: View, @MainActor Equatable {
 
 /// "Today": today's scheduled runs and, while the calendar is on, its events, in time order, then the inboxes'
 /// unread threads while the mailbox is on. It reads the mailbox and the calendars' colors in its own body, so new
-/// mail redraws this zone alone. Empty, it is not there. As a list, the runs that already ran fold into one line
-/// after the others, which shows them when chosen, as "Show more" does under the results just finished. On the
-/// time axis (`onAxis`, the three zones) the mail folds to one line, all-day events stay lines, and the runs and
-/// timed events stand at their times.
+/// mail redraws this zone alone. Empty, it is not there. The recurring runs still to come fold into one line, which
+/// shows them at their times when chosen, as the calendar sums them up in its all-day row. As a list, the runs that
+/// already ran fold into one line after the others, which shows them when chosen, as "Show more" does under the
+/// results just finished. On the time axis (`onAxis`, the three zones) the mail folds to one line, all-day events and
+/// the line of recurring runs stay lines, and the one-off runs and timed events stand at their times.
 struct DeskTodayZone: View {
     let items: [DeskTodayItem]
     /// The time axis's blocks, with `onAxis`: the timed lines, the runs that ran folded by the hour unless `showsRan`.
@@ -909,7 +924,10 @@ struct DeskTodayZone: View {
     /// How many runs already ran, which `items` leaves out unless `showsRan`: the folded line's count.
     var ran = 0
     var showsRan = false
-    /// The title's "N left": runs still to come and timed events not ended.
+    /// How many recurring runs are still to come today, which `items` leaves out unless `showsRecurring`.
+    var recurring = 0
+    var showsRecurring = false
+    /// The title's "N left": one-off runs still to come and timed events not ended.
     let left: Int
     /// The calendar is on, so `left` counts events too.
     var countsEvents = false
@@ -919,6 +937,7 @@ struct DeskTodayZone: View {
     let onOpenSchedule: (UUID) -> Void
     let onOpenEvent: (CalendarEvent) -> Void
     var onToggleRan: () -> Void = {}
+    var onToggleRecurring: () -> Void = {}
     @Environment(\.mailbox) private var mailbox
     @Environment(\.calendarCenter) private var calendarCenter
 
@@ -931,6 +950,7 @@ struct DeskTodayZone: View {
                 title
                 if !mail.isEmpty { mailBlock(mail, compact: true) }
                 ForEach(items.filter(\.isAllDay)) { line($0, colors: colors) }
+                if recurring > 0 { recurringLine }
                 if showsRan, ran > 0 { ranLine }
                 DeskTimeAxis(items: axis, colors: colors, minute: Calendar.current.startOfMinute(now),
                              day: day, highlighted: highlightedID, onOpenEvent: onOpenEvent, onOpenSchedule: onOpenSchedule,
@@ -940,13 +960,37 @@ struct DeskTodayZone: View {
                     .padding(.top, 10)
                     .padding(.bottom, 16)
             }
-        } else if !items.isEmpty || ran > 0 || !mail.isEmpty {
+        } else if !items.isEmpty || ran > 0 || recurring > 0 || !mail.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
                 title
                 ForEach(items) { line($0, colors: colors) }
+                if recurring > 0 { recurringLine }
                 if ran > 0 { ranLine }
-                if !mail.isEmpty { mailBlock(mail, compact: false).padding(.top, items.isEmpty && ran == 0 ? 0 : 8) }
+                if !mail.isEmpty {
+                    mailBlock(mail, compact: false).padding(.top, items.isEmpty && ran == 0 && recurring == 0 ? 0 : 8)
+                }
             }
+        }
+    }
+
+    /// The keyboard's place of the line of recurring runs to come.
+    static let recurringLineID = "recurring"
+
+    /// The recurring runs still to come, folded: how many, or "Fold recurring runs" once they show.
+    private var recurringLine: some View {
+        NewTaskHomeRow(isHighlighted: highlightedID == Self.recurringLineID, showsChevron: false,
+                       action: onToggleRecurring) {
+            timeText("", isPast: false)
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 14)
+            Text(showsRecurring ? L10n.string("Fold recurring runs")
+                 : L10n.format("%lld recurring runs left", recurring))
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
         }
     }
 

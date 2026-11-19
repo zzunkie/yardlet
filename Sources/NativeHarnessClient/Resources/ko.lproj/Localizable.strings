@@ -4044,6 +4044,17 @@
 "%lld left today with the calendar" = "오늘 남은 일정 %lld";
 "%lld of today's runs already ran" = "실행됨 %lld";
 "%lld left with the calendar" = "남은 일정 %lld";
+"%lld recurring runs" = "반복 실행 %lld";
+"%lld recurring runs · %lld left" = "반복 실행 %1$lld · 남은 %2$lld";
+"%lld recurring runs left" = "반복 실행 %lld개 남음";
+"Fold recurring runs" = "반복 실행 접기";
+"%lld scheduled runs" = "예약 실행 %lld개";
+"from %@" = "%@부터";
+"Show the day's runs" = "이날 실행 보기";
+"Runs this day" = "이날 예약 실행";
+"%lld past runs" = "지난 실행 %lld";
+"Recurring run" = "반복 실행";
+"One-off run" = "한 번 실행";
 "Accept invitation" = "수락";
 "Decline invitation" = "거절";
 "%lld projects" = "프로젝트 %lld개";

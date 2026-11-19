@@ -4044,6 +4044,17 @@
 "%lld left today with the calendar" = "%lld left today";
 "%lld of today's runs already ran" = "%lld already ran";
 "%lld left with the calendar" = "%lld left";
+"%lld recurring runs" = "%lld recurring";
+"%lld recurring runs · %lld left" = "%1$lld recurring · %2$lld left";
+"%lld recurring runs left" = "%lld recurring left";
+"Fold recurring runs" = "Fold recurring runs";
+"%lld scheduled runs" = "%lld scheduled";
+"from %@" = "from %@";
+"Show the day's runs" = "Show the day's runs";
+"Runs this day" = "Runs this day";
+"%lld past runs" = "%lld earlier";
+"Recurring run" = "Recurring run";
+"One-off run" = "One-off run";
 "Accept invitation" = "Accept";
 "Decline invitation" = "Decline";
 "%lld projects" = "%lld projects";

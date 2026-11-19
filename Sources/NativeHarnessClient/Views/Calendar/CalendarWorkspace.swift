@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// The calendar beside its sidebar: the month and the days shown in the title bar's row with Today, the arrows and
-/// Day or Week, and the days below. While it shows, the calendar reads the days shown and the sidebar's upcoming
+/// Day or Week, and the days below, with a day's scheduled runs listed beside it in Day and the chosen event's
+/// details in their place. While it shows, the calendar reads the days shown and the sidebar's upcoming
 /// days (`CalendarCenter.show`), and nothing once it goes.
 struct CalendarWorkspace: View {
     let center: CalendarCenter
@@ -18,18 +19,25 @@ struct CalendarWorkspace: View {
         let events = center.events(in: window.range)
         let colors = CalendarColors.byCalendar(center)
         let chosen = window.selection.flatMap { key in events.first { $0.id == key } }
+        let slots = center.showsSchedules
+            ? CalendarScheduleSlot.slots(of: schedules, in: window.range, calendar: window.calendar) : []
         VStack(spacing: 0) {
             titleBar(AnyView(titleRow))
             HStack(spacing: 0) {
-                CalendarDaysView(days: window.days, today: window.today, events: events,
-                                 slots: center.showsSchedules
-                                    ? CalendarScheduleSlot.slots(of: schedules, in: window.range, calendar: window.calendar) : [],
+                CalendarDaysView(days: window.days, today: window.today, events: events, slots: slots,
                                  colors: colors, selection: window.selection, calendar: window.calendar,
                                  onSelect: { window.selection = window.selection == $0.id ? nil : $0.id },
-                                 onOpenSchedule: onOpenSchedule)
+                                 onOpenSchedule: onOpenSchedule,
+                                 onShowDay: { day in
+                                     window.show(day, as: .day)
+                                     window.selection = nil
+                                 })
                     .padding(.leading, 6)
                     .padding(.trailing, 12)
-                if let chosen {
+                if chosen == nil, window.span == .day, !slots.isEmpty {
+                    CalendarDayRunsList(slots: slots, calendar: window.calendar, onOpenSchedule: onOpenSchedule)
+                        .id(window.range.start)
+                } else if let chosen {
                     let account = center.account(chosen.id.calendar.accountID)
                     CalendarEventDetail(event: chosen,
                                         info: center.accountCalendars[chosen.id.calendar.accountID]?.first { $0.id == chosen.id.calendar },

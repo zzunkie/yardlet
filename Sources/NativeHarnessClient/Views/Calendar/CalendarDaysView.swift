@@ -1,8 +1,9 @@
 import SwiftUI
 
 /// The days the calendar shows side by side: each day's name, its all-day events, and its hours with the events
-/// and Yardlet's scheduled runs at their times, overlapping ones side by side. The hours scroll; the names and
-/// all-day events stay above them.
+/// and Yardlet's one-off scheduled runs at their times, overlapping ones side by side. The runs of schedules that come
+/// due again stay out of the hours: the all-day row sums up each day's in one line, which shows that day with its
+/// runs listed (`CalendarDayRunsList`). The hours scroll; the names and all-day events stay above them.
 struct CalendarDaysView: View {
     let days: [Date]
     let today: Date
@@ -13,6 +14,8 @@ struct CalendarDaysView: View {
     let calendar: Calendar
     let onSelect: (CalendarEvent) -> Void
     let onOpenSchedule: (UUID) -> Void
+    /// A day's line of recurring runs was chosen.
+    let onShowDay: (Date) -> Void
     @Environment(\.yardletInterfaceScale) private var scale
     /// The hour at the top of the hours: the morning's work hours at first, or an earlier event's.
     @State private var topHour: Int?
@@ -24,11 +27,15 @@ struct CalendarDaysView: View {
     static let allDayLimit = 3
 
     var body: some View {
+#if DEBUG
+        let _ = ViewBodyCensus.note(.calendarDays)
+#endif
+        let runs = CalendarDayRuns.byDay(slots, days: days, calendar: calendar)
         VStack(spacing: 0) {
             dayNames
-            allDayRow
+            allDayRow(runs)
             Rectangle().fill(ParityTheme.strongSeparator).frame(height: 1)
-            hours
+            hours(runs)
         }
     }
 
@@ -65,9 +72,11 @@ struct CalendarDaysView: View {
         }
     }
 
-    private var allDayRow: some View {
+    /// The all-day events, then each day's line of recurring runs.
+    private func allDayRow(_ runs: [CalendarDayRuns]) -> some View {
         let perDay = allDayEvents
-        let rows = min(perDay.map(\.count).max() ?? 0, Self.allDayLimit)
+        let summed = runs.contains { !$0.recurring.isEmpty }
+        let rows = min(perDay.map(\.count).max() ?? 0, Self.allDayLimit) + (summed ? 1 : 0)
         return HStack(alignment: .top, spacing: 0) {
             Text(L10n.string("All day"))
                 .font(.system(size: 10.5 * scale))
@@ -76,7 +85,7 @@ struct CalendarDaysView: View {
                 .frame(width: Self.gutter - 8, alignment: .trailing)
                 .padding(.trailing, 8)
                 .padding(.top, 5)
-            ForEach(Array(zip(days.indices, perDay)), id: \.0) { _, list in
+            ForEach(Array(zip(days.indices, perDay)), id: \.0) { index, list in
                 VStack(spacing: 2) {
                     ForEach(list.prefix(list.count > Self.allDayLimit ? Self.allDayLimit - 1 : Self.allDayLimit)) { event in
                         CalendarAllDayBlock(event: event, color: color(of: event), isSelected: selection == event.id) { onSelect(event) }
@@ -89,6 +98,9 @@ struct CalendarDaysView: View {
                             .padding(.leading, 6)
                             .frame(height: 20 * scale)
                     }
+                    if index < runs.count, !runs[index].recurring.isEmpty {
+                        recurringLine(runs[index].recurring, day: days[index])
+                    }
                 }
                 .padding(.horizontal, 2)
                 .padding(.vertical, 3)
@@ -99,6 +111,18 @@ struct CalendarDaysView: View {
         .frame(height: max(26, CGFloat(rows) * 22 + 6) * scale, alignment: .top)
     }
 
+    /// A day's recurring runs: how many, and on today's how many are still to come, as the minutes pass.
+    @ViewBuilder
+    private func recurringLine(_ runs: [CalendarScheduleSlot], day: Date) -> some View {
+        if calendar.isDate(day, inSameDayAs: today) {
+            TimelineView(.everyMinute) { context in
+                CalendarRecurringLine(count: runs.count, left: runs.count { $0.at >= context.date }) { onShowDay(day) }
+            }
+        } else {
+            CalendarRecurringLine(count: runs.count, left: day > today ? runs.count : 0) { onShowDay(day) }
+        }
+    }
+
     // MARK: - Hours
 
     private var firstHour: Int {
@@ -106,7 +130,7 @@ struct CalendarDaysView: View {
         return max(0, min(8, earliest))
     }
 
-    private var hours: some View {
+    private func hours(_ runs: [CalendarDayRuns]) -> some View {
         ScrollView(.vertical) {
             // One place to scroll to an hour, with the hours drawn over them.
             VStack(spacing: 0) {
@@ -115,7 +139,7 @@ struct CalendarDaysView: View {
             .scrollTargetLayout()
             .padding(.bottom, Self.hourNameRoom)
             .overlay(alignment: .topLeading) {
-                GeometryReader { geometry in grid(width: geometry.size.width) }
+                GeometryReader { geometry in grid(width: geometry.size.width, runs: runs) }
                     .padding(.top, Self.hourNameRoom)
             }
         }
@@ -123,7 +147,7 @@ struct CalendarDaysView: View {
         .onAppear { if topHour == nil { topHour = firstHour } }
     }
 
-    private func grid(width: CGFloat) -> some View {
+    private func grid(width: CGFloat, runs: [CalendarDayRuns]) -> some View {
         let perHour = Self.hourHeight * scale
         let columnWidth = max(0, (width - Self.gutter) / CGFloat(max(days.count, 1)))
         return ZStack(alignment: .topLeading) {
@@ -146,7 +170,8 @@ struct CalendarDaysView: View {
                     .offset(x: Self.gutter + CGFloat(index) * columnWidth)
             }
             ForEach(Array(days.enumerated()), id: \.element) { index, day in
-                dayItems(day, x: Self.gutter + CGFloat(index) * columnWidth, width: columnWidth, perHour: perHour)
+                dayItems(day, once: index < runs.count ? runs[index].once : [],
+                         x: Self.gutter + CGFloat(index) * columnWidth, width: columnWidth, perHour: perHour)
             }
             if let index = days.firstIndex(where: { calendar.isDate($0, inSameDayAs: today) }) {
                 CalendarNowLine(day: days[index], calendar: calendar, perHour: perHour, width: columnWidth)
@@ -160,11 +185,11 @@ struct CalendarDaysView: View {
         case slot(String)
     }
 
-    /// One day's events and runs, each cut to the day, side by side where they overlap.
-    private func dayItems(_ day: Date, x: CGFloat, width: CGFloat, perHour: CGFloat) -> some View {
+    /// One day's events and one-off runs, each cut to the day, side by side where they overlap.
+    private func dayItems(_ day: Date, once runs: [CalendarScheduleSlot], x: CGFloat, width: CGFloat,
+                          perHour: CGFloat) -> some View {
         let end = calendar.date(byAdding: .day, value: 1, to: day) ?? day.addingTimeInterval(86_400)
         let timed = events.filter { !$0.isAllDay && $0.start < end && $0.end > day }
-        let runs = slots.filter { $0.at >= day && $0.at < end }
         let placements = CalendarDayLayout.place(
             timed.map { (key: ItemKey.event($0.id), start: max($0.start, day), end: min($0.end, end)) }
                 + runs.map { (key: ItemKey.slot($0.id), start: $0.at, end: $0.at.addingTimeInterval(CalendarScheduleSlot.drawnLength)) },
@@ -332,6 +357,42 @@ struct CalendarRunBlock: View {
         .help(L10n.string("Open the scheduled task"))
         .accessibilityLabel(slot.name + ", " + CalendarText.time(slot.at, calendar: calendar))
         .accessibilityHint(L10n.string("Open the scheduled task"))
+    }
+}
+
+/// A day's recurring runs in the all-day row, dashed like a run: "12 recurring runs · 5 left". Choosing it shows the
+/// day, whose runs stand listed beside its hours.
+struct CalendarRecurringLine: View {
+    let count: Int
+    /// How many are still to come: some on today's, all on a day to come, none on a day gone.
+    let left: Int
+    let action: () -> Void
+    @Environment(\.yardletInterfaceScale) private var scale
+
+    var body: some View {
+        let text = left > 0 && left < count ? L10n.format("%lld recurring runs · %lld left", count, left)
+            : L10n.format("%lld recurring runs", count)
+        Button(action: action) {
+            HStack(spacing: 3) {
+                Image(systemName: "clock.arrow.circlepath").font(.system(size: 9 * scale, weight: .semibold))
+                Text(text).font(.system(size: 11 * scale, weight: .medium).monospacedDigit()).lineLimit(1)
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: 20 * scale)
+            .background {
+                RoundedRectangle(cornerRadius: 4).fill(ParityTheme.subtleFill)
+                    .overlay(RoundedRectangle(cornerRadius: 4)
+                        .strokeBorder(ParityTheme.strongSeparator, style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 4))
+        }
+        .buttonStyle(.plain)
+        .parityPointer()
+        .help(L10n.string("Show the day's runs"))
+        .accessibilityLabel(text)
+        .accessibilityHint(L10n.string("Show the day's runs"))
     }
 }
 

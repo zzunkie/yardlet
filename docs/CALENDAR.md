@@ -73,8 +73,10 @@ through Apple Calendar. It is shown once, from its connector, which can answer i
 
 - **Upcoming:** what has not ended yet today and in the six days after, by day (Today, Tomorrow, then the date),
   at most eight rows: an event with its calendar's color, title and time (All day first), "Not replied" on an
-  invitation that waits for an answer, and the scheduled runs with a clock while their layer shows. Choosing an event
-  moves the days shown to its day, keeping Day or Week, and chooses it; choosing a run opens its scheduled task.
+  invitation that waits for an answer, and, while the runs' layer shows, one row after each day's events for that
+  day's scheduled runs still to come, recurring and one-off alike ("16 scheduled · from 6:30 PM"), so the runs leave
+  the events their rows. Choosing an event moves the days shown to its day, keeping Day or Week, and chooses it;
+  choosing a day's runs shows that day in Day, with its runs listed.
 - **Calendars:** each account's calendars under its address and service, the Mac's under each account Calendar keeps
   them in (Mac Calendar · iCloud). A box in the calendar's color shows or hides it.
 - **Yardlet › Scheduled runs:** shows or hides the runs of enabled scheduled tasks over the days.
@@ -87,8 +89,17 @@ through Apple Calendar. It is shown once, from its connector, which can answer i
 - All-day events sit in a row above the hours: up to three a day, or two and "N more". Events sit at their times in the
   calendar's color, those that overlap side by side; an invitation not answered yet is drawn with a dashed outline.
   The hours open at 8 AM, or earlier when an event starts earlier, and today's column has a line at the current time.
-- Scheduled runs are drawn as dashed lines with a clock at each time their trigger comes due, from when the schedule
-  was made; choosing one opens its scheduled task.
+- Scheduled runs are worked out from their triggers, from when the schedule was made; the calendar does not draw what
+  a run did. A schedule that comes due again (every day, on chosen days, every N hours) keeps its runs out of the
+  hours: the all-day row sums up each day's in one dashed line with a clock and an arrow around it ("71 recurring ·
+  14 left" on today's, the count alone on other days), and choosing it shows that day in Day. A one-off run is drawn
+  as a dashed block with a clock at its time; choosing it opens its scheduled task. The rule is the same however many
+  runs there are, so a day looks the same from one week to the next.
+- In Day the day's runs stand listed beside the hours (`CalendarDayRunsList`), as wide as an event's details, which
+  take its place while an event is chosen: how many, then the runs still to come by time, a clock with an arrow for a
+  recurring run and a clock for a one-off one. The runs whose time passed fold into one line at the top ("56
+  earlier"), which lists them when chosen. Choosing a run opens its scheduled task. A click on the list's heading, or
+  Tab, gives it the keyboard: ↑ and ↓ move through its lines, Return or Space does what the line does.
 
 ## An event
 
@@ -119,22 +130,26 @@ calendar while the calendar is on.
   for the Projects view, another screen or a closed window.
 - **Today** lists today's events with the scheduled runs in time order: all-day events first, then each event's time,
   its calendar's color, its title, and whether it ended, is under way or starts soon ("in 1 hour"). An invitation not
-  answered yet says "Not replied", kept when the line is too narrow for the rest. The runs that already ran ask nothing,
-  so the list folds them into one line after the others ("12 already ran"), which lists them when chosen, as "Show
-  more" does under the results just finished; the time axis folds them the same way, one block for each hour. The
-  header's and the zone's count of what is left today counts the runs to come and the timed events that have not
-  ended.
+  answered yet says "Not replied", kept when the line is too narrow for the rest. As on the calendar, the next runs of
+  the schedules that come due again fold into one line near the list's end ("16 recurring left"), which shows them at
+  their times when chosen and folds them again when chosen once more; one-off runs and runs that failed keep their own
+  lines. The runs that already ran ask nothing, so the list folds them into one line after the others ("12 already
+  ran"), which lists them when chosen, as "Show more" does under the results just finished; the time axis folds them
+  the same way, one block for each hour. The header's and the zone's count of what is left today counts the one-off
+  runs to come and the timed events that have not ended; the folded line counts the recurring runs.
 - With the calendar on and the home at least 1,200 points wide (`DeskLayout.zones`), the desk stands as three zones:
   what waits with what just finished under it, what runs, and today on a time axis (`DeskTimeAxis`). While both fit,
   the results stand right under what waits; when they do not, they keep their lines at the column's foot, up to half
   of it, and what waits scrolls in the rest (`DeskWaitingOverFinished`). Like the desk's two columns,
   they stand no wider than the Projects view's grid (1,360 points between 30-point margins), so a wider home keeps
   them in its middle rather than stretching their lines (`DeskColumnsPlacement`). Unread mail folds to one line
-  above it and all-day events stay lines. The axis spans 9:00 to 23:00, widened to today's earliest and latest items;
-  events sit at their times in their calendars' colors, side by side where they overlap; an invitation not answered
-  yet is outlined dashed; runs are dashed with a clock; a red line marks the time now. The runs that already ran fold
-  into one block for their hour ("4 already ran"), and choosing one lays them all out at their times again, with "Show
-  less" above the axis to fold them back; events and the runs to come are never folded. The axis opens an hour before
+  above it, and all-day events and the line of recurring runs stay lines. The axis holds the events, the one-off runs,
+  the runs that failed and those that already ran; the recurring runs to come join it only while their line is open.
+  It spans 9:00 to 23:00, widened to today's earliest and latest items; events sit at their times in their calendars'
+  colors, side by side where they overlap; an invitation not answered yet is outlined dashed; runs are dashed with a
+  clock; a red line marks the time now. The runs that already ran fold into one block for their hour ("4 already
+  ran"), and choosing one lays them all out at their times again, with "Show less" above the axis to fold them back;
+  events and the one-off runs to come are never folded. The axis opens an hour before
   now, with the earlier hours above it to scroll up to, and spreads the rest of the day over the column: over at least
   six hours, and no less than 44 points an hour, so a few hours left at night do not stretch to fill a tall column. It
   keeps that opening, and wherever the person scrolled, while it shows, as the time moves and the window changes size.
@@ -162,13 +177,14 @@ calendar while the calendar is on.
 | `Presentation/CalendarWindowState.swift` | A window's days and chosen event, scheduled runs on the days, laying out events that overlap, and dates and the hand-off text (`CalendarText`) |
 | `AppModel+Calendar.swift` | Following the setting and the connectors |
 | `Presentation/DeskProjection.swift`, `Views/AppShell/DeskHome.swift`, `Views/AppShell/DeskTimeAxis.swift` | The desk's today: its events, what is left, the three zones and the time axis |
-| `Views/Calendar/` | The sidebar (`CalendarSidebar`), the days (`CalendarWorkspace`, `CalendarDaysView`) and an event (`CalendarEventDetail`) |
+| `Views/Calendar/` | The sidebar (`CalendarSidebar`), the days (`CalendarWorkspace`, `CalendarDaysView`), a day's runs (`CalendarDayRunsList`) and an event (`CalendarEventDetail`) |
 
 Tests: `GoogleConnectorTests` and `MicrosoftConnectorTests` (the transports against a fake Google and a fake Graph),
 `CalendarCenterTests` (one calendar reached two ways, the Mac's copy standing in, reading only what is shown and not
 again within five minutes, forgetting when turned off, answering an invitation on its own service) and
-`CalendarRenderingTests` (the sidebar's words, the week, an event, an answer, the hand-off and the day, with nothing
-read before the calendar shows or after it goes, drawn under `.build/calendar-qa/` in both appearances at 1280×820 and
-1800×1125), and `NewTaskHomeRenderingTests` (the desk's three zones, two columns with the calendar off and in a
-narrower home, reading today only while the desk shows, and the time axis alone drawn again as the minute changes,
-drawn under `.build/desk-qa/`).
+`CalendarRenderingTests` (the sidebar's words, the week, an event, an answer, the hand-off and the day, with a heavy
+week of about 600 runs (`ManyRunsFixture`) summed up by day, the day's runs listed and gone through with the keyboard,
+and nothing read before the calendar shows or after it goes, drawn under `.build/calendar-qa/` in both appearances at
+1280×820 and 1800×1125), and `NewTaskHomeRenderingTests` (the desk's three zones, two columns with the calendar off
+and in a narrower home, a heavy day's recurring runs folded, reading today only while the desk shows, and the time
+axis alone drawn again as the minute changes, drawn under `.build/desk-qa/`).

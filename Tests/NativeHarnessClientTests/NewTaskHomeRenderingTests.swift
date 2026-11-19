@@ -424,8 +424,8 @@ final class NewTaskHomeRenderingTests: XCTestCase {
 
     /// The same 9 November as the desk's mock: two coordinators (one with four subtasks, one with one),
     /// a task running alone, an approval with a long command, a question, a coordinator's report, a
-    /// pull request whose checks fail, a plan limit, two results just finished, three schedules and three
-    /// unread threads. A subtask its coordinator already read is not on the desk. `cleared` is the same
+    /// pull request whose checks fail, a plan limit, two results just finished, three daily schedules and a
+    /// one-off run, and three unread threads. A subtask its coordinator already read is not on the desk. `cleared` is the same
     /// day after the last waiting line was handled; `quiet` has nothing waiting, running or unread.
     private func deskFixture(_ day: DeskDay) -> (fixture: Fixture, requestLines: [UUID: String]) {
         let w = Self.words
@@ -516,9 +516,12 @@ final class NewTaskHomeRenderingTests: XCTestCase {
             }
             return (task, slot)
         }
+        let measure = calendar.date(bySettingHour: 19, minute: 26, second: 0, of: today)!
         let schedules = [schedule(w("홍보 확인 · 오전", "Promotion check · morning"), 10, 0, ran: true),
                          schedule(w("설계 검토 매일 평가", "Design review daily check"), 17, 40, ran: false),
-                         schedule(w("홍보 확인 · 밤", "Promotion check · night"), 22, 0, ran: false)]
+                         schedule(w("홍보 확인 · 밤", "Promotion check · night"), 22, 0, ran: false),
+                         (ScheduledTask(name: w("측정 72h · 안경 릴스", "Measure 72h · glasses reel"), prompt: "",
+                                        trigger: .once(measure), destination: ScheduleDestination(harness: .claudeCode)), measure)]
 
         let conversations: [UUID: [TranscriptEntry]] = [reattach.id: [
             TranscriptEntry(content: .user(text: w("PR을 열어 주세요", "Open the pull request"))),
@@ -612,7 +615,7 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         // A busy day: five lines wait, four tasks run, two results just finished; the header says so.
         let busy = "busy-1040"
         XCTAssertTrue(shows(busy, L10n.format("%lld waiting", 5) + " · " + L10n.format("%lld running now", 4) + " · "
-                                  + L10n.format("%lld left today", 2)), report[busy]!)
+                                  + L10n.format("%lld left today", 1)), report[busy]!)
         XCTAssertTrue(shows(busy, "git push -u origin remote-terminal-reattach"), "The command to approve")
         XCTAssertTrue(shows(busy, w("보관한 작업을 모아 두는 메뉴 이름을", "Should the menu that collects archived tasks")),
                       "The question")
@@ -625,7 +628,9 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         XCTAssertFalse(shows(busy, w("Android 0.3.9", "Android 0.3.9")), "A result its coordinator read is not on the desk")
         XCTAssertTrue(shows(busy, L10n.string("Just finished")))
         XCTAssertTrue(shows(busy, w("두 해지 조항은", "The two termination clauses")))
-        XCTAssertTrue(shows(busy, w("설계 검토 매일 평가", "Design review daily check")), "Today's runs")
+        XCTAssertTrue(shows(busy, w("측정 72h · 안경 릴스", "Measure 72h · glasses reel")), "A one-off run at its time")
+        XCTAssertFalse(shows(busy, w("설계 검토 매일 평가", "Design review daily check")), "A recurring run to come folds")
+        XCTAssertTrue(shows(busy, L10n.format("%lld recurring runs left", 2)), report[busy]!)
         XCTAssertFalse(shows(busy, w("홍보 확인 · 오전", "Promotion check · morning")), "A run that already ran folds")
         XCTAssertTrue(shows(busy, L10n.format("%lld of today's runs already ran", 1)), report[busy]!)
         XCTAssertTrue(shows(busy, "Google Play Console"), "Unread mail")
@@ -665,7 +670,8 @@ final class NewTaskHomeRenderingTests: XCTestCase {
 
     /// The desk with the calendar on: three zones with today on a time axis in a wide window (1,800 × 1,125 less
     /// 351 pt), two columns in the same window with the calendar off, and two columns whose today lists the events
-    /// with the runs at 1,280 × 820 less 240 pt, in both appearances, into `.build/desk-qa/<language>/calendar-*`.
+    /// with the runs at 1,280 × 820 less 240 pt, then both with a heavy day of runs (`ManyRunsFixture`), whose
+    /// recurring runs to come fold into one line, in both appearances, into `.build/desk-qa/<language>/calendar-*`.
     /// The axis opens on the hour before now as the calendar's lines load above it. The calendar is read for today
     /// while the desk shows, and not before or once the Projects view replaces it.
     func testTheDeskLaysTodayOnATimeAxisWithTheCalendarOn() async throws {
@@ -683,11 +689,14 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         let wide = NSSize(width: 1_449, height: 1_125), regular = NSSize(width: 1_040, height: 820)
         let scenes: [(name: String, calendar: CalendarCenter, size: NSSize)] = [
             ("calendar-zones-1449", center, wide), ("calendar-off-1449", off, wide), ("calendar-two-1040", center, regular),
+            ("calendar-many-zones-1449", center, wide), ("calendar-many-two-1040", center, regular),
         ]
         for scene in scenes {
             for appearance in WindowlessRender.Appearance.allCases {
+                var fixture = deskFixture(.busy).fixture
+                if scene.name.contains("many") { fixture.activity.schedules = Self.heavyDay(now: fixture.activity.now) }
                 let host = WindowlessRender.Host(
-                    home(fixture: deskFixture(.busy).fixture, size: scene.size, scheme: appearance.colorScheme, runtimes: runtimes)
+                    home(fixture: fixture, size: scene.size, scheme: appearance.colorScheme, runtimes: runtimes)
                         .environment(\.mailbox, mailbox)
                         .environment(\.calendarCenter, scene.calendar),
                     size: scene.size, appearance: appearance)
@@ -720,8 +729,10 @@ final class NewTaskHomeRenderingTests: XCTestCase {
                 let axis = elements.contains { $0.label == L10n.format("Time axis now %@", "15:25") }
                 switch scene.name {
                 case "calendar-zones-1449":
-                    // Two runs to come and the invitation; the meeting ended.
-                    XCTAssertTrue(shows(L10n.format("%lld left today with the calendar", 3)), report)
+                    // The one-off run to come and the invitation; the meeting ended, the recurring runs count apart.
+                    XCTAssertTrue(shows(L10n.format("%lld left today with the calendar", 2)), report)
+                    XCTAssertTrue(shows(L10n.format("%lld recurring runs left", 2)), report)
+                    XCTAssertFalse(shows(w("설계 검토 매일 평가", "Design review daily check")), "Off the axis until chosen")
                     XCTAssertTrue(axis, "Today on a time axis: \(report)")
                     let opening = try XCTUnwrap(openingHour(), report)
                     XCTAssertTrue(0 <= opening.gap && opening.gap < opening.quarter,
@@ -740,13 +751,31 @@ final class NewTaskHomeRenderingTests: XCTestCase {
                     XCTAssertGreaterThan(result.frame.minY, question.frame.maxY)
                     XCTAssertTrue(shows(L10n.string("Unread mail")))
                     XCTAssertFalse(shows("Google Play Console"), "The mail folds to one line beside the axis")
+                case "calendar-many-zones-1449", "calendar-many-two-1040":
+                    // A heavy day: what is left counts the one-off runs and the invitation; the recurring runs to
+                    // come are one line, and the rest of today keeps its room.
+                    let runs = DeskProjection.todayRuns(schedules: fixture.activity.schedules, now: fixture.activity.now)
+                    let once = runs.filter { $0.kind == .upcoming && !$0.schedule.trigger.isRecurring }.count
+                    XCTAssertEqual(once, 2)
+                    XCTAssertTrue(shows(L10n.format("%lld left today with the calendar", once + 1)), report)
+                    XCTAssertTrue(shows(L10n.format("%lld recurring runs left", runs.filter(\.isRecurringToCome).count)), report)
+                    XCTAssertFalse(shows(w("소셜 답글 확인 (매시)", "Social replies (hourly)")), "The recurring runs fold")
+                    XCTAssertTrue(shows(ManyRunsFixture.onceRuns(w)[0].name), "Today's one-off run: \(report)")
+                    XCTAssertEqual(axis, scene.name == "calendar-many-zones-1449", report)
+                    if scene.name == "calendar-many-two-1040" {
+                        let result = try XCTUnwrap(controls(in: host).first {
+                            $0.label.contains(w("블로그 소재 고르기", "Pick the next blog topic"))
+                        }, report)
+                        XCTAssertLessThanOrEqual(result.frame.maxY, scene.size.height,
+                                                 "What just finished stays on the screen: \(result.frame)")
+                    }
                 case "calendar-off-1449":
                     XCTAssertFalse(axis, report)
                     XCTAssertFalse(shows(meeting), "No events with the calendar off")
-                    XCTAssertTrue(shows(L10n.format("%lld left today", 2)), report)
+                    XCTAssertTrue(shows(L10n.format("%lld left today", 1)), report)
                 default:
                     XCTAssertFalse(axis, "Two columns at this width: \(report)")
-                    XCTAssertTrue(shows(L10n.format("%lld left today with the calendar", 3)), report)
+                    XCTAssertTrue(shows(L10n.format("%lld left today with the calendar", 2)), report)
                     XCTAssertTrue(elements.contains { $0.label.contains(meeting) && $0.label.contains(L10n.string("Not replied")) },
                                   "The invitation's line: \(report)")
                     XCTAssertTrue(shows(L10n.string("Event ended")), "The meeting that ended")
@@ -770,15 +799,21 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         XCTAssertGreaterThan(service.reads, 0)
     }
 
-    /// The home's clock moving on draws the time axis again once its minute changes, and no line of the desk.
+    /// The home's clock moving on draws the time axis again once its minute changes, and no line of the desk, on
+    /// the fixture's day and on a heavy day of runs (`ManyRunsFixture`).
     func testTheTimeAxisAloneIsDrawnAgainAsTheMinuteChanges() async throws {
+        for heavy in [false, true] { try await timeAxisAloneDrawnAgain(heavy: heavy) }
+    }
+
+    private func timeAxisAloneDrawnAgain(heavy: Bool) async throws {
         let runtimes = try runtimes()
         let mailbox = try await deskMailbox()
         let (center, _) = try deskCalendar()
         DeskPreview.show()
         defer { DeskPreview.hide() }
         let size = NSSize(width: 1_449, height: 1_125)
-        let fixture = deskFixture(.busy).fixture
+        var fixture = deskFixture(.busy).fixture
+        if heavy { fixture.activity.schedules = Self.heavyDay(now: fixture.activity.now) }
         let clock = DeskClock(now: fixture.activity.now)
         let host = WindowlessRender.Host(DeskClockHome(clock: clock) { now in
             var fixture = fixture
@@ -804,6 +839,24 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         XCTAssertEqual(ViewBodyCensus[.deskAxis], 1, "The next minute moves the time line")
         XCTAssertEqual(ViewBodyCensus[.deskRow], 0, "No line of the desk is drawn again")
         XCTAssertTrue(host.accessibilityElements().contains { $0.label == L10n.format("Time axis now %@", "15:26") })
+        if heavy {
+            // The desk works out today from each schedule's runs of today, not from all it ever ran.
+            let clock = ContinuousClock()
+            let took = clock.measure {
+                _ = DeskProjection.desk(sessions: fixture.activity.sessions, schedules: fixture.activity.schedules,
+                                        now: fixture.activity.now).axisItems(showsRan: false, showsRecurring: false)
+            }
+            let line = "\(fixture.activity.schedules.count) schedules, desk \(ViewBodyCensus[.desk]) and axis "
+                + "\(ViewBodyCensus[.deskAxis]) drawn for a minute; today worked out in \(took)"
+            try line.write(to: try WindowlessRender.directory("desk-qa").appending(path: "heavy-day-cost.txt"),
+                           atomically: true, encoding: .utf8)
+        }
+    }
+
+    /// A heavy day of runs on the desk's day (`ManyRunsFixture`): each schedule with what it ran today and its next run.
+    private static func heavyDay(now: Date) -> [(schedule: ScheduledTask, nextRun: Date)] {
+        let schedules = ManyRunsFixture.schedules(today: now, made: now.addingTimeInterval(-21 * 86_400), words: words)
+        return ManyRunsFixture.ranToday(schedules, now: now).map { (schedule: $0.0, nextRun: $0.1) }
     }
 
     /// Choosing the approval's line answers it in the composer's place: its card shows the whole command

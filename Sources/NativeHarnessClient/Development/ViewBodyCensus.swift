@@ -56,6 +56,8 @@ enum ViewBodyCensus {
         case deskRow
         /// The desk's time axis of today (`DeskTimeAxis`), drawn again only when what it shows changed, to the minute.
         case deskAxis
+        /// The calendar's days (`CalendarDaysView`), which split the runs they show by day.
+        case calendarDays
     }
 
     static var isEnabled = false

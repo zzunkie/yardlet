@@ -109,6 +109,8 @@ struct CalendarScheduleSlot: Identifiable, Hashable, Sendable {
     let scheduleID: UUID
     let name: String
     let at: Date
+    /// Its schedule comes due again (every day, on chosen days, every N hours), rather than once at a moment.
+    let isRecurring: Bool
 
     var id: String { scheduleID.uuidString + " \(at.timeIntervalSinceReferenceDate)" }
 
@@ -124,12 +126,41 @@ struct CalendarScheduleSlot: Identifiable, Hashable, Sendable {
             var cursor = max(range.start, calendar.startOfMinute(schedule.createdAt)).addingTimeInterval(-0.001)
             var count = 0
             while count < limit, let next = schedule.trigger.nextSlot(after: cursor, calendar: calendar), next < range.end {
-                slots.append(CalendarScheduleSlot(scheduleID: schedule.id, name: schedule.name, at: next))
+                slots.append(CalendarScheduleSlot(scheduleID: schedule.id, name: schedule.name, at: next,
+                                                  isRecurring: schedule.trigger.isRecurring))
                 cursor = next
                 count += 1
             }
         }
         return slots.sorted { $0.at < $1.at }
+    }
+}
+
+/// One day's scheduled runs as the days show them: the runs of schedules that come due again, which the all-day row
+/// sums up in one line, and the runs that come due once, which stand at their times.
+struct CalendarDayRuns: Hashable, Sendable {
+    var recurring: [CalendarScheduleSlot] = []
+    var once: [CalendarScheduleSlot] = []
+
+    /// Each day's runs, in one pass over the runs shown, which `CalendarScheduleSlot.slots` gives by time.
+    static func byDay(_ slots: [CalendarScheduleSlot], days: [Date], calendar: Calendar) -> [CalendarDayRuns] {
+        var result = Array(repeating: CalendarDayRuns(), count: days.count)
+        guard let first = days.first else { return result }
+        var index = 0
+        var end = dayEnd(of: first, calendar: calendar)
+        for slot in slots where slot.at >= first {
+            while slot.at >= end {
+                index += 1
+                guard index < days.count else { return result }
+                end = dayEnd(of: days[index], calendar: calendar)
+            }
+            if slot.isRecurring { result[index].recurring.append(slot) } else { result[index].once.append(slot) }
+        }
+        return result
+    }
+
+    private static func dayEnd(of day: Date, calendar: Calendar) -> Date {
+        calendar.date(byAdding: .day, value: 1, to: day) ?? day.addingTimeInterval(86_400)
     }
 }
 
