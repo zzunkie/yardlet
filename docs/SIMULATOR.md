@@ -286,8 +286,8 @@ declined when the turn stops, or after ten minutes. Declined, the call is `refus
   (`YardletSimulatorApprovedDevices`): turning the switch off removes every approval, and removing Yardlet removes its
   preferences with them.
 - A real device's approval holds only in the task it was given in, and only while Yardlet runs; its card adds that
-  with real accounts signed in, the agent can send messages or make payments, and that pictures of its screen are sent
-  to the model's provider.
+  with real accounts signed in, the agent can send messages or make payments, and that pictures and text from
+  its screen are sent to the model's provider.
 - "Revoke Agent Access" in the device menu takes an approval back in every task; the next tool on the device asks
   again.
 

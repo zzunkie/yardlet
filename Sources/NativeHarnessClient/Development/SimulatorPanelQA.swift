@@ -424,7 +424,7 @@ final class SimulatorPanelQA {
             }
         }
         let attach = await attaching.value
-        let warned = (card?.detail ?? "").contains(L10n.string("Pictures of its screen are sent to the model's provider."))
+        let warned = (card?.detail ?? "").contains(L10n.string("Pictures and text from its screen are sent to the model's provider."))
         check("connected: the agents' tools list it as a real device and ask for it on its card in this task",
               list.text.contains(#""realDevice":true"#) && list.text.contains(address) && warned && !attach.isError
                   && attach.text.contains("real Android device")

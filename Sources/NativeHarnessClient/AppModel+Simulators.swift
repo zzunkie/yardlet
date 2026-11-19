@@ -178,7 +178,7 @@ struct SimulatorApprovalCard: Equatable {
         var lines = device.osName.isEmpty ? [] : [device.osName]
         if device.identity.kind.isPhysical {
             lines.append(L10n.string("If real accounts are signed in on it, the agent can send messages or make payments."))
-            lines.append(L10n.string("Pictures of its screen are sent to the model's provider."))
+            lines.append(L10n.string("Pictures and text from its screen are sent to the model's provider."))
             lines.append(L10n.string("Allowed for this task only."))
         } else {
             lines.append(L10n.string("Once allowed, any task's agent can use it until you take that back in the Simulator tab."))
