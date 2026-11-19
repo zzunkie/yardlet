@@ -23,9 +23,9 @@ import YardletSimulatorHostProtocol
 /// server on the device ended. Captures `android-{list,live,recents,drawer,turned,approval,tools,off}-{light,dark}.png`.
 /// With `YARDLET_SIMULATOR_QA_ANDROID_CONNECTED` as well, the address the script connected the same emulator at
 /// (`adb connect 127.0.0.1:<port>`), it is then checked as a real device is: listed by the serial number it reports,
-/// live and driven through the tab, never started or stopped by Yardlet, and left alone by the agents' tools
-/// (`android-connected-{live,recents}-{light,dark}.png`). adb commands go only to emulators and that address, so a
-/// person's own phone on this Mac is neither sent one nor listed.
+/// live and driven through the tab, never started or stopped by Yardlet, and used by the agents' tools after the real
+/// device's card in the task (`android-connected-{list,live,recents,approval}-{light,dark}.png`). adb commands go only
+/// to emulators and that address, so a person's own phone on this Mac is neither sent one nor listed.
 @MainActor
 final class SimulatorPanelQA {
     private typealias Navigation = TaskSurfaceNavigationProjection
@@ -377,17 +377,43 @@ final class SimulatorPanelQA {
         await capture(window, "android-connected-recents")
         screens.pressNavigation(.home, on: identity)
 
-        // The agents' tools do not use real devices yet: not listed to them, an attach refused, nothing acted on.
+        // The agents' tools: listed as a real device; the first use in this task asks on the real device's card, which
+        // says what it can reach; allowed, a screenshot is its screen in dp and Recents reaches it. The approval holds
+        // in this task only.
         let tools = model.simulatorTools
+        tools.drivers[.android] = MacAndroidEmulatorDriver(screens: MacSimulatorScreens.shared)
         let list = await tools.run(tool: SimulatorToolCatalog.list, arguments: .object([:]), task: session)
-        let attach = await tools.run(tool: SimulatorToolCatalog.attach, arguments: .object(["device": .string(address)]),
-                                     task: session)
-        let tap = await tools.run(tool: SimulatorToolCatalog.tap, arguments: .object(["x": .integer(1), "y": .integer(1)]),
-                                  task: session)
-        check("connected: the agents' tools leave it to the person",
-              !list.text.contains(address) && attach.failure?.kind == .refused && tap.failure?.kind == .refused
-                  && model.sessionTools.approvals(for: session).isEmpty,
-              "\(list.text) | \(attach.text) | \(tap.text)")
+        let attaching = Task { @MainActor in
+            await tools.run(tool: SimulatorToolCatalog.attach, arguments: .object(["device": .string(address)]),
+                            task: session)
+        }
+        var card: PermissionRequest?
+        for _ in 0..<150 where card == nil {
+            if let approval = model.sessionTools.approvals(for: session).first {
+                card = approval.request
+                try? await Task.sleep(for: .seconds(1))
+                await capture(window, "android-connected-approval")
+                model.sessionTools.answer(approval.id, allow: true)
+            } else {
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+        }
+        let attach = await attaching.value
+        let warned = (card?.detail ?? "").contains(L10n.string("Pictures of its screen are sent to the model's provider."))
+        check("connected: the agents' tools list it as a real device and ask for it on its card in this task",
+              list.text.contains(#""realDevice":true"#) && list.text.contains(address) && warned && !attach.isError
+                  && attach.text.contains("real Android device")
+                  && !model.simulatorTools.approvals.isApproved(identity, for: UUID()),
+              "\(list.text) | \(String(describing: card)) | \(attach.text)")
+        let shot = await tools.run(tool: SimulatorToolCatalog.screenshot, arguments: .object(["format": .string("png")]),
+                                   task: session)
+        let pressedAt = view.frameDisplay.current?.frame.sequence ?? 0
+        let press = await tools.run(tool: SimulatorToolCatalog.press, arguments: .object(["button": .string("recents")]),
+                                    task: session)
+        let moved = await waitUntil(.seconds(10)) { (view.frameDisplay.current?.frame.sequence ?? 0) > pressedAt + 5 }
+        check("connected: allowed, the tools take its screenshot in dp and press Recents on it",
+              !shot.isError && shot.text.contains("dp") && !press.isError && moved, "\(shot.text) | \(press.text)")
+        screens.pressNavigation(.home, on: identity)
     }
 
     /// A finger dragged through the screen view over a quarter of a second, between points given as fractions of the

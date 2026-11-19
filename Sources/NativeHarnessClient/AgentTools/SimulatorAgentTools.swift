@@ -16,8 +16,8 @@ enum SimulatorPanelShowing: Equatable, Sendable {
 /// (`SimulatorDeviceDriving`). The checks that keep an agent to its own device live here, in code: a tool acts only on
 /// the task's attached device, which only `simulator_attach` attaches; the person allows each device before a task's
 /// agent first uses it, whatever the task's permission mode (`SimulatorApprovals`); positions stay on the screen, and
-/// durations, counts and text within their limits. Real Android devices, which the Simulator tab lists for the
-/// person, are not the tools' yet: they are not listed to the agent, and attaching or acting on one is refused.
+/// durations, counts and text within their limits. A real Android device's approval holds only in the task it was
+/// given in, and its card says what the device can reach.
 @MainActor
 final class SimulatorAgentTools {
     /// How long after the person's last input on a device the tools say they are using it, as the browser tools say
@@ -78,13 +78,14 @@ final class SimulatorAgentTools {
     private func list(for task: UUID) async -> AgentToolResult {
         let center = center()
         await center.refreshDevices()
-        let devices: [ToolJSON] = Self.usable(center.entries(for: task)).map { entry in
+        let devices: [ToolJSON] = center.entries(for: task).map { entry in
             var fields: [String: ToolJSON] = [
                 "device": .string(entry.device.toolID),
                 "platform": .string(Self.platformName(entry.device.platform)),
                 "name": .string(entry.device.name),
                 "os": .string(entry.device.osName),
                 "state": .string(Self.stateName(entry.device.state)),
+                "realDevice": .bool(entry.device.identity.kind.isPhysical),
                 "attached": .bool(entry.isAttachedHere),
                 "startedByYardlet": .bool(entry.isStartedByYardlet),
                 "shown": .bool(entry.isShown)
@@ -113,7 +114,6 @@ final class SimulatorAgentTools {
         case let .success(found): device = found
         case let .failure(refusal): return refused(refusal, task: task)
         }
-        if device.identity.kind.isPhysical { return Self.realDevice(device) }
         if let refusal = center.attachRefusal(device.identity, to: task, by: .agent) {
             return refused(refusal, task: task)
         }
@@ -134,9 +134,7 @@ final class SimulatorAgentTools {
             case let .failure(error):
                 lines.append("Yardlet cannot show or drive its screen: \(error.message)")
             }
-            lines.append(attachment.isStartedByYardlet
-                ? Self.startedByYardletLine(startedNow: attachment.startedNow)
-                : "It was started outside Yardlet, so another app or tool may be using it.")
+            lines.append(Self.originLine(attachment))
             switch showPanel(task) {
             case .shown: lines.append("The task's side panel shows it.")
             case .besidePersonsTab:
@@ -176,7 +174,6 @@ final class SimulatorAgentTools {
         // Asked before the device is read again and started if it shut down, which `prepareAttachedDevice` does.
         let known = center.device(identity)
             ?? SimulatorDevice(identity: identity, name: identity.value, state: .off, osName: "", osVersion: "")
-        if identity.kind.isPhysical { return Self.realDevice(known) }
         if let declined = await approval(of: known, for: task) { return declined }
         let attachment: SimulatorAttachment
         switch await center.prepareAttachedDevice(for: task) {
@@ -418,7 +415,7 @@ final class SimulatorAgentTools {
     private func notAttached(_ task: UUID) async -> AgentToolResult {
         let center = center()
         await center.refreshDevices()
-        let entries = Self.usable(center.entries(for: task))
+        let entries = center.entries(for: task)
         var message = "This task has no attached device. Attach one with simulator_attach first"
         if entries.isEmpty {
             message += "; no simulator or emulator is listed."
@@ -438,8 +435,7 @@ final class SimulatorAgentTools {
     }
 
     private func refused(_ refusal: SimulatorRefusal, task: UUID) -> AgentToolResult {
-        let free = refusal.freeRunningDevices.filter { !$0.identity.kind.isPhysical }.prefix(Self.listedDeviceLimit)
-            .map { "\($0.name) (id \($0.toolID))" }
+        let free = refusal.freeRunningDevices.prefix(Self.listedDeviceLimit).map { "\($0.name) (id \($0.toolID))" }
         let freeLine = free.isEmpty ? "" : " Devices that are on and free: \(free.joined(separator: ", "))."
         switch refusal.reason {
         case .disabled:
@@ -476,16 +472,6 @@ final class SimulatorAgentTools {
             + "tries again.", .unreachable, retry: .later)
     }
 
-    /// The devices the tools may use: simulators and emulators.
-    private static func usable(_ entries: [SimulatorListEntry]) -> [SimulatorListEntry] {
-        entries.filter { !$0.device.identity.kind.isPhysical }
-    }
-
-    private static func realDevice(_ device: SimulatorDevice) -> AgentToolResult {
-        .failure("\(device.name) is a real Android device. Yardlet's simulator tools do not use real devices yet; the "
-            + "person can use it in the Simulator tab.", .refused, retry: .no)
-    }
-
     private static func noDriver(_ device: SimulatorDevice) -> AgentToolResult {
         .failure("This Yardlet cannot drive \(platformName(device.platform)) devices yet; \(device.name) stays attached "
             + "for your own tools.", .refused, retry: .no)
@@ -513,6 +499,16 @@ final class SimulatorAgentTools {
         case .android:
             "pass it to your own build and install tools (adb -s \(device.toolID) install <apk>)."
         }
+    }
+
+    /// Where the attached device came from, and what that means for the agent.
+    private static func originLine(_ attachment: SimulatorAttachment) -> String {
+        if attachment.isStartedByYardlet { return startedByYardletLine(startedNow: attachment.startedNow) }
+        if attachment.device.identity.kind.isPhysical {
+            return "It is a real Android device: the person's own accounts may be signed in on it, and Yardlet never "
+                + "turns it on or off."
+        }
+        return "It was started outside Yardlet, so another app or tool may be using it."
     }
 
     static func startedByYardletLine(startedNow: Bool) -> String {

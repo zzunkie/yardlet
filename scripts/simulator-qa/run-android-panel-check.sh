@@ -8,7 +8,8 @@
 # swipes through the tab, turns the device, hands the task's yardlet-mcp launch to drive-tools.py to call the agent's
 # simulator tools with on the emulator (the fixture allows the card they raise, and checks the paste leaves the
 # emulator's clipboard as it was), connects the same emulator again over `adb connect 127.0.0.1:<adb port>` and checks
-# it as a real device (listed by the serial number it reports, live and driven, left alone by the agents' tools),
+# it as a real device (listed by the serial number it reports, live and driven, used by the agents' tools after the
+# real device's card in the task),
 # turns the switch off and checks the tab closes and the server on the device ends, capturing each step in both
 # appearances. The app sends adb commands only to emulators and that address, so a phone on this Mac is never sent
 # one. However the run ends, the script ends the app by its PID, disconnects the address, stops the emulator with

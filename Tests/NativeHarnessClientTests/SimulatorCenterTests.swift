@@ -354,10 +354,10 @@ final class SimulatorCenterTests: XCTestCase {
         XCTAssertEqual(driver.events, [])
     }
 
-    /// A real Android device is the person's in the Simulator tab, not the agents' yet: the tools do not list it, an
-    /// attach asks nothing and is refused, and a device the person attached is not acted on.
-    func testTheToolsLeaveRealDevicesToThePerson() async throws {
-        let center = SimulatorCenter(backends: [FakeSimulatorBackend([(phoneA, .on)]), ConnectedPhoneBackend()])
+    /// The tools drive a real Android device as they do an emulator, once the person allowed it in the task asking:
+    /// another task asks again, and a declined card leaves the device untouched.
+    func testTheToolsAskForARealDeviceInEachTask() async throws {
+        let center = SimulatorCenter(backends: [ConnectedPhoneBackend()])
         await center.setEnabled(true)
         let suite = "SimulatorToolTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -365,24 +365,30 @@ final class SimulatorCenterTests: XCTestCase {
         let driver = RecordingSimulatorDriver(screen: SimulatorToolScreen(width: 411, height: 914))
         let tools = SimulatorAgentTools(center: { center }, approvals: SimulatorApprovals(defaults: defaults),
                                         drivers: [.android: driver])
+        tools.sleep = { _ in }
         var asked = 0
+        var allows = true
         tools.askPerson = { _, _ in
             asked += 1
-            return true
+            return allows
         }
-        let task = UUID()
-        let list = await tools.run(tool: SimulatorToolCatalog.list, arguments: .object([:]), task: task)
-        XCTAssertTrue(list.text.contains("Phone A") && !list.text.contains(ConnectedPhoneBackend.phone.name), list.text)
-        let attach = await tools.run(tool: SimulatorToolCatalog.attach,
-                                     arguments: .object(["device": .string("R3CT00TEST")]), task: task)
-        XCTAssertEqual(attach.failure?.kind, .refused, attach.text)
-        XCTAssertNil(center.attachment(of: task))
-        _ = await center.attach(ConnectedPhoneBackend.phone.identity, to: task, by: .person)
-        let tap = await tools.run(tool: SimulatorToolCatalog.tap, arguments: .object(["x": .integer(1), "y": .integer(1)]),
-                                  task: task)
-        XCTAssertEqual(tap.failure?.kind, .refused, tap.text)
-        XCTAssertEqual(asked, 0)
-        XCTAssertEqual(driver.events, [])
+        let (first, second) = (UUID(), UUID())
+        func run(_ tool: String, _ arguments: [String: ToolJSON] = [:], in task: UUID) async -> AgentToolResult {
+            await tools.run(tool: tool, arguments: .object(arguments), task: task)
+        }
+        let list = await run(SimulatorToolCatalog.list, in: first)
+        XCTAssertTrue(list.text.contains(#""realDevice":true"#), list.text)
+        let attached = await run(SimulatorToolCatalog.attach, ["device": .string("R3CT00TEST")], in: first)
+        XCTAssertTrue(attached.text.contains("real Android device"), attached.text)
+        _ = await run(SimulatorToolCatalog.tap, ["x": .integer(205), "y": .integer(457)], in: first)
+        XCTAssertEqual(asked, 1)
+        XCTAssertEqual(driver.events.count, 2)
+        _ = await run(SimulatorToolCatalog.detach, in: first)
+        allows = false
+        let declined = await run(SimulatorToolCatalog.attach, ["device": .string("R3CT00TEST")], in: second)
+        XCTAssertEqual(declined.failure?.kind, .refused, declined.text)
+        XCTAssertEqual(asked, 2, "A real device's approval holds in its own task only")
+        XCTAssertEqual(driver.events.count, 2)
     }
 
     /// A simulator's or an emulator's approval holds for every task and is kept in the preferences the Simulator switch

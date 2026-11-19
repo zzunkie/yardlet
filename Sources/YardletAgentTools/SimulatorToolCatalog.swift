@@ -1,10 +1,10 @@
 import Foundation
 
-/// The simulator tools: an agent sees and drives the iOS simulator or Android emulator its task attached, the device
-/// the task's Simulator tab shows (docs/SIMULATOR.md, "Agent tools"). Every tool but `simulator_list` and
-/// `simulator_attach` acts on the attached device only, and none attaches one by itself: a device that is on may be
-/// one the person uses in Simulator.app or another task's QA device. Building, installing, launching and logs stay
-/// with the agent's own tools, which take the device's id these tools give.
+/// The simulator tools: an agent sees and drives the iOS simulator, Android emulator or Android device its task
+/// attached, the device the task's Simulator tab shows (docs/SIMULATOR.md, "Agent tools"). Every tool but
+/// `simulator_list` and `simulator_attach` acts on the attached device only, and none attaches one by itself: a device
+/// that is on may be one the person uses in Simulator.app or another task's QA device. Building, installing, launching
+/// and logs stay with the agent's own tools, which take the device's id these tools give.
 package enum SimulatorToolCatalog {
     package static let list = "simulator_list"
     package static let attach = "simulator_attach"
@@ -67,25 +67,28 @@ package enum SimulatorToolCatalog {
         AgentToolDefinition(
             name: list,
             title: "List simulators",
-            description: "List the simulators and emulators Yardlet can show: each device's id, platform, name, OS, state "
-                + "(on, off, booting or shutting down), whether this task attached it, whether another task's agent "
-                + "uses it (that task's title), whether Yardlet started it, and whether a Simulator tab shows it. The "
-                + "other simulator tools act only on the device this task attached with simulator_attach.",
+            description: "List the simulators, emulators and Android devices Yardlet can show: each device's id, "
+                + "platform, name, OS, state (on, off, booting or shutting down), whether it is a real device (a phone "
+                + "or tablet, which may have the person's own accounts signed in), whether this task attached it, "
+                + "whether another task's agent uses it (that task's title), whether Yardlet started it, and whether a "
+                + "Simulator tab shows it. The other simulator tools act only on the device this task attached with "
+                + "simulator_attach.",
             inputSchema: object([:]),
             readOnly: true
         ),
         AgentToolDefinition(
             name: attach,
             title: "Attach simulator",
-            description: "Attach a simulator or emulator to this task by the id or name simulator_list gives, so the "
-                + "other simulator tools act on it; a task has one at a time, and attaching another lets go of the "
-                + "first. A device that is off starts without a window, which takes a minute or less. The first time "
-                + "a device is used, Yardlet asks the person to allow it on a card in this task, and the call waits for "
-                + "the answer. The task's side panel shows the device. Returns the device's id, which your own build "
-                + "and install tools take (xcrun simctl install <id> <app>, adb -s <id> install <apk>), and its screen "
-                + "size, which the coordinates of the other tools use. Other apps and tools can drive the same device "
-                + "(Simulator.app, Xcode, XcodeBuildMCP), and their input mixes with these tools'; while another tool "
-                + "has a session open on this device, you may leave its input to that tool.",
+            description: "Attach a simulator, emulator or Android device to this task by the id or name simulator_list "
+                + "gives, so the other simulator tools act on it; a task has one at a time, and attaching another lets "
+                + "go of the first. A device that is off starts without a window, which takes a minute or less. The "
+                + "first time a device is used, Yardlet asks the person to allow it on a card in this task, and the "
+                + "call waits for the answer; a real device is asked for in each task. The task's side panel shows the "
+                + "device. Returns the device's id, which your own build and install tools take (xcrun simctl install "
+                + "<id> <app>, adb -s <id> install <apk>), and its screen size, which the coordinates of the other "
+                + "tools use. Other apps and tools can drive the same device (Simulator.app, Xcode, XcodeBuildMCP), "
+                + "and their input mixes with these tools'; while another tool has a session open on this device, you "
+                + "may leave its input to that tool.",
             inputSchema: object([
                 "device": .object([
                     "type": .string("string"),

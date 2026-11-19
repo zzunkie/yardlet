@@ -1,7 +1,7 @@
 import Foundation
 import YardletSimulatorHostProtocol
 
-/// Android emulators for the agent's simulator tools, through the scrcpy stream the Simulator tabs use
+/// Android emulators and real devices for the agent's simulator tools, through the scrcpy stream the Simulator tabs use
 /// (`AndroidScreenClient`): screenshots and coordinates in dp, touches and keys as scrcpy control messages, and the
 /// clipboard through scrcpy's own clipboard messages, which `simulator_type` pastes from (docs/SIMULATOR.md, "Agent
 /// tools").
@@ -21,7 +21,7 @@ final class MacAndroidEmulatorDriver: SimulatorDeviceDriving {
     }
 
     func prepare(_ device: SimulatorDevice, with toolchain: SimulatorToolchain) async throws -> SimulatorToolScreen {
-        try Self.checkEmulator(device)
+        try Self.checkAndroid(device)
         guard let serial = device.adbSerial else {
             throw SimulatorDriveError(message: "\(device.name) has no adb serial; it may still be starting")
         }
@@ -135,16 +135,16 @@ final class MacAndroidEmulatorDriver: SimulatorDeviceDriving {
     private static let volumeDown: UInt32 = 25 // KEYCODE_VOLUME_DOWN
 
     private func attached(_ device: SimulatorDevice) throws -> (AndroidScreenClient, AndroidScreenTarget) {
-        try Self.checkEmulator(device)
+        try Self.checkAndroid(device)
         guard let stream = screens.androidStream(of: device.identity) else {
             throw SimulatorDriveError(message: SimulatorScreenFailure.lost.toolReason)
         }
         return stream
     }
 
-    private static func checkEmulator(_ device: SimulatorDevice) throws {
-        guard device.identity.kind == .androidEmulator else {
-            throw SimulatorDriveError(message: "\(device.name) is not an Android emulator")
+    private static func checkAndroid(_ device: SimulatorDevice) throws {
+        guard device.platform == .android else {
+            throw SimulatorDriveError(message: "\(device.name) is not an Android device")
         }
     }
 
