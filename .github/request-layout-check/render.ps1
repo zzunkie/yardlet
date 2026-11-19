@@ -18,6 +18,8 @@ public static class QaWindow {
  [DllImport("user32.dll")] public static extern void mouse_event(uint flags,int dx,int dy,uint buttons,UIntPtr extra);
  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(System.Drawing.Point point);
+ [DllImport("user32.dll")] public static extern bool GetCursorPos(out System.Drawing.Point point);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr handle,System.Text.StringBuilder name,int length);
  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd,out uint processId);
  public struct Rect { public int Left, Top, Right, Bottom; }
 }
@@ -229,6 +231,14 @@ if ($hover) {
     [uint32]$hitPid=0
     [void][QaWindow]::GetWindowThreadProcessId($hit,[ref]$hitPid)
     ("Pointer target matches app: "+($hitPid -eq $proc.Id)+". Element: "+$target.Current.Name) | Set-Content (Join-Path $out 'hover-target.txt')
+    $cursor=[Drawing.Point]::Empty
+    [void][QaWindow]::GetCursorPos([ref]$cursor)
+    $clazz=New-Object Text.StringBuilder 260;[void][QaWindow]::GetClassName($hit,$clazz,260)
+    ("target point "+$point+" cursor "+$cursor+" hwnd class "+$clazz.ToString()) | Add-Content (Join-Path $out 'hover-target.txt')
+    for ($n=0; $n -lt 8 -and $target -and $target.Current.ProcessId -eq $proc.Id; $n++) {
+        ($target.Current.ControlType.ProgrammaticName+" "+$target.Current.Name+" "+$target.Current.ClassName+" "+$target.Current.BoundingRectangle.ToString()) | Add-Content (Join-Path $out 'hover-target.txt')
+        $target=[System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($target)
+    }
     Start-Sleep -Milliseconds 550
     Shot 'question-hover'
     $rect=New-Object QaWindow+Rect; [void][QaWindow]::GetWindowRect($hwnd,[ref]$rect)
@@ -237,6 +247,10 @@ if ($hover) {
     $graphics.CopyFromScreen($rect.Left,$rect.Top,0,0,$bmp.Size)
     $bmp.Save((Join-Path $out 'hover-display.png'),[Drawing.Imaging.ImageFormat]::Png)
     $graphics.Dispose();$bmp.Dispose()
+    [QaWindow]::mouse_event(2,0,0,0,[UIntPtr]::Zero); [QaWindow]::mouse_event(4,0,0,0,[UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 350
+    $physical=$hover.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Current.IsSelected
+    ("Physical click selected the same option: "+$physical) | Add-Content (Join-Path $out 'hover-target.txt')
 }
 $detail=Find-Control $ct::RadioButton @('Detailed')
 if ($detail) {$detail.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select();Start-Sleep -Milliseconds 300;Shot 'question-selected'}
