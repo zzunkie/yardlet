@@ -1286,6 +1286,17 @@
 "Allow and switch to %@ mode for this session" = "허용하고 이 세션을 %@ 모드로 전환";
 "Always allow in this project (saved to %@)" = "이 프로젝트에서 항상 허용 (%@에 저장)";
 "Always allow in every project (saved to %@)" = "모든 프로젝트에서 항상 허용 (%@에 저장)";
+"Allow and switch" = "허용하고 전환";
+"Allow similar commands" = "비슷한 명령 허용";
+"Always allow host" = "호스트 항상 허용";
+"More allow options" = "허용 옵션 더 보기";
+"Applies to this session only" = "이 세션에만 적용";
+"Switches this session to %@ mode" = "이 세션을 %@ 모드로 전환";
+"Saves to local project settings on this Mac" = "이 Mac의 프로젝트 로컬 설정에 저장";
+"Saves to shared project settings" = "프로젝트의 공유 설정에 저장";
+"Saves to user settings for all projects" = "사용자 설정에 저장해 모든 프로젝트에 적용";
+"Always allows commands starting with “%@”" = "“%@”(으)로 시작하는 명령 항상 허용";
+"Always allows network access to %@" = "%@에 대한 네트워크 접근 항상 허용";
 "shared .claude/settings.json" = "공유 .claude/settings.json";
 "Claude Code user settings" = "Claude Code 사용자 설정";
 "Agent browser tools" = "에이전트 브라우저 도구";

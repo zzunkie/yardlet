@@ -115,6 +115,52 @@ enum ConversationRequestResponses {
     }
 }
 
+/// How a broad allow reads on the card, as both apps show one: a short name on the button ("Always allow")
+/// and its scope under it in the button's menu ("Saves to local project settings on this Mac"). Read from
+/// the words Yardlet gave the answer; nil for words it does not know, which the button keeps as they are.
+struct ConversationAllowScope: Equatable {
+    let name: String
+    let scope: String
+
+    init?(_ response: ConversationRequestResponse) {
+        guard let text = response.text, let wording = Self.wording(text) else { return nil }
+        name = wording.name.resolved
+        scope = wording.scope.resolved
+    }
+
+    private static func wording(_ text: LocalizedText) -> (name: LocalizedText, scope: LocalizedText)? {
+        let argument = text.args.first
+        switch text.key {
+        case "Allow for session":
+            return (text, LocalizedText("Applies to this session only"))
+        case "Allow and switch to %@ mode for this session":
+            guard let mode = argument else { return nil }
+            return (LocalizedText("Allow and switch"), LocalizedText("Switches this session to %@ mode", mode))
+        case "Always allow in this project (saved to %@)":
+            // One settings file, by the name `ClaudePermissionSuggestions.placeName` gave it; several keep
+            // the words that name them all.
+            switch argument?.key {
+            case ".claude/settings.local.json":
+                return (LocalizedText("Always allow"), LocalizedText("Saves to local project settings on this Mac"))
+            case "shared .claude/settings.json":
+                return (LocalizedText("Always allow"), LocalizedText("Saves to shared project settings"))
+            default:
+                return nil
+            }
+        case "Always allow in every project (saved to %@)":
+            return (LocalizedText("Always allow"), LocalizedText("Saves to user settings for all projects"))
+        case "Always allow commands starting with “%@”":
+            guard let prefix = argument else { return nil }
+            return (LocalizedText("Allow similar commands"), LocalizedText("Always allows commands starting with “%@”", prefix))
+        case "Always allow %@":
+            guard let host = argument else { return nil }
+            return (LocalizedText("Always allow host"), LocalizedText("Always allows network access to %@", host))
+        default:
+            return nil
+        }
+    }
+}
+
 // MARK: - Words
 
 extension ConversationRequest {

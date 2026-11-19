@@ -360,20 +360,84 @@ struct ConversationRequestCard: View {
     /// The answers right-aligned in one row, the prominent one last; stacked when the row does not
     /// fit the card.
     private func responseButtons(_ responses: [ConversationRequestResponse]) -> some View {
-        ViewThatFits(in: .horizontal) {
+        let controls = Self.controls(responses)
+        return ViewThatFits(in: .horizontal) {
             HStack(spacing: 8) {
                 Spacer(minLength: 0)
-                ForEach(Array(responses.enumerated()), id: \.offset) { _, response in
-                    responseButton(response)
+                ForEach(Array(controls.enumerated()), id: \.offset) { _, control in
+                    answerControl(control)
                 }
             }
             VStack(alignment: .trailing, spacing: 6) {
-                ForEach(Array(responses.enumerated()), id: \.offset) { _, response in
-                    responseButton(response)
+                ForEach(Array(controls.enumerated()), id: \.offset) { _, control in
+                    answerControl(control)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
         }
+    }
+
+    /// One control of the card's row: an answer's own button, or the wider allows as one split button.
+    enum AnswerControl {
+        case answer(ConversationRequestResponse)
+        case widerAllows([ConversationRequestResponse])
+    }
+
+    /// The answers as the row draws them. The wider allows (the secondary answers between the denials and
+    /// "Allow") become one split button when Yardlet can name their scope or there are several, as the
+    /// Claude app keeps "Always allow" short and its scopes in the button's menu; otherwise each keeps its
+    /// own button.
+    static func controls(_ responses: [ConversationRequestResponse]) -> [AnswerControl] {
+        let wider = responses.filter { $0.role == .secondary }
+        guard let first = wider.first, wider.count > 1 || ConversationAllowScope(first) != nil
+        else { return responses.map(AnswerControl.answer) }
+        var controls: [AnswerControl] = []
+        for response in responses {
+            if response.role != .secondary {
+                controls.append(.answer(response))
+            } else if response == first {
+                controls.append(.widerAllows(wider))
+            }
+        }
+        return controls
+    }
+
+    @ViewBuilder
+    private func answerControl(_ control: AnswerControl) -> some View {
+        switch control {
+        case let .answer(response): responseButton(response)
+        case let .widerAllows(wider): widerAllowsButton(wider)
+        }
+    }
+
+    /// The wider allows as one split button: the narrowest by its short name, which its click gives, and
+    /// all of them in the menu, each with its scope on a second line. The tooltip keeps the full words.
+    @ViewBuilder
+    private func widerAllowsButton(_ wider: [ConversationRequestResponse]) -> some View {
+        let first = wider[0]
+        let name = ConversationAllowScope(first)?.name ?? first.title
+        Menu {
+            ForEach(Array(wider.enumerated()), id: \.offset) { _, response in
+                let scope = ConversationAllowScope(response)
+                Button { send(response) } label: {
+                    Text(scope?.name ?? response.title)
+                    if let scope { Text(scope.scope) }
+                }
+                .disabled(request.route(for: response, input: input) == nil)
+            }
+        } label: {
+            Text(name)
+        } primaryAction: {
+            send(first)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.bordered)
+        .fixedSize()
+        .parityPointer()
+        .disabled(wider.allSatisfy { request.route(for: $0, input: input) == nil })
+        .accessibilityLabel(name)
+        .accessibilityHint(L10n.string("More allow options"))
+        .help(first.title)
     }
 
     /// Sends `response` with what the form holds; a question form keeps what it sent.

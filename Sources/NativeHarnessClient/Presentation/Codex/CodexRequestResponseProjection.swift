@@ -261,11 +261,12 @@ struct CodexMCPToolApproval: Equatable {
         var responses: [ConversationRequestResponse] = [
             .init(LocalizedText("Deny"), role: .destructive, route: .codex(.mcpElicitation(action: .decline)))
         ]
-        if persistModes.contains("always") {
-            responses.append(.init(LocalizedText("Always allow"), role: .secondary, route: .codex(Self.accept("always"))))
-        }
+        // The wider allows narrowest first, as the other requests list theirs: the card shows the first.
+        let always = ConversationRequestResponse(LocalizedText("Always allow"), role: .secondary,
+                                                 route: .codex(Self.accept("always")))
         let session = persistModes.contains("session") ? "session" : nil
         if isComputerUse {
+            if persistModes.contains("always") { responses.append(always) }
             responses.append(.init(LocalizedText("Allow this conversation"), role: .primary,
                                    route: .codex(Self.accept(session))))
             return responses
@@ -274,6 +275,7 @@ struct CodexMCPToolApproval: Equatable {
             responses.append(.init(LocalizedText("Allow this conversation"), role: .secondary,
                                    route: .codex(Self.accept(session))))
         }
+        if persistModes.contains("always") { responses.append(always) }
         responses.append(.init(LocalizedText("Allow once"), role: .primary, route: .codex(Self.accept(nil))))
         return responses
     }

@@ -1286,6 +1286,17 @@
 "Allow and switch to %@ mode for this session" = "Allow and switch to %@ mode for this session";
 "Always allow in this project (saved to %@)" = "Always allow in this project (saved to %@)";
 "Always allow in every project (saved to %@)" = "Always allow in every project (saved to %@)";
+"Allow and switch" = "Allow and switch";
+"Allow similar commands" = "Allow similar commands";
+"Always allow host" = "Always allow host";
+"More allow options" = "More allow options";
+"Applies to this session only" = "Applies to this session only";
+"Switches this session to %@ mode" = "Switches this session to %@ mode";
+"Saves to local project settings on this Mac" = "Saves to local project settings on this Mac";
+"Saves to shared project settings" = "Saves to shared project settings";
+"Saves to user settings for all projects" = "Saves to user settings for all projects";
+"Always allows commands starting with “%@”" = "Always allows commands starting with “%@”";
+"Always allows network access to %@" = "Always allows network access to %@";
 "shared .claude/settings.json" = "shared .claude/settings.json";
 "Claude Code user settings" = "Claude Code user settings";
 "Agent browser tools" = "Agent browser tools";

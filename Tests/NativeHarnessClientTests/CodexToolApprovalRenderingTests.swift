@@ -44,8 +44,9 @@ final class CodexToolApprovalRenderingTests: XCTestCase {
         XCTAssertEqual(computerUse.responses.map(\.title),
                        [L10n.string("Deny"), L10n.string("Always allow"), L10n.string("Allow this conversation")])
         let other = Self.request(connector: "github", persist: ["session", "always"])
-        XCTAssertEqual(other.responses.map(\.title), [L10n.string("Deny"), L10n.string("Always allow"),
-                                                      L10n.string("Allow this conversation"), L10n.string("Allow once")])
+        XCTAssertEqual(other.responses.map(\.title), [L10n.string("Deny"), L10n.string("Allow this conversation"),
+                                                      L10n.string("Always allow"), L10n.string("Allow once")],
+                       "The wider allows narrowest first, as the card's split button shows the first")
         // A Yardlet connector's tool its service's accounts share: the card names the account the call acts in.
         ConnectorToolLabels.shared.update([ConnectorRecord(
             name: "Gmail", slug: "gmail", serverURL: URL(string: "https://gmail.googleapis.com/gmail/v1/")!,

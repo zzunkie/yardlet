@@ -70,7 +70,8 @@ final class WindowlessRenderTests: XCTestCase {
         XCTAssertFalse(elements.contains { $0.role == NSAccessibility.Role.scrollBar.rawValue })
         XCTAssertFalse(zip(elements, elements.dropFirst()).contains { $0 == $1 })
         XCTAssertTrue(elements.contains { $0.description.contains("Approve the next tool call.") })
-        let choices = ["Reject", "Always reject", "Allow once", "Always allow"]
+        // Denials first and the prominent allow last, as both apps end the row with "Allow once".
+        let choices = ["Reject", "Always reject", "Always allow", "Allow once"]
         XCTAssertEqual(elements.filter { $0.role == "AXButton" && choices.contains($0.label) }.map(\.label), choices)
     }
 }
