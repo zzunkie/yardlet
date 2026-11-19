@@ -151,7 +151,7 @@ struct ConnectorGuideLinks: View {
                     Label(link.title, systemImage: "arrow.up.right.square")
                         .labelStyle(.titleAndIcon)
                 }
-                .buttonStyle(.link)
+                .parityLinkButton()
                 .font(.caption)
             }
         }

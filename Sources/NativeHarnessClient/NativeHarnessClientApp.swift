@@ -775,12 +775,13 @@ struct NativeHarnessClientApp: App {
 /// A window's content in the appearance and interface size Settings chose. They are read here, not
 /// in the app's scene: a scene holding them is rebuilt, with its windows' roots and the menu bar's
 /// commands, whenever they change. Here a change applies new values to the same content.
-private struct YardletWindowPreferences<Content: View>: View {
+struct YardletWindowPreferences<Content: View>: View {
     let usesVisualFixture: Bool
     var appliesInterfaceSize = true
     @ViewBuilder let content: Content
     @AppStorage(YardletPreferenceKeys.appearance) private var appearanceRawValue =
         YardletAppearancePreference.system.rawValue
+    @AppStorage(YardletPreferenceKeys.accent) private var accent = YardletAccentPreference.system
     @AppStorage(YardletPreferenceKeys.interfaceSize) private var interfaceSizeRawValue =
         YardletInterfaceSizePreference.standard.rawValue
     @AppStorage(CodeFontPreference.nameKey) private var codeFontName = ""
@@ -789,12 +790,14 @@ private struct YardletWindowPreferences<Content: View>: View {
     var body: some View {
         if appliesInterfaceSize {
             content
+                .environment(\.yardletAccent, accent)
                 .preferredColorScheme(effectiveColorScheme)
                 .environment(\.yardletInterfaceScale, effectiveInterfaceSize.scale)
                 .environment(\.yardletCodeFont, effectiveCodeFont)
                 .dynamicTypeSize(effectiveInterfaceSize.dynamicTypeSize)
         } else {
             content
+                .environment(\.yardletAccent, accent)
                 .preferredColorScheme(effectiveColorScheme)
                 .environment(\.yardletCodeFont, effectiveCodeFont)
         }

@@ -106,7 +106,7 @@ struct FileTasksLine: View {
     private func taskButton(_ item: FileTasks.Item, services: FileTaskServices) -> some View {
         Button { services.open(item) } label: {
             HStack(spacing: 4) {
-                Text(name(item, services: services)).foregroundStyle(ParityTheme.accent).truncationMode(.tail)
+                Text(name(item, services: services)).foregroundStyle(ParityTheme.accentText).truncationMode(.tail)
                 Text(Self.day(item.at)).foregroundStyle(.secondary).fixedSize()
             }
             .contentShape(Rectangle())

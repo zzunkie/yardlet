@@ -74,7 +74,7 @@ struct ConnectorRegistrySection: View {
                             if searching { await registry.search(query) } else { await registry.loadIfNeeded() }
                         }
                     }
-                    .buttonStyle(.link)
+                    .parityLinkButton()
                     .font(.caption)
                 }
             } else if entries.isEmpty, phase == .loaded, searching {
@@ -219,7 +219,7 @@ struct ConnectorRegistrySection: View {
                 } label: {
                     Label(L10n.string("Find your API key"), systemImage: "arrow.up.right.square")
                 }
-                .buttonStyle(.link)
+                .parityLinkButton()
                 .font(.caption)
             }
             if let error, error.row == entry.id {
@@ -300,7 +300,7 @@ struct ConnectorProgramPage: View {
                             } label: {
                                 Label(L10n.string("Source"), systemImage: "arrow.up.right.square")
                             }
-                            .buttonStyle(.link)
+                            .parityLinkButton()
                             .font(.caption)
                         }
                     }

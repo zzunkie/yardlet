@@ -36,7 +36,7 @@ struct ConnectorViewCard<Fallback: View>: View {
             VStack(alignment: .leading, spacing: 8) {
                 fallback()
                 Button(L10n.string("Show view again")) { controller.retry() }
-                    .buttonStyle(.link)
+                    .parityLinkButton()
                     .font(.system(size: 12 * interfaceScale))
             }
         } else {

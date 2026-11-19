@@ -254,11 +254,11 @@ private struct TranscriptPictureWeb: View {
                             .font(.system(size: 12 * interfaceScale))
                             .foregroundStyle(.secondary)
                         Button(L10n.string("Try again")) { webImages.load(url) }
-                            .buttonStyle(.link)
+                            .parityLinkButton()
                             .font(.system(size: 12 * interfaceScale))
                     default:
                         Button(L10n.string("Load image")) { webImages.load(url) }
-                            .buttonStyle(.link)
+                            .parityLinkButton()
                             .font(.system(size: 12 * interfaceScale))
                             .help(L10n.format("Loads it from %@, without cookies.", url.host() ?? url.absoluteString))
                     }
@@ -454,7 +454,7 @@ private struct TranscriptPictureLink: View {
             Text(name)
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .foregroundStyle(action == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(ParityTheme.accent))
+                .foregroundStyle(action == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(ParityTheme.accentText))
             if let detail {
                 Text(detail)
                     .lineLimit(1)

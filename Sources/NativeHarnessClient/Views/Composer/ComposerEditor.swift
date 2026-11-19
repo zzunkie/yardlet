@@ -203,7 +203,7 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
                     // The Claude app marks bash mode with a "bash" badge and its accent ring.
                     Text(verbatim: "bash")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(ParityTheme.accent)
+                        .foregroundStyle(ParityTheme.accentText)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 1)
                         .background(ParityTheme.accent.opacity(0.12), in: Capsule())

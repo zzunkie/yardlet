@@ -144,7 +144,7 @@ struct UsageResetConfirmationContent: View {
             HStack(spacing: 8) {
                 if let purchaseURL = resets?.purchaseURL {
                     Button(L10n.string("Buy an instant reset…")) { NSWorkspace.shared.open(purchaseURL) }
-                        .buttonStyle(.link)
+                        .parityLinkButton()
                         .help(L10n.string("Not a banked reset: buying one resets your limits at once. You pay on ChatGPT."))
                 }
                 Spacer(minLength: 12)

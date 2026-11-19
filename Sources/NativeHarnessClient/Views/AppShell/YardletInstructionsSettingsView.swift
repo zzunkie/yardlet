@@ -139,7 +139,7 @@ private struct RoutingEvaluationSettingsCard: View {
                             .foregroundStyle(.secondary)
                         if let report = reportURL {
                             Button(L10n.string("Open Report")) { NSWorkspace.shared.open(report) }
-                                .buttonStyle(.link)
+                                .parityLinkButton()
                         }
                     }
                     .font(SettingsMetrics.detailFont)

@@ -90,13 +90,15 @@ enum WindowlessRender {
         /// - Parameter titled: the main window's hidden title bar (`.hiddenTitleBar`) in place of no
         ///   border, for what AppKit does with a press in the title bar's height. The content reaches
         ///   the window's top where it ignores the top safe area, as the app's does.
-        init(_ content: Content, size: NSSize, appearance: Appearance? = nil, titled: Bool = false) {
+        init(_ content: Content, size: NSSize, appearance: Appearance? = nil, titled: Bool = false,
+             alpha: CGFloat = 1) {
             _ = NSApplication.shared
             hosting = NSHostingView(rootView: content)
             window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
                               styleMask: titled ? [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
                                   : [.borderless],
                               backing: .buffered, defer: false)
+            window.alphaValue = alpha
             if titled {
                 window.titlebarAppearsTransparent = true
                 window.titleVisibility = .hidden

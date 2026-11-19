@@ -368,7 +368,7 @@ struct NewTaskHomeLists: View {
                 .frame(width: 16)
             Text(summary.name)
                 .font(.system(size: 14.5, weight: .semibold))
-                .foregroundStyle(isChosen ? AnyShapeStyle(ParityTheme.accent) : AnyShapeStyle(.primary))
+                .foregroundStyle(isChosen ? AnyShapeStyle(ParityTheme.accentText) : AnyShapeStyle(.primary))
                 .lineLimit(1)
                 .layoutPriority(1)
             if let facts = facts(summary, isChosen: isChosen) {

@@ -215,7 +215,7 @@ struct SessionRailCard<HeaderMenu: View, Content: View>: View {
         .background(ParityTheme.canvas, in: RoundedRectangle(cornerRadius: 10))
         .overlay {
             RoundedRectangle(cornerRadius: 10)
-                .stroke(isDropTarget ? Color.accentColor.opacity(0.6) : ParityTheme.separator,
+                .stroke(isDropTarget ? ParityTheme.accent.opacity(0.6) : ParityTheme.separator,
                         lineWidth: isDropTarget ? 1.5 : 1)
         }
         .contentShape(RoundedRectangle(cornerRadius: 10))

@@ -44,7 +44,7 @@ struct SettingChangedRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             if let openSettings, let section {
                 Button(L10n.string("Open")) { openSettings(section) }
-                    .buttonStyle(.link)
+                    .parityLinkButton()
                     .font(.system(size: 12 * interfaceScale))
                     .parityPointer()
                     .help(L10n.format("Open %@ in Settings", change.title))

@@ -111,7 +111,7 @@ private struct VaultCodeTimer: View {
                 Circle().stroke(ParityTheme.separator, lineWidth: 2)
                 Circle()
                     .trim(from: 0, to: CGFloat(remaining) / CGFloat(max(period, 1)))
-                    .stroke(remaining <= 5 ? Color.orange : Color.accentColor,
+                    .stroke(remaining <= 5 ? Color.orange : ParityTheme.accent,
                             style: StrokeStyle(lineWidth: 2, lineCap: .round))
                     .rotationEffect(.degrees(-90))
             }

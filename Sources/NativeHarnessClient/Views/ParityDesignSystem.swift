@@ -40,6 +40,62 @@ extension EnvironmentValues {
     }
 }
 
+extension EnvironmentValues {
+    @Entry var yardletAccent = YardletAccentPreference.system
+}
+
+private struct AccentStyle: ShapeStyle, Hashable {
+    enum Role { case accent, text, onAccent }
+    var role: Role = .accent
+
+    func resolve(in environment: EnvironmentValues) -> Color.Resolved {
+        let color = switch role {
+        case .accent: ParityTheme.accentColor(for: environment.yardletAccent)
+        case .text: ParityTheme.linkTextColor(for: environment.yardletAccent)
+        case .onAccent: ParityTheme.foregroundOnAccent(for: environment.yardletAccent)
+        }
+        return Color(nsColor: color).resolve(in: environment)
+    }
+}
+
+/// Each color stays adaptive, including the system accent when the person changes it in macOS.
+private struct AccentPalette {
+    let accent: NSColor
+    let text: NSColor
+    let onAccent: NSColor
+
+    init(_ accent: NSColor) {
+        self.accent = accent
+        text = NSColor(name: nil) { appearance in
+            let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            var environment = EnvironmentValues()
+            environment.colorScheme = dark ? .dark : .light
+            // Sidebar in light mode and input in dark mode bound the plain surfaces.
+            let surface = dark ? ParityTheme.input : ParityTheme.sidebar
+            var readable = false
+            appearance.performAsCurrentDrawingAppearance {
+                let foreground = Self.luminance(Color(nsColor: accent).resolve(in: environment))
+                let background = Self.luminance(surface.resolve(in: environment))
+                readable = (max(foreground, background) + 0.05) / (min(foreground, background) + 0.05) >= 4.5
+            }
+            return readable ? accent : .labelColor
+        }
+        onAccent = NSColor(name: nil) { appearance in
+            var black = false
+            appearance.performAsCurrentDrawingAppearance {
+                var environment = EnvironmentValues()
+                environment.colorScheme = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .dark : .light
+                black = Self.luminance(Color(nsColor: accent).resolve(in: environment)) > 0.179
+            }
+            return black ? .black : .white
+        }
+    }
+
+    private static func luminance(_ color: Color.Resolved) -> Float {
+        0.2126 * color.linearRed + 0.7152 * color.linearGreen + 0.0722 * color.linearBlue
+    }
+}
+
 enum ParityTheme {
     static let proseLineSpacing: CGFloat = 5
     static let proseBlockSpacing: CGFloat = 15
@@ -58,12 +114,45 @@ enum ParityTheme {
         .system(size: 14 * scale)
     }
 
-    static let accent = Color(nsColor: accentColor)
-    /// `accent` for AppKit drawing, such as a message's links.
-    static let accentColor = NSColor(name: "YardletAccent") { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(calibratedRed: 0.55, green: 0.72, blue: 0.98, alpha: 1)
-            : NSColor(calibratedRed: 0.08, green: 0.23, blue: 0.42, alpha: 1)
+    static let accent = Color(AccentStyle())
+    /// Link text keeps the label color when this accent is too pale for text.
+    static let accentText = Color(AccentStyle(role: .text))
+    static let onAccent = Color(AccentStyle(role: .onAccent))
+
+    /// AppKit and SwiftUI take their accent from the same adaptive color.
+    static func accentColor(for preference: YardletAccentPreference) -> NSColor {
+        palette(for: preference).accent
+    }
+
+    static func linkTextColor(for preference: YardletAccentPreference) -> NSColor {
+        palette(for: preference).text
+    }
+
+    fileprivate static func foregroundOnAccent(for preference: YardletAccentPreference) -> NSColor {
+        palette(for: preference).onAccent
+    }
+
+    private static let system = AccentPalette(.controlAccentColor)
+
+    private static func palette(for preference: YardletAccentPreference) -> AccentPalette {
+        switch preference {
+        case .system: system
+        case .ink: ink
+        case .grove: grove
+        case .iris: iris
+        }
+    }
+
+    private static let ink = pair("Ink", light: 0x143B6B, dark: 0x8CB8FA)
+    private static let grove = pair("Grove", light: 0x14664A, dark: 0x7AD1AD)
+    private static let iris = pair("Iris", light: 0x5C45AB, dark: 0xB8A6FA)
+
+    private static func pair(_ name: String, light: Int, dark: Int) -> AccentPalette {
+        AccentPalette(NSColor(name: "YardletAccent" + name) { appearance in
+            let rgb = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+            return NSColor(srgbRed: CGFloat(rgb >> 16) / 255, green: CGFloat((rgb >> 8) & 255) / 255,
+                           blue: CGFloat(rgb & 255) / 255, alpha: 1)
+        })
     }
     static let signal = Color(nsColor: NSColor(name: "YardletSignal") { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
@@ -344,6 +433,11 @@ extension View {
     /// card's Submit). Every prominent button opts into the accent here instead.
     func parityProminentButton() -> some View {
         buttonStyle(.borderedProminent).tint(ParityTheme.accent)
+    }
+
+    /// A link keeps the native button behavior and follows the same accent as prose links.
+    func parityLinkButton() -> some View {
+        buttonStyle(.link).tint(ParityTheme.accentText)
     }
 
     func parityCard(cornerRadius: CGFloat = ParityTheme.panelCornerRadius) -> some View {

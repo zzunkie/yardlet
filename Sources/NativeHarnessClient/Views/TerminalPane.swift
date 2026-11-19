@@ -996,6 +996,8 @@ private struct SwiftTermHost: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: TerminalViewHost, context: Context) {
+        let accent = ParityTheme.accentColor(for: context.environment.yardletAccent)
+        if nsView.terminal.caretColor != accent { nsView.terminal.caretColor = accent }
         applyAppearance(to: nsView.terminal, coordinator: context.coordinator)
         (nsView.terminal as? NativeTerminalView)?.attachSelection = attachSelection
     }
@@ -1006,7 +1008,6 @@ private struct SwiftTermHost: NSViewRepresentable {
             view.nativeBackgroundColor = TerminalAppearance.background(isDark: isDark)
             view.layer?.backgroundColor = TerminalAppearance.background(isDark: isDark).cgColor
             view.installColors(TerminalAppearance.palette(isDark: isDark))
-            view.caretColor = NSColor.systemBlue
             coordinator.isDark = isDark
         }
         if coordinator.font != font {

@@ -115,7 +115,7 @@ struct PersonalAgentRequestCard: View {
             note(Self.reason(request.reason))
             if let openWeb {
                 Button(L10n.string("Open This Dot on the Web"), action: openWeb)
-                    .buttonStyle(.link)
+                    .parityLinkButton()
                     .font(.caption)
                     .parityPointer()
             }
@@ -453,7 +453,7 @@ struct PersonalAgentOptionQuestion: View {
                 Button { actions.choose(messageID, index) } label: {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Image(systemName: isChosen ? "largecircle.fill.circle" : "circle")
-                            .foregroundStyle(isChosen ? Color.accentColor : Color.secondary)
+                            .foregroundStyle(isChosen ? ParityTheme.accent : Color.secondary)
                             .accessibilityHidden(true)
                         Text(option)
                             .font(.callout.weight(isChosen ? .semibold : .regular))

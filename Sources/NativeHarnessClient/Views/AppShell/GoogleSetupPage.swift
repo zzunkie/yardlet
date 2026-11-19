@@ -102,7 +102,7 @@ struct GoogleSetupPage: View {
                     editingApp = true
                     showsSteps = true
                 }
-                .buttonStyle(.link)
+                .parityLinkButton()
                 .font(.caption)
             }
             scopeNote

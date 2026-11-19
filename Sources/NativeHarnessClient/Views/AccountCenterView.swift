@@ -856,7 +856,7 @@ struct ConnectionCenterContent: View {
                 Spacer()
                 Text(AccountConnectionPresentation.providerBadge(for: descriptor.id))
                     .font(.system(size: 9.5, weight: .semibold))
-                    .foregroundStyle(ParityTheme.accent)
+                    .foregroundStyle(ParityTheme.accentText)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 3)
                     .background(ParityTheme.subtleFill, in: Capsule())
@@ -1400,7 +1400,7 @@ private struct AccountLoginTerminalHost: NSViewRepresentable {
         view.nativeForegroundColor = NativeTerminalSession.foregroundColor
         view.nativeBackgroundColor = NativeTerminalSession.backgroundColor
         view.layer?.backgroundColor = NativeTerminalSession.backgroundColor.cgColor
-        view.caretColor = NSColor.systemBlue
+        view.caretColor = ParityTheme.accentColor(for: context.environment.yardletAccent)
         view.getTerminal().setCursorStyle(CursorStyle.steadyBlock)
         view.metalBufferingMode = MetalBufferingMode.perFrameAggregated
         try? view.setUseMetal(false)
@@ -1411,6 +1411,8 @@ private struct AccountLoginTerminalHost: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: LocalProcessTerminalView, context: Context) {
+        let accent = ParityTheme.accentColor(for: context.environment.yardletAccent)
+        if nsView.caretColor != accent { nsView.caretColor = accent }
         if isVisible, !context.coordinator.wasVisible,
            let view = nsView as? AccountLoginTerminalView {
             view.requestFocus()

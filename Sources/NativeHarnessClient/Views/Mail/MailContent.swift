@@ -298,7 +298,7 @@ struct MailMessageView: View {
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                         Button(L10n.string("Show images")) { showsRemoteContent = true }
-                            .buttonStyle(.link)
+                            .parityLinkButton()
                     }
                     .font(.system(size: 12 * scale))
                 }

@@ -63,7 +63,7 @@ struct ScheduledTaskCreatedRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             if let actions, schedule != nil {
                 Button(L10n.string("Open")) { actions.open(creation.scheduleID) }
-                    .buttonStyle(.link)
+                    .parityLinkButton()
                     .font(.system(size: 12 * interfaceScale))
                     .parityPointer()
                     .help(L10n.format("Open %@ in Scheduled tasks", name))
