@@ -452,7 +452,15 @@ actor FixtureMailTransport: MailAccountTransport {
         self.labels = labels
     }
 
+    private var failsNextFoldersRead = false
+
+    func failNextFoldersRead() { failsNextFoldersRead = true }
+
     func folders() async throws -> [MailFolder] {
+        if failsNextFoldersRead {
+            failsNextFoldersRead = false
+            throw MailFailure(kind: .unavailable, message: "The folders could not be read just now")
+        }
         let summaries = threads.values.map(\.summary)
         func unread(in place: String) -> Int {
             summaries.filter { (places[$0.id.threadID] ?? "INBOX") == place && $0.isUnread }.count

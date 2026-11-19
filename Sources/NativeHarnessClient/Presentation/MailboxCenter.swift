@@ -395,7 +395,7 @@ final class MailboxCenter {
 
     /// One account's watch: the cursor kept from the last run, or the account's present one, then what
     /// changed after it. A failure waits twice as long each time, up to ten minutes; a refused sign-in
-    /// shows on the account and stops its watch.
+    /// shows on the account and stops its watch. An answer reads again what could not be read of it.
     private func watch(_ id: UUID, _ transport: any MailAccountTransport) -> Task<Void, Never> {
         let interval = watchInterval
         return Task { [weak self] in
@@ -415,6 +415,7 @@ final class MailboxCenter {
                         self.setCursor(cursor, for: id)
                     }
                     wait = interval
+                    await self.readMissed(id)
                 } catch {
                     guard let self, !Task.isCancelled else { return }
                     if Self.isSignInRefusal(error) {
@@ -428,6 +429,16 @@ final class MailboxCenter {
                 try? await Task.sleep(for: wait)
             }
         }
+    }
+
+    /// Reads again what could not be read of an account, its folders or its inbox, once its watch hears from
+    /// it: a read that failed before the network was up, as at login, does not stay on the account until new
+    /// mail or Refresh. A refresh under way reads it anyway.
+    private func readMissed(_ id: UUID) async {
+        guard !isLoading, failures[id] != nil || folders[id] == nil, let transport = transports[id] else { return }
+        let generation = generation
+        if folders[id] == nil, let list = try? await transport.folders(), generation == self.generation { folders[id] = list }
+        if failures[id] != nil { await reread(id, arrived: []) }
     }
 
     /// Reads one account's inbox again after a change, and tells of the threads mail arrived in;

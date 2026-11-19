@@ -220,7 +220,9 @@ connector › **Mail (IMAP)**, as Apple Mail and Thunderbird add them.
   inbox's first page again, and the cursor moves on only once it was read, so what arrived is still told
   after a failed read. A cursor Gmail no longer has (a week or more old) reads the inbox again
   without telling anything. A failure waits twice as long each time, up to ten minutes; a refused sign-in
-  shows on the account and stops its watch until the account answers a refresh again.
+  shows on the account and stops its watch until the account answers a refresh again. Once the watch hears
+  from an account whose folders or inbox could not be read, as when Yardlet starts at login before the
+  network is up, it reads them again, so the failure does not stay until new mail or Refresh.
 - Unread mail that came into the inbox, not sent or drafted by the account and in Gmail's Primary
   category, is told as a system notification through the same permission as task notifications: the
   sender (and the account with several) and the subject with its first words, or one count for more than

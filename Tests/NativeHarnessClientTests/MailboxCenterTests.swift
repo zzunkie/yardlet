@@ -73,6 +73,28 @@ final class MailboxCenterTests: XCTestCase {
         center.stopWatching()
     }
 
+    /// An account that could not be read when the mailbox started, as before the network is up at login,
+    /// is read again once its watch hears from it, without new mail or Refresh.
+    func testAnAccountUnreadAtStartIsReadOnceItAnswers() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("MailboxRecover")))
+        let transport = try XCTUnwrap(MailFixture().transports().first)
+        let id = transport.account.id
+        await transport.failNextFoldersRead()
+        await transport.failNextInboxRead()
+        let center = MailboxCenter(defaults: defaults)
+        center.watchInterval = .milliseconds(20)
+        center.setEnabled(true)
+        center.setAccounts([(transport.account, transport)])
+        await center.refresh()
+        XCTAssertNotNil(center.failures[id])
+        XCTAssertNil(center.folders[id])
+
+        center.startWatching()
+        try await waitUntil { center.failures[id] == nil && center.folders[id] != nil }
+        XCTAssertFalse(center.threads.isEmpty, "The inbox was read")
+        center.stopWatching()
+    }
+
     /// A reply goes out through a draft once the undo time passes; Undo keeps it from leaving, and
     /// closing what was written keeps it in Drafts.
     func testAReplyIsSentAfterTheUndoTimeAndUndoKeepsItBack() async throws {
