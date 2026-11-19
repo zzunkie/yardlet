@@ -4187,3 +4187,9 @@
 "Diff removal / background" = "삭제된 줄과 배경";
 "%@ · %@  %.2f:1 (minimum %.2f:1)" = "%@ · %@ 대비 %.2f:1 (최소 %.2f:1)";
 "Accent preset" = "기본 강조색";
+
+"Select model %lld" = "모델 %lld 선택";
+"Select option %lld" = "선택지 %lld 선택";
+"Open pinned item %lld" = "고정 항목 %lld 열기";
+"Last browser tab" = "마지막 브라우저 탭";
+"Browser tab %lld" = "브라우저 탭 %lld";

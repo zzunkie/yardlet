@@ -4187,3 +4187,9 @@
 "Diff removal / background" = "Diff removal / background";
 "%@ · %@  %.2f:1 (minimum %.2f:1)" = "%@ · %@  %.2f:1 (minimum %.2f:1)";
 "Accent preset" = "Accent preset";
+
+"Select model %lld" = "Select model %lld";
+"Select option %lld" = "Select option %lld";
+"Open pinned item %lld" = "Open pinned item %lld";
+"Last browser tab" = "Last browser tab";
+"Browser tab %lld" = "Browser tab %lld";
