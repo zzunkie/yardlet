@@ -7,6 +7,8 @@ struct CommandPaletteItem: Identifiable {
     let systemName: String
     /// A task the palette opens, which shows its project (`subtitle`) beside its title.
     var isTask = false
+    /// A setting Settings search found, which shows where it is in Settings (`subtitle`) beside its title.
+    var isSetting = false
     /// The menu bar's key for the same command, shown at the row's end as both apps' palettes do.
     var shortcut: KeyboardShortcut? = nil
     let action: () -> Void
@@ -31,8 +33,10 @@ extension CommandPaletteItem {
 enum CommandPaletteSelection {
     /// What ⌘K lists, as the Codex app's command menu searches chats and commands: with no query the
     /// commands and then the most recent tasks; with one, the tasks whose title or project has it
-    /// first (the side panel launcher's counts), then the commands that match.
+    /// first (the side panel launcher's counts), then the commands that match, then the settings Settings
+    /// search finds for it (`settings`, already ranked), at most `settingLimit`.
     static func shown(commands: [CommandPaletteItem], tasks: [CommandPaletteItem],
+                      settings: (String) -> [CommandPaletteItem] = { _ in [] },
                       query: String) -> [CommandPaletteItem] {
         let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines).localizedLowercase
         guard !normalized.isEmpty else { return commands + tasks.prefix(SidePanelLauncher.recentCount) }
@@ -40,7 +44,10 @@ enum CommandPaletteSelection {
             item.title.localizedLowercase.contains(normalized) || item.subtitle.localizedLowercase.contains(normalized)
         }
         return Array(tasks.filter(matches).prefix(SidePanelLauncher.matchLimit)) + commands.filter(matches)
+            + settings(query).prefix(settingLimit)
     }
+
+    static let settingLimit = 8
 
     static func movedIndex(currentIndex: Int?, count: Int, offset: Int) -> Int? {
         guard count > 0, offset != 0 else { return count > 0 ? currentIndex ?? 0 : nil }
@@ -61,13 +68,15 @@ struct CommandPaletteView: View {
     let items: [CommandPaletteItem]
     /// The tasks the palette finds, most recent first.
     var tasks: [CommandPaletteItem] = []
+    /// The settings Settings search finds for the words, best first.
+    var settings: (String) -> [CommandPaletteItem] = { _ in [] }
     let onSelect: (CommandPaletteItem) -> Void
     @State private var query = ""
     @State private var selectedIndex: Int?
     @FocusState private var isSearchFocused: Bool
 
     private var filteredItems: [CommandPaletteItem] {
-        CommandPaletteSelection.shown(commands: items, tasks: tasks, query: query)
+        CommandPaletteSelection.shown(commands: items, tasks: tasks, settings: settings, query: query)
     }
 
     var body: some View {
@@ -108,8 +117,10 @@ struct CommandPaletteView: View {
                     ScrollView {
                         LazyVStack(spacing: 2) {
                             ForEach(Array(filteredItems.enumerated()), id: \.element.id) { index, item in
-                                if item.isTask, index == 0 || !filteredItems[index - 1].isTask {
-                                    Text(L10n.string("Tasks"))
+                                if item.isTask || item.isSetting,
+                                   index == 0 || filteredItems[index - 1].isTask != item.isTask
+                                    || filteredItems[index - 1].isSetting != item.isSetting {
+                                    Text(L10n.string(item.isTask ? "Tasks" : "Settings"))
                                         .font(.caption.weight(.medium))
                                         .foregroundStyle(.secondary)
                                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -132,7 +143,7 @@ struct CommandPaletteView: View {
                                             .lineLimit(1)
                                             .help(item.title)
                                         Spacer(minLength: 0)
-                                        if item.isTask {
+                                        if item.isTask || item.isSetting {
                                             Text(item.subtitle)
                                                 .font(.callout)
                                                 .foregroundStyle(.secondary)
@@ -160,7 +171,7 @@ struct CommandPaletteView: View {
                                     in: RoundedRectangle(cornerRadius: 7)
                                 )
                                 .accessibilityElement(children: .combine)
-                                .accessibilityLabel(item.isTask ? "\(item.title), \(item.subtitle)" : item.title)
+                                .accessibilityLabel(item.isTask || item.isSetting ? "\(item.title), \(item.subtitle)" : item.title)
                                 .accessibilityAddTraits(index == selectedIndex ? .isSelected : [])
                             }
                         }

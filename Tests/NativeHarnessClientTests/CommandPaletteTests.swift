@@ -37,6 +37,16 @@ final class CommandPaletteTests: XCTestCase {
                        ["New task", "Settings"] + (1...6).map { "Fix login \($0)" })
         XCTAssertEqual(CommandPaletteSelection.shown(commands: commands, tasks: tasks, query: " settings ").map(\.id),
                        ["Notes", "Settings"], "a task's project counts, and tasks lead")
+
+        // Settings search's results follow the commands while there are words, never in the empty palette.
+        let settings = { (query: String) in
+            (1...10).map { CommandPaletteItem(id: "setting \($0) \(query)", title: "Sound \($0)", subtitle: "Settings",
+                                              systemName: "", isSetting: true, action: {}) }
+        }
+        XCTAssertEqual(CommandPaletteSelection.shown(commands: commands, tasks: tasks, settings: settings, query: "").map(\.id),
+                       ["New task", "Settings"] + (1...6).map { "Fix login \($0)" })
+        XCTAssertEqual(CommandPaletteSelection.shown(commands: commands, tasks: tasks, settings: settings, query: "set").map(\.id),
+                       ["Notes", "Settings"] + (1...CommandPaletteSelection.settingLimit).map { "setting \($0) set" })
     }
 
     func testSelectionReturnsNilForEmptyPalette() {

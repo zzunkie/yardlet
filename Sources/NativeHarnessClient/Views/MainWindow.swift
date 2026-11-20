@@ -2650,7 +2650,8 @@ struct MainWindow: View {
             }
         }
         .sheet(isPresented: $isPresentingCommandPalette, onDismiss: finishCommandPalette) {
-            CommandPaletteView(items: commandPaletteItems, tasks: commandPaletteTasks, onSelect: { pendingCommand = $0 })
+            CommandPaletteView(items: commandPaletteItems, tasks: commandPaletteTasks, settings: commandPaletteSettings,
+                               onSelect: { pendingCommand = $0 })
         }
         .sheet(isPresented: $isPresentingImport, onDismiss: finishShellModal) {
             ImportConversationSheet(model: model,
@@ -3024,6 +3025,25 @@ struct MainWindow: View {
                     action: { activateTask(session.id) }
                 )
             }
+    }
+
+    /// The settings ⌘K finds, as Settings search finds them in this window, each opening its row in Settings.
+    private func commandPaletteSettings(_ query: String) -> [CommandPaletteItem] {
+        let context = model.settingsContext
+        let settings = YardletSettingCatalog.all.compactMap { setting in setting.target(in: context).map { (setting, $0) } }
+        // The sections the Settings sheet offers from the same objects.
+        let sections = SettingsSection.available(
+            hasAccounts: true, hasConnectors: true, hasVault: true, hasRemote: model.remoteControl != nil,
+            hasYardletAccount: model.remoteControl?.relayURL != nil, hasCLIUpdates: model.cliUpdates != nil,
+            hasInstructions: model.yardletInstructions != nil, hasUsage: settingsUsage != nil)
+        let items = SettingsSearch.items(sections: sections, settings: settings, pageItems: SettingsSearch.pageItems)
+        return SettingsSearch.results(query, in: items, limit: CommandPaletteSelection.settingLimit).map { item in
+            CommandPaletteItem(id: "settings-\(item.id)", title: item.title,
+                               subtitle: item.kind == .section ? L10n.string("Settings")
+                                   : L10n.format("%@ › %@", L10n.string("Settings"), item.section.title),
+                               systemName: item.section.systemName, isSetting: true,
+                               action: { presentSettings(item.destination) })
+        }
     }
 
     private var commandPaletteItems: [CommandPaletteItem] {
