@@ -105,8 +105,9 @@ final class MenuBarRenderingTests: XCTestCase {
         defer { updates.close() }
         updates.settle()
         let updateSwitches = updates.accessibilityElements().filter { $0.role == NSAccessibility.Role.checkBox.rawValue }
-        XCTAssertEqual(updateSwitches.prefix(3).map(\.label), [L10n.string("Show Yardlet in the menu bar"), L10n.string("Mailbox"),
-            L10n.string("Automatically check for updates")], "Sparkle's switch closes the App heading's rows")
+        XCTAssertEqual(updateSwitches.prefix(5).map(\.label), [L10n.string("Show Yardlet in the menu bar"), L10n.string("Mailbox"),
+            L10n.string("Calendar"), L10n.string("Simulator"), L10n.string("Automatically check for updates")],
+            "Sparkle's switch closes the App heading's rows")
     }
 
     func testTheLidSettingAndItsMenuLinesDraw() throws {
