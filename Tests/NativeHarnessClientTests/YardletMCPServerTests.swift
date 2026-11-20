@@ -291,8 +291,8 @@ final class YardletMCPServerTests: XCTestCase {
         }
         XCTAssertEqual(ids.sorted(), [1, 2, 3])
         let list = replies.first { $0["id"] == .integer(2) }
-        XCTAssertEqual(list?["result"]?["tools"]?.arrayValue?.count, 44,
-                       "20 browser tools, the 2 task suggestion tools, the 14 session tools, the 2 settings tools and the 6 "
+        XCTAssertEqual(list?["result"]?["tools"]?.arrayValue?.count, 45,
+                       "20 browser tools, the 2 task suggestion tools, the 15 session tools, the 2 settings tools and the 6 "
                        + "scheduled-task tools")
         let call = replies.first { $0["id"] == .integer(3) }
         XCTAssertEqual(call?["result"]?["isError"], .bool(true))
