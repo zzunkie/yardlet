@@ -6,9 +6,10 @@ import Foundation
 /// Yardlet's own settings (Yardlet Instructions where the Codex app has Personalization's custom
 /// instructions); Integrations what agents reach outside Yardlet (Connectors, the built-in Browser as the
 /// ChatGPT app has a Browser section, the Vault agents fill its sign-ins from, and Remote, the phone
-/// remote, as the ChatGPT app keeps passwords and connections there); Harnesses the coding tools with
-/// their accounts, the limits those accounts show, and the CLI updates for their runtimes. Each section
-/// owns its page; General holds only its own controls rather than links to the others.
+/// remote, as the ChatGPT app keeps passwords and connections there); Harnesses the accounts first, as
+/// adding one and reading its limits are the common visits, with the limits they show beside them, then the
+/// coding tools with the CLI updates for their runtimes. Each section owns its page; General holds only its
+/// own controls rather than links to the others.
 enum SettingsSection: String, CaseIterable, Identifiable {
     case yardletAccount
     case general
@@ -20,9 +21,9 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case browser
     case vault
     case remote
-    case harnesses
     case accounts
     case usage
+    case harnesses
     case cliUpdates
 
     /// The headings the sections sit under; the Yardlet account sits above them.

@@ -14,7 +14,7 @@ final class SettingsStructureTests: XCTestCase {
         XCTAssertEqual(SettingsSection.Group.allCases.map { group in all.filter { $0.group == group } }, [
             [.general, .appearance, .keyboardShortcuts, .notifications, .instructions],
             [.connectors, .browser, .vault, .remote],
-            [.harnesses, .accounts, .usage, .cliUpdates],
+            [.accounts, .usage, .harnesses, .cliUpdates],
         ])
         XCTAssertEqual(all.dropFirst().compactMap(\.group), SettingsSection.Group.allCases.flatMap { group in
             all.filter { $0.group == group }.map { _ in group } }, "Each heading's sections follow one another")
@@ -29,7 +29,7 @@ final class SettingsStructureTests: XCTestCase {
         XCTAssertEqual(SettingsSection.available(hasAccounts: true, hasConnectors: false, hasVault: true, hasRemote: true,
                                                  hasYardletAccount: true, hasCLIUpdates: true, hasInstructions: true, hasUsage: true),
             all.filter { $0 != .connectors })
-        XCTAssertEqual(all.filter(\.isConnectionSection), [.harnesses, .accounts])
+        XCTAssertEqual(all.filter(\.isConnectionSection), [.accounts, .harnesses])
 
         // Every General row sits under one of its headings, and the catalog lists them heading by heading,
         // so a row without one is never left out of the page.
