@@ -1414,6 +1414,7 @@ struct SidebarTaskEntry: View, @MainActor Equatable {
             && (lhs.onMarkRead != nil) == (rhs.onMarkRead != nil)
             && (lhs.onMarkUnread != nil) == (rhs.onMarkUnread != nil)
             && (lhs.onMoveToProject != nil) == (rhs.onMoveToProject != nil)
+            && (lhs.onMakeProject != nil) == (rhs.onMakeProject != nil)
     }
 
     @ViewBuilder var menuContents: some View {
