@@ -88,6 +88,7 @@ struct RemoteSettingsView: View {
     /// A switch's row, in the words the settings catalog gives it.
     private func row<Accessory: View>(setting: YardletSetting, @ViewBuilder accessory: () -> Accessory) -> some View {
         row(title: setting.title, detail: setting.detail ?? "", accessory: accessory)
+            .settingsAnchor(setting.id)
     }
 
     /// A phone can reach this Mac some way now.
@@ -163,6 +164,7 @@ struct RemoteSettingsView: View {
                         .controlSize(.small)
                         .disabled(!canPair)
                 }
+                .settingsAnchor(SettingsSearch.Anchor.pairDevice)
             }
         }
         .padding(.horizontal, SettingsMetrics.groupHorizontalPadding)
@@ -237,6 +239,7 @@ struct RemoteSettingsView: View {
             Text(L10n.string("Paired devices"))
                 .font(SettingsMetrics.groupTitleFont)
                 .padding(.vertical, 12)
+                .settingsAnchor(SettingsSearch.Anchor.pairedDevices)
             if service.devices.isEmpty {
                 Text(L10n.string("No paired devices"))
                     .font(SettingsMetrics.detailFont)

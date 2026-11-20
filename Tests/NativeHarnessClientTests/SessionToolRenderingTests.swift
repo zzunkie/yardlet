@@ -229,11 +229,11 @@ final class SessionToolRenderingTests: XCTestCase {
                                       title: "mcp__yardlet__update_setting", input: input, output: result), state: .completed),
             .assistant(text: "Every task now shares one set of cookies.", isStreaming: false)
         ])
-        var opened: [SettingsSection] = []
+        var opened: [SettingsDestination] = []
         let rows = try draw("setting-changed", height: 360) {
             ConversationTimeline(source: .transcript(entries: made, harness: .claudeCode, status: .ready,
                                                      latestTurnIsComplete: true))
-                .environment(\.openSettingsSection, { opened.append($0) })
+                .environment(\.openSettings, { opened.append($0) })
         }
         for drawing in rows {
             let texts = drawing.elements.map(\.description).joined(separator: "\n")

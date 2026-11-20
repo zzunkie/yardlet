@@ -1,29 +1,29 @@
 import SwiftUI
 
-private struct OpenSettingsSectionKey: EnvironmentKey {
-    static let defaultValue: (@MainActor (SettingsSection) -> Void)? = nil
+private struct OpenSettingsKey: EnvironmentKey {
+    static let defaultValue: (@MainActor (SettingsDestination) -> Void)? = nil
 }
 
 extension EnvironmentValues {
-    /// Opens Settings on a section. Nil where the conversation has no Settings to open (a row then
-    /// shows no Open).
-    var openSettingsSection: (@MainActor (SettingsSection) -> Void)? {
-        get { self[OpenSettingsSectionKey.self] }
-        set { self[OpenSettingsSectionKey.self] = newValue }
+    /// Opens Settings at a destination: a section, and the row in it to scroll to and highlight. Nil where the
+    /// window has no Settings to open (a link to it is then left out).
+    var openSettings: (@MainActor (SettingsDestination) -> Void)? {
+        get { self[OpenSettingsKey.self] }
+        set { self[OpenSettingsKey.self] = newValue }
     }
 }
 
 /// A setting an agent changed (`update_setting`), as one outlined row where the call happened, as a created
 /// schedule's row: a gear, the setting's name over what it went from and to, and Open, which shows its
-/// section in Settings. The words are the ones the change was made in.
+/// row in Settings, highlighted. The words are the ones the change was made in.
 struct SettingChangedRow: View {
     let change: ConversationSettingChange
 
     @Environment(\.yardletInterfaceScale) private var interfaceScale
-    @Environment(\.openSettingsSection) private var openSettings
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
-        let section = YardletSettingCatalog.setting(change.settingID)?.section
+        let destination = YardletSettingCatalog.setting(change.settingID)?.destination
         HStack(alignment: .center, spacing: 10) {
             Image(systemName: "gearshape")
                 .font(.system(size: 13 * interfaceScale))
@@ -42,8 +42,8 @@ struct SettingChangedRow: View {
                     .truncationMode(.tail)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            if let openSettings, let section {
-                Button(L10n.string("Open")) { openSettings(section) }
+            if let openSettings, let destination {
+                Button(L10n.string("Open")) { openSettings(destination) }
                     .parityLinkButton()
                     .font(.system(size: 12 * interfaceScale))
                     .parityPointer()

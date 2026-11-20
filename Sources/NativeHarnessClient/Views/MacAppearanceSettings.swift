@@ -13,7 +13,7 @@ enum PlatformAppearanceSettings {
                 var theme = MacColorTheme.current(in: context.defaults)
                 theme.usePreset(preset)
                 return save(theme, in: context.defaults)
-            }))
+            }), keywords: preset.keywords)
         let colors = ThemeMode.allCases.flatMap { mode in
             ThemeField.allCases.map { field in
                 YardletSetting(id: "\(mode.rawValue)_\(field.rawValue)_color", section: .appearance,
@@ -25,7 +25,7 @@ enum PlatformAppearanceSettings {
                             var theme = MacColorTheme.current(in: context.defaults)
                             theme[mode][keyPath: field.key] = ThemeRGB(raw)
                             return save(theme, in: context.defaults)
-                        }))
+                        }), keywords: "theme color, custom color")
             }
         }
         let font = YardletSetting(id: "ui_font", section: .appearance, title: L10n.string("Interface font"),
@@ -35,7 +35,7 @@ enum PlatformAppearanceSettings {
                 var theme = MacColorTheme.current(in: context.defaults)
                 theme.font = font
                 return save(theme, in: context.defaults)
-            }))
+            }), keywords: "font, typeface, serif")
         return [.theme, paired, .interfaceSize, font, .codeFontSize] + colors
     }()
 

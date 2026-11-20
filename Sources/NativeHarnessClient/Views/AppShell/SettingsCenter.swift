@@ -71,6 +71,16 @@ struct SettingsCenterView: View {
     private let initialSectionRawValue: String?
     @State private var section: SettingsSection
     @State private var focusedSection: SettingsSection?
+    /// Settings search (`SettingsSearch`): what the field at the top of the section list holds, and the result
+    /// last opened from it.
+    @State private var searchText = ""
+    @State private var selectedResultID: String?
+    @FocusState private var isSearchFocused: Bool
+    /// The row a link or a search result landed on, scrolled to and highlighted for a moment; each visit is a new
+    /// value, so landing on the same row again scrolls and highlights it again.
+    @State private var visit: SettingsVisit?
+    @State private var highlightedAnchor: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var appliedInitialRemoteSection = false
     @State private var pendingRemoteConfirmation: RemoteHostSettingsProjection.Confirmation?
     /// The section list takes the keyboard when Settings opens, as the sidebar list it replaced did.
@@ -130,6 +140,7 @@ struct SettingsCenterView: View {
     init(
         size: CGSize = SettingsCenterView.preferredSize,
         initialSection: String? = nil,
+        destination: SettingsDestination? = nil,
         notificationCenter: any SystemNotificationCenter = LocalSystemNotificationCenter(),
         connectors: ConnectorCenter? = nil,
         vault: VaultCenter? = nil,
@@ -159,6 +170,7 @@ struct SettingsCenterView: View {
         self.lidHelper = lidHelper
         self.launchAtLogin = launchAtLogin
         self.remoteHost = remoteHost
+        let initialSection = destination?.section.rawValue ?? initialSection
         self.initialSectionRawValue = initialSection
         self.notificationCenter = notificationCenter
         _notifications = State(initialValue: SystemNotificationSettingsModel(center: notificationCenter))
@@ -168,6 +180,8 @@ struct SettingsCenterView: View {
                 hasRemote: remote != nil, hasYardletAccount: remote?.relayURL != nil, hasCLIUpdates: cliUpdates != nil,
                 hasInstructions: instructions != nil, hasUsage: usage != nil)
         _section = State(initialValue: SettingsSection.initial(initialSection, available: available))
+        _visit = State(initialValue: destination?.anchor.map(SettingsVisit.init))
+        if let query = destination?.shortcutQuery { _shortcutEditor.wrappedValue.query = query }
         _accountCenter = State(initialValue: AccountCenterModel(
             connections: accounts?.connections ?? ProviderConnectionStore(),
             codexEnvironmentManager: accounts?.codexEnvironmentManager))
@@ -186,7 +200,8 @@ struct SettingsCenterView: View {
                     .font(.system(size: 14, weight: .semibold))
                 Spacer()
                 Button(L10n.string("Done")) { dismiss() }
-                    .keyboardShortcut(MacShortcut.dismiss.binding)
+                    // While the search field has the keyboard and holds words, Escape clears them first.
+                    .keyboardShortcut(searchText.isEmpty || !isSearchFocused ? MacShortcut.dismiss.binding : nil)
                     .disabled(accountCenter.loginController.isRunning)
                     .help(accountCenter.loginController.isRunning ? L10n.string("Finish or cancel the sign-in first") : "")
                     .controlSize(.small)
@@ -200,49 +215,18 @@ struct SettingsCenterView: View {
                 // The two apps' settings lists: the chosen section on a light fill with its words in
                 // the text colour. A sidebar `List` drew its selection in the shell's monochrome tint, a
                 // black bar the words disappeared into (2026-10-22).
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 2) {
-                        // The Yardlet account above the headings, as both apps put the account first; then
-                        // each heading over its sections, as the ChatGPT app's Personal, Integrations, Coding.
-                        let sections = sections
-                        if sections.contains(.yardletAccount), let remote {
-                            SettingsAccountSectionRow(summary: YardletAccountSettingsView.summary(remote),
-                                                      isSelected: section == .yardletAccount) { section = .yardletAccount }
-                        }
-                        ForEach(SettingsSection.Group.allCases, id: \.self) { group in
-                            let members = sections.filter { $0.group == group }
-                            if !members.isEmpty {
-                                Text(group.title)
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .foregroundStyle(.secondary)
-                                    .padding(.horizontal, 8)
-                                    .padding(.top, 10)
-                                    .padding(.bottom, 2)
-                                    .accessibilityAddTraits(.isHeader)
-                                ForEach(members) { item in
-                                    SettingsSectionRow(item: item, isSelected: item == section) { section = item }
-                                }
-                            }
-                        }
+                VStack(spacing: 0) {
+                    searchField
+                        .padding(.horizontal, 10)
+                        .padding(.top, 10)
+                    if isSearching {
+                        searchResultList
+                    } else {
+                        sectionList
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 10)
                 }
-                .frame(width: 190)
+                .frame(width: Self.sidebarWidth)
                 .background(ParityTheme.sidebar)
-                .focusable()
-                .focusEffectDisabled()
-                .focused($isSectionListFocused)
-                .accessibilityLabel(L10n.string("Settings sections"))
-                .accessibilityValue(section.title)
-                .onMacKeyPress(.nextItem) {
-                    moveSection(by: 1)
-                    return .handled
-                }
-                .onMacKeyPress(.previousItem) {
-                    moveSection(by: -1)
-                    return .handled
-                }
 
                 Rectangle()
                     .fill(ParityTheme.separator)
@@ -272,37 +256,60 @@ struct SettingsCenterView: View {
                             }
                         }
                     } else {
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 16) {
-                                detailHeader
-                                if let remoteHost, let hostSettings = remoteHost.hostSettings, !hostSettings.writable {
-                                    Text(RemoteHostSettingsProjection.permissionNote(hostName: remoteHost.name))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .fixedSize(horizontal: false, vertical: true)
+                        ScrollViewReader { proxy in
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 16) {
+                                    detailHeader
+                                    if let remoteHost, let hostSettings = remoteHost.hostSettings, !hostSettings.writable {
+                                        Text(RemoteHostSettingsProjection.permissionNote(hostName: remoteHost.name))
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                    if let error = remoteHost?.commandError {
+                                        Text(error)
+                                            .font(.caption)
+                                            .foregroundStyle(Color.orange)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                    detail
                                 }
-                                if let error = remoteHost?.commandError {
-                                    Text(error)
-                                        .font(.caption)
-                                        .foregroundStyle(Color.orange)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                                detail
+                                .padding(20)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                             }
-                            .padding(20)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            // The page of a section just chosen lays out first, then its row comes into view.
+                            .task(id: visit) {
+                                guard let anchor = visit?.anchor else { return }
+                                try? await Task.sleep(for: .milliseconds(60))
+                                withAnimation(ParityMotion.easeInOut(reduceMotion: reduceMotion)) {
+                                    proxy.scrollTo(anchor, anchor: .center)
+                                }
+                            }
                         }
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .environment(\.settingsHighlight, highlightedAnchor)
             }
         }
         .frame(width: size.width, height: size.height)
         .background(ParityTheme.canvas)
         .task {
             focusedSection = section
-            isSectionListFocused = true
+            // As macOS System Settings, Settings opens ready to search; with no words the arrow keys still move
+            // between sections and Escape still closes it.
+            isSearchFocused = true
         }
+        .task(id: visit) {
+            // The row a link landed on shows a light fill for a moment, then fades.
+            guard let anchor = visit?.anchor else { return }
+            try? await Task.sleep(for: .milliseconds(60))
+            highlightedAnchor = anchor
+            try? await Task.sleep(for: .seconds(1.6))
+            guard !Task.isCancelled else { return }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.4)) { highlightedAnchor = nil }
+        }
+        .onChange(of: searchText) { _, _ in selectedResultID = nil }
         .task(id: section) {
             if section == .notifications { await notifications.refresh() }
             if section == .appearance, codeFontFamilies.isEmpty { codeFontFamilies = YardletCodeFont.installedFamilies() }
@@ -366,6 +373,189 @@ struct SettingsCenterView: View {
                                          hasRemote: remote != nil, hasYardletAccount: remote?.relayURL != nil,
                                          hasCLIUpdates: cliUpdates != nil, hasInstructions: instructions != nil,
                                          hasUsage: usage != nil)
+    }
+
+    static let sidebarWidth: CGFloat = 220
+
+    /// The sections under their headings: the Yardlet account above them, as both apps put the account first; then
+    /// each heading over its sections, as the ChatGPT app's Personal, Integrations, Coding.
+    private var sectionList: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 2) {
+                let sections = sections
+                if sections.contains(.yardletAccount), let remote {
+                    SettingsAccountSectionRow(summary: YardletAccountSettingsView.summary(remote),
+                                              isSelected: section == .yardletAccount) { section = .yardletAccount }
+                }
+                ForEach(SettingsSection.Group.allCases, id: \.self) { group in
+                    let members = sections.filter { $0.group == group }
+                    if !members.isEmpty {
+                        Text(group.title)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.top, 10)
+                            .padding(.bottom, 2)
+                            .accessibilityAddTraits(.isHeader)
+                        ForEach(members) { item in
+                            SettingsSectionRow(item: item, isSelected: item == section) { section = item }
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 10)
+        }
+        .focusable()
+        .focusEffectDisabled()
+        .focused($isSectionListFocused)
+        .accessibilityLabel(L10n.string("Settings sections"))
+        .accessibilityValue(section.title)
+        .onMacKeyPress(.nextItem) {
+            moveSection(by: 1)
+            return .handled
+        }
+        .onMacKeyPress(.previousItem) {
+            moveSection(by: -1)
+            return .handled
+        }
+    }
+
+    /// The field at the top of the section list, as macOS System Settings has one: words find sections, settings
+    /// and the parts of a page by their names and synonyms. With no words the arrow keys move between sections, as
+    /// in the list; with words they move between results and open each, and Escape clears them.
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            TextField(L10n.string("Search"), text: $searchText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .focused($isSearchFocused)
+                .accessibilityLabel(L10n.string("Search settings"))
+                .onMacKeyPress(.nextItem) {
+                    moveSearchSelection(by: 1)
+                    return .handled
+                }
+                .onMacKeyPress(.previousItem) {
+                    moveSearchSelection(by: -1)
+                    return .handled
+                }
+                .onMacShortcutSubmit(.chooseItem) { openResult(selectedResult ?? searchResults.first) }
+                .onMacShortcutExit { searchText = "" }
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                    isSearchFocused = true
+                } label: {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 12))
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .parityPointer()
+                .accessibilityLabel(L10n.string("Clear search"))
+            }
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 28)
+        .background(ParityTheme.input, in: RoundedRectangle(cornerRadius: 7))
+        .overlay { RoundedRectangle(cornerRadius: 7).stroke(ParityTheme.separator) }
+        .focusEffectDisabled()
+    }
+
+    private var isSearching: Bool {
+        !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// What the words find in this window, best first, with at most a few keyboard commands after the settings.
+    private var searchResults: [SettingsSearchItem] {
+        let found = SettingsSearch.results(searchText, in: searchItems)
+        let commands = found.filter { $0.kind == .command }.prefix(Self.commandResultLimit)
+        return found.filter { $0.kind != .command } + commands
+    }
+
+    private static let commandResultLimit = 6
+
+    private var selectedResult: SettingsSearchItem? {
+        selectedResultID.flatMap { id in searchResults.first { $0.id == id } }
+    }
+
+    /// The results in the section list's place: each with its section's symbol, its name and, under it, its section.
+    private var searchResultList: some View {
+        let results = searchResults
+        return ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    if results.isEmpty {
+                        Text(L10n.string("No matching settings"))
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.top, 8)
+                    }
+                    ForEach(results) { item in
+                        SettingsSearchResultRow(item: item, isSelected: item.id == selectedResultID) { openResult(item) }
+                            .id(item.id)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 10)
+            }
+            .onChange(of: selectedResultID) { _, id in
+                if let id { proxy.scrollTo(id) }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(L10n.string("Search results"))
+    }
+
+    /// Everything Settings search finds in this window (`SettingsSearch.items`): the sections it offers, the catalog's
+    /// settings it shows, the parts of its pages, and on this Mac the commands whose keys Keyboard shortcuts changes.
+    private var searchItems: [SettingsSearchItem] {
+        let settings: [(setting: YardletSetting, target: YardletSetting)]
+        if let remoteHost {
+            let values = remoteHost.hostSettings?.values ?? [:]
+            settings = YardletSettingCatalog.all.compactMap { setting in
+                guard values[setting.id] != nil else { return nil }
+                let parent = setting.shownWhileOn.flatMap(YardletSettingCatalog.setting)
+                return (setting, parent?.section == setting.section ? parent! : setting)
+            }
+        } else {
+            let context = settingsContext
+            settings = YardletSettingCatalog.all.compactMap { setting in setting.target(in: context).map { (setting, $0) } }
+        }
+        return SettingsSearch.items(sections: sections, settings: settings, pageItems: SettingsSearch.pageItems,
+                                    commands: remoteHost == nil ? KeyboardShortcutsSettings.searchItems : [])
+    }
+
+    private func moveSearchSelection(by offset: Int) {
+        guard isSearching else {
+            moveSection(by: offset)
+            return
+        }
+        let results = searchResults
+        guard !results.isEmpty else { return }
+        let current = selectedResultID.flatMap { id in results.firstIndex { $0.id == id } }
+        let next = current.map { min(max($0 + offset, 0), results.count - 1) } ?? (offset > 0 ? 0 : results.count - 1)
+        openResult(results[next])
+    }
+
+    private func openResult(_ item: SettingsSearchItem?) {
+        guard let item else { return }
+        selectedResultID = item.id
+        open(item.destination)
+    }
+
+    /// Shows a destination: its section, the Keyboard shortcuts page searched for its command, and its row scrolled
+    /// to and highlighted.
+    private func open(_ destination: SettingsDestination) {
+        guard sections.contains(destination.section) else { return }
+        section = destination.section
+        focusedSection = destination.section
+        if let query = destination.shortcutQuery { shortcutEditor.query = query }
+        visit = destination.anchor.map(SettingsVisit.init)
     }
 
     private var effectiveUsage: SettingsUsageContext? {
@@ -665,7 +855,7 @@ struct SettingsCenterView: View {
         let codeFont = YardletCodeFont(name: codeFontFamilies.contains(codeFontName) ? codeFontName : "",
                                        points: CodeFontPreference.size(codeFontSize))
         return VStack(alignment: .leading, spacing: 0) {
-            SettingsRow(title: L10n.string("Code font"), detail: setting.detail) {
+            SettingsRow(title: L10n.string("Code font"), detail: setting.detail, anchor: setting.id) {
                 HStack(spacing: 8) {
                     Picker(L10n.string("Code font"), selection: Binding(
                         get: { codeFont.name }, set: { codeFontName = $0 })) {
@@ -760,7 +950,7 @@ struct SettingsCenterView: View {
         case (true, .unavailable): L10n.string("Not available in this copy of Yardlet")
         default: nil
         }
-        return SettingsRow(title: setting.title, detail: note) {
+        return SettingsRow(title: setting.title, detail: note, anchor: setting.id) {
             if keepsWorkingWithLidClosed, helper.status == .needsApproval || helper.status == .off {
                 Button(L10n.string("Open System Settings")) { helper.openSystemSettings() }
                     .controlSize(.small)
@@ -775,7 +965,8 @@ struct SettingsCenterView: View {
     /// "Launch at login", with one line and System Settings while macOS keeps Yardlet's login item turned off.
     private func launchAtLoginRow(_ item: LaunchAtLogin, setting: YardletSetting) -> some View {
         SettingsRow(title: setting.title,
-                    detail: item.status == .needsApproval ? L10n.string("Allow Yardlet in Login Items in System Settings") : nil) {
+                    detail: item.status == .needsApproval ? L10n.string("Allow Yardlet in Login Items in System Settings") : nil,
+                    anchor: setting.id) {
             if item.status == .needsApproval {
                 Button(L10n.string("Open System Settings")) { item.openSystemSettings() }
                     .controlSize(.small)
@@ -798,7 +989,7 @@ struct SettingsCenterView: View {
         case (true, "unavailable"?): L10n.string("Not available in this copy of Yardlet")
         default: nil
         }
-        return SettingsRow(title: setting.title, detail: note) {
+        return SettingsRow(title: setting.title, detail: note, anchor: setting.id) {
             Toggle(setting.title, isOn: Binding(
                 get: { isOn },
                 set: { requestRemoteSettingChange(setting, to: $0 ? YardletSetting.on : YardletSetting.off) }
@@ -814,7 +1005,8 @@ struct SettingsCenterView: View {
     private var notificationDetail: some View {
         SettingsGroup {
             SettingsRow(title: L10n.string("macOS notifications"),
-                        detail: L10n.string("Allow Yardlet's notifications in macOS for the settings below.")) {
+                        detail: L10n.string("Allow Yardlet's notifications in macOS for the settings below."),
+                        anchor: SettingsSearch.Anchor.macOSNotifications) {
                 if !notifications.statusLabel.isEmpty {
                     Text(notifications.statusLabel)
                         .font(SettingsMetrics.detailFont)
@@ -937,6 +1129,55 @@ private struct SettingsSectionRow: View {
     }
 }
 
+/// One Settings search result in the section list's place: its section's symbol, its name in up to two lines, and
+/// its section under it, filled when it is the one shown, as a section row is.
+private struct SettingsSearchResultRow: View {
+    let item: SettingsSearchItem
+    let isSelected: Bool
+    let onSelect: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: item.section.systemName)
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(isSelected ? .primary : .secondary)
+                    .frame(width: 18)
+                    .padding(.top, 1)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(item.title)
+                        .font(.system(size: 13, weight: isSelected ? .medium : .regular))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if item.kind != .section {
+                        Text(item.section.title)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+            .background(isSelected ? ParityTheme.selectedFill : (isHovering ? ParityTheme.hoverFill : .clear),
+                        in: RoundedRectangle(cornerRadius: 7))
+            .contentShape(RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .parityPointer()
+        .onHover { isHovering = $0 }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(item.title)
+        .accessibilityValue(item.kind == .section ? "" : item.section.title)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+}
+
 /// The Yardlet account above the section list's headings, as macOS System Settings puts the Apple Account at
 /// the top of its list: a person symbol, the section's name and the account or that nobody is signed in.
 private struct SettingsAccountSectionRow: View {
@@ -1005,7 +1246,8 @@ private struct CredentialHidingContentRow: View {
 
     var body: some View {
         SettingsRow(title: setting.title, detail: setting.detail,
-                    notes: isAllowedBuild ? [] : [L10n.string("Always on in a build that is not team-signed.")]) {
+                    notes: isAllowedBuild ? [] : [L10n.string("Always on in a build that is not team-signed.")],
+                    anchor: setting.id) {
             Toggle(setting.title, isOn: Binding(get: { hidesCredentials }, set: { onToggle($0) }))
                 .labelsHidden()
                 .toggleStyle(.paritySwitch)
@@ -1059,17 +1301,21 @@ struct SettingsRow<Control: View>: View {
     let title: String
     var detail: String?
     var notes: [String] = []
+    /// Where a link into Settings lands on this row (`SettingsDestination.anchor`): the setting's id for a setting.
+    var anchor: String?
     @ViewBuilder let control: () -> Control
 
-    init(title: String, detail: String? = nil, notes: [String] = [], @ViewBuilder control: @escaping () -> Control) {
+    init(title: String, detail: String? = nil, notes: [String] = [], anchor: String? = nil,
+         @ViewBuilder control: @escaping () -> Control) {
         self.title = title
         self.detail = detail
         self.notes = notes
+        self.anchor = anchor
         self.control = control
     }
 
     init(setting: YardletSetting, notes: [String] = [], @ViewBuilder control: @escaping () -> Control) {
-        self.init(title: setting.title, detail: setting.detail, notes: notes, control: control)
+        self.init(title: setting.title, detail: setting.detail, notes: notes, anchor: setting.id, control: control)
     }
 
     var body: some View {
@@ -1079,6 +1325,51 @@ struct SettingsRow<Control: View>: View {
             HStack(spacing: 8) { control() }
         }
         .padding(.vertical, SettingsMetrics.rowVerticalPadding)
+        .settingsAnchor(anchor)
+    }
+}
+
+private struct SettingsHighlightKey: EnvironmentKey {
+    static let defaultValue: String? = nil
+}
+
+extension EnvironmentValues {
+    /// The row a link into Settings just landed on, which shows a light fill for a moment.
+    var settingsHighlight: String? {
+        get { self[SettingsHighlightKey.self] }
+        set { self[SettingsHighlightKey.self] = newValue }
+    }
+}
+
+/// A visit to a row from a link or a search result; each is new, so landing on the same row again scrolls again.
+struct SettingsVisit: Equatable {
+    let anchor: String
+    let id = UUID()
+
+    init(anchor: String) { self.anchor = anchor }
+}
+
+extension View {
+    /// Marks where a link into Settings can land (`SettingsDestination.anchor`): the page scrolls it into view and
+    /// gives it a light accent fill for a moment. Nil marks nothing.
+    @ViewBuilder func settingsAnchor(_ anchor: String?) -> some View {
+        if let anchor { modifier(SettingsAnchorModifier(anchor: anchor)) } else { self }
+    }
+}
+
+private struct SettingsAnchorModifier: ViewModifier {
+    let anchor: String
+    @Environment(\.settingsHighlight) private var highlight
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(ParityTheme.accent.opacity(highlight == anchor ? 0.14 : 0))
+                    .padding(.horizontal, -8)
+                    .allowsHitTesting(false)
+            }
+            .id(anchor)
     }
 }
 

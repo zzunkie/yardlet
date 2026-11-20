@@ -51,6 +51,7 @@ struct ConnectorSettingsView: View {
                 HStack(alignment: .firstTextBaseline) {
                     Text(L10n.string("Your connectors"))
                         .font(.headline)
+                        .settingsAnchor(SettingsSearch.Anchor.addConnector)
                     Spacer(minLength: 8)
                     // With none yet, the empty state holds the one "Add connector".
                     if !isRemote, !center.connectors.isEmpty {
@@ -229,6 +230,7 @@ struct ConnectorSetupTiles: View {
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .parityCard(cornerRadius: 10)
+        .settingsAnchor(SettingsSearch.Anchor.setUp(id))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(L10n.format("Set up %@", name))
         .accessibilityValue(status)

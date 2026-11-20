@@ -78,6 +78,7 @@ struct YardletInstructionsSettingsView: View {
                     .controlSize(.small)
             }
             .padding(.vertical, SettingsMetrics.rowVerticalPadding)
+            .settingsAnchor(YardletSetting.yardletInstructions.id)
             .padding(.horizontal, SettingsMetrics.groupHorizontalPadding)
             .parityCard()
 
@@ -155,5 +156,6 @@ private struct RoutingEvaluationSettingsCard: View {
         .padding(.vertical, SettingsMetrics.rowVerticalPadding)
         .padding(.horizontal, SettingsMetrics.groupHorizontalPadding)
         .parityCard()
+        .settingsAnchor(YardletSetting.dailyEvaluation.id)
     }
 }

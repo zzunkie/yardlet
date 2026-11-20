@@ -81,7 +81,7 @@ struct AppearanceThemeEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             SettingsGroup {
-                SettingsRow(title: L10n.string("Accent preset")) {
+                SettingsRow(title: L10n.string("Accent preset"), anchor: YardletSetting.accent.id) {
                     Circle().fill(Color(nsColor: ParityTheme.accentColor(for: model.draft.preset)))
                         .overlay { Circle().strokeBorder(ParityTheme.strongSeparator) }
                         .frame(width: 12, height: 12).accessibilityHidden(true)
@@ -93,7 +93,7 @@ struct AppearanceThemeEditor: View {
                     .labelsHidden().fixedSize()
                 }
                 Divider()
-                SettingsRow(title: L10n.string("Interface font")) {
+                SettingsRow(title: L10n.string("Interface font"), anchor: "ui_font") {
                     Picker(L10n.string("Interface font"), selection: $model.draft.font) {
                         ForEach(InterfaceFont.allCases, id: \.self) { Text($0.title).tag($0) }
                     }
@@ -108,7 +108,7 @@ struct AppearanceThemeEditor: View {
                     }
                 }.padding(.top, 8)
                 ForEach(ThemeField.allCases, id: \.self) { field in
-                    SettingsRow(title: field.title) {
+                    SettingsRow(title: field.title, anchor: SettingsSearch.Anchor.themeColor(field.rawValue)) {
                         ForEach(ThemeMode.allCases, id: \.self) { mode in
                             let label = L10n.format("%@ · %@", mode.title, field.title)
                             ColorPicker(label, selection: Binding(

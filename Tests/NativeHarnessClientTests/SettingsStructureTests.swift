@@ -40,6 +40,72 @@ final class SettingsStructureTests: XCTestCase {
         XCTAssertTrue(YardletSettingCatalog.all.filter { $0.section != .general }.allSatisfy { $0.generalGroup == nil })
     }
 
+    /// Settings search finds every section and every setting the window shows by its name in English and in
+    /// Korean, whatever language the run shows, lands each on its row, and puts what a person types for a common
+    /// wish first.
+    @MainActor
+    func testSettingsSearchFindsEverySettingByNameAndCommonWishesFirst() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("SettingsSearch")))
+        let vault = VaultCenter(environment: VaultCenter.Environment(
+            secrets: InMemoryVaultSecretStore([:]), repository: InMemoryVaultRepository(items: []), hmac: MacVault.hmac,
+            isAllowedBuild: true, confirm: { _ in true }, defaults: .vaultTests()))
+        let context = YardletSettingsContext(defaults: defaults, vault: vault)
+        let sections = SettingsSection.available(hasAccounts: true, hasConnectors: true, hasVault: true, hasRemote: true,
+                                                 hasYardletAccount: true, hasCLIUpdates: true, hasInstructions: true,
+                                                 hasUsage: true)
+        let settings = YardletSettingCatalog.all.compactMap { setting in setting.target(in: context).map { (setting, $0) } }
+        let items = SettingsSearch.items(sections: sections, settings: settings, pageItems: SettingsSearch.pageItems,
+                                         commands: KeyboardShortcutsSettings.searchItems)
+        XCTAssertEqual(Set(items.map(\.id)).count, items.count, "Every item has its own id")
+
+        func first(_ query: String) -> SettingsSearchItem? { SettingsSearch.results(query, in: items).first }
+        for item in items where item.kind != .command {
+            let key = L10n.englishKeys(for: item.title)[0]
+            for name in [item.title, key, L10n.string(key, languageCode: "ko")] {
+                XCTAssertTrue(SettingsSearch.results(name, in: items).contains { $0.id == item.id },
+                              "\(item.id) is found by “\(name)”")
+            }
+        }
+        for (setting, target) in settings where !setting.isColor {
+            let found = items.first { $0.id == "setting:\(setting.id)" }
+            XCTAssertEqual(found?.destination, SettingsDestination(target.section, anchor: target.id), setting.id)
+        }
+
+        for (query, expected) in [
+            ("sound", "setting:notification_sound"), ("알림 소리", "setting:notification_sound"),
+            ("dark", "setting:theme"), ("다크 모드", "setting:theme"), ("language", "setting:language"),
+            ("언어", "setting:language"), ("cookies", "setting:keep_cookies"), ("API 키", "setting:hide_keys_and_tokens"),
+            ("pair phone", "item:pair_device:Pair a device"), ("휴대폰", "item:pair_device:Pair a device"), ("add account", "item:add_account:Add account"),
+            ("slack", "item:set_up_slack:Slack"), ("import chrome", "item:import_logins:Import from Another Browser…"),
+            ("context limit", "setting:claude_code_context_limit"), ("shortcut", "section:keyboardShortcuts"),
+            ("terminal location", "setting:terminal_location"), ("usage", "section:usage"),
+            ("browser cookies", "setting:keep_cookies"), ("브라우저 쿠키", "setting:keep_cookies"),
+        ] {
+            XCTAssertEqual(first(query)?.id, expected, "“\(query)” finds \(expected) first")
+        }
+
+        // A row drawn under another lands on that one; one shown only while another is on lands on that switch while
+        // it is off.
+        XCTAssertEqual(items.first { $0.id == "setting:memory_saver_level" }?.destination,
+                       SettingsDestination(.browser, anchor: YardletSetting.memorySaver.id))
+        XCTAssertEqual(items.first { $0.id == "setting:new_mail" }?.destination,
+                       SettingsDestination(.general, anchor: YardletSetting.mailbox.id))
+        // A command lands on Keyboard shortcuts searched for it, after the settings the words find.
+        let zoom = SettingsSearch.results("zoom", in: items)
+        XCTAssertEqual(zoom.first?.id, "item:set_up_zoom-meetings:Zoom")
+        let command = try XCTUnwrap(zoom.first { $0.kind == .command })
+        XCTAssertEqual(command.destination.section, .keyboardShortcuts)
+        XCTAssertEqual(command.destination.shortcutQuery, command.title)
+        XCTAssertTrue(zoom.drop { $0.kind != .command }.allSatisfy { $0.kind == .command })
+        XCTAssertFalse(SettingsSearch.results("shortcut", in: items).contains { $0.kind == .command },
+                       "A section's name alone finds its section and settings, not every command on its page")
+        // A window without a section finds nothing of it, and no words find nothing.
+        let withoutVault = SettingsSearch.items(sections: sections.filter { $0 != .vault }, settings: settings,
+                                                pageItems: SettingsSearch.pageItems)
+        XCTAssertFalse(SettingsSearch.results("import chrome", in: withoutVault).contains { $0.section == .vault })
+        XCTAssertTrue(SettingsSearch.results("   ", in: items).isEmpty)
+    }
+
     func testEachSectionIsReachableFromTheKeyboardAndByName() {
         let ids = SettingsSection.available(hasAccounts: true, hasConnectors: true).map(\.rawValue)
         var visited = [ids[0]]

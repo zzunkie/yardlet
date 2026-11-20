@@ -194,6 +194,7 @@ struct UsageLimitAutoContinueSettingRow: View {
                 .controlSize(.small)
                 .disabled(!isEnabled)
         }
+        .settingsAnchor(YardletSetting.continueAtUsageLimit.id)
     }
 }
 

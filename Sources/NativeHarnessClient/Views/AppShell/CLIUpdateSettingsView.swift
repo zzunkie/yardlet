@@ -120,6 +120,7 @@ struct CLIUpdateSettingsView: View {
                 VStack(spacing: 0) {
                     ForEach(rows) { row in
                         harnessRow(row)
+                            .settingsAnchor(row.id == rows.first?.id ? SettingsSearch.Anchor.cliVersions : nil)
                         if row.id != rows.last?.id {
                             Divider().padding(.leading, 28 + 12) // under the words, past the logo and the gap
                         }

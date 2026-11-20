@@ -114,7 +114,7 @@ struct MainWindow: View {
     /// window rather than inside Settings.
     @State private var connectorAddStart: ConnectorAddSheet.Start?
     /// The section and account filter the next Settings presentation opens on; General by default.
-    @State private var settingsRoute: (section: SettingsSection, harness: HarnessKind?)?
+    @State private var settingsRoute: (destination: SettingsDestination, harness: HarnessKind?)?
     @State private var isPresentingCommandPalette = false
     @State private var isPresentingImport = false
     @State private var isPresentingOtherAppImport = false
@@ -355,8 +355,13 @@ struct MainWindow: View {
     }
 
     private func presentSettings(_ section: SettingsSection = .general, harness: HarnessKind? = nil) {
+        presentSettings(SettingsDestination(section), harness: harness)
+    }
+
+    /// Opens Settings at a destination: its section, and the row it names scrolled to and highlighted.
+    private func presentSettings(_ destination: SettingsDestination, harness: HarnessKind? = nil) {
         rememberShellFocus()
-        settingsRoute = (section, harness)
+        settingsRoute = (destination, harness)
         isPresentingSettings = true
     }
 
@@ -1522,8 +1527,8 @@ struct MainWindow: View {
         .environment(\.taskSuggestionActions, taskSuggestionActions(for: session))
         // A schedule an agent created (`create_scheduled_task`) is a row whose Open shows it.
         .environment(\.scheduledTaskRowActions, scheduledTaskRowActions)
-        // A setting an agent changed (`update_setting`) is a row whose Open shows its section in Settings.
-        .environment(\.openSettingsSection, { presentSettings($0) })
+        // A setting an agent changed (`update_setting`) is a row whose Open shows its row in Settings.
+        .environment(\.openSettings, { presentSettings($0) })
         // A `run_agent` card reads its subagent's live line and conversation, and stops it.
         .environment(\.agentRunActions, agentRunActions(for: session, opensInPanel: !conversationOnly))
         // A file change row's diff that is too long for the conversation continues here.
@@ -2611,7 +2616,8 @@ struct MainWindow: View {
         }) {
             SettingsCenterView(
                 size: SettingsCenterView.fittingSize(in: windowSize),
-                initialSection: settingsRoute?.section.rawValue ?? model.initialSettingsSection,
+                initialSection: settingsRoute?.destination.section.rawValue ?? model.initialSettingsSection,
+                destination: settingsRoute?.destination,
                 notificationCenter: model.systemNotificationCenter,
                 // The connectors the composers and the rail read (the app's own, unless a visual fixture
                 // put its own in place).
@@ -2659,6 +2665,8 @@ struct MainWindow: View {
             OtherAppImportSheet(model: model, onDismiss: { isPresentingOtherAppImport = false })
         }
         .focusedSceneValue(\.yardletSettingsPresented, modalBinding($isPresentingSettings))
+        // Panels that link to their settings (the browser panel's menu) open Settings at the row.
+        .environment(\.openSettings, { presentSettings($0) })
         .focusedSceneValue(\.yardletCommandPalettePresented, modalBinding($isPresentingCommandPalette))
         .focusedSceneValue(\.yardletImportPresented, modalBinding($isPresentingImport))
         .focusedSceneValue(\.yardletOtherAppImportPresented, modalBinding($isPresentingOtherAppImport))

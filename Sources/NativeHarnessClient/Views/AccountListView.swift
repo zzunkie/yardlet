@@ -108,6 +108,7 @@ struct AccountList: View {
                     .disabled(harnessFilter.wrappedValue.map {
                         !HarnessConnectionCapabilities.capabilities(for: $0).supportsSeparateHome
                     } ?? false)
+                    .settingsAnchor(SettingsSearch.Anchor.addAccount)
             }
             if let onDone {
                 Button(L10n.string("Done"), action: onDone).keyboardShortcut(MacShortcut.dismiss.binding)
@@ -140,6 +141,7 @@ struct AccountList: View {
                     .labelsHidden().toggleStyle(.paritySwitch).controlSize(.small)
                     .disabled(!canChooseAccounts)
             }
+            .settingsAnchor(YardletSetting.newTaskAccountAutomatically.id)
             .padding(.bottom, showsClaudeCodeSettings ? 0 : 12)
             if showsClaudeCodeSettings {
                 Divider()
@@ -815,6 +817,7 @@ struct AccountMoveSettingRow: View {
                 .controlSize(.small)
                 .disabled(!isEnabled)
         }
+        .settingsAnchor(YardletSetting.moveTasksToAccountsWithRoom.id)
         .padding(.bottom, 12)
     }
 }

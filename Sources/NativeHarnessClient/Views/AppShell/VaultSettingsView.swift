@@ -78,6 +78,7 @@ struct VaultSettingsView: View {
                     .disabled(!vault.isAllowedBuild)
                 }
                 .controlSize(.small)
+                .settingsAnchor(SettingsSearch.Anchor.importLogins)
                 .alert(imported?.title ?? "",
                        isPresented: Binding(get: { imported != nil }, set: { if !$0 { imported = nil } }),
                        presenting: imported) { result in
@@ -141,7 +142,8 @@ struct VaultSettingsView: View {
     private var switchCard: some View {
         SettingsGroup {
             SettingsRow(title: YardletSetting.passwordManager.title,
-                        notes: vault.isAllowedBuild ? [] : [L10n.string("Available in team-signed builds of Yardlet.")]) {
+                        notes: vault.isAllowedBuild ? [] : [L10n.string("Available in team-signed builds of Yardlet.")],
+                        anchor: YardletSetting.passwordManager.id) {
                 // A build that cannot keep items behind the team's code requirement shows the vault off.
                 Toggle(YardletSetting.passwordManager.title, isOn: Binding(
                     get: { vault.isAllowedBuild && vault.isEnabled }, set: { vault.isEnabled = $0 }))
@@ -179,6 +181,7 @@ struct VaultSettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(L10n.string("Two-factor codes"))
                 .font(SettingsMetrics.groupTitleFont)
+                .settingsAnchor(SettingsSearch.Anchor.twoFactorCodes)
             VStack(spacing: 0) {
                 ForEach(Array(codeItems.filter { $0.matches(query) }.enumerated()), id: \.element.id) { index, item in
                     if index > 0 { Divider() }

@@ -249,3 +249,17 @@ struct ShortcutRecorder: NSViewRepresentable {
         }
     }
 }
+
+extension KeyboardShortcutsSettings {
+    /// Each command whose key this page changes, for Settings search: found by its name and its place in either
+    /// language, and landing on this page searched for it.
+    static var searchItems: [SettingsSearchItem] {
+        MacShortcut.all.map { command in
+            let item = command.definition
+            let name = L10n.string(item.title)
+            return SettingsSearchItem(id: "command:\(command.id)", kind: .command,
+                                      destination: SettingsDestination(.keyboardShortcuts, shortcutQuery: name),
+                                      title: name, words: [item.title, item.scope, L10n.string(item.scope)])
+        }
+    }
+}

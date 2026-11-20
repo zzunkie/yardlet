@@ -88,6 +88,40 @@ enum L10n {
         return activeBundle.localizedString(forKey: key, value: fallback, table: nil)
     }
 
+    /// The English keys of words the app shows in its language (more than one where keys share a translation), or the
+    /// words themselves where they are English or not in the catalog, so Settings search finds a setting by its
+    /// English name in any language.
+    static func englishKeys(for words: String) -> [String] {
+        keysByWords[words] ?? [words]
+    }
+
+    /// The key's words in each localization the app has, English first, without repeats: what Settings search finds
+    /// a name or a synonym by, whatever language the app shows.
+    static func translations(of key: String) -> [String] {
+        var words = [key]
+        for language in activeBundle.localizations where language != "Base" && language != "en" {
+            let translated = string(key, languageCode: language)
+            if !words.contains(translated) { words.append(translated) }
+        }
+        let shown = string(key)
+        if !words.contains(shown) { words.append(shown) }
+        return words
+    }
+
+    private static let keysByWords: [String: [String]] = {
+        #if os(Windows)
+        let table = windowsLocalization.words
+        #elseif canImport(Darwin)
+        let table = activeBundle.url(forResource: "Localizable", withExtension: "strings")
+            .flatMap { NSDictionary(contentsOf: $0) as? [String: String] } ?? [:]
+        #else
+        let table: [String: String] = [:]
+        #endif
+        var keys: [String: [String]] = [:]
+        for (key, words) in table.sorted(by: { $0.key < $1.key }) where words != key { keys[words, default: []].append(key) }
+        return keys
+    }()
+
     static func string(_ key: String, languageCode: String) -> String {
         guard let path = activeBundle.path(forResource: languageCode, ofType: "lproj"),
               let localizedBundle = Bundle(path: path) else {

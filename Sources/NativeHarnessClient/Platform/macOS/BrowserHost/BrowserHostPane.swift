@@ -1211,6 +1211,7 @@ struct BrowserHostPane: View {
     /// The key button and the save offer follow the vault's items.
     @ObservedObject private var vault = MacAgentToolService.shared.vault
     @AppStorage(BrowserPageSuggestionPreference.key) private var suggestsPages = true
+    @Environment(\.openSettings) private var openSettings
     /// Changes when the start page removed a site from the history, which it reads again.
     @State private var startPageRevision = 0
 
@@ -1386,6 +1387,13 @@ struct BrowserHostPane: View {
             }
             Divider()
             Button(L10n.string("Import from Another Browser…")) { controller.startLoginImport() }
+            if let openSettings {
+                // The rest of the browser's settings, and the sign-ins agents fill here, as the Claude app's Browser
+                // pane menu leads to its settings.
+                Divider()
+                Button(L10n.string("All Browser Settings…")) { openSettings(SettingsDestination(.browser)) }
+                Button(L10n.string("Passwords…")) { openSettings(SettingsDestination(.vault)) }
+            }
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 13, weight: .semibold))
