@@ -415,17 +415,24 @@ import XCTest
         // What the CLI held when Yardlet quit went with it unread; the next launch holds it again.
         let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("ClaudeFollowUps.Restore")))
         let repository = UserDefaultsCodexQueueRepository(defaults: defaults, keyPrefix: "queue.")
-        let saved = SessionRecord(harness: .claudeCode, workspaceURL: URL(filePath: "/tmp/claude-follow-up-restore"),
-                                  runtimeExecutableURL: URL(filePath: "/tmp/claude"), title: "Restored")
+        let saved = SessionRecord(harness: .claudeCode, workspaceURL: task.workspaceURL,
+                                  runtimeExecutableURL: task.runtimeExecutableURL, title: "Restored")
         repository.save([
             CodexQueuedSubmission(draft: CodexComposerDraft(inputs: [.text("held by the CLI")]), state: .sent,
-                                  providerMessageID: UUID().uuidString.lowercased()),
+                                  providerMessageID: UUID().uuidString.lowercased(), steered: true),
             CodexQueuedSubmission(draft: CodexComposerDraft(inputs: [.text("held by Yardlet")]))
         ], for: saved.id)
         repository.setPaused(true, for: saved.id)
+        let transports = TransportLog()
         let restored = AppModel(
             store: SessionStore(repository: InMemorySessionRepository(sessions: [saved])),
             runtimeSelections: RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false),
+            registry: HarnessRegistry { _, url in
+                YHPProviderCompatibilityAdapter(
+                    adapter: ClaudeAdapter(executableURL: url, transportFactory: { _ in transports.make() }),
+                    manifest: HarnessProtocolCompatibilityManifest.claude()
+                )
+            },
             codexQueueRepository: repository,
             preferences: defaults
         )
@@ -436,6 +443,18 @@ import XCTest
         XCTAssertTrue(restored.followUps.isPaused(session.id))
         XCTAssertEqual(restored.followUps.queue(for: session.id).map(\.draft.text), ["held by the CLI", "held by Yardlet"],
                        "One queue per task, in its saved order")
+
+        // The task has no runtime, and Resume starts one for the queue: the message the CLI held
+        // starts the next turn, and the one Yardlet held for the turn's end goes after it.
+        restored.resumeQueue(for: session)
+        try await waitUntil { restored.followUps.queue(for: session.id).map(\.draft.text) == ["held by Yardlet"] }
+        let restarted = try XCTUnwrap(transports.all.first)
+        let first = try await lastSent(restarted)
+        XCTAssertEqual(first["message"]?["content"]?.stringValue, "held by the CLI")
+        await restarted.emit(try json(result))
+        try await waitUntil { restored.followUps.queue(for: session.id).isEmpty }
+        let next = try await lastSent(restarted)
+        XCTAssertEqual(next["message"]?["content"]?.stringValue, "held by Yardlet")
         await restored.shutdown()
     }
 

@@ -3793,7 +3793,9 @@ final class AppModelTests: XCTestCase {
             harness: .codex,
             workspaceURL: URL(filePath: "/tmp/queue-actions"),
             runtimeExecutableURL: URL(filePath: "/tmp/codex"),
-            title: "Queue actions"
+            title: "Queue actions",
+            // Its turn runs, so what is queued waits for its end rather than starting one.
+            status: .running
         )
         let defaults = try XCTUnwrap(
             UserDefaults(suiteName: testDefaultsSuite("NativeHarnessClientTests"))
