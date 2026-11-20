@@ -1089,7 +1089,9 @@ extension AppModel: SessionToolHandling {
         if sessionToolWaitsForPerson(in: session.id) { return "it waits for the person's approval." }
         if taskAttentionDetails[session.id]?.browserWait != nil { return "a tab of its browser waits for the person." }
         if sessionTools.isQueued(session.id) { return "it is queued and has not started." }
-        if Self.isWorking(session) || !followUps.queue(for: session.id).isEmpty { return "it is running." }
+        if Self.isWorking(session) { return "it is running." }
+        // Archiving would drop them: they are sent next, or wait for the person's Resume or Retry.
+        if !followUps.queue(for: session.id).isEmpty { return "messages wait in its queue." }
         if shellBusySessionIDs.contains(session.id) { return "a command it started is still running." }
         if sessionTools.runs(hostedBy: session.id).contains(where: { !$0.state.isFinished }) {
             return "a subagent it started is still running."

@@ -112,6 +112,7 @@ struct QueuedFollowUp: Codable, Equatable, Identifiable, Sendable {
     /// The message held by Yardlet again, unsent: the provider that held it let it go unread. It
     /// was written to be read in the running turn, and keeps that place (2026-10-23: after an update
     /// restart, a message another task sent before the quit reached its parent after one sent after).
+    /// With no turn running, the first such message starts the next one (`AppModel.drainFollowUps`).
     var heldAgain: QueuedFollowUp {
         guard state == .sent else { return self }
         var held = self
@@ -713,7 +714,7 @@ final class FollowUpQueueStore {
     }
 
     /// The runtime that held this task's sent messages is gone, and they went with it unread.
-    /// Yardlet holds them again, ahead of the rest, for the next running turn (`heldAgain`).
+    /// Yardlet holds them again, ahead of the rest, for the running turn or the next (`heldAgain`).
     func holdAllSent(in sessionID: UUID) {
         guard let queue = queues[sessionID], queue.contains(where: { $0.state == .sent }) else { return }
         queues[sessionID] = queue.map(\.heldAgain)

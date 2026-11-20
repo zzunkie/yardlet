@@ -666,12 +666,14 @@ final class TaskContinuationCoordinator {
         let record = RestartResumeRecord.load(from: model.preferences)
         // From here on the record is kept as a quit would write it, and replaces the one just read.
         keepsRestartRecordCurrent = true
-        guard let record else {
+        // After the limits' continues are restored, which hold a queue until their reset.
+        let sendingQueue = Set(model.store.sessions.map(\.id).filter(model.sendsQueueNext))
+        guard record != nil || !sendingQueue.isEmpty else {
             writeRestartRecord(now: now)
             return
         }
-        let plan = RestartResumePolicy.plan(for: record, sessions: model.store.sessions, now: now,
-            isOn: RestartResumePreference.isOn(in: model.preferences))
+        let plan = RestartResumePolicy.plan(for: record, sessions: model.store.sessions, sendingQueue: sendingQueue,
+            now: now, isOn: RestartResumePreference.isOn(in: model.preferences))
         restartResumesToContinue.merge(plan.entries) { _, new in new }
         restartResumesWhenOpened.merge(plan.whenOpened) { _, new in new }
         // A question the quit cut off waits for the person on the card it was asked on.

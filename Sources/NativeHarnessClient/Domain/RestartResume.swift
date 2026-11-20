@@ -112,6 +112,13 @@ struct RestartResumeRecord: Codable, Equatable, Sendable {
 ///   at once (`RestartResumeLine`); one waiting on the person still waits to be opened. A quit
 ///   writes down a turn Yardlet continued unseen too, up to `unseenContinuationLimit` times in a
 ///   row, and carries over what it had not continued yet.
+/// - A message waiting in a task's queue goes from launch in the same line, as the next turn (2026-11-20,
+///   after messages other tasks sent a parent whose turn waited on an approval stayed unsent once an
+///   update had ended the CLI holding them): what the provider held unread when the quit ended it, and
+///   what Yardlet held. That is so whether the turn waited on an approval, whether the record names the
+///   task (an idle one, a record older than a day, a queue an earlier build left) and however old the
+///   message is: nothing else sends it, while the task reads as idle and its queue keeps it from being
+///   archived. A turn that waited on a question still waits for the person's answer.
 /// - A force quit, a crash or a kill (2026-11-09, after Yardlet froze and was force quit, every task
 ///   that had been mid-turn stayed stopped) continues by the same rules: Yardlet keeps the record as a
 ///   quit would write it while it runs, written a moment after a turn starts, waits, asks, ends or is
@@ -226,13 +233,16 @@ enum RestartResumePolicy {
 
     /// What the next launch does with a record: only tasks still exactly as they were written
     /// down (the same conversation, account and harness), not already running again, and cut off
-    /// less than a day ago.
-    static func plan(for record: RestartResumeRecord, sessions: [SessionRecord], now: Date = Date(), isOn: Bool) -> Plan {
+    /// less than a day ago. `sendingQueue` names the tasks whose queue sends its first message as their
+    /// next turn (`AppModel.sendsQueueNext`): each idle one goes from launch too, sending that message,
+    /// unless its turn waited on a question, whatever the record says of it or however old it is.
+    static func plan(for record: RestartResumeRecord?, sessions: [SessionRecord], sendingQueue: Set<UUID> = [],
+                     now: Date = Date(), isOn: Bool) -> Plan {
         guard isOn else { return Plan() }
         var plan = Plan()
         var atLaunch: [(id: UUID, lastActiveAt: Date)] = []
-        for var entry in record.entries {
-            let interruptedAt = entry.interruptedAt ?? record.recordedAt
+        for var entry in record?.entries ?? [] {
+            guard let interruptedAt = entry.interruptedAt ?? record?.recordedAt else { continue }
             let deadline = interruptedAt.addingTimeInterval(maxAge)
             guard now < deadline, harnesses.contains(entry.harness),
                   let session = sessions.first(where: { $0.id == entry.sessionID }),
@@ -243,11 +253,15 @@ enum RestartResumePolicy {
             plan.entries[session.id] = entry
             if let question = entry.cutOffQuestion {
                 plan.questions[session.id] = question
-            } else if entry.wasWaitingForApproval {
+            } else if entry.wasWaitingForApproval, !sendingQueue.contains(session.id) {
                 plan.whenOpened[session.id] = deadline
             } else {
                 atLaunch.append((session.id, entry.lastActiveAt ?? session.updatedAt))
             }
+        }
+        for session in sessions where sendingQueue.contains(session.id) && plan.entries[session.id] == nil
+            && session.status != .running && session.status != .waitingForApproval {
+            atLaunch.append((session.id, session.updatedAt))
         }
         plan.atLaunch = atLaunch.sorted { $0.lastActiveAt > $1.lastActiveAt }.map(\.id)
         return plan

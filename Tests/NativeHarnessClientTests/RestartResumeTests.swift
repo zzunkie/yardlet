@@ -150,6 +150,20 @@ final class RestartResumeTests: XCTestCase {
 
             XCTAssertEqual(RestartResumePolicy.plan(for: record, sessions: sessions, now: recordedAt, isOn: false),
                 RestartResumePolicy.Plan(), "The setting off continues nothing")
+
+            // A task whose queue sends a message next goes from launch with it: one that waited on the
+            // person too, and one the record does not name, the next day as well.
+            let idle = task(.claudeCode, status: .ready, updatedAt: recordedAt.addingTimeInterval(20))
+            let sendingQueue: Set<UUID> = [waiting.id, idle.id]
+            let queued = RestartResumePolicy.plan(for: record, sessions: sessions + [idle], sendingQueue: sendingQueue,
+                                                  now: recordedAt.addingTimeInterval(60), isOn: true)
+            XCTAssertEqual(queued.atLaunch, [idle.id, waiting.id] + soon.atLaunch)
+            XCTAssertEqual(queued.whenOpened, [codexWaiting.id: deadline])
+            let queuedNextDay = RestartResumePolicy.plan(for: record, sessions: sessions + [idle], sendingQueue: sendingQueue,
+                                                         now: recordedAt.addingTimeInterval(25 * 60 * 60), isOn: true)
+            XCTAssertEqual(queuedNextDay, RestartResumePolicy.Plan(atLaunch: [idle.id, waiting.id]))
+            XCTAssertEqual(RestartResumePolicy.plan(for: nil, sessions: [idle], sendingQueue: [idle.id], isOn: false),
+                           RestartResumePolicy.Plan(), "Nor does it send with the setting off")
         }
     }
 
@@ -1597,41 +1611,49 @@ final class RestartResumeTests: XCTestCase {
     /// Messages Claude Code held unread when the quit ended it go in the order they were sent: the
     /// first starts the next turn, the rest join it at once, and a message sent after the restart
     /// comes after them (2026-10-23: after an update, a parent read its child's message sent after
-    /// the restart before the one sent before it, which waited for the turn's end).
+    /// the restart before the one sent before it, which waited for the turn's end). So too when the
+    /// turn waited on an approval, which the quit ended, and when no record names the task (an idle
+    /// one, a record over a day old, a queue an earlier build left): nothing else sends them
+    /// (2026-11-20: four messages other tasks sent a parent waiting on an approval stayed unsent
+    /// after an update, and kept it from being archived).
     func testMessagesClaudeHeldAtTheQuitGoInTheOrderTheyWereSent() async throws {
-        let fixture = try ClaudeFixture()
-        let parent = fixture.session(title: "Parent", status: .running, updatedAt: Date())
-        let repository = InMemorySessionRepository(sessions: [parent])
-        func held(_ text: String) -> QueuedFollowUp {
-            QueuedFollowUp(draft: CodexComposerDraft(inputs: [.text(text)]), state: .sent,
-                           providerMessageID: UUID().uuidString.lowercased())
-        }
-        UserDefaultsCodexQueueRepository(defaults: fixture.defaults).save(
-            [held("Sort the sidebar first"), held("Waiting for the account switch")], for: parent.id)
-        let before = fixture.model(store: SessionStore(sessions: [parent], repository: repository))
-        before.followUps.load(for: [parent.id])
-        before.recordWorkForRestart(trigger: .update)
-        XCTAssertEqual(RestartResumeRecord.load(from: fixture.defaults)?.entries.first?.sendsQueuedMessages, true)
-        await before.shutdown()
+        for status in [SessionStatus.running, .waitingForApproval, .ready] {
+            let fixture = try ClaudeFixture()
+            let parent = fixture.session(title: "Parent", status: status, updatedAt: Date())
+            let repository = InMemorySessionRepository(sessions: [parent])
+            func held(_ text: String) -> QueuedFollowUp {
+                QueuedFollowUp(draft: CodexComposerDraft(inputs: [.text(text)]), state: .sent,
+                               providerMessageID: UUID().uuidString.lowercased(), steered: true)
+            }
+            UserDefaultsCodexQueueRepository(defaults: fixture.defaults).save(
+                [held("Sort the sidebar first"), held("Waiting for the account switch")], for: parent.id)
+            let before = fixture.model(store: SessionStore(sessions: [parent], repository: repository))
+            before.followUps.load(for: [parent.id])
+            before.recordWorkForRestart(trigger: .update)
+            XCTAssertEqual(RestartResumeRecord.load(from: fixture.defaults)?.entries.first?.sendsQueuedMessages,
+                           status == .ready ? nil : true, "\(status)")
+            await before.shutdown()
 
-        let after = try await fixture.relaunch(repository: repository)
-        after.followUps.load(for: [parent.id])
-        XCTAssertEqual(after.followUps.queue(for: parent.id).map(\.waitsToBeSteered), [true, true])
-        await after.continueWorkInterruptedByRestart()
-        let transport = try await fixture.transport(for: parent.providerSessionID ?? "")
-        try await waitUntil { await transport.sentValues.count == 2 }
-        let child = TaskMessage(senderID: UUID().uuidString, senderName: "Passkey", body: "The profile is created")
-        let delivery = await after.deliverTaskMessage(child, to: try XCTUnwrap(after.store.sessions.first))
-        XCTAssertEqual(delivery, .steered)
-        let sent = await transport.sentValues
-        XCTAssertEqual(sent.count, 3)
-        XCTAssertEqual(sent.first?["message"]?["content"]?.stringValue, "Sort the sidebar first")
-        XCTAssertNil(sent.first?["priority"], "The first starts the turn")
-        XCTAssertEqual(sent.dropFirst().first?["message"]?["content"]?.stringValue, "Waiting for the account switch")
-        XCTAssertEqual(sent.dropFirst().map { $0["priority"]?.stringValue }, ["next", "next"],
-                       "The rest join that turn at its next step, in the order they were sent")
-        XCTAssertTrue(sent.last?["message"]?["content"]?.stringValue?.contains("The profile is created") == true)
-        await after.shutdown()
+            let after = try await fixture.relaunch(repository: repository)
+            after.followUps.load(for: [parent.id])
+            XCTAssertEqual(after.followUps.queue(for: parent.id).map(\.waitsToBeSteered), [true, true])
+            await after.continueWorkInterruptedByRestart()
+            let transport = try await fixture.transport(for: parent.providerSessionID ?? "")
+            try await waitUntil { await transport.sentValues.count == 2 }
+            let child = TaskMessage(senderID: UUID().uuidString, senderName: "Passkey", body: "The profile is created")
+            let delivery = await after.deliverTaskMessage(child, to: try XCTUnwrap(after.store.sessions.first))
+            XCTAssertEqual(delivery, .steered, "\(status)")
+            let sent = await transport.sentValues
+            XCTAssertEqual(sent.count, 3)
+            XCTAssertEqual(sent.first?["message"]?["content"]?.stringValue, "Sort the sidebar first")
+            XCTAssertNil(sent.first?["priority"], "The first starts the turn")
+            XCTAssertEqual(sent.dropFirst().first?["message"]?["content"]?.stringValue, "Waiting for the account switch")
+            XCTAssertEqual(sent.dropFirst().map { $0["priority"]?.stringValue }, ["next", "next"],
+                           "The rest join that turn at its next step, in the order they were sent")
+            XCTAssertTrue(sent.last?["message"]?["content"]?.stringValue?.contains("The profile is created") == true)
+            XCTAssertFalse(after.continuations.continuesWhenOpened(parent.id), "Nothing waits to be opened: \(status)")
+            await after.shutdown()
+        }
     }
 
     // MARK: - After a lost connection

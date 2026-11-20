@@ -1745,16 +1745,11 @@ final class AppModel {
         followUps.move(itemID, in: session.id, to: index, policy: policy)
     }
 
-    /// A failed message waits to be sent again, and goes once no turn is running. A task with no runtime
-    /// runs no turn and drains nothing, so the first message goes now, as Send now sends it: a task whose
-    /// harness did not start sends the message it was made with.
+    /// A failed message waits to be sent again, and goes once no turn is running; a task with no runtime
+    /// gets one for it (`drainFollowUps`), so a task whose harness did not start sends the message it
+    /// was made with.
     func retryQueued(_ itemID: UUID, for session: SessionRecord) {
         guard followUps.retry(itemID, in: session.id) else { return }
-        if handlesBySessionID[session.id] == nil, !followUps.isPaused(session.id),
-           followUps.queue(for: session.id).first?.id == itemID {
-            Task { await sendQueuedNow(itemID, for: session) }
-            return
-        }
         scheduleFollowUpDrain(for: session.id)
     }
 
@@ -1876,15 +1871,29 @@ final class AppModel {
 
     /// Sends the first message Yardlet holds once no turn runs and nothing a send waits for holds the
     /// task (`TaskBlocker.holdsOffSends`). While the provider still holds one (Claude Code), it starts
-    /// that turn itself, so the queue waits for it.
+    /// that turn itself, so the queue waits for it. A task with no runtime gets one for the message, as
+    /// Send now starts one: the runtime that held or would have sent it is gone (a quit, a CLI that
+    /// ended), and nothing else sends it, while the task reads as idle.
     private func drainFollowUps(for sessionID: UUID) async {
-        guard let session = store.sessions.first(where: { $0.id == sessionID }), !followUps.isPaused(sessionID),
-              continuations.accountSwitchesAfterTurn[sessionID] == nil, continuations.usageLimitHold(of: sessionID) == nil,
+        guard let session = store.sessions.first(where: { $0.id == sessionID }), sendsQueueNext(sessionID),
               firstBlocker(of: session, among: TaskBlocker.holdingOffSends) == nil,
-              let delivery = followUpDelivery(for: session),
-              let first = followUps.queue(for: sessionID).first, first.state == .pending,
+              let first = followUps.queue(for: sessionID).first else { return }
+        guard handlesBySessionID[sessionID] != nil else {
+            guard !isRunning(sessionID), !store.isTemporary(sessionID), sendRefusal(for: session) == nil else { return }
+            await startQueuedTurn(with: first.id, in: session, attaching: true)
+            return
+        }
+        guard let delivery = followUpDelivery(for: session),
               await delivery.runningTurn(reportedRunning: isRunning(sessionID)) == nil else { return }
         await startQueuedTurn(with: first.id, in: session, attaching: false)
+    }
+
+    /// Whether the task's queue sends its first message as the next turn once no turn runs: Yardlet
+    /// holds that message, and no pause or wait holds it back (a move to another account, a limit's
+    /// reset).
+    func sendsQueueNext(_ id: UUID) -> Bool {
+        followUps.queue(for: id).first?.state == .pending && !followUps.isPaused(id)
+            && continuations.accountSwitchesAfterTurn[id] == nil && continuations.usageLimitHold(of: id) == nil
     }
 
     // MARK: Messages the provider holds
