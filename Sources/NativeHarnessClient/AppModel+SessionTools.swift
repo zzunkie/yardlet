@@ -3,10 +3,10 @@ import YardletAgentTools
 
 // The session tools (`SessionToolCatalog`, docs/AGENT_BROWSER_TOOLS.md, "Session tools"): an agent reads the person's other
 // tasks, messages one, waits for one, creates a child task, runs a prompt as a subagent on a
-// harness, archives tasks, or hides or shows a project (`AppModel+ProjectTools`). Every call comes
+// harness, archives tasks, or adds, hides or shows a project (`AppModel+ProjectTools`). Every call comes
 // from one task's harness through the Yardlet MCP server and is answered here, through the same paths
 // the window uses: a message goes the composer's way, a child task the new-task screen's, an archive
-// and a hidden project the sidebar's, an approval the request card's. Nothing is pushed into a turn the agent did not ask for; the one message Yardlet
+// and an added or hidden project the sidebar's, an approval the request card's. Nothing is pushed into a turn the agent did not ask for; the one message Yardlet
 // sends on its own is the end of a child or subagent the agent asked to be told about.
 
 /// Who made a session tool call: a task, or a subagent `run_agent` started (whose approvals and
@@ -78,6 +78,7 @@ extension AppModel: SessionToolHandling {
         case SessionToolCatalog.runAgent: return await runAgent(arguments, caller: caller)
         case SessionToolCatalog.archiveTask: return await archiveTasks(arguments, caller: caller)
         case SessionToolCatalog.listProjects: return listProjects(caller: caller)
+        case SessionToolCatalog.createProject: return createProject(arguments)
         case SessionToolCatalog.hideProject: return hideProject(arguments)
         case SessionToolCatalog.showProject: return showProject(arguments)
         case SessionToolCatalog.listAccounts: return await listAccounts(arguments, caller: caller)
@@ -1769,12 +1770,8 @@ extension AppModel: SessionToolHandling {
         guard let value = value?.trimmingCharacters(in: .whitespaces), !value.isEmpty else {
             return .success((caller.workspaceURL, projects.project(id: caller.projectID)))
         }
-        if PathRules.current.isAbsolute(value) || value.hasPrefix("~") {
-            let folder = URL(filePath: NSString(string: value).expandingTildeInPath, directoryHint: .isDirectory)
-                .standardizedFileURL
-            var isDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: folder.path(percentEncoded: false), isDirectory: &isDirectory),
-                  isDirectory.boolValue else {
+        if Self.isSessionToolPath(value) {
+            guard let folder = Self.sessionToolFolder(value) else {
                 return .failure(SessionToolError(message: "no folder at \(value)."))
             }
             return .success((folder, projects.project(containingRoot: folder)))
@@ -1786,6 +1783,21 @@ extension AppModel: SessionToolHandling {
         }
         if project.id == caller.projectID { return .success((caller.workspaceURL, project)) }
         return .success((project.primaryRoot, project))
+    }
+
+    /// Whether a session tool's argument is a path rather than a name: absolute, or from `~`.
+    static func isSessionToolPath(_ value: String) -> Bool {
+        PathRules.current.isAbsolute(value) || value.hasPrefix("~")
+    }
+
+    /// The folder an absolute or `~` path names, if a folder is there.
+    static func sessionToolFolder(_ path: String) -> URL? {
+        let folder = URL(filePath: NSString(string: path).expandingTildeInPath, directoryHint: .isDirectory)
+            .standardizedFileURL
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: folder.path(percentEncoded: false), isDirectory: &isDirectory),
+              isDirectory.boolValue else { return nil }
+        return folder
     }
 
     // MARK: - Approvals

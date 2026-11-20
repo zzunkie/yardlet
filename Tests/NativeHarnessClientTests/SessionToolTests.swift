@@ -20,13 +20,13 @@ final class SessionToolTests: XCTestCase {
     func testTheToolsAreSmallPullOnlySchemasBehindToolSearch() throws {
         let names = SessionToolCatalog.tools.map(\.name)
         XCTAssertEqual(names, ["list_tasks", "read_task", "send_message_to_task", "wait_tasks", "create_task", "run_agent",
-                               "archive_task", "list_projects", "hide_project", "show_project", "list_accounts",
-                               "list_personal_agents", "read_personal_agent", "read_personal_agent_thread"])
+                               "archive_task", "list_projects", "create_project", "hide_project", "show_project",
+                               "list_accounts", "list_personal_agents", "read_personal_agent", "read_personal_agent_thread"])
         let required: [String: [String]] = [
             "list_tasks": [], "read_task": ["task_id"], "send_message_to_task": ["task_id", "message"],
             "wait_tasks": ["ids"], "create_task": ["prompt"], "run_agent": ["harness", "prompt"],
-            "archive_task": ["task_ids"], "list_projects": [], "hide_project": ["project"], "show_project": ["project"],
-            "list_accounts": [], "list_personal_agents": [], "read_personal_agent": ["agent"],
+            "archive_task": ["task_ids"], "list_projects": [], "create_project": ["folder"], "hide_project": ["project"],
+            "show_project": ["project"], "list_accounts": [], "list_personal_agents": [], "read_personal_agent": ["agent"],
             "read_personal_agent_thread": ["agent", "thread_id"], "list_settings": [], "update_setting": ["id", "value"]
         ]
         let readOnly: Set<String> = ["list_tasks", "read_task", "wait_tasks", "list_projects", "list_accounts",
@@ -2816,11 +2816,12 @@ final class SessionToolTests: XCTestCase {
         await model.shutdown()
     }
 
-    // MARK: - list_projects, hide_project, show_project
+    // MARK: - list_projects, create_project, hide_project, show_project
 
-    /// The sidebar's Remove project and its way back, for an agent: the list shows hidden projects too, a
-    /// name, folder or projectId finds one (a name the one to hide or to show), and hiding changes only
-    /// whether the sidebar shows the project and its tasks.
+    /// The sidebar's Add project, Remove project and its way back, for an agent: the list shows hidden
+    /// projects too, a name, folder or projectId finds one (a name the one to hide or to show), hiding
+    /// changes only whether the sidebar shows the project and its tasks, and adding takes a folder that is
+    /// there, once.
     func testProjectsListHiddenOnesAndHideAndShowAsTheSidebarDoes() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
@@ -2877,6 +2878,37 @@ final class SessionToolTests: XCTestCase {
             let result = await call(model, "hide_project", arguments, from: fixture.caller)
             XCTAssertTrue(result.isError && result.text.contains(words), "\(words) ← \(result.text)")
         }
+
+        let docsFolder = fixture.root.appending(path: "docs", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: docsFolder, withIntermediateDirectories: true)
+        let added = await call(model, "create_project", ["folder": docsFolder.path(percentEncoded: false)],
+                               from: fixture.caller)
+        let docs = try XCTUnwrap(model.projects.project(containingRoot: docsFolder), added.text)
+        XCTAssertEqual(docs.name, "docs", "Named after its folder, as the sidebar's Add project names it")
+        XCTAssertFalse(docs.isHidden)
+        XCTAssertTrue(!added.isError && added.text.contains("(projectId: \(docs.id.uuidString)) is added"), added.text)
+        XCTAssertTrue(model.approvalsAreEmpty(in: fixture.caller.id), "Adding to the sidebar asks no one, as hiding")
+        let projectCount = model.projects.projects.count
+        let addedAgain = await call(model, "create_project", ["folder": docsFolder.path(percentEncoded: false) + "/"],
+                               from: fixture.caller)
+        XCTAssertTrue(!addedAgain.isError && addedAgain.text.contains("already holds this folder"), addedAgain.text)
+        model.projects.hide(fixture.site.id)
+        let back = await call(model, "create_project", ["folder": fixture.site.primaryRoot.path(percentEncoded: false)],
+                              from: fixture.caller)
+        XCTAssertTrue(back.text.contains("in the sidebar again, with its 2 tasks"), back.text)
+        XCTAssertEqual(model.projects.project(id: fixture.site.id)?.isHidden, false, "A hidden one shows again")
+        XCTAssertEqual(model.projects.projects.count, projectCount, "A folder already a project adds none")
+        let missing = fixture.root.appending(path: "missing", directoryHint: .isDirectory)
+        let notAdded: [([String: Any], String)] = [
+            ([:], "folder is required"), (["folder": "docs"], "folder must be an absolute or ~ path"),
+            (["folder": missing.path(percentEncoded: false)], "no folder at")
+        ]
+        for (arguments, words) in notAdded {
+            let result = await call(model, "create_project", arguments, from: fixture.caller)
+            XCTAssertTrue(result.isError && result.text.contains("Nothing was added: \(words)"), "\(words) ← \(result.text)")
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: missing.path(percentEncoded: false)), "It makes no folder")
+        XCTAssertEqual(model.projects.projects.count, projectCount)
         await model.shutdown()
     }
 
