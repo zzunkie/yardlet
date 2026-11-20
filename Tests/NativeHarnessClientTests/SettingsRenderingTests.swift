@@ -69,6 +69,19 @@ import XCTest
         }
     }
 
+    func testCompletePresetsProvideContrastingColorsInBothAppearances() throws {
+        for preset in YardletAccentPreference.allCases where ![.system, .ink, .grove, .iris].contains(preset) {
+            let theme = MacColorTheme(preset: preset)
+            for mode in ThemeMode.allCases {
+                XCTAssertNotNil(preset.colors(in: mode).accent)
+                XCTAssertNotNil(theme[mode].background)
+                XCTAssertNotNil(theme[mode].text)
+            }
+            let failures = ThemeContrast.failures(for: theme)
+            XCTAssertTrue(failures.isEmpty, "\(preset): \(failures.map(\.message))")
+        }
+    }
+
     func testThemeProtectsFixedColorsOnTheirDefaultAndCustomBackgrounds() throws {
         var theme = MacColorTheme(preset: .ink)
         XCTAssertTrue(ThemeContrast.failures(for: theme).isEmpty)

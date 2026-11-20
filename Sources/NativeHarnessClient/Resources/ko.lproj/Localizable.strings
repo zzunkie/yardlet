@@ -4180,7 +4180,7 @@
 "Background" = "배경색";
 "Text color" = "글자색";
 "An sRGB color in #RRGGBB format, or default." = "#RRGGBB 형식의 sRGB 색 또는 default를 입력합니다.";
-"Unknown accent" = "알 수 없는 강조색입니다.";
+"Unknown color preset" = "알 수 없는 색상 프리셋입니다.";
 "Unknown font" = "알 수 없는 글꼴입니다.";
 "Use #RRGGBB or default." = "#RRGGBB 또는 default를 입력하세요.";
 "Text / background" = "글자와 배경";
@@ -4190,7 +4190,13 @@
 "Diff addition / background" = "추가된 줄과 배경";
 "Diff removal / background" = "삭제된 줄과 배경";
 "%@ · %@  %.2f:1 (minimum %.2f:1)" = "%@ · %@ 대비 %.2f:1 (최소 %.2f:1)";
-"Accent preset" = "기본 강조색";
+"Color themes" = "색상 테마";
+"Accent only" = "강조색만";
+"Color preset" = "색상 프리셋";
+"Nord" = "노르드";
+"Catppuccin" = "캣푸친";
+"Ember" = "잿불";
+"Tidepool" = "조수 웅덩이";
 
 "Select model %lld" = "모델 %lld 선택";
 "Select option %lld" = "선택지 %lld 선택";
@@ -4312,7 +4318,7 @@
 "pull request, PR, checks, GitHub Actions, CI" = "풀 리퀘스트, PR, 검사, 실패한 검사";
 "update Yardlet, new version" = "Yardlet 업데이트, 새 버전";
 "dark mode, light mode, appearance" = "다크 모드, 라이트 모드, 어둡게, 밝게, 모양";
-"color, highlight color, tint" = "색, 강조 색상, 포인트 색";
+"color theme, palette, highlight color, tint" = "색상 테마, 팔레트, 강조 색상, 포인트 색";
 "text size, font size, zoom, bigger, smaller" = "글자 크기, 글씨 크기, 확대, 크게, 작게";
 "monospace, code, terminal font" = "고정폭, 코드, 터미널 글꼴";
 "dot, personal agent" = "점, 개인 에이전트";

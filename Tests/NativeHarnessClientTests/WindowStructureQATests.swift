@@ -70,10 +70,16 @@ final class WindowStructureQATests: XCTestCase {
         guard let phase = ProcessInfo.processInfo.environment["YARDLET_COLOR_RENDER"] else {
             throw XCTSkip("Set YARDLET_COLOR_RENDER to capture the appearance")
         }
-        let directory = try WindowlessRender.directory("design-audit/color-theme/" + phase)
+        let directory: URL
+        if let output = ProcessInfo.processInfo.environment["YARDLET_COLOR_RENDER_DIR"] {
+            directory = URL(filePath: output)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        } else {
+            directory = try WindowlessRender.directory("design-audit/color-theme/" + phase)
+        }
         let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("ColorRender")))
         let preset = ProcessInfo.processInfo.environment["YARDLET_RENDER_ACCENT"] ?? "system"
-        defaults.set(preset, forKey: YardletPreferenceKeys.accent)
+        MacColorTheme(preset: try XCTUnwrap(YardletAccentPreference(rawValue: preset))).persist(in: defaults)
         let fixture = try makeFixture()
         let model = fixture.model
         let task = fixture.running

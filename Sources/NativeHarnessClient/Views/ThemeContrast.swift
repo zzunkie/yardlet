@@ -67,9 +67,8 @@ enum ThemeContrast {
                 var environment = EnvironmentValues()
                 environment.colorScheme = mode.scheme
                 environment.yardletColorTheme = theme
-                let defaults = MacColorTheme(preset: theme.preset)
                 var original = environment
-                original.yardletColorTheme = defaults
+                original.yardletColorTheme = MacColorTheme()
                 let colors = theme[mode]
                 let accent = Color(nsColor: theme.accent(in: mode)).resolve(in: environment)
                 let text = (colors.text?.color ?? .primary).resolve(in: environment)
@@ -105,7 +104,7 @@ enum ThemeContrast {
                             over(signal, card, opacity: Float(CodexDiffPreviewLines.lineTintOpacity))
                         ]
                     }
-                    let nativeAccent = Color(nsColor: defaults.accent(in: mode)).resolve(in: original)
+                    let nativeAccent = Color(nsColor: ParityTheme.accentColor(for: theme.preset)).resolve(in: original)
                     // Each row is compared with the same row on its default background.
                     let comparisons = zip(rows(environment, accent: accent), rows(original, accent: nativeAccent)).map {
                         (actual: ratio(signal, $0.0), floor: min(3, ratio(signal, $0.1)))

@@ -73,7 +73,7 @@ final class SettingsStructureTests: XCTestCase {
 
         for (query, expected) in [
             ("sound", "setting:notification_sound"), ("알림 소리", "setting:notification_sound"),
-            ("dark", "setting:theme"), ("다크 모드", "setting:theme"), ("language", "setting:language"),
+            ("Catppuccin", "setting:accent"), ("조수 웅덩이", "setting:accent"), ("dark", "setting:theme"), ("다크 모드", "setting:theme"), ("language", "setting:language"),
             ("언어", "setting:language"), ("cookies", "setting:keep_cookies"), ("API 키", "setting:hide_keys_and_tokens"),
             ("pair phone", "item:pair_device:Pair a device"), ("휴대폰", "item:pair_device:Pair a device"), ("add account", "item:add_account:Add account"),
             ("slack", "item:set_up_slack:Slack"), ("import chrome", "item:import_logins:Import from Another Browser…"),

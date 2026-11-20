@@ -20,9 +20,9 @@ enum YardletAppearancePreference: String, CaseIterable, Identifiable {
     }
 }
 
-/// One accent for controls, selections and links in the Mac app.
+/// The Mac color preset. Existing accent-only choices keep their stored names.
 enum YardletAccentPreference: String, CaseIterable, Identifiable, Sendable, Codable {
-    case system, ink, grove, iris
+    case system, ink, grove, iris, nord, catppuccin, ember, tidepool
 
     var id: Self { self }
 
@@ -32,6 +32,10 @@ enum YardletAccentPreference: String, CaseIterable, Identifiable, Sendable, Coda
         case .ink: L10n.string("Ink")
         case .grove: L10n.string("Grove")
         case .iris: L10n.string("Iris")
+        case .nord: L10n.string("Nord")
+        case .catppuccin: L10n.string("Catppuccin")
+        case .ember: L10n.string("Ember")
+        case .tidepool: L10n.string("Tidepool")
         }
     }
 

@@ -90,7 +90,7 @@ Accent is one semantic token, independent of the home/sidebar composition. Route
 links, selection details and custom controls through `ParityTheme.accent`; AppKit reads `accentColor`
 as the same token's bridge, not a second palette. Status colors retain their semantic meaning.
 
-**Settings > Appearance > Accent** defaults to **System**, resolved dynamically from
+**Settings > Appearance > Color preset** defaults to **System**, resolved dynamically from
 [`NSColor.controlAccentColor`](https://developer.apple.com/documentation/appkit/nscolor/controlaccentcolor),
 which follows the person's macOS accent preference. Do not cache it as a fixed RGB value or assume
 its color space. **Ink**, **Grove** and **Iris** each provide an sRGB light/dark pair. The Mac settings tools expose the same choice as `accent`.
@@ -116,14 +116,33 @@ In Settings > Appearance on the Mac, the Light and Dark columns each set an acce
 and a text color. Save applies the draft to open windows. The chosen background moves the canvas,
 sidebar, elevated panels, input and review surfaces together, preserving the brightness differences
 between them. The interface font offers the system, serif and rounded faces with native fallback.
-Code keeps its own font and size. The accent preset supplies both accents until a column overrides
-one. Selecting another preset replaces both accent overrides.
+Code keeps its own font and size. **Color preset** offers four complete palettes alongside
+System and the accent-only Ink, Grove and Iris. Each complete palette sets these sRGB colors:
+
+| Preset | Light background / text / accent | Dark background / text / accent |
+| --- | --- | --- |
+| Nord | `#FEFEFE` / `#2E3440` / `#5E81AC` | `#20242D` / `#ECEFF4` / `#88C0D0` |
+| Catppuccin | `#FEFEFE` / `#4C4F69` / `#8839EF` | `#1E1E2E` / `#CDD6F4` / `#CBA6F7` |
+| Ember | `#FFFFFE` / `#3B2823` / `#943F20` | `#211714` / `#F7E7DA` / `#F3AB82` |
+| Tidepool | `#FEFFFF` / `#193537` / `#006C68` | `#102326` / `#D5F3EE` / `#75D7CB` |
+
+Nord uses Polar Night text and a Frost accent on a Snow Storm background in light mode.
+To preserve contrast for the fixed status and diff colors, Yardlet lightens Snow Storm
+(`#ECEFF4`) and darkens the dark Polar Night background (`#2E3440`). Catppuccin pairs
+Latte and Mocha with their Mauve accents and lightens Latte's Base (`#EFF1F5`).
+Ember and Tidepool are Yardlet palettes. The third-party palette licenses are in
+[Third-party notices](../THIRD_PARTY_NOTICES.md).
+
+Changing a color in either column shows **Custom** in the picker. Selecting a preset again
+replaces all six colors and keeps the interface font. System restores native colors in both
+columns. Save applies the choice. Searching Settings or the command palette for a preset name
+opens its row. The agent's `accent` setting accepts the same preset names as lowercase IDs.
 
 Reset to defaults restores the system accent, the native surface and label colors, and the system
 interface font in a single action. It also clears a preset saved by an earlier version. The theme
 is stored in app preferences. The agent can set `light_accent_color`, `light_background_color`,
 `light_text_color` and their `dark_` counterparts to an opaque sRGB `#RRGGBB` or `default`.
-The interface font setting is `ui_font`.
+A color set to `default` inherits from the selected preset. The interface font setting is `ui_font`.
 
 The settings page and `update_setting` validate the same candidate palette before writing it.
 Primary text requires 4.5:1 against its background. Accent requires 3:1. These checks include the

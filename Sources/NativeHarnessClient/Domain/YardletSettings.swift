@@ -551,10 +551,10 @@ extension YardletSetting {
         keywords: "dark mode, light mode, appearance")
 
     static let accent = YardletSetting(
-        id: "accent", section: .appearance, title: L10n.string("Accent"),
+        id: "accent", section: .appearance, title: L10n.string("Color preset"),
         values: choices(YardletAccentPreference.self, title: \.title),
         storage: .choice(key: YardletPreferenceKeys.accent, defaultValue: YardletAccentPreference.system.rawValue),
-        keywords: "color, highlight color, tint")
+        keywords: "color theme, palette, highlight color, tint")
 
     static let interfaceSize = YardletSetting(
         id: "interface_size", section: .appearance, symbol: "textformat.size", title: L10n.string("Interface size"),

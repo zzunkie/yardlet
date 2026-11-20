@@ -77,9 +77,13 @@ enum SettingsSearch {
             // Each of the theme's colors is a setting for the agent's tools; search finds their rows by name instead.
             for (setting, target) in settings where setting.section == section && offered.contains(target.section)
                 && !setting.isColor {
+                var optionWords: [String] = []
+                if case let .choices(choices) = setting.values {
+                    optionWords = choices.flatMap { [$0.title, $0.value] + titleWords($0.title) }
+                }
                 items.append(SettingsSearchItem(id: "setting:\(setting.id)", kind: .setting,
                     destination: SettingsDestination(target.section, anchor: target.id), title: setting.title,
-                    words: [setting.detail, setting.note, setting.hint].compactMap(\.self) + words(setting.keywords)))
+                    words: [setting.detail, setting.note, setting.hint].compactMap(\.self) + words(setting.keywords) + optionWords))
             }
             items += pageItems.filter { $0.section == section }
         }
@@ -149,6 +153,7 @@ enum SettingsSearch {
                   keywords: "allow notifications, notification permission, System Settings"),
         .pageItem(YardletSetting.codeFontSize.id, in: .appearance, title: "Code font",
                   keywords: "monospace, programming font, terminal font"),
+        .pageItem(Anchor.themeColor("accent"), in: .appearance, title: "Accent", keywords: "theme color, custom color"),
         .pageItem(Anchor.themeColor("background"), in: .appearance, title: "Background",
                   keywords: "theme color, custom color, background color"),
         .pageItem(Anchor.themeColor("text"), in: .appearance, title: "Text color", keywords: "theme color, custom color"),
