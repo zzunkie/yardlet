@@ -11,8 +11,12 @@ struct ProjectEditSheet: View {
     let projectID: UUID
     /// Nil where the app has no Yardlet instructions (tests, fixtures); the section is then left out.
     var instructions: YardletInstructionsStore? = nil
+    /// Gives the name its field, all of it selected, as the sheet opens: for a project just named after
+    /// a chat (`AppModel.makeProject(from:)`), so Return keeps the name and typing replaces it.
+    var focusesName = false
     @State private var name = ""
     @State private var didLoadName = false
+    @FocusState private var isNameFocused: Bool
 
     private var project: Project? { projects.project(id: projectID) }
 
@@ -27,6 +31,7 @@ struct ProjectEditSheet: View {
                     .foregroundStyle(.secondary)
                 TextField(L10n.string("Project name"), text: $name)
                     .textFieldStyle(.roundedBorder)
+                    .focused($isNameFocused)
                     .onSubmit(commitName)
             }
 
@@ -73,6 +78,7 @@ struct ProjectEditSheet: View {
             guard !didLoadName, let project else { return }
             name = project.name
             didLoadName = true
+            if focusesName { isNameFocused = true }
         }
     }
 

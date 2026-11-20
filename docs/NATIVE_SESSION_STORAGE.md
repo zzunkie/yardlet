@@ -715,7 +715,8 @@ follows.
   project"). `AppModel.makeProject(from:)` adds a project for the task's folder, as Add project does for a folder,
   named after the task's title as Chats lists it (`TaskProjectMove.projectName(for:)`: the agent's own title or Yardlet's
   fallback, so no model turn starts), then moves the task into it by ID as below. The folder stays where it is under
-  its name (`new-chat-4`); only the project's name is new, and the person renames it as any project. Other tasks in
+  its name (`new-chat-4`); only the project's name is new, and Edit project opens with that name selected
+  (`ProjectEditSheet.focusesName`), so Return keeps it and typing replaces it. Other tasks in
   the folder that were not moved to Chats are listed in the project too, by the folder rule below. A task moved to
   Chats from its project's own folder goes back with a move to that project instead. Another Mac's window does not
   offer it.
