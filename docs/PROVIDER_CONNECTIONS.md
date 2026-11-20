@@ -299,6 +299,10 @@ the task's own account, and only while the task still stands at that card.
 
 A Codex limit card names no reset and the Codex app offers no continue on it, so it has neither.
 
+An Antigravity CLI turn its plan limit stopped ends on a limit card too, with the CLI's words and the reset they name
+(docs/NATIVE_SESSION_STORAGE.md, "Antigravity CLI conversations"). Yardlet never continues or moves an Antigravity task
+on its own, so the setting arms nothing for it and its card offers no continue and no other account.
+
 ## Usage limit resets
 
 A Codex account can hold banked resets of its plan limits. The App Server reports them in the

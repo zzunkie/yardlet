@@ -302,3 +302,41 @@ struct AntigravityModelCatalog: Equatable, Sendable {
         return name[..<open].trimmingCharacters(in: .whitespaces)
     }
 }
+
+/// The plan limit that ended an Antigravity turn. `agy acp` sends nothing structured for it: the model
+/// request fails with `RESOURCE_EXHAUSTED` (code 429, reason `QUOTA_EXHAUSTED`, with the reset), which
+/// the CLI keeps in its own log and conversation file, while over ACP the prompt ends with `end_turn`
+/// after one message chunk the CLI writes itself, "\n⚠ <the service's words>\n" ("⚠ Individual quota
+/// reached. Please upgrade your subscription to increase your limits. Resets in 146h6m30s."). The CLI
+/// writes its other notices the same way, among them a retry it makes on its own ("⚠ API error
+/// (attempt 1): …"), so the limit is a notice that names a quota and is not a retry.
+enum AntigravityPlanLimit {
+    static func limit(inNotice text: String, receivedAt: Date) -> HarnessRateLimit? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.first?.unicodeScalars.first == "\u{26A0}" else { return nil }
+        let words = trimmed.dropFirst().trimmingCharacters(in: .whitespaces)
+        guard !words.isEmpty, !words.contains(where: \.isNewline),
+              words.range(of: "quota", options: .caseInsensitive) != nil,
+              words.range(of: "(attempt ", options: .caseInsensitive) == nil else { return nil }
+        return HarnessRateLimit(status: .rejected, resetsAt: resetDelay(in: words).map(receivedAt.addingTimeInterval),
+                                message: words)
+    }
+
+    /// "Resets in 146h6m30s.": a Go duration's hours, minutes and seconds.
+    static func resetDelay(in words: String) -> TimeInterval? {
+        guard let match = words.firstMatch(of: /(?i)resets? (?:in|after) ((?:\d+(?:\.\d+)?(?:ms|h|m|s))+)/) else {
+            return nil
+        }
+        var seconds = 0.0
+        for part in match.1.matches(of: /(\d+(?:\.\d+)?)(ms|h|m|s)/) {
+            guard let value = Double(part.1) else { return nil }
+            switch part.2 {
+            case "h": seconds += value * 3600
+            case "m": seconds += value * 60
+            case "s": seconds += value
+            default: break
+            }
+        }
+        return seconds > 0 ? seconds : nil
+    }
+}

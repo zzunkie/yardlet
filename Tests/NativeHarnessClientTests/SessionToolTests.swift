@@ -1753,7 +1753,30 @@ final class SessionToolTests: XCTestCase {
         let last = await told().last
         let failed = try XCTUnwrap(last)
         XCTAssertEqual(failed.senderID, gone.id.uuidString)
-        XCTAssertTrue(failed.body.hasPrefix("Ended (failed)."), failed.body)
+        XCTAssertTrue(failed.body.hasPrefix("Ended (failed: \(L10n.format("Connection to %@ ended.", "Claude Code")))."),
+                      failed.body)
+
+        // One its plan limit stopped after some work did not complete: it ends failed with the limit, its
+        // reset and the provider's words, and what it said before is its answer.
+        _ = await call(model, "run_agent", ["harness": "claude-code", "prompt": "Migrate", "background": true],
+                       from: fixture.caller)
+        let limited = try XCTUnwrap(model.sessionTools.runs(hostedBy: fixture.caller.id).first { $0.prompt == "Migrate" })
+        try await waitUntil { await fixture.adapter.prompts(for: limited.id).count == 1 }
+        await fixture.adapter.emit(.sessionStatusChanged(.running), for: limited.id)
+        await fixture.adapter.emit(.assistantMessageCompleted("Two of five files moved."), for: limited.id)
+        await fixture.adapter.emit(.usageLimitReached(HarnessRateLimit(
+            status: .rejected, resetsAt: Date(timeIntervalSince1970: 1_800_000_000),
+            message: "Individual quota reached.")), for: limited.id)
+        await fixture.adapter.emit(.turnCompleted, for: limited.id)
+        await fixture.adapter.emit(.sessionStatusChanged(.ready), for: limited.id)
+        try await waitUntil { await told().count == 3 }
+        let reason = #"plan limit reached, resets 2027-01-15T08:00:00Z: "Individual quota reached.""#
+        XCTAssertEqual(limited.state, .failed(reason))
+        let last3 = await told().last
+        let stopped = try XCTUnwrap(last3)
+        XCTAssertEqual(stopped.senderID, limited.id.uuidString)
+        XCTAssertTrue(stopped.body.hasPrefix("Ended (failed: \(reason))."), stopped.body)
+        XCTAssertTrue(stopped.body.hasSuffix("Two of five files moved."), stopped.body)
         await model.shutdown()
     }
 

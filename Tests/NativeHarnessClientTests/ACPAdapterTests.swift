@@ -1110,6 +1110,32 @@ final class ACPAdapterTests: XCTestCase {
         let payloads = await recorder.payloads
         XCTAssertFalse(payloads.contains(.assistantDelta("The image is ready.")))
         XCTAssertEqual(payloads.filter { $0 == .assistantMessageCompleted("The image is ready.") }.count, 1)
+
+        // The CLI's own notice of its plan limit ends the turn on a limit card after what the turn said;
+        // a retry the CLI makes on its own stays its words (`AntigravityPlanLimit`).
+        let before = await recorder.payloads.count
+        try await adapter.send("Go on", to: handle)
+        try await waitUntil { await transport.pendingPromptCount == 1 }
+        let retry = "\n⚠ API error (attempt 1): RESOURCE_EXHAUSTED (code 429): quota exceeded\n"
+        await transport.emit(log.answer("Half of it is done."))
+        await transport.emit(log.answer(retry))
+        let sent = Date()
+        await transport.emit(log.answer("\n⚠ Individual quota reached. Please upgrade your subscription to increase your "
+            + "limits. Resets in 1h2m3s.\n"))
+        await transport.completePrompt()
+        try await waitUntil { await ready() == 5 }
+        let limitTurn = Array(await recorder.payloads.dropFirst(before))
+        guard case let .usageLimitReached(limit)? = limitTurn.first(where: {
+            if case .usageLimitReached = $0 { true } else { false }
+        }) else { return XCTFail("No limit card: \(limitTurn)") }
+        XCTAssertEqual(limit.status, .rejected)
+        XCTAssertEqual(limit.message, "Individual quota reached. Please upgrade your subscription to increase your limits. "
+            + "Resets in 1h2m3s.")
+        let reset = try XCTUnwrap(limit.resetsAt)
+        XCTAssertTrue(reset >= sent.addingTimeInterval(3723) && reset <= Date().addingTimeInterval(3723), "\(reset)")
+        XCTAssertEqual(limitTurn, [.sessionStatusChanged(.running), .assistantDelta("Half of it is done."),
+                                   .assistantDelta(retry), .assistantMessageCompleted("Half of it is done." + retry),
+                                   .usageLimitReached(limit), .turnCompleted, .sessionStatusChanged(.ready)])
         await adapter.close(handle)
     }
 

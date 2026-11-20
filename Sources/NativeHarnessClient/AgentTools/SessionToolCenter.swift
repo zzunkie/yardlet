@@ -177,7 +177,8 @@ final class AgentRun: Identifiable {
             case .running: "running"
             case .waitingForApproval: "waiting for the person's approval"
             case .completed: "completed"
-            case .failed: "failed"
+            // Its reason goes with it to whoever reads the state: `wait_tasks`, the caller's message, its record.
+            case let .failed(reason): "failed: \(reason)"
             case .stopped: "stopped"
             case .interrupted: "interrupted when Yardlet quit; it cannot continue"
             }
@@ -282,6 +283,9 @@ final class AgentRun: Identifiable {
     /// than reporting the connection.
     @ObservationIgnored var sawWork = false
     @ObservationIgnored var lastError: String?
+    /// The plan limit that stopped its turn, as its harness reported it: the turn ends as failed with it
+    /// (`AppModel.endAgentRunTurn`).
+    @ObservationIgnored var usageLimit: HarnessRateLimit?
     @ObservationIgnored var consumers: [Task<Void, Never>] = []
 
     init(id: UUID = UUID(), callerID: UUID, hostTaskID: UUID, harness: HarnessKind, model: String? = nil,

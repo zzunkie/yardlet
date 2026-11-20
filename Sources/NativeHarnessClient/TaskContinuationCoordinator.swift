@@ -401,10 +401,13 @@ final class TaskContinuationCoordinator {
     /// Claude Code keeps its wait when a message typed during it hits the limit again; else, while
     /// the setting is on (`UsageLimitAutoContinuePreference`), one for a reset within a day. Not when
     /// one waits for that reset already, and not for a card read back from saved history.
+    /// Another harness's card has no continue: an Antigravity task in particular is never continued or
+    /// moved on its own (docs/PROVIDER_CONNECTIONS.md, "Continuing after a usage limit").
     func armAtUsageLimit(_ limit: HarnessRateLimit, for id: UUID) {
         guard let model, let resetsAt = limit.resetsAt, resetsAt > Date(),
               usageLimitAutoContinue[id]?.waits(for: resetsAt) != true,
-              let session = model.store.sessions.first(where: { $0.id == id }) else { return }
+              let session = model.store.sessions.first(where: { $0.id == id }),
+              session.harness == .claudeCode else { return }
         let settingArms = UsageLimitAutoContinuePreference.isOn(in: model.preferences)
         if let previous = usageLimitAutoContinueHandedOver.removeValue(forKey: id),
            settingArms || previous.armedBy != .setting {

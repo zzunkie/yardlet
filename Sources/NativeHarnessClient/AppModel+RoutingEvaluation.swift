@@ -34,7 +34,7 @@ extension AppModel {
         guard let evaluation = routingEvaluation, evaluation.isEnabled, state != .interrupted else { return }
         let outcome: RoutingLedgerEntry.Outcome = switch state {
         case .stopped: .stopped
-        case .failed: .failed
+        case .failed: run.usageLimit != nil ? .usageLimit : .failed
         default: .completed
         }
         let tokens = run.codexState?.thread?.turns.last?.tokenUsage.map { Self.routingTokens($0.last) }

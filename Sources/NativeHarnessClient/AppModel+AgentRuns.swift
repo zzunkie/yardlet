@@ -150,7 +150,6 @@ extension AppModel {
             + "harness: \(run.harness.rawValue)" + (run.model.map { " · model: \($0)" } ?? "")
             + " · state: \(run.state.word)"
             + (run.accountStart.map { "\n" + $0.assignment.toolLine } ?? "")
-        if case let .failed(reason) = run.state { text += " · \(reason)" }
         if let roomElsewhere = run.accountStart?.roomElsewhere { text += "\n" + roomElsewhere }
         if run.state == .queued {
             text += "\nIt is queued and starts when there is room; wait_tasks with this id waits for it."
@@ -311,7 +310,7 @@ extension AppModel {
                 run.sawWork = true
                 run.state = .waitingForApproval
             case .ready, .completed:
-                if run.sawWork, run.harness != .codex { finishAgentRun(run, state: .completed) }
+                if run.sawWork, run.harness != .codex { endAgentRunTurn(run) }
             case .failed:
                 if run.sawWork || run.harness != .codex {
                     finishAgentRun(run, state: .failed(run.lastError ?? "the harness reported a failure"))
@@ -320,13 +319,15 @@ extension AppModel {
         case .assistantDelta, .assistantMessageCompleted, .activityStarted, .activityUpdated, .activityCompleted,
              .reasoningDelta, .reasoningCompleted, .progressUpdateCompleted:
             run.sawWork = true
+        case let .usageLimitReached(limit):
+            run.usageLimit = limit
         case .permissionRequested:
             run.sawWork = true
             run.state = .waitingForApproval
             // No one answers a judge's requests; it was told to need none.
             if run.isEvaluationJudge { Task { await stopAgentRun(run) } }
         case .turnCompleted:
-            if run.harness != .codex { finishAgentRun(run, state: .completed) }
+            if run.harness != .codex { endAgentRunTurn(run) }
         case let .error(message, recoverable, _):
             run.lastError = message
             if !recoverable, run.harness != .codex { finishAgentRun(run, state: .failed(message)) }
@@ -334,6 +335,24 @@ extension AppModel {
             break
         }
         if appliesConversation { sessionToolApprovalsChanged(in: run.hostTaskID) }
+    }
+
+    /// Its turn ended: completed, or failed when a plan limit stopped it, with the limit, its reset and
+    /// the provider's words as the reason and what it did before as its answer. A Codex thread's turn
+    /// the limit stopped ends failed with Codex's own words (`acceptAgentRun(_:CodexTaskState:)`).
+    private func endAgentRunTurn(_ run: AgentRun) {
+        guard let limit = run.usageLimit else { return finishAgentRun(run, state: .completed) }
+        finishAgentRun(run, state: .failed(Self.planLimitFailure(limit)))
+    }
+
+    /// `plan limit reached, resets 2026-11-25T00:05:52Z: "Individual quota reached. …"`
+    static func planLimitFailure(_ limit: HarnessRateLimit) -> String {
+        var reason = "plan limit reached"
+        if let resetsAt = limit.resetsAt { reason += ", resets \(SessionToolText.iso(resetsAt))" }
+        if let words = limit.message?.trimmingCharacters(in: .whitespacesAndNewlines), !words.isEmpty {
+            reason += ": \"\(words)\""
+        }
+        return reason
     }
 
     /// A Codex thread's state: its conversation and requests, and the end of its turn.
@@ -430,8 +449,9 @@ extension AppModel {
         sessionTools.dequeue(run.id)
         let started = run.state != .queued
         run.state = state
-        // One the quit cut off answered nothing yet; what it said last is its answer so far.
-        run.answer = run.latestAnswer ?? (state == .interrupted ? run.lastWords : nil) ?? run.answer
+        // One the quit or a plan limit cut off answered nothing yet; what it said last is its answer so far.
+        run.answer = run.latestAnswer ?? (state == .interrupted || run.usageLimit != nil ? run.lastWords : nil)
+            ?? run.answer
         run.finishTranscript(run.entries)
         for consumer in run.consumers { consumer.cancel() }
         run.consumers = []

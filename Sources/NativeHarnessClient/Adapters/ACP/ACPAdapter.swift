@@ -834,6 +834,13 @@ actor ACPAdapter:
         if updateKind == "agent_message_chunk",
            update["content"]?["type"]?.stringValue == "text",
            let text = update["content"]?["text"]?.stringValue {
+            // Antigravity's plan limit ends the turn with a notice of the CLI's own, not the model's
+            // answer (`AntigravityPlanLimit`): the turn shows the limit card Claude Code's limit shows.
+            if kind == .antigravityCLI, let limit = AntigravityPlanLimit.limit(inNotice: text, receivedAt: Date()) {
+                completeAssistantIfNeeded(for: localSessionID, rawData: frame.data)
+                emit(.usageLimitReached(limit), for: localSessionID, rawData: frame.data)
+                return
+            }
             acceptAssistantChunk(
                 text,
                 messageID: update["messageId"]?.stringValue,
