@@ -44,7 +44,7 @@ struct ClaudeBashMessage: Equatable, Sendable {
     static func parse(_ text: String) -> ClaudeBashMessage? {
         guard text.contains("<bash-input>"), let parts = tags(in: text), let input = parts["bash-input"] else { return nil }
         let unescapes = parts["bash-stdout"] != nil
-        let decode: (String) -> String = { unescapes ? unescaped($0) : $0 }
+        let decode: (String) -> String = { unescapes ? ClaudeLocalCommand.unescapedOutput($0) : $0 }
         let stdout = parts["bash-stdout"].map { decode(strippingEscapeSequences($0)).trimmingCharacters(in: .whitespacesAndNewlines) }
         let stderr = parts["bash-stderr"].map { decode(strippingEscapeSequences($0)).trimmingCharacters(in: .whitespacesAndNewlines) }
         let output = [stdout, stderr].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
@@ -119,12 +119,6 @@ struct ClaudeBashMessage: Equatable, Sendable {
         text.replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")
-    }
-
-    private static func unescaped(_ text: String) -> String {
-        text.replacingOccurrences(of: "&lt;", with: "<")
-            .replacingOccurrences(of: "&gt;", with: ">")
-            .replacingOccurrences(of: "&amp;", with: "&")
     }
 
     private static let escapeSequencePattern = try! NSRegularExpression(

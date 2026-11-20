@@ -215,6 +215,7 @@ struct CompactionMarker: View {
                     } else {
                         Image(systemName: compaction.phase == .failed
                             ? "exclamationmark.triangle" : "rectangle.compress.vertical")
+                            .foregroundStyle(compaction.phase == .failed ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
                     }
                     Text(ProviderNoticeText.compaction(compaction))
                         .monospacedDigit()
@@ -234,8 +235,10 @@ struct CompactionMarker: View {
             }
         }
         .font(.yardlet(.caption, scale: interfaceScale))
-        .foregroundStyle(compaction.phase == .failed ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+        .foregroundStyle(compaction.phase == .failed ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
         .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text(verbatim: "\(ProviderNoticeText.compaction(compaction)). \(compaction.message ?? "")"),
+                            isEnabled: compaction.phase == .failed && compaction.message?.isEmpty == false)
     }
 
     private var rule: some View {

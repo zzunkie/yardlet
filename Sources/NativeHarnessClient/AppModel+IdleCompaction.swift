@@ -59,22 +59,25 @@ extension AppModel {
     func idleCompactionEvent(_ payload: HarnessEventPayload,
                              for id: UUID) -> (payload: HarnessEventPayload?, opensTurn: Bool)? {
         guard var run = idleCompactionRuns[id], !run.ended else { return nil }
+        var compaction: HarnessContextCompaction
         switch payload {
-        case var .contextCompaction(compaction):
-            compaction.whileIdle = true
-            let opensTurn = !run.opened
-            run.opened = true
-            idleCompactionRuns[id] = run
-            // Its saved records read back as this, not as the `/compact` that ran it.
-            if let compactionID = compaction.providerID {
-                Task { try? await store.recordIdleCompaction(id: id, compactionID: compactionID) }
-            }
-            return (.contextCompaction(compaction), opensTurn)
+        case let .contextCompaction(update):
+            compaction = update
+        case let .error(message, _, _):
+            compaction = HarnessContextCompaction(phase: .failed, message: message)
         case let .activityCompleted(activity) where activity.id.hasPrefix(ClaudeEventProjector.commandOutputPrefix):
             return (nil, false)
         default:
             return nil
         }
+        compaction.whileIdle = true
+        let opensTurn = !run.opened
+        run.opened = true
+        idleCompactionRuns[id] = run
+        if let compactionID = compaction.providerID {
+            Task { try? await store.recordIdleCompaction(id: id, compactionID: compactionID) }
+        }
+        return (.contextCompaction(compaction), opensTurn)
     }
 
     func fireIdleCompaction(_ id: UUID, armed: ClaudePromptCacheState, due: Date) async {
@@ -117,11 +120,13 @@ extension AppModel {
             try await adapter.send(HarnessUserInput(text: "/compact"), to: handle)
             recordIdleCompaction(id, "started")
         } catch {
-            guard idleCompactionRuns[id]?.opened == false else { return }
-            idleCompactionRuns.removeValue(forKey: id)
-            if store.sessions.first(where: { $0.id == id })?.status == .running {
-                try? await store.updateSession(id: id, status: .ready, updatesRecency: false)
+            guard let run = idleCompactionRuns[id], !run.ended else { return }
+            mutateTranscript(for: id, publishImmediately: true) { builder in
+                if !run.opened { builder.appendUser("", origin: .provider) }
+                builder.apply(.contextCompaction(HarnessContextCompaction(
+                    phase: .failed, message: error.localizedDescription, whileIdle: true)))
             }
+            await turnEnded(id, as: .ready, cause: .notStarted)
             recordIdleCompaction(id, "not_sent")
         }
     }

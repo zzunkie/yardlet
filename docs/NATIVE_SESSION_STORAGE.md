@@ -123,8 +123,8 @@ read nothing in it, whatever mode the files inside have.
   state with the restored tasks (continuing cut-off turns, armed continues, schedules, following the session list) does
   not run, and the window says why until Yardlet is restarted. None of those records on disk change, so the next launch
   that opens the index finds them as they were. Settings and sign-ins are used as usual.
-- **Idle compactions:** `sessions.idle_compactions TEXT`, nullable: the `compact_boundary` uuids of the compactions
-  Yardlet made of a Claude Code task while it was idle (Settings › General › Idle compaction), the latest 50, kept
+- **Idle compactions:** `sessions.idle_compactions TEXT`, nullable: the boundary or failed command output UUIDs for
+  the latest 50 compactions Yardlet made while a Claude Code task was idle (Settings › General › Idle compaction), kept
   with the task's fields (`SessionRecord.idleCompactions`) and cleared when the task is deleted. Claude Code's records
   cannot tell such a compaction from a `/compact` the person sent; this list is what lets a read show it as it showed
   live. Existing rows keep none, and earlier builds ignore the column and their saves leave it as it is.
@@ -666,7 +666,11 @@ nothing to show while it is read shows as loading instead of "Start a conversati
     `/compact` that ran it; its marker is shown after that command, as it was live. A compaction Yardlet made while
     the task was idle (`idle_compactions` below) reads as it showed live: its `/compact` opens a turn with no request,
     the marker carries the idle note, and the output is left out. None of them, nor a compaction's summary, is an edit
-    or rewind point.
+    or rewind point. A failed `/compact` is saved as a `system/local_command` record with `commandOutcome.kind: failed`
+    and the diagnostic in `<local-command-stderr>`. It can end the saved chain. The live stream sends the same outcome
+    on a synthetic assistant message in `local_command_run` and `local_command_outcome`. Both forms show a failed
+    compaction marker with the provider's reason. The bare command opens the turn without a request bubble, and custom
+    arguments stay visible.
   - A request Claude Code could not make (a server or connection error, a refused sign-in, a safeguard) is saved as an
     assistant record of its own, `<synthetic>`, with the error's category in `error` and `isApiErrorMessage`. The
     stream sends that record and then a `result` in the same words, the turn's error card, so live the record is left

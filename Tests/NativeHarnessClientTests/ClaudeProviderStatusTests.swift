@@ -250,6 +250,27 @@ final class ClaudeProviderStatusTests: XCTestCase {
         XCTAssertEqual(builder.entries.last?.content, .compaction(HarnessContextCompaction(
             phase: .failed, message: "Conversation too long to summarize")))
 
+        // A local /compact can fail even when its enclosing SDK turn returns success.
+        let reason = "You've hit your 5-hour limit · resets 5pm"
+        let output = try json(#"""
+        {"type":"assistant","uuid":"c10","parent_tool_use_id":null,
+         "message":{"role":"assistant","content":[{"type":"text","text":"Error during compaction: \#(reason)"}]},
+         "local_command_run":{"command":"compact","args":""},"local_command_outcome":{"kind":"failed"}}
+        """#)
+        for command in ["/compact", "/compact keep the API notes"] {
+            var local = TranscriptBuilder()
+            let request = local.appendUser(command)
+            for frame in [try json(compacting), output, try json(#"{"type":"result","subtype":"success","is_error":false}"#)] {
+                projection.payloads(from: frame).forEach { local.apply($0) }
+            }
+            XCTAssertEqual(local.entries.count, 2)
+            XCTAssertEqual(local.entries.first?.id, request)
+            XCTAssertEqual(local.entries.first?.content, .user(text: command == "/compact" ? "" : command, images: nil))
+            XCTAssertEqual(local.entries.first?.origin, command == "/compact" ? .provider : nil)
+            XCTAssertEqual(local.entries.last?.content, .compaction(HarnessContextCompaction(
+                phase: .failed, message: reason, providerID: "c10")))
+        }
+
         var unfinished = TranscriptBuilder()
         unfinished.apply(.contextCompaction(HarnessContextCompaction(phase: .started)))
         unfinished.apply(.turnCompleted)

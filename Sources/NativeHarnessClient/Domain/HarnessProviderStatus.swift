@@ -72,7 +72,7 @@ struct HarnessContextCompaction: Codable, Equatable, Sendable {
     /// Code notes its own. Nil for every other compaction, and left out of the saved shape then.
     var whileIdle: Bool? = nil
     /// The provider's own ID for it, which its saved conversation keeps (Claude Code's `compact_boundary`
-    /// uuid). Nil where the provider gives none, and left out of the saved shape then.
+    /// uuid or the output record of a failed local command). Nil where the provider gives none.
     var providerID: String? = nil
 
     var savedTokens: UInt64? {

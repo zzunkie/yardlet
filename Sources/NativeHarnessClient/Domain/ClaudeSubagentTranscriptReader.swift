@@ -535,7 +535,7 @@ struct ClaudeSubagentTranscriptReader: Sendable {
     private struct Scan {
         var records: [String: ClaudeTranscriptWindow.Record] = [:]
         var values: [String: JSONValue] = [:]
-        /// The newest user or assistant record that is not meta: where the conversation's chain ends.
+        /// The newest visible message or failed compaction, where the conversation's chain ends.
         var leaf: String?
     }
 
@@ -559,7 +559,7 @@ struct ClaudeSubagentTranscriptReader: Sendable {
                 guard let value = Self.parseLine(Data(buffer[lineStart..<lineEnd])),
                       let id = value["uuid"]?.stringValue else { continue }
                 let type = value["type"]?.stringValue
-                if type == "user" || type == "assistant" {
+                if type == "user" || type == "assistant" || ClaudeLocalCommand.isSavedCompactionFailure(value) {
                     guard let recordSessionID = value["sessionId"]?.stringValue ?? value["session_id"]?.stringValue,
                           recordSessionID.lowercased() == session else { throw unavailable() }
                     if value["isMeta"]?.boolValue != true { scan.leaf = id }
@@ -774,6 +774,14 @@ struct ClaudeSubagentTranscriptReader: Sendable {
                 let lastID = builder.entries.last?.id
                 builder.appendUser(notice)
                 record(added(after: lastID), from: value)
+                continue
+            }
+            if var failure = ClaudeLocalCommand.savedCompactionFailure(in: value) {
+                if let id = failure.providerID, idleCompactions.contains(id) { failure.whileIdle = true }
+                let lastID = builder.entries.last?.id
+                builder.apply(.contextCompaction(failure))
+                record(added(after: lastID), from: value)
+                count += 1
                 continue
             }
             // A compaction reads as the marker the live stream shows. Its summary is the model's next

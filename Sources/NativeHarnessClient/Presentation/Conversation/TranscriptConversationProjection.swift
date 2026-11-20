@@ -378,6 +378,8 @@ enum TranscriptConversationProjection {
             .failed
         } else if isCutOff || stoppedAt != nil {
             .interrupted
+        } else if case let .compaction(compaction) = shown.last?.content, compaction.phase == .failed {
+            .failed
         } else if input.isComplete {
             .completed
         } else {

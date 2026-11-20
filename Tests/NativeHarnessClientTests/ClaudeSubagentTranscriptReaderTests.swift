@@ -584,6 +584,48 @@ final class ClaudeSubagentTranscriptReaderTests: XCTestCase {
         XCTAssertNil(ClaudeLocalCommand.parse("<command-name>/compact</command-name> and more words"), "Words of the person's own")
     }
 
+    @MainActor
+    func testFailedCompactCommandAtTheEndOfSavedHistoryShowsItsReason() throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let reason = "You've hit your 5-hour limit · resets 5pm"
+        let rows = [
+            #"{"type":"user","uuid":"u","message":{"content":"Check the build."}}"#,
+            #"{"type":"assistant","uuid":"a","parentUuid":"u","message":{"content":[{"type":"text","text":"The build passed."}]}}"#,
+            #"{"type":"user","uuid":"cmd","parentUuid":"a","message":{"content":"<command-name>/compact</command-name><command-message>compact</command-message><command-args></command-args>"}}"#,
+            #"{"type":"system","subtype":"local_command","uuid":"failure","parentUuid":"cmd","commandRun":{"command":"compact","args":""},"commandOutcome":{"kind":"failed"},"content":"<local-command-stderr>\u001b[31mError during compaction: \#(reason)\u001b[0m</local-command-stderr>"}"#
+        ]
+        try mainLog(root, rows)
+        var reader = ClaudeSubagentTranscriptReader(configDirectory: root)
+        let history = try XCTUnwrap(reader.readNewest(sessionID: parent, bytes: ClaudeTranscriptTail.initialBytes)).entries
+        XCTAssertEqual(history.map(\.content), [
+            .user(text: "Check the build.", images: nil), .assistant(text: "The build passed.", isStreaming: false),
+            .user(text: "", images: nil), .compaction(HarnessContextCompaction(phase: .failed, message: reason, providerID: "failure"))
+        ])
+        XCTAssertEqual(history.dropFirst(2).first?.origin, .provider, "An older failed command has no record of who sent it")
+        reader.idleCompactions = ["failure"]
+        let known = try XCTUnwrap(reader.readConversation(sessionID: parent)).entries
+        XCTAssertEqual(known.map(\.id), history.map(\.id))
+        XCTAssertEqual(known.last?.content, .compaction(HarnessContextCompaction(
+            phase: .failed, message: reason, whileIdle: true, providerID: "failure")))
+
+        let renders = try WindowlessRender.directory("compact-failure-qa")
+        let view = TaskConversationView(harness: .claudeCode, workspaceURL: root, entries: history, sessionStatus: .ready)
+        for appearance in WindowlessRender.Appearance.allCases {
+            let drawing = try ConversationDrawing.draw(view, size: NSSize(width: 920, height: 560), appearance: appearance)
+            try WindowlessRender.writePNG(drawing.capture.bitmap, to: renders.appending(path: "conversation-\(appearance.suffix).png"))
+            let words = drawing.elements.map(\.description).joined(separator: "\n")
+            XCTAssertTrue(words.contains(L10n.string("Compaction failed")), words)
+            XCTAssertTrue(words.contains(reason), words)
+            XCTAssertTrue(drawing.elements.contains { $0.role == "AXButton" && $0.value == L10n.string("Failed") }, words)
+            XCTAssertFalse(words.contains("/compact"), words)
+        }
+        // A later message continues from the failure. It retains that turn and its reading position.
+        try mainLog(root, rows + [#"{"type":"user","uuid":"next","parentUuid":"failure","message":{"content":"Continue."}}"#])
+        let continued = try XCTUnwrap(reader.readNewest(sessionID: parent, bytes: ClaudeTranscriptTail.initialBytes)).entries
+        XCTAssertEqual(Array(continued.dropLast()), known)
+    }
+
     /// A child conversation as the reader reads it draws in the subtask panel (plan M8): its request,
     /// thinking, tools with their output and diff, and its answer, read only. Written to
     /// `.build/subtask-panel-qa/subtask-panel-*`.

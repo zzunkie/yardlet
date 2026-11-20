@@ -75,6 +75,46 @@ import XCTest
         XCTAssertTrue(old.isEmpty, "Nothing went under the spent account")
     }
 
+    func testAFailedIdleCompactionKeepsTheAnswerAndDoesNotArmAnotherTimer() async throws {
+        let fixture = try makeFixture()
+        let model = fixture.model
+        let created = await model.createSession(harness: .claudeCode, workspaceURL: fixture.shared,
+            runtimeExecutableURL: fixture.cli, title: "Idle task", connection: fixture.first)
+        let task = try XCTUnwrap(created)
+        let transport = try XCTUnwrap(fixture.transports.all.first)
+        await transport.setContextUsageResponse(try json(#"{"isAutoCompactEnabled":true,"totalTokens":254000,"rawMaxTokens":1000000}"#))
+        await model.send("Check the build.", to: task)
+        await transport.emit(try json(#"""
+        {"type":"stream_event","event":{"type":"message_start","message":{"usage":{"cache_read_input_tokens":250000,
+          "cache_creation_input_tokens":4000,"cache_creation":{"ephemeral_1h_input_tokens":4000}}}}}
+        """#))
+        await transport.emit(try json(#"{"type":"assistant","message":{"content":[{"type":"text","text":"The build passed."}]}}"#))
+        let completed = try json(#"{"type":"result","subtype":"success","is_error":false,"result":""}"#)
+        await transport.emit(completed)
+        try await waitUntil { model.store.sessions.first?.status == .ready && model.idleCompactionTimers[task.id] != nil }
+        let compacting = try XCTUnwrap(model.adaptersBySessionID[task.id] as? any HarnessIdleCompacting)
+        let cache = await compacting.promptCache(for: task.id)
+        let armed = try XCTUnwrap(cache)
+        model.cancelIdleCompaction(for: task.id)
+        await model.fireIdleCompaction(task.id, armed: armed, due: Date())
+        let sent = await transport.sentValues
+        XCTAssertEqual(sent.last?["message"]?["content"]?.stringValue, "/compact")
+        await transport.emit(try json(#"""
+        {"type":"assistant","uuid":"failed-command","local_command_run":{"command":"compact","args":""},
+         "local_command_outcome":{"kind":"failed"},"message":{"content":[{"type":"text","text":"Error during compaction: Session limit reached"}]}}
+        """#))
+        await transport.emit(completed)
+        try await waitUntil {
+            model.store.sessions.first?.idleCompactions == ["failed-command"] && model.idleCompactionRuns[task.id]?.ended == true
+        }
+        let entries = model.transcriptBySessionID[task.id] ?? []
+        XCTAssertEqual(entries.suffix(3).map(\.content), [
+            .assistant(text: "The build passed.", isStreaming: false), .user(text: "", images: nil),
+            .compaction(HarnessContextCompaction(phase: .failed, message: "Session limit reached", whileIdle: true, providerID: "failed-command"))
+        ])
+        XCTAssertNil(model.idleCompactionTimers[task.id])
+    }
+
     func testTheAutomaticContinueWaitsForTheResetAndThenAsksClaudeToPickUp() async throws {
         let fixture = try makeFixture()
         let model = fixture.model

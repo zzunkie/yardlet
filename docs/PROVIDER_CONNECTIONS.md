@@ -444,9 +444,10 @@ suggested next message, and a compaction's end arms no new timer: the CLI forget
 A CLI that starts again, after a relaunch or for any other reason, arms nothing until the task's next turn, as Claude
 Code arms only after a turn of its own process; so a task whose cache lapsed meanwhile is not compacted. Claude Code
 saves the compaction as the `/compact` it was sent as, which its records cannot tell from one the person sent, so
-Yardlet keeps with the task the compactions it made while idle (`SessionRecord.idleCompactions`, by the boundary's
-uuid, the latest 50; [NATIVE_SESSION_STORAGE.md](NATIVE_SESSION_STORAGE.md)): read back after a relaunch, they show as
-they did live, the marker with its note, without the command or its output.
+Yardlet keeps the UUIDs of the latest 50 idle compactions with the task (`SessionRecord.idleCompactions`). The UUID
+comes from the boundary on success and the command output on failure. On reopen, the marker shows
+the idle note for a successful compaction or the provider's reason for a failure. See
+[NATIVE_SESSION_STORAGE.md](NATIVE_SESSION_STORAGE.md).
 Turned off, a timer that fires does nothing and none is armed; nothing else is kept.
 
 Not the same as Claude Code: the request time is when its response began streaming rather than when the CLI sent it,

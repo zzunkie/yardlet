@@ -1,11 +1,7 @@
 import Foundation
 
-/// A local slash command Claude Code saved in a conversation's transcript, which it writes as two `user`
-/// records of its own (2.1.322): the command the person ran,
-/// `<command-name>/compact</command-name> <command-message>compact</command-message> <command-args></command-args>`,
-/// and what it printed, `<local-command-stdout>Compacted </local-command-stdout>` (or `-stderr`). Live,
-/// Yardlet shows the command as the request it sent and the output as the stream's
-/// `local_command_output` card; read back, they read the same way rather than as their tags.
+/// Claude Code's local slash commands. The transcript keeps the command name and arguments in a
+/// tagged user record. Output can be a second user record or a system record with a command outcome.
 enum ClaudeLocalCommand: Equatable {
     /// The command as it was typed: its name, then its arguments.
     case request(String)
@@ -14,6 +10,39 @@ enum ClaudeLocalCommand: Equatable {
 
     /// `/compact`, whose compaction Claude Code saves before the command that ran it.
     static let compactName = "/compact"
+
+    /// Claude saves a rejected local command as a system record and streams its output as a
+    /// synthetic assistant message. Both carry the command and its outcome outside the text.
+    static func isFailedCompaction(run: JSONValue?, outcome: JSONValue?) -> Bool {
+        run?["command"]?.stringValue == "compact" && outcome?["kind"]?.stringValue == "failed"
+    }
+
+    static func isSavedCompactionFailure(_ record: JSONValue) -> Bool {
+        record["subtype"]?.stringValue == "local_command" && record["type"]?.stringValue == "system"
+            && record["isMeta"]?.boolValue != true
+            && isFailedCompaction(run: record["commandRun"], outcome: record["commandOutcome"])
+    }
+
+    static func savedCompactionFailure(in record: JSONValue) -> HarnessContextCompaction? {
+        guard isSavedCompactionFailure(record) else { return nil }
+        let text = record["content"]?.stringValue ?? ""
+        let reason = if case let .output(output) = parse(text) { unescapedOutput(output) } else { text }
+        return failedCompaction(reason: reason, id: record["uuid"]?.stringValue)
+    }
+
+    static func unescapedOutput(_ text: String) -> String {
+        text.replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&amp;", with: "&")
+    }
+
+    static func failedCompaction(reason: String, id: String?) -> HarnessContextCompaction {
+        let prefix = "Error during compaction:"
+        let trimmed = strippingEscapeSequences(reason).trimmingCharacters(in: .whitespacesAndNewlines)
+        let message = trimmed.hasPrefix(prefix)
+            ? String(trimmed.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines) : trimmed
+        return HarnessContextCompaction(phase: .failed, message: message.isEmpty ? nil : message, providerID: id)
+    }
 
     static func parse(_ text: String) -> Self? {
         guard text.contains("<command-name>") || text.contains("<local-command-std") else { return nil }

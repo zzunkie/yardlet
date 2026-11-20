@@ -94,6 +94,11 @@ struct ClaudeSessionProjection: Sendable {
         }
 
         if frame["type"]?.stringValue == "assistant" {
+            if ClaudeLocalCommand.isFailedCompaction(run: frame["local_command_run"], outcome: frame["local_command_outcome"]) {
+                isCompacting = false
+                return [.contextCompaction(ClaudeLocalCommand.failedCompaction(
+                    reason: Self.assistantText(frame), id: frame["uuid"]?.stringValue))]
+            }
             for block in frame["message"]?["content"]?.arrayValue ?? [] {
                 guard block["type"]?.stringValue == "tool_use",
                       let id = block["id"]?.stringValue,

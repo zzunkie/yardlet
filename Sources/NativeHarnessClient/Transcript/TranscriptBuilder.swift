@@ -247,6 +247,19 @@ struct TranscriptBuilder: Sendable {
     /// start while it works and reports the end both as a status and as a boundary carrying the
     /// token counts, in either order, so those fill in the same marker.
     private mutating func applyCompaction(_ update: HarnessContextCompaction) {
+        // A failed local /compact has no boundary. Older saved commands do not say who sent
+        // them. Keep the turn and its identity, showing the failure in place of the bare command.
+        if update.phase == .failed {
+            var request = entries.count - 1
+            if case let .compaction(previous) = entries.last?.content, previous.phase == .started { request -= 1 }
+            if request >= 0, entries[request].opensTurn, entries[request].origin == nil,
+               case .user(ClaudeLocalCommand.compactName, nil) = entries[request].content {
+                var opener = entries[request]
+                opener.content = .user(text: "", images: nil)
+                opener.origin = .provider
+                list[request] = opener
+            }
+        }
         let index = entries.lastIndex { entry in
             if case .compaction = entry.content { return true }
             return false
