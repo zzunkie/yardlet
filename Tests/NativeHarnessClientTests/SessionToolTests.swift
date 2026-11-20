@@ -2999,7 +2999,7 @@ final class SessionToolTests: XCTestCase {
         XCTAssertEqual(cookies.choices?.map(\.value), ["perTask", "shared"])
         XCTAssertEqual(cookies.choices?.map(\.title), [L10n.string("Per task"), L10n.string("Shared by all tasks")])
         XCTAssertEqual(cookies.help, L10n.string("Tasks share your sign-ins. A task whose agent signs in to a site itself keeps that sign-in to itself. Sign-ins saved in the password manager work in every task"),
-                       "A row's tooltip is its help when it has no line")
+                       "The line under a row is its help")
         let level = try XCTUnwrap(settings.first { $0.id == "memory_saver_level" })
         XCTAssertEqual(level.choices?.compactMap(\.detail).count, 3, "Each level's line, as Settings shows it")
         XCTAssertEqual(settings.first { $0.id == "theme" }?.section, L10n.string("Appearance"))

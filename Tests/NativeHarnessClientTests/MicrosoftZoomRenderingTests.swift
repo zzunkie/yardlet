@@ -116,7 +116,7 @@ final class MicrosoftZoomRenderingTests: XCTestCase {
         let sheet = spoken(ConnectorAddSheet(center: empty, start: .directory, showsOwnApps: true, onClose: {}), size: sheetSize)
         expect([L10n.string("Microsoft 365 · Outlook, OneDrive, Teams"), L10n.string("Zoom · Meetings, Team Chat, Docs")], in: sheet)
 
-        let tilesSize = NSSize(width: 580, height: 220)
+        let tilesSize = NSSize(width: 580, height: 300)
         try WindowlessRender.hostedInBothAppearances("setup-tiles", in: directory, size: tilesSize, passes: 10) { appearance in
             page(ConnectorSetupTiles(center: center(Self.accounts, builtIn: true), onOpen: { _ in }), size: tilesSize,
                  appearance: appearance)

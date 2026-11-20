@@ -79,7 +79,7 @@ struct VaultWalletSection: View {
     }
 
     private var switchRow: some View {
-        SettingsRow(title: YardletSetting.addressesAndCards.title, anchor: YardletSetting.addressesAndCards.id) {
+        SettingsRow(setting: .addressesAndCards) {
             Toggle(YardletSetting.addressesAndCards.title, isOn: Binding(
                 get: { vault.offersWallet }, set: { vault.isWalletEnabled = $0 }))
                 .labelsHidden()

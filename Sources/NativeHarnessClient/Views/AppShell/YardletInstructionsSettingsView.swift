@@ -62,7 +62,7 @@ struct YardletInstructionsSettingsView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: SettingsMetrics.groupSpacing) {
             HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(YardletSetting.yardletInstructions.title).font(SettingsMetrics.titleFont)

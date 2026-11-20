@@ -51,7 +51,7 @@ struct VaultSettingsView: View {
     private var shownItems: [VaultItem] { vault.items.filter { $0.matches(query) } }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: SettingsMetrics.groupSpacing) {
             switchCard
             if !vault.items.isEmpty { searchField }
             if codeItems.contains(where: { $0.matches(query) }) { codeList }
@@ -141,7 +141,7 @@ struct VaultSettingsView: View {
 
     private var switchCard: some View {
         SettingsGroup {
-            SettingsRow(title: YardletSetting.passwordManager.title,
+            SettingsRow(title: YardletSetting.passwordManager.title, detail: YardletSetting.passwordManager.detail,
                         notes: vault.isAllowedBuild ? [] : [L10n.string("Available in team-signed builds of Yardlet.")],
                         anchor: YardletSetting.passwordManager.id) {
                 // A build that cannot keep items behind the team's code requirement shows the vault off.

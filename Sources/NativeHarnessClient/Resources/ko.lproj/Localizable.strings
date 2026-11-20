@@ -4352,3 +4352,8 @@
 "sign in, log in, another account" = "로그인, 다른 계정";
 "CLI version, update now, use newest version" = "CLI 버전, 지금 업데이트, 최신 버전 사용";
 "theme color, custom color, background color" = "테마 색, 사용자 색상, 배경색";
+"Lists running, unread and recent tasks and your usage from the menu bar." = "메뉴 막대에서 실행 중인 작업, 읽지 않은 작업, 최근 작업과 사용량을 보여 줍니다.";
+"Lets agents open and use pages in the task's browser panel. Tasks follow a change from their next start or resume." = "에이전트가 작업의 브라우저 패널에서 페이지를 열고 다룹니다. 바꾼 값은 작업을 다음에 시작하거나 다시 열 때부터 적용됩니다.";
+"While a task works, the display doesn't sleep, so the screen doesn't lock and computer use keeps working." = "작업이 진행되는 동안 디스플레이가 잠자기에 들지 않아 화면이 잠기지 않고, 컴퓨터 사용도 계속 동작합니다.";
+"Agents sign in with what is saved here in the browser panel, without seeing the passwords." = "에이전트가 여기 저장된 로그인 정보로 브라우저 패널에서 로그인합니다. 비밀번호는 에이전트에게 보이지 않습니다.";
+"Offers to save them from forms you send in the browser panel, and fills them there for you. Agents can't fill a card." = "브라우저 패널에서 보낸 양식의 주소와 카드를 저장할지 묻고, 다음에 그곳에서 대신 채워 줍니다. 에이전트는 카드를 채우지 못합니다.";

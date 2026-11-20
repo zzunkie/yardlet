@@ -347,6 +347,7 @@ extension YardletSetting {
 
     static let showInMenuBar = YardletSetting(
         id: "show_in_menu_bar", section: .general, generalGroup: .app, symbol: "menubar.rectangle", title: L10n.string("Show in menu bar"),
+        detail: L10n.string("Lists running, unread and recent tasks and your usage from the menu bar."),
         controlLabel: L10n.string("Show Yardlet in the menu bar"),
         values: .onOff, storage: .flag(key: MenuBarPreference.key, defaultValue: true),
         keywords: "status bar, menu bar icon, tray")
@@ -381,6 +382,7 @@ extension YardletSetting {
 
     static let agentBrowserTools = YardletSetting(
         id: "agent_browser_tools", section: .browser, symbol: "globe", title: L10n.string("Agent browser tools"),
+        detail: L10n.string("Lets agents open and use pages in the task's browser panel. Tasks follow a change from their next start or resume."),
         values: .onOff, storage: .flag(key: AgentToolPreference.browserToolsKey, defaultValue: true),
         asksEveryTime: true,
         keywords: "browser control, web, browser tools")
@@ -421,7 +423,7 @@ extension YardletSetting {
 
     static let keepCookies = YardletSetting(
         id: "keep_cookies", section: .browser, symbol: "person.2.badge.key", title: L10n.string("Keep cookies"),
-        hint: L10n.string("Tasks share your sign-ins. A task whose agent signs in to a site itself keeps that sign-in to itself. Sign-ins saved in the password manager work in every task"),
+        detail: L10n.string("Tasks share your sign-ins. A task whose agent signs in to a site itself keeps that sign-in to itself. Sign-ins saved in the password manager work in every task"),
         values: choices(BrowserTaskProfiles.Storage.self, title: \.title),
         storage: .choice(key: BrowserTaskProfiles.storageKey, defaultValue: BrowserTaskProfiles.Storage.perTask.rawValue),
         asksEveryTime: true,
@@ -445,13 +447,14 @@ extension YardletSetting {
     static let continueAfterRestart = YardletSetting(
         id: "continue_after_restart", section: .general, generalGroup: .tasks, symbol: "arrow.clockwise",
         title: L10n.string("Continue running work after a restart"),
-        hint: L10n.string("Claude Code, Codex, Antigravity, OpenCode, Kimi Code, Grok Build and Hermes tasks continue where they left off after Yardlet quits or updates"),
+        detail: L10n.string("Claude Code, Codex, Antigravity, OpenCode, Kimi Code, Grok Build and Hermes tasks continue where they left off after Yardlet quits or updates"),
         values: .onOff, storage: .flag(key: RestartResumePreference.key, defaultValue: true),
         keywords: "resume, restart, quit, update")
 
     static let keepScreenUnlocked = YardletSetting(
         id: "keep_screen_unlocked", section: .general, generalGroup: .tasks, symbol: "lock.open.display",
         title: L10n.string("Keep the screen unlocked while tasks work"),
+        detail: L10n.string("While a task works, the display doesn't sleep, so the screen doesn't lock and computer use keeps working."),
         values: .onOff, storage: .flag(key: KeepScreenAwakePreference.key, defaultValue: false), asksEveryTime: true,
         keywords: "lock screen, sleep, display, awake")
 
@@ -702,6 +705,7 @@ extension YardletSetting {
 extension YardletSetting {
     static let passwordManager = YardletSetting(
         id: "password_manager", section: .vault, symbol: "lock.shield", title: L10n.string("Password manager for agents"),
+        detail: L10n.string("Agents sign in with what is saved here in the browser panel, without seeing the passwords."),
         values: .onOff,
         storage: appSwitch({ context in context.vault.map { $0.isAllowedBuild && $0.isEnabled } }, { context, isOn in
             guard let vault = context.vault, vault.isAllowedBuild else {
@@ -716,6 +720,7 @@ extension YardletSetting {
     static let addressesAndCards = YardletSetting(
         id: "addresses_and_cards", section: .vault, symbol: "creditcard",
         title: L10n.string("Save and fill addresses and cards"),
+        detail: L10n.string("Offers to save them from forms you send in the browser panel, and fills them there for you. Agents can't fill a card."),
         values: .onOff,
         storage: appSwitch({ $0.vault?.offersWallet }, { context, isOn in
             guard let vault = context.vault, vault.isAllowedBuild else {

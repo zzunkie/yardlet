@@ -95,7 +95,7 @@ struct CLIUpdateSettingsView: View {
 
     var body: some View {
         let rows = displayRows
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: SettingsMetrics.groupSpacing) {
             SettingsGroup {
                 SettingsRow(setting: .cliAutomaticUpdates, notes: lastCheckAll.map { last in
                     [L10n.format("Checked %@ · checks every 6 hours", Calendar.current.isDateInToday(last)

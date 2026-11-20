@@ -4352,3 +4352,8 @@
 "sign in, log in, another account" = "sign in, log in, another account";
 "CLI version, update now, use newest version" = "CLI version, update now, use newest version";
 "theme color, custom color, background color" = "theme color, custom color, background color";
+"Lists running, unread and recent tasks and your usage from the menu bar." = "Lists running, unread and recent tasks and your usage from the menu bar.";
+"Lets agents open and use pages in the task's browser panel. Tasks follow a change from their next start or resume." = "Lets agents open and use pages in the task's browser panel. Tasks follow a change from their next start or resume.";
+"While a task works, the display doesn't sleep, so the screen doesn't lock and computer use keeps working." = "While a task works, the display doesn't sleep, so the screen doesn't lock and computer use keeps working.";
+"Agents sign in with what is saved here in the browser panel, without seeing the passwords." = "Agents sign in with what is saved here in the browser panel, without seeing the passwords.";
+"Offers to save them from forms you send in the browser panel, and fills them there for you. Agents can't fill a card." = "Offers to save them from forms you send in the browser panel, and fills them there for you. Agents can't fill a card.";

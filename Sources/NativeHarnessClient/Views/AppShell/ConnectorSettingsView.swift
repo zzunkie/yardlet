@@ -21,7 +21,7 @@ struct ConnectorSettingsView: View {
     static let importDismissedKey = "YardletConnectorImportDismissed"
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
+        VStack(alignment: .leading, spacing: SettingsMetrics.groupSpacing) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(L10n.string("Tools of the services you connect here work in every task, whichever harness or account it uses."))
                     .font(.callout)
@@ -145,7 +145,8 @@ struct ConnectorSettingsView: View {
 }
 
 /// "Set up in one go": the services that need an app of the person's own, or sign in per account
-/// (Google, Microsoft 365, Slack, Zoom), each opening its setup assistant, with how far along it is.
+/// (Google, Microsoft 365, Slack, Zoom), each opening its setup assistant, with how far along it is: one group of
+/// rows, as the connectors above are listed, with no tile around each.
 struct ConnectorSetupTiles: View {
     let center: ConnectorCenter
     let onOpen: (ConnectorPreset) -> Void
@@ -157,16 +158,23 @@ struct ConnectorSetupTiles: View {
                 .font(SettingsMetrics.detailFont)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+            // One group of rows, as the connectors above are listed: each service's mark, name and products, its
+            // state, and the way in.
+            VStack(spacing: 0) {
                 tile(name: "Google", detail: L10n.string("Gmail · Calendar · Drive"), status: googleStatus,
                      done: center.canSignInWithGoogle && googleConnected > 0, preset: "gmail")
+                Divider().padding(.leading, 42)
                 tile(name: "Microsoft 365", detail: L10n.string("Outlook · OneDrive · Teams"), status: microsoftStatus,
                      done: center.canSignInWithMicrosoft && microsoftConnected > 0, preset: "outlook-mail")
+                Divider().padding(.leading, 42)
                 tile(name: "Slack", detail: L10n.string("From Yardlet's manifest"), status: slackStatus,
                      done: slack?.status == .connected, preset: "slack")
+                Divider().padding(.leading, 42)
                 tile(name: "Zoom", detail: L10n.string("Meetings · Chat · Docs"), status: zoomStatus,
                      done: zoom.contains { $0.status == .connected }, preset: "zoom-meetings")
             }
+            .padding(.horizontal, SettingsMetrics.groupHorizontalPadding)
+            .parityCard()
             .padding(.top, 2)
         }
     }
@@ -210,26 +218,27 @@ struct ConnectorSetupTiles: View {
         return ConnectorSettingsState.make(slack, in: center).word
     }
 
+    /// A service's row, as a connector's row above: its mark, name and products, then its state and the way in.
     private func tile(name: String, detail: String, status: String, done: Bool, preset id: String) -> some View {
-        HStack(spacing: 10) {
+        HStack(alignment: .center, spacing: 12) {
             ConnectorIcon(name: name, presetID: id == "gmail" ? nil : id, sources: id == "gmail" ? .google : nil, size: 30)
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(name).font(SettingsMetrics.titleFont)
                 Text(detail).font(SettingsMetrics.detailFont).foregroundStyle(.secondary).lineLimit(1)
-                HStack(spacing: 4) {
-                    Circle().fill(done ? Color.green : Color.secondary.opacity(0.5)).frame(width: 6, height: 6)
-                    Text(status).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                }
             }
-            Spacer(minLength: 6)
+            Spacer(minLength: 8)
+            HStack(spacing: 5) {
+                Circle().fill(done ? Color.green : Color.secondary.opacity(0.5)).frame(width: 7, height: 7)
+                Text(status).font(.caption.weight(.medium)).foregroundStyle(.secondary).lineLimit(1)
+            }
+            .fixedSize()
             Button(done ? L10n.string("Open") : L10n.string("Set up…")) {
                 if let preset = ConnectorPreset.preset(id: id) { onOpen(preset) }
             }
             .controlSize(.small)
         }
-        .padding(10)
+        .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .parityCard(cornerRadius: 10)
         .settingsAnchor(SettingsSearch.Anchor.setUp(id))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(L10n.format("Set up %@", name))

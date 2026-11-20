@@ -318,7 +318,7 @@ struct TokenUsagePage: View {
 
     var body: some View {
         let overview = overview()
-        VStack(alignment: .leading, spacing: 22) {
+        VStack(alignment: .leading, spacing: SettingsMetrics.groupSpacing) {
             if !overview.limits.isEmpty { limits(overview) }
             if isCounting() {
                 if !overview.limits.isEmpty { Divider() }

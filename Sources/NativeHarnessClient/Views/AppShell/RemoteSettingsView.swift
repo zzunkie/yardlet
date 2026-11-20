@@ -17,7 +17,7 @@ struct RemoteSettingsView: View {
     @State private var copiedLink: URL?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: SettingsMetrics.groupSpacing) {
             VStack(spacing: 0) {
                 row(setting: .remoteConnections) {
                     Toggle(YardletSetting.remoteConnections.title, isOn: Binding(

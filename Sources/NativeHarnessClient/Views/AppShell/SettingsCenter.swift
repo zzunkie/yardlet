@@ -620,7 +620,7 @@ struct SettingsCenterView: View {
                 // The rows come from the settings catalog, which the agent's settings tools list too, under
                 // their headings.
                 let rows = catalogRows(in: .general)
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: SettingsMetrics.groupSpacing) {
                     ForEach(GeneralSettingsGroup.allCases, id: \.self) { group in
                         let members = rows.filter { $0.generalGroup == group }
                         if !members.isEmpty {
@@ -823,7 +823,7 @@ struct SettingsCenterView: View {
 
     /// Theme, interface size and the code font as rows of one group, each control at the row's end.
     private var appearanceDetail: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: SettingsMetrics.groupSpacing) {
             SettingsGroup {
                 SettingsRow(setting: .theme) {
                     Picker(YardletSetting.theme.title, selection: $appearanceRawValue) {
@@ -1258,13 +1258,14 @@ private struct CredentialHidingContentRow: View {
 }
 
 /// The sizes every settings row shares, as both apps set theirs: a 13 pt title, a 12 pt line under it in the
-/// secondary colour, 12 pt above and below, 16 pt inside a group's sides.
+/// secondary colour, 12 pt above and below, 16 pt inside a group's sides, and 18 pt between a page's groups.
 enum SettingsMetrics {
     static let titleFont = Font.system(size: 13, weight: .medium)
     static let detailFont = Font.system(size: 12)
     static let groupTitleFont = Font.system(size: 13, weight: .semibold)
     static let rowVerticalPadding: CGFloat = 12
     static let groupHorizontalPadding: CGFloat = 16
+    static let groupSpacing: CGFloat = 18
 }
 
 /// A settings row's words: the setting's title, with its line under it where it has one.
