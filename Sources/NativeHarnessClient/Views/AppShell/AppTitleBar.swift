@@ -88,6 +88,8 @@ struct IntegratedTitleBar: View {
     /// The projects a task can move to and whether it can go back to Chats (`TaskProjectMove`).
     var projectMoveOptions: (SessionRecord) -> TaskProjectMove.Options = { _ in .none }
     var onMoveToProject: (SessionRecord, Project?) -> Void = { _, _ in }
+    /// Makes a chat a project of its own folder; nil leaves the item out.
+    var onMakeProject: ((SessionRecord) -> Void)? = nil
     var onChooseAccount: ((SessionRecord) -> Void)? = nil
     var canOpenOriginalConversation: (SessionRecord) -> Bool = { _ in false }
     var onOpenOriginalConversation: ((SessionRecord) -> Void)? = nil
@@ -127,6 +129,7 @@ struct IntegratedTitleBar: View {
             isAttached: { [isAttached] _ in isAttached }, onResume: onResume, onRename: onRename,
             onRenameFromConversation: onRenameFromConversation, onTogglePinned: onTogglePinned, onArchive: onArchive, onBackToConversation: onBackToConversation,
             projectName: projectName, projectMoveOptions: projectMoveOptions, onMoveToProject: onMoveToProject,
+            onMakeProject: onMakeProject,
             onChooseAccount: onChooseAccount, canOpenOriginalConversation: canOpenOriginalConversation,
             onOpenOriginalConversation: onOpenOriginalConversation,
             pullRequest: { [pullRequest] _ in pullRequest }, onOpenPullRequest: onOpenPullRequest,

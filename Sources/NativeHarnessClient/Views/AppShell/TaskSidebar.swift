@@ -255,6 +255,9 @@ struct TaskSidebar: View {
     var onMarkUnread: ((SessionRecord) -> Void)? = { _ in }
     /// Moves a task to a project, or back to Chats (nil), from its row's context menu.
     var onMoveToProject: ((SessionRecord, Project?) -> Void)? = { _, _ in }
+    /// Makes a chat a project of its own folder (`AppModel.makeProject(from:)`), from its row's
+    /// "Move to project" menu; nil where the window cannot, and the item is left out.
+    var onMakeProject: ((SessionRecord) -> Void)? = nil
     /// Moves a task in the sidebar's families, under another task or to the top level (nil), from
     /// its row's menu or a drop on a row (`TaskNesting`).
     var onNest: ((UUID, UUID?) -> Void)? = { _, _ in }
@@ -699,6 +702,7 @@ struct TaskSidebar: View {
                         for: session, visibleProjects: allGroups.compactMap(\.project),
                         projects: projects.projects),
                     onMoveToProject: onMoveToProject.map { move in { move(session, $0) } },
+                    onMakeProject: onMakeProject.map { make in { make(session) } },
                     onDropTask: splitActions.combine.map { combine in { dropped in combine(dropped, session.id) } },
                     // A task moves among the families of its project's list, which the states mix.
                     nesting: onNest == nil || row.project != nil ? nil : nesting
@@ -797,6 +801,7 @@ struct TaskSidebar: View {
                     for: session, visibleProjects: allGroups.compactMap(\.project),
                     projects: projects.projects),
                 onMoveToProject: onMoveToProject.map { move in { move(session, $0) } },
+                onMakeProject: onMakeProject.map { make in { make(session) } },
                 onDropTask: splitActions.combine.map { combine in { dropped in combine(dropped, session.id) } }
             )
             .equatable()
@@ -1334,6 +1339,8 @@ struct SidebarTaskEntry: View, @MainActor Equatable {
     /// The projects the task can move to and whether it can go back to Chats.
     let projectMove: TaskProjectMove.Options
     let onMoveToProject: ((Project?) -> Void)?
+    /// Makes the task a project of its own folder, from "Move to project"; nil leaves the item out.
+    var onMakeProject: (() -> Void)? = nil
     /// A task dropped on the row outside the families, which joins it in a split view; nil where there are none.
     let onDropTask: ((UUID) -> Void)?
     /// The sidebar's families, for a row listed in them: its menu's moves, and a task dropped on it
@@ -1404,7 +1411,8 @@ struct SidebarTaskEntry: View, @MainActor Equatable {
             if let pullRequestMark {
                 Button(pullRequestMark.openTitle) { NSWorkspace.shared.open(pullRequestMark.url) }
             }
-            TaskProjectMoveMenuItems(options: projectMove, onMove: { onMoveToProject?($0) })
+            TaskProjectMoveMenuItems(options: projectMove, onMove: { onMoveToProject?($0) },
+                                     onMakeProject: onMakeProject)
                 .disabled(onMoveToProject == nil)
             Button(L10n.string("Archive"), role: .destructive) { onArchive(session) }
             Button(L10n.string("Delete task"), role: .destructive) { onDelete?(session) }

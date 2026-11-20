@@ -24,6 +24,8 @@ struct TaskHeaderActions {
     /// The projects a task can move to and whether it can go back to Chats (`TaskProjectMove`).
     var projectMoveOptions: (SessionRecord) -> TaskProjectMove.Options = { _ in .none }
     var onMoveToProject: (SessionRecord, Project?) -> Void = { _, _ in }
+    /// Makes a chat a project of its own folder (`AppModel.makeProject(from:)`); nil leaves the item out.
+    var onMakeProject: ((SessionRecord) -> Void)? = nil
     var onChooseAccount: ((SessionRecord) -> Void)? = nil
     var canOpenOriginalConversation: (SessionRecord) -> Bool = { _ in false }
     var onOpenOriginalConversation: ((SessionRecord) -> Void)? = nil
@@ -104,7 +106,9 @@ struct TaskTitleMenu: View {
                                            action: onRenameFromConversation)
         }
         Button(L10n.string(session.isPinned ? "Unpin" : "Pin")) { actions.onTogglePinned(session) }
-        TaskProjectMoveMenuItems(options: actions.projectMoveOptions(session)) { actions.onMoveToProject(session, $0) }
+        TaskProjectMoveMenuItems(options: actions.projectMoveOptions(session),
+                                 onMove: { actions.onMoveToProject(session, $0) },
+                                 onMakeProject: actions.onMakeProject.map { make in { make(session) } })
             .disabled(!actions.canManageTask)
         Button(L10n.string("Archive")) { actions.onArchive(session) }
         if actions.hasOriginalConversation?(session) ?? (session.harness == .claudeCode && session.inheritedContext?.nativeConversationOrigin != nil),

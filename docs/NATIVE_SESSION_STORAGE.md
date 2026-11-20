@@ -710,6 +710,16 @@ projects, in the sidebar's order) and, for any task in a project, "Move to Chats
 window offers the same through `taskAction.move` (docs/REMOTE_PROTOCOL.md §15.32). The storage contract is as
 follows.
 
+- **A chat can become a project of its own folder:** for a task in no project whose folder no project holds
+  (`TaskProjectMove.Options.canMakeProject`), "Move to project" ends with "New project" (the palette's "Move to new
+  project"). `AppModel.makeProject(from:)` adds a project for the task's folder, as Add project does for a folder,
+  named after the task's title as Chats lists it (`TaskProjectMove.projectName(for:)`: the agent's own title or Yardlet's
+  fallback, so no model turn starts), then moves the task into it by ID as below. The folder stays where it is under
+  its name (`new-chat-4`); only the project's name is new, and the person renames it as any project. Other tasks in
+  the folder that were not moved to Chats are listed in the project too, by the folder rule below. A task moved to
+  Chats from its project's own folder goes back with a move to that project instead. Another Mac's window does not
+  offer it.
+
 - **Only three columns of the index row change:** `project_id` (the project moved to, NULL for Chats),
   `additional_roots` (`TaskProjectMove.additionalRoots`: the project's roots minus the task folder and, for a worktree,
   its origin root, or empty for Chats) and `moved_to_chats` (`INTEGER NOT NULL DEFAULT 0`,

@@ -894,6 +894,7 @@ struct MainWindow: View {
             projectName: { projects.displayName(for: $0) },
             projectMoveOptions: projectMoveOptions(for:),
             onMoveToProject: moveTask,
+            onMakeProject: makeProject,
             onChooseAccount: { session in rememberShellFocus(); accountSwitchSession = session },
             canOpenOriginalConversation: { model.canOpenOriginalConversation(in: $0) },
             onOpenOriginalConversation: { session in Task { await model.openOriginalClaudeConversation(from: session) } },
@@ -1108,6 +1109,17 @@ struct MainWindow: View {
     private func moveTask(_ session: SessionRecord, to project: Project?) {
         Task {
             guard await model.moveTask(session, to: project) != nil, let project,
+                  model.store.selectedSessionID == session.id else { return }
+            sidebarDisclosure.expand(SidebarProjection.disclosureKey(
+                for: WorkspaceGroup(workspaceURL: project.primaryRoot, sessions: [], project: project)))
+        }
+    }
+
+    /// Makes a chat a project of its own folder and moves it there (`AppModel.makeProject(from:)`).
+    /// The shown chat stays in sight, as a move keeps it.
+    private func makeProject(from session: SessionRecord) {
+        Task {
+            guard let project = await model.makeProject(from: session),
                   model.store.selectedSessionID == session.id else { return }
             sidebarDisclosure.expand(SidebarProjection.disclosureKey(
                 for: WorkspaceGroup(workspaceURL: project.primaryRoot, sessions: [], project: project)))
@@ -2072,6 +2084,7 @@ struct MainWindow: View {
                         onMarkRead: { session in Task { await model.store.markRead(id: session.id) } },
                         onMarkUnread: { session in Task { await model.store.markUnread(id: session.id) } },
                         onMoveToProject: moveTask,
+                        onMakeProject: makeProject,
                         onNest: { task, parent in Task { await model.nest(task, under: parent) } },
                         splitActions: SidebarSplitActions(
                             togglePinned: { model.splits.togglePinned($0.id) },
@@ -2355,6 +2368,7 @@ struct MainWindow: View {
             projectName: { projects.displayName(for: $0) },
             projectMoveOptions: projectMoveOptions(for:),
             onMoveToProject: moveTask,
+            onMakeProject: makeProject,
             onChooseAccount: { session in rememberShellFocus(); accountSwitchSession = session },
             canOpenOriginalConversation: { model.canOpenOriginalConversation(in: $0) },
             onOpenOriginalConversation: { session in Task { await model.openOriginalClaudeConversation(from: session) } },
@@ -3230,13 +3244,24 @@ struct MainWindow: View {
             )
             // The palette lists commands, not submenus: one per project the task can move to.
             for command in TaskProjectMove.commands(projectMoveOptions(for: session)) {
+                let systemName = switch command.target {
+                case .project: "folder"
+                case .newProject: "folder.badge.plus"
+                case .chats: "bubble.left"
+                }
                 items.append(
                     CommandPaletteItem(
                         id: "\(command.id)-\(session.id)",
                         title: command.title,
                         subtitle: session.title,
-                        systemName: command.destination == nil ? "bubble.left" : "folder",
-                        action: { moveTask(session, to: command.destination) }
+                        systemName: systemName,
+                        action: {
+                            if command.target == .newProject {
+                                makeProject(from: session)
+                            } else {
+                                moveTask(session, to: command.destination)
+                            }
+                        }
                     )
                 )
             }
