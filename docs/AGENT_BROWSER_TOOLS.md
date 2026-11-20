@@ -585,10 +585,10 @@ threads the same way, in the workspace sandbox asking on request; `readOnly` and
     first message goes into that turn.
   - A queued subagent: `AgentRun.State.queued`, "Pending" on the agent card and the conversation card; stopping it takes
     it out of the queue. A quit ends it as `interrupted`, as one at work (`run_agent` above); it is not queued again.
-- **Claude Code launch arguments:** The 14 session tools also go into `--allowedTools`, with the task suggestion and
+- **Claude Code launch arguments:** The 15 session tools also go into `--allowedTools`, with the task suggestion and
   settings tools, `read_terminal`, `list_task_runs` and `show_widget` (`AgentToolServerLaunch.claudeAllowedTools`; no CLI card; for the
-  calls that reach further and for `archive_task`, the app asks when the calling task runs at a level that asks; hiding
-  and showing projects have no card). Codex gets no per-tool `approval_mode`, so for `archive_task` too, as for
+  calls that reach further and for `archive_task`, the app asks when the calling task runs at a level that asks; adding,
+  hiding and showing projects have no card). Codex gets no per-tool `approval_mode`, so for `archive_task` too, as for
   other tools that write, Codex may ask first under that task's approval setting.
 
 ### Terminal tool
