@@ -5,11 +5,11 @@ import Foundation
 /// "Antigravity"):
 ///
 /// - `conversation_summaries.db`, the index `agy`'s `/resume` lists: one row per conversation with
-///   its title, preview, folder (`workspace_uris`), times and `parent_conversation_id`. Rows whose
+///   its title, preview, folders (`workspace_uris`), times and `parent_conversation_id`. Rows whose
 ///   `app_data_dir` is `antigravity` are the desktop app's (its `~/.gemini/antigravity`), which the
 ///   CLI copies into its own store before it continues one, so they are not offered.
-/// - `cache/last_conversations.json`, the folder each `agy` run last continued, for rows the CLI
-///   recorded without a folder.
+/// - `cache/last_conversations.json`, the folder each `agy` run last continued, which names the
+///   folder of such a conversation (`ownFolder`).
 /// - `brain/<id>/.system_generated/logs/transcript_full.jsonl` (else `transcript.jsonl`), the
 ///   conversation's readable log: requests, answers, thinking and tool calls.
 /// - `brain/<id>/.system_generated/subagents/<subagent's conversation ID>.json`, the subagents the
@@ -35,7 +35,10 @@ struct AntigravityConversationStore: Sendable {
         let preview: String
         let stepCount: Int
         let updatedAt: Date?
-        let workspaceURL: URL?
+        /// `workspace_uris`, in its order: the folder the conversation ran in, with its `--add-dir` folders,
+        /// or, for one an `agy acp` process ran, every folder that process served, sorted, so its own
+        /// folder need not be the first.
+        let workspaceURLs: [URL]
         let parentConversationID: String?
         let nestingDepth: Int
         let appDataDirectory: String
@@ -44,29 +47,54 @@ struct AntigravityConversationStore: Sendable {
     // MARK: - Listing
 
     /// Every conversation the CLI can continue by its ID: its own (`antigravity-cli`), not a
-    /// subagent's (`nesting_depth` 0), with steps, and with a known folder. Newest first.
+    /// subagent's (`nesting_depth` 0), with steps, and with a known folder: its own (`ownFolder`), else
+    /// the first it lists. Newest first.
     func conversations() throws -> [ImportableConversation] {
         let lastByFolder = lastConversationFolders()
-        return try summaries()
-            .filter { $0.appDataDirectory == "antigravity-cli" && $0.nestingDepth == 0 && $0.stepCount > 0 }
-            .compactMap { summary -> ImportableConversation? in
-                guard let folder = summary.workspaceURL ?? lastByFolder[summary.conversationID] else { return nil }
-                return ImportableConversation(
-                    harness: .antigravityCLI,
-                    providerSessionID: summary.conversationID,
-                    title: Self.title(of: summary),
-                    workspaceURL: folder,
-                    updatedAt: summary.updatedAt ?? .distantPast,
-                    isOpenElsewhere: false,
-                    parentProviderSessionID: summary.parentConversationID)
-            }
-            .sorted { $0.updatedAt > $1.updatedAt }
+        return try continuable(summaries()).compactMap { summary -> ImportableConversation? in
+            guard let folder = Self.ownFolder(of: summary, lastContinuedIn: lastByFolder[summary.conversationID])
+                    ?? summary.workspaceURLs.first else { return nil }
+            return Self.importable(summary, in: folder)
+        }
+        .sorted { $0.updatedAt > $1.updatedAt }
     }
 
-    /// The conversations of one folder, newest first.
+    /// The conversations of one folder, newest first: those whose own folder it is, and those whose own
+    /// folder is not known that list it among theirs.
     func conversations(in folder: URL, limit: Int = 50) throws -> [ImportableConversation] {
         let target = Self.path(folder)
-        return Array(try conversations().filter { Self.path($0.workspaceURL) == target }.prefix(limit))
+        let lastByFolder = lastConversationFolders()
+        return Array(try continuable(summaries()).filter { summary in
+            if let own = Self.ownFolder(of: summary, lastContinuedIn: lastByFolder[summary.conversationID]) {
+                return Self.path(own) == target
+            }
+            return summary.workspaceURLs.contains { Self.path($0) == target }
+        }
+        .map { Self.importable($0, in: URL(filePath: target, directoryHint: .isDirectory)) }
+        .sorted { $0.updatedAt > $1.updatedAt }
+        .prefix(limit))
+    }
+
+    private func continuable(_ summaries: [Summary]) -> [Summary] {
+        summaries.filter { $0.appDataDirectory == "antigravity-cli" && $0.nestingDepth == 0 && $0.stepCount > 0 }
+    }
+
+    private static func importable(_ summary: Summary, in folder: URL) -> ImportableConversation {
+        ImportableConversation(
+            harness: .antigravityCLI,
+            providerSessionID: summary.conversationID,
+            title: title(of: summary),
+            workspaceURL: folder,
+            updatedAt: summary.updatedAt ?? .distantPast,
+            isOpenElsewhere: false,
+            parentProviderSessionID: summary.parentConversationID)
+    }
+
+    /// The folder a conversation ran in, when it is known: the one `agy` last continued it in
+    /// (`cache/last_conversations.json`), or the only one it lists. A conversation of a shared `agy acp`
+    /// process lists every folder the process served and is found in each of them.
+    static func ownFolder(of summary: Summary, lastContinuedIn: URL?) -> URL? {
+        lastContinuedIn ?? (summary.workspaceURLs.count == 1 ? summary.workspaceURLs.first : nil)
     }
 
     /// The title the CLI generated for a conversation, for the task's title.
@@ -127,7 +155,7 @@ struct AntigravityConversationStore: Sendable {
                 preview: text(2),
                 stepCount: Int(sqlite3_column_int64(statement, 3)),
                 updatedAt: date(text(4)),
-                workspaceURL: firstFolder(in: text(5)),
+                workspaceURLs: folders(in: text(5)),
                 parentConversationID: parent.isEmpty || parent == id ? nil : parent,
                 nestingDepth: Int(sqlite3_column_int64(statement, 7)),
                 appDataDirectory: text(8)))
@@ -157,15 +185,15 @@ struct AntigravityConversationStore: Sendable {
         return preview.isEmpty ? L10n.string("Antigravity conversation") : String(preview.prefix(120))
     }
 
-    /// `["file:///Users/…/project"]` → that folder.
-    static func firstFolder(in workspaceURIs: String) -> URL? {
+    /// `["file:///Users/…/project", "file:///tmp"]` → those folders, in order.
+    static func folders(in workspaceURIs: String) -> [URL] {
         guard let data = workspaceURIs.data(using: .utf8),
-              let values = try? JSONSerialization.jsonObject(with: data) as? [String] else { return nil }
-        for value in values {
-            guard let url = URL(string: value), url.isFileURL, PathRules.current.isAbsolute(url.path(percentEncoded: false)) else { continue }
+              let values = try? JSONSerialization.jsonObject(with: data) as? [String] else { return [] }
+        return values.compactMap { value in
+            guard let url = URL(string: value), url.isFileURL,
+                  PathRules.current.isAbsolute(url.path(percentEncoded: false)) else { return nil }
             return URL(filePath: url.path(percentEncoded: false), directoryHint: .isDirectory).standardizedFileURL
         }
-        return nil
     }
 
     /// `2026-10-16 05:41:41.331209+00:00`, as the index stores it.

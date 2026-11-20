@@ -27,16 +27,20 @@ final class AntigravityImportAndHistoryTests: XCTestCase {
     private static let e = "0e000000-0000-4000-8000-00000000000e"
     private static let f = "0f000000-0000-4000-8000-00000000000f"
     private static let g = "01000000-0000-4000-8000-000000000001"
+    private static let h = "02000000-0000-4000-8000-000000000002"
+    private static let i = "03000000-0000-4000-8000-000000000003"
 
     // MARK: - The index
 
     /// What the CLI can continue by ID is offered: its own conversations (not the desktop app's,
     /// which it copies before continuing), not subagents', with steps and a folder — from the row
-    /// or, for a row the CLI kept without one, from `last_conversations.json`.
+    /// or, for a row the CLI kept without one, from `last_conversations.json`. A row with several
+    /// folders (a shared `agy acp` process lists every folder it served, sorted) is found in each,
+    /// unless `last_conversations.json` names its own.
     func testTheIndexOffersWhatTheCLICanContinue() throws {
         let fixture = try makeStore()
         let listed = try fixture.store.conversations()
-        XCTAssertEqual(listed.map(\.providerSessionID), [Self.e, Self.a, Self.b])
+        XCTAssertEqual(listed.map(\.providerSessionID), [Self.e, Self.a, Self.h, Self.i, Self.b])
         let first = try XCTUnwrap(listed.first { $0.providerSessionID == Self.a })
         XCTAssertEqual(first.harness, .antigravityCLI)
         XCTAssertEqual(first.title, "Fixture conversation title")
@@ -50,8 +54,13 @@ final class AntigravityImportAndHistoryTests: XCTestCase {
         // A conversation the CLI started from another names it.
         XCTAssertEqual(listed.first { $0.providerSessionID == Self.e }?.parentProviderSessionID, Self.a)
 
-        XCTAssertEqual(try fixture.store.conversations(in: fixture.project).map(\.providerSessionID), [Self.e, Self.a])
-        XCTAssertEqual(try fixture.store.conversations(in: fixture.otherProject).map(\.providerSessionID), [Self.b])
+        XCTAssertEqual(listed.first { $0.providerSessionID == Self.h }?.workspaceURL, fixture.otherProject)
+        XCTAssertEqual(listed.first { $0.providerSessionID == Self.i }?.workspaceURL, fixture.project)
+
+        let inProject = try fixture.store.conversations(in: fixture.project)
+        XCTAssertEqual(inProject.map(\.providerSessionID), [Self.e, Self.a, Self.h, Self.i])
+        XCTAssertEqual(inProject.first { $0.providerSessionID == Self.h }?.workspaceURL, fixture.project)
+        XCTAssertEqual(try fixture.store.conversations(in: fixture.otherProject).map(\.providerSessionID), [Self.h, Self.b])
         XCTAssertEqual(fixture.store.title(conversationID: Self.a), "Fixture conversation title")
         XCTAssertNil(fixture.store.title(conversationID: Self.b))
     }
@@ -188,7 +197,7 @@ final class AntigravityImportAndHistoryTests: XCTestCase {
         let app = try makeModel(store: fixture.store)
         let listed = try await app.model.importableConversations(
             harness: .antigravityCLI, workspaceURL: fixture.project, connection: nil)
-        XCTAssertEqual(listed.conversations.map(\.providerSessionID), [Self.e, Self.a])
+        XCTAssertEqual(listed.conversations.map(\.providerSessionID), [Self.e, Self.a, Self.h, Self.i])
         let conversation = try XCTUnwrap(listed.conversations.first { $0.providerSessionID == Self.a })
         let imported = await app.model.importConversation(conversation, connection: nil)
         let task = try XCTUnwrap(imported)
@@ -271,7 +280,7 @@ final class AntigravityImportAndHistoryTests: XCTestCase {
         let fixture = try makeStore()
         let app = try makeModel(store: fixture.store)
         let listing = await app.model.otherAppConversations(claudeConnection: nil)
-        XCTAssertEqual(listing.antigravity.map(\.providerSessionID), [Self.e, Self.a, Self.b])
+        XCTAssertEqual(listing.antigravity.map(\.providerSessionID), [Self.e, Self.a, Self.h, Self.i, Self.b])
         XCTAssertNil(listing.antigravityError)
         XCTAssertTrue(listing.all.contains { $0.providerSessionID == Self.b })
         XCTAssertEqual(L10n.string("Conversations from the Claude and Codex apps, Claude Code and Codex run elsewhere, and Antigravity CLI. Their history stays where it is.",
@@ -368,6 +377,7 @@ final class AntigravityImportAndHistoryTests: XCTestCase {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         }
         let uri = #"["\#(project.absoluteString)"]"#
+        let both = #"["\#(otherProject.absoluteString)","\#(project.absoluteString)"]"#
         try writeIndex(cli.appending(path: "conversation_summaries.db"), rows: [
             // conversation_id, title, preview, step_count, last_modified_time, workspace_uris,
             // parent_conversation_id, nesting_depth, app_data_dir
@@ -377,9 +387,12 @@ final class AntigravityImportAndHistoryTests: XCTestCase {
             (Self.d, "Subagent", "Subagent preview", 3, "2026-10-16 05:42:00.000000+00:00", uri, Self.a, 1, "antigravity-cli"),
             (Self.e, "Fixture follow-up", "Follow-up preview", 4, "2026-10-16 06:00:00.000000+00:00", uri, Self.a, 0, "antigravity-cli"),
             (Self.f, "Empty", "", 0, "2026-10-16 06:10:00.000000+00:00", uri, "", 0, "antigravity-cli"),
-            (Self.g, "No folder", "No folder", 2, "2026-09-01 00:00:00.000000+00:00", "", "", 0, "antigravity-cli")
+            (Self.g, "No folder", "No folder", 2, "2026-09-01 00:00:00.000000+00:00", "", "", 0, "antigravity-cli"),
+            (Self.h, "Shared process", "Shared", 6, "2026-10-15 00:00:00.000000+00:00", both, "", 0, "antigravity-cli"),
+            (Self.i, "Continued here", "Continued", 7, "2026-10-14 00:00:00.000000+00:00", both, "", 0, "antigravity-cli")
         ])
-        try JSONSerialization.data(withJSONObject: [otherProject.path(percentEncoded: false): Self.b])
+        try JSONSerialization.data(withJSONObject: [otherProject.path(percentEncoded: false): Self.b,
+                                                    project.path(percentEncoded: false): Self.i])
             .write(to: cli.appending(path: "cache/last_conversations.json"))
         let logs = cli.appending(path: "brain/\(Self.a)/.system_generated/logs", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
