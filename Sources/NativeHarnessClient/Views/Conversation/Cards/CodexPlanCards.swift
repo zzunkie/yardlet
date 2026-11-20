@@ -144,11 +144,16 @@ struct CodexQuestionOptions: View {
 
     private var steps: [ConversationQuestionStep] { questions.map(ConversationQuestionStep.init) }
 
+    /// Waiting, on a request's panel; answered, as an answered request's questions read: under a thin rule.
     var body: some View {
         let steps = steps
         Group {
             if let answered = answers ?? sent.map({ $0.answers(for: steps) }) {
                 ConversationQuestionSummary(steps: steps, answers: answered)
+                    .padding(.leading, 12)
+                    .overlay(alignment: .leading) {
+                        Rectangle().fill(ParityTheme.strongSeparator).frame(width: 2)
+                    }
             } else {
                 ConversationQuestionStepsView(
                     steps: steps, input: $input, index: $index, isAnswerable: onAnswer != nil,
@@ -161,12 +166,10 @@ struct CodexQuestionOptions: View {
                         .help(ConversationQuestionStepper(steps: steps, index: index).blocker(input) ?? "")
                         .accessibilityLabel(L10n.string("Send"))
                 }
+                .modifier(ConversationRequestSurface(header: AnyView(
+                    ConversationQuestionBand(title: L10n.string("Questions"), steps: steps, index: $index))))
             }
         }
-        .padding(12)
-        .frame(maxWidth: 560, alignment: .leading)
-        .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 11))
-        .overlay { RoundedRectangle(cornerRadius: 11).stroke(ParityTheme.separator) }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
     }

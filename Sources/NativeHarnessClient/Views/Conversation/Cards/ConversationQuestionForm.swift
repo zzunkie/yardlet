@@ -1,12 +1,12 @@
 import SwiftUI
 
 /// A request's questions as the Claude app's Code question card and the Codex app's input panel ask
-/// them (`ConversationQuestionStepper`): one question at a time, its place among several ("2 of 3")
-/// with the previous and next question beside it, the provider's options, and the person's own
-/// answer under them where the provider takes one. Skip and Next lead to the last question, whose
-/// row ends with the caller's answer buttons, which send every answer at once. A question whose
-/// options have previews shows the picked option's preview beside the options
-/// (`ConversationQuestionPreview`).
+/// them (`ConversationQuestionStepper`): one question at a time, the provider's options, and the
+/// person's own answer under them where the provider takes one. Its place among several ("2 of 3"),
+/// between the previous and next question, is in the panel's header band (`ConversationQuestionBand`).
+/// Skip and Next lead to the last question, whose row ends with the caller's answer buttons, which
+/// send every answer at once. A question whose options have previews shows the picked option's
+/// preview beside the options (`ConversationQuestionPreview`).
 ///
 /// Keys, once the person has clicked into the form, are the Codex app's: 1–9 picks an option (the
 /// number after the options goes to the person's own answer), ← → move between questions, and
@@ -40,12 +40,10 @@ struct ConversationQuestionStepsView<Finish: View>: View {
         if let step = stepper.current {
             // One container for every question, so the keys keep reaching it as the questions change.
             VStack(alignment: .leading, spacing: 8) {
-                if stepper.isStepped || step.header?.isEmpty == false {
-                    stepHeader(step, stepper: stepper)
-                }
                 if let text = step.text, !text.isEmpty {
+                    // The card's headline, at the conversation's own size.
                     Text(text)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 14, weight: .semibold))
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -73,50 +71,6 @@ struct ConversationQuestionStepsView<Finish: View>: View {
             .accessibilityElement(children: .contain)
             .accessibilityLabel(accessibilityTitle(step, stepper: stepper))
         }
-    }
-
-    // MARK: - Header
-
-    /// The provider's label for the question on the left; its place among several, between the
-    /// previous and next question, on the right.
-    private func stepHeader(_ step: ConversationQuestionStep, stepper: ConversationQuestionStepper) -> some View {
-        HStack(alignment: .center, spacing: 8) {
-            if let header = step.header, !header.isEmpty {
-                Text(header)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 0)
-            if stepper.isStepped {
-                HStack(spacing: 2) {
-                    pagerButton(systemImage: "chevron.left", label: L10n.string("Previous question"),
-                                isEnabled: stepper.hasPrevious) { move(by: -1) }
-                    Text(L10n.format("Question %lld of %lld", Int64(stepper.index + 1), Int64(steps.count)))
-                        .font(.system(size: 12).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .fixedSize()
-                    pagerButton(systemImage: "chevron.right", label: L10n.string("Next question"),
-                                isEnabled: !stepper.isLast) { move(by: 1) }
-                }
-            }
-        }
-    }
-
-    private func pagerButton(systemImage: String, label: String, isEnabled: Bool,
-                             action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 10, weight: .semibold))
-                .frame(width: 20, height: 20)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(isEnabled ? Color.secondary : Color.secondary.opacity(0.35))
-        .disabled(!isEnabled)
-        .parityPointer()
-        .help(label)
-        .accessibilityLabel(label)
     }
 
     // MARK: - Options
@@ -350,6 +304,87 @@ struct ConversationQuestionStepsView<Finish: View>: View {
         let question = [step.header, step.text].compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: ": ")
         guard stepper.isStepped else { return question }
         return L10n.format("Question %lld of %lld", Int64(stepper.index + 1), Int64(steps.count)) + ", " + question
+    }
+}
+
+/// A waiting question panel's header band (`ConversationRequestSurface`): the accent symbol and who asks
+/// (`ConversationRequestBandTitle`), the provider's label for the question, and, among several, the
+/// question's place between the previous and next question.
+struct ConversationQuestionBand: View {
+    let title: String
+    let steps: [ConversationQuestionStep]
+    @Binding var index: Int
+
+    var body: some View {
+        let stepper = ConversationQuestionStepper(steps: steps, index: index)
+        HStack(alignment: .center, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                ConversationRequestBandTitle(symbol: "questionmark.bubble", title: title)
+                if let header = stepper.current?.header, !header.isEmpty {
+                    Text(verbatim: "·").foregroundStyle(.tertiary).accessibilityHidden(true)
+                    Text(header)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isHeader)
+            Spacer(minLength: 0)
+            if stepper.isStepped {
+                HStack(spacing: 2) {
+                    pagerButton(systemImage: "chevron.left", label: L10n.string("Previous question"),
+                                isEnabled: stepper.hasPrevious) { move(by: -1) }
+                    Text(L10n.format("Question %lld of %lld", Int64(stepper.index + 1), Int64(steps.count)))
+                        .font(.system(size: 12).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                    pagerButton(systemImage: "chevron.right", label: L10n.string("Next question"),
+                                isEnabled: !stepper.isLast) { move(by: 1) }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func move(by offset: Int) {
+        var stepper = ConversationQuestionStepper(steps: steps, index: index)
+        stepper.move(to: stepper.index + offset)
+        index = stepper.index
+    }
+
+    private func pagerButton(systemImage: String, label: String, isEnabled: Bool,
+                             action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 10, weight: .semibold))
+                .frame(width: 20, height: 20)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isEnabled ? Color.secondary : Color.secondary.opacity(0.35))
+        .disabled(!isEnabled)
+        .parityPointer()
+        .help(label)
+        .accessibilityLabel(label)
+    }
+}
+
+/// The start of a waiting request's header band: the accent symbol for what the request waits for, and its
+/// title.
+struct ConversationRequestBandTitle: View {
+    let symbol: String
+    let title: String
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(ParityTheme.accent)
+            .accessibilityHidden(true)
+        Text(title)
+            .font(.system(size: 13, weight: .semibold))
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 

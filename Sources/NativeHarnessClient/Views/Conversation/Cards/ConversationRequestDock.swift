@@ -66,12 +66,7 @@ struct ConversationRequestDock: View {
         ZStack(alignment: .top) {
             ForEach((1...max(count, 1)).reversed(), id: \.self) { depth in
                 if depth <= count {
-                    RoundedRectangle(cornerRadius: ParityTheme.panelCornerRadius)
-                        .fill(ParityTheme.elevated)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: ParityTheme.panelCornerRadius)
-                                .stroke(ParityTheme.strongSeparator)
-                        }
+                    ConversationRequestPanel()
                         .frame(height: 40)
                         .scaleEffect(x: 1 - 0.03 * CGFloat(depth), y: 1, anchor: .top)
                         .offset(y: -Self.edgeStep * CGFloat(depth))

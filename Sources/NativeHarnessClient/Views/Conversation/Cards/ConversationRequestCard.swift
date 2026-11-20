@@ -55,7 +55,12 @@ struct ConversationRequestCard: View {
         let responses = offeredResponses
         let usesDescriptionAsHeadline = request.descriptionHeadline != nil
         return VStack(alignment: .leading, spacing: 12) {
-            header
+            if let headline = request.descriptionHeadline {
+                Text(headline)
+                    .font(.system(size: 13, weight: .semibold))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             if !usesDescriptionAsHeadline, let detail = request.detail,
                request.preview?.repeats(detail) != true {
@@ -103,7 +108,7 @@ struct ConversationRequestCard: View {
                 }
             }
         }
-        .modifier(ConversationRequestSurface())
+        .modifier(ConversationRequestSurface(header: AnyView(header)))
     }
 
     /// An answered request as both apps leave one in the conversation: no panel of its own. A question form
@@ -187,29 +192,35 @@ struct ConversationRequestCard: View {
 
     // MARK: - Header
 
-    /// The request's title as both apps head their cards: a 13 pt semibold line, under the tool's name in the
-    /// secondary colour when the provider described the call.
+    /// The panel's header band, as the Claude app heads its question card: the accent symbol for what the request
+    /// waits for and the request's title, or the tool's name when the provider described the call (its description
+    /// then heads the body). A question form's band also carries the question's label and its place among several
+    /// (`ConversationQuestionBand`).
+    @ViewBuilder
     private var header: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            if let headline = request.descriptionHeadline {
-                Text(request.title)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                Text(headline)
-                    .font(.system(size: 13, weight: .semibold))
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
-                Text(request.title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+        if let steps = request.form?.questionSteps, !steps.isEmpty {
+            ConversationQuestionBand(title: request.title, steps: steps, index: $questionIndex)
+                .help(request.method ?? "")
+        } else {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                ConversationRequestBandTitle(symbol: waitingSymbol, title: request.title)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .help(request.method ?? "")
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isHeader)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .help(request.method ?? "")
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isHeader)
+    }
+
+    /// What the waiting request asks for: a plan's review, a form, or an approval (a question's band is
+    /// `ConversationQuestionBand`'s).
+    private var waitingSymbol: String {
+        switch request.form {
+        case .choices, .freeText: "questionmark.bubble"
+        case .planReview: "list.bullet.clipboard"
+        case .mcpForm: "square.and.pencil"
+        case nil: "hand.raised"
+        }
     }
 
     /// An answerable card is not an approval, so its resolved state reads as the answer it was.
@@ -432,18 +443,45 @@ struct ConversationRequestCard: View {
     }
 }
 
-/// The panel a waiting request sits on, as both apps draw theirs: a neutral surface with a hairline border, never
-/// tinted by the request's state or kind.
+/// The panel a waiting request sits on (`ConversationRequestPanel`), under its header band when it has one, as the
+/// Claude app heads its question card. No control on it draws a focus ring: the focused question shows its picked
+/// option by the selection fill, a field its caret, and an answer button the key that gives it
+/// (docs/DESIGN_SYSTEM.md, "Semantic colors").
 struct ConversationRequestSurface: ViewModifier {
+    var header: AnyView? = nil
+
     func body(content: Content) -> some View {
-        content
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(ParityTheme.elevated, in: RoundedRectangle(cornerRadius: ParityTheme.panelCornerRadius))
-            .overlay {
-                RoundedRectangle(cornerRadius: ParityTheme.panelCornerRadius)
-                    .stroke(ParityTheme.strongSeparator)
+        let shape = RoundedRectangle(cornerRadius: ParityTheme.panelCornerRadius)
+        VStack(alignment: .leading, spacing: 0) {
+            if let header {
+                header
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(ParityTheme.subtleFill)
+                    .overlay(alignment: .bottom) {
+                        Rectangle().fill(ParityTheme.separator).frame(height: 1)
+                    }
             }
+            content
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background { ConversationRequestPanel() }
+        .clipShape(shape)
+        .focusEffectDisabled()
+    }
+}
+
+/// A waiting request's panel, as the Codex app draws its request panel: a neutral surface a shade off the
+/// conversation's and the composer's, with a hairline border, never tinted by the request's state or kind. The
+/// elevated surface alone is the light canvas's white, where a waiting request read as more of the conversation.
+struct ConversationRequestPanel: View {
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: ParityTheme.panelCornerRadius)
+        shape.fill(ParityTheme.elevated)
+            .overlay { shape.fill(ParityTheme.requestPanelFill) }
+            .overlay { shape.strokeBorder(ParityTheme.strongSeparator) }
     }
 }
 
