@@ -3100,15 +3100,16 @@ final class AppModel {
     /// Makes a project of a task's own folder and moves the task into it, for a chat whose folder no
     /// project holds (`TaskProjectMove.Options.canMakeProject`). The project is named after the
     /// task's title (`TaskProjectMove.projectName(for:)`), and the person renames it as any project.
-    /// Adding the project is the sidebar's Add project for that folder, and the move is `moveTask`'s:
-    /// the task's folder stays its cwd, nothing on disk is moved or renamed, and nothing is written to
-    /// the provider. Other tasks in the folder that were not moved to Chats come along, as a project
+    /// The move is `moveTask`'s: the task's folder stays its cwd, nothing on disk is moved or renamed,
+    /// and nothing is written to the provider. The project is added, as the sidebar's Add project adds
+    /// one for a folder, only once the move is saved, so a move that fails leaves no project and
+    /// returns nil. Other tasks in the folder that were not moved to Chats come along, as a project
     /// lists the tasks in its folders.
     @discardableResult
     func makeProject(from session: SessionRecord) async -> Project? {
         guard let current = store.sessions.first(where: { $0.id == session.id }),
               projectMoveOptions(for: current, visibleProjects: projects.projects).canMakeProject else { return nil }
-        let project = projects.ensureProject(forRoot: current.workspaceURL, name: TaskProjectMove.projectName(for: current))
+        let project = Project(name: TaskProjectMove.projectName(for: current), primaryRoot: current.workspaceURL)
         // By its ID, as a move records it, so the task stays in the project whatever its folders become.
         let moved = TaskProjectMove.moved(current, to: project)
         do {
@@ -3116,8 +3117,9 @@ final class AppModel {
                                             additionalRoots: moved.additionalRoots)
         } catch {
             bootstrapError = error.localizedDescription
+            return nil
         }
-        return projects.project(id: project.id)
+        return projects.ensureProject(project)
     }
 
     /// Delete a task with an explicit provider boundary. An attached task whose provider keeps its

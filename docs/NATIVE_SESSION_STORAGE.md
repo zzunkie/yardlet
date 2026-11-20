@@ -718,9 +718,10 @@ listed, even before there is a project, outside a search. The project then opens
 selected (`ProjectEditSheet.focusesName`), so Return keeps the name and typing replaces it. Another Mac's window does
 not offer it. The storage contract is as follows.
 
-- **A chat made a project keeps its folder:** `AppModel.makeProject(from:)` adds a project for the task's folder, as
-  Add project does for a folder, named after the task's title as Chats lists it (`TaskProjectMove.projectName(for:)`:
-  the agent's own title or Yardlet's fallback, so no model turn starts), then moves the task into it by ID as below.
+- **A chat made a project keeps its folder:** `AppModel.makeProject(from:)` moves the task by ID, as below, into a
+  new project of the task's folder, named after the task's title as Chats lists it
+  (`TaskProjectMove.projectName(for:)`: the agent's own title or Yardlet's fallback, so no model turn starts). It adds
+  the project, as Add project does for a folder, only once the move is saved, so a move that fails leaves no project.
   The folder stays where it is under its name (`new-chat-4`); only the project's name is new. Other tasks in the
   folder that were not moved to Chats are listed in the project too, by the folder rule below. A task moved to Chats
   from its project's own folder goes back with a move to that project instead.

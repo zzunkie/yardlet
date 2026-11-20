@@ -226,6 +226,22 @@ final class TaskProjectMoveTests: XCTestCase {
         XCTAssertNil(refused)
     }
 
+    /// A chat whose move is not saved stays a chat, and no project is left behind: the project is added
+    /// only once the chat is in it, and nil keeps Edit project from opening.
+    func testAChatWhoseMoveIsNotSavedMakesNoProject() async throws {
+        let chat = try task("Finish the OpenAI Game 2026 web game", in: chatFolder)
+        let model = try makeModel(sessions: [chat], repository: UnsavableSessionRepository(sessions: [chat]),
+                                  projectRepository: InMemoryProjectRepository(
+                                      snapshot: ProjectSnapshot(projects: [], didImportFolderPreferences: true)))
+
+        let made = await model.makeProject(from: chat)
+        XCTAssertNil(made)
+        XCTAssertNotNil(model.bootstrapError, "The failed save is shown")
+        XCTAssertEqual(model.projects.projects, [])
+        XCTAssertNil(model.store.sessions.first { $0.id == chat.id }?.projectID)
+        XCTAssertEqual(model.projects.chats(sessions: model.store.sessions).map(\.id), [chat.id])
+    }
+
     /// A task in its project's own folder moves to Chats too, from the same menus: Yardlet's index
     /// records the person's choice (`isMovedToChats`), so the folder does not put it back. It keeps
     /// working in its folder without the project's other roots, and every list of tasks shows it
@@ -517,6 +533,15 @@ final class TaskProjectMoveTests: XCTestCase {
         -> SessionRecord {
         let moved = await model.moveTask(session, to: project)
         return try XCTUnwrap(moved, "\(session.title) to \(project?.name ?? "Chats")")
+    }
+
+    /// An index whose saves fail, as on a full disk.
+    private actor UnsavableSessionRepository: SessionRepository {
+        let sessions: [SessionRecord]
+        init(sessions: [SessionRecord]) { self.sessions = sessions }
+        func loadSessions() -> [SessionRecord] { sessions }
+        func upsert(_ session: SessionRecord) throws { throw CocoaError(.fileWriteOutOfSpace) }
+        func archive(id: UUID) throws { throw CocoaError(.fileWriteOutOfSpace) }
     }
 
     /// A harness that records the roots handed to it before a resume, and runs nothing.
