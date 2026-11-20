@@ -15,10 +15,15 @@ enum TaskProjectMove {
         /// project holds stays in Chats because the move records it (`SessionRecord.isMovedToChats`),
         /// and keeps working in its folder.
         var removableFrom: Project?
+        /// Whether the task can become a project of its own folder (`AppModel.makeProject(from:)`):
+        /// a task in no project, as a chat is, whose folder no listed project holds. A hidden project
+        /// of the folder, which Remove project leaves, is shown again with the task in it. A task moved
+        /// to Chats from its project's folder goes back with a move to that project instead.
+        var canMakeProject = false
 
         static let none = Options()
 
-        var isEmpty: Bool { destinations.isEmpty && removableFrom == nil }
+        var isEmpty: Bool { destinations.isEmpty && removableFrom == nil && !canMakeProject }
 
         /// Whether the task can go to `destination` (nil: Chats).
         func allows(_ destination: Project?) -> Bool {
@@ -29,12 +34,29 @@ enum TaskProjectMove {
 
     /// A move as one command, for the command palette, which lists commands rather than submenus.
     struct Command: Identifiable, Equatable, Sendable {
-        /// The project the task moves to; nil moves it to Chats.
-        let destination: Project?
+        enum Target: Equatable, Sendable {
+            case project(Project)
+            /// Out of the task's project, to Chats.
+            case chats
+            /// A project made of the task's own folder (`Options.canMakeProject`).
+            case newProject
+        }
+
+        let target: Target
         let title: String
 
+        /// The project the task moves to; nil for Chats and for a new project.
+        var destination: Project? {
+            if case let .project(project) = target { return project }
+            return nil
+        }
+
         var id: String {
-            destination.map { "move-to-project-\($0.id.uuidString)" } ?? "move-to-chats"
+            switch target {
+            case let .project(project): "move-to-project-\(project.id.uuidString)"
+            case .chats: "move-to-chats"
+            case .newProject: "move-to-new-project"
+            }
         }
     }
 
@@ -44,7 +66,9 @@ enum TaskProjectMove {
     static func options(for session: SessionRecord, visibleProjects: [Project], projects: [Project]) -> Options {
         let current = ProjectProjection.project(for: session, in: projects)
         let destinations = visibleProjects.filter { !$0.isHidden && $0.id != current?.id }
-        return Options(destinations: destinations, removableFrom: current)
+        // The listed projects only: a hidden one of the folder is shown again (`ProjectStore.ensureProject(forRoot:)`).
+        let canMakeProject = current == nil && !destinations.contains { $0.contains(root: session.workspaceURL) }
+        return Options(destinations: destinations, removableFrom: current, canMakeProject: canMakeProject)
     }
 
     /// The submenu's title, the Codex app's ("Move to project").
@@ -53,10 +77,25 @@ enum TaskProjectMove {
     /// The move out of the task's project to Chats, named for where it goes as "Move to project" is.
     static var chatsTitle: String { L10n.string("Move to Chats") }
 
-    /// The moves as commands: one per destination, then the move to Chats.
+    /// The item under "Move to project" that makes the task a project of its own folder.
+    static var newProjectTitle: String { L10n.string("New project") }
+
+    /// The same move as one command, named as the moves to a project are.
+    static var newProjectCommandTitle: String { L10n.string("Move to new project") }
+
+    /// The name a project made of a task's folder starts with: the task's title as Chats lists it,
+    /// which the agent gave the session or Yardlet made from its first request, so making the
+    /// project starts no model turn. The person renames it as any project. An untitled task's project
+    /// is named after its folder (`Project.normalizedName`).
+    static func projectName(for session: SessionRecord) -> String {
+        SessionTitleProjection.titleUnderProject(session, projectNames: [session.workspaceURL.lastPathComponent])
+    }
+
+    /// The moves as commands: one per destination, then a new project, then the move to Chats.
     static func commands(_ options: Options) -> [Command] {
-        options.destinations.map { Command(destination: $0, title: L10n.format("Move to project: %@", $0.name)) }
-            + (options.removableFrom == nil ? [] : [Command(destination: nil, title: chatsTitle)])
+        options.destinations.map { Command(target: .project($0), title: L10n.format("Move to project: %@", $0.name)) }
+            + (options.canMakeProject ? [Command(target: .newProject, title: newProjectCommandTitle)] : [])
+            + (options.removableFrom == nil ? [] : [Command(target: .chats, title: chatsTitle)])
     }
 
     /// The roots a task in `project` hands its harness besides its own folder: the project's roots,

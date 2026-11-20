@@ -346,6 +346,19 @@ final class ProjectStore {
         return project
     }
 
+    /// Adds `project`, a one-folder project made before it is added so a task can be moved into it by
+    /// its ID first (`AppModel.makeProject(from:)`). A project that holds its folder by then is
+    /// returned instead, shown again if it was hidden, as `ensureProject(forRoot:)` returns it.
+    @discardableResult
+    func ensureProject(_ project: Project) -> Project {
+        guard self.project(containingRoot: project.primaryRoot) == nil else {
+            return ensureProject(forRoot: project.primaryRoot)
+        }
+        projects.append(project)
+        schedulePersist()
+        return project
+    }
+
     func rename(_ id: UUID, to name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }

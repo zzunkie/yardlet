@@ -31,6 +31,8 @@ struct TaskObservationScope<Content: View>: View {
 
 private struct ProjectEditPresentation: Identifiable {
     let id: UUID
+    /// A project just made of a chat: its name opens selected (`ProjectEditSheet.focusesName`).
+    var focusesName = false
 }
 
 struct MainWindow: View {
@@ -54,6 +56,8 @@ struct MainWindow: View {
     @State private var taskSurfaceHostings = TaskSurfaceHostings()
     /// The task rows' hover card, drawn over the sidebar and the content beside it.
     @State private var sidebarHoverCard = SidebarHoverCardState()
+    /// A chat dragged in the sidebar that Projects can take, which lists Projects while it lasts.
+    @State private var sidebarChatDrag = SidebarChatDrag()
     /// The shown task's place in the sidebar while the list is scrolled away from its top. The window
     /// is drawn again only when the hold changes the order, not each time the list crosses its top.
     @State private var sidebarOrderHold = SidebarOrderHold()
@@ -85,6 +89,8 @@ struct MainWindow: View {
     @State private var sessionToRename: SessionRecord?
     @State private var sessionToDelete: SessionRecord?
     @State private var projectToEdit: UUID?
+    /// Whether the project being edited was just made of a chat, so its name opens selected.
+    @State private var isNamingNewProject = false
     @State private var projectToArchive: WorkspaceGroup?
     @State private var projectToRemove: WorkspaceGroup?
     @State private var renameTitle = ""
@@ -894,6 +900,7 @@ struct MainWindow: View {
             projectName: { projects.displayName(for: $0) },
             projectMoveOptions: projectMoveOptions(for:),
             onMoveToProject: moveTask,
+            onMakeProject: makeProject,
             onChooseAccount: { session in rememberShellFocus(); accountSwitchSession = session },
             canOpenOriginalConversation: { model.canOpenOriginalConversation(in: $0) },
             onOpenOriginalConversation: { session in Task { await model.openOriginalClaudeConversation(from: session) } },
@@ -1111,6 +1118,22 @@ struct MainWindow: View {
                   model.store.selectedSessionID == session.id else { return }
             sidebarDisclosure.expand(SidebarProjection.disclosureKey(
                 for: WorkspaceGroup(workspaceURL: project.primaryRoot, sessions: [], project: project)))
+        }
+    }
+
+    /// Makes a chat a project of its own folder and moves it there (`AppModel.makeProject(from:)`).
+    /// The shown chat stays in sight, as a move keeps it, and the project opens for editing with its
+    /// name selected: Return keeps the chat's title, typing replaces it.
+    private func makeProject(from session: SessionRecord) {
+        Task {
+            guard let project = await model.makeProject(from: session) else { return }
+            if model.store.selectedSessionID == session.id {
+                sidebarDisclosure.expand(SidebarProjection.disclosureKey(
+                    for: WorkspaceGroup(workspaceURL: project.primaryRoot, sessions: [], project: project)))
+            }
+            rememberShellFocus()
+            isNamingNewProject = true
+            projectToEdit = project.id
         }
     }
 
@@ -2072,6 +2095,7 @@ struct MainWindow: View {
                         onMarkRead: { session in Task { await model.store.markRead(id: session.id) } },
                         onMarkUnread: { session in Task { await model.store.markUnread(id: session.id) } },
                         onMoveToProject: moveTask,
+                        onMakeProject: makeProject,
                         onNest: { task, parent in Task { await model.nest(task, under: parent) } },
                         splitActions: SidebarSplitActions(
                             togglePinned: { model.splits.togglePinned($0.id) },
@@ -2113,6 +2137,7 @@ struct MainWindow: View {
                     .environment(model.pullRequests)
                     .environment(model.accountAssignments)
                     .environment(\.sidebarHoverCard, sidebarHoverCard)
+                    .environment(\.sidebarChatDrag, sidebarChatDrag)
                     .onChange(of: model.splits.selection, initial: true) { holdSidebarOrder() }
                     }
                     }
@@ -2355,6 +2380,7 @@ struct MainWindow: View {
             projectName: { projects.displayName(for: $0) },
             projectMoveOptions: projectMoveOptions(for:),
             onMoveToProject: moveTask,
+            onMakeProject: makeProject,
             onChooseAccount: { session in rememberShellFocus(); accountSwitchSession = session },
             canOpenOriginalConversation: { model.canOpenOriginalConversation(in: $0) },
             onOpenOriginalConversation: { session in Task { await model.openOriginalClaudeConversation(from: session) } },
@@ -2730,10 +2756,11 @@ struct MainWindow: View {
         shellPresentedContent(sidebarLists)
         .environment(\.renamingTaskIDs, model.renamingFromConversationIDs)
         .sheet(item: Binding(
-            get: { projectToEdit.map { ProjectEditPresentation(id: $0) } },
-            set: { if $0 == nil { projectToEdit = nil } }
+            get: { projectToEdit.map { ProjectEditPresentation(id: $0, focusesName: isNamingNewProject) } },
+            set: { if $0 == nil { projectToEdit = nil; isNamingNewProject = false } }
         ), onDismiss: finishShellModal) { presentation in
-            ProjectEditSheet(projects: projects, projectID: presentation.id, instructions: model.yardletInstructions)
+            ProjectEditSheet(projects: projects, projectID: presentation.id, instructions: model.yardletInstructions,
+                             focusesName: presentation.focusesName)
         }
         .sheet(item: $harnessSettingsSession, onDismiss: restoreTaskModalFocus) { session in
             let actions = HarnessSettingsActions(model: model, session: session,
@@ -3230,13 +3257,24 @@ struct MainWindow: View {
             )
             // The palette lists commands, not submenus: one per project the task can move to.
             for command in TaskProjectMove.commands(projectMoveOptions(for: session)) {
+                let systemName = switch command.target {
+                case .project: "folder"
+                case .newProject: "folder.badge.plus"
+                case .chats: "bubble.left"
+                }
                 items.append(
                     CommandPaletteItem(
                         id: "\(command.id)-\(session.id)",
                         title: command.title,
                         subtitle: session.title,
-                        systemName: command.destination == nil ? "bubble.left" : "folder",
-                        action: { moveTask(session, to: command.destination) }
+                        systemName: systemName,
+                        action: {
+                            if command.target == .newProject {
+                                makeProject(from: session)
+                            } else {
+                                moveTask(session, to: command.destination)
+                            }
+                        }
                     )
                 )
             }

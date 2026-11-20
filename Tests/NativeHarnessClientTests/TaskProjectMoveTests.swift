@@ -173,6 +173,89 @@ final class TaskProjectMoveTests: XCTestCase {
         XCTAssertEqual(model.projects.projects.count, projectCount)
     }
 
+    /// A chat whose folder no project holds becomes a project of that folder ("Move to project" ›
+    /// "New project"): named after the chat as Chats lists it, holding only the chat's folder, with
+    /// the chat moved into it by ID as a move to a project records it. Nothing else about the chat
+    /// changes. A task moved to Chats from its project's own folder goes back with a move instead, and
+    /// a chat whose project was removed makes that project its own again.
+    func testAChatBecomesAProjectOfItsOwnFolder() async throws {
+        let alphaProject = Project(name: "Alpha", primaryRoot: alpha)
+        let chat = try task("Finish the OpenAI Game 2026 web game", in: chatFolder)
+        let post = try task("Draft the launch post", in: alpha, projectID: alphaProject.id)
+        let model = try makeModel(sessions: [chat, post], projects: [alphaProject])
+        model.composerDrafts.tasks.draft(for: chat.id).text = "Next step"
+
+        let options = model.projectMoveOptions(for: chat, visibleProjects: visibleProjects(model))
+        XCTAssertTrue(options.canMakeProject)
+        XCTAssertEqual(TaskProjectMove.commands(options).map { [$0.id, $0.title] }, [
+            ["move-to-project-\(alphaProject.id.uuidString)", L10n.format("Move to project: %@", "Alpha")],
+            ["move-to-new-project", L10n.string("Move to new project")]
+        ])
+        XCTAssertFalse(model.projectMoveOptions(for: post, visibleProjects: visibleProjects(model)).canMakeProject,
+                       "A task in a project has its project")
+
+        let made = await model.makeProject(from: chat)
+        let project = try XCTUnwrap(made)
+        XCTAssertEqual(project.name, "Finish the OpenAI Game 2026 web game")
+        XCTAssertEqual(project.roots, [Project.canonical(chatFolder)])
+        XCTAssertEqual(model.projects.projects.map(\.id), [alphaProject.id, project.id])
+        let moved = try XCTUnwrap(model.store.sessions.first { $0.id == chat.id })
+        XCTAssertEqual(moved.projectID, project.id, "Moved by ID, as a move to a project records it")
+        XCTAssertEqual(moved.workspaceURL, chatFolder.standardizedFileURL, "The chat's folder stays its cwd")
+        XCTAssertEqual(moved.additionalRoots, [], "Its project has no other folder")
+        XCTAssertEqual(unchangedFields(moved), unchangedFields(chat))
+        XCTAssertEqual(model.composerDrafts.tasks.draft(for: chat.id).text, "Next step")
+        XCTAssertTrue(model.projects.chats(sessions: model.store.sessions).isEmpty)
+        XCTAssertEqual(model.projects.visibleGroups(sessions: model.store.sessions)
+            .first { $0.project?.id == project.id }?.sessions.map(\.id), [chat.id])
+
+        // In its project, it can go back to Chats, and makes no second project.
+        let inProject = model.projectMoveOptions(for: moved, visibleProjects: visibleProjects(model))
+        XCTAssertFalse(inProject.canMakeProject)
+        XCTAssertEqual(inProject.removableFrom?.id, project.id)
+        let again = await model.makeProject(from: moved)
+        XCTAssertNil(again)
+        model.projects.ensureProjects(forTasks: model.store.sessions)
+        XCTAssertEqual(model.projects.projects.count, 2)
+
+        // Moved to Chats from its project's folder, a task goes back to that project with a move.
+        let movedOut = try await move(post, to: nil, in: model)
+        let fromChats = model.projectMoveOptions(for: movedOut, visibleProjects: visibleProjects(model))
+        XCTAssertFalse(fromChats.canMakeProject)
+        XCTAssertTrue(fromChats.allows(alphaProject))
+        let refused = await model.makeProject(from: movedOut)
+        XCTAssertNil(refused)
+
+        // Moved to Chats with its project removed, which only hides the project, the chat offers New project
+        // again, and its folder's project comes back with it.
+        let inChats = try await move(moved, to: nil, in: model)
+        model.projects.hide(project.id)
+        XCTAssertTrue(model.projectMoveOptions(for: inChats, visibleProjects: visibleProjects(model)).canMakeProject,
+                      "A hidden project of its folder does not keep it from New project")
+        let remade = await model.makeProject(from: inChats)
+        let shownAgain = try XCTUnwrap(remade)
+        XCTAssertEqual(shownAgain.id, project.id)
+        XCTAssertFalse(shownAgain.isHidden)
+        XCTAssertEqual(model.store.sessions.first { $0.id == chat.id }?.projectID, project.id)
+        XCTAssertEqual(model.projects.projects.count, 2, "No second project of the folder")
+    }
+
+    /// A chat whose move is not saved stays a chat, and no project is left behind: the project is added
+    /// only once the chat is in it, and nil keeps Edit project from opening.
+    func testAChatWhoseMoveIsNotSavedMakesNoProject() async throws {
+        let chat = try task("Finish the OpenAI Game 2026 web game", in: chatFolder)
+        let model = try makeModel(sessions: [chat], repository: UnsavableSessionRepository(sessions: [chat]),
+                                  projectRepository: InMemoryProjectRepository(
+                                      snapshot: ProjectSnapshot(projects: [], didImportFolderPreferences: true)))
+
+        let made = await model.makeProject(from: chat)
+        XCTAssertNil(made)
+        XCTAssertNotNil(model.bootstrapError, "The failed save is shown")
+        XCTAssertEqual(model.projects.projects, [])
+        XCTAssertNil(model.store.sessions.first { $0.id == chat.id }?.projectID)
+        XCTAssertEqual(model.projects.chats(sessions: model.store.sessions).map(\.id), [chat.id])
+    }
+
     /// A task in its project's own folder moves to Chats too, from the same menus: Yardlet's index
     /// records the person's choice (`isMovedToChats`), so the folder does not put it back. It keeps
     /// working in its folder without the project's other roots, and every list of tasks shows it
@@ -296,7 +379,7 @@ final class TaskProjectMoveTests: XCTestCase {
         let options = TaskProjectMove.options(for: chat, visibleProjects: order, projects: projects.projects)
         XCTAssertEqual(options.destinations.map(\.name), ["Pinned", "Newer", "Older"])
         XCTAssertEqual(TaskProjectMove.commands(options).map(\.id),
-                       [pinned, newer, older].map { "move-to-project-\($0.id.uuidString)" })
+                       [pinned, newer, older].map { "move-to-project-\($0.id.uuidString)" } + ["move-to-new-project"])
     }
 
     /// A worktree stands in for the root it was checked out from, as it does for a task started in
@@ -452,6 +535,9 @@ final class TaskProjectMoveTests: XCTestCase {
         XCTAssertEqual(L10n.string("Move to Chats", languageCode: "en"), "Move to Chats")
         XCTAssertEqual(L10n.string("Move to Chats", languageCode: "ko"), "채팅으로 이동")
         XCTAssertEqual(L10n.string("Move to project: %@", languageCode: "ko"), "프로젝트로 이동: %@")
+        XCTAssertEqual(L10n.string("New project", languageCode: "ko"), "새 프로젝트")
+        XCTAssertEqual(L10n.string("Move to new project", languageCode: "en"), "Move to new project")
+        XCTAssertEqual(L10n.string("Move to new project", languageCode: "ko"), "새 프로젝트로 이동")
     }
 
     // MARK: - Helpers
@@ -461,6 +547,15 @@ final class TaskProjectMoveTests: XCTestCase {
         -> SessionRecord {
         let moved = await model.moveTask(session, to: project)
         return try XCTUnwrap(moved, "\(session.title) to \(project?.name ?? "Chats")")
+    }
+
+    /// An index whose saves fail, as on a full disk.
+    private actor UnsavableSessionRepository: SessionRepository {
+        let sessions: [SessionRecord]
+        init(sessions: [SessionRecord]) { self.sessions = sessions }
+        func loadSessions() -> [SessionRecord] { sessions }
+        func upsert(_ session: SessionRecord) throws { throw CocoaError(.fileWriteOutOfSpace) }
+        func archive(id: UUID) throws { throw CocoaError(.fileWriteOutOfSpace) }
     }
 
     /// A harness that records the roots handed to it before a resume, and runs nothing.
