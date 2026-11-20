@@ -233,6 +233,112 @@ final class TaskProjectMoveRenderingTests: XCTestCase {
                              "The project's other task stays in it")
     }
 
+    /// A chat's row menu ends "Move to project" with "New project", which makes the chat a project of its
+    /// own folder. Drawn into `.build/move-project-qa`, light and dark: the row's menu beside the sidebar
+    /// with "Move to project" open (`new-project-menu-*.png`), and that submenu's items in English and
+    /// Korean (`new-project-menu-en-*.png`, `new-project-menu-ko-*.png`).
+    func testAChatsMenuMakesItAProjectOfItsOwnFolder() async throws {
+        let home = URL(filePath: "/tmp/move-project-qa/home", directoryHint: .isDirectory)
+        let website = URL(filePath: "/tmp/move-project-qa/website", directoryHint: .isDirectory)
+        let projects = ProjectStore(chatWorkspaceHome: home)
+        _ = projects.ensureProject(forRoot: website, name: "Website")
+        let now = Date()
+        func task(_ title: String, in folder: URL, minutesAgo: Double) -> SessionRecord {
+            SessionRecord(harness: .claudeCode, workspaceURL: folder, runtimeExecutableURL: URL(filePath: "/tmp/agent"),
+                          title: title, titleOrigin: .provider, status: .ready,
+                          updatedAt: now.addingTimeInterval(-minutesAgo * 60))
+        }
+        let trip = task("Plan the weekend trip",
+                        in: home.appending(path: "Documents/Yardlet/2026-11-20/new-chat", directoryHint: .isDirectory),
+                        minutesAgo: 3)
+        let hero = task("Redesign the hero section", in: website, minutesAgo: 40)
+        let sessions = [trip, hero]
+        let disclosure = SidebarDisclosureStore(
+            defaults: try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("new-project-menu-qa"))))
+        var made: [String] = []
+        func view(_ scheme: ColorScheme) -> some View {
+            let groups = projects.visibleGroups(sessions: sessions)
+            let layout = SidebarProjection.layout(visibleGroups: groups, allGroups: groups,
+                                                  chats: projects.chats(sessions: sessions), splits: [],
+                                                  isFiltering: false, disclosure: disclosure.disclosure,
+                                                  selection: .session(trip.id))
+            return TaskSidebar(layout: layout, allGroups: groups, isRestoring: false, selection: .session(trip.id),
+                searchText: .constant(""), onNewTask: {}, onActivate: { _ in }, onNewTaskInProject: { _ in },
+                onAddProject: {}, projects: projects, onEditProject: { _ in },
+                onArchiveProjectChats: { _ in }, onRemoveProject: { _ in }, onTogglePinned: { _ in },
+                onArchive: { _ in }, onDelete: { _ in }, onRename: { _ in }, onMarkRead: { _ in },
+                onMakeProject: { made.append($0.title) }, disclosure: disclosure)
+                .tint(Color.primary)
+                .environment(\.colorScheme, scheme)
+                .frame(width: ParityTheme.sidebarWidth, height: 300, alignment: .top)
+                .background(ParityTheme.sidebar)
+        }
+        let size = NSSize(width: ParityTheme.sidebarWidth, height: 300)
+        let directory = try WindowlessRender.directory("move-project-qa")
+
+        // The row's menu, built as a right click builds it, without opening it.
+        let host = WindowlessRender.Host(view(.light), size: size, appearance: .light)
+        defer { host.close() }
+        host.settle()
+        let row = try rowFrame(trip.title, in: host)
+        let click = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .rightMouseDown, location: NSPoint(x: row.midX, y: size.height - row.midY),
+            modifierFlags: [], timestamp: 0, windowNumber: host.window.windowNumber, context: nil,
+            eventNumber: 0, clickCount: 1, pressure: 1))
+        var target = host.hosting.hitTest(click.locationInWindow)
+        var menu: NSMenu?
+        while let view = target, menu == nil { menu = view.menu(for: click); target = view.superview }
+        let items = try XCTUnwrap(menu).items
+        let toProject = try XCTUnwrap(items.firstIndex { $0.title == L10n.string("Move to project") })
+        let submenu = try XCTUnwrap(items[toProject].submenu)
+        XCTAssertEqual(submenu.items.map { $0.isSeparatorItem ? "—" : $0.title },
+                       ["Website", "—", L10n.string("New project")])
+        XCTAssertFalse(items.contains { $0.title == L10n.string("Move to Chats") }, "A chat is in no project to leave")
+        let newProject = submenu.items.count - 1
+
+        let lines = MenuLine.lines(items), submenuLines = MenuLine.lines(submenu.items)
+        let menuTop = row.midY - 4
+        let submenuTop = menuTop + lines.prefix(toProject).reduce(0) { $0 + $1.height }
+        let menuSize = NSSize(width: ParityTheme.sidebarWidth + 400, height: 320)
+        try WindowlessRender.hostedInBothAppearances("new-project-menu", in: directory, size: menuSize) { appearance in
+            HStack(alignment: .top, spacing: 0) {
+                view(appearance.colorScheme)
+                MenuPanel(lines: lines, width: 230, highlighted: toProject)
+                    .padding(.top, menuTop)
+                    .padding(.leading, -40)
+                MenuPanel(lines: submenuLines, width: 170, highlighted: newProject)
+                    .padding(.top, submenuTop)
+                    .padding(.leading, -4)
+                Spacer(minLength: 0)
+            }
+            .frame(width: menuSize.width, height: menuSize.height, alignment: .topLeading)
+            .background(appearance == .dark ? Color(white: 0.1) : Color(white: 0.85))
+            .environment(\.colorScheme, appearance.colorScheme)
+        }
+        // The submenu's items in each language; a project's name is its own.
+        for language in ["en", "ko"] {
+            let translated = submenu.items.map { item in
+                let copy = item.copy() as! NSMenuItem
+                if item.title == L10n.string("New project") {
+                    copy.title = L10n.string("New project", languageCode: language)
+                }
+                return copy
+            }
+            let panelSize = NSSize(width: 190, height: MenuPanel.height(MenuLine.lines(translated)) + 20)
+            try WindowlessRender.hostedInBothAppearances("new-project-menu-\(language)", in: directory,
+                                                         size: panelSize) { appearance in
+                MenuPanel(lines: MenuLine.lines(translated), width: 170, highlighted: newProject)
+                    .frame(width: panelSize.width, height: panelSize.height)
+                    .background(appearance == .dark ? Color(white: 0.1) : Color(white: 0.85))
+                    .environment(\.colorScheme, appearance.colorScheme)
+            }
+        }
+
+        // "New project" makes the chat a project of its own folder.
+        submenu.performActionForItem(at: newProject)
+        try await waitUntil { made == [trip.title] }
+    }
+
     /// A project just made of a chat opens for editing with the name it took from the chat in its
     /// field, all of it selected, so Return keeps it and typing replaces it. Drawn into
     /// `.build/move-project-qa` as `new-project-name-*.png`, light and dark.
