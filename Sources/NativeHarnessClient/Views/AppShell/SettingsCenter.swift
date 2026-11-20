@@ -121,6 +121,8 @@ struct SettingsCenterView: View {
     @AppStorage(LidClosedWorkPreference.key) private var keepsWorkingWithLidClosed = false
     /// Not `@AppStorage`: System must remove the app's own `AppleLanguages`, not store a value.
     @State private var language = AppLanguagePreference.stored()
+    /// Quits and opens Yardlet again, for a language chosen since it opened; nil without an app (tests).
+    @Environment(\.yardletRelaunch) private var relaunch
     /// Sparkle in a public build: General's automatic update check. Nil in a development build.
     @Environment(\.yardletSparkle) private var sparkle
 
@@ -795,17 +797,28 @@ struct SettingsCenterView: View {
 
     private func languageRow(_ setting: YardletSetting) -> some View {
         SettingsRow(setting: setting) {
-            Picker(setting.title, selection: Binding(
-                get: { language },
-                set: { language = $0; AppLanguagePreference.store($0) })) {
-                ForEach(AppLanguagePreference.allCases) { preference in
-                    Text(preference.title).tag(preference)
+            HStack(spacing: 8) {
+                // As System Settings offers for an app whose language it changed: the language applies as
+                // Yardlet opens, so the row offers the relaunch rather than leaving the person to find Quit.
+                if let relaunch, language.changesShownLanguage() {
+                    Button(L10n.string("Relaunch")) {
+                        dismiss()
+                        relaunch()
+                    }
+                    .controlSize(.small)
                 }
+                Picker(setting.title, selection: Binding(
+                    get: { language },
+                    set: { language = $0; AppLanguagePreference.store($0) })) {
+                    ForEach(AppLanguagePreference.allCases) { preference in
+                        Text(preference.title).tag(preference)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .fixedSize()
+                .controlSize(.small)
             }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .fixedSize()
-            .controlSize(.small)
         }
     }
 

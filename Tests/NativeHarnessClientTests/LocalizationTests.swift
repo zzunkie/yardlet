@@ -364,6 +364,11 @@ final class LocalizationTests: XCTestCase {
         // A region-qualified choice made in System Settings reads as its language.
         defaults.set(["ko-KR"], forKey: AppLanguagePreference.key)
         XCTAssertEqual(AppLanguagePreference.stored(in: defaults, domain: suite), .korean)
+
+        // Settings offers Relaunch for a language other than the one the bundle chose as Yardlet opened.
+        let shown = try XCTUnwrap(L10n.shownLocalization.flatMap(AppLanguagePreference.init(rawValue:)))
+        XCTAssertFalse(shown.changesShownLanguage(in: defaults))
+        XCTAssertTrue((shown == .english ? AppLanguagePreference.korean : .english).changesShownLanguage(in: defaults))
     }
 
     private func catalog(languageCode: String) throws -> [String: String] {
