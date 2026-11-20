@@ -3,6 +3,7 @@ import SwiftUI
 /// The composer's model menu for every harness, in the task composer and the new-task composer
 /// alike. Opening it never submits a draft; a menu without a list loads one first.
 struct ComposerModelControl: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let menu: ComposerModelMenu
     let onPrepare: () async -> Void
     let onSetOption: (String, String) -> Void
@@ -46,7 +47,7 @@ struct ComposerModelControl: View {
                     ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(16)
                 } else {
                     VStack(spacing: 8) {
-                        Text(L10n.string("Models unavailable")).font(.caption).foregroundStyle(.secondary)
+                        Text(L10n.string("Models unavailable")).font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary)
                         Button(L10n.string("Retry")) { Task { await load() } }.parityPointer()
                     }
                     .frame(maxWidth: .infinity).padding(12)

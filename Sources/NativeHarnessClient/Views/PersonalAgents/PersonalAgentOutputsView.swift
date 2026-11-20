@@ -18,6 +18,7 @@ struct PersonalAgentOutputFailure: Equatable {
 /// three more at a time, each with its kind, name and when it was made. A failure stays with its file;
 /// earlier pages and failed reads can be requested below the list.
 struct PersonalAgentOutputsList: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let outputs: PersonalAgentOutputs
     let isOpening: Bool
     let actions: PersonalAgentOutputActions
@@ -38,7 +39,7 @@ struct PersonalAgentOutputsList: View {
                     SessionRailRow(systemName: Self.symbol(output), title: output.title) {
                         if let date = output.producedAt {
                             Text(date.formatted(.relative(presentation: .named, unitsStyle: .abbreviated)))
-                                .font(.caption).foregroundStyle(.tertiary).lineLimit(1)
+                                .font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.tertiary).lineLimit(1)
                         }
                     }
                     .contentShape(Rectangle())
@@ -49,10 +50,10 @@ struct PersonalAgentOutputsList: View {
                 .accessibilityValue(Self.origin(output))
                 if let openFailure, openFailure.output.id == output.id {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(openFailure.failure.message).font(.caption).foregroundStyle(.secondary)
+                        Text(openFailure.failure.message).font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                         Button(L10n.string("Try again")) { actions.open(output) }
-                            .buttonStyle(.borderless).font(.caption).parityPointer().disabled(isOpening)
+                            .buttonStyle(.borderless).font(.yardlet(.caption, scale: interfaceScale)).parityPointer().disabled(isOpening)
                     }
                     .padding(.bottom, 4)
                     .accessibilityElement(children: .contain)
@@ -60,7 +61,7 @@ struct PersonalAgentOutputsList: View {
             }
             if outputs.items.count > count {
                 Button(L10n.string("Show more")) { shown = count + Self.step }
-                    .buttonStyle(.plain).foregroundStyle(.secondary).font(.caption).parityPointer()
+                    .buttonStyle(.plain).foregroundStyle(.secondary).font(.yardlet(.caption, scale: interfaceScale)).parityPointer()
                     .padding(.top, 2)
             }
             status.padding(.top, outputs.items.isEmpty ? 0 : 4)
@@ -89,7 +90,7 @@ struct PersonalAgentOutputsList: View {
                 }
                 if outputs.hasEarlier {
                     Button(L10n.string("Look further back"), action: actions.readEarlier)
-                        .buttonStyle(.plain).foregroundStyle(.secondary).font(.caption).parityPointer()
+                        .buttonStyle(.plain).foregroundStyle(.secondary).font(.yardlet(.caption, scale: interfaceScale)).parityPointer()
                 }
             }
         }

@@ -5,6 +5,7 @@ import SwiftUI
 /// resume, answer or change the task. The record arrives a page at a time; what is not read yet, or
 /// could not be, says so instead of passing for the whole record.
 struct PersonalAgentActivityView: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let agent: PersonalAgent
     @Bindable var reading: PersonalAgentActivityReading
     var showsDetails = false
@@ -48,7 +49,7 @@ struct PersonalAgentActivityView: View {
             Text(reading.activity.title).font(.system(size: 14 * scale, weight: .semibold))
                 .lineLimit(1).truncationMode(.tail)
             let status = PersonalAgentDetailsPanel.statusText(reading.activity)
-            if !status.isEmpty { Text(status).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+            if !status.isEmpty { Text(status).font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary).lineLimit(1) }
             Spacer(minLength: 8)
             Button(action: reload) { Image(systemName: "arrow.clockwise").frame(width: 26, height: 26) }
                 .buttonStyle(.borderless).parityPointer().disabled(history.phase == .loading)
@@ -85,7 +86,7 @@ struct PersonalAgentActivityView: View {
             Spacer()
             Button(L10n.string("Try again"), action: retry).buttonStyle(.borderless).parityPointer()
         }
-        .font(.caption).foregroundStyle(.secondary)
+        .font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary)
         .frame(maxWidth: ParityTheme.contentWidth)
         .padding(.horizontal, ParityTheme.conversationInset).padding(.bottom, 8)
         .frame(maxWidth: .infinity)
@@ -119,7 +120,7 @@ struct PersonalAgentActivityView: View {
 
     private func state(_ text: String, systemName: String, retry: (() -> Void)?) -> some View {
         VStack(spacing: 12) {
-            Image(systemName: systemName).font(.system(size: 22)).foregroundStyle(.tertiary)
+            Image(systemName: systemName).font(.system(size: 22 * interfaceScale)).foregroundStyle(.tertiary)
             Text(text).foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 360)
             HStack(spacing: 12) {
                 if let retry { Button(L10n.string("Try again"), action: retry) }

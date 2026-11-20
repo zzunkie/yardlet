@@ -7,6 +7,7 @@ import SwiftUI
 /// while find's current match is in it, or when the person asks for its source, the block is the code block it was.
 /// On hover: "Copy code", "Show source" and "Expand diagram", which opens it in the image viewer.
 struct TranscriptMermaidBlock: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let text: String
     let findKey: ConversationFindSegmentKey
     let copyPayload: () -> String?
@@ -120,7 +121,7 @@ struct TranscriptMermaidBlock: View {
         }
         .buttonStyle(.borderless)
         .parityPointer()
-        .font(.caption)
+        .font(.yardlet(.caption, scale: interfaceScale))
         .foregroundStyle(.secondary)
         .help(L10n.string("Show diagram"))
     }

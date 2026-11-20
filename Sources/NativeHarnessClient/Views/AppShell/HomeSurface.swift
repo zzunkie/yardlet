@@ -385,6 +385,7 @@ struct NewTaskHome: View {
 /// while all is well. It reads the accounts' limits in its own body, so a new reading redraws this line
 /// alone.
 struct NewTaskHomeNoticeLine: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let accounts: () -> [NewTaskHomeNotice]
     /// The usage band is not shown, so this line names the accounts' limits.
     let showsUsage: Bool
@@ -397,10 +398,10 @@ struct NewTaskHomeNoticeLine: View {
         if !notices.isEmpty {
             HStack(spacing: 7) {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 10.5, weight: .medium))
+                    .font(.system(size: 10.5 * interfaceScale, weight: .medium))
                     .foregroundStyle(.orange)
                 Text(notices.map(\.text).joined(separator: " · "))
-                    .font(.system(size: 12))
+                    .font(.system(size: 12 * interfaceScale))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -626,11 +627,12 @@ private struct NewTaskAutomaticAccountLine: View {
 
 /// The automatic account's explanation, drawn identically for local and host-projected choices.
 struct NewTaskAccountExplanation: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let line: String
 
     var body: some View {
         Text(line)
-            .font(.caption).foregroundStyle(.secondary)
+            .font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary)
             .lineLimit(1).truncationMode(.middle)
             .frame(maxWidth: .infinity, alignment: .leading)
             .help(line)
@@ -796,7 +798,7 @@ private struct NewTaskComposer: View {
                         .parityPointer()
                     }
                 }
-                .font(.caption)
+                .font(.yardlet(.caption, scale: interfaceScale))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 16).padding(.bottom, 10)
             }
@@ -1040,7 +1042,7 @@ private struct NewTaskComposer: View {
                 addMenuOpenedFromKeyboard = ParityInteraction.currentEventIsKeyboard
                 addMenuPage = .additions
             } label: {
-                Image(systemName: "plus").font(.system(size: 12, weight: .medium))
+                Image(systemName: "plus").font(.system(size: 12 * interfaceScale, weight: .medium))
                     .foregroundStyle(.secondary).frame(width: 28, height: 28)
             }
             .buttonStyle(.borderless).parityPointer()
@@ -1145,7 +1147,7 @@ private struct NewTaskComposer: View {
                 Button(L10n.string(action), action: perform).parityPointer()
             }
         }
-        .font(.caption)
+        .font(.yardlet(.caption, scale: interfaceScale))
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16).padding(.bottom, 12)
     }

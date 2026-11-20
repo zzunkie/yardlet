@@ -106,7 +106,7 @@ struct NewTaskHomeReplyHeader: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "arrowshape.turn.up.left")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 11 * interfaceScale, weight: .semibold))
                 .foregroundStyle(ParityTheme.accent)
                 .accessibilityHidden(true)
             HarnessIdentityIcon(harness: session.harness, size: 14 * interfaceScale)

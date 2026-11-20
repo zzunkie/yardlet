@@ -2,12 +2,13 @@ import SwiftUI
 
 /// A provider notice the App Server sent during the turn, as one quiet line.
 struct CodexNoticeRow: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let notice: CodexNoticeItem
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Image(systemName: symbolName)
-                .font(.system(size: 10.5, weight: .medium))
+                .font(.system(size: 10.5 * interfaceScale, weight: .medium))
                 .foregroundStyle(tint)
             VStack(alignment: .leading, spacing: 2) {
                 Text(message)
@@ -22,7 +23,7 @@ struct CodexNoticeRow: View {
                 }
             }
         }
-        .font(.system(size: 11.5))
+        .font(.system(size: 11.5 * interfaceScale))
         .help(notice.path ?? "")
         .accessibilityElement(children: .combine)
     }

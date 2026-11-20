@@ -180,13 +180,12 @@ final class ConversationOneLookTests: XCTestCase {
                                                         historySelection: nil))
         let claude = transcript(.claudeCode, [TranscriptEntry(createdAt: start, content: .user(text: sentText))],
                                 status: .ready)
-        // The Codex turn adds its header under the message (its menu and status), so the two grow by
-        // the same amount rather than standing as tall.
+        // The Codex turn adds its header under the message (its menu and status), which follows the
+        // interface size too, so the Codex turn grows by at least what the Claude Code message does.
         let codexGrowth = try drawnHeight(codex, scale: 1.3) - drawnHeight(codex, scale: 1)
         let claudeGrowth = try drawnHeight(claude, scale: 1.3) - drawnHeight(claude, scale: 1)
-        XCTAssertGreaterThan(codexGrowth, 0, "the Codex sent message ignores the interface size")
         XCTAssertGreaterThan(claudeGrowth, 0, "the Claude Code sent message ignores the interface size")
-        XCTAssertEqual(codexGrowth, claudeGrowth)
+        XCTAssertGreaterThanOrEqual(codexGrowth, claudeGrowth, "the Codex sent message ignores the interface size")
     }
 
     /// A long answer shows its first 5,000 characters and "Show more" in every harness (the shared

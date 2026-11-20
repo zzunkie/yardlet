@@ -11,17 +11,18 @@ import SwiftUI
 /// - above the composer (`TaskDetail`): the limit warning, the edit banner, the Codex status panel;
 /// - at the bottom of the window: the worktree notice and the bootstrap error.
 struct ConversationTurnStatusLine: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let progress: ConversationTurnProgress
 
     var body: some View {
         switch progress {
         case let .reconnecting(status):
             Label(status, systemImage: "arrow.clockwise")
-                .font(.system(size: 12))
+                .font(.system(size: 12 * interfaceScale))
                 .foregroundStyle(.secondary)
         case .thinking:
             Text(L10n.string("Thinking"))
-                .font(.system(size: 12))
+                .font(.system(size: 12 * interfaceScale))
                 .foregroundStyle(.tertiary)
         case .none:
             EmptyView()

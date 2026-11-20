@@ -241,6 +241,7 @@ struct WorkSurfacePanelControls: View {
 }
 
 struct WorkSurfaceHeader<Trailing: View>: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     @Environment(\.workSurfaceNavigation) private var navigation
     /// The panel's tab strip shares the task area's header row (`TaskWorkspaceLayout`).
     @Environment(\.workSurfaceHeaderRow) private var sharedRow
@@ -311,7 +312,7 @@ struct WorkSurfaceHeader<Trailing: View>: View {
                 .overlay { if let row, row.isTitleBar { WindowDragRegion().frame(height: row.height) } }
             if let status {
                 // The tabs keep their room; a long status shortens first.
-                Text(status).font(.caption).foregroundStyle(statusTint)
+                Text(status).font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(statusTint)
                     .lineLimit(1).truncationMode(.middle).help(status)
                     .layoutPriority(-1)
             }
@@ -396,7 +397,7 @@ struct WorkSurfaceHeader<Trailing: View>: View {
                     .foregroundStyle(.secondary)
                     .allowsHitTesting(false)
                 Text(title)
-                    .font(.callout)
+                    .font(.yardlet(.callout, scale: interfaceScale))
                     .lineLimit(1).truncationMode(.middle)
                     .allowsHitTesting(false)
                     .accessibilityValue(workspaceURL.map { $0.isFileURL ? $0.lastPathComponent : "" } ?? "")
@@ -527,6 +528,7 @@ private struct PanelTabRoom: Layout {
 /// A tab that is open in the side panel but not shown. Hovering a titled tab shows its close
 /// button over the end of the title, so the strip does not shift; every tab closes from its menu.
 private struct WorkSurfaceTabButton<Menu: View>: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let tab: WorkSurfaceTab
     let onSelect: () -> Void
     let onClose: () -> Void
@@ -560,7 +562,7 @@ private struct WorkSurfaceTabButton<Menu: View>: View {
                                        isLoading: tab.isLoading, isDiscarded: tab.isDiscarded)
                         .modifier(BrowserTabMarks(waits: tab.waitNote != nil, agent: tab.isAgentUsing))
                     if titled {
-                        Text(tab.title).font(.callout).lineLimit(1).truncationMode(.middle)
+                        Text(tab.title).font(.yardlet(.callout, scale: interfaceScale)).lineLimit(1).truncationMode(.middle)
                     }
                 }
                 .foregroundStyle(.secondary)
@@ -592,6 +594,7 @@ private struct WorkSurfaceTabButton<Menu: View>: View {
 /// (its dialog, passkey or question shows once the panel shows the tab), the agent's sparkles while the agent works
 /// in it.
 private struct BrowserTabMarks: ViewModifier {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let waits: Bool
     let agent: Bool
 
@@ -608,7 +611,7 @@ private struct BrowserTabMarks: ViewModifier {
             .overlay(alignment: .bottomTrailing) {
                 if agent {
                     Image(systemName: "sparkles")
-                        .font(.system(size: 7, weight: .bold))
+                        .font(.system(size: 7 * interfaceScale, weight: .bold))
                         .foregroundStyle(.tint)
                         .padding(1.5)
                         .background(ParityTheme.canvas, in: Circle())
@@ -622,6 +625,7 @@ private struct BrowserTabMarks: ViewModifier {
 /// page's icon, or a spinner while the page loads (the Codex app's browser tab icon, `YXa`). A browser tab
 /// the memory saver discarded shows its icon smaller and fainter in a dashed ring, as Chrome marks an inactive tab.
 struct WorkSurfaceTabIcon: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let systemName: String
     var harness: HarnessKind? = nil
     var favicon: Data? = nil
@@ -639,7 +643,7 @@ struct WorkSurfaceTabIcon: View {
                     Image(nsImage: image).resizable().interpolation(.high).frame(width: 10, height: 10)
                         .clipShape(RoundedRectangle(cornerRadius: 2))
                 } else {
-                    Image(systemName: systemName).font(.system(size: 8))
+                    Image(systemName: systemName).font(.system(size: 8 * interfaceScale))
                 }
             }
             .opacity(0.6)
@@ -657,6 +661,7 @@ struct WorkSurfaceTabIcon: View {
 /// The + menu that opens another panel in the side panel, or the terminal below, and under Tasks
 /// another task's conversation.
 private struct WorkSurfaceOpenMenu: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let choices: [WorkSurfaceTab]
     var taskChoices: @MainActor @Sendable () -> [WorkSurfaceTab] = { [] }
     let onSelect: @MainActor @Sendable (String) -> Void
@@ -692,7 +697,7 @@ private struct WorkSurfaceOpenMenu: View {
             }
         } label: {
             Image(systemName: "plus")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 13 * interfaceScale, weight: .semibold))
                 .foregroundStyle(.primary)
                 .frame(width: 30, height: 30)
                 .background(Circle().fill(isHovering ? ParityTheme.hoverFill : .clear))
@@ -712,6 +717,7 @@ private struct WorkSurfaceOpenMenu: View {
 /// or no repository, has no symbol and says so in secondary text, as the Claude app's Changes pane
 /// does; a failure keeps its symbol. `actions` go under the message.
 struct WorkSurfaceEmptyState<Actions: View>: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let title: String
     var message: String? = nil
     var systemName: String? = nil
@@ -721,16 +727,16 @@ struct WorkSurfaceEmptyState<Actions: View>: View {
         VStack(spacing: 9) {
             if let systemName {
                 Image(systemName: systemName)
-                    .font(.system(size: 19, weight: .medium))
+                    .font(.system(size: 19 * interfaceScale, weight: .medium))
                     .foregroundStyle(.tertiary)
             }
             Text(title)
-                .font(.callout.weight(systemName == nil ? .regular : .semibold))
+                .font(.yardlet(.callout, scale: interfaceScale).weight(systemName == nil ? .regular : .semibold))
                 .foregroundStyle(systemName == nil ? .secondary : .primary)
                 .multilineTextAlignment(.center)
             if let message {
                 Text(message)
-                    .font(.caption)
+                    .font(.yardlet(.caption, scale: interfaceScale))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 420)

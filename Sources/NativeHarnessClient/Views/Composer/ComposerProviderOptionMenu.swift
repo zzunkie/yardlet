@@ -2,6 +2,7 @@ import SwiftUI
 
 /// The common menu geometry with the provider's actual option identity and wording.
 struct ComposerProviderOptionMenu: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let selector: ProviderCapabilitySelector
     let isEnabled: Bool
     let onSelect: (String, String) -> Void
@@ -9,7 +10,7 @@ struct ComposerProviderOptionMenu: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(selector.name).font(.caption.weight(.semibold))
+            Text(selector.name).font(.yardlet(.caption, scale: interfaceScale).weight(.semibold))
                 .padding(.horizontal, 14).padding(.vertical, 8)
             ForEach(selector.choices) { choice in
                 let selected = choice.value == selector.currentValue
@@ -22,7 +23,7 @@ struct ComposerProviderOptionMenu: View {
             }
             if !isEnabled {
                 Text(L10n.string("Resume the task to change live settings."))
-                    .font(.caption).foregroundStyle(.secondary).padding(12)
+                    .font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary).padding(12)
             }
         }
         .padding(.vertical, 6).background(ParityTheme.elevated)
@@ -30,6 +31,7 @@ struct ComposerProviderOptionMenu: View {
 }
 
 struct ComposerOptionChoiceLabel: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let choice: ProviderCapabilityChoice
     let isSelected: Bool
     var body: some View {
@@ -38,14 +40,14 @@ struct ComposerOptionChoiceLabel: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(choice.name).lineLimit(1)
                 if let description {
-                    Text(description).font(.caption).foregroundStyle(.secondary)
+                    Text(description).font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
             // A described choice is taller than the row; this keeps it apart from the next one.
             .padding(.vertical, description == nil ? 0 : 5)
             Spacer(minLength: 8)
-            Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold))
+            Image(systemName: "checkmark").font(.system(size: 10 * interfaceScale, weight: .semibold))
                 .opacity(isSelected ? 1 : 0)
         }
     }

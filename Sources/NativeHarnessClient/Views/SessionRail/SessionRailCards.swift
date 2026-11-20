@@ -53,6 +53,7 @@ struct SessionRailCardBody: View {
 /// The files the task wrote, newest first: five, then "Show N more". A file opens in the task's Files
 /// panel; its menu opens it in its own app or shows it in Finder.
 struct SessionRailOutputsCard: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let outputs: [SessionRailContent.Output]
     let actions: SessionRailActions
     @Environment(\.openURL) private var openURL
@@ -68,7 +69,7 @@ struct SessionRailOutputsCard: View {
                     Spacer(minLength: 6)
                     if let date = output.writtenAt {
                         Text(date.formatted(.relative(presentation: .named, unitsStyle: .abbreviated)))
-                            .font(.caption)
+                            .font(.yardlet(.caption, scale: interfaceScale))
                             .foregroundStyle(.tertiary)
                             .lineLimit(1)
                     }
@@ -102,6 +103,7 @@ struct SessionRailOutputsCard: View {
 
 /// A list of rows that shows its first `limit` and "Show {count} more" (`Z184O6N3fq`).
 struct SessionRailLimitedList<Item: Identifiable, Row: View>: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let items: [Item]
     let limit: Int
     @ViewBuilder let row: (Item) -> Row
@@ -114,7 +116,7 @@ struct SessionRailLimitedList<Item: Identifiable, Row: View>: View {
                 Button(L10n.format("Show %lld more", Int64(items.count - limit))) { showsAll = true }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
-                    .font(.caption)
+                    .font(.yardlet(.caption, scale: interfaceScale))
                     .parityPointer()
                     .padding(.top, 2)
             }
@@ -127,6 +129,7 @@ struct SessionRailLimitedList<Item: Identifiable, Row: View>: View {
 /// Where the task runs: on this Mac or in its own worktree, its folder and extra folders, its branch,
 /// the instruction files there and its harness. What the title bar's Environment popover listed.
 struct SessionRailEnvironmentCard: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let environment: SessionRailContent.Environment
     let actions: SessionRailActions
     private static let visibleInstructionSourceLimit = 6
@@ -191,18 +194,18 @@ struct SessionRailEnvironmentCard: View {
         if !sources.isEmpty {
             VStack(alignment: .leading, spacing: 2) {
                 Text(L10n.string(sources.origin == .provider ? "Applied instruction files" : "Instruction files present"))
-                    .font(.caption)
+                    .font(.yardlet(.caption, scale: interfaceScale))
                     .foregroundStyle(.secondary)
                 ForEach(sources.paths.prefix(Self.visibleInstructionSourceLimit), id: \.self) { path in
                     Text(ProjectSidebarPresentation.abbreviatedPath(for: URL(filePath: path)))
-                        .font(.caption)
+                        .font(.yardlet(.caption, scale: interfaceScale))
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .help(path)
                 }
                 if sources.paths.count > Self.visibleInstructionSourceLimit {
                     Text(L10n.format("%lld more", sources.paths.count - Self.visibleInstructionSourceLimit))
-                        .font(.caption)
+                        .font(.yardlet(.caption, scale: interfaceScale))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -288,12 +291,13 @@ struct SessionRailSettingsCard: View {
 
 /// What is left of the account's plan limits, as the account list draws them.
 struct SessionRailUsageCard: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let account: SessionRailAccount
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(account.name)
-                .font(.caption)
+                .font(.yardlet(.caption, scale: interfaceScale))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -311,7 +315,7 @@ struct SessionRailUsageCard: View {
                         .frame(height: 4)
                     if let resetsAt = window.resetsAt {
                         Text(L10n.format("Resets %@", ProviderNoticeText.resetTime(resetsAt)))
-                            .font(.caption2)
+                            .font(.yardlet(.caption2, scale: interfaceScale))
                             .foregroundStyle(.tertiary)
                     }
                 }
@@ -319,7 +323,7 @@ struct SessionRailUsageCard: View {
             }
             if let checkedAt = account.checkedAt {
                 Text(L10n.format("Checked %@", checkedAt.formatted(.relative(presentation: .named))))
-                    .font(.caption2)
+                    .font(.yardlet(.caption2, scale: interfaceScale))
                     .foregroundStyle(.tertiary)
             }
         }
@@ -332,6 +336,7 @@ struct SessionRailUsageCard: View {
 /// "Show N more", what the composer's list notes, and "Add connectors" (the directory over the window)
 /// beside "Manage connectors" (Settings), as the Claude app's connector list offers both.
 struct SessionRailConnectorsCard: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let list: ComposerConnectorList
     let actions: SessionRailActions
 
@@ -349,7 +354,7 @@ struct SessionRailConnectorsCard: View {
             ForEach(ComposerConnectorsMenu.footnotes(list: list, switches: actions.connectors?.setOn != nil),
                     id: \.self) { note in
                 Text(note)
-                    .font(.caption)
+                    .font(.yardlet(.caption, scale: interfaceScale))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -393,6 +398,7 @@ struct SessionRailConnectorsCard: View {
 
 /// The task's plan, its current step marked (the Claude app's Progress card).
 struct SessionRailProgressCard: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let progress: SessionRailContent.Progress
 
     var body: some View {
@@ -407,7 +413,7 @@ struct SessionRailProgressCard: View {
                 let isCurrent = step.id == progress.currentStepID
                 HStack(alignment: .firstTextBaseline, spacing: 7) {
                     Image(systemName: Self.symbol(step.status))
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.system(size: 10 * interfaceScale, weight: .semibold))
                         .foregroundStyle(Self.tint(step.status, current: isCurrent))
                         .frame(width: 13)
                     Text(step.text)
@@ -530,7 +536,7 @@ struct SessionRailBackgroundTasksCard: View {
                 Button(L10n.string("Stop all")) { stopAll.request() }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
-                    .font(.caption)
+                    .font(.yardlet(.caption, scale: interfaceScale))
                     .parityPointer()
                     .padding(.top, 2)
                     .help(L10n.string("Stop all running tasks?"))

@@ -26,6 +26,7 @@ extension EnvironmentValues {
 /// The Codex app's find bar: a field with a close button, and, once there is a query, previous and
 /// next buttons with the count. It floats over the top trailing corner of the conversation.
 struct ConversationFindBar: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     @Bindable var find: ConversationFindModel
     @Environment(\.taskKeyboardFocus) private var keyboardFocus
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -46,14 +47,14 @@ struct ConversationFindBar: View {
                         ProgressView().controlSize(.small).scaleEffect(0.8)
                     } else {
                         Image(systemName: "magnifyingglass")
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.system(size: 12 * interfaceScale, weight: .medium))
                             .foregroundStyle(.secondary)
                     }
                 }
                 .frame(width: 16, height: 16)
                 TextField(L10n.string("Search chat…"), text: $find.query)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 13))
+                    .font(.system(size: 13 * interfaceScale))
                     .focused($isFieldFocused)
                     .accessibilityLabel(L10n.string("Find in chat"))
                     .onSubmit {
@@ -86,7 +87,7 @@ struct ConversationFindBar: View {
                         .disabled(!find.hasMatches)
                     Spacer(minLength: 8)
                     Text(statusText)
-                        .font(.system(size: 12))
+                        .font(.system(size: 12 * interfaceScale))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -145,7 +146,7 @@ struct ConversationFindBar: View {
                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 11 * interfaceScale, weight: .semibold))
                 .frame(width: 24, height: 24)
                 .contentShape(Rectangle())
         }

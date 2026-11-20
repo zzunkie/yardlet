@@ -14,7 +14,7 @@ struct NewTaskHarnessControl<Items: View>: View {
                     Label(L10n.string("Choose harness"), systemImage: "square.stack.3d.up")
                 }
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .semibold))
+                    .font(.system(size: 8 * interfaceScale, weight: .semibold))
             }
             .font(.system(size: 13 * interfaceScale, weight: .medium))
             .padding(.horizontal, 7)

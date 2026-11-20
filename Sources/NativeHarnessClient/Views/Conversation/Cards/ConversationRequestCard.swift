@@ -12,6 +12,7 @@ import SwiftUI
 /// the answer it got: a question form as each question and its answer, as the provider recorded it
 /// (`ConversationRequest.recordedAnswers`), or as the card sent it until the record arrives.
 struct ConversationRequestCard: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let request: ConversationRequest
     let actions: ConversationActions
     /// Whether the composer's keys answer this request: only the oldest of the ones waiting, so the
@@ -57,7 +58,7 @@ struct ConversationRequestCard: View {
         return VStack(alignment: .leading, spacing: 12) {
             if let headline = request.descriptionHeadline {
                 Text(headline)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 13 * interfaceScale, weight: .semibold))
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -65,7 +66,7 @@ struct ConversationRequestCard: View {
             if !usesDescriptionAsHeadline, let detail = request.detail,
                request.preview?.repeats(detail) != true {
                 Text(detail)
-                    .font(.system(size: 13))
+                    .font(.system(size: 13 * interfaceScale))
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -100,7 +101,7 @@ struct ConversationRequestCard: View {
             if !drawsAnswersInForm(responses) {
                 if responses.isEmpty {
                     Text(request.unanswerableReason ?? L10n.string("This Codex request needs a structured response."))
-                        .font(.system(size: 12))
+                        .font(.system(size: 12 * interfaceScale))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
@@ -163,7 +164,7 @@ struct ConversationRequestCard: View {
                         .truncationMode(.middle)
                 }
             }
-            .font(.system(size: 13))
+            .font(.system(size: 13 * interfaceScale))
             .foregroundStyle(.secondary)
             stateNote
         }
@@ -241,12 +242,12 @@ struct ConversationRequestCard: View {
         switch request.state {
         case let .expired(message?) where !message.isEmpty:
             Text(message)
-                .font(.system(size: 12))
+                .font(.system(size: 12 * interfaceScale))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         case let .rejected(message) where !message.isEmpty:
             Text(message)
-                .font(.system(size: 12))
+                .font(.system(size: 12 * interfaceScale))
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
@@ -269,7 +270,7 @@ struct ConversationRequestCard: View {
         let fields = context.fields.filter { $0.id != "command" || request.command == nil }
         ForEach(context.messages, id: \.self) { message in
             Text(message)
-                .font(.callout)
+                .font(.yardlet(.callout, scale: interfaceScale))
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -277,7 +278,7 @@ struct ConversationRequestCard: View {
             VStack(alignment: .leading, spacing: 4) {
                 if let title = field.titleKey {
                     Text(L10n.string(title))
-                        .font(.system(size: 12))
+                        .font(.system(size: 12 * interfaceScale))
                         .foregroundStyle(.secondary)
                 }
                 CodexBoundedOutput(text: field.text, folds: false)
@@ -285,7 +286,7 @@ struct ConversationRequestCard: View {
         }
         if context.isEmpty, request.command == nil, let method = request.method {
             Text(method)
-                .font(.system(size: 12, design: .monospaced)).fontDesign(nil)
+                .font(.system(size: 12 * interfaceScale, design: .monospaced)).fontDesign(nil)
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
@@ -487,11 +488,12 @@ struct ConversationRequestPanel: View {
 
 /// A key inside a button, as both apps draw one: the key's glyph in a small outlined box ("Esc" for escape).
 struct ConversationKeyCap: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let shortcut: KeyboardShortcut
 
     var body: some View {
         Text(verbatim: shortcut.key == .escape && shortcut.modifiers.isEmpty ? "Esc" : shortcut.displayText)
-            .font(.system(size: 10.5, weight: .medium))
+            .font(.system(size: 10.5 * interfaceScale, weight: .medium))
             .fixedSize()
             .padding(.horizontal, 4)
             .frame(minWidth: 16, minHeight: 15)

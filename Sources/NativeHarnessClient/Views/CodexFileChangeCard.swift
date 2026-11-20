@@ -42,6 +42,7 @@ struct CodexFileChangeRows: View {
 /// Folded by default. The row keeps its open state by path while the provider rewrites the
 /// card's file list. Opening it leaves transcript following as it was, as for any card.
 private struct CodexFileChangeRow: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let row: CodexFileChangeCardProjection.Row
     let handoff: CodexChangeHandoff?
 
@@ -73,7 +74,7 @@ private struct CodexFileChangeRow: View {
             if row.canExpand {
                 Button(action: toggle) {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 8, weight: .semibold))
+                        .font(.system(size: 8 * interfaceScale, weight: .semibold))
                         .frame(width: 14, height: 14)
                         .contentShape(Rectangle())
                 }
@@ -84,7 +85,7 @@ private struct CodexFileChangeRow: View {
             }
             Spacer(minLength: 0)
         }
-        .font(.system(size: 12))
+        .font(.system(size: 12 * interfaceScale))
         .foregroundStyle(.secondary)
         .contentShape(Rectangle())
         .onTapGesture { if row.canExpand { toggle() } }
@@ -146,6 +147,7 @@ struct CodexFileChangeLink: View {
 /// A file's diff under its name and line counts: the box a file change's row and a file change's
 /// status line open into.
 struct CodexFileDiffBox<FileLink: View>: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let row: CodexFileChangeCardProjection.Row
     @ViewBuilder let fileLink: () -> FileLink
 
@@ -161,7 +163,7 @@ struct CodexFileDiffBox<FileLink: View>: View {
                 }
                 Spacer(minLength: 0)
             }
-            .font(.system(size: 11.5))
+            .font(.system(size: 11.5 * interfaceScale))
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
             Divider()
@@ -206,7 +208,7 @@ struct CodexFileDiffBox<FileLink: View>: View {
             }
             Spacer(minLength: 0)
         }
-        .font(.system(size: 11.5))
+        .font(.system(size: 11.5 * interfaceScale))
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
     }
@@ -310,6 +312,7 @@ struct CodexDiffPreviewLines: View {
 
 /// The row's accessibility value already carries the counts.
 struct CodexLineCountsText: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let counts: CodexFileChangeCardProjection.LineCounts
 
     var body: some View {
@@ -317,7 +320,7 @@ struct CodexLineCountsText: View {
             Text(verbatim: "+\(counts.additions)").foregroundStyle(.green)
             Text(verbatim: "−\(counts.deletions)").foregroundStyle(.red)
         }
-        .font(.system(size: 11).monospacedDigit())
+        .font(.system(size: 11 * interfaceScale).monospacedDigit())
         .fixedSize()
         .accessibilityHidden(true)
     }

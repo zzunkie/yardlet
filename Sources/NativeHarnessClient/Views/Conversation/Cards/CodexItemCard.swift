@@ -90,7 +90,7 @@ struct CodexBoundedOutput: View {
                 }
                 .parityLinkButton()
                 .parityPointer()
-                .font(.caption2)
+                .font(.yardlet(.caption2, scale: interfaceScale))
             }
         }
         .padding(monospaced ? 8 : 0)
@@ -153,7 +153,7 @@ struct CodexCommandOutput: View {
                 }
                 .parityLinkButton()
                 .parityPointer()
-                .font(.caption2)
+                .font(.yardlet(.caption2, scale: interfaceScale))
             }
         }
         .padding(8)
@@ -172,6 +172,7 @@ struct HoverCopyItem {
 }
 
 private struct HoverCopy: ViewModifier {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let items: [HoverCopyItem]
     @Environment(\.revealsSentMessageActions) private var revealsActions
     @State private var isHovering = false
@@ -187,7 +188,7 @@ private struct HoverCopy: ViewModifier {
                                 copied = TranscriptClipboard.copy(item.payload()) ? item.title : nil
                             } label: {
                                 Image(systemName: copied == item.title ? "checkmark" : item.systemName)
-                                    .font(.system(size: 10, weight: .medium))
+                                    .font(.system(size: 10 * interfaceScale, weight: .medium))
                                     .frame(width: 22, height: 22)
                                     .background(ParityTheme.elevated, in: RoundedRectangle(cornerRadius: 5))
                                     .contentShape(Rectangle())

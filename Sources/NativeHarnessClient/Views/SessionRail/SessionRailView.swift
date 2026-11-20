@@ -307,6 +307,7 @@ struct SessionRailMeter: View {
 
 /// A row in a card: an icon, a title, and a quieter value on the right.
 struct SessionRailRow<Trailing: View>: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let systemName: String?
     let title: String
     @ViewBuilder var trailing: () -> Trailing
@@ -322,7 +323,7 @@ struct SessionRailRow<Trailing: View>: View {
             if let systemName {
                 Image(systemName: systemName)
                     .foregroundStyle(.secondary)
-                    .frame(width: 16)
+                    .frame(width: 16 * interfaceScale)
                     .accessibilityHidden(true)
             }
             Text(title)
@@ -331,7 +332,7 @@ struct SessionRailRow<Trailing: View>: View {
             Spacer(minLength: 6)
             trailing()
         }
-        .frame(minHeight: 24)
+        .frame(minHeight: 24 * interfaceScale)
     }
 }
 

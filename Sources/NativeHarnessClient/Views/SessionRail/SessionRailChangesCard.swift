@@ -6,6 +6,7 @@ import SwiftUI
 /// merge, each check (failing first, a failed one's log on request), reviews, re-running failed
 /// jobs, merging and auto-merge, "Fix CI" and the task's auto-fix.
 struct SessionRailChangesCard: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let changes: SessionRailContent.Changes
     let actions: SessionRailActions
 
@@ -20,7 +21,7 @@ struct SessionRailChangesCard: View {
                         Spacer(minLength: 6)
                         Text("+\(summary.additions)").foregroundStyle(.green).monospacedDigit()
                         Text("−\(summary.deletions)").foregroundStyle(.red).monospacedDigit()
-                        Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                        Image(systemName: "chevron.right").font(.yardlet(.caption2, scale: interfaceScale)).foregroundStyle(.tertiary)
                     }
                     .frame(minHeight: 24)
                     .contentShape(Rectangle())
@@ -41,6 +42,7 @@ struct SessionRailChangesCard: View {
 }
 
 struct SessionRailPullRequestView: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let pullRequest: TaskPullRequest
     let state: PullRequestDetailCenter.TaskState?
     let autoFix: PullRequestAutoFixRecord?
@@ -64,7 +66,7 @@ struct SessionRailPullRequestView: View {
                 if detail.isOpen { autoFixSection(detail) }
             } else if let problem = state?.problem {
                 Text(problem.message)
-                    .font(.caption)
+                    .font(.yardlet(.caption, scale: interfaceScale))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else if state?.isLoading == true {
@@ -72,7 +74,7 @@ struct SessionRailPullRequestView: View {
             }
             if let error = state?.actionError {
                 Text(error)
-                    .font(.caption)
+                    .font(.yardlet(.caption, scale: interfaceScale))
                     .foregroundStyle(.red)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -100,7 +102,7 @@ struct SessionRailPullRequestView: View {
                     ProgressView().controlSize(.mini)
                 } else if prActions != nil {
                     Button { prActions?.refresh() } label: {
-                        Image(systemName: "arrow.clockwise").font(.system(size: 10, weight: .semibold))
+                        Image(systemName: "arrow.clockwise").font(.system(size: 10 * interfaceScale, weight: .semibold))
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
@@ -116,7 +118,7 @@ struct SessionRailPullRequestView: View {
             }
             if let head = detail?.headBranch {
                 Text([head, detail?.baseBranch].compactMap { $0 }.joined(separator: " → "))
-                    .font(.caption)
+                    .font(.yardlet(.caption, scale: interfaceScale))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -139,19 +141,19 @@ struct SessionRailPullRequestView: View {
         } icon: {
             Image(systemName: symbol).foregroundStyle(tint)
         }
-        .font(.caption)
+        .font(.yardlet(.caption, scale: interfaceScale))
     }
 
     private func autoMergeLine(_ method: PullRequestDetail.MergeMethod) -> some View {
         HStack(spacing: 6) {
             Label(L10n.format("Auto-merge on · %@", method.title), systemImage: "arrow.triangle.merge")
-                .font(.caption)
+                .font(.yardlet(.caption, scale: interfaceScale))
                 .foregroundStyle(.secondary)
             Spacer(minLength: 4)
             if let prActions {
                 Button(L10n.string("Turn off")) { prActions.requestMerge(.disableAuto) }
                     .buttonStyle(.plain)
-                    .font(.caption)
+                    .font(.yardlet(.caption, scale: interfaceScale))
                     .foregroundStyle(.secondary)
                     .parityPointer()
                     .disabled(state?.runningAction != nil)
@@ -167,7 +169,7 @@ struct SessionRailPullRequestView: View {
         return VStack(alignment: .leading, spacing: 3) {
             if let summary = detail.checksSummaryText {
                 Text(L10n.format("Checks: %@", summary))
-                    .font(.caption)
+                    .font(.yardlet(.caption, scale: interfaceScale))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -177,10 +179,10 @@ struct SessionRailPullRequestView: View {
             }
             if hiddenCount > 0 {
                 Button(L10n.format("Show %lld passing checks", Int64(hiddenCount))) { showsPassingChecks = true }
-                    .buttonStyle(.plain).font(.caption).foregroundStyle(.secondary).parityPointer()
+                    .buttonStyle(.plain).font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary).parityPointer()
             } else if showsPassingChecks {
                 Button(L10n.string("Hide passing checks")) { showsPassingChecks = false }
-                    .buttonStyle(.plain).font(.caption).foregroundStyle(.secondary).parityPointer()
+                    .buttonStyle(.plain).font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary).parityPointer()
             }
         }
     }
@@ -200,12 +202,12 @@ struct SessionRailPullRequestView: View {
                         Image(systemName: review.decision == .approved ? "checkmark.circle" : "xmark.circle")
                             .foregroundStyle(review.decision == .approved ? .green : .red)
                     }
-                    .font(.caption)
+                    .font(.yardlet(.caption, scale: interfaceScale))
                 }
             }
         } else if detail.isOpen, detail.review == nil, detail.state == .open {
             Label(L10n.string("Waiting for review"), systemImage: "person.crop.circle.badge.clock")
-                .font(.caption)
+                .font(.yardlet(.caption, scale: interfaceScale))
                 .foregroundStyle(.secondary)
         }
     }
@@ -309,7 +311,7 @@ struct SessionRailPullRequestView: View {
                     .help(L10n.string("Sends the task a message to fix the checks when they fail, once per failure, while Yardlet is open."))
                     if autoFix?.isOn == true, let sent = autoFix?.lastSentAt {
                         Text(L10n.format("Last sent %@", sent.formatted(.relative(presentation: .named))))
-                            .font(.caption2)
+                            .font(.yardlet(.caption2, scale: interfaceScale))
                             .foregroundStyle(.tertiary)
                     }
                 }
@@ -332,14 +334,14 @@ struct SessionRailCheckRow: View {
             // The state and the menu on the check's name, not between its name and its workflow.
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Image(systemName: symbol)
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.system(size: 10 * interfaceScale, weight: .semibold))
                     .foregroundStyle(tint)
                     .frame(width: 13)
                     .centeredOnCapHeight(ofTextSize: 12 * interfaceScale)
                 VStack(alignment: .leading, spacing: 0) {
                     Text(check.name).lineLimit(1).truncationMode(.middle)
                     if let detail = detailText {
-                        Text(detail).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        Text(detail).font(.yardlet(.caption2, scale: interfaceScale)).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }
                 Spacer(minLength: 4)
@@ -355,7 +357,7 @@ struct SessionRailCheckRow: View {
                         Button(L10n.string("Open logs on GitHub")) { openURL(link) }
                     }
                 } label: {
-                    Image(systemName: "ellipsis").font(.system(size: 10, weight: .semibold))
+                    Image(systemName: "ellipsis").font(.system(size: 10 * interfaceScale, weight: .semibold))
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
@@ -381,11 +383,11 @@ struct SessionRailCheckRow: View {
         case .loading:
             ProgressView().controlSize(.mini).padding(.leading, 19)
         case let .failed(message):
-            Text(message).font(.caption).foregroundStyle(.secondary).padding(.leading, 19)
+            Text(message).font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary).padding(.leading, 19)
         case let .loaded(text):
             ScrollView {
                 Text(text.isEmpty ? L10n.string("No failed steps were logged.") : text)
-                    .font(.system(size: 10, design: .monospaced)).fontDesign(nil)
+                    .font(.system(size: 10 * interfaceScale, design: .monospaced)).fontDesign(nil)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(6)

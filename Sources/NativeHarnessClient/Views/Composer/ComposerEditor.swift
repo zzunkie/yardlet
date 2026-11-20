@@ -203,7 +203,7 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
                 if isBashMode {
                     // The Claude app marks bash mode with a "bash" badge and its accent ring.
                     Text(verbatim: "bash")
-                        .font(.caption.weight(.semibold))
+                        .font(.yardlet(.caption, scale: interfaceScale).weight(.semibold))
                         .foregroundStyle(ParityTheme.accentText)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 1)
@@ -223,7 +223,7 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
 
             if let notice = draft.notice {
                 Text(notice)
-                    .font(.caption)
+                    .font(.yardlet(.caption, scale: interfaceScale))
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -811,6 +811,7 @@ struct ComposerInputChip: View {
 
 /// A chip of a symbol and a name, with its remove button.
 struct ComposerLabelChip: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let symbol: String
     let label: String
     let onRemove: () -> Void
@@ -822,14 +823,14 @@ struct ComposerLabelChip: View {
                 .lineLimit(1)
             Button(action: onRemove) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 8, weight: .bold))
+                    .font(.system(size: 8 * interfaceScale, weight: .bold))
             }
             .buttonStyle(.plain)
             .parityPointer()
             .accessibilityLabel(L10n.string("Remove attachment"))
             .help(L10n.string("Remove attachment"))
         }
-        .font(.caption2)
+        .font(.yardlet(.caption2, scale: interfaceScale))
         .foregroundStyle(.secondary)
         .padding(.horizontal, 7)
         .frame(height: 24)
@@ -846,6 +847,7 @@ struct ComposerLabelChip: View {
 /// empty; an image that cannot be read shows its name as other attachments do. A click opens it
 /// over the window (`openImageViewer`).
 struct ComposerImageChip: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let url: URL
     let name: String
     /// Opens the image to mark up; nil for an image that cannot be marked up here.
@@ -904,7 +906,7 @@ struct ComposerImageChip: View {
         .overlay(alignment: .topTrailing) {
             Button(action: onRemove) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 7, weight: .bold))
+                    .font(.system(size: 7 * interfaceScale, weight: .bold))
                     .foregroundStyle(.white)
                     .frame(width: 16, height: 16)
                     .background(.black.opacity(0.6), in: Circle())

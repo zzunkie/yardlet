@@ -240,7 +240,7 @@ private struct WindowTabButton<SelectedTitle: View>: View {
             if showsClose {
                 Button(action: onClose) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(.system(size: 9 * interfaceScale, weight: .semibold))
                         .foregroundStyle(.secondary)
                         .frame(width: 18, height: 18)
                         .background(Circle().fill(isHovering ? ParityTheme.hoverFill : .clear))
@@ -283,13 +283,13 @@ private struct WindowTabButton<SelectedTitle: View>: View {
         switch tab.kind {
         case .newTask:
             Image(systemName: "square.and.pencil")
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 11 * interfaceScale, weight: .medium))
                 .foregroundStyle(.secondary)
         case let .task(harness):
             HarnessIdentityIcon(harness: harness, size: 14)
         case let .split(isVertical):
             Image(systemName: isVertical ? "rectangle.split.1x2" : "rectangle.split.2x1")
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 11 * interfaceScale, weight: .medium))
                 .foregroundStyle(.secondary)
         }
     }

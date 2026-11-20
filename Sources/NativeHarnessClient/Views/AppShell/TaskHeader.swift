@@ -67,13 +67,14 @@ struct TaskTitleMenu: View {
     let session: SessionRecord
     let actions: TaskHeaderActions
     var size: CGFloat = 13
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
 
     @FocusState private var taskInfoFocused: Bool
 
     var body: some View {
         Menu { menuContents } label: {
             Text(session.title)
-                .font(.system(size: size, weight: .medium))
+                .font(.system(size: size * interfaceScale, weight: .medium))
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .contentShape(Rectangle())
@@ -141,6 +142,7 @@ struct TaskHeaderStatus: View {
     var showsHarnessName = true
     var dragsByHarness = false
     @AppStorage(TaskServersPreference.key) private var showsServers = true
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
 
     var body: some View {
         let servers = showsServers ? actions.servers(session) : []
@@ -160,8 +162,8 @@ struct TaskHeaderStatus: View {
     private func row(servers: [TaskServerPort], extent: TaskServersLink.Extent) -> some View {
         HStack(spacing: compact ? 7 : 9) {
             if showsHarness {
-                HarnessIdentityLabel(harness: session.harness, size: compact ? 13 : 14, showsName: showsHarnessName)
-                    .font(.system(size: compact ? 11 : 11.5))
+                HarnessIdentityLabel(harness: session.harness, size: (compact ? 13 : 14) * interfaceScale, showsName: showsHarnessName)
+                    .font(.system(size: (compact ? 11 : 11.5) * interfaceScale))
                     .foregroundStyle(.secondary)
                     .fixedSize()
                     .overlay {
@@ -268,6 +270,7 @@ struct TaskServersLink: View {
 
 /// Running, waiting for approval, or failed, beside the task's harness.
 struct TaskHeaderActivity: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let status: SessionStatus
 
     var body: some View {
@@ -278,7 +281,7 @@ struct TaskHeaderActivity: View {
                 .help(status.displayName)
         case .waitingForApproval, .failed:
             Image(systemName: status == .failed ? "exclamationmark.triangle" : "exclamationmark.shield")
-                .font(.system(size: 12))
+                .font(.system(size: 12 * interfaceScale))
                 // Failure in red; a waiting request in the secondary colour, as the conversation's
                 // progress line is the one place a task's view marks it in orange.
                 .foregroundStyle(status == .failed ? Color.red : Color.secondary)
@@ -393,7 +396,7 @@ struct SplitPaneHeader<Identity: View, Controls: View>: View {
             controls(isFolded)
             Button(action: onClose) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(.system(size: 9 * interfaceScale, weight: .semibold))
                     .frame(width: 22, height: 22)
                     .contentShape(Rectangle())
             }

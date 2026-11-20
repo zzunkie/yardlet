@@ -174,6 +174,7 @@ private struct SentImageThumbnail: View {
 /// An attached image that cannot be previewed, by name, as sent messages showed it before.
 /// An image that cannot be shown, by its name.
 struct SentImageNameChip: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let name: String
 
     var body: some View {
@@ -183,7 +184,7 @@ struct SentImageNameChip: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
-        .font(.caption2)
+        .font(.yardlet(.caption2, scale: interfaceScale))
         .foregroundStyle(.secondary)
         .padding(.horizontal, 8)
         .frame(height: 24)

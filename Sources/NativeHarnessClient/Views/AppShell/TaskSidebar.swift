@@ -220,6 +220,7 @@ struct SidebarSplitActions {
 }
 
 struct TaskSidebar: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let layout: SidebarProjection.Layout
     let allGroups: [WorkspaceGroup]
     let isRestoring: Bool
@@ -340,7 +341,7 @@ struct TaskSidebar: View {
                                 ProgressView()
                                     .controlSize(.small)
                                 Text(L10n.string("Restoring tasks…"))
-                                    .font(.caption)
+                                    .font(.yardlet(.caption, scale: interfaceScale))
                                     .foregroundStyle(.secondary)
                             }
                             .padding(.horizontal, 13)
@@ -354,7 +355,7 @@ struct TaskSidebar: View {
                             }
                             if layout.states.isEmpty, layout.pinned.isEmpty, !searchText.isEmpty, cloudRows.all.isEmpty {
                                 Text(L10n.string("No matching tasks."))
-                                    .font(.caption)
+                                    .font(.yardlet(.caption, scale: interfaceScale))
                                     .foregroundStyle(.secondary)
                                     .padding(.horizontal, 13)
                             }
@@ -376,7 +377,7 @@ struct TaskSidebar: View {
                             if layout.sections.isEmpty, layout.pinned.isEmpty, layout.chats == nil, !searchText.isEmpty,
                                cloudRows.all.isEmpty {
                                 Text(L10n.string("No matching tasks."))
-                                    .font(.caption)
+                                    .font(.yardlet(.caption, scale: interfaceScale))
                                     .foregroundStyle(.secondary)
                                     .padding(.horizontal, 13)
                             } else {
@@ -771,7 +772,7 @@ struct TaskSidebar: View {
             .padding(.bottom, 2)
         if activity.sessions.isEmpty {
             Text(L10n.string(searchText.isEmpty ? "Nothing needs attention" : "No matching tasks."))
-                .font(.callout)
+                .font(.yardlet(.callout, scale: interfaceScale))
                 .foregroundStyle(.secondary)
                 .opacity(searchText.isEmpty ? 0.7 : 1)
                 .padding(.horizontal, 13)
@@ -819,13 +820,14 @@ struct TaskSidebar: View {
 /// The activity view's heading, the Codex app's "Priority" with its options menu, which here
 /// holds only "Mark all as read".
 private struct SidebarActivityHeader: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let canMarkAllRead: Bool
     let onMarkAllRead: () -> Void
 
     var body: some View {
         HStack(spacing: 8) {
             Text(L10n.string("Priority"))
-                .font(.caption.weight(.semibold))
+                .font(.yardlet(.caption, scale: interfaceScale).weight(.semibold))
                 .foregroundStyle(.secondary)
                 .accessibilityAddTraits(.isHeader)
             Spacer()
@@ -834,7 +836,7 @@ private struct SidebarActivityHeader: View {
                     .disabled(!canMarkAllRead)
             } label: {
                 Image(systemName: "ellipsis")
-                    .font(.caption.weight(.semibold))
+                    .font(.yardlet(.caption, scale: interfaceScale).weight(.semibold))
                     .foregroundStyle(.secondary)
                     .frame(width: 22, height: 22)
                     .contentShape(Rectangle())
@@ -1060,7 +1062,7 @@ private struct ProjectTaskHeader: View {
                         projectOptions
                     } label: {
                         Image(systemName: "ellipsis")
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(.system(size: 11 * interfaceScale, weight: .semibold))
                             .foregroundStyle(.secondary)
                             .frame(width: 24, height: 24)
                             .contentShape(Rectangle())
@@ -1288,6 +1290,7 @@ private struct SidebarStatusDot: View {
 }
 
 private struct ProjectHoverActionButton: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let systemName: String
     let label: String
     let action: () -> Void
@@ -1295,7 +1298,7 @@ private struct ProjectHoverActionButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 11 * interfaceScale, weight: .medium))
                 .foregroundStyle(.secondary)
                 .frame(width: 24, height: 24)
                 .contentShape(Rectangle())
@@ -2180,6 +2183,7 @@ extension EnvironmentValues {
 }
 
 private struct TaskRowActionButton: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let systemName: String
     let label: String
     var shortcut: KeyboardShortcut? = nil
@@ -2189,7 +2193,7 @@ private struct TaskRowActionButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 10, weight: .medium))
+                .font(.system(size: 10 * interfaceScale, weight: .medium))
                 .foregroundStyle(.secondary)
                 .frame(width: 21, height: 22)
                 .contentShape(Rectangle())

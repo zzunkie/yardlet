@@ -79,6 +79,7 @@ extension EnvironmentValues {
 /// A message's actions after its copy, each shown as `HoverRevealedAction` shows one, in the copy's
 /// look.
 struct ConversationMessageActionButtons: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let actions: [ConversationMessageAction]
 
     var body: some View {
@@ -89,7 +90,7 @@ struct ConversationMessageActionButtons: View {
                 }
                 .buttonStyle(.borderless)
                 .parityPointer()
-                .font(.caption)
+                .font(.yardlet(.caption, scale: interfaceScale))
                 .foregroundStyle(.secondary)
                 .help(action.title)
             }

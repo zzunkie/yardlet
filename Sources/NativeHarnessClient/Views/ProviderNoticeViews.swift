@@ -5,6 +5,7 @@ import SwiftUI
 /// task's account holds, continuing under another account, and continuing once the limit resets:
 /// on its own if armed before the reset, or on Resume after it.
 struct UsageLimitCard: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let entryID: UUID
     let limit: HarnessRateLimit
     /// Only the card the task continues from offers to continue (`UsageLimitContinuation.card`); a
@@ -23,14 +24,14 @@ struct UsageLimitCard: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "gauge.with.dots.needle.100percent")
-                    .font(.system(size: 15, weight: .medium))
+                    .font(.system(size: 15 * interfaceScale, weight: .medium))
                     .foregroundStyle(.orange)
                 VStack(alignment: .leading, spacing: 5) {
                     Text(ProviderNoticeText.limitHeadline(limit))
-                        .font(.callout.weight(.semibold))
+                        .font(.yardlet(.callout, scale: interfaceScale).weight(.semibold))
                     if let detail {
                         Text(detail)
-                            .font(.callout)
+                            .font(.yardlet(.callout, scale: interfaceScale))
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
@@ -60,7 +61,7 @@ struct UsageLimitCard: View {
                         Button { showsAccounts.toggle() } label: {
                             HStack(spacing: 4) {
                                 Text(L10n.string("Continue with another account"))
-                                Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+                                Image(systemName: "chevron.down").font(.system(size: 8 * interfaceScale, weight: .semibold))
                             }
                         }
                         .buttonStyle(.borderless)
@@ -95,10 +96,10 @@ struct UsageLimitCard: View {
                             .parityPointer()
                     }
                 }
-                .font(.callout.weight(.medium))
+                .font(.yardlet(.callout, scale: interfaceScale).weight(.medium))
                 if let error = notices.switchError {
                     Text(error)
-                        .font(.caption)
+                        .font(.yardlet(.caption, scale: interfaceScale))
                         .foregroundStyle(.orange)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
@@ -143,6 +144,7 @@ struct UsageLimitCard: View {
 /// "Continue with another account" for a task on another Mac: the accounts that Mac lists, read as the menu
 /// first shows, each by its name and plan.
 private struct UsageLimitHostAccountMenu: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let load: @MainActor () async -> [UsageLimitHostAccount]
     let choose: @MainActor (String) -> Void
     @State private var accounts: [UsageLimitHostAccount]?
@@ -160,7 +162,7 @@ private struct UsageLimitHostAccountMenu: View {
         } label: {
             HStack(spacing: 4) {
                 Text(L10n.string("Continue with another account"))
-                Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+                Image(systemName: "chevron.down").font(.system(size: 8 * interfaceScale, weight: .semibold))
             }
         }
         .menuStyle(.borderlessButton)
@@ -200,6 +202,7 @@ struct UsageLimitAutoContinueSettingRow: View {
 
 /// Where the provider summarized earlier conversation, as a divider in the timeline.
 struct CompactionMarker: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let compaction: HarnessContextCompaction
 
     var body: some View {
@@ -230,7 +233,7 @@ struct CompactionMarker: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .font(.caption)
+        .font(.yardlet(.caption, scale: interfaceScale))
         .foregroundStyle(compaction.phase == .failed ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
         .accessibilityElement(children: .combine)
     }
@@ -244,6 +247,7 @@ struct CompactionMarker: View {
 /// limit the provider warned is close. A request the provider is retrying shows on the running
 /// turn's status line instead (D6).
 struct ProviderNoticeLines: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let notices: TaskProviderNotices
 
     var body: some View {
@@ -264,7 +268,7 @@ struct ProviderNoticeLines: View {
                     .foregroundStyle(.orange)
             }
         }
-        .font(.caption)
+        .font(.yardlet(.caption, scale: interfaceScale))
         .lineLimit(1)
         .frame(maxWidth: ParityTheme.contentWidth, alignment: .leading)
         .padding(.horizontal, 30)

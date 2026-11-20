@@ -24,6 +24,7 @@ enum ArchivedTaskFilter {
 /// read-only beside it (`ArchivedTaskConversation`), and restores one with Unarchive. Back returns
 /// to the task list.
 struct ArchivedTaskList: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     /// nil until the index has been read.
     let archived: [ArchivedSessionRecord]?
     let errorMessage: String?
@@ -63,7 +64,7 @@ struct ArchivedTaskList: View {
                 LazyVStack(alignment: .leading, spacing: 1) {
                     if let errorMessage {
                         Label(errorMessage, systemImage: "exclamationmark.triangle")
-                            .font(.caption)
+                            .font(.yardlet(.caption, scale: interfaceScale))
                             .foregroundStyle(.red)
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.horizontal, 13)
@@ -74,14 +75,14 @@ struct ArchivedTaskList: View {
                             ProgressView()
                                 .controlSize(.small)
                             Text(L10n.string("Loading archived tasks…"))
-                                .font(.caption)
+                                .font(.yardlet(.caption, scale: interfaceScale))
                                 .foregroundStyle(.secondary)
                         }
                         .padding(.horizontal, 13)
                         .accessibilityElement(children: .combine)
                     } else if shown.isEmpty {
                         Text(L10n.string(searchText.isEmpty ? "No archived tasks." : "No matching archived tasks."))
-                            .font(.caption)
+                            .font(.yardlet(.caption, scale: interfaceScale))
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 13)
                     } else {
@@ -165,7 +166,7 @@ struct ArchivedTaskRow: View {
             } else if isHovering {
                 Button(L10n.string("Unarchive"), action: onUnarchive)
                     .buttonStyle(.borderless)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 11 * interfaceScale, weight: .medium))
                     .padding(.horizontal, 7)
                     .frame(height: 22)
                     .background(ParityTheme.hoverFill, in: RoundedRectangle(cornerRadius: 5))
@@ -202,6 +203,7 @@ struct ArchivedTaskRow: View {
 /// The line under the window that says what archiving or unarchiving did with a task's worktree
 /// when it did not simply tidy it away. It stays until it is closed or the next archive.
 struct WorktreeNoticeBar: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let message: String
     var systemImage = "arrow.triangle.branch"
     let onDismiss: () -> Void
@@ -209,14 +211,14 @@ struct WorktreeNoticeBar: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Label(message, systemImage: systemImage)
-                .font(.caption)
+                .font(.yardlet(.caption, scale: interfaceScale))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
             Spacer(minLength: 8)
             Button(action: onDismiss) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(.system(size: 9 * interfaceScale, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .frame(width: 16, height: 16)
                     .contentShape(Rectangle())

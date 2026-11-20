@@ -9,7 +9,7 @@ enum MacShortcut: Hashable, Identifiable {
     case toggleTerminal, terminalAlternate, openModelMenu, back, forward, newTab, closeTab, closeWindow
     case reopenClosedTab, nextTab, previousTab, splitRight, splitDown, closePane, focusLeft, focusRight
     case focusUp, focusDown, conversationFind, nextResult, previousResult, surfaceChat, surfaceReview
-    case surfaceTerminal, surfaceBrowser
+    case surfaceTerminal, surfaceBrowser, zoomIn, zoomOut, actualSize
     case composerSend, composerAlternate, composerNewline, composerEscape, start, acceptSuggestion, complete
     case pasteAttachment, leaveBash, previousSuggestion, nextSuggestion
     case attachSelection
@@ -57,6 +57,7 @@ enum MacShortcut: Hashable, Identifiable {
         .forward, .newTab, .closeTab, .closeWindow, .reopenClosedTab, .nextTab, .previousTab, .splitRight,
         .splitDown, .closePane, .focusLeft, .focusRight, .focusUp, .focusDown, .conversationFind,
         .nextResult, .previousResult, .surfaceChat, .surfaceReview, .surfaceTerminal, .surfaceBrowser,
+        .actualSize, .zoomIn, .zoomOut,
         .composerSend, .composerAlternate, .composerNewline, .composerEscape, .start, .acceptSuggestion,
         .complete, .pasteAttachment, .leaveBash, .previousSuggestion, .nextSuggestion, .attachSelection,
         .browserNew, .browserClose, .browserReopen, .browserNext, .browserPrevious, .browserCopy,
@@ -111,6 +112,9 @@ enum MacShortcut: Hashable, Identifiable {
         case .surfaceReview: .init("Window", "Review", "2", .command)
         case .surfaceTerminal: .init("Window", "Terminal", "3", .command)
         case .surfaceBrowser: .init("Window", "Browser", "4", .command)
+        case .actualSize: .init("Window", "Actual Size", "0", .command)
+        case .zoomIn: .init("Window", "Zoom In", "+", .command)
+        case .zoomOut: .init("Window", "Zoom Out", "-", .command)
         case .composerSend: .init("Composer", "Send or allow once", .return, [])
         case .composerAlternate: .init("Composer", "Send alternate follow-up", .return, .command)
         case .composerNewline: .init("Composer", "Insert newline", .return, .shift)

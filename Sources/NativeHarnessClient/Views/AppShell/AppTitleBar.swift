@@ -211,7 +211,7 @@ struct IntegratedTitleBar: View {
     @ViewBuilder
     private var selectedTitle: some View {
         if let session {
-            TaskTitleMenu(session: session, actions: headerActions, size: 12.5 * interfaceScale)
+            TaskTitleMenu(session: session, actions: headerActions, size: 12.5)
                 .id(session.id)
         } else if let splitTitle {
             splitTitle
