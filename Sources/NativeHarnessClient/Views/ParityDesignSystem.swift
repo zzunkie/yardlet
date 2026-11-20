@@ -204,6 +204,9 @@ enum ParityTheme {
     static let subtleFill = Color.primary.opacity(0.035)
     static let selectedFill = Color.primary.opacity(0.095)
     static let hoverFill = Color.primary.opacity(0.065)
+    /// The shade a waiting request's panel lays over the elevated surface (`ConversationRequestPanel`), so the
+    /// panel stands apart from the canvas and the composer in both appearances.
+    static let requestPanelFill = Color.primary.opacity(0.045)
     static let primaryActionFill = Color(nsColor: NSColor(name: "YardletPrimaryActionFill") { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             ? NSColor(calibratedWhite: 0.88, alpha: 1)

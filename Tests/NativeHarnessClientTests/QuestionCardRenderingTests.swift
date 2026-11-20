@@ -84,6 +84,34 @@ final class QuestionCardRenderingTests: XCTestCase {
         }
     }
 
+    /// No control on a waiting request's panel draws a focus ring (2026-11-20: a person saw one on the question
+    /// card and had asked for none): SwiftUI makes no ring view for the question form, its options and buttons, an
+    /// approval's answers or a plan's buttons, and the plan's field draws none of AppKit's.
+    func testNoControlOnAWaitingRequestDrawsAFocusRing() throws {
+        let bash = PermissionRequest(id: "bash", title: "Bash", detail: "Deploy the site", command: "npm run deploy",
+                                     toolCallID: "bash")
+        let plan = PermissionRequest(id: "plan", title: "Review the plan", detail: nil, command: nil,
+                                     structured: .plan("# Plan"), toolCallID: "plan")
+        let requests = try [bash, plan].map { permission in
+            let entries = [TranscriptEntry(content: .user(text: "Go")),
+                           TranscriptEntry(content: .permission(permission, state: .pending))]
+            return try XCTUnwrap(TranscriptConversationProjection.presentation(
+                from: entries, harness: .claudeCode, status: .waitingForApproval, latestTurnIsComplete: false)
+                .turns.last?.requests.first)
+        } + [Self.request(state: .pending)]
+        for request in requests {
+            let host = WindowlessRender.Host(Self.card(request, appearance: .light), size: NSSize(width: 640, height: 760))
+            defer { host.close() }
+            host.settle()
+            func views(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(views) }
+            let all = views(host.hosting)
+            XCTAssertEqual(all.filter { String(describing: type(of: $0)).contains("FocusRing") }.count, 0,
+                           "\(request.id): a control draws a focus ring")
+            XCTAssertTrue(all.compactMap { $0 as? NSTextField }.filter(\.isEditable).allSatisfy { $0.focusRingType == .none },
+                          "\(request.id): a field draws a focus ring")
+        }
+    }
+
     /// One question whose second option carries a multi-line preview, as Claude Code's
     /// `AskUserQuestion` sends a mockup to compare.
     static let previewQuestions = [
