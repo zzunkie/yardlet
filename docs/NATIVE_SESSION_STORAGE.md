@@ -713,10 +713,12 @@ can take the task while it is dragged over it.
 
 A chat can become a project of its own folder too: for a task in no project whose folder no listed project holds
 (`TaskProjectMove.Options.canMakeProject`), "Move to project" ends with "New project" (the palette's "Move to new
-project"), and dropping its row on the sidebar's Projects title does the same. That title stays while chats are
-listed, even before there is a project, outside a search. The project then opens in Edit project with its name
-selected (`ProjectEditSheet.focusesName`), so Return keeps the name and typing replaces it. Another Mac's window does
-not offer it. The storage contract is as follows.
+project"), and dropping its row on the sidebar's Projects title does the same. With no projects the sidebar lists no
+Projects title until a chat that can become one is dragged, and only while the drag lasts (`SidebarChatDrag`). SwiftUI
+tells the sidebar when a drag starts and ends from macOS 26; on macOS 15 the title stays as the projects list it, and
+the chat's menu offers New project. The project then opens in Edit project with its name selected
+(`ProjectEditSheet.focusesName`), so Return keeps the name and typing replaces it. Another Mac's window does not offer
+it. The storage contract is as follows.
 
 - **A chat made a project keeps its folder:** `AppModel.makeProject(from:)` moves the task by ID, as below, into a
   new project of the task's folder, named after the task's title as Chats lists it

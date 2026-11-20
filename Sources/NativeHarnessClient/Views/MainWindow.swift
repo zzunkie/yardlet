@@ -56,6 +56,8 @@ struct MainWindow: View {
     @State private var taskSurfaceHostings = TaskSurfaceHostings()
     /// The task rows' hover card, drawn over the sidebar and the content beside it.
     @State private var sidebarHoverCard = SidebarHoverCardState()
+    /// A chat dragged in the sidebar that Projects can take, which lists Projects while it lasts.
+    @State private var sidebarChatDrag = SidebarChatDrag()
     /// The shown task's place in the sidebar while the list is scrolled away from its top. The window
     /// is drawn again only when the hold changes the order, not each time the list crosses its top.
     @State private var sidebarOrderHold = SidebarOrderHold()
@@ -2135,6 +2137,7 @@ struct MainWindow: View {
                     .environment(model.pullRequests)
                     .environment(model.accountAssignments)
                     .environment(\.sidebarHoverCard, sidebarHoverCard)
+                    .environment(\.sidebarChatDrag, sidebarChatDrag)
                     .onChange(of: model.splits.selection, initial: true) { holdSidebarOrder() }
                     }
                     }

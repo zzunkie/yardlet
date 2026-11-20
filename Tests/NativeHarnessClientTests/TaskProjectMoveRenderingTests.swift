@@ -266,11 +266,17 @@ final class TaskProjectMoveRenderingTests: XCTestCase {
         }
     }
 
-    /// A chat dropped on Projects becomes a project of its own folder, so Projects is listed under the
-    /// chats even before there is a project. Another Mac's window, which makes no project here, and a
-    /// search leave it out as before. Drawn into `.build/move-project-qa` as `projects-drop-target-*.png`,
-    /// light and dark.
-    func testProjectsIsListedUnderTheChatsToTakeADroppedChat() throws {
+    /// With no projects the sidebar lists no Projects title, as before. While a chat that can become a
+    /// project is dragged (`SidebarChatDrag`), Projects is listed under the chats and takes the chat,
+    /// which becomes a project of its own folder; once the drag ends, the title is gone again. Another
+    /// Mac's window, which makes no project here, lists none. Drawn into `.build/move-project-qa` with the
+    /// chat over the title, light and dark: `projects-drop-target-*.png`.
+    func testProjectsIsListedWhileAChatIsDraggedWithNoProjects() async throws {
+        // SwiftUI reads a dropped item only in a type Launch Services knows as data, as the next test says.
+        guard UTType.yardletTaskReference.conforms(to: .data) else {
+            return XCTFail("No registered bundle declares \(UTType.yardletTaskReference.identifier), "
+                           + "so a drop cannot read the task")
+        }
         let home = URL(filePath: "/tmp/move-project-qa/home", directoryHint: .isDirectory)
         let projects = ProjectStore(chatWorkspaceHome: home)
         let now = Date()
@@ -280,52 +286,91 @@ final class TaskProjectMoveRenderingTests: XCTestCase {
                           runtimeExecutableURL: URL(filePath: "/tmp/agent"), title: title, titleOrigin: .provider,
                           status: .ready, updatedAt: now.addingTimeInterval(-minutesAgo * 60))
         }
-        let sessions = [chat("Plan the weekend trip", in: "new-chat", minutesAgo: 3),
-                        chat("Compare standing desks", in: "new-chat-2", minutesAgo: 20)]
+        let trip = chat("Plan the weekend trip", in: "new-chat", minutesAgo: 3)
+        let desks = chat("Compare standing desks", in: "new-chat-2", minutesAgo: 20)
+        let sessions = [trip, desks]
         let disclosure = SidebarDisclosureStore(
             defaults: try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("projects-drop-qa"))))
-        func sidebar(makesProjects: Bool, search: String = "") -> TaskSidebar {
+        let chatDrag = SidebarChatDrag()
+        var made: [String] = []
+        func sidebar(_ scheme: ColorScheme = .light, makesProjects: Bool = true) -> some View {
             let groups = projects.visibleGroups(sessions: sessions)
             let layout = SidebarProjection.layout(visibleGroups: groups, allGroups: groups,
                                                   chats: projects.chats(sessions: sessions), splits: [],
-                                                  isFiltering: !search.isEmpty, disclosure: disclosure.disclosure,
-                                                  selection: .session(sessions[0].id))
-            return TaskSidebar(layout: layout, allGroups: groups, isRestoring: false, selection: .session(sessions[0].id),
-                searchText: .constant(search), onNewTask: {}, onActivate: { _ in }, onNewTaskInProject: { _ in },
+                                                  isFiltering: false, disclosure: disclosure.disclosure,
+                                                  selection: .session(trip.id))
+            return TaskSidebar(layout: layout, allGroups: groups, isRestoring: false, selection: .session(trip.id),
+                searchText: .constant(""), onNewTask: {}, onActivate: { _ in }, onNewTaskInProject: { _ in },
                 onAddProject: {}, projects: projects, onEditProject: { _ in },
                 onArchiveProjectChats: { _ in }, onRemoveProject: { _ in }, onTogglePinned: { _ in },
                 onArchive: { _ in }, onDelete: { _ in }, onRename: { _ in }, onMarkRead: { _ in },
-                onMakeProject: makesProjects ? { _ in } : nil, disclosure: disclosure)
+                onMakeProject: makesProjects ? { made.append($0.title) } : nil, disclosure: disclosure)
+                .environment(\.sidebarChatDrag, chatDrag)
+                .tint(Color.primary)
+                .environment(\.colorScheme, scheme)
+                .frame(width: ParityTheme.sidebarWidth, height: 300, alignment: .top)
+                .background(ParityTheme.sidebar)
         }
         let size = NSSize(width: ParityTheme.sidebarWidth, height: 300)
-        func elements(_ view: TaskSidebar) -> [WindowlessRender.AccessibilityElement] {
-            let host = WindowlessRender.Host(view.frame(width: size.width, height: size.height, alignment: .top), size: size)
-            defer { host.close() }
-            host.settle()
-            return host.accessibilityElements()
-        }
         func isTitle(_ text: String) -> (WindowlessRender.AccessibilityElement) -> Bool {
             { $0.label == text || $0.value == text }
         }
+        func listsProjects(_ host: WindowlessRender.Host<some View>) -> Bool {
+            host.accessibilityElements().contains(where: isTitle(L10n.string("Projects")))
+        }
+        /// The middle of `frame`, from the window's top-left, unflipped as a drag gives it.
+        func middle(_ frame: CGRect) -> NSPoint { NSPoint(x: frame.midX, y: size.height - frame.midY) }
 
-        let shown = elements(sidebar(makesProjects: true))
+        let host = WindowlessRender.Host(sidebar(), size: size, appearance: .light)
+        defer { host.close() }
+        host.settle()
+        XCTAssertFalse(listsProjects(host), "With no projects and no drag, the sidebar is as it was")
+
+        // A chat's drag starts, as its row tells SwiftUI the task it drags.
+        _ = SidebarNesting.dragging(desks.id)
+        chatDrag.setDragging(true)
+        host.settle()
+        let shown = host.accessibilityElements()
         let chatsTitle = try XCTUnwrap(shown.firstIndex(where: isTitle(L10n.string("Chats"))), "\(shown)")
         let projectsTitle = try XCTUnwrap(shown.firstIndex(where: isTitle(L10n.string("Projects"))), "\(shown)")
-        let lastChat = try XCTUnwrap(shown.lastIndex { $0.label.hasPrefix("Compare standing desks") }, "\(shown)")
+        let lastChat = try XCTUnwrap(shown.lastIndex { $0.label.hasPrefix(desks.title) }, "\(shown)")
         XCTAssertTrue(chatsTitle < lastChat && lastChat < projectsTitle, "Under the chats: \(shown)")
-        XCTAssertFalse(elements(sidebar(makesProjects: false)).contains(where: isTitle(L10n.string("Projects"))),
-                       "Another Mac's window makes no project here")
-        XCTAssertFalse(elements(sidebar(makesProjects: true, search: "trip")).contains(where: isTitle(L10n.string("Projects"))),
-                       "A search lists what matches")
 
         let directory = try WindowlessRender.directory("move-project-qa")
-        try WindowlessRender.hostedInBothAppearances("projects-drop-target", in: directory, size: size) { appearance in
-            sidebar(makesProjects: true)
-                .tint(Color.primary)
-                .environment(\.colorScheme, appearance.colorScheme)
-                .frame(width: size.width, height: size.height, alignment: .top)
-                .background(ParityTheme.sidebar)
+        for appearance in WindowlessRender.Appearance.allCases {
+            let shot = WindowlessRender.Host(sidebar(appearance.colorScheme), size: size, appearance: appearance)
+            defer { shot.close() }
+            shot.settle()
+            let drag = try TaskRowDrag(desks.id, at: middle(try textFrame(L10n.string("Projects"), in: shot)),
+                                       in: shot.window)
+            defer { drag.close() }
+            let destination = try XCTUnwrap(drag.destination(in: shot.hosting))
+            _ = destination.draggingEntered(drag)
+            XCTAssertEqual(destination.draggingUpdated(drag), .move, "A chat can become a project")
+            shot.settle(passes: 3)
+            try WindowlessRender.writePNG(try shot.capture().bitmap,
+                                          to: directory.appending(path: "projects-drop-target-\(appearance.suffix).png"))
+            destination.draggingExited(drag)
         }
+
+        // Dropped there, the chat becomes a project of its own folder. The drop reads the task from the
+        // drag's pasteboard after it returns, so the drag closes once the drop has acted.
+        let drag = try TaskRowDrag(desks.id, at: middle(try textFrame(L10n.string("Projects"), in: host)), in: host.window)
+        defer { drag.close() }
+        let destination = try XCTUnwrap(drag.destination(in: host.hosting))
+        _ = destination.draggingEntered(drag)
+        _ = destination.draggingUpdated(drag)
+        XCTAssertTrue(destination.performDragOperation(drag))
+        try await waitUntil { made == [desks.title] }
+
+        let remote = WindowlessRender.Host(sidebar(makesProjects: false), size: size)
+        defer { remote.close() }
+        remote.settle()
+        XCTAssertFalse(listsProjects(remote), "Another Mac's window makes no project here")
+
+        chatDrag.setDragging(false)
+        host.settle()
+        XCTAssertFalse(listsProjects(host), "Gone once the drag ends")
     }
 
     /// A task dragged onto a project's row moves there, as its "Move to project" menu offers, and a chat

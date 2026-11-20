@@ -297,6 +297,7 @@ struct TaskSidebar: View {
     @State private var nesting = SidebarNesting()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.sidebarHoverCard) private var hoverCard
+    @Environment(\.sidebarChatDrag) private var chatDrag
     /// Where the list's content is in the window, for the rows' hover cards.
     @State private var listOrigin = SidebarListOrigin()
 
@@ -369,14 +370,13 @@ struct TaskSidebar: View {
                                 chatsEntry(chats)
                             }
 
-                            if !layout.sections.isEmpty || (layout.pinned.isEmpty && layout.chats == nil)
-                                || takesChatsOnProjects {
-                                SidebarProjectsTitle(
-                                    onAdd: onAddProject ?? onNewTask,
-                                    addLabel: L10n.string(onAddProject == nil ? "New task" : "Add project…"),
-                                    topPadding: layout.pinned.isEmpty && layout.chats == nil ? 0 : 16,
-                                    taskToMakeProject: taskToMakeProject, onMakeProject: onMakeProject)
-                            }
+                            SidebarProjectsTitle(
+                                isListed: !layout.sections.isEmpty || (layout.pinned.isEmpty && layout.chats == nil),
+                                onAdd: onAddProject ?? onNewTask,
+                                addLabel: L10n.string(onAddProject == nil ? "New task" : "Add project…"),
+                                topPadding: layout.pinned.isEmpty && layout.chats == nil ? 0 : 16,
+                                taskToMakeProject: taskToMakeProject, onMakeProject: onMakeProject,
+                                chatDrag: onMakeProject == nil ? nil : chatDrag)
 
                             if layout.sections.isEmpty, layout.pinned.isEmpty, layout.chats == nil, !searchText.isEmpty,
                                cloudRows.all.isEmpty {
@@ -396,6 +396,8 @@ struct TaskSidebar: View {
                     .padding(.bottom, 12)
                     // The rows' frames are read in the content, which scrolling leaves as they are.
                     .coordinateSpace(.named(SidebarListOrigin.contentSpace))
+                    .modifier(SidebarChatDragTracking(chatDrag: onMakeProject == nil ? nil : chatDrag,
+                                                      takes: { taskToMakeProject($0) != nil }))
                 }
                 .scrollPosition($position)
                 .environment(\.sidebarListOrigin, listOrigin)
@@ -550,12 +552,6 @@ struct TaskSidebar: View {
                 .frame(height: SidebarMetrics.groupBottomSpacing - SidebarMetrics.rowSpacing)
                 .accessibilityHidden(true)
         }
-    }
-
-    /// A chat dropped on Projects becomes a project of its own folder, so the title stays while chats are
-    /// listed, even before there is a project, where the window makes projects and no search filters the list.
-    private var takesChatsOnProjects: Bool {
-        layout.chats != nil && onMakeProject != nil && searchText.isEmpty
     }
 
     /// The listed task with `id` and the moves its row's "Move to project" menu offers, for a drop.
@@ -2284,9 +2280,12 @@ private struct SidebarTaskDropModifier: ViewModifier {
 }
 
 /// The Projects title over the projects, which takes a chat dropped on it and makes it a project of its own
-/// folder. It keeps to itself whether a chat it can take is over it, as a project's row does, so a drag
-/// coming over it or leaving draws the title again and not the sidebar.
+/// folder. With no projects it is listed only while a chat that can become one is dragged (`SidebarChatDrag`),
+/// so the sidebar stays as it is until then. It keeps to itself whether a chat it can take is over it, as a
+/// project's row does, so a drag coming over it or leaving draws the title again and not the sidebar.
 private struct SidebarProjectsTitle: View {
+    /// Whether the title is listed whatever is dragged: there are projects, or nothing else is listed.
+    let isListed: Bool
     let onAdd: () -> Void
     let addLabel: String
     let topPadding: CGFloat
@@ -2294,17 +2293,76 @@ private struct SidebarProjectsTitle: View {
     let taskToMakeProject: (UUID) -> SessionRecord?
     /// Nil where the window cannot make a project, and the title takes no drop.
     let onMakeProject: ((SessionRecord) -> Void)?
+    /// The drag that lists the title while it lasts; nil where the window makes no project.
+    var chatDrag: SidebarChatDrag?
     /// A chat that can become a project is dragged over the title.
     @State private var isDropTargeted = false
 
     var body: some View {
-        ParitySectionTitle(title: L10n.string("Projects"), trailingAction: onAdd, trailingLabel: addLabel)
-            .padding(.horizontal, 9)
-            .background(isDropTargeted ? ParityTheme.selectedFill : .clear, in: SidebarMetrics.rowShape())
-            .padding(.horizontal, 4)
-            .padding(.top, topPadding)
-            .modifier(SidebarProjectDropModifier(take: taskToMakeProject, perform: onMakeProject,
-                                                 isTargeted: $isDropTargeted))
+        if isListed || chatDrag?.isDragging == true {
+            ParitySectionTitle(title: L10n.string("Projects"), trailingAction: onAdd, trailingLabel: addLabel)
+                .padding(.horizontal, 9)
+                .background(isDropTargeted ? ParityTheme.selectedFill : .clear, in: SidebarMetrics.rowShape())
+                .padding(.horizontal, 4)
+                .padding(.top, topPadding)
+                .modifier(SidebarProjectDropModifier(take: taskToMakeProject, perform: onMakeProject,
+                                                     isTargeted: $isDropTargeted))
+        }
+    }
+}
+
+/// A chat that can become a project of its own folder, dragged in the window's sidebar: from the drag's
+/// start to its end, Projects is listed to take it even when there are no projects. SwiftUI tells a view
+/// when the drags it starts begin and end from macOS 26 (`SidebarChatDragTracking`); on macOS 15 nothing
+/// is told, so the title stays as the projects list it, and the chat's menu still offers New project.
+@MainActor
+@Observable
+final class SidebarChatDrag {
+    /// Whether such a chat is being dragged.
+    private(set) var isDragging = false
+
+    func setDragging(_ dragging: Bool) {
+        // Only a change draws the title again.
+        if isDragging != dragging { isDragging = dragging }
+    }
+}
+
+private struct SidebarChatDragKey: EnvironmentKey {
+    static let defaultValue: SidebarChatDrag? = nil
+}
+
+extension EnvironmentValues {
+    /// The window's drag of a chat that Projects can take (`SidebarChatDrag`); nil where there is none.
+    var sidebarChatDrag: SidebarChatDrag? {
+        get { self[SidebarChatDragKey.self] }
+        set { self[SidebarChatDragKey.self] = newValue }
+    }
+}
+
+/// Tells `chatDrag` whether a drag that starts in the list is of a chat Projects can take, and when the
+/// drag ends, from the drag's phases, which reach the list from macOS 26.
+private struct SidebarChatDragTracking: ViewModifier {
+    let chatDrag: SidebarChatDrag?
+    /// Whether the listed task with a dragged task's ID can become a project of its own folder.
+    let takes: (UUID) -> Bool
+
+    func body(content: Content) -> some View {
+        if let chatDrag {
+            if #available(macOS 26, *) {
+                content.onDragSessionUpdated { session in
+                    switch session.phase {
+                    // Decided once, as the drag starts: its row has just named the task it drags.
+                    case .initial: chatDrag.setDragging(SidebarNesting.draggedTaskID.map(takes) ?? false)
+                    case .ended, .dataTransferCompleted: chatDrag.setDragging(false)
+                    default: break
+                    }
+                }
+            } else {
+                content
+            }
+        } else {
+            content
+        }
     }
 }
 
