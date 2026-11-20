@@ -4,6 +4,7 @@ import SwiftUI
 /// each run goes — a new task with the new-task screen's choices (project, local or new worktree,
 /// harness, account, model and permission), or the next message of a task.
 struct ScheduledTaskEditor: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let existing: ScheduledTask?
     let projects: [Project]
     /// The tasks "Continue this task" can choose, most recent first.
@@ -55,7 +56,7 @@ struct ScheduledTaskEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(L10n.string(existing == nil ? "New scheduled task" : "Edit scheduled task"))
-                .font(.title3.weight(.semibold))
+                .font(.yardlet(.title3, scale: interfaceScale).weight(.semibold))
                 .padding(.horizontal, 22)
                 .padding(.top, 20)
                 .padding(.bottom, 12)
@@ -70,7 +71,7 @@ struct ScheduledTaskEditor: View {
                     }
                     field(L10n.string("Instructions")) {
                         TextEditor(text: $draft.prompt)
-                            .font(.body)
+                            .font(.yardlet(.body, scale: interfaceScale))
                             .scrollContentBackground(.hidden)
                             .padding(6)
                             .frame(minHeight: 96, maxHeight: 160)
@@ -96,7 +97,7 @@ struct ScheduledTaskEditor: View {
     private func field<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
-                .font(.callout)
+                .font(.yardlet(.callout, scale: interfaceScale))
                 .foregroundStyle(.secondary)
             content()
         }
@@ -138,7 +139,7 @@ struct ScheduledTaskEditor: View {
                         Text(L10n.string("Yardlet runs scheduled tasks only while it is open."))
                     }
                 }
-                .font(.caption)
+                .font(.yardlet(.caption, scale: interfaceScale))
                 .foregroundStyle(.secondary)
             }
         }
@@ -166,7 +167,7 @@ struct ScheduledTaskEditor: View {
                     if isOn { days.wrappedValue.remove(day) } else { days.wrappedValue.insert(day) }
                 } label: {
                     Text(calendar.veryShortWeekdaySymbols[day.rawValue - 1])
-                        .font(.callout.weight(isOn ? .semibold : .regular))
+                        .font(.yardlet(.callout, scale: interfaceScale).weight(isOn ? .semibold : .regular))
                         .frame(width: 30, height: 26)
                         .foregroundStyle(isOn ? ParityTheme.primaryActionForeground : .primary)
                         .background(isOn ? ParityTheme.primaryActionFill : ParityTheme.subtleFill,
@@ -220,7 +221,7 @@ struct ScheduledTaskEditor: View {
             .frame(maxWidth: 460)
             Text(targetTask.map { L10n.format("Each run is sent to “%@” as its next message, with its own harness, account and model.", $0.title) }
                  ?? L10n.string("Each run is sent to the task as its next message."))
-                .font(.caption)
+                .font(.yardlet(.caption, scale: interfaceScale))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -337,7 +338,7 @@ struct ScheduledTaskEditor: View {
 
     private func label(_ text: String) -> some View {
         Text(text)
-            .font(.callout)
+            .font(.yardlet(.callout, scale: interfaceScale))
             .foregroundStyle(.secondary)
             .gridColumnAlignment(.trailing)
     }
@@ -360,7 +361,7 @@ struct ScheduledTaskEditor: View {
         HStack(spacing: 10) {
             if let problem = errorMessage ?? problem {
                 Text(problem)
-                    .font(.caption)
+                    .font(.yardlet(.caption, scale: interfaceScale))
                     .foregroundStyle(.secondary)
             }
             Spacer()

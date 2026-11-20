@@ -3,6 +3,7 @@ import SwiftUI
 /// The change a tool request would make, inside its approval card: a file's edits or new
 /// contents in the file change card's diff box, or a command with its description.
 struct PermissionRequestPreviewView: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let preview: PermissionRequestPreview
     /// The command's description, when the card does not already head itself with it.
     var showsDescription = true
@@ -27,7 +28,7 @@ struct PermissionRequestPreviewView: View {
             VStack(alignment: .leading, spacing: 8) {
                 if showsDescription, let description {
                     Text(description)
-                        .font(.system(size: 13))
+                        .font(.system(size: 13 * interfaceScale))
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
@@ -35,7 +36,7 @@ struct PermissionRequestPreviewView: View {
                 CodexBoundedOutput(text: command.text, folds: false)
                 if command.omittedLineCount > 0 {
                     Text(L10n.format("%lld more lines", Int64(command.omittedLineCount)))
-                        .font(.system(size: 12))
+                        .font(.system(size: 12 * interfaceScale))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -57,7 +58,7 @@ struct PermissionRequestPreviewView: View {
                 summary()
                 Spacer(minLength: 0)
             }
-            .font(.system(size: 11.5))
+            .font(.system(size: 11.5 * interfaceScale))
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
             Divider()
@@ -84,7 +85,7 @@ struct PermissionRequestPreviewView: View {
 
     private func notice(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 11.5))
+            .font(.system(size: 11.5 * interfaceScale))
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 10)

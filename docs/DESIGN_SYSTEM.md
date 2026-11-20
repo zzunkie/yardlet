@@ -20,7 +20,12 @@ A even when their setting is Yardlet-specific. A remote conversation retains the
 
 Values are macOS points at the standard interface size. Use the existing `yardletInterfaceScale`
 (compact 0.94, standard 1, large 1.08) where the component already supports it; text must not be
-scaled twice. SF system text provides Korean fallback. Code (code blocks, diffs, command output, open
+scaled twice. View › Zoom In and Zoom Out multiply it by the app's zoom (80% to 175%,
+`InterfaceZoom`), so a view that reads it follows both, code and the terminal included: a size in points
+as `size * yardletInterfaceScale`, a text style as `Font.yardlet(_:scale:)`, which draws exactly as the
+style at 1. SwiftUI's `dynamicTypeSize` does not change the size of macOS fonts, text styles such as
+`.body` included, so it is not a way to scale text. Native controls (buttons, pickers, switches) keep
+their system size. SF system text provides Korean fallback. Code (code blocks, diffs, command output, open
 files and the terminal) uses the code font Settings › Appearance chooses, `yardletCodeFont`: a view
 keeps its size for the standard code font, the system monospaced face at 12 points, and takes its
 font and size from it (`YardletCodeFont.size(_:scale:)`), so the default draws as before.
@@ -229,7 +234,7 @@ Menu commands continue to participate in System Settings > Keyboard > Keyboard S
 
 | Where the keyboard is | Default behavior |
 | --- | --- |
-| App and window menus | ⌘, opens Settings, ⌘K searches tasks and commands, and ⌘N opens New task. The Task, View, Edit, File, Window and Split View menus show the available keys for the current window. |
+| App and window menus | ⌘, opens Settings, ⌘K searches tasks and commands, and ⌘N opens New task. The Task, View, Edit, File, Window and Split View menus show the available keys for the current window. View › Zoom In (⌘+ or ⌘=), Zoom Out (⌘−) and Actual Size (⌘0) change the size of the text and code in the sidebar, home, conversation, composer, session rail and panels of every task window, as in the Claude and Codex apps; Settings and other sheets keep theirs. Yardlet keeps the zoom across launches, and Actual Size returns to Settings' interface size. A focused browser page or an image preview takes these keys for its own zoom first. |
 | Task window | ⌘1–4 select task surfaces. ⌃1–9 open pinned rows in sidebar order. ⌃Tab and ⌃⇧Tab move between window tabs, or between tasks when only one tab is open. ⌘⌥ and an arrow focus an adjacent pane. |
 | Composer | The existing send preference decides whether Return sends or inserts a line. The alternate follow-up uses ⌘Return or ⇧⌘Return. Typed commands and mentions take precedence over submission. Marked text stays with the input method. In the empty composer the send keys can allow one pending request, and Escape can deny one before stopping a turn. |
 | Terminal | ⌘J and Control-backtick toggle the terminal. The latter is handled by the window while its panel commands are enabled. ⇧⌘L attaches a shared terminal selection; the terminal and shell handle their own input. |

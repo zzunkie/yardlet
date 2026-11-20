@@ -6,6 +6,7 @@ import SwiftUI
 /// until every required field is filled in and every field is valid (`ConversationRequest.route`).
 /// An answered form shows what was sent, read-only, and no default as if it had been sent.
 struct CodexMCPElicitationFormView: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let form: CodexMCPElicitationForm
     @Binding var input: [String: CodexMCPElicitationFieldValue]
     let isAnswerable: Bool
@@ -32,10 +33,10 @@ struct CodexMCPElicitationFormView: View {
         let sent = form.sentText(of: field)
         return VStack(alignment: .leading, spacing: 3) {
             Text(field.label)
-                .font(.caption.weight(.medium))
+                .font(.yardlet(.caption, scale: interfaceScale).weight(.medium))
                 .foregroundStyle(.secondary)
             Text(sent ?? L10n.string("Not answered"))
-                .font(.callout)
+                .font(.yardlet(.callout, scale: interfaceScale))
                 .foregroundStyle(sent == nil ? .tertiary : .primary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
@@ -47,22 +48,22 @@ struct CodexMCPElicitationFormView: View {
         VStack(alignment: .leading, spacing: 6) {
             if case .boolean = field.kind {
                 Toggle(isOn: flag(field)) {
-                    Text(field.label).font(.callout.weight(.medium))
+                    Text(field.label).font(.yardlet(.callout, scale: interfaceScale).weight(.medium))
                 }
                 .toggleStyle(.checkbox)
                 .accessibilityLabel(field.label)
             } else {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(field.label)
-                        .font(.callout.weight(.medium))
+                        .font(.yardlet(.callout, scale: interfaceScale).weight(.medium))
                     Text(field.isRequired ? L10n.string("Required") : L10n.string("Optional"))
-                        .font(.caption2)
+                        .font(.yardlet(.caption2, scale: interfaceScale))
                         .foregroundStyle(.tertiary)
                 }
             }
             if let description = field.description, !description.isEmpty {
                 Text(description)
-                    .font(.caption)
+                    .font(.yardlet(.caption, scale: interfaceScale))
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -70,12 +71,12 @@ struct CodexMCPElicitationFormView: View {
             control(field)
             if let hint = CodexMCPElicitationForm.hint(field.kind) {
                 Text(hint)
-                    .font(.caption2)
+                    .font(.yardlet(.caption2, scale: interfaceScale))
                     .foregroundStyle(.tertiary)
             }
             if let issue = form.shownIssue(of: field, in: input) {
                 Text(issue.message)
-                    .font(.caption)
+                    .font(.yardlet(.caption, scale: interfaceScale))
                     .foregroundStyle(.red)
                     .accessibilityLabel(issue.message)
             }
@@ -113,7 +114,7 @@ struct CodexMCPElicitationFormView: View {
                             .foregroundStyle(isSelected ? ParityTheme.accent : Color.secondary)
                             .accessibilityHidden(true)
                         Text(option.title)
-                            .font(.callout.weight(isSelected ? .semibold : .regular))
+                            .font(.yardlet(.callout, scale: interfaceScale).weight(isSelected ? .semibold : .regular))
                         Spacer(minLength: 0)
                     }
                     .contentShape(Rectangle())

@@ -1069,6 +1069,7 @@ final class TranscriptProseFragment: NSTextLayoutFragment {
 
 /// "View full code" under a long code block, which opens the whole block in a sheet.
 private struct TranscriptFullCodeButton: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let language: String?
     let scale: CGFloat
     let payload: () -> String?
@@ -1090,7 +1091,7 @@ private struct TranscriptFullCodeButton: View {
         }
         .buttonStyle(.borderless)
         .parityPointer()
-        .font(.caption)
+        .font(.yardlet(.caption, scale: interfaceScale))
         .padding(10)
         .sheet(item: $fullCode, onDismiss: {
             focusBookmark?.restore()

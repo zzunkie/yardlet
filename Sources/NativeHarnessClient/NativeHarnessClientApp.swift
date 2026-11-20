@@ -237,6 +237,7 @@ final class NativeHarnessClientAppDelegate: NSObject, NSApplicationDelegate {
             sparkle.start()
         }
         WindowTooltipRelease.start()
+        InterfaceZoomCommands.watchAlternateZoomInKey()
 #if DEBUG
         PerfBenchFixture.applicationDidFinishLaunching()
 #endif
@@ -702,6 +703,7 @@ struct NativeHarnessClientApp: App {
             YardletSettingsCommands()
             YardletUpdateCommands(appDelegate: appDelegate, updateWait: appDelegate.updateWait)
             YardletTaskCommands()
+            InterfaceZoomCommands()
             YardletWindowLayerCommands()
             YardletTabCommands()
             YardletConversationFindCommands()
@@ -785,6 +787,7 @@ struct YardletWindowPreferences<Content: View>: View {
     @AppStorage(YardletPreferenceKeys.accent) private var accent = YardletAccentPreference.system
     @AppStorage(YardletPreferenceKeys.interfaceSize) private var interfaceSizeRawValue =
         YardletInterfaceSizePreference.standard.rawValue
+    @AppStorage(InterfaceZoom.key) private var zoom = 1.0
     @AppStorage(CodeFontPreference.nameKey) private var codeFontName = ""
     @AppStorage(CodeFontPreference.sizeKey) private var codeFontSize = String(CodeFontPreference.standardSize)
 
@@ -793,7 +796,7 @@ struct YardletWindowPreferences<Content: View>: View {
             content
                 .modifier(MacThemeContent(theme: effectiveTheme))
                 .preferredColorScheme(effectiveColorScheme)
-                .environment(\.yardletInterfaceScale, effectiveInterfaceSize.scale)
+                .environment(\.yardletInterfaceScale, effectiveInterfaceSize.scale * effectiveZoom)
                 .environment(\.yardletCodeFont, effectiveCodeFont)
                 .dynamicTypeSize(effectiveInterfaceSize.dynamicTypeSize)
         } else {
@@ -837,5 +840,18 @@ struct YardletWindowPreferences<Content: View>: View {
 #endif
         guard !usesVisualFixture else { return .standard }
         return YardletInterfaceSizePreference(rawValue: interfaceSizeRawValue) ?? .standard
+    }
+
+    /// View › Zoom In and Zoom Out on top of the interface size. A visual fixture draws at 100%, as in the
+    /// standard interface size.
+    private var effectiveZoom: CGFloat {
+#if DEBUG
+        if usesVisualFixture,
+           let argument = CommandLine.arguments.first(where: { $0.hasPrefix("--ui-fixture-interface-zoom=") }),
+           let level = Double(argument.dropFirst("--ui-fixture-interface-zoom=".count)) {
+            return InterfaceZoom.level(level)
+        }
+#endif
+        return usesVisualFixture ? 1 : InterfaceZoom.level(zoom)
     }
 }

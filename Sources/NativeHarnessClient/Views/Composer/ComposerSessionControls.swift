@@ -9,6 +9,7 @@ import SwiftUI
 /// a choice goes back through `onChoose` in the form its provider applies. Each control is its
 /// own subview of the row, so the row wraps them like the controls around them.
 struct ComposerSessionControls: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     enum Placement {
         case leading
         case trailing
@@ -75,7 +76,7 @@ struct ComposerSessionControls: View {
         }
         if let error = options.settingsError {
             Image(systemName: "exclamationmark.triangle")
-                .font(.caption)
+                .font(.yardlet(.caption, scale: interfaceScale))
                 .foregroundStyle(.orange)
                 .help(error)
                 .accessibilityLabel(error)
@@ -282,6 +283,7 @@ struct ComposerPermissionControl: View {
 /// The permission control's menu: the policy now, then the provider's description and choices, or
 /// what the session says about permissions without them.
 struct ComposerPermissionMenu: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let slot: ComposerPermissionSlot
     var focusedChoice: FocusState<String?>.Binding
     let onChoose: (ProviderCapabilityChoice, ProviderCapabilitySelector, _ isSelected: Bool) -> Void
@@ -293,7 +295,7 @@ struct ComposerPermissionMenu: View {
             if slot.showsChoices, let selector = slot.selector {
                 if let description = selector.description, !description.isEmpty {
                     Text(description)
-                        .font(.caption)
+                        .font(.yardlet(.caption, scale: interfaceScale))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, 14)
@@ -312,12 +314,12 @@ struct ComposerPermissionMenu: View {
             } else if let explanation = slot.explanation {
                 Label {
                     Text(explanation.text)
-                        .font(.caption)
+                        .font(.yardlet(.caption, scale: interfaceScale))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 } icon: {
                     Image(systemName: explanation.icon)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: 11 * interfaceScale, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
                 .padding(.horizontal, 14)

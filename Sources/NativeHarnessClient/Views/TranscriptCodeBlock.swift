@@ -35,7 +35,7 @@ struct TranscriptCodeBlock: View {
         return VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text(language ?? L10n.string("Code"))
-                    .font(.caption.monospaced()).fontDesign(nil)
+                    .font(.yardlet(.caption, scale: interfaceScale).monospaced()).fontDesign(nil)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 12)
                 if let accessory { accessory }
@@ -67,7 +67,7 @@ struct TranscriptCodeBlock: View {
                 }
                 .buttonStyle(.borderless)
                 .parityPointer()
-                .font(.caption)
+                .font(.yardlet(.caption, scale: interfaceScale))
                 .padding(10)
             }
         }
@@ -118,6 +118,7 @@ struct TranscriptCodeBlock: View {
 
 /// A whole code block in a sheet, from "View full code".
 struct TranscriptFullCodeSheet: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let language: String?
     let text: String
     let fontSize: CGFloat
@@ -126,7 +127,7 @@ struct TranscriptFullCodeSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text(language ?? L10n.string("Code")).font(.headline)
+                Text(language ?? L10n.string("Code")).font(.yardlet(.headline, scale: interfaceScale))
                 Spacer()
                 TranscriptCopyButton(title: L10n.string("Copy code")) { text }
                 Button(L10n.string("Done"), action: done)

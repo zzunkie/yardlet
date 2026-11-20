@@ -13,6 +13,7 @@ import SwiftUI
 /// Return goes on (Next, or the answer on the last question). Return in the answer field does the
 /// same.
 struct ConversationQuestionStepsView<Finish: View>: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let steps: [ConversationQuestionStep]
     @Binding var input: ConversationRequestFormInput
     @Binding var index: Int
@@ -43,14 +44,14 @@ struct ConversationQuestionStepsView<Finish: View>: View {
                 if let text = step.text, !text.isEmpty {
                     // The card's headline, at the conversation's own size.
                     Text(text)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: 14 * interfaceScale, weight: .semibold))
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if step.allowsMultipleSelections {
                     Text(L10n.string("Choose one or more"))
-                        .font(.system(size: 12))
+                        .font(.system(size: 12 * interfaceScale))
                         .foregroundStyle(.secondary)
                 }
                 if step.isFreeTextOnly {
@@ -122,11 +123,11 @@ struct ConversationQuestionStepsView<Finish: View>: View {
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(option.label)
-                        .font(.system(size: 13, weight: isSelected ? .medium : .regular))
+                        .font(.system(size: 13 * interfaceScale, weight: isSelected ? .medium : .regular))
                         .fixedSize(horizontal: false, vertical: true)
                     if let description = option.description, !description.isEmpty {
                         Text(description)
-                            .font(.system(size: 12))
+                            .font(.system(size: 12 * interfaceScale))
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -165,7 +166,7 @@ struct ConversationQuestionStepsView<Finish: View>: View {
             .disabled(!isAnswerable)
             .accessibilityHidden(true)
             textField(step, placeholder: L10n.string("Type your own answer"), isBordered: false)
-                .font(.system(size: 13))
+                .font(.system(size: 13 * interfaceScale))
                 .accessibilityLabel(L10n.string("Other"))
         }
         .padding(.horizontal, 10)
@@ -311,6 +312,7 @@ struct ConversationQuestionStepsView<Finish: View>: View {
 /// (`ConversationRequestBandTitle`), the provider's label for the question, and, among several, the
 /// question's place between the previous and next question.
 struct ConversationQuestionBand: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let title: String
     let steps: [ConversationQuestionStep]
     @Binding var index: Int
@@ -323,7 +325,7 @@ struct ConversationQuestionBand: View {
                 if let header = stepper.current?.header, !header.isEmpty {
                     Text(verbatim: "·").foregroundStyle(.tertiary).accessibilityHidden(true)
                     Text(header)
-                        .font(.system(size: 13))
+                        .font(.system(size: 13 * interfaceScale))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -336,7 +338,7 @@ struct ConversationQuestionBand: View {
                     pagerButton(systemImage: "chevron.left", label: L10n.string("Previous question"),
                                 isEnabled: stepper.hasPrevious) { move(by: -1) }
                     Text(L10n.format("Question %lld of %lld", Int64(stepper.index + 1), Int64(steps.count)))
-                        .font(.system(size: 12).monospacedDigit())
+                        .font(.system(size: 12 * interfaceScale).monospacedDigit())
                         .foregroundStyle(.secondary)
                         .fixedSize()
                     pagerButton(systemImage: "chevron.right", label: L10n.string("Next question"),
@@ -357,7 +359,7 @@ struct ConversationQuestionBand: View {
                              action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 10, weight: .semibold))
+                .font(.system(size: 10 * interfaceScale, weight: .semibold))
                 .frame(width: 20, height: 20)
                 .contentShape(Rectangle())
         }
@@ -373,16 +375,17 @@ struct ConversationQuestionBand: View {
 /// The start of a waiting request's header band: the accent symbol for what the request waits for, and its
 /// title.
 struct ConversationRequestBandTitle: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let symbol: String
     let title: String
 
     var body: some View {
         Image(systemName: symbol)
-            .font(.system(size: 13, weight: .semibold))
+            .font(.system(size: 13 * interfaceScale, weight: .semibold))
             .foregroundStyle(ParityTheme.accent)
             .accessibilityHidden(true)
         Text(title)
-            .font(.system(size: 13, weight: .semibold))
+            .font(.system(size: 13 * interfaceScale, weight: .semibold))
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -393,6 +396,7 @@ struct ConversationRequestBandTitle: View {
 /// beside it the picked option's preview where the question shows previews. Nothing on it can be
 /// pressed. With no answers known (`answers` nil) it lists the questions alone.
 struct ConversationQuestionSummary: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let steps: [ConversationQuestionStep]
     let answers: [String: ConversationQuestionAnswer]?
 
@@ -426,7 +430,7 @@ struct ConversationQuestionSummary: View {
         VStack(alignment: .leading, spacing: 3) {
             let question = step.text ?? step.header ?? L10n.string("Question")
             Text(question)
-                .font(.system(size: 13))
+                .font(.system(size: 13 * interfaceScale))
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
@@ -435,13 +439,13 @@ struct ConversationQuestionSummary: View {
                 if let answer = answers[step.id], !answer.values.isEmpty {
                     let text = Self.text(answer, isSecret: step.isSecret)
                     Text(text)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 13 * interfaceScale, weight: .medium))
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                         .conversationSelectionText(text)
                 } else {
                     Text(L10n.string("Not answered"))
-                        .font(.system(size: 13))
+                        .font(.system(size: 13 * interfaceScale))
                         .foregroundStyle(.tertiary)
                         .conversationSelectionText(L10n.string("Not answered"))
                 }
@@ -469,6 +473,7 @@ struct ConversationQuestionSummary: View {
 /// selectable, in a box like Claude Code's. Without one it says there is none, as Claude Code does
 /// beside an option that has none.
 struct ConversationQuestionPreview: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let markdown: String?
 
     /// The options' column beside a preview, about Claude Code's 30 columns.
@@ -483,7 +488,7 @@ struct ConversationQuestionPreview: View {
                 TranscriptMarkdownText(text: markdown)
             } else {
                 Text(L10n.string("No preview"))
-                    .font(.system(size: 12))
+                    .font(.system(size: 12 * interfaceScale))
                     .foregroundStyle(.tertiary)
                     .frame(maxWidth: .infinity, minHeight: 48)
             }

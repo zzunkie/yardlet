@@ -9,6 +9,7 @@ import SwiftUI
 /// Codex child thread as its own task, a Claude subtask in the panel beside the task, which can
 /// also be stopped while it runs (B8). The controls stay in view while the details are folded.
 struct ConversationSubagentCard: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let subagent: ConversationSubagent
     let phase: ConversationItemPhase
     let actions: ConversationActions
@@ -23,7 +24,7 @@ struct ConversationSubagentCard: View {
         ) {
             if let detail = subagent.detail, !detail.isEmpty {
                 Text(detail)
-                    .font(.system(size: 11, design: .monospaced)).fontDesign(nil)
+                    .font(.system(size: 11 * interfaceScale, design: .monospaced)).fontDesign(nil)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
             }
@@ -56,11 +57,11 @@ struct ConversationSubagentCard: View {
                 }
                 .parityLinkButton()
                 .parityPointer()
-                .font(.caption)
+                .font(.yardlet(.caption, scale: interfaceScale))
                 ForEach(Array(routes.enumerated()), id: \.offset) { _, route in
                     if case let .harnessSubtask(_, activityID) = route,
                        let error = actions.subtaskControls?.error(activityID) {
-                        Text(error).foregroundStyle(.red).font(.caption).textSelection(.enabled)
+                        Text(error).foregroundStyle(.red).font(.yardlet(.caption, scale: interfaceScale)).textSelection(.enabled)
                     }
                 }
             }
@@ -118,6 +119,7 @@ enum ConversationActivityStatus {
 /// The shared transcript's card for a call: a status tile, the title and the kind, the status,
 /// and the details folded below. A failed call opens itself.
 private struct ConversationActivityDisclosure<Details: View, Controls: View>: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let title: String
     let kindLabel: String
     let phase: ConversationItemPhase
@@ -196,18 +198,18 @@ private struct ConversationActivityDisclosure<Details: View, Controls: View>: Vi
                 RoundedRectangle(cornerRadius: 6)
                     .fill(phase == .running ? ParityTheme.accent.opacity(0.08) : ParityTheme.subtleFill)
                 Image(systemName: statusSymbol)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 11 * interfaceScale, weight: .semibold))
                     .foregroundStyle(phase == .failed ? Color.red : phase == .running ? ParityTheme.accent : .secondary)
             }
             .frame(width: 26, height: 26)
 
             HStack(spacing: 7) {
                 Text(title)
-                    .font(.callout.weight(.medium))
+                    .font(.yardlet(.callout, scale: interfaceScale).weight(.medium))
                     .lineLimit(1)
                 if kindLabel != title {
                     Text(kindLabel)
-                        .font(.caption2.weight(.medium))
+                        .font(.yardlet(.caption2, scale: interfaceScale).weight(.medium))
                         .foregroundStyle(.tertiary)
                         .padding(.horizontal, 6)
                         .frame(height: 18)
@@ -218,7 +220,7 @@ private struct ConversationActivityDisclosure<Details: View, Controls: View>: Vi
                 }
                 if let harnessLabel {
                     Text(harnessLabel)
-                        .font(.system(size: 11))
+                        .font(.system(size: 11 * interfaceScale))
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
                         .fixedSize()
@@ -232,7 +234,7 @@ private struct ConversationActivityDisclosure<Details: View, Controls: View>: Vi
                     .controlSize(.small)
             }
             Text(ConversationActivityStatus.label(phase))
-                .font(.caption)
+                .font(.yardlet(.caption, scale: interfaceScale))
                 .foregroundStyle(phase == .failed ? Color.red : Color.secondary)
             ConversationCopyDetailsButton(details: copyDetails)
         }
@@ -250,6 +252,7 @@ private struct ConversationActivityDisclosure<Details: View, Controls: View>: Vi
 
 /// A titled block of a call's text.
 struct ConversationActivitySection: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let title: String
     let text: String
     let accessibilityLabel: String
@@ -257,7 +260,7 @@ struct ConversationActivitySection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(title)
-                .font(.caption2.weight(.semibold))
+                .font(.yardlet(.caption2, scale: interfaceScale).weight(.semibold))
                 .foregroundStyle(.tertiary)
             ConversationActivityText(text: text, accessibilityLabel: accessibilityLabel)
         }
@@ -291,13 +294,14 @@ struct ConversationActivityText: View {
 
 /// The person allowed this call; the answered request is read here rather than as its own card.
 struct ConversationAllowedMark: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     var body: some View {
         HStack(spacing: 3) {
             Image(systemName: "checkmark.shield.fill")
                 .foregroundStyle(.green)
             Text(L10n.string("Allowed"))
         }
-        .font(.caption2.weight(.medium))
+        .font(.yardlet(.caption2, scale: interfaceScale).weight(.medium))
         .foregroundStyle(.secondary)
         .accessibilityElement(children: .combine)
     }
@@ -305,6 +309,7 @@ struct ConversationAllowedMark: View {
 
 /// "Copy item details": what the item ran and returned, on the clipboard.
 struct ConversationCopyDetailsButton: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let details: String?
     @State private var didCopy = false
 
@@ -315,7 +320,7 @@ struct ConversationCopyDetailsButton: View {
                 didCopy = true
             } label: {
                 Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.system(size: 10 * interfaceScale, weight: .medium))
                     .foregroundStyle(.tertiary)
                     .frame(width: 22, height: 22)
             }
@@ -332,6 +337,7 @@ struct ConversationCopyDetailsButton: View {
 /// command, a Claude Bash call, a Claude bash-mode command. The task's terminal opens and runs it,
 /// as the terminal's own "Run in terminal" has always run Codex's last command.
 struct ConversationRunInTerminalButton: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let action: () -> Void
 
     /// The button's action for `command`, when the task has a terminal and there is a command.
@@ -343,7 +349,7 @@ struct ConversationRunInTerminalButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: "apple.terminal")
-                .font(.system(size: 10, weight: .medium))
+                .font(.system(size: 10 * interfaceScale, weight: .medium))
                 .foregroundStyle(.tertiary)
                 .frame(width: 22, height: 22)
         }

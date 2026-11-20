@@ -5,6 +5,7 @@ import SwiftUI
 /// as an attached image shows (a click marks it up), then what the element is and the page's host. The
 /// pointer reads its page and selector. Without a capture it is a chip of its name.
 struct BrowserCommentChip: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let comment: BrowserComment
     /// The marked-up capture that takes the comment's capture's place.
     var onMarkedUp: ((URL) -> Void)?
@@ -29,7 +30,7 @@ struct BrowserCommentChip: View {
             HStack(spacing: 6) {
                 ComposerImageChip(url: image, name: comment.target, onMarkup: markup(image), onRemove: onRemove)
                 Text(Self.label(comment))
-                    .font(.caption2)
+                    .font(.yardlet(.caption2, scale: interfaceScale))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                     .frame(maxWidth: 160, alignment: .leading)

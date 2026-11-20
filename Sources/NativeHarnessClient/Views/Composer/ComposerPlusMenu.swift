@@ -49,6 +49,7 @@ struct ComposerMenuEntry: Identifiable {
 /// choose, → opens a list, ← goes back from one, and Escape closes the menu. The pointer
 /// highlights the row under it, as in a menu.
 struct ComposerMenuList: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let entries: [ComposerMenuEntry]
     /// The list's title with a way back, for a list opened from the "+" menu.
     var title: String? = nil
@@ -76,7 +77,7 @@ struct ComposerMenuList: View {
                 }
                 if let groupTitle = entry.groupTitle {
                     Text(groupTitle)
-                        .font(.caption.weight(.semibold))
+                        .font(.yardlet(.caption, scale: interfaceScale).weight(.semibold))
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 8)
                         .padding(.top, 2)
@@ -93,7 +94,7 @@ struct ComposerMenuList: View {
             }
             ForEach(footnotes, id: \.self) { note in
                 Text(note)
-                    .font(.caption)
+                    .font(.yardlet(.caption, scale: interfaceScale))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 8)
@@ -150,6 +151,7 @@ struct ComposerMenuList: View {
 
 /// "‹ Connectors": a list's title, which goes back to the "+" menu.
 struct ComposerMenuBackHeader: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let title: String
     let onBack: () -> Void
 
@@ -157,11 +159,11 @@ struct ComposerMenuBackHeader: View {
         Button(action: onBack) {
             HStack(spacing: 6) {
                 Image(systemName: "chevron.left")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.system(size: 10 * interfaceScale, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .frame(width: 18)
                 Text(title)
-                    .font(.callout.weight(.semibold))
+                    .font(.yardlet(.callout, scale: interfaceScale).weight(.semibold))
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 8)
@@ -177,6 +179,7 @@ struct ComposerMenuBackHeader: View {
 
 /// One row: the whole row chooses; a switch or button at its end does the same.
 struct ComposerMenuRow: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let entry: ComposerMenuEntry
     var isHighlighted = false
 
@@ -203,13 +206,13 @@ struct ComposerMenuRow: View {
             case let .button(title):
                 Button(title) { entry.action?() }
                     .buttonStyle(.borderless)
-                    .font(.caption.weight(.medium))
+                    .font(.yardlet(.caption, scale: interfaceScale).weight(.medium))
                     .foregroundStyle(ParityTheme.accent)
             case .none, .submenu:
                 EmptyView()
             }
         }
-        .font(.callout)
+        .font(.yardlet(.callout, scale: interfaceScale))
         .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, minHeight: entry.subtitle == nil ? 28 : 36, alignment: .leading)
         .background(isHighlighted ? ParityTheme.hoverFill : .clear, in: RoundedRectangle(cornerRadius: 6))
@@ -227,7 +230,7 @@ struct ComposerMenuRow: View {
                     .truncationMode(.middle)
                 if let subtitle = entry.subtitle {
                     Text(subtitle)
-                        .font(.caption)
+                        .font(.yardlet(.caption, scale: interfaceScale))
                         .foregroundStyle(subtitleStyle)
                         .lineLimit(1)
                 }
@@ -236,12 +239,12 @@ struct ComposerMenuRow: View {
             if case let .submenu(hint) = entry.accessory {
                 if let hint {
                     Text(hint)
-                        .font(.caption)
+                        .font(.yardlet(.caption, scale: interfaceScale))
                         .foregroundStyle(.orange)
                         .lineLimit(1)
                 }
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(.system(size: 9 * interfaceScale, weight: .semibold))
                     .foregroundStyle(.tertiary)
             }
         }
@@ -252,7 +255,7 @@ struct ComposerMenuRow: View {
         switch entry.icon {
         case let .symbol(name)?:
             Image(systemName: name)
-                .font(.system(size: 13))
+                .font(.system(size: 13 * interfaceScale))
                 .foregroundStyle(.secondary)
                 .frame(width: 18, height: 18)
         case let .connector(name, presetID, sources)?:

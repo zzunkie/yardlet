@@ -106,7 +106,7 @@ struct ScheduledTaskList: View {
 
     private func emptyLine(_ text: String) -> some View {
         Text(text)
-            .font(.caption)
+            .font(.yardlet(.caption, scale: interfaceScale))
             .foregroundStyle(.secondary)
             .padding(.horizontal, 13)
     }
@@ -216,7 +216,7 @@ struct ScheduleSectionHeader: View {
                     menuItems(onDeleteAll)
                 } label: {
                     Image(systemName: "ellipsis")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 11 * interfaceScale, weight: .semibold))
                         .foregroundStyle(.secondary)
                         .frame(width: 24, height: 24)
                         .contentShape(Rectangle())
@@ -346,16 +346,17 @@ struct ContinuedTaskLabel: View {
 /// The mark before a schedule's status where it is off: a pause for one the person paused, a warning for
 /// one that turned itself off after its runs kept failing to start.
 struct ScheduleStateMark: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let schedule: ScheduledTask
 
     var body: some View {
         if schedule.state.stopReason == .repeatedFailures {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 9))
+                .font(.system(size: 9 * interfaceScale))
                 .foregroundStyle(.orange)
         } else if !schedule.isEnabled, schedule.state.stopReason == nil {
             Image(systemName: "pause.fill")
-                .font(.system(size: 8))
+                .font(.system(size: 8 * interfaceScale))
                 .foregroundStyle(.secondary)
         }
     }

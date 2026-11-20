@@ -106,6 +106,7 @@ struct CodexChildThreadPane: View {
 /// output") and the Codex app's background terminal tab ("No output yet"). It follows the output
 /// while the task runs and keeps to its newest part.
 struct BackgroundOutputPane: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let title: String
     let workspaceURL: URL
     /// The task still runs: its output is read again every second.
@@ -131,11 +132,11 @@ struct BackgroundOutputPane: View {
                         VStack(alignment: .leading, spacing: 6) {
                             if output.isTruncated {
                                 Text(L10n.string("(Earlier output not shown)"))
-                                    .font(.caption)
+                                    .font(.yardlet(.caption, scale: interfaceScale))
                                     .foregroundStyle(.secondary)
                             }
                             Text(output.text)
-                                .font(.system(size: 11.5, design: .monospaced)).fontDesign(nil)
+                                .font(.system(size: 11.5 * interfaceScale, design: .monospaced)).fontDesign(nil)
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             Color.clear.frame(height: 1).id("end")

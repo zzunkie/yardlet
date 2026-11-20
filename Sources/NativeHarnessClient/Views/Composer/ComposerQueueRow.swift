@@ -2,6 +2,7 @@ import SwiftUI
 
 /// The queue row shared by host and remote composers; actions stay with their owner.
 struct ComposerQueueRow: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let title: String
     let failed: Bool
     let fromTask: Bool
@@ -100,7 +101,7 @@ struct ComposerQueueRow: View {
             }
             .fixedSize()
         }
-        .font(.caption)
+        .font(.yardlet(.caption, scale: interfaceScale))
         .foregroundStyle(failed ? .red : .secondary)
         .padding(.horizontal, 9)
         .frame(maxWidth: .infinity, minHeight: 28)
@@ -149,6 +150,7 @@ struct ComposerQueueRow: View {
 
 /// The same paused-queue explanation in either window.
 struct ComposerQueuePausedRow: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     var resume: (() -> Void)?
     var body: some View {
         HStack(spacing: 6) {
@@ -161,7 +163,7 @@ struct ComposerQueuePausedRow: View {
                     .parityPointer()
             }
         }
-        .font(.caption)
+        .font(.yardlet(.caption, scale: interfaceScale))
         .foregroundStyle(.secondary)
         .padding(.horizontal, 15)
         .padding(.top, 9)

@@ -15,6 +15,7 @@ import SwiftUI
 /// answered, opens it. The tasks it reads are asked about by the pull request lookup while it shows
 /// (`TaskPullRequestMonitor.showHome`), as a sidebar row's task is.
 struct NewTaskHomeLists: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     enum Part: Hashable {
         case projects
         /// The folder's rows that start something, over the composer.
@@ -152,7 +153,7 @@ struct NewTaskHomeLists: View {
                                            action: { toggle(.moreProjects) }) {
                                 Text(layout.showsAllProjects ? L10n.string("Show less")
                                      : L10n.format("Show %lld more", layout.hiddenProjects))
-                                    .font(.system(size: 12))
+                                    .font(.system(size: 12 * interfaceScale))
                                     .foregroundStyle(.secondary)
                             }
                         }
@@ -238,11 +239,11 @@ struct NewTaskHomeLists: View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 8) {
                 Image(systemName: "clock.arrow.circlepath")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 12 * interfaceScale, weight: .medium))
                     .foregroundStyle(.secondary)
                     .frame(width: 16)
                 Text(L10n.string("Left for a while"))
-                    .font(.system(size: 14.5, weight: .semibold))
+                    .font(.system(size: 14.5 * interfaceScale, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -269,7 +270,7 @@ struct NewTaskHomeLists: View {
                 NewTaskHomeRow(isHighlighted: isHighlighted(.toggle(.idle)), showsChevron: false,
                                action: { toggle(.idle) }) {
                     Text(idle.isExpanded ? L10n.string("Show less") : L10n.format("Show %lld more", idle.hidden))
-                        .font(.system(size: 12))
+                        .font(.system(size: 12 * interfaceScale))
                         .foregroundStyle(.secondary)
                         .padding(.leading, 23)
                 }
@@ -281,13 +282,13 @@ struct NewTaskHomeLists: View {
     private func idleLine(_ idle: NewTaskIdleProject) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 7) {
             Image(systemName: "folder")
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 11 * interfaceScale, weight: .medium))
                 .foregroundStyle(.secondary)
                 .frame(width: 14)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 7) {
                     Text(idle.project.name)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 13 * interfaceScale, weight: .medium))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                         .layoutPriority(1)
@@ -295,7 +296,7 @@ struct NewTaskHomeLists: View {
                     NewTaskHomeTime(date: idle.lastActive)
                 }
                 Text(idle.workLeft.joined(separator: " · "))
-                    .font(.system(size: 12))
+                    .font(.system(size: 12 * interfaceScale))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -351,7 +352,7 @@ struct NewTaskHomeLists: View {
                 NewTaskHomeRow(isHighlighted: isHighlighted(.toggle(section)), showsChevron: false,
                                action: { toggle(section) }) {
                     Text(panel.isExpanded ? L10n.string("Show less") : L10n.format("Show %lld more", panel.hidden))
-                        .font(.system(size: 12))
+                        .font(.system(size: 12 * interfaceScale))
                         .foregroundStyle(.secondary)
                         .padding(.leading, 23)
                 }
@@ -364,17 +365,17 @@ struct NewTaskHomeLists: View {
     private func header(_ summary: NewTaskProjectSummary, isChosen: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: summary.project == nil ? "bubble.left" : (isChosen ? "folder.fill" : "folder"))
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 12 * interfaceScale, weight: .medium))
                 .foregroundStyle(isChosen ? AnyShapeStyle(ParityTheme.accent) : AnyShapeStyle(.secondary))
                 .frame(width: 16)
             Text(summary.name)
-                .font(.system(size: 14.5, weight: .semibold))
+                .font(.system(size: 14.5 * interfaceScale, weight: .semibold))
                 .foregroundStyle(isChosen ? AnyShapeStyle(ParityTheme.accentText) : AnyShapeStyle(.primary))
                 .lineLimit(1)
                 .layoutPriority(1)
             if let facts = facts(summary, isChosen: isChosen) {
                 Text(facts)
-                    .font(.system(size: 12))
+                    .font(.system(size: 12 * interfaceScale))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -384,7 +385,7 @@ struct NewTaskHomeLists: View {
                 pill(first)
                 if summary.pullRequests.count > 1 {
                     Text(verbatim: "+\(summary.pullRequests.count - 1)")
-                        .font(.system(size: 11.5).monospacedDigit())
+                        .font(.system(size: 11.5 * interfaceScale).monospacedDigit())
                         .foregroundStyle(.tertiary)
                         .fixedSize()
                         .help(summary.pullRequests.dropFirst().map { "#\($0.pullRequest.number) \($0.pill.title)" }
@@ -411,14 +412,14 @@ struct NewTaskHomeLists: View {
             SidebarTaskStatusView(status: row.status)
                 .accessibilityHidden(true)
             Text(row.status.homeName)
-                .font(.system(size: 12))
+                .font(.system(size: 12 * interfaceScale))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .fixedSize()
             taskName(row.session, weight: .medium)
             if let detail = row.status.homeDetail {
                 Text(detail)
-                    .font(.system(size: 12))
+                    .font(.system(size: 12 * interfaceScale))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -440,7 +441,7 @@ struct NewTaskHomeLists: View {
             taskName(row.session, weight: .medium)
             if row.subtasks > 0 {
                 Text(row.subtasks == 1 ? L10n.string("1 subtask") : L10n.format("%lld subtasks", row.subtasks))
-                    .font(.system(size: 11.5).monospacedDigit())
+                    .font(.system(size: 11.5 * interfaceScale).monospacedDigit())
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 6)
                     .frame(height: 18)
@@ -466,7 +467,7 @@ struct NewTaskHomeLists: View {
             HStack(spacing: 7) { line() }
             if let answer {
                 Text(answer)
-                    .font(.system(size: 12))
+                    .font(.system(size: 12 * interfaceScale))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -481,34 +482,34 @@ struct NewTaskHomeLists: View {
         switch row {
         case let .schedule(schedule, nextRun):
             Image(systemName: "clock")
-                .font(.system(size: 10.5, weight: .medium))
+                .font(.system(size: 10.5 * interfaceScale, weight: .medium))
                 .foregroundStyle(.secondary)
                 .frame(width: 14, height: 14)
             HarnessIdentityIcon(harness: schedule.destination.harness, size: 14)
                 .accessibilityLabel(schedule.destination.harness.displayName)
             Text(schedule.name)
-                .font(.system(size: 13))
+                .font(.system(size: 13 * interfaceScale))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .layoutPriority(1)
             Spacer(minLength: 8)
             Text(Layout.nextRunText(nextRun, now: activity.now))
-                .font(.system(size: 11.5).monospacedDigit())
+                .font(.system(size: 11.5 * interfaceScale).monospacedDigit())
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .fixedSize()
         case let .suggestion(suggestion, task):
             Image(systemName: "lightbulb")
-                .font(.system(size: 10.5, weight: .medium))
+                .font(.system(size: 10.5 * interfaceScale, weight: .medium))
                 .foregroundStyle(.secondary)
                 .frame(width: 14, height: 14)
             Text(suggestion.title)
-                .font(.system(size: 13))
+                .font(.system(size: 13 * interfaceScale))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .layoutPriority(1)
             Text(L10n.format("Suggested in %@", task.title))
-                .font(.system(size: 12))
+                .font(.system(size: 12 * interfaceScale))
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
             Spacer(minLength: 8)
@@ -518,18 +519,18 @@ struct NewTaskHomeLists: View {
     @ViewBuilder
     private func folderRow(_ row: NewTaskFolderRow) -> some View {
         Image(systemName: row.systemImage)
-            .font(.system(size: 10.5, weight: .medium))
+            .font(.system(size: 10.5 * interfaceScale, weight: .medium))
             .foregroundStyle(row.tint)
             .frame(width: 14, height: 14)
         Text(row.title)
             .foregroundStyle(.primary)
-            .font(.system(size: 13))
+            .font(.system(size: 13 * interfaceScale))
             .lineLimit(1)
             .truncationMode(.middle)
             .layoutPriority(1)
         if let detail = row.detail {
             Text(detail)
-                .font(.system(size: 12))
+                .font(.system(size: 12 * interfaceScale))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
@@ -543,7 +544,7 @@ struct NewTaskHomeLists: View {
                 .accessibilityLabel(session.harness.displayName)
             Text(session.title)
                 .foregroundStyle(.primary)
-                .font(.system(size: 13, weight: weight))
+                .font(.system(size: 13 * interfaceScale, weight: weight))
                 .lineLimit(1)
         }
         .layoutPriority(1)
@@ -553,7 +554,7 @@ struct NewTaskHomeLists: View {
     private func pullRequestNumber(_ session: SessionRecord) -> some View {
         if let pr = pullRequests?.pullRequest(for: session.id), pr.hasState {
             Text(verbatim: "#\(pr.number)")
-                .font(.system(size: 12).monospacedDigit())
+                .font(.system(size: 12 * interfaceScale).monospacedDigit())
                 .foregroundStyle(.secondary)
                 .fixedSize()
         }
@@ -566,7 +567,7 @@ struct NewTaskHomeLists: View {
             Text(verbatim: "#\(row.pullRequest.number)").monospacedDigit()
             Text(pill.title)
         }
-        .font(.system(size: 11, weight: .medium))
+        .font(.system(size: 11 * interfaceScale, weight: .medium))
         .foregroundStyle(TaskPullRequestBadgeView.color(pill.tone))
         .padding(.horizontal, 6)
         .frame(height: 18)
@@ -582,14 +583,14 @@ struct NewTaskHomeLists: View {
                 if let onImportConversation {
                     Button(L10n.string("Import conversation…"), action: onImportConversation)
                         .buttonStyle(.borderless)
-                        .font(.caption)
+                        .font(.yardlet(.caption, scale: interfaceScale))
                         .foregroundStyle(.secondary)
                         .help(L10n.string("Continue a conversation started in another app or CLI."))
                 }
                 if let onImportFromOtherApps {
                     Button(L10n.string("Import Conversations from Other Apps…"), action: onImportFromOtherApps)
                         .buttonStyle(.borderless)
-                        .font(.caption)
+                        .font(.yardlet(.caption, scale: interfaceScale))
                         .foregroundStyle(.secondary)
                         .help(L10n.string("Bring in the conversations open in the Claude and Codex apps."))
                 }
@@ -678,11 +679,12 @@ private extension NewTaskFolderRow {
 
 /// When a row's task was last active, as a short relative time ("3 min. ago").
 struct NewTaskHomeTime: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let date: Date
 
     var body: some View {
         Text(date, format: .relative(presentation: .named, unitsStyle: .abbreviated))
-            .font(.system(size: 11.5).monospacedDigit())
+            .font(.system(size: 11.5 * interfaceScale).monospacedDigit())
             .foregroundStyle(.tertiary)
             .lineLimit(1)
             .fixedSize()
@@ -691,12 +693,13 @@ struct NewTaskHomeTime: View {
 
 /// How long a running task's turn has run ("12 min"), redrawn each minute.
 struct NewTaskHomeElapsed: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let since: Date
 
     var body: some View {
         TimelineView(.periodic(from: since, by: 60)) { context in
             Text(L10n.format("%@ so far", Self.duration(from: since, to: context.date)))
-                .font(.system(size: 11.5).monospacedDigit())
+                .font(.system(size: 11.5 * interfaceScale).monospacedDigit())
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
                 .fixedSize()
@@ -733,7 +736,7 @@ struct NewTaskHomeRow<Content: View>: View {
                     content
                     if showsChevron {
                         Image(systemName: symbol)
-                            .font(.caption2.weight(.semibold))
+                            .font(.yardlet(.caption2, scale: interfaceScale).weight(.semibold))
                             .foregroundStyle(isAnswering ? AnyShapeStyle(ParityTheme.accent) : AnyShapeStyle(.tertiary))
                             .opacity(isHovering && markRead != nil ? 0 : 1)
                             .accessibilityHidden(true)
@@ -749,7 +752,7 @@ struct NewTaskHomeRow<Content: View>: View {
             if isHovering, let markRead {
                 Button(action: markRead) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(.system(size: 9 * interfaceScale, weight: .semibold))
                         .foregroundStyle(.secondary)
                         .frame(width: 20, height: 20)
                         .contentShape(Rectangle())
@@ -784,7 +787,7 @@ private struct RecentTaskButton: View {
                     .frame(width: 24, height: 24)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(session.title)
-                        .font(.callout.weight(.medium))
+                        .font(.yardlet(.callout, scale: interfaceScale).weight(.medium))
                         .lineLimit(1)
                     HStack(spacing: 4) {
                         Text(projectName)
@@ -793,16 +796,16 @@ private struct RecentTaskButton: View {
                         Text("· \(session.harness.displayName)")
                             .fixedSize()
                     }
-                    .font(.caption)
+                    .font(.yardlet(.caption, scale: interfaceScale))
                     .foregroundStyle(.secondary)
                 }
                 Spacer()
                 Text(session.status.displayName)
-                    .font(.caption)
+                    .font(.yardlet(.caption, scale: interfaceScale))
                     .foregroundStyle(session.status == .failed ? .red : .secondary)
                     .fixedSize()
                 Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.semibold))
+                    .font(.yardlet(.caption2, scale: interfaceScale).weight(.semibold))
                     .foregroundStyle(.tertiary)
             }
             .padding(.horizontal, 10)

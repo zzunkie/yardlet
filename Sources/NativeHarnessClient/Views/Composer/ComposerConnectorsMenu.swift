@@ -111,6 +111,7 @@ struct ConnectorIcon: View {
 /// One connector or server with its state, in the session rail's Connectors card. The composer's
 /// "+" menu lists them with `ComposerConnectorsMenu`.
 struct ComposerConnectorRow: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let row: ComposerConnectorList.Row
     let onSwitch: ((UUID, Bool) -> Void)?
     let onReconnect: ((UUID) -> Void)?
@@ -123,7 +124,7 @@ struct ComposerConnectorRow: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Text(row.statusText)
-                    .font(.caption)
+                    .font(.yardlet(.caption, scale: interfaceScale))
                     .foregroundStyle(statusStyle)
                     .lineLimit(1)
             }

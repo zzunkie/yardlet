@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 struct PersonalAgentsSidebar: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     @Bindable var center: PersonalAgentCenter
     let accounts: [AccountChoice]
     @Binding var accountID: String
@@ -31,7 +32,7 @@ struct PersonalAgentsSidebar: View {
                     }
                     if center.hasLoaded, center.agents.isEmpty, center.failure == nil {
                         Text(L10n.string("No dots in this account"))
-                            .font(.system(size: 12)).foregroundStyle(.secondary).padding(10)
+                            .font(.system(size: 12 * interfaceScale)).foregroundStyle(.secondary).padding(10)
                     }
                 }
                 .padding(.horizontal, SidebarMetrics.rowInset)
@@ -60,7 +61,7 @@ struct PersonalAgentsSidebar: View {
                 } label: {
                     HStack(spacing: 4) {
                         Text(title).lineLimit(1)
-                        Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+                        Image(systemName: "chevron.down").font(.system(size: 8 * interfaceScale, weight: .semibold))
                     }
                 }
                 .menuStyle(.borderlessButton)
@@ -77,7 +78,7 @@ struct PersonalAgentsSidebar: View {
                     ProgressView().controlSize(.mini)
                 } else {
                     Button(action: onRefresh) {
-                        Image(systemName: "arrow.clockwise").font(.caption.weight(.semibold))
+                        Image(systemName: "arrow.clockwise").font(.yardlet(.caption, scale: interfaceScale).weight(.semibold))
                     }
                     .buttonStyle(.borderless)
                     .parityPointer()
@@ -87,7 +88,7 @@ struct PersonalAgentsSidebar: View {
             }
             .frame(width: 22, height: 22)
         }
-        .font(.caption.weight(.semibold))
+        .font(.yardlet(.caption, scale: interfaceScale).weight(.semibold))
         .foregroundStyle(.secondary)
     }
 }
@@ -151,6 +152,7 @@ private struct PersonalAgentLiveAvatar: View {
 }
 
 private struct PersonalAgentLiveLabel: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let live: PersonalAgentCenter?
     let agent: PersonalAgent
     let reconnecting: Bool
@@ -159,9 +161,9 @@ private struct PersonalAgentLiveLabel: View {
 #if DEBUG
         let _ = ViewBodyCensus.note(.personalAgentStatus)
 #endif
-        if reconnecting { Text(L10n.string("Reconnecting")).font(.caption).foregroundStyle(.secondary) }
+        if reconnecting { Text(L10n.string("Reconnecting")).font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary) }
         else if let label = (live?.status(for: agent) ?? PersonalAgentStatus(live: nil, isPaused: agent.isPaused)).label {
-            Text(label).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+            Text(label).font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
         }
     }
 }
@@ -239,6 +241,7 @@ struct PersonalAgentAvatarView: View {
 }
 
 struct PersonalAgentsContent: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     @Bindable var center: PersonalAgentCenter
     /// The account the dots belong to, as the account menu names it.
     var accountTitle: String? = nil
@@ -350,8 +353,8 @@ struct PersonalAgentsContent: View {
                 }
             } else {
                 VStack(spacing: 14) {
-                    Image(systemName: "circle.dotted").font(.system(size: 38)).foregroundStyle(.secondary)
-                    Text("Dots").font(.title2.weight(.medium))
+                    Image(systemName: "circle.dotted").font(.system(size: 38 * interfaceScale)).foregroundStyle(.secondary)
+                    Text("Dots").font(.yardlet(.title2, scale: interfaceScale).weight(.medium))
                     if center.isLoading {
                         ProgressView().controlSize(.small)
                         Text(L10n.string("Loading your dots…")).foregroundStyle(.secondary)
@@ -369,7 +372,7 @@ struct PersonalAgentsContent: View {
                             .foregroundStyle(.secondary).multilineTextAlignment(.center)
                     }
                 }
-                .font(.system(size: 13))
+                .font(.system(size: 13 * interfaceScale))
                 .padding(32)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -538,6 +541,7 @@ extension EnvironmentValues {
 }
 
 struct PersonalAgentConversationView: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let agent: PersonalAgent
     @Bindable var conversation: PersonalAgentConversation
     var avatar: Data?
@@ -600,7 +604,7 @@ struct PersonalAgentConversationView: View {
             .padding(.horizontal, 20).frame(height: Self.headerHeight)
             if let failure = conversation.failure ?? connectionFailure {
                 HStack { Text(failure.message); Spacer(); Button(L10n.string("Try again"), action: refresh) }
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary)
                     .frame(maxWidth: ParityTheme.contentWidth)
                     .padding(.horizontal, ParityTheme.conversationInset).padding(.bottom, 8)
             }
@@ -639,7 +643,7 @@ struct PersonalAgentConversationView: View {
                     if let attachmentFailure { Text(attachmentFailure.message) }
                     else if openFailed { Text(L10n.string("Dots could not be opened.")) }
                 }
-                .font(.caption).foregroundStyle(.secondary).padding(.bottom, 4)
+                .font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary).padding(.bottom, 4)
             }
             if conversation.optionReply.storageFailed || conversation.optionReply.pending != nil && !showsWaitingQuestion {
                 PersonalAgentOptionAnswerStatus(reply: conversation.optionReply, showsQuestion: showsWaitingQuestion,
@@ -955,6 +959,7 @@ struct PersonalAgentConversationView: View {
 /// Activity, its schedules, the computers its root thread can use, and its Outputs as far as they were
 /// read. Every part reads only; none starts work, connects a computer or changes the dot.
 struct PersonalAgentDetailsPanel: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     static let width: CGFloat = SessionRailPlacement.width
 
     let agent: PersonalAgent
@@ -1074,7 +1079,7 @@ struct PersonalAgentDetailsPanel: View {
                         SessionRailRow(systemName: Self.symbol(item), title: item.title) {
                             if let date = item.updatedAt {
                                 Text(date.formatted(.relative(presentation: .named, unitsStyle: .abbreviated)))
-                                    .font(.caption).foregroundStyle(.tertiary).lineLimit(1)
+                                    .font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.tertiary).lineLimit(1)
                             }
                         }
                         .contentShape(Rectangle())
@@ -1089,7 +1094,7 @@ struct PersonalAgentDetailsPanel: View {
                 }
                 if details?.activityCursor != nil {
                     Button(L10n.string("Show more"), action: loadMoreActivity)
-                        .buttonStyle(.plain).foregroundStyle(.secondary).font(.caption).parityPointer()
+                        .buttonStyle(.plain).foregroundStyle(.secondary).font(.yardlet(.caption, scale: interfaceScale)).parityPointer()
                         .disabled(details?.isLoadingMoreActivity == true)
                         .padding(.top, 2)
                 }
@@ -1126,13 +1131,13 @@ struct PersonalAgentDetailsPanel: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(thread.displayTitle).lineLimit(1).truncationMode(.tail)
                     if let place {
-                        Text(place.text).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                        Text(place.text).font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                     }
                 }
                 Spacer(minLength: 4)
                 if let date = activity.updatedAt {
                     Text(date.formatted(.relative(presentation: .named, unitsStyle: .abbreviated)))
-                        .font(.caption).foregroundStyle(.tertiary).lineLimit(1)
+                        .font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.tertiary).lineLimit(1)
                 }
             }
             .frame(minHeight: 28)
@@ -1152,7 +1157,7 @@ struct PersonalAgentDetailsPanel: View {
             SessionRailLimitedList(items: items, limit: 5) { item in
                 SessionRailRow(systemName: "clock", title: item.title ?? L10n.string("Scheduled task")) {
                     if item.isEnabled == false {
-                        Text(L10n.string("Off")).font(.caption).foregroundStyle(.tertiary)
+                        Text(L10n.string("Off")).font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.tertiary)
                     }
                 }
             }
@@ -1169,7 +1174,7 @@ struct PersonalAgentDetailsPanel: View {
                         VStack(alignment: .leading, spacing: 1) {
                             Text(computer.name).lineLimit(1).truncationMode(.middle)
                             if let status = Self.statusText(computer) {
-                                Text(status).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                Text(status).font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary).lineLimit(1)
                             }
                         }
                     }
@@ -1223,6 +1228,7 @@ struct PersonalAgentComposerFiles {
 }
 
 private struct PersonalAgentComposer: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     @Bindable var draft: PersonalAgentDraft
     let send: () -> Void
     var files = PersonalAgentComposerFiles()
@@ -1257,7 +1263,7 @@ private struct PersonalAgentComposer: View {
                         Button(L10n.string("Try again")) { draft.save() }
                     }
                 }
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary)
             } else if let failure = draft.failure {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(failure.message).fixedSize(horizontal: false, vertical: true)
@@ -1270,17 +1276,17 @@ private struct PersonalAgentComposer: View {
                         Button(L10n.string("Retry upload"), action: files.retry)
                     }
                 }
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary)
             } else if draft.waitsForUploads {
                 Text(L10n.string("Sending when the files finish uploading…"))
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary)
             } else if let failure = draft.files.lazy.compactMap(\.failure).first, draft.pending == nil {
                 HStack {
                     Text(failure.message).fixedSize(horizontal: false, vertical: true)
                     Spacer()
                     if allowsFiles { Button(L10n.string("Retry upload"), action: files.retry) }
                 }
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary)
             }
             ComposerEditor(draft: draft.editor, placeholder: L10n.string("Message your dot…"),
                 accessibilityHint: (sendShortcut.sendKeyName.isEmpty ? nil : L10n.format("Press %@ to send", sendShortcut.sendKeyName)), metrics: .task(),
@@ -1368,6 +1374,7 @@ private struct PersonalAgentComposer: View {
 /// A file in the dot's composer: a picture as its thumbnail, anything else by name, each with its
 /// upload shown over it (a spinner while it goes up, a warning when it did not) and a remove button.
 private struct PersonalAgentFileChip: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let file: PersonalAgentDraftFile
     let onRemove: () -> Void
 
@@ -1389,7 +1396,7 @@ private struct PersonalAgentFileChip: View {
                             Image(systemName: "exclamationmark.circle.fill")
                                 .symbolRenderingMode(.palette)
                                 .foregroundStyle(.white, .red)
-                                .font(.system(size: 13))
+                                .font(.system(size: 13 * interfaceScale))
                                 .padding(3)
                                 .allowsHitTesting(false)
                         }
@@ -1404,14 +1411,14 @@ private struct PersonalAgentFileChip: View {
                     }
                     Text(file.shownName).lineLimit(1).truncationMode(.middle).frame(maxWidth: 180)
                     Button(action: onRemove) {
-                        Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
+                        Image(systemName: "xmark").font(.system(size: 8 * interfaceScale, weight: .bold))
                     }
                     .buttonStyle(.plain)
                     .parityPointer()
                     .accessibilityLabel(L10n.string("Remove attachment"))
                     .help(L10n.string("Remove attachment"))
                 }
-                .font(.caption2)
+                .font(.yardlet(.caption2, scale: interfaceScale))
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 7)
                 .frame(height: 24)

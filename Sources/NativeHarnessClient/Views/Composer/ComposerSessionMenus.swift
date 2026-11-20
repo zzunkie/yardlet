@@ -76,6 +76,7 @@ struct ComposerContextRing: View {
 /// and how far auto-compact is with "Compact session" from half full. Below, the token counts and
 /// cost the harness reported for its turns (D5).
 struct ComposerContextUsageDetails: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     struct Compact {
         var isAvailable: Bool
         /// Why "Compact session" waits, while it does.
@@ -108,11 +109,11 @@ struct ComposerContextUsageDetails: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(L10n.string("Context window"))
-                    .font(.callout.weight(.semibold))
+                    .font(.yardlet(.callout, scale: interfaceScale).weight(.semibold))
                 Spacer(minLength: 8)
                 if let text = summary.summaryText {
                     Text(text)
-                        .font(.caption.weight(.medium))
+                        .font(.yardlet(.caption, scale: interfaceScale).weight(.medium))
                         .foregroundStyle(summary.severity == .normal ? AnyShapeStyle(.secondary) : AnyShapeStyle(tint))
                         .monospacedDigit()
                 }
@@ -130,7 +131,7 @@ struct ComposerContextUsageDetails: View {
                 .frame(height: 4)
             } else {
                 Text(L10n.string("Send a message to see context usage."))
-                    .font(.caption)
+                    .font(.yardlet(.caption, scale: interfaceScale))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -151,11 +152,11 @@ struct ComposerContextUsageDetails: View {
                 Divider()
                 HStack {
                     Text(breakdown.title)
-                        .font(.caption.weight(.semibold))
+                        .font(.yardlet(.caption, scale: interfaceScale).weight(.semibold))
                     Spacer()
                     if let total = breakdown.total {
                         Text(ComposerContextSummary.tokenText(total))
-                            .font(.caption.weight(.semibold))
+                            .font(.yardlet(.caption, scale: interfaceScale).weight(.semibold))
                             .monospacedDigit()
                     }
                 }
@@ -213,7 +214,7 @@ struct ComposerContextUsageDetails: View {
                             .foregroundStyle(.tertiary)
                             .frame(minWidth: 44, alignment: .trailing)
                     }
-                    .font(.caption)
+                    .font(.yardlet(.caption, scale: interfaceScale))
                     .foregroundStyle(row.kind == .deferred ? .tertiary : .secondary)
                     .accessibilityElement(children: .combine)
                 }
@@ -227,7 +228,7 @@ struct ComposerContextUsageDetails: View {
         HStack(spacing: 8) {
             if let hint = summary.autoCompactHint {
                 Text(hint)
-                    .font(.caption)
+                    .font(.yardlet(.caption, scale: interfaceScale))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
@@ -244,7 +245,7 @@ struct ComposerContextUsageDetails: View {
     private func limitRow(_ limit: Limit) -> some View {
         let selector = limit.slot.selector
         let name = Text(selector.name)
-            .font(.caption)
+            .font(.yardlet(.caption, scale: interfaceScale))
             .foregroundStyle(.secondary)
             .lineLimit(1)
         // A menu, as Default names the limit it stands for and four segments would not fit the rail. A menu is
@@ -273,7 +274,7 @@ struct ComposerContextUsageDetails: View {
             }
             if let note = limit.slot.note {
                 Text(note)
-                    .font(.caption)
+                    .font(.yardlet(.caption, scale: interfaceScale))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -315,25 +316,26 @@ struct ComposerContextUsageDetails: View {
             Text(value)
                 .monospacedDigit()
         }
-        .font(.caption)
+        .font(.yardlet(.caption, scale: interfaceScale))
         .foregroundStyle(.secondary)
     }
 }
 
 /// The heading of every harness's permissions menu: what the next turn runs with.
 struct ComposerPermissionHeader: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let value: String
 
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "checkmark.shield")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 12 * interfaceScale, weight: .semibold))
                 .foregroundStyle(.secondary)
             Text(L10n.string("Permissions"))
-                .font(.callout.weight(.semibold))
+                .font(.yardlet(.callout, scale: interfaceScale).weight(.semibold))
             Spacer()
             Text(value)
-                .font(.caption.weight(.medium))
+                .font(.yardlet(.caption, scale: interfaceScale).weight(.medium))
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 14)
@@ -343,9 +345,10 @@ struct ComposerPermissionHeader: View {
 
 /// Under a menu whose choices apply only to a running session.
 struct ComposerDetachedNotice: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     var body: some View {
         Label(L10n.string("Resume the task to change live settings."), systemImage: "pause.circle")
-            .font(.caption2)
+            .font(.yardlet(.caption2, scale: interfaceScale))
             .foregroundStyle(.tertiary)
             .padding(.horizontal, 8)
             .padding(.vertical, 7)
@@ -365,6 +368,7 @@ struct ComposerDetachedNotice: View {
 /// app's menu numbers its models. It takes only the selectors and what choosing does, so any popover
 /// that sets a model and effort can show it.
 struct HarnessIntelligencePicker: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     private enum PickerView {
         case effort
         case models
@@ -454,11 +458,11 @@ struct HarnessIntelligencePicker: View {
                 } content: {
                     HStack(spacing: 8) {
                         Text(selectedName(for: modelSelector))
-                            .font(.callout.weight(.semibold))
+                            .font(.yardlet(.callout, scale: interfaceScale).weight(.semibold))
                             .lineLimit(1)
                         Spacer()
                         Image(systemName: "chevron.right")
-                            .font(.system(size: 9, weight: .semibold))
+                            .font(.system(size: 9 * interfaceScale, weight: .semibold))
                             .foregroundStyle(.tertiary)
                     }
                 }
@@ -491,7 +495,7 @@ struct HarnessIntelligencePicker: View {
                         }
                     } label: {
                         Image(systemName: "chevron.left")
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.system(size: 10 * interfaceScale, weight: .semibold))
                             .frame(width: 22, height: 22)
                             .contentShape(Rectangle())
                     }
@@ -501,7 +505,7 @@ struct HarnessIntelligencePicker: View {
                 }
 
                 Text(L10n.string("Model"))
-                    .font(.caption.weight(.semibold))
+                    .font(.yardlet(.caption, scale: interfaceScale).weight(.semibold))
                     .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 7)
@@ -520,12 +524,12 @@ struct HarnessIntelligencePicker: View {
                             Spacer()
                             if isSelected {
                                 Image(systemName: "checkmark")
-                                    .font(.system(size: 10, weight: .bold))
+                                    .font(.system(size: 10 * interfaceScale, weight: .bold))
                                     .foregroundStyle(ParityTheme.accent)
                             } else if index < 9 {
                                 // The Claude app's menu numbers its models; the number chooses one.
                                 Text("\(index + 1)")
-                                    .font(.caption)
+                                    .font(.yardlet(.caption, scale: interfaceScale))
                                     .monospacedDigit()
                                     .foregroundStyle(.tertiary)
                             }
@@ -537,7 +541,7 @@ struct HarnessIntelligencePicker: View {
                 }
             } else {
                 Text(L10n.string("Unavailable"))
-                    .font(.caption)
+                    .font(.yardlet(.caption, scale: interfaceScale))
                     .foregroundStyle(.secondary)
                     .padding(7)
             }
@@ -551,13 +555,13 @@ struct HarnessIntelligencePicker: View {
             onSetOption(speed.id, isOn ? "off" : "on")
         } content: {
             Image(systemName: "bolt")
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 12 * interfaceScale, weight: .medium))
                 .foregroundStyle(isOn ? AnyShapeStyle(ParityTheme.accent) : AnyShapeStyle(.secondary))
                 .frame(width: 16)
             VStack(alignment: .leading, spacing: 1) {
                 Text(speed.name)
                 if let description = speed.description, !description.isEmpty {
-                    Text(description).font(.caption).foregroundStyle(.secondary)
+                    Text(description).font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -612,6 +616,7 @@ struct HarnessIntelligencePicker: View {
 /// offers (Claude Code's own default) is not a step on the scale and sits before it. Each stop is a
 /// button named for its level, so every level is one press away for VoiceOver too.
 struct IntelligenceEffortSlider: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let selector: ProviderCapabilitySelector
     /// The level to show: the harness's, or one just chosen.
     let shownValue: String
@@ -643,11 +648,11 @@ struct IntelligenceEffortSlider: View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .firstTextBaseline) {
                 Text(L10n.string("Reasoning effort"))
-                    .font(.caption.weight(.semibold))
+                    .font(.yardlet(.caption, scale: interfaceScale).weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 8)
                 Text(shownName)
-                    .font(.callout.weight(.semibold))
+                    .font(.yardlet(.callout, scale: interfaceScale).weight(.semibold))
                     .foregroundStyle(isMaximum ? AnyShapeStyle(ParityTheme.accentText) : AnyShapeStyle(.primary))
                     .contentTransition(.opacity)
                     .accessibilityHidden(true)
@@ -666,7 +671,7 @@ struct IntelligenceEffortSlider: View {
                     Spacer()
                     Text(L10n.string("Smarter"))
                 }
-                .font(.caption2)
+                .font(.yardlet(.caption2, scale: interfaceScale))
                 .foregroundStyle(.tertiary)
                 .padding(.leading, defaultChoice == nil ? 0 : defaultWidth + 10)
                 .accessibilityHidden(true)
@@ -691,7 +696,7 @@ struct IntelligenceEffortSlider: View {
         let isSelected = choice.value == shownValue && dragIndex == nil
         return Button { onPick(choice.value) } label: {
             Text(choice.name)
-                .font(.caption.weight(.medium))
+                .font(.yardlet(.caption, scale: interfaceScale).weight(.medium))
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
                 .foregroundStyle(isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
@@ -815,6 +820,7 @@ enum IntelligencePickerRowMetrics {
 }
 
 struct IntelligencePickerRow<Content: View>: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     var isEnabled = true
     let action: () -> Void
     @ViewBuilder let content: () -> Content
@@ -836,7 +842,7 @@ struct IntelligencePickerRow<Content: View>: View {
             .contentShape(RoundedRectangle(cornerRadius: 7))
         }
         .buttonStyle(.plain)
-        .font(.callout)
+        .font(.yardlet(.callout, scale: interfaceScale))
         .opacity(isEnabled ? 1 : 0.5)
         .disabled(!isEnabled)
         .parityPointer()

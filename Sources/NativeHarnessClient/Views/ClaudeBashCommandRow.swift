@@ -72,7 +72,7 @@ struct ClaudeBashCommandRow: View {
             output(for: run)
             if run?.state == .stopped {
                 Label(L10n.string("Stopped"), systemImage: "stop")
-                    .font(.caption)
+                    .font(.yardlet(.caption, scale: interfaceScale))
                     .foregroundStyle(.secondary)
             }
         }

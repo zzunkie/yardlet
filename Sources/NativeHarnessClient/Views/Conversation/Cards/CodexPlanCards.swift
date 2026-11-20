@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct CodexPlanCard: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let plan: CodexPlanState
 
     init(plan: CodexPlanState) {
@@ -23,11 +24,11 @@ struct CodexPlanCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             Label(L10n.string("Plan"), systemImage: "list.bullet.rectangle")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 11 * interfaceScale, weight: .semibold))
                 .foregroundStyle(.secondary)
             if let explanation = plan.explanation, !explanation.isEmpty {
                 Text(explanation)
-                    .font(.system(size: 12))
+                    .font(.system(size: 12 * interfaceScale))
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -35,11 +36,11 @@ struct CodexPlanCard: View {
             ForEach(plan.steps) { step in
                 HStack(alignment: .top, spacing: 7) {
                     Image(systemName: planSymbol(step.status))
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 11 * interfaceScale, weight: .semibold))
                         .foregroundStyle(planTint(step.status))
                         .frame(width: 14)
                     Text(step.text)
-                        .font(.system(size: 12))
+                        .font(.system(size: 12 * interfaceScale))
                         .foregroundStyle(.primary)
                 }
             }
@@ -81,6 +82,7 @@ struct CodexPlanCard: View {
 
 /// The plan a Plan mode turn proposes, shown in the answer area as the Codex app's Plan card.
 struct CodexProposedPlanCard: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let text: String
     let isWriting: Bool
 
@@ -91,7 +93,7 @@ struct CodexProposedPlanCard: View {
                     isWriting ? L10n.string("Writing plan") : L10n.string("Plan"),
                     systemImage: "list.bullet.clipboard"
                 )
-                .font(.system(size: 11.5, weight: .semibold))
+                .font(.system(size: 11.5 * interfaceScale, weight: .semibold))
                 .foregroundStyle(.secondary)
                 if isWriting {
                     ProgressView().controlSize(.mini)
@@ -196,12 +198,13 @@ struct CodexQuestionOptions: View {
 }
 
 struct CodexImplementPlanPrompt: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let onImplement: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(L10n.string("Implement this plan?"))
-                .font(.system(size: 12.5, weight: .medium))
+                .font(.system(size: 12.5 * interfaceScale, weight: .medium))
             Button(L10n.string("Yes, implement this plan"), action: onImplement)
                 .parityProminentButton()
                 .parityPointer()

@@ -84,6 +84,7 @@ struct ScheduledRunRow: Identifiable, Equatable {
 /// The schedule shown beside the sidebar's list: what it runs, where and when, its actions, and its
 /// run history grouped by day.
 struct ScheduledTaskDetail: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let schedule: ScheduledTask
     let nextRun: Date?
     let isStarting: Bool
@@ -115,12 +116,12 @@ struct ScheduledTaskDetail: View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 5) {
                 Text(schedule.name)
-                    .font(.title2.weight(.semibold))
+                    .font(.yardlet(.title2, scale: interfaceScale).weight(.semibold))
                     .lineLimit(2)
                     .textSelection(.enabled)
                 Text(verbatim: "\(ScheduleText.summary(schedule.trigger, calendar: calendar, now: now)) · "
                      + ScheduleText.status(schedule, nextRun: nextRun, isStarting: isStarting, now: now, calendar: calendar))
-                    .font(.callout)
+                    .font(.yardlet(.callout, scale: interfaceScale))
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 12)
@@ -181,7 +182,7 @@ struct ScheduledTaskDetail: View {
         } icon: {
             Image(systemName: notice.systemImage).foregroundStyle(notice.tint)
         }
-        .font(.callout)
+        .font(.yardlet(.callout, scale: interfaceScale))
         .foregroundStyle(.secondary)
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -199,7 +200,7 @@ struct ScheduledTaskDetail: View {
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .font(.callout)
+                .font(.yardlet(.callout, scale: interfaceScale))
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
                 if index < detailRows.count - 1 { Divider().padding(.leading, 14) }
@@ -240,10 +241,10 @@ struct ScheduledTaskDetail: View {
     private var promptCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(L10n.string("Instructions"))
-                .font(.caption.weight(.semibold))
+                .font(.yardlet(.caption, scale: interfaceScale).weight(.semibold))
                 .foregroundStyle(.secondary)
             Text(schedule.prompt)
-                .font(.callout)
+                .font(.yardlet(.callout, scale: interfaceScale))
                 .textSelection(.enabled)
                 .lineLimit(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -256,16 +257,16 @@ struct ScheduledTaskDetail: View {
         let rows = ScheduledRunRow.rows(for: schedule, task: context.task)
         return VStack(alignment: .leading, spacing: 8) {
             Text(L10n.string("Runs"))
-                .font(.caption.weight(.semibold))
+                .font(.yardlet(.caption, scale: interfaceScale).weight(.semibold))
                 .foregroundStyle(.secondary)
             if rows.isEmpty {
                 Text(L10n.string("No runs yet."))
-                    .font(.callout)
+                    .font(.yardlet(.callout, scale: interfaceScale))
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(ScheduledRunRow.groups(rows, now: now, calendar: calendar), id: \.title) { group in
                     Text(group.title)
-                        .font(.caption)
+                        .font(.yardlet(.caption, scale: interfaceScale))
                         .foregroundStyle(.tertiary)
                         .padding(.top, 4)
                         .accessibilityAddTraits(.isHeader)
@@ -283,28 +284,28 @@ struct ScheduledTaskDetail: View {
 
     private func runRow(_ row: ScheduledRunRow) -> some View {
         // The time, the dot and the chevron on the run's first line, not between its two lines.
-        let capHeightSize = NSFont.preferredFont(forTextStyle: .callout).pointSize
+        let capHeightSize = NSFont.preferredFont(forTextStyle: .callout).pointSize * interfaceScale
         let content = HStack(alignment: .firstTextBaseline, spacing: 10) {
             Circle()
                 .fill(row.isUnread ? ParityTheme.accent : .clear)
                 .frame(width: 6, height: 6)
                 .centeredOnCapHeight(ofTextSize: capHeightSize)
             Text(ScheduleText.moment(row.at, relativeTo: now, calendar: calendar))
-                .font(.callout.monospacedDigit())
+                .font(.yardlet(.callout, scale: interfaceScale).monospacedDigit())
                 .frame(width: 150, alignment: .leading)
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.title ?? row.stateText)
-                    .font(.callout)
+                    .font(.yardlet(.callout, scale: interfaceScale))
                     .lineLimit(1)
                 Text(row.detailText)
-                    .font(.caption)
+                    .font(.yardlet(.caption, scale: interfaceScale))
                     .foregroundStyle(stateTint(row.state))
                     .lineLimit(2)
             }
             Spacer(minLength: 8)
             if row.taskID != nil {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.system(size: 10 * interfaceScale, weight: .semibold))
                     .foregroundStyle(.tertiary)
                     .centeredOnCapHeight(ofTextSize: capHeightSize)
             }
@@ -336,18 +337,19 @@ struct ScheduledTaskDetail: View {
 
 /// The detail's place when no schedule is chosen: what scheduled tasks are and the two ways to add one.
 struct ScheduledTaskEmptyDetail: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let hasSchedules: Bool
     let actions: ScheduledTaskActions
 
     var body: some View {
         VStack(spacing: 14) {
             Image(systemName: "clock")
-                .font(.system(size: 30, weight: .light))
+                .font(.system(size: 30 * interfaceScale, weight: .light))
                 .foregroundStyle(.secondary)
             Text(L10n.string(hasSchedules ? "Choose a scheduled task." : "No scheduled tasks."))
-                .font(.title3.weight(.semibold))
+                .font(.yardlet(.title3, scale: interfaceScale).weight(.semibold))
             Text(L10n.string("Yardlet starts a scheduled task while it is open. A run missed while it was closed runs once when it opens again."))
-                .font(.callout)
+                .font(.yardlet(.callout, scale: interfaceScale))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 420)

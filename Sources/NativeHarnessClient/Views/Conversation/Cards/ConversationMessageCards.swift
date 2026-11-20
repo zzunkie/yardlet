@@ -62,7 +62,7 @@ struct ConversationSentMessage: View {
         } icon: {
             Image(systemName: "gearshape.2")
         }
-        .font(.callout)
+        .font(.yardlet(.callout, scale: interfaceScale))
         .foregroundStyle(.secondary)
         .frame(maxWidth: .infinity, alignment: .leading)
         .modifier(ConversationMessageFrame(label: L10n.string("Background task"), phase: phase,
@@ -337,6 +337,7 @@ private struct ConversationClippedSentText: View {
 /// It reads the same for every harness; the provider's name labels it for assistive apps. A Codex
 /// message also draws the directives the Codex app draws (`CodexMessageDirectives`).
 struct ConversationAgentMessage: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let itemID: String
     let harness: HarnessKind
     let text: String
@@ -375,7 +376,7 @@ struct ConversationAgentMessage: View {
                     label
                 } else if let providerPhase {
                     Text(providerPhase)
-                        .font(.caption2.monospaced()).fontDesign(nil)
+                        .font(.yardlet(.caption2, scale: interfaceScale).monospaced()).fontDesign(nil)
                         .foregroundStyle(.tertiary)
                 }
                 TranscriptMarkdownText(text: shownText, characterLimit: ConversationLayout.messageCharacterLimit,
@@ -424,13 +425,13 @@ struct ConversationAgentMessage: View {
         return HStack(spacing: 4) {
             if isCommentary {
                 Text(L10n.string("Commentary"))
-                    .font(.caption2.weight(.medium))
+                    .font(.yardlet(.caption2, scale: interfaceScale).weight(.medium))
                     .foregroundStyle(.secondary)
             }
             if isSummary {
-                if isCommentary { Text(verbatim: "·").font(.caption2).foregroundStyle(.tertiary) }
+                if isCommentary { Text(verbatim: "·").font(.yardlet(.caption2, scale: interfaceScale)).foregroundStyle(.tertiary) }
                 Text(L10n.string("Summarized"))
-                    .font(.caption2)
+                    .font(.yardlet(.caption2, scale: interfaceScale))
                     .foregroundStyle(.tertiary)
                     .help(L10n.string("A summary that came as thinking. Claude's own wording did not come through."))
             }

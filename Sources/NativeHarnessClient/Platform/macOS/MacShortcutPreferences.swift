@@ -134,6 +134,8 @@ extension MacShortcut {
             [MacKeyChord("\r", [])]
         case .browserZoomIn, .imageZoomIn:
             [MacKeyChord("+", .command)]
+        case .zoomIn:
+            [MacKeyChord("=", .command)]
         default: []
         }
     }
@@ -155,7 +157,8 @@ extension MacShortcut {
         case .previousTab: ["Show Previous Tab", "Previous task"]
         case .help, .newTask, .previousTask, .nextTask, .nextTaskNeedingAttention, .markUnread, .archive,
              .openModelMenu, .back, .forward, .newTab, .closeWindow, .reopenClosedTab, .splitRight, .splitDown,
-             .closePane, .focusLeft, .focusRight, .focusUp, .focusDown, .conversationFind, .nextResult, .previousResult:
+             .closePane, .focusLeft, .focusRight, .focusUp, .focusDown, .conversationFind, .nextResult, .previousResult,
+             .actualSize, .zoomIn, .zoomOut:
             [definition.title]
         default: []
         }
@@ -206,12 +209,17 @@ final class MacShortcutPreferences: Sendable {
 
     func displayedKeys(for command: MacShortcut, send: SendShortcut) -> String? {
         guard let binding = binding(for: command, send: send) else { return nil }
+        return ([binding.displayText] + additionalKeys(for: command, send: send).map(\.displayText)).joined(separator: " / ")
+    }
+
+    /// The keys a command takes beside its binding (`MacShortcut.additionalDefaults`) while it keeps its default: none
+    /// once the person or macOS App Shortcuts gave it a key, and none that App Shortcuts gave another command.
+    func additionalKeys(for command: MacShortcut, send: SendShortcut) -> [MacKeyChord] {
         let current = snapshot
         guard current.overrides[command.id] == nil, !current.system.contains(where: { $0.commands.contains(command) }) else {
-            return binding.displayText
+            return []
         }
-        let extra = command.additionalDefaults(send: send).filter { chord in !current.system.contains { $0.chord == chord } }
-        return ([binding.displayText] + extra.map(\.displayText)).joined(separator: " / ")
+        return command.additionalDefaults(send: send).filter { chord in !current.system.contains { $0.chord == chord } }
     }
 
     @MainActor

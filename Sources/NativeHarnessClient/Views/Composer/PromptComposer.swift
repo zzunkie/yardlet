@@ -469,7 +469,7 @@ struct PromptComposer: View {
                     presentComposerMenu(.attachments)
                 } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.system(size: 12 * interfaceScale, weight: .medium))
                         .foregroundStyle(.secondary)
                         .frame(width: 28, height: 28)
                         .contentShape(Rectangle())
@@ -543,7 +543,7 @@ struct PromptComposer: View {
                             Image(systemName: "text.append")
                             if !personQueue.isEmpty {
                                 Text("\(personQueue.count)")
-                                    .font(.caption2.monospacedDigit())
+                                    .font(.yardlet(.caption2, scale: interfaceScale).monospacedDigit())
                             }
                         }
                         .foregroundStyle(.secondary)
@@ -602,7 +602,7 @@ struct PromptComposer: View {
                 } label: {
                     // Send's size, so the button keeps its place when one replaces the other.
                     Image(systemName: "stop.fill")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.system(size: 11 * interfaceScale, weight: .bold))
                         .foregroundStyle(.white)
                         .frame(width: 28, height: 28)
                         .background(.red, in: Circle())

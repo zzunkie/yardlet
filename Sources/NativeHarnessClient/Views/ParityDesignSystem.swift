@@ -29,6 +29,35 @@ extension YardletInterfaceSizePreference {
     }
 }
 
+extension Font {
+    /// `style` at the interface size and zoom (`yardletInterfaceScale`). macOS draws a text style at one size whatever
+    /// `dynamicTypeSize` says, so a view that scales its text takes the style's own font at its size times `scale`,
+    /// which draws as the style does, with its weight and line height; at 1 it is the style itself.
+    static func yardlet(_ style: Font.TextStyle, scale: CGFloat) -> Font {
+        guard scale != 1 else { return .system(style) }
+        let font = NSFont.preferredFont(forTextStyle: style.appKitStyle)
+        return Font(font.withSize(font.pointSize * scale))
+    }
+}
+
+private extension Font.TextStyle {
+    var appKitStyle: NSFont.TextStyle {
+        switch self {
+        case .largeTitle: .largeTitle
+        case .title: .title1
+        case .title2: .title2
+        case .title3: .title3
+        case .headline: .headline
+        case .subheadline: .subheadline
+        case .callout: .callout
+        case .footnote: .footnote
+        case .caption: .caption1
+        case .caption2: .caption2
+        default: .body
+        }
+    }
+}
+
 private struct YardletInterfaceScaleKey: EnvironmentKey {
     static let defaultValue: CGFloat = 1
 }
@@ -387,6 +416,7 @@ struct ParityIconButton: View {
 }
 
 struct ParitySectionTitle: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let title: String
     var trailingAction: (() -> Void)?
     var trailingLabel = L10n.string("New task")
@@ -394,13 +424,13 @@ struct ParitySectionTitle: View {
     var body: some View {
         HStack(spacing: 8) {
             Text(title)
-                .font(.caption.weight(.semibold))
+                .font(.yardlet(.caption, scale: interfaceScale).weight(.semibold))
                 .foregroundStyle(.secondary)
             Spacer()
             if let trailingAction {
                 Button(action: trailingAction) {
                     Image(systemName: "plus")
-                        .font(.caption.weight(.semibold))
+                        .font(.yardlet(.caption, scale: interfaceScale).weight(.semibold))
                         .foregroundStyle(.secondary)
                         .frame(width: 22, height: 22)
                         .contentShape(Rectangle())

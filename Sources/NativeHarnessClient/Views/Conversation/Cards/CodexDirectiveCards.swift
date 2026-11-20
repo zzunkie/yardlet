@@ -427,6 +427,7 @@ struct CodexVisualizationView: View {
 /// An expanded visualization: its page moved out of the row into a sheet, at the width the skill designs a wide
 /// visualization for, scrolling inside when taller.
 struct CodexVisualizationExpanded: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let title: String
     let controller: MCPAppViewController
     let close: () -> Void
@@ -435,7 +436,7 @@ struct CodexVisualizationExpanded: View {
         VStack(spacing: 0) {
             HStack {
                 Text(title)
-                    .font(.headline)
+                    .font(.yardlet(.headline, scale: interfaceScale))
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer()

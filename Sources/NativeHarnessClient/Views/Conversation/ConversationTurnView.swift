@@ -137,6 +137,7 @@ enum ConversationTurnAction: Hashable, Sendable {
 /// stays in view parts the fold (`ConversationTurn.workStretches`): the header folds the work before
 /// it, and the work after it folds on a line of its own under the message, which opens only that work.
 struct ConversationTurnView: View, Equatable {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let turn: ConversationTurn
     /// The part of its turn `turn` is (`ConversationTurnRows`); a part never folds, since only a turn
     /// whose work shows is drawn in parts.
@@ -280,7 +281,7 @@ struct ConversationTurnView: View, Equatable {
                 }
                 .buttonStyle(.borderless)
                 .parityPointer()
-                .font(.caption)
+                .font(.yardlet(.caption, scale: interfaceScale))
                 .foregroundStyle(ParityTheme.accentText)
                 .accessibilityHint(L10n.string("Load the next page of items for this turn."))
             }
@@ -445,14 +446,14 @@ struct ConversationTurnView: View, Equatable {
         } else if canExpand {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Image(systemName: "list.bullet")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 11 * interfaceScale, weight: .medium))
                     .accessibilityHidden(true)
                 Text(L10n.string("Work details"))
                     .conversationSelectionText(L10n.string("Work details"))
                 DisclosureCaret(isOpen: workDetailsAreVisible)
-                    .centeredOnCapHeight(ofTextSize: CodexWorkSummaryLabel.fontSize)
+                    .centeredOnCapHeight(ofTextSize: CodexWorkSummaryLabel.fontSize * interfaceScale)
             }
-            .font(.system(size: CodexWorkSummaryLabel.fontSize))
+            .font(.system(size: CodexWorkSummaryLabel.fontSize * interfaceScale))
             .foregroundStyle(.secondary)
             .accessibilityElement(children: .combine)
             .contentShape(Rectangle())
@@ -510,6 +511,7 @@ struct ConversationTurnView: View, Equatable {
 /// harness: a stretch has no time of its own, as a Codex item carries none. It opens only the work
 /// it folds, in place under it.
 private struct ConversationWorkStretchFold: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let isOpen: Bool
     let toggle: () -> Void
 
@@ -517,14 +519,14 @@ private struct ConversationWorkStretchFold: View {
         Button(action: toggle) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Image(systemName: "list.bullet")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 11 * interfaceScale, weight: .medium))
                     .accessibilityHidden(true)
                 Text(L10n.string("Work details"))
                     .conversationSelectionText(L10n.string("Work details"))
                 DisclosureCaret(isOpen: isOpen)
-                    .centeredOnCapHeight(ofTextSize: CodexWorkSummaryLabel.fontSize)
+                    .centeredOnCapHeight(ofTextSize: CodexWorkSummaryLabel.fontSize * interfaceScale)
             }
-            .font(.system(size: CodexWorkSummaryLabel.fontSize))
+            .font(.system(size: CodexWorkSummaryLabel.fontSize * interfaceScale))
             .foregroundStyle(.secondary)
             .accessibilityElement(children: .combine)
             .contentShape(Rectangle())

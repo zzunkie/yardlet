@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct TranscriptMarkdownText: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     @Environment(\.pauseTranscriptFollowing) private var pauseFollowing
     @Environment(\.conversationFindSlot) private var findSlot
     let text: String
@@ -40,7 +41,7 @@ struct TranscriptMarkdownText: View {
                 }
                 .parityLinkButton()
                 .parityPointer()
-                .font(.caption2)
+                .font(.yardlet(.caption2, scale: interfaceScale))
             }
         }
         .onChange(of: findSlot?.active, initial: true) { _, active in revealFindMatch(active) }
@@ -293,10 +294,10 @@ private struct TranscriptMarkdownBlockView: View {
 
     private func headingFont(_ level: Int) -> Font {
         switch level {
-        case 1: .title2.weight(.semibold)
-        case 2: .title3.weight(.semibold)
-        case 3: .headline
-        default: .body.weight(.semibold)
+        case 1: .yardlet(.title2, scale: interfaceScale).weight(.semibold)
+        case 2: .yardlet(.title3, scale: interfaceScale).weight(.semibold)
+        case 3: .yardlet(.headline, scale: interfaceScale)
+        default: .yardlet(.body, scale: interfaceScale).weight(.semibold)
         }
     }
 }
@@ -399,7 +400,7 @@ private struct TranscriptMarkdownTable: View {
         }) {
             VStack(spacing: 0) {
                 HStack {
-                    Text(L10n.string("Table")).font(.headline)
+                    Text(L10n.string("Table")).font(.yardlet(.headline, scale: interfaceScale))
                     Spacer()
                     Button(L10n.string("Copy table"), action: copy)
                     Button(L10n.string("Done")) { showsExpanded = false }
@@ -583,6 +584,7 @@ private struct TranscriptScrollEdgeFade: ViewModifier {
 
 /// A small icon button in a block's corner (a table, a visualization), shown on hover.
 struct TranscriptBlockButton: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let systemName: String
     let title: String
     let action: () -> Void
@@ -590,7 +592,7 @@ struct TranscriptBlockButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 11 * interfaceScale, weight: .medium))
                 .frame(width: 22, height: 22)
                 .contentShape(Rectangle())
         }

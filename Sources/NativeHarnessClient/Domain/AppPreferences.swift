@@ -89,6 +89,41 @@ enum YardletInterfaceSizePreference: String, CaseIterable, Identifiable {
     }
 }
 
+/// View › Zoom In, Zoom Out and Actual Size (⌘+, ⌘− and ⌘0), as in the Claude and Codex apps: how much larger or
+/// smaller than Settings' interface size the app draws its text, code and the controls sized from them. It is the
+/// app's state, kept across launches, not a Settings row; Actual Size removes it.
+enum InterfaceZoom {
+    static let key = "YardletInterfaceZoom"
+    /// A browser's steps around 100%, up to the size at which the sidebar and the panels, which keep their widths,
+    /// still show a task's name.
+    static let levels: [Double] = [0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75]
+
+    /// The level a stored value stands for: 1 for none, or for one not offered.
+    static func level(_ stored: Double?) -> Double {
+        stored.flatMap { levels.contains($0) ? $0 : nil } ?? 1
+    }
+
+    static func current(in defaults: UserDefaults = .yardlet) -> Double {
+        level(defaults.object(forKey: key) as? Double)
+    }
+
+    static func zoomIn(in defaults: UserDefaults = .yardlet) {
+        levels.first { $0 > current(in: defaults) }.map { set($0, in: defaults) }
+    }
+
+    static func zoomOut(in defaults: UserDefaults = .yardlet) {
+        levels.last { $0 < current(in: defaults) }.map { set($0, in: defaults) }
+    }
+
+    static func actualSize(in defaults: UserDefaults = .yardlet) {
+        set(1, in: defaults)
+    }
+
+    private static func set(_ level: Double, in defaults: UserDefaults) {
+        if level == 1 { defaults.removeObject(forKey: key) } else { defaults.set(level, forKey: key) }
+    }
+}
+
 enum YardletPreferenceKeys {
     static let accent = "YardletAccent"
     static let appearance = "YardletAppearance"

@@ -54,6 +54,7 @@ enum ConversationSource {
 /// view, following and the reading position stay; saved places and "the latest request" carry over
 /// through `ConversationAnchorResolver`, which knows how a detached snapshot names a thread's turns.
 struct ConversationTimeline: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let source: ConversationSource
     /// Where the conversation sits: a task's own, or inside a side panel.
     var placement: ConversationPlacement = .task
@@ -669,7 +670,7 @@ struct ConversationTimeline: View {
         } else {
             // A quiet line, without a symbol over it, as both apps leave an empty conversation.
             Text(L10n.string("Start a conversation"))
-                .font(.system(size: 13))
+                .font(.system(size: 13 * interfaceScale))
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity)
                 .padding(.top, 96)

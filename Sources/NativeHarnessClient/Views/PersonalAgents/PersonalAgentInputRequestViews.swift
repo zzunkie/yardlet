@@ -13,6 +13,7 @@ struct PersonalAgentRequestActions {
 /// It is drawn as the coding task's request card is, and answers only through its own buttons: a
 /// reply in the conversation never answers it.
 struct PersonalAgentRequestCard: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     @Bindable var item: PersonalAgentInputRequest
     let actions: PersonalAgentRequestActions
     var openWeb: (() -> Void)?
@@ -39,10 +40,10 @@ struct PersonalAgentRequestCard: View {
         VStack(alignment: .leading, spacing: 2) {
             Label(stateTitle, systemImage: icon)
                 .labelStyle(.titleAndIcon)
-                .font(.system(size: 12))
+                .font(.system(size: 12 * interfaceScale))
                 .foregroundStyle(.secondary)
             Text(title)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 13 * interfaceScale, weight: .semibold))
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -116,7 +117,7 @@ struct PersonalAgentRequestCard: View {
             if let openWeb {
                 Button(L10n.string("Open This Dot on the Web"), action: openWeb)
                     .parityLinkButton()
-                    .font(.caption)
+                    .font(.yardlet(.caption, scale: interfaceScale))
                     .parityPointer()
             }
         }
@@ -139,7 +140,7 @@ struct PersonalAgentRequestCard: View {
         }
         if approval.presentation.isHighRisk, isWaiting {
             Label(L10n.string("Check the details before allowing this."), systemImage: "exclamationmark.triangle.fill")
-                .font(.caption)
+                .font(.yardlet(.caption, scale: interfaceScale))
                 .foregroundStyle(.orange)
         }
         if approval.approveDisabled, isWaiting {
@@ -157,7 +158,7 @@ struct PersonalAgentRequestCard: View {
                 }
                 .frame(maxHeight: 180)
             }
-            .font(.caption)
+            .font(.yardlet(.caption, scale: interfaceScale))
             .foregroundStyle(.secondary)
         }
     }
@@ -165,7 +166,7 @@ struct PersonalAgentRequestCard: View {
     private func detailRow(_ name: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(name)
-                .font(.caption2.weight(.semibold))
+                .font(.yardlet(.caption2, scale: interfaceScale).weight(.semibold))
                 .foregroundStyle(.tertiary)
             Text(value)
                 .font(.system(.caption, design: .monospaced)).fontDesign(nil)
@@ -178,14 +179,14 @@ struct PersonalAgentRequestCard: View {
 
     private func bodyText(_ text: String) -> some View {
         Text(text)
-            .font(.callout)
+            .font(.yardlet(.callout, scale: interfaceScale))
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
     }
 
     private func note(_ text: String) -> some View {
         Text(text)
-            .font(.caption)
+            .font(.yardlet(.caption, scale: interfaceScale))
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -236,7 +237,7 @@ struct PersonalAgentRequestCard: View {
         case .storage: L10n.string("Yardlet couldn't record this answer, so it was not sent.")
         case .uncertain: L10n.string("Couldn't confirm this request's status.")
         }
-        return Text(text).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+        return Text(text).font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
     }
 
     /// Why the request cannot be answered now, and a way to read it again; nothing is sent from here.
@@ -326,6 +327,7 @@ struct PersonalAgentRequestCard: View {
 /// question is no longer shown, deleted or without its options. It names neither question nor answer,
 /// and sends nothing.
 struct PersonalAgentOptionAnswerStatus: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     @Bindable var reply: PersonalAgentOptionReply
     /// Whether the waiting answer's question is shown, with its own way to stop waiting.
     let showsQuestion: Bool
@@ -349,7 +351,7 @@ struct PersonalAgentOptionAnswerStatus: View {
             }
         }
         .disabled(reply.isSending)
-        .font(.caption)
+        .font(.yardlet(.caption, scale: interfaceScale))
         .foregroundStyle(.secondary)
         .modifier(PersonalAgentConfirmationAlert(confirming: $confirming, confirm: confirm))
     }
@@ -432,6 +434,7 @@ extension EnvironmentValues {
 /// A dot's question with options under its message. Choosing one sends its exact text as a reply to
 /// the question, after reading the question again; the draft in the editor is left as it is.
 struct PersonalAgentOptionQuestion: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let messageID: String
     let picker: DotsOptionPicker
     /// The option the provider records, or a reply chose.
@@ -456,7 +459,7 @@ struct PersonalAgentOptionQuestion: View {
                             .foregroundStyle(isChosen ? ParityTheme.accent : Color.secondary)
                             .accessibilityHidden(true)
                         Text(option)
-                            .font(.callout.weight(isChosen ? .semibold : .regular))
+                            .font(.yardlet(.callout, scale: interfaceScale).weight(isChosen ? .semibold : .regular))
                             .multilineTextAlignment(.leading)
                             .fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 0)
@@ -487,7 +490,7 @@ struct PersonalAgentOptionQuestion: View {
                 ProgressView().controlSize(.small)
                 Text(L10n.string("Sending your answer…"))
             }
-            .font(.caption).foregroundStyle(.secondary)
+            .font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary)
         } else if waitsHere, let problem = reply.problem {
             VStack(alignment: .leading, spacing: 6) {
                 Text(problem == .failure(.deliveryUnknown)
@@ -504,10 +507,10 @@ struct PersonalAgentOptionQuestion: View {
                     }
                 }
             }
-            .font(.caption).foregroundStyle(.secondary)
+            .font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary)
         } else if !waitsHere, reply.pending == nil, reply.question == messageID, let problem = reply.problem {
             Text(Self.text(problem))
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }

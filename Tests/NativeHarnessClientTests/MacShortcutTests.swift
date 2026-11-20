@@ -11,11 +11,13 @@ final class MacShortcutTests: XCTestCase {
             .toggleSidePanel, .toggleTerminal, .terminalAlternate, .openModelMenu, .back, .forward,
             .newTab, .closeTab, .closeWindow, .reopenClosedTab, .nextTab, .previousTab, .splitRight, .splitDown,
             .closePane, .focusLeft, .focusRight, .focusUp, .focusDown, .conversationFind, .nextResult, .previousResult,
-            .surfaceChat, .surfaceReview, .surfaceTerminal, .surfaceBrowser, .attachSelection]
+            .surfaceChat, .surfaceReview, .surfaceTerminal, .surfaceBrowser, .actualSize, .zoomIn, .zoomOut,
+            .attachSelection]
         XCTAssertEqual(commands.map { $0.defaultBinding().displayText }, [
             "⌘,", "⌘K", "⌘?", "⌘N", "⇧⌘S", "⇧⌘[", "⇧⌘]", "⌥⌘A", "⌥⌘U", "⌥⌘P", "⇧⌘U", "⇧⌘A", "⌃⌘I",
             "⌥⌘B", "⌘J", "⌃\u{60}", "⌃⇧M", "⌘[", "⌘]", "⌘T", "⌘W", "⇧⌘W", "⇧⌘T", "⌃⇥", "⌃⇧⇥", "⇧⌘D",
-            "⌥⇧⌘D", "⌃⌘W", "⌥⌘←", "⌥⌘→", "⌥⌘↑", "⌥⌘↓", "⌘F", "⌘G", "⇧⌘G", "⌘1", "⌘2", "⌘3", "⌘4", "⇧⌘L"
+            "⌥⇧⌘D", "⌃⌘W", "⌥⌘←", "⌥⌘→", "⌥⌘↑", "⌥⌘↓", "⌘F", "⌘G", "⇧⌘G", "⌘1", "⌘2", "⌘3", "⌘4", "⌘0", "⌘+", "⌘-",
+            "⇧⌘L"
         ])
         for number in 1...9 {
             XCTAssertEqual(MacShortcut.pinnedRow(number).defaultBinding().displayText, "⌃\(number)")
@@ -71,6 +73,38 @@ final class MacShortcutTests: XCTestCase {
 }
 
 extension MacShortcutTests {
+    /// View › Zoom In takes ⌘= beside its menu key ⌘+ (shown together in Settings), after the window's views: a
+    /// browser page or an image that zooms itself keeps the key while it has it.
+    @MainActor
+    func testZoomInTakesCommandEqualsAfterTheWindowsOwnZoom() throws {
+        XCTAssertEqual(MacShortcutPreferences.shared.displayedKeys(for: .zoomIn, send: .return), "⌘+ / ⌘=")
+        final class PageView: NSView {
+            override func performKeyEquivalent(with event: NSEvent) -> Bool { true }
+        }
+        func window(_ content: NSView) -> NSWindow {
+            let window = NSWindow(contentRect: NSRect(x: -5000, y: -5000, width: 80, height: 40), styleMask: [.borderless],
+                                  backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = content
+            return window
+        }
+        func key(_ characters: String, _ flags: NSEvent.ModifierFlags, in window: NSWindow) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
+                                           windowNumber: window.windowNumber, context: nil, characters: characters,
+                                           charactersIgnoringModifiers: characters, isARepeat: false, keyCode: 24))
+        }
+        let plain = window(NSView()), page = window(PageView())
+        defer { plain.close(); page.close(); InterfaceZoom.actualSize() }
+        InterfaceZoom.actualSize()
+        XCTAssertTrue(InterfaceZoomCommands.takeAlternateZoomInKey(try key("=", .command, in: plain)))
+        XCTAssertEqual(InterfaceZoom.current(), 1.1)
+        XCTAssertTrue(InterfaceZoomCommands.takeAlternateZoomInKey(try key("=", .command, in: page)))
+        XCTAssertEqual(InterfaceZoom.current(), 1.1, "The page zoomed itself")
+        XCTAssertFalse(InterfaceZoomCommands.takeAlternateZoomInKey(try key("+", [.command, .shift], in: plain)),
+                       "⌘+ is the menu's")
+        XCTAssertFalse(InterfaceZoomCommands.takeAlternateZoomInKey(try key("=", [], in: plain)))
+    }
+
     @MainActor
     func testReassignmentIsAtomicAndRestoringRemovesThePreference() throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("ShortcutReassignment")))

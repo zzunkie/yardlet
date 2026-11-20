@@ -403,7 +403,7 @@ struct ConversationWorkLine: View, Equatable {
                               failedExit: failedExit, stop: stop)
             if let error = stop?.error {
                 Text(error)
-                    .font(.caption)
+                    .font(.yardlet(.caption, scale: interfaceScale))
                     .foregroundStyle(.red)
                     .textSelection(.enabled)
             }
@@ -448,7 +448,7 @@ struct ConversationWorkLine: View, Equatable {
                 }
                 if let exitCode = command.exitCode, exitCode != 0 {
                     Text(L10n.format("Exit code %lld", exitCode))
-                        .font(.caption2.monospacedDigit())
+                        .font(.yardlet(.caption2, scale: interfaceScale).monospacedDigit())
                         .foregroundStyle(Color.red)
                 }
             }
@@ -500,7 +500,7 @@ struct ConversationWorkLine: View, Equatable {
                 }
                 if let error {
                     Text(error)
-                        .font(.caption)
+                        .font(.yardlet(.caption, scale: interfaceScale))
                         .foregroundStyle(.red)
                         .lineLimit(4)
                         .textSelection(.enabled)
@@ -576,7 +576,7 @@ struct ConversationWorkLine: View, Equatable {
                 }
                 if let error = tool.errorMessage, !error.isEmpty {
                     Text(error)
-                        .font(.caption)
+                        .font(.yardlet(.caption, scale: interfaceScale))
                         .foregroundStyle(.red)
                         .textSelection(.enabled)
                 }
@@ -614,6 +614,7 @@ struct ConversationWorkLine: View, Equatable {
 /// A line's "Stop task": stops the provider's task the line stands for, then reads "Stop requested"
 /// until the task ends. Why it could not be stopped shows under the line.
 struct ConversationStopTaskButton: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let isStopping: Bool
     let error: String?
     let action: () -> Void
@@ -622,7 +623,7 @@ struct ConversationStopTaskButton: View {
         let title = L10n.string(isStopping ? "Stop requested" : "Stop task")
         Button(action: action) {
             Image(systemName: "stop.circle")
-                .font(.system(size: 10, weight: .medium))
+                .font(.system(size: 10 * interfaceScale, weight: .medium))
                 .foregroundStyle(.tertiary)
                 .frame(width: 22, height: 22)
         }

@@ -5,6 +5,7 @@ import SwiftUI
 /// and copies the chosen ones into Yardlet. The originals stay in their apps, untouched; after the
 /// import the sheet says how to keep them from running twice.
 struct ScheduleImportSheet: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let listing: ScheduleImportListing?
     let now: Date
     let onImport: ([ImportableSchedule]) -> Int
@@ -26,13 +27,13 @@ struct ScheduleImportSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text(L10n.string("Import Schedules from Other Apps")).font(.headline)
+                Text(L10n.string("Import Schedules from Other Apps")).font(.yardlet(.headline, scale: interfaceScale))
                 Spacer()
                 Button(L10n.string("Done"), action: onDismiss)
                     .keyboardShortcut(MacShortcut.dismiss.binding)
             }
             Text(L10n.string("Scheduled tasks in the Claude app and Codex automations. Importing copies them; the originals stay as they are."))
-                .font(.callout).foregroundStyle(.secondary)
+                .font(.yardlet(.callout, scale: interfaceScale)).foregroundStyle(.secondary)
             list
             if let importedCount { doneNote(importedCount) }
             footer
@@ -69,7 +70,7 @@ struct ScheduleImportSheet: View {
     private func section(_ title: String, _ items: [ImportableSchedule], listing: ScheduleImportListing) -> some View {
         if !items.isEmpty {
             Text(title)
-                .font(.caption.weight(.semibold))
+                .font(.yardlet(.caption, scale: interfaceScale).weight(.semibold))
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 12)
                 .padding(.top, 10)
@@ -99,11 +100,11 @@ struct ScheduleImportSheet: View {
                 .disabled(imported || !item.canImport)
             HarnessIdentityIcon(harness: item.harness)
             VStack(alignment: .leading, spacing: 2) {
-                Text(item.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                Text(item.name).font(.system(size: 13 * interfaceScale, weight: .medium)).lineLimit(1)
                 Text(detail)
-                    .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                    .font(.system(size: 11 * interfaceScale)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                 ForEach(notes, id: \.self) { note in
-                    Text(note).font(.system(size: 11))
+                    Text(note).font(.system(size: 11 * interfaceScale))
                         .foregroundStyle(imported ? Color.secondary : Color.orange).lineLimit(2)
                 }
             }
@@ -131,7 +132,7 @@ struct ScheduleImportSheet: View {
         } icon: {
             Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
         }
-        .font(.callout)
+        .font(.yardlet(.callout, scale: interfaceScale))
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 8))
@@ -141,7 +142,7 @@ struct ScheduleImportSheet: View {
         let chosen = (listing?.all ?? []).filter { selection.contains($0.id) && $0.canImport && listing?.isImported($0) == false }
         return HStack(spacing: 10) {
             Text(L10n.format("%lld selected", Int64(chosen.count)))
-                .font(.callout).foregroundStyle(.secondary)
+                .font(.yardlet(.callout, scale: interfaceScale)).foregroundStyle(.secondary)
             Spacer()
             Button(L10n.string("Import")) {
                 importedCount = onImport(chosen)

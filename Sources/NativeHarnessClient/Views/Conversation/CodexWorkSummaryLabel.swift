@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct CodexWorkSummaryLabel: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     /// The turn is still running, and counts its seconds.
     let isRunning: Bool
     let startedAt: Date?
@@ -56,10 +57,10 @@ struct CodexWorkSummaryLabel: View {
 
             if canExpand {
                 DisclosureCaret(isOpen: isExpanded)
-                    .centeredOnCapHeight(ofTextSize: Self.fontSize)
+                    .centeredOnCapHeight(ofTextSize: Self.fontSize * interfaceScale)
             }
         }
-        .font(.system(size: Self.fontSize))
+        .font(.system(size: Self.fontSize * interfaceScale))
         .foregroundStyle(.secondary)
         .accessibilityElement(children: .combine)
     }

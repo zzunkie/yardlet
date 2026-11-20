@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct CodexTurnRail: View, Equatable {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     /// One mark on the rail: the turn it moves to and the status it reads out.
     struct Turn: Identifiable, Equatable, Sendable {
         let id: String
@@ -71,7 +72,7 @@ struct CodexTurnRail: View, Equatable {
                 } label: {
                     // The rail's whole width takes the click, not the small chevron alone.
                     Image(systemName: "chevron.up")
-                        .font(.system(size: 7, weight: .semibold))
+                        .font(.system(size: 7 * interfaceScale, weight: .semibold))
                         .frame(width: 24, height: 20)
                         .contentShape(Rectangle())
                 }

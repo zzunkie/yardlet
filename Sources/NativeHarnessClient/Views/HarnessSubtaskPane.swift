@@ -3,10 +3,11 @@ import SwiftUI
 /// The exact content used by the native link buttons. Kept independently renderable because
 /// ImageRenderer does not render AppKit's link-button backing view.
 struct HarnessSubtaskActionLabel: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let title: String
     let systemName: String
     var body: some View {
-        Label(L10n.string(title), systemImage: systemName).font(.caption)
+        Label(L10n.string(title), systemImage: systemName).font(.yardlet(.caption, scale: interfaceScale))
     }
 }
 

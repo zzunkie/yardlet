@@ -27,6 +27,7 @@ final class PersonalAgentPreviewFile: Identifiable {
 }
 
 struct PersonalAgentAttachmentPreview: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let file: PersonalAgentPreviewFile
     let close: () -> Void
     @State private var saveFailed = false
@@ -49,7 +50,7 @@ struct PersonalAgentAttachmentPreview: View {
             .padding(16)
             .fixedSize(horizontal: false, vertical: true)
             .background(ParityTheme.canvas)
-            if saveFailed { Text(L10n.string("The attachment could not be saved.")).font(.caption).padding(8) }
+            if saveFailed { Text(L10n.string("The attachment could not be saved.")).font(.yardlet(.caption, scale: interfaceScale)).padding(8) }
             NativeAttachmentPreview(url: file.url).frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
         }
         .frame(minWidth: 620, minHeight: 460)

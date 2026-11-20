@@ -26,6 +26,7 @@ extension EnvironmentValues {
 /// "Run in terminal" beside a code block's "Copy code", in its look, with the terminal symbol the command
 /// cards' button has.
 struct TranscriptRunInTerminalButton: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     /// The block's first line, for assistive apps, where several blocks' buttons read alike.
     var detail: String? = nil
     let action: () -> Void
@@ -36,7 +37,7 @@ struct TranscriptRunInTerminalButton: View {
         }
         .buttonStyle(.borderless)
         .parityPointer()
-        .font(.caption)
+        .font(.yardlet(.caption, scale: interfaceScale))
         .foregroundStyle(.secondary)
         .accessibilityLabel(L10n.string("Run in terminal"))
         .accessibilityValue(detail ?? "")

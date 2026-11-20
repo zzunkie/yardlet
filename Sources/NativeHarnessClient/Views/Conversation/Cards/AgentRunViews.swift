@@ -72,6 +72,7 @@ struct AgentRunControls: View {
 
 /// A subagent's conversation, read only, in the one conversation renderer.
 struct AgentRunConversationSheet: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let run: AgentRun
     @Environment(\.dismiss) private var dismiss
 
@@ -80,9 +81,9 @@ struct AgentRunConversationSheet: View {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(run.label)
-                        .font(.headline)
+                        .font(.yardlet(.headline, scale: interfaceScale))
                     Text(run.workspaceURL.path(percentEncoded: false))
-                        .font(.caption)
+                        .font(.yardlet(.caption, scale: interfaceScale))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)

@@ -108,6 +108,7 @@ struct NewTaskHomeViewSwitch: View {
 /// (`NewTaskHomeListKeyboard`). While the calendar is on, the desk asks it to read today as long as the desk
 /// shows (`CalendarCenter.show`), lists today's events with the runs, and with room lays today on a time axis.
 struct DeskHome<Switch: View, Bottom: View>: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let activity: NewTaskHomeActivity
     /// The home's own size.
     let size: CGSize
@@ -319,11 +320,11 @@ struct DeskHome<Switch: View, Bottom: View>: View {
             if desk.waiting.isEmpty {
                 HStack(spacing: 7) {
                     Image(systemName: "checkmark")
-                        .font(.system(size: 10.5, weight: .semibold))
+                        .font(.system(size: 10.5 * interfaceScale, weight: .semibold))
                         .foregroundStyle(.secondary)
                         .frame(width: 14, height: 14)
                     Text(L10n.string("Nothing is waiting on you"))
-                        .font(.system(size: 13))
+                        .font(.system(size: 13 * interfaceScale))
                         .foregroundStyle(.secondary)
                     Spacer(minLength: 0)
                 }
@@ -391,7 +392,7 @@ struct DeskHome<Switch: View, Bottom: View>: View {
                                    action: { showsAllFinished.toggle() }) {
                         Text(showsAllFinished ? L10n.string("Show less")
                              : L10n.format("Show %lld more", desk.finished.count - DeskLines.finished))
-                            .font(.system(size: 12))
+                            .font(.system(size: 12 * interfaceScale))
                             .foregroundStyle(.secondary)
                             .padding(.leading, 21)
                     }
@@ -635,6 +636,7 @@ struct DeskSectionTitle: View {
 /// an ellipsis; its approval card in the composer's place shows it whole. Equal when it would show the
 /// same line, so a home redraw that changed nothing it shows leaves it alone.
 struct DeskWaitingRow: View, @MainActor Equatable {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let item: DeskWaitingItem
     let place: String
     var detailLines = 2
@@ -678,19 +680,19 @@ struct DeskWaitingRow: View, @MainActor Equatable {
         HStack(spacing: 7) {
             mark.accessibilityHidden(true)
             Text(label)
-                .font(.system(size: 12))
+                .font(.system(size: 12 * interfaceScale))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .fixedSize()
             HarnessIdentityIcon(harness: item.session.harness, size: 14)
                 .accessibilityLabel(item.session.harness.displayName)
             Text(item.session.title)
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: 13 * interfaceScale, weight: .medium))
                 .lineLimit(1)
                 .layoutPriority(1)
             if showsPlace {
                 Text(place)
-                    .font(.system(size: 12))
+                    .font(.system(size: 12 * interfaceScale))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .fixedSize()
@@ -706,7 +708,7 @@ struct DeskWaitingRow: View, @MainActor Equatable {
             SidebarTaskStatusView(status: status)
         } else {
             Image(systemName: "xmark.circle")
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(.system(size: 10.5 * interfaceScale, weight: .semibold))
                 .foregroundStyle(.red)
                 .frame(width: 14, height: 14)
         }
@@ -740,12 +742,12 @@ struct DeskWaitingRow: View, @MainActor Equatable {
     private func detailText(_ detail: (text: String, isCommand: Bool)) -> some View {
         if detail.isCommand {
             Text(detail.text)
-                .font(.system(size: 12.5, design: .monospaced)).fontDesign(nil)
+                .font(.system(size: 12.5 * interfaceScale, design: .monospaced)).fontDesign(nil)
                 .lineLimit(1)
                 .truncationMode(.tail)
         } else {
             Text(detail.text)
-                .font(.system(size: 13))
+                .font(.system(size: 13 * interfaceScale))
                 .lineLimit(detailLines)
                 .truncationMode(.tail)
                 .multilineTextAlignment(.leading)
@@ -759,6 +761,7 @@ struct DeskWaitingRow: View, @MainActor Equatable {
 /// with room, its members with their marks and how long each has run. A task running alone says how
 /// long it has run instead.
 struct DeskFamilyView: View, @MainActor Equatable {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let family: DeskFamily
     let place: String
     var showsMembers = true
@@ -783,7 +786,7 @@ struct DeskFamilyView: View, @MainActor Equatable {
                         HarnessIdentityIcon(harness: family.root.harness, size: 14)
                             .accessibilityLabel(family.root.harness.displayName)
                         Text(family.root.title)
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.system(size: 13 * interfaceScale, weight: .medium))
                             .lineLimit(1)
                         Spacer(minLength: 6)
                         if family.members.isEmpty, family.status.map(DeskProjection.runs) == true,
@@ -792,7 +795,7 @@ struct DeskFamilyView: View, @MainActor Equatable {
                         }
                     }
                     Text(([place] + Self.facts(family)).joined(separator: " · "))
-                        .font(.system(size: 12))
+                        .font(.system(size: 12 * interfaceScale))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .padding(.leading, 21)
@@ -827,11 +830,11 @@ struct DeskFamilyView: View, @MainActor Equatable {
             HStack(spacing: 7) {
                 SidebarTaskStatusView(status: member.status).accessibilityHidden(true)
                 Text(member.session.title)
-                    .font(.system(size: 12.5))
+                    .font(.system(size: 12.5 * interfaceScale))
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Text(member.status.homeName)
-                    .font(.system(size: 12))
+                    .font(.system(size: 12 * interfaceScale))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .frame(maxWidth: 120, alignment: .trailing)
@@ -869,6 +872,7 @@ struct DeskFamilyView: View, @MainActor Equatable {
 
 /// A line of "Just finished": a result that asks nothing, with its answer's first line.
 struct DeskFinishedRow: View, @MainActor Equatable {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let session: SessionRecord
     let place: String
     var isHighlighted = false
@@ -894,14 +898,14 @@ struct DeskFinishedRow: View, @MainActor Equatable {
                     HarnessIdentityIcon(harness: session.harness, size: 14)
                         .accessibilityLabel(session.harness.displayName)
                     Text(session.title)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: 13 * interfaceScale, weight: .semibold))
                         .lineLimit(1)
                         .layoutPriority(1)
                     Spacer(minLength: 6)
                     NewTaskHomeTime(date: session.updatedAt)
                 }
                 Text(([place] + [answerLine(session.id)].compactMap { $0 }).joined(separator: " · "))
-                    .font(.system(size: 12))
+                    .font(.system(size: 12 * interfaceScale))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -921,6 +925,7 @@ struct DeskFinishedRow: View, @MainActor Equatable {
 /// results just finished. On the time axis (`onAxis`, the three zones) the mail folds to one line, all-day events and
 /// the line of recurring runs stay lines, and the one-off runs and timed events stand at their times.
 struct DeskTodayZone: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let items: [DeskTodayItem]
     /// The time axis's blocks, with `onAxis`: the timed lines, the runs that ran folded by the hour unless `showsRan`.
     var axis: [DeskAxisItem] = []
@@ -985,12 +990,12 @@ struct DeskTodayZone: View {
                        action: onToggleRecurring) {
             timeText("", isPast: false)
             Image(systemName: "clock.arrow.circlepath")
-                .font(.system(size: 10.5, weight: .medium))
+                .font(.system(size: 10.5 * interfaceScale, weight: .medium))
                 .foregroundStyle(.secondary)
                 .frame(width: 14)
             Text(showsRecurring ? L10n.string("Fold recurring runs")
                  : L10n.format("%lld recurring runs left", recurring))
-                .font(.system(size: 13))
+                .font(.system(size: 13 * interfaceScale))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             Spacer(minLength: 0)
@@ -1002,11 +1007,11 @@ struct DeskTodayZone: View {
         NewTaskHomeRow(isHighlighted: highlighted == .toggle(.desk(.today)), showsChevron: false, action: onToggleRan) {
             timeText("", isPast: true)
             Image(systemName: "clock")
-                .font(.system(size: 10.5, weight: .medium))
+                .font(.system(size: 10.5 * interfaceScale, weight: .medium))
                 .foregroundStyle(.tertiary)
                 .frame(width: 14)
             Text(showsRan ? L10n.string("Show less") : L10n.format("%lld of today's runs already ran", ran))
-                .font(.system(size: 12))
+                .font(.system(size: 12 * interfaceScale))
                 .foregroundStyle(.secondary)
             Spacer(minLength: 0)
         }
@@ -1037,13 +1042,13 @@ struct DeskTodayZone: View {
                               action: { onOpenSchedule(run.schedule.id) }) {
             timeText(Self.time(run.at), isPast: isPast)
             Image(systemName: "clock")
-                .font(.system(size: 10.5, weight: .medium))
+                .font(.system(size: 10.5 * interfaceScale, weight: .medium))
                 .foregroundStyle(.secondary)
                 .frame(width: 14)
             titleText(run.schedule.name, isPast: isPast)
             Spacer(minLength: 6)
             Text(Self.note(run.kind))
-                .font(.system(size: 12))
+                .font(.system(size: 12 * interfaceScale))
                 .foregroundStyle(run.kind == .failed ? AnyShapeStyle(.red) : AnyShapeStyle(.tertiary))
                 .fixedSize()
         }
@@ -1073,14 +1078,14 @@ struct DeskTodayZone: View {
 
     private func noteText(_ note: String, isPast: Bool) -> some View {
         Text(note)
-            .font(.system(size: 12))
+            .font(.system(size: 12 * interfaceScale))
             .foregroundStyle(isPast ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.secondary))
             .fixedSize()
     }
 
     private func timeText(_ time: String, isPast: Bool) -> some View {
         Text(time)
-            .font(.system(size: 12).monospacedDigit())
+            .font(.system(size: 12 * interfaceScale).monospacedDigit())
             .foregroundStyle(isPast ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.secondary))
             .lineLimit(1)
             .frame(width: 44, alignment: .leading)
@@ -1088,7 +1093,7 @@ struct DeskTodayZone: View {
 
     private func titleText(_ title: String, isPast: Bool) -> some View {
         Text(title)
-            .font(.system(size: 13))
+            .font(.system(size: 13 * interfaceScale))
             .foregroundStyle(isPast ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
             .lineLimit(1)
             .layoutPriority(1)
@@ -1099,11 +1104,11 @@ struct DeskTodayZone: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
                 Image(systemName: "envelope")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 11 * interfaceScale, weight: .medium))
                     .foregroundStyle(.secondary)
                     .frame(width: 14)
-                Text(L10n.string("Unread mail")).font(.system(size: 13, weight: .medium))
-                Text(verbatim: "\(mail.count)").font(.system(size: 13).monospacedDigit()).foregroundStyle(.secondary)
+                Text(L10n.string("Unread mail")).font(.system(size: 13 * interfaceScale, weight: .medium))
+                Text(verbatim: "\(mail.count)").font(.system(size: 13 * interfaceScale).monospacedDigit()).foregroundStyle(.secondary)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 10)
@@ -1113,11 +1118,11 @@ struct DeskTodayZone: View {
                 ForEach(mail.prefix(DeskLines.mail)) { thread in
                     HStack(spacing: 8) {
                         Text(thread.senders.first.map { $0.name ?? $0.address } ?? "")
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.system(size: 12 * interfaceScale, weight: .medium))
                             .lineLimit(1)
                             .fixedSize()
                         Text(thread.subject)
-                            .font(.system(size: 12))
+                            .font(.system(size: 12 * interfaceScale))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                         Spacer(minLength: 0)

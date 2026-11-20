@@ -14,6 +14,7 @@ extension TaskSurface {
 /// A header button's symbol on the selected fill while its panel shows, and on the hover fill under the
 /// pointer, as the title bar's other buttons (`ParityIconButton`) answer the pointer.
 private struct TaskSurfaceButtonLabel: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     let symbol: String
     let isActive: Bool
     @State private var isHovering = false
@@ -22,7 +23,7 @@ private struct TaskSurfaceButtonLabel: View {
 
     var body: some View {
         Image(systemName: symbol)
-            .font(.system(size: 12))
+            .font(.system(size: 12 * interfaceScale))
             .foregroundStyle(isActive ? Color.primary : Color.secondary)
             .frame(minWidth: 28, minHeight: 28)
             .background(isActive ? ParityTheme.selectedFill : (isHovering && isEnabled ? ParityTheme.hoverFill : .clear),
@@ -46,6 +47,7 @@ enum TaskPanelSymbol {
 /// the task the window shows; in a split pane's header, on that pane's task. A header too narrow for
 /// them shows them in a "More" menu instead, as the Claude app's header does.
 struct TaskSurfaceControls: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
     /// The session rail is on screen for the task.
     let showsSessionRail: Bool
     let onToggleSessionRail: () -> Void
@@ -165,7 +167,7 @@ struct TaskSurfaceControls: View {
             }
         } label: {
             Image(systemName: "ellipsis")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 12 * interfaceScale, weight: .semibold))
                 .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
         }
