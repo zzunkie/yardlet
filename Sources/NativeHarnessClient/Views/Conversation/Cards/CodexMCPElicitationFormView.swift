@@ -10,9 +10,11 @@ struct CodexMCPElicitationFormView: View {
     let form: CodexMCPElicitationForm
     @Binding var input: [String: CodexMCPElicitationFieldValue]
     let isAnswerable: Bool
+    /// The choice under the pointer, drawn as a question's option is (`ConversationQuestionStepsView.rowFill`).
+    @State private var hovered: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: ParitySpace.s16) {
             ForEach(form.fields) { field in
                 Group {
                     if form.recorded != nil {
@@ -31,12 +33,12 @@ struct CodexMCPElicitationFormView: View {
     /// A field of an answered form: its title and the value sent, or that none was.
     private func sentRow(_ field: CodexMCPElicitationForm.Field) -> some View {
         let sent = form.sentText(of: field)
-        return VStack(alignment: .leading, spacing: 3) {
+        return VStack(alignment: .leading, spacing: 2) {
             Text(field.label)
-                .font(.yardlet(.caption, scale: interfaceScale).weight(.medium))
+                .font(.parity(.caption, weight: .medium, scale: interfaceScale))
                 .foregroundStyle(.secondary)
             Text(sent ?? L10n.string("Not answered"))
-                .font(.yardlet(.callout, scale: interfaceScale))
+                .font(.parity(.control, scale: interfaceScale))
                 .foregroundStyle(sent == nil ? .tertiary : .primary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
@@ -45,38 +47,41 @@ struct CodexMCPElicitationFormView: View {
 
     @ViewBuilder
     private func fieldView(_ field: CodexMCPElicitationForm.Field) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if case .boolean = field.kind {
-                Toggle(isOn: flag(field)) {
-                    Text(field.label).font(.yardlet(.callout, scale: interfaceScale).weight(.medium))
+        // The field's name and what it is for, then its control and what it takes.
+        VStack(alignment: .leading, spacing: ParitySpace.s8) {
+            VStack(alignment: .leading, spacing: 2) {
+                if case .boolean = field.kind {
+                    Toggle(isOn: flag(field)) {
+                        Text(field.label).font(.parity(.control, weight: .medium, scale: interfaceScale))
+                    }
+                    .toggleStyle(.checkbox)
+                    .accessibilityLabel(field.label)
+                } else {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(field.label)
+                            .font(.parity(.control, weight: .medium, scale: interfaceScale))
+                        Text(field.isRequired ? L10n.string("Required") : L10n.string("Optional"))
+                            .font(.parity(.caption, scale: interfaceScale))
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                .toggleStyle(.checkbox)
-                .accessibilityLabel(field.label)
-            } else {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(field.label)
-                        .font(.yardlet(.callout, scale: interfaceScale).weight(.medium))
-                    Text(field.isRequired ? L10n.string("Required") : L10n.string("Optional"))
-                        .font(.yardlet(.caption2, scale: interfaceScale))
-                        .foregroundStyle(.tertiary)
+                if let description = field.description, !description.isEmpty {
+                    Text(description)
+                        .font(.parity(.caption, scale: interfaceScale))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-            }
-            if let description = field.description, !description.isEmpty {
-                Text(description)
-                    .font(.yardlet(.caption, scale: interfaceScale))
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
             }
             control(field)
             if let hint = CodexMCPElicitationForm.hint(field.kind) {
                 Text(hint)
-                    .font(.yardlet(.caption2, scale: interfaceScale))
-                    .foregroundStyle(.tertiary)
+                    .font(.parity(.caption, scale: interfaceScale))
+                    .foregroundStyle(.secondary)
             }
             if let issue = form.shownIssue(of: field, in: input) {
                 Text(issue.message)
-                    .font(.yardlet(.caption, scale: interfaceScale))
+                    .font(.parity(.caption, scale: interfaceScale))
                     .foregroundStyle(.red)
                     .accessibilityLabel(issue.message)
             }
@@ -102,29 +107,32 @@ struct CodexMCPElicitationFormView: View {
     private func optionList(
         _ field: CodexMCPElicitationForm.Field, _ options: [CodexMCPElicitationForm.Option], isMultiple: Bool
     ) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: ParitySpace.s4) {
             ForEach(options, id: \.value) { option in
                 let isSelected = picked(field).contains(option.value)
+                let id = field.id + "\u{0}" + option.value
                 Button {
                     toggle(option.value, in: field)
                 } label: {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline, spacing: ParitySpace.s8) {
                         Image(systemName: isMultiple ? (isSelected ? "checkmark.square.fill" : "square")
                                                      : (isSelected ? "largecircle.fill.circle" : "circle"))
                             .foregroundStyle(isSelected ? ParityTheme.accent : Color.secondary)
                             .accessibilityHidden(true)
                         Text(option.title)
-                            .font(.yardlet(.callout, scale: interfaceScale).weight(isSelected ? .semibold : .regular))
+                            .font(.parity(.control, weight: isSelected ? .medium : .regular, scale: interfaceScale))
                         Spacer(minLength: 0)
                     }
                     .contentShape(Rectangle())
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(isSelected ? ParityTheme.selectedFill : ParityTheme.subtleFill,
-                                in: RoundedRectangle(cornerRadius: 8))
+                    .padding(.horizontal, ConversationRequestSurface.optionInset)
+                    .padding(.vertical, ParitySpace.s8)
+                    .background(ConversationQuestionStepsView<EmptyView>.rowFill(
+                        isSelected: isSelected, isHovered: hovered == id && isAnswerable),
+                                in: RoundedRectangle(cornerRadius: ParityRadius.row))
                 }
                 .buttonStyle(.plain)
                 .parityPointer()
+                .onHover { hovered = $0 ? id : (hovered == id ? nil : hovered) }
                 .accessibilityLabel(option.title)
                 .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
             }

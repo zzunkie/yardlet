@@ -40,6 +40,73 @@ extension Font {
     }
 }
 
+/// The type roles of Yardlet's chrome (docs/DESIGN_SYSTEM.md, "Tokens"), in points at the standard interface size.
+/// A role says what the words are, not how big they happen to be: an 8 pt disclosure glyph is an icon, not a caption.
+/// Code keeps the code font (`yardletCodeFont`) and native controls keep their system size.
+enum ParityType: CaseIterable {
+    /// A secondary line, metadata, a hint: 12 pt.
+    case caption
+    /// A control's label, a row's title, a card's own words: 13 pt.
+    case control
+    /// Reading text, as the conversation's prose and a question's headline: 14 pt.
+    case body
+    /// A page's or a section's heading: 18 pt semibold.
+    case section
+    /// A surface's title: 24 pt semibold.
+    case title
+
+    var size: CGFloat {
+        switch self {
+        case .caption: 12
+        case .control: 13
+        case .body: 14
+        case .section: 18
+        case .title: 24
+        }
+    }
+
+    var weight: Font.Weight {
+        switch self {
+        case .caption, .control, .body: .regular
+        case .section, .title: .semibold
+        }
+    }
+}
+
+extension Font {
+    /// `type` at `scale`, in its own weight or in `weight`. A view that follows the interface size and View › Zoom
+    /// passes `yardletInterfaceScale`, which already holds the zoom, so the size is scaled once; one that keeps its
+    /// size, as Settings does, passes 1.
+    static func parity(_ type: ParityType, weight: Font.Weight? = nil, scale: CGFloat) -> Font {
+        .system(size: type.size * scale, weight: weight ?? type.weight)
+    }
+}
+
+/// The spacing scale (docs/DESIGN_SYSTEM.md, "Tokens"): the paddings and gaps of chrome, in points, not scaled by the
+/// interface size. A 1 pt rule and a 2 pt optical adjustment are not on it; neither is a window's or a component's
+/// own geometry (`ParityTheme`).
+enum ParitySpace {
+    static let s4: CGFloat = 4
+    static let s8: CGFloat = 8
+    static let s12: CGFloat = 12
+    static let s16: CGFloat = 16
+    static let s20: CGFloat = 20
+    static let s24: CGFloat = 24
+    static let s32: CGFloat = 32
+    static let s48: CGFloat = 48
+}
+
+/// The corner radii (docs/DESIGN_SYSTEM.md, "Tokens"). Circles and capsules are shapes, not radii, and a native
+/// menu keeps the system's corners.
+enum ParityRadius {
+    /// A small control: a chip, a field, a key.
+    static let control: CGFloat = 6
+    /// A row, an option, an attachment, a code or preview box.
+    static let row: CGFloat = 8
+    /// A panel, a popover, a sheet, the composer.
+    static let surface: CGFloat = 12
+}
+
 private extension Font.TextStyle {
     var appKitStyle: NSFont.TextStyle {
         switch self {
@@ -150,12 +217,12 @@ enum ParityTheme {
     static let paneToolbarHeight: CGFloat = 40
     static let contentWidth: CGFloat = 768
     /// Claude Code's composer corner (`--cds-radius-composer`, 2026-10-15 user decision).
-    static let composerCornerRadius: CGFloat = 12
-    static let panelCornerRadius: CGFloat = 12
+    static let composerCornerRadius = ParityRadius.surface
+    static let panelCornerRadius = ParityRadius.surface
     /// Claude Code's conversation gutter (`--chat-gutter`), also the composer's.
-    static let conversationInset: CGFloat = 32
+    static let conversationInset = ParitySpace.s32
     static func conversationFont(scale: CGFloat) -> Font {
-        .system(size: 14 * scale)
+        .parity(.body, scale: scale)
     }
 
     static let accent = Color(AccentStyle())
@@ -324,9 +391,9 @@ struct ParityComposerControl: View {
             isActive
                 ? ParityTheme.selectedFill
                 : (isInteractive && isHovering ? ParityTheme.hoverFill : .clear),
-            in: RoundedRectangle(cornerRadius: 6)
+            in: RoundedRectangle(cornerRadius: ParityRadius.control)
         )
-        .contentShape(RoundedRectangle(cornerRadius: 6))
+        .contentShape(RoundedRectangle(cornerRadius: ParityRadius.control))
         .animation(ParityMotion.easeOut(reduceMotion: reduceMotion, duration: 0.1), value: isHovering)
         .onHover { hovering in
             isHovering = isInteractive && hovering
@@ -340,7 +407,7 @@ struct ParityComposerControl: View {
 
     private func styled(_ text: Text, truncation: Text.TruncationMode = .middle) -> some View {
         text
-            .font(.system(size: 13 * interfaceScale, weight: .medium))
+            .font(.parity(.control, weight: .medium, scale: interfaceScale))
             .lineLimit(1)
             .truncationMode(truncation)
     }

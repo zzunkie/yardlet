@@ -202,9 +202,9 @@ struct CodexImplementPlanPrompt: View {
     let onImplement: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: ParitySpace.s8) {
             Text(L10n.string("Implement this plan?"))
-                .font(.system(size: 12.5 * interfaceScale, weight: .medium))
+                .font(.parity(.control, weight: .medium, scale: interfaceScale))
             Button(L10n.string("Yes, implement this plan"), action: onImplement)
                 .parityProminentButton()
                 .parityPointer()

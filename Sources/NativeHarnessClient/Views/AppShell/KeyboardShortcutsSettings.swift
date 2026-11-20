@@ -68,8 +68,8 @@ struct KeyboardShortcutsSettings: View {
     static let systemPath = "System Settings › Keyboard › Keyboard Shortcuts › App Shortcuts"
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: ParitySpace.s12) {
+            HStack(spacing: ParitySpace.s8) {
                 TextField(L10n.string("Search commands"), text: $editor.query)
                     .textFieldStyle(.roundedBorder)
                     .accessibilityLabel(L10n.string("Search commands"))
@@ -80,7 +80,7 @@ struct KeyboardShortcutsSettings: View {
                 .disabled(preferences.snapshot.overrides.isEmpty)
             }
             if editor.confirmsRestore {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: ParitySpace.s8) {
                     Text(L10n.string("Restore all customized shortcuts to their defaults?"))
                     HStack {
                         Button(L10n.string("Restore defaults")) { preferences.restoreAll(); editor.cancel() }
@@ -103,23 +103,25 @@ struct KeyboardShortcutsSettings: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         if !external.isEmpty {
-                            Text(L10n.string("macOS App Shortcuts")).font(.headline).accessibilityAddTraits(.isHeader)
-                                .padding(.top, 9).padding(.bottom, 5)
+                            Text(L10n.string("macOS App Shortcuts")).font(SettingsMetrics.groupTitleFont)
+                                .accessibilityAddTraits(.isHeader)
+                                .padding(.top, ParitySpace.s12).padding(.bottom, ParitySpace.s8)
                             ForEach(Array(external.enumerated()), id: \.offset) { _, item in
                                 Divider()
-                                VStack(alignment: .leading, spacing: 6) {
+                                VStack(alignment: .leading, spacing: ParitySpace.s4) {
                                     HStack {
                                         Text(item.name).frame(maxWidth: .infinity, alignment: .leading)
                                         Text(verbatim: item.chord.displayText).monospaced()
                                     }
                                     systemNotice
                                 }
-                                .padding(.vertical, 7)
+                                .padding(.vertical, ParitySpace.s8)
                             }
                         }
                         ForEach(groups, id: \.self) { group in
-                            Text(L10n.string(group)).font(.headline).accessibilityAddTraits(.isHeader)
-                                .padding(.top, 9).padding(.bottom, 5)
+                            Text(L10n.string(group)).font(SettingsMetrics.groupTitleFont)
+                                .accessibilityAddTraits(.isHeader)
+                                .padding(.top, ParitySpace.s12).padding(.bottom, ParitySpace.s8)
                             ForEach(commands.filter { $0.definition.scope == group }) { command in
                                 Divider()
                                 row(command)
@@ -130,7 +132,7 @@ struct KeyboardShortcutsSettings: View {
                 }
             }
         }
-        .font(.system(size: 13))
+        .font(.parity(.control, scale: 1))
         .frame(maxWidth: .infinity, alignment: .leading)
         .onChange(of: editor.query) { _, _ in editor.cancel() }
         .onDisappear { editor.cancel() }
@@ -150,8 +152,8 @@ struct KeyboardShortcutsSettings: View {
         let name = L10n.string(command.definition.title)
         let keys = preferences.displayedKeys(for: command, send: send)
         let system = preferences.snapshot.system.first { $0.commands.contains(command) }
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
+        return VStack(alignment: .leading, spacing: ParitySpace.s8) {
+            HStack(spacing: ParitySpace.s8) {
                 Text(name).frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
                 if let system {
                     Text(verbatim: system.chord.displayText).monospaced()
@@ -167,12 +169,12 @@ struct KeyboardShortcutsSettings: View {
                 editing(command, assigned: keys != nil)
             }
         }
-        .padding(.vertical, 7)
+        .padding(.vertical, ParitySpace.s8)
     }
 
     private var systemNotice: some View {
         Text(L10n.string("Set in macOS App Shortcuts.") + " " + L10n.string(Self.systemPath))
-            .foregroundStyle(.secondary).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
+            .foregroundStyle(.secondary).font(SettingsMetrics.detailFont).fixedSize(horizontal: false, vertical: true)
     }
 
     @ViewBuilder private func editing(_ command: MacShortcut, assigned: Bool) -> some View {
@@ -184,7 +186,7 @@ struct KeyboardShortcutsSettings: View {
                     editor.record(MacShortcutEvent(event), for: command, send: send)
                 }.id(editor.recordingID).frame(width: 1, height: 1))
             Text(L10n.string("macOS may keep ⌘Space (Spotlight), ⌃Space (input sources), and ⌘Tab (app switching). Input methods can also keep keys."))
-                .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                .font(SettingsMetrics.detailFont).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
                 if assigned { Button(L10n.string("Clear")) { editor.set(nil, for: command, send: send) } }
                 if preferences.snapshot.overrides[command.id] != nil {
@@ -204,7 +206,7 @@ struct KeyboardShortcutsSettings: View {
             }
         case let .refused(reason, systemMenu):
             Text(reason).fixedSize(horizontal: false, vertical: true)
-            if systemMenu { Text(L10n.string(Self.systemPath)).font(.system(size: 12)).foregroundStyle(.secondary) }
+            if systemMenu { Text(L10n.string(Self.systemPath)).font(SettingsMetrics.detailFont).foregroundStyle(.secondary) }
             HStack {
                 Button(L10n.string("Try another key")) { editor.start(command) }
                 Button(L10n.string("Cancel")) { editor.cancel() }

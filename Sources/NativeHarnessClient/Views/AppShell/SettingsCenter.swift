@@ -196,10 +196,10 @@ struct SettingsCenterView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                // The two apps' top row: the word alone, then the way out.
+            HStack(spacing: ParitySpace.s12) {
+                // The two apps' top row: the word alone, then the way out, as a window's title.
                 Text(L10n.string("Settings"))
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.parity(.control, weight: .semibold, scale: 1))
                 Spacer()
                 Button(L10n.string("Done")) { dismiss() }
                     // While the search field has the keyboard and holds words, Escape clears them first.
@@ -208,7 +208,7 @@ struct SettingsCenterView: View {
                     .help(accountCenter.loginController.isRunning ? L10n.string("Finish or cancel the sign-in first") : "")
                     .controlSize(.small)
             }
-            .padding(.horizontal, 14)
+            .padding(.horizontal, ParitySpace.s16)
             .frame(height: ParityTheme.toolbarHeight)
 
             Rectangle().fill(ParityTheme.separator).frame(height: 1)
@@ -219,8 +219,8 @@ struct SettingsCenterView: View {
                 // black bar the words disappeared into (2026-10-22).
                 VStack(spacing: 0) {
                     searchField
-                        .padding(.horizontal, 10)
-                        .padding(.top, 10)
+                        .padding(.horizontal, SettingsMetrics.listInset)
+                        .padding(.top, SettingsMetrics.listInset)
                     if isSearching {
                         searchResultList
                     } else {
@@ -236,21 +236,21 @@ struct SettingsCenterView: View {
 
                 Group {
                     if section == .keyboardShortcuts {
-                        VStack(alignment: .leading, spacing: 14) {
+                        VStack(alignment: .leading, spacing: SettingsMetrics.headerSpacing) {
                             detailHeader
                             KeyboardShortcutsSettings(editor: shortcutEditor)
                         }
-                        .padding(20)
+                        .padding(SettingsMetrics.pageInset)
                     } else if section.isConnectionSection, let accounts {
                         // These pages scroll their own lists under a fixed search and filter row.
                         VStack(alignment: .leading, spacing: 0) {
-                            detailHeader.padding(.horizontal, 20).padding(.top, 20)
+                            detailHeader.padding(.horizontal, SettingsMetrics.pageInset).padding(.top, SettingsMetrics.pageInset)
                             connectionContent(accounts)
                         }
                     } else if section.isConnectionSection, let remoteHost {
                         // Another Mac's Accounts and Harnesses, drawn by the same content from its values (§15.37).
                         VStack(alignment: .leading, spacing: 0) {
-                            detailHeader.padding(.horizontal, 20).padding(.top, 20)
+                            detailHeader.padding(.horizontal, SettingsMetrics.pageInset).padding(.top, SettingsMetrics.pageInset)
                             if section == .harnesses {
                                 remoteHost.harnessesSettingsSectionView()
                             } else {
@@ -260,23 +260,23 @@ struct SettingsCenterView: View {
                     } else {
                         ScrollViewReader { proxy in
                             ScrollView {
-                                VStack(alignment: .leading, spacing: 16) {
+                                VStack(alignment: .leading, spacing: SettingsMetrics.headerSpacing) {
                                     detailHeader
                                     if let remoteHost, let hostSettings = remoteHost.hostSettings, !hostSettings.writable {
                                         Text(RemoteHostSettingsProjection.permissionNote(hostName: remoteHost.name))
-                                            .font(.caption)
+                                            .font(SettingsMetrics.detailFont)
                                             .foregroundStyle(.secondary)
                                             .fixedSize(horizontal: false, vertical: true)
                                     }
                                     if let error = remoteHost?.commandError {
                                         Text(error)
-                                            .font(.caption)
+                                            .font(SettingsMetrics.detailFont)
                                             .foregroundStyle(Color.orange)
                                             .fixedSize(horizontal: false, vertical: true)
                                     }
                                     detail
                                 }
-                                .padding(20)
+                                .padding(SettingsMetrics.pageInset)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             }
                             // The page of a section just chosen lays out first, then its row comes into view.
@@ -393,11 +393,11 @@ struct SettingsCenterView: View {
                     let members = sections.filter { $0.group == group }
                     if !members.isEmpty {
                         Text(group.title)
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(.parity(.caption, weight: .semibold, scale: 1))
                             .foregroundStyle(.secondary)
-                            .padding(.horizontal, 8)
-                            .padding(.top, 10)
-                            .padding(.bottom, 2)
+                            .padding(.horizontal, SettingsMetrics.listRowInset)
+                            .padding(.top, ParitySpace.s12)
+                            .padding(.bottom, ParitySpace.s4)
                             .accessibilityAddTraits(.isHeader)
                         ForEach(members) { item in
                             SettingsSectionRow(item: item, isSelected: item == section) { section = item }
@@ -405,8 +405,7 @@ struct SettingsCenterView: View {
                     }
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 10)
+            .padding(SettingsMetrics.listInset)
         }
         .focusable()
         .focusEffectDisabled()
@@ -434,7 +433,7 @@ struct SettingsCenterView: View {
                 .accessibilityHidden(true)
             TextField(L10n.string("Search"), text: $searchText)
                 .textFieldStyle(.plain)
-                .font(.system(size: 13))
+                .font(.parity(.control, scale: 1))
                 .focused($isSearchFocused)
                 .accessibilityLabel(L10n.string("Search settings"))
                 .onMacKeyPress(.nextItem) {
@@ -460,10 +459,10 @@ struct SettingsCenterView: View {
                 .accessibilityLabel(L10n.string("Clear search"))
             }
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, SettingsMetrics.listRowInset)
         .frame(height: 28)
-        .background(ParityTheme.input, in: RoundedRectangle(cornerRadius: 7))
-        .overlay { RoundedRectangle(cornerRadius: 7).stroke(ParityTheme.separator) }
+        .background(ParityTheme.input, in: RoundedRectangle(cornerRadius: ParityRadius.control))
+        .overlay { RoundedRectangle(cornerRadius: ParityRadius.control).stroke(ParityTheme.separator) }
         .focusEffectDisabled()
     }
 
@@ -492,18 +491,17 @@ struct SettingsCenterView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     if results.isEmpty {
                         Text(L10n.string("No matching settings"))
-                            .font(.system(size: 12))
+                            .font(SettingsMetrics.detailFont)
                             .foregroundStyle(.secondary)
-                            .padding(.horizontal, 8)
-                            .padding(.top, 8)
+                            .padding(.horizontal, SettingsMetrics.listRowInset)
+                            .padding(.top, ParitySpace.s8)
                     }
                     ForEach(results) { item in
                         SettingsSearchResultRow(item: item, isSelected: item.id == selectedResultID) { openResult(item) }
                             .id(item.id)
                     }
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 10)
+                .padding(SettingsMetrics.listInset)
             }
             .onChange(of: selectedResultID) { _, id in
                 if let id { proxy.scrollTo(id) }
@@ -603,7 +601,7 @@ struct SettingsCenterView: View {
     /// The page's name as both apps title a settings page: words only; the list beside it carries the symbol.
     private var detailHeader: some View {
         Text(section.title)
-            .font(.system(size: 18, weight: .semibold))
+            .font(.parity(.section, scale: 1))
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityAddTraits(.isHeader)
     }
@@ -797,7 +795,7 @@ struct SettingsCenterView: View {
 
     private func languageRow(_ setting: YardletSetting) -> some View {
         SettingsRow(setting: setting) {
-            HStack(spacing: 8) {
+            HStack(spacing: ParitySpace.s8) {
                 // As System Settings offers for an app whose language it changed: the language applies as
                 // Yardlet opens, so the row offers the relaunch rather than leaving the person to find Quit.
                 if let relaunch, language.changesShownLanguage() {
@@ -869,7 +867,7 @@ struct SettingsCenterView: View {
                                        points: CodeFontPreference.size(codeFontSize))
         return VStack(alignment: .leading, spacing: 0) {
             SettingsRow(title: L10n.string("Code font"), detail: setting.detail, anchor: setting.id) {
-                HStack(spacing: 8) {
+                HStack(spacing: ParitySpace.s8) {
                     Picker(L10n.string("Code font"), selection: Binding(
                         get: { codeFont.name }, set: { codeFontName = $0 })) {
                         Text(L10n.string("System")).tag("")
@@ -892,8 +890,8 @@ struct SettingsCenterView: View {
                 .font(codeFont.font(ofSize: codeFont.size(12.5, scale: interfaceScale))).fontDesign(nil)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
-                .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 8))
+                .padding(ParitySpace.s12)
+                .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: ParityRadius.row))
                 .padding(.bottom, SettingsMetrics.rowVerticalPadding)
                 .accessibilityHidden(true)
         }
@@ -943,7 +941,7 @@ struct SettingsCenterView: View {
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
-                        .padding(.bottom, 6)
+                        .padding(.bottom, ParitySpace.s8)
                         .tag(level)
                     }
                 }
@@ -1116,22 +1114,22 @@ private struct SettingsSectionRow: View {
 
     var body: some View {
         Button(action: onSelect) {
-            HStack(spacing: 8) {
+            HStack(spacing: ParitySpace.s8) {
                 Image(systemName: item.systemName)
-                    .font(.system(size: 13, weight: .regular))
+                    .font(.parity(.control, scale: 1))
                     .foregroundStyle(isSelected ? .primary : .secondary)
                     .frame(width: 18)
                 Text(item.title)
-                    .font(.system(size: 13, weight: isSelected ? .medium : .regular))
+                    .font(.parity(.control, weight: isSelected ? .medium : .regular, scale: 1))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, SettingsMetrics.listRowInset)
             .frame(height: 30)
             .background(isSelected ? ParityTheme.selectedFill : (isHovering ? ParityTheme.hoverFill : .clear),
-                        in: RoundedRectangle(cornerRadius: 7))
-            .contentShape(RoundedRectangle(cornerRadius: 7))
+                        in: RoundedRectangle(cornerRadius: ParityRadius.row))
+            .contentShape(RoundedRectangle(cornerRadius: ParityRadius.row))
         }
         .buttonStyle(.plain)
         .focusable(false)
@@ -1152,33 +1150,33 @@ private struct SettingsSearchResultRow: View {
 
     var body: some View {
         Button(action: onSelect) {
-            HStack(alignment: .top, spacing: 8) {
+            HStack(alignment: .top, spacing: ParitySpace.s8) {
                 Image(systemName: item.section.systemName)
-                    .font(.system(size: 13, weight: .regular))
+                    .font(.parity(.control, scale: 1))
                     .foregroundStyle(isSelected ? .primary : .secondary)
                     .frame(width: 18)
                     .padding(.top, 1)
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(item.title)
-                        .font(.system(size: 13, weight: isSelected ? .medium : .regular))
+                        .font(.parity(.control, weight: isSelected ? .medium : .regular, scale: 1))
                         .foregroundStyle(.primary)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
                     if item.kind != .section {
                         Text(item.section.title)
-                            .font(.system(size: 11))
+                            .font(SettingsMetrics.detailFont)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+            .padding(.horizontal, SettingsMetrics.listRowInset)
+            .padding(.vertical, ParitySpace.s8)
             .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
             .background(isSelected ? ParityTheme.selectedFill : (isHovering ? ParityTheme.hoverFill : .clear),
-                        in: RoundedRectangle(cornerRadius: 7))
-            .contentShape(RoundedRectangle(cornerRadius: 7))
+                        in: RoundedRectangle(cornerRadius: ParityRadius.row))
+            .contentShape(RoundedRectangle(cornerRadius: ParityRadius.row))
         }
         .buttonStyle(.plain)
         .focusable(false)
@@ -1201,28 +1199,28 @@ private struct SettingsAccountSectionRow: View {
 
     var body: some View {
         Button(action: onSelect) {
-            HStack(spacing: 9) {
+            HStack(spacing: ParitySpace.s8) {
                 Image(systemName: "person.crop.circle.fill")
                     .font(.system(size: 26, weight: .regular))
                     .foregroundStyle(.secondary)
                     .frame(width: 30)
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(SettingsSection.yardletAccount.title)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(SettingsMetrics.titleFont)
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                     Text(summary)
-                        .font(.system(size: 11))
+                        .font(SettingsMetrics.detailFont)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 6)
+            .padding(.horizontal, ParitySpace.s4)
             .frame(height: 46)
             .background(isSelected ? ParityTheme.selectedFill : (isHovering ? ParityTheme.hoverFill : .clear),
-                        in: RoundedRectangle(cornerRadius: 7))
-            .contentShape(RoundedRectangle(cornerRadius: 7))
+                        in: RoundedRectangle(cornerRadius: ParityRadius.row))
+            .contentShape(RoundedRectangle(cornerRadius: ParityRadius.row))
         }
         .buttonStyle(.plain)
         .focusable(false)
@@ -1270,15 +1268,23 @@ private struct CredentialHidingContentRow: View {
     }
 }
 
-/// The sizes every settings row shares, as both apps set theirs: a 13 pt title, a 12 pt line under it in the
-/// secondary colour, 12 pt above and below, 16 pt inside a group's sides, and 18 pt between a page's groups.
+/// The sizes every settings page shares, as both apps set theirs, on the design tokens at the standard size (Settings
+/// keeps its size under View › Zoom): a 13 pt title, a 12 pt line under it in the secondary colour, 12 pt above and
+/// below, 16 pt inside a group's sides; a group's heading 8 pt over it and 24 pt between a page's groups, so a heading
+/// reads with the rows under it; the page's 18 pt heading 16 pt over its content, inside a 20 pt margin.
 enum SettingsMetrics {
-    static let titleFont = Font.system(size: 13, weight: .medium)
-    static let detailFont = Font.system(size: 12)
-    static let groupTitleFont = Font.system(size: 13, weight: .semibold)
-    static let rowVerticalPadding: CGFloat = 12
-    static let groupHorizontalPadding: CGFloat = 16
-    static let groupSpacing: CGFloat = 18
+    static let titleFont = Font.parity(.control, weight: .medium, scale: 1)
+    static let detailFont = Font.parity(.caption, scale: 1)
+    static let groupTitleFont = Font.parity(.control, weight: .semibold, scale: 1)
+    static let rowVerticalPadding = ParitySpace.s12
+    static let groupHorizontalPadding = ParitySpace.s16
+    static let groupTitleSpacing = ParitySpace.s8
+    static let groupSpacing = ParitySpace.s24
+    static let headerSpacing = ParitySpace.s16
+    static let pageInset = ParitySpace.s20
+    /// The section list's margin, and the inset of its rows' words.
+    static let listInset = ParitySpace.s12
+    static let listRowInset = ParitySpace.s8
 }
 
 /// A settings row's words: the setting's title, with its line under it where it has one.
@@ -1333,10 +1339,10 @@ struct SettingsRow<Control: View>: View {
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
+        HStack(alignment: .center, spacing: ParitySpace.s12) {
             SettingsRowWords(title: title, detail: detail, notes: notes)
-            Spacer(minLength: 12)
-            HStack(spacing: 8) { control() }
+            Spacer(minLength: ParitySpace.s12)
+            HStack(spacing: ParitySpace.s8) { control() }
         }
         .padding(.vertical, SettingsMetrics.rowVerticalPadding)
         .settingsAnchor(anchor)
@@ -1378,9 +1384,9 @@ private struct SettingsAnchorModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .background {
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: ParityRadius.row)
                     .fill(ParityTheme.accent.opacity(highlight == anchor ? 0.14 : 0))
-                    .padding(.horizontal, -8)
+                    .padding(.horizontal, -ParitySpace.s8)
                     .allowsHitTesting(false)
             }
             .id(anchor)
@@ -1398,7 +1404,7 @@ struct SettingsGroup<Content: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: SettingsMetrics.groupTitleSpacing) {
             if let title {
                 Text(title)
                     .font(SettingsMetrics.groupTitleFont)

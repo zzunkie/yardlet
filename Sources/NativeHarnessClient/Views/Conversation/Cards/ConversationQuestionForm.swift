@@ -40,18 +40,18 @@ struct ConversationQuestionStepsView<Finish: View>: View {
         let stepper = stepper
         if let step = stepper.current {
             // One container for every question, so the keys keep reaching it as the questions change.
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: ParitySpace.s8) {
                 if let text = step.text, !text.isEmpty {
                     // The card's headline, at the conversation's own size.
                     Text(text)
-                        .font(.system(size: 14 * interfaceScale, weight: .semibold))
+                        .font(.parity(.body, weight: .semibold, scale: interfaceScale))
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if step.allowsMultipleSelections {
                     Text(L10n.string("Choose one or more"))
-                        .font(.system(size: 12 * interfaceScale))
+                        .font(.parity(.caption, scale: interfaceScale))
                         .foregroundStyle(.secondary)
                 }
                 if step.isFreeTextOnly {
@@ -81,7 +81,7 @@ struct ConversationQuestionStepsView<Finish: View>: View {
     private func optionList(_ step: ConversationQuestionStep, previewUnderPicked: Bool) -> some View {
         let pickedPreview = previewUnderPicked ? step.preview(for: input.answer(for: step)) : nil
         let picked = input.answer(for: step)?.options.first
-        return VStack(alignment: .leading, spacing: 6) {
+        return VStack(alignment: .leading, spacing: ParitySpace.s4) {
             ForEach(step.options, id: \.label) { option in
                 optionRow(step, option: option)
                 if let pickedPreview, option.label == picked {
@@ -117,17 +117,17 @@ struct ConversationQuestionStepsView<Finish: View>: View {
             input.toggle(option.label, for: step)
             focus = .form
         } label: {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: ParitySpace.s8) {
                 Image(systemName: Self.indicator(multiple: step.allowsMultipleSelections, isOn: isSelected))
                     .foregroundStyle(isSelected ? ParityTheme.accent : Color.secondary)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(option.label)
-                        .font(.system(size: 13 * interfaceScale, weight: isSelected ? .medium : .regular))
+                        .font(.parity(.control, weight: isSelected ? .medium : .regular, scale: interfaceScale))
                         .fixedSize(horizontal: false, vertical: true)
                     if let description = option.description, !description.isEmpty {
                         Text(description)
-                            .font(.system(size: 12 * interfaceScale))
+                            .font(.parity(.caption, scale: interfaceScale))
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -135,10 +135,10 @@ struct ConversationQuestionStepsView<Finish: View>: View {
                 Spacer(minLength: 0)
             }
             .contentShape(Rectangle())
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.horizontal, ConversationRequestSurface.optionInset)
+            .padding(.vertical, ParitySpace.s8)
             .background(Self.rowFill(isSelected: isSelected, isHovered: hovered == option.label && isAnswerable),
-                        in: RoundedRectangle(cornerRadius: 8))
+                        in: RoundedRectangle(cornerRadius: ParityRadius.row))
         }
         .buttonStyle(.plain)
         .parityPointer()
@@ -153,7 +153,7 @@ struct ConversationQuestionStepsView<Finish: View>: View {
     /// under the options. Typing chooses it over the options of a question that takes one answer.
     private func customAnswerRow(_ step: ConversationQuestionStep) -> some View {
         let isChosen = input.isCustomAnswerChosen(for: step)
-        return HStack(alignment: .firstTextBaseline, spacing: 8) {
+        return HStack(alignment: .firstTextBaseline, spacing: ParitySpace.s8) {
             Button {
                 input.chooseCustomAnswer(for: step)
                 focus = .customAnswer(step.id)
@@ -166,12 +166,12 @@ struct ConversationQuestionStepsView<Finish: View>: View {
             .disabled(!isAnswerable)
             .accessibilityHidden(true)
             textField(step, placeholder: L10n.string("Type your own answer"), isBordered: false)
-                .font(.system(size: 13 * interfaceScale))
+                .font(.parity(.control, scale: interfaceScale))
                 .accessibilityLabel(L10n.string("Other"))
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(Self.rowFill(isSelected: isChosen, isHovered: false), in: RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, ConversationRequestSurface.optionInset)
+        .padding(.vertical, ParitySpace.s8)
+        .background(Self.rowFill(isSelected: isChosen, isHovered: false), in: RoundedRectangle(cornerRadius: ParityRadius.row))
     }
 
     /// A question with no options, answered only in the person's words.
@@ -221,7 +221,7 @@ struct ConversationQuestionStepsView<Finish: View>: View {
     /// Skip where the provider allows it, then Next, or on the last question the caller's answer
     /// buttons. Next waits for an answer or a skip, and says so.
     private func stepButtons(_ step: ConversationQuestionStep, stepper: ConversationQuestionStepper) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: ParitySpace.s8) {
             Spacer(minLength: 0)
             if step.canSkip {
                 Button(L10n.string("Skip")) { skip(step) }
@@ -319,13 +319,13 @@ struct ConversationQuestionBand: View {
 
     var body: some View {
         let stepper = ConversationQuestionStepper(steps: steps, index: index)
-        HStack(alignment: .center, spacing: 8) {
+        HStack(alignment: .center, spacing: ParitySpace.s8) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 ConversationRequestBandTitle(symbol: "questionmark.bubble", title: title)
                 if let header = stepper.current?.header, !header.isEmpty {
                     Text(verbatim: "·").foregroundStyle(.tertiary).accessibilityHidden(true)
                     Text(header)
-                        .font(.system(size: 13 * interfaceScale))
+                        .font(.parity(.control, scale: interfaceScale))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -338,7 +338,7 @@ struct ConversationQuestionBand: View {
                     pagerButton(systemImage: "chevron.left", label: L10n.string("Previous question"),
                                 isEnabled: stepper.hasPrevious) { move(by: -1) }
                     Text(L10n.format("Question %lld of %lld", Int64(stepper.index + 1), Int64(steps.count)))
-                        .font(.system(size: 12 * interfaceScale).monospacedDigit())
+                        .font(.parity(.caption, scale: interfaceScale).monospacedDigit())
                         .foregroundStyle(.secondary)
                         .fixedSize()
                     pagerButton(systemImage: "chevron.right", label: L10n.string("Next question"),
@@ -381,11 +381,11 @@ struct ConversationRequestBandTitle: View {
 
     var body: some View {
         Image(systemName: symbol)
-            .font(.system(size: 13 * interfaceScale, weight: .semibold))
+            .font(.parity(.control, weight: .semibold, scale: interfaceScale))
             .foregroundStyle(ParityTheme.accent)
             .accessibilityHidden(true)
         Text(title)
-            .font(.system(size: 13 * interfaceScale, weight: .semibold))
+            .font(.parity(.control, weight: .semibold, scale: interfaceScale))
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -401,7 +401,7 @@ struct ConversationQuestionSummary: View {
     let answers: [String: ConversationQuestionAnswer]?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: ParitySpace.s12) {
             ForEach(steps) { step in
                 if let preview = step.preview(for: answers?[step.id]) {
                     // The Claude app keeps the picked option's preview beside the answer.
@@ -413,7 +413,7 @@ struct ConversationQuestionSummary: View {
                                 .frame(minWidth: ConversationQuestionPreview.minimumWidth,
                                        idealWidth: ConversationQuestionPreview.minimumWidth, maxWidth: .infinity)
                         }
-                        VStack(alignment: .leading, spacing: 6) {
+                        VStack(alignment: .leading, spacing: ParitySpace.s8) {
                             questionAndAnswer(step)
                             ConversationQuestionPreview(markdown: preview)
                         }
@@ -427,10 +427,10 @@ struct ConversationQuestionSummary: View {
 
     private func questionAndAnswer(_ step: ConversationQuestionStep) -> some View {
         // A selection across the conversation takes the question and its answer as they read.
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 2) {
             let question = step.text ?? step.header ?? L10n.string("Question")
             Text(question)
-                .font(.system(size: 13 * interfaceScale))
+                .font(.parity(.control, scale: interfaceScale))
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
@@ -439,13 +439,13 @@ struct ConversationQuestionSummary: View {
                 if let answer = answers[step.id], !answer.values.isEmpty {
                     let text = Self.text(answer, isSecret: step.isSecret)
                     Text(text)
-                        .font(.system(size: 13 * interfaceScale, weight: .medium))
+                        .font(.parity(.control, weight: .medium, scale: interfaceScale))
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                         .conversationSelectionText(text)
                 } else {
                     Text(L10n.string("Not answered"))
-                        .font(.system(size: 13 * interfaceScale))
+                        .font(.parity(.control, scale: interfaceScale))
                         .foregroundStyle(.tertiary)
                         .conversationSelectionText(L10n.string("Not answered"))
                 }
@@ -480,7 +480,7 @@ struct ConversationQuestionPreview: View {
     static let optionsWidth: CGFloat = 220
     /// The narrowest preview drawn beside the options; a card with less room shows it under them.
     static let minimumWidth: CGFloat = 280
-    static let spacing: CGFloat = 12
+    static let spacing = ParitySpace.s12
 
     var body: some View {
         Group {
@@ -488,15 +488,15 @@ struct ConversationQuestionPreview: View {
                 TranscriptMarkdownText(text: markdown)
             } else {
                 Text(L10n.string("No preview"))
-                    .font(.system(size: 12 * interfaceScale))
+                    .font(.parity(.caption, scale: interfaceScale))
                     .foregroundStyle(.tertiary)
                     .frame(maxWidth: .infinity, minHeight: 48)
             }
         }
-        .padding(10)
+        .padding(ParitySpace.s12)
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(ParityTheme.elevated, in: RoundedRectangle(cornerRadius: 8))
-        .overlay { RoundedRectangle(cornerRadius: 8).stroke(ParityTheme.separator) }
+        .background(ParityTheme.elevated, in: RoundedRectangle(cornerRadius: ParityRadius.row))
+        .overlay { RoundedRectangle(cornerRadius: ParityRadius.row).stroke(ParityTheme.separator) }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(L10n.string("Preview"))
     }

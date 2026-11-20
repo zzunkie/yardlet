@@ -92,7 +92,7 @@ struct AppearanceThemeEditor: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: ParitySpace.s8) {
             SettingsGroup {
                 SettingsRow(title: YardletSetting.accent.title, anchor: YardletSetting.accent.id) {
                     Circle().fill(Color(nsColor: model.draft.accent(in: ThemeMode(scheme))))
@@ -128,7 +128,7 @@ struct AppearanceThemeEditor: View {
                         Text(mode.title).font(SettingsMetrics.detailFont).foregroundStyle(.secondary)
                             .frame(width: 54)
                     }
-                }.padding(.top, 8)
+                }.padding(.top, ParitySpace.s12)
                 ForEach(ThemeField.allCases, id: \.self) { field in
                     SettingsRow(title: field.title, anchor: SettingsSearch.Anchor.themeColor(field.rawValue)) {
                         ForEach(ThemeMode.allCases, id: \.self) { mode in
@@ -143,7 +143,7 @@ struct AppearanceThemeEditor: View {
                 }
             }
             if !model.failures.isEmpty {
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: ParitySpace.s4) {
                     ForEach(model.failures, id: \.message) { failure in
                         Text(failure.message).font(SettingsMetrics.detailFont).fixedSize(horizontal: false, vertical: true)
                     }

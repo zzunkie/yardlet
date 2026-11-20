@@ -25,10 +25,10 @@ struct PermissionRequestPreviewView: View {
                     .monospacedDigit()
             }
         case let .command(command, description):
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: ParitySpace.s8) {
                 if showsDescription, let description {
                     Text(description)
-                        .font(.system(size: 13 * interfaceScale))
+                        .font(.parity(.control, scale: interfaceScale))
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
@@ -36,7 +36,7 @@ struct PermissionRequestPreviewView: View {
                 CodexBoundedOutput(text: command.text, folds: false)
                 if command.omittedLineCount > 0 {
                     Text(L10n.format("%lld more lines", Int64(command.omittedLineCount)))
-                        .font(.system(size: 12 * interfaceScale))
+                        .font(.parity(.caption, scale: interfaceScale))
                         .foregroundStyle(.secondary)
                 }
             }

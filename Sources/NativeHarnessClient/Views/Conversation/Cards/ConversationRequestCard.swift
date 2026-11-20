@@ -55,10 +55,10 @@ struct ConversationRequestCard: View {
     private var pendingCard: some View {
         let responses = offeredResponses
         let usesDescriptionAsHeadline = request.descriptionHeadline != nil
-        return VStack(alignment: .leading, spacing: 12) {
+        return VStack(alignment: .leading, spacing: ConversationRequestSurface.blockSpacing) {
             if let headline = request.descriptionHeadline {
                 Text(headline)
-                    .font(.system(size: 13 * interfaceScale, weight: .semibold))
+                    .font(.parity(.control, weight: .semibold, scale: interfaceScale))
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -66,7 +66,7 @@ struct ConversationRequestCard: View {
             if !usesDescriptionAsHeadline, let detail = request.detail,
                request.preview?.repeats(detail) != true {
                 Text(detail)
-                    .font(.system(size: 13 * interfaceScale))
+                    .font(.parity(.control, scale: interfaceScale))
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -101,7 +101,7 @@ struct ConversationRequestCard: View {
             if !drawsAnswersInForm(responses) {
                 if responses.isEmpty {
                     Text(request.unanswerableReason ?? L10n.string("This Codex request needs a structured response."))
-                        .font(.system(size: 12 * interfaceScale))
+                        .font(.parity(.caption, scale: interfaceScale))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
@@ -119,25 +119,25 @@ struct ConversationRequestCard: View {
     private var answered: some View {
         switch request.form {
         case .choices, .freeText:
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: ParitySpace.s8) {
                 outcomeLine
                 questionForm(request.form?.questionSteps ?? [], responses: [])
-                    .padding(.leading, 12)
+                    .padding(.leading, ParitySpace.s12)
                     .overlay(alignment: .leading) {
                         Rectangle().fill(ParityTheme.strongSeparator).frame(width: 2)
                     }
             }
         case let .planReview(plan):
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: ParitySpace.s8) {
                 outcomeLine
                 planBody(plan)
             }
         case let .mcpForm(form):
             // The form as it was sent, read-only, as an answered question reads as its answers.
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: ParitySpace.s8) {
                 outcomeLine
                 CodexMCPElicitationFormView(form: form, input: $input.fields, isAnswerable: false)
-                    .padding(.leading, 12)
+                    .padding(.leading, ParitySpace.s12)
                     .overlay(alignment: .leading) {
                         Rectangle().fill(ParityTheme.strongSeparator).frame(width: 2)
                     }
@@ -149,7 +149,7 @@ struct ConversationRequestCard: View {
 
     /// How the request ended and what it was about, in the secondary colour, with the provider's message under it.
     private var outcomeLine: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: ParitySpace.s4) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Image(systemName: outcomeSymbol)
                     .accessibilityHidden(true)
@@ -164,7 +164,7 @@ struct ConversationRequestCard: View {
                         .truncationMode(.middle)
                 }
             }
-            .font(.system(size: 13 * interfaceScale))
+            .font(.parity(.control, scale: interfaceScale))
             .foregroundStyle(.secondary)
             stateNote
         }
@@ -242,12 +242,12 @@ struct ConversationRequestCard: View {
         switch request.state {
         case let .expired(message?) where !message.isEmpty:
             Text(message)
-                .font(.system(size: 12 * interfaceScale))
+                .font(.parity(.caption, scale: interfaceScale))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         case let .rejected(message) where !message.isEmpty:
             Text(message)
-                .font(.system(size: 12 * interfaceScale))
+                .font(.parity(.caption, scale: interfaceScale))
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
@@ -270,15 +270,15 @@ struct ConversationRequestCard: View {
         let fields = context.fields.filter { $0.id != "command" || request.command == nil }
         ForEach(context.messages, id: \.self) { message in
             Text(message)
-                .font(.yardlet(.callout, scale: interfaceScale))
+                .font(.parity(.control, scale: interfaceScale))
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         }
         ForEach(fields) { field in
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: ParitySpace.s4) {
                 if let title = field.titleKey {
                     Text(L10n.string(title))
-                        .font(.system(size: 12 * interfaceScale))
+                        .font(.parity(.caption, scale: interfaceScale))
                         .foregroundStyle(.secondary)
                 }
                 CodexBoundedOutput(text: field.text, folds: false)
@@ -286,7 +286,7 @@ struct ConversationRequestCard: View {
         }
         if context.isEmpty, request.command == nil, let method = request.method {
             Text(method)
-                .font(.system(size: 12 * interfaceScale, design: .monospaced)).fontDesign(nil)
+                .font(.system(size: ParityType.caption.size * interfaceScale, design: .monospaced)).fontDesign(nil)
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
@@ -332,8 +332,8 @@ struct ConversationRequestCard: View {
         TranscriptMarkdownText(text: plan)
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(12)
-            .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 8))
+            .padding(ParitySpace.s12)
+            .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: ParityRadius.row))
             .accessibilityLabel(L10n.string("Proposed plan"))
     }
 
@@ -344,13 +344,13 @@ struct ConversationRequestCard: View {
     private func responseButtons(_ responses: [ConversationRequestResponse]) -> some View {
         let controls = ConversationRequestResponses.controls(responses)
         return ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) {
+            HStack(spacing: ParitySpace.s8) {
                 Spacer(minLength: 0)
                 ForEach(Array(controls.enumerated()), id: \.offset) { _, control in
                     answerControl(control)
                 }
             }
-            VStack(alignment: .trailing, spacing: 6) {
+            VStack(alignment: .trailing, spacing: ParitySpace.s8) {
                 ForEach(Array(controls.enumerated()), id: \.offset) { _, control in
                     answerControl(control)
                 }
@@ -412,7 +412,7 @@ struct ConversationRequestCard: View {
         let send = { self.send(response) }
         let keys = keys(for: response)
         let help = ShortcutHelp.text(response.title, keys)
-        let label = HStack(spacing: 6) {
+        let label = HStack(spacing: ParitySpace.s8) {
             Text(response.title)
             if let key = keys.first { ConversationKeyCap(shortcut: key) }
         }
@@ -451,13 +451,23 @@ struct ConversationRequestCard: View {
 struct ConversationRequestSurface: ViewModifier {
     var header: AnyView? = nil
 
+    /// The panel's inset, inside its header band and its body.
+    static let inset = ParitySpace.s16
+    /// The gap between the body's blocks: what it asks, what it would do, the form and the answers.
+    static let blockSpacing = ParitySpace.s12
+    /// The band's content height: the question pager's buttons, so a band with them and one without are as tall.
+    static let bandContentHeight: CGFloat = 20
+    /// An option row's inset beside its words, for a question's options and a form's choices alike.
+    static let optionInset = ParitySpace.s12
+
     func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: ParityTheme.panelCornerRadius)
+        let shape = RoundedRectangle(cornerRadius: ParityRadius.surface)
         VStack(alignment: .leading, spacing: 0) {
             if let header {
                 header
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 9)
+                    .frame(minHeight: Self.bandContentHeight)
+                    .padding(.horizontal, Self.inset)
+                    .padding(.vertical, ParitySpace.s8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(ParityTheme.subtleFill)
                     .overlay(alignment: .bottom) {
@@ -465,7 +475,7 @@ struct ConversationRequestSurface: ViewModifier {
                     }
             }
             content
-                .padding(12)
+                .padding(Self.inset)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background { ConversationRequestPanel() }
@@ -479,24 +489,26 @@ struct ConversationRequestSurface: ViewModifier {
 /// elevated surface alone is the light canvas's white, where a waiting request read as more of the conversation.
 struct ConversationRequestPanel: View {
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: ParityTheme.panelCornerRadius)
+        let shape = RoundedRectangle(cornerRadius: ParityRadius.surface)
         shape.fill(ParityTheme.elevated)
             .overlay { shape.fill(ParityTheme.requestPanelFill) }
             .overlay { shape.strokeBorder(ParityTheme.strongSeparator) }
     }
 }
 
-/// A key inside a button, as both apps draw one: the key's glyph in a small outlined box ("Esc" for escape).
+/// A key inside a button, as both apps draw one: the key's glyph in a small outlined box ("Esc" for escape), a
+/// caption beside the button's label.
 struct ConversationKeyCap: View {
     @Environment(\.yardletInterfaceScale) private var interfaceScale
     let shortcut: KeyboardShortcut
 
     var body: some View {
         Text(verbatim: shortcut.key == .escape && shortcut.modifiers.isEmpty ? "Esc" : shortcut.displayText)
-            .font(.system(size: 10.5 * interfaceScale, weight: .medium))
+            .font(.parity(.caption, weight: .medium, scale: interfaceScale))
             .fixedSize()
-            .padding(.horizontal, 4)
-            .frame(minWidth: 16, minHeight: 15)
+            .padding(.horizontal, ParitySpace.s4)
+            .frame(minWidth: 16 * interfaceScale, minHeight: 16 * interfaceScale)
+            // A key's corner, rounder than a control's would look on a box this small.
             .overlay { RoundedRectangle(cornerRadius: 4).stroke(.foreground.opacity(0.3)) }
             .opacity(0.85)
             .accessibilityHidden(true)
