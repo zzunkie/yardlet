@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 import XCTest
 @testable import NativeHarnessClient
 
@@ -324,6 +325,134 @@ final class TaskProjectMoveRenderingTests: XCTestCase {
                 .environment(\.colorScheme, appearance.colorScheme)
                 .frame(width: size.width, height: size.height, alignment: .top)
                 .background(ParityTheme.sidebar)
+        }
+    }
+
+    /// A task dragged onto a project's row moves there, as its "Move to project" menu offers, and a chat
+    /// dragged onto Projects becomes a project of its own folder. Each shows it can take the task while
+    /// the task is over it and refuses one it cannot take. Drawn into `.build/move-project-qa` while a
+    /// chat is over them, light and dark: `drop-on-project-*.png` and `drop-on-projects-*.png`.
+    func testATaskDroppedOnAProjectMovesThereAndAChatDroppedOnProjectsBecomesOne() async throws {
+        // SwiftUI reads a dropped item only in a type Launch Services knows as data, from a registered
+        // bundle that declares it: an installed Yardlet, or the bundle the nightly run registers.
+        guard UTType.yardletTaskReference.conforms(to: .data) else {
+            return XCTFail("No registered bundle declares \(UTType.yardletTaskReference.identifier), "
+                           + "so a drop cannot read the task")
+        }
+        let home = URL(filePath: "/tmp/move-project-qa/home", directoryHint: .isDirectory)
+        let website = URL(filePath: "/tmp/move-project-qa/website", directoryHint: .isDirectory)
+        let projects = ProjectStore(chatWorkspaceHome: home)
+        _ = projects.ensureProject(forRoot: website, name: "Website")
+        let now = Date()
+        func task(_ title: String, in folder: URL, minutesAgo: Double) -> SessionRecord {
+            SessionRecord(harness: .claudeCode, workspaceURL: folder, runtimeExecutableURL: URL(filePath: "/tmp/agent"),
+                          title: title, titleOrigin: .provider, status: .ready,
+                          updatedAt: now.addingTimeInterval(-minutesAgo * 60))
+        }
+        func chatFolder(_ name: String) -> URL {
+            home.appending(path: "Documents/Yardlet/2026-11-20/\(name)", directoryHint: .isDirectory)
+        }
+        let trip = task("Plan the weekend trip", in: chatFolder("new-chat"), minutesAgo: 3)
+        let desks = task("Compare standing desks", in: chatFolder("new-chat-2"), minutesAgo: 20)
+        let hero = task("Redesign the hero section", in: website, minutesAgo: 40)
+        let sessions = [trip, desks, hero]
+        let disclosure = SidebarDisclosureStore(
+            defaults: try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("project-drop-qa"))))
+        var moves: [String] = []
+        var made: [String] = []
+        func view(_ scheme: ColorScheme) -> some View {
+            let groups = projects.visibleGroups(sessions: sessions)
+            let layout = SidebarProjection.layout(visibleGroups: groups, allGroups: groups,
+                                                  chats: projects.chats(sessions: sessions), splits: [],
+                                                  isFiltering: false, disclosure: disclosure.disclosure,
+                                                  selection: .session(trip.id))
+            return TaskSidebar(layout: layout, allGroups: groups, isRestoring: false, selection: .session(trip.id),
+                searchText: .constant(""), onNewTask: {}, onActivate: { _ in }, onNewTaskInProject: { _ in },
+                onAddProject: {}, projects: projects, onEditProject: { _ in },
+                onArchiveProjectChats: { _ in }, onRemoveProject: { _ in }, onTogglePinned: { _ in },
+                onArchive: { _ in }, onDelete: { _ in }, onRename: { _ in }, onMarkRead: { _ in },
+                onMoveToProject: { session, project in moves.append("\(session.title) → \(project?.name ?? "Chats")") },
+                onMakeProject: { made.append($0.title) },
+                disclosure: disclosure)
+                .tint(Color.primary)
+                .environment(\.colorScheme, scheme)
+                .frame(width: ParityTheme.sidebarWidth, height: 360, alignment: .top)
+                .background(ParityTheme.sidebar)
+        }
+        let size = NSSize(width: ParityTheme.sidebarWidth, height: 360)
+        let directory = try WindowlessRender.directory("move-project-qa")
+        /// The middle of `frame`, from the window's top-left, unflipped as a drag gives it.
+        func middle(_ frame: CGRect) -> NSPoint { NSPoint(x: frame.midX, y: size.height - frame.midY) }
+
+        for appearance in WindowlessRender.Appearance.allCases {
+            let host = WindowlessRender.Host(view(appearance.colorScheme), size: size, appearance: appearance)
+            defer { host.close() }
+            host.settle()
+            let onProject = middle(try rowFrame(L10n.format("Project %@", "Website"), in: host))
+            let onProjects = middle(try textFrame(L10n.string("Projects"), in: host))
+            func over(_ task: SessionRecord, _ location: NSPoint, capture name: String? = nil) throws -> NSDragOperation {
+                _ = SidebarNesting.dragging(task.id)
+                let drag = try TaskRowDrag(task.id, at: location, in: host.window)
+                defer { drag.close() }
+                let destination = try XCTUnwrap(drag.destination(in: host.hosting))
+                _ = destination.draggingEntered(drag)
+                let operation = destination.draggingUpdated(drag)
+                host.settle(passes: 3)
+                if let name {
+                    try WindowlessRender.writePNG(try host.capture().bitmap,
+                                                  to: directory.appending(path: "\(name)-\(appearance.suffix).png"))
+                }
+                destination.draggingExited(drag)
+                host.settle(passes: 2)
+                return operation
+            }
+            XCTAssertEqual(try over(trip, onProject, capture: "drop-on-project"), .move, "A chat can move to Website")
+            XCTAssertEqual(try over(hero, onProject), [], "A task in Website stays where it is")
+            XCTAssertEqual(try over(desks, onProjects, capture: "drop-on-projects"), .move, "A chat can become a project")
+            XCTAssertEqual(try over(hero, onProjects), [], "A task in a project has its project")
+        }
+
+        let host = WindowlessRender.Host(view(.light), size: size, appearance: .light)
+        defer { host.close() }
+        host.settle()
+        /// Drops the task; the drop reads the task from the drag's pasteboard after it returns, so the
+        /// caller closes the drag once the drop has acted.
+        func drop(_ task: SessionRecord, at location: NSPoint) throws -> TaskRowDrag {
+            _ = SidebarNesting.dragging(task.id)
+            let drag = try TaskRowDrag(task.id, at: location, in: host.window)
+            let destination = try XCTUnwrap(drag.destination(in: host.hosting))
+            _ = destination.draggingEntered(drag)
+            _ = destination.draggingUpdated(drag)
+            XCTAssertTrue(destination.performDragOperation(drag))
+            return drag
+        }
+        let onProject = try drop(trip, at: middle(try rowFrame(L10n.format("Project %@", "Website"), in: host)))
+        defer { onProject.close() }
+        try await waitUntil { moves == ["Plan the weekend trip → Website"] }
+        let onProjects = try drop(desks, at: middle(try textFrame(L10n.string("Projects"), in: host)))
+        defer { onProjects.close() }
+        try await waitUntil { made == ["Compare standing desks"] }
+        XCTAssertEqual(moves, ["Plan the weekend trip → Website"], "The drop on Projects moves nothing else")
+    }
+
+    /// The words `text` (a section's title), in the window's top-left space.
+    private func textFrame(_ text: String, in host: WindowlessRender.Host<some View>) throws -> CGRect {
+        host.hosting.layoutSubtreeIfNeeded()
+        let window = host.window, height = host.hosting.bounds.height
+        return try WindowlessRender.withAccessibilityTree {
+            func find(_ node: AnyObject) -> CGRect? {
+                for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
+                    let label = (child.accessibilityLabel?() ?? nil) ?? ""
+                    let value = ((child.accessibilityValue?() as Any??) ?? nil) as? String ?? ""
+                    if label == text || value == text, let screen = child.accessibilityFrame?(), screen.height > 0 {
+                        let frame = window.convertFromScreen(screen)
+                        return CGRect(x: frame.minX, y: height - frame.maxY, width: frame.width, height: frame.height)
+                    }
+                    if let found = find(child) { return found }
+                }
+                return nil
+            }
+            return try XCTUnwrap(find(host.hosting), "No \(text)")
         }
     }
 

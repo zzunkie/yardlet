@@ -707,8 +707,9 @@ skipped. It writes or moves nothing, and does not change the task's provider ID,
 
 A task row's context menu, the task actions menu and the command palette offer "Move to project" (the other visible
 projects, in the sidebar's order) and, for any task in a project, "Move to Chats" (`TaskProjectMove`); another Mac's
-window offers the same through `taskAction.move` (docs/REMOTE_PROTOCOL.md §15.32). The storage contract is as
-follows.
+window offers the same through `taskAction.move` (docs/REMOTE_PROTOCOL.md §15.32). A task's row dropped on a
+project's row in the sidebar moves to that project the same way, when its menu offers that project; the row shows it
+can take the task while it is dragged over it. The storage contract is as follows.
 
 - **A chat can become a project of its own folder:** for a task in no project whose folder no project holds
   (`TaskProjectMove.Options.canMakeProject`), "Move to project" ends with "New project" (the palette's "Move to new

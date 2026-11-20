@@ -380,8 +380,8 @@ struct TaskSidebar: View {
                                                 in: SidebarMetrics.rowShape())
                                     .padding(.horizontal, 4)
                                     .padding(.top, layout.pinned.isEmpty && layout.chats == nil ? 0 : 16)
-                                    .modifier(SidebarProjectsDropModifier(
-                                        taskToMakeProject: taskToMakeProject, onMakeProject: onMakeProject,
+                                    .modifier(SidebarProjectDropModifier(
+                                        take: taskToMakeProject, perform: onMakeProject,
                                         isTargeted: $isProjectsDropTargeted))
                             }
 
@@ -532,7 +532,11 @@ struct TaskSidebar: View {
             onNewTask: { onNewTaskInProject(group.workspaceURL) },
             onEditProject: { onEditProject(completeGroup) },
             onArchiveChats: { onArchiveProjectChats(completeGroup) },
-            onRemoveProject: { onRemoveProject(completeGroup) }
+            onRemoveProject: { onRemoveProject(completeGroup) },
+            taskToMove: { id in completeGroup.project.flatMap { taskToMove(id, to: $0) } },
+            onMoveTask: completeGroup.project.flatMap { project in
+                onMoveToProject.map { move in { move($0, project) } }
+            }
         )
         if !section.isCollapsed {
             ForEach(section.rows) { row in
@@ -561,16 +565,25 @@ struct TaskSidebar: View {
         layout.chats != nil && onMakeProject != nil && searchText.isEmpty
     }
 
-    /// The listed task with `id`, when a drop on Projects can make it a project of its own folder
-    /// (`TaskProjectMove.Options.canMakeProject`), as its row's "Move to project" menu would.
-    private func taskToMakeProject(_ id: UUID) -> SessionRecord? {
+    /// The listed task with `id` and the moves its row's "Move to project" menu offers, for a drop.
+    private func listedTask(_ id: UUID) -> (session: SessionRecord, moves: TaskProjectMove.Options)? {
         for row in layout.rows {
             guard case let .session(session) = row.content, session.id == id else { continue }
-            let options = remoteProjectMoveOptions?(session) ?? TaskProjectMove.options(
-                for: session, visibleProjects: allGroups.compactMap(\.project), projects: projects.projects)
-            return options.canMakeProject ? session : nil
+            return (session, remoteProjectMoveOptions?(session) ?? TaskProjectMove.options(
+                for: session, visibleProjects: allGroups.compactMap(\.project), projects: projects.projects))
         }
         return nil
+    }
+
+    /// The listed task with `id`, when a drop on Projects can make it a project of its own folder
+    /// (`TaskProjectMove.Options.canMakeProject`).
+    private func taskToMakeProject(_ id: UUID) -> SessionRecord? {
+        listedTask(id).flatMap { $0.moves.canMakeProject ? $0.session : nil }
+    }
+
+    /// The listed task with `id`, when a drop on `project`'s row can move it there.
+    private func taskToMove(_ id: UUID, to project: Project) -> SessionRecord? {
+        listedTask(id).flatMap { $0.moves.allows(project) ? $0.session : nil }
     }
 
     /// The Chats section, above the projects as in the Codex app: its rows read and act like the
@@ -990,7 +1003,14 @@ private struct ProjectTaskHeader: View {
     let onEditProject: () -> Void
     let onArchiveChats: () -> Void
     let onRemoveProject: () -> Void
+    /// The listed task with a dragged task's ID, when it can move to this project: a drop on the row
+    /// moves it here, as its "Move to project" menu does.
+    var taskToMove: (UUID) -> SessionRecord? = { _ in nil }
+    /// Nil where the window cannot move a task, and the row takes no drop.
+    var onMoveTask: ((SessionRecord) -> Void)? = nil
     @State private var isHovering = false
+    /// A task that can move to this project is dragged over its row.
+    @State private var isDropTargeted = false
     @Environment(\.shellBusyTaskIDs) private var shellBusyTaskIDs
     @Environment(\.taskAttentionDetails) private var attentionDetails
     @Environment(\.yardletInterfaceScale) private var interfaceScale
@@ -1116,8 +1136,10 @@ private struct ProjectTaskHeader: View {
         .contextMenu {
             projectOptions
         }
+        .background(isDropTargeted ? ParityTheme.selectedFill : .clear, in: SidebarMetrics.rowShape())
         .padding(.top, SidebarMetrics.projectHeaderTopSpacing)
         .padding(.horizontal, SidebarMetrics.rowInset)
+        .modifier(SidebarProjectDropModifier(take: taskToMove, perform: onMoveTask, isTargeted: $isDropTargeted))
         .accessibilitySortPriority(ParityAccessibility.sidebarPrimary - 2)
     }
 
@@ -2267,28 +2289,30 @@ private struct SidebarTaskDropModifier: ViewModifier {
     }
 }
 
-/// A task dragged over Projects: a chat whose folder no project holds becomes a project of its own
-/// folder when dropped there (`AppModel.makeProject(from:)`), as its row's "Move to project" ›
-/// "New project" makes it, and the title shows it can take the chat while it can. Without
-/// `onMakeProject` (another Mac's window) nothing is taken.
-private struct SidebarProjectsDropModifier: ViewModifier {
-    let taskToMakeProject: (UUID) -> SessionRecord?
-    let onMakeProject: ((SessionRecord) -> Void)?
+/// A task dragged over Projects or a project's row goes there when dropped, if `take` finds it listed and able
+/// to: on Projects a chat whose folder no project holds becomes a project of its own folder
+/// (`AppModel.makeProject(from:)`), and on a project's row a task moves to that project (`AppModel.moveTask`),
+/// as the task's "Move to project" menu offers. The title or row shows it can take the task while it can.
+/// Without `perform` (a window that cannot) nothing is taken.
+private struct SidebarProjectDropModifier: ViewModifier {
+    /// The listed task with a dragged task's ID, when it can go here.
+    let take: (UUID) -> SessionRecord?
+    let perform: ((SessionRecord) -> Void)?
     @Binding var isTargeted: Bool
 
     func body(content: Content) -> some View {
-        if let onMakeProject {
-            content.onDrop(of: [.yardletTaskReference], delegate: SidebarProjectsDrop(
-                taskToMakeProject: taskToMakeProject, onMakeProject: onMakeProject, isTargeted: $isTargeted))
+        if let perform {
+            content.onDrop(of: [.yardletTaskReference], delegate: SidebarProjectDrop(
+                take: take, perform: perform, isTargeted: $isTargeted))
         } else {
             content
         }
     }
 }
 
-private struct SidebarProjectsDrop: DropDelegate {
-    let taskToMakeProject: (UUID) -> SessionRecord?
-    let onMakeProject: (SessionRecord) -> Void
+private struct SidebarProjectDrop: DropDelegate {
+    let take: (UUID) -> SessionRecord?
+    let perform: (SessionRecord) -> Void
     @Binding var isTargeted: Bool
 
     func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: [.yardletTaskReference]) }
@@ -2304,7 +2328,7 @@ private struct SidebarProjectsDrop: DropDelegate {
     func performDrop(info: DropInfo) -> Bool {
         isTargeted = false
         guard let provider = info.itemProviders(for: [.yardletTaskReference]).first else { return false }
-        let taskToMakeProject = taskToMakeProject, onMakeProject = onMakeProject
+        let take = take, perform = perform
         Task { @MainActor in
             let taskID: UUID? = await withCheckedContinuation { continuation in
                 _ = provider.loadTransferable(type: TaskDragItem.self) { result in
@@ -2312,11 +2336,11 @@ private struct SidebarProjectsDrop: DropDelegate {
                 }
             }
             // The item dropped, which may have come from another window's sidebar.
-            if let session = taskID.flatMap(taskToMakeProject) { onMakeProject(session) }
+            if let session = taskID.flatMap(take) { perform(session) }
         }
         return true
     }
 
-    /// Whether the task whose drag started last can become a project here.
-    private var takesDraggedTask: Bool { SidebarNesting.draggedTaskID.flatMap(taskToMakeProject) != nil }
+    /// Whether the task whose drag started last can go here.
+    private var takesDraggedTask: Bool { SidebarNesting.draggedTaskID.flatMap(take) != nil }
 }
