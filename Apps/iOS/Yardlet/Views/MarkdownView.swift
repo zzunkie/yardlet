@@ -1,5 +1,23 @@
 import SwiftUI
 
+/// Prose in messages, including the hidden copy used to measure a folded message.
+struct ConversationText: View {
+    private let content: Text
+    @ScaledMetric(relativeTo: .body) private var lineSpacing: CGFloat = 4
+
+    init(_ text: String, opensFiles: Bool = false) {
+        content = Text(MarkdownView.inline(text, opensFiles: opensFiles))
+    }
+
+    init(verbatim text: String) {
+        content = Text(verbatim: text)
+    }
+
+    var body: some View {
+        content.lineSpacing(lineSpacing)
+    }
+}
+
 /// An answer's Markdown (CommonMark and GFM tables, docs/REMOTE_PROTOCOL.md §6.3), drawn in blocks: paragraphs and
 /// lists with their inline styles, headings, quotes, code blocks that scroll sideways, and tables as monospaced
 /// text. Selectable, so a part can be copied. Links underlined, and with `opensFiles` a code span that names a file
@@ -8,9 +26,10 @@ struct MarkdownView: View {
     let text: String
     var font: Font = .body
     var opensFiles = false
+    @ScaledMetric(relativeTo: .body) var blockSpacing: CGFloat = 14
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: blockSpacing) {
             ForEach(Array(Self.blocks(text).enumerated()), id: \.offset) { _, block in
                 view(for: block)
             }
@@ -22,16 +41,16 @@ struct MarkdownView: View {
     private func view(for block: Block) -> some View {
         switch block {
         case let .paragraph(text):
-            Text(Self.inline(text, opensFiles: opensFiles)).font(font).textSelection(.enabled)
+            ConversationText(text, opensFiles: opensFiles).font(font).textSelection(.enabled)
         case let .heading(level, text):
-            Text(Self.inline(text, opensFiles: opensFiles))
+            ConversationText(text, opensFiles: opensFiles)
                 .font(level <= 1 ? .title3.weight(.semibold) : level == 2 ? .headline : .subheadline.weight(.semibold))
                 .textSelection(.enabled)
                 .padding(.top, 4)
         case let .quote(text):
             HStack(alignment: .top, spacing: 10) {
                 RoundedRectangle(cornerRadius: 1.5).fill(Color(.systemGray4)).frame(width: 3)
-                Text(Self.inline(text, opensFiles: opensFiles)).font(font).foregroundStyle(.secondary).textSelection(.enabled)
+                ConversationText(text, opensFiles: opensFiles).font(font).foregroundStyle(.secondary).textSelection(.enabled)
             }
         case let .code(code), let .table(code):
             ScrollView(.horizontal, showsIndicators: false) {

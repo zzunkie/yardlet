@@ -38,7 +38,7 @@ struct BackgroundNotice: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: "gearshape").font(.footnote).frame(width: 16).foregroundStyle(.secondary)
-            Text(item.text ?? "").font(.subheadline).foregroundStyle(.secondary).textSelection(.enabled)
+            ConversationText(verbatim: item.text ?? "").font(.subheadline).foregroundStyle(.secondary).textSelection(.enabled)
         }
         .accessibilityElement(children: .combine)
         .accessibilityValue(Text("Background task"))
@@ -116,13 +116,13 @@ private struct ReceivedText: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(MarkdownView.inline(text))
+            ConversationText(text)
                 .lineLimit(lines == nil || isExpanded ? nil : lines)
                 .textSelection(.enabled)
                 .onGeometryChange(for: CGFloat.self, of: \.size.height) { shownHeight = $0 }
                 .background(alignment: .top) {
                     if lines != nil {
-                        Text(MarkdownView.inline(text))
+                        ConversationText(text)
                             .fixedSize(horizontal: false, vertical: true)
                             .hidden()
                             .onGeometryChange(for: CGFloat.self, of: \.size.height) { wholeHeight = $0 }
@@ -151,7 +151,7 @@ private struct QuotedWords: View {
         HStack(alignment: .top, spacing: 8) {
             RoundedRectangle(cornerRadius: 1).fill(Color(.separator)).frame(width: 2)
             VStack(alignment: .leading, spacing: 2) {
-                Text(quote.text).font(.subheadline).textSelection(.enabled)
+                ConversationText(verbatim: quote.text).font(.subheadline).textSelection(.enabled)
                 Text(caption).font(.caption).foregroundStyle(.secondary)
             }
         }

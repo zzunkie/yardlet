@@ -665,7 +665,7 @@ struct UserMessageView: View {
                 Text(text)
                     .font(.system(.callout, design: .monospaced))
             } else if !text.isEmpty || (item.images ?? []).isEmpty {
-                Text(MarkdownView.inline(text))
+                ConversationText(text)
             }
             if uncounted > 0 {
                 Label("\(uncounted) images", systemImage: "photo").font(.caption).foregroundStyle(.secondary)

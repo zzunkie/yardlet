@@ -304,7 +304,7 @@ private struct QuestionForm: View {
                         Text(header).font(.caption.weight(.semibold)).foregroundStyle(.secondary).textCase(.uppercase)
                     }
                     if let text = step.text, !text.isEmpty {
-                        Text(MarkdownView.inline(text)).font(.body).textSelection(.enabled)
+                        ConversationText(text).font(.body).textSelection(.enabled)
                     }
                     ForEach(step.options, id: \.label) { option in
                         optionRow(option, step: step)
