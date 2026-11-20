@@ -1555,10 +1555,24 @@ final class BrowserAgentToolsTests: XCTestCase {
             ("gh" + "p_" + body, "ghp_"), ("github" + "_pat_11AAAA_" + body, "github_pat_"),
             ("sk" + "-proj-" + body, "sk-proj-"), ("sk" + "-ant-api03-" + body, "sk-ant-api03-"),
             ("sk" + "_live_" + body, "sk_live_"), ("rk" + "_live_" + body, "rk_live_"),
-            ("AK" + "IA" + "ABCDEFGHIJ234567", "AKIA"), ("AI" + "za" + String(body.prefix(35)), "AIza")
+            ("AK" + "IA" + "ABCDEFGHIJ234567", "AKIA"), ("AI" + "za" + String(body.prefix(35)), "AIza"),
+            ("wh" + "sec_" + body, "whsec_")
         ]
         for (key, kind) in keys {
             XCTAssertEqual(CredentialText.scrub("Key: \(key)."), "Key: \(kind)[hidden credential].", kind)
+        }
+        // A combining mark or a format character right beside a key joins the character next to it into one
+        // `Character` (an Arabic number sign before one) and is no word boundary to ICU (an accent, a zero-width joiner or
+        // a variation selector after one); the key is hidden all the same and the mark stays.
+        let marks = ["\u{0301}", "\u{0600}", "\u{200D}", "\u{FE0F}"]
+        for (key, kind) in keys {
+            for mark in marks {
+                let scalar = String(mark.unicodeScalars.first!.value, radix: 16)
+                XCTAssertEqual(CredentialText.scrub("Here: \(mark)\(key)."), "Here: \(mark)\(kind)[hidden credential].",
+                               "\(kind) after U+\(scalar)")
+                XCTAssertEqual(CredentialText.scrub("Here: \(key)\(mark)."), "Here: \(kind)[hidden credential]\(mark).",
+                               "\(kind) before U+\(scalar)")
+            }
         }
         let pem = "-----BEGIN RSA PRIVATE" + " KEY-----\n\(body)\n\(body)\n-----END RSA PRIVATE KEY-----"
         XCTAssertEqual(CredentialText.scrub(pem), "-----BEGIN RSA PRIVATE KEY-----[hidden credential]-----END RSA PRIVATE KEY-----")
@@ -1606,7 +1620,9 @@ final class BrowserAgentToolsTests: XCTestCase {
             """)
         XCTAssertNil(context.exception, context.exception?.toString() ?? "")
         for (key, kind) in keys + [(pem, "PEM")] {
-            XCTAssertEqual(holds?.call(withArguments: ["Key: \(key)."])?.toBool(), true, kind)
+            for text in ["Key: \(key)."] + marks.flatMap({ ["Here: \($0)\(key).", "Here: \(key)\($0)."] }) {
+                XCTAssertEqual(holds?.call(withArguments: [text])?.toBool(), true, kind)
+            }
         }
         for (text, _) in named {
             XCTAssertEqual(holds?.call(withArguments: [text])?.toBool(), true, text)

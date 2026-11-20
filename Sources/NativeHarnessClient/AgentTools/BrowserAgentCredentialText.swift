@@ -39,8 +39,10 @@ enum CredentialText {
         // Stripe secret and restricted keys, and webhook signing secrets.
         Shape(["k_live_", "k_test_"], #"\b([sr]k_(?:live|test)_)[A-Za-z0-9]{16,}"#),
         Shape(["whsec_"], #"\b(whsec_)[A-Za-z0-9+/=]{16,}"#),
-        // AWS access key IDs, long-term and temporary.
-        Shape(["AKIA", "ASIA"], #"\b(AKIA|ASIA)[0-9A-Z]{16}\b"#),
+        // AWS access key IDs, long-term and temporary, where no ASCII letter, digit or underscore follows. Not a `\b`
+        // there: ICU puts none before a combining mark or format character, which would leave the ID shown when an
+        // accent, a zero-width joiner or a variation selector comes right after it.
+        Shape(["AKIA", "ASIA"], #"\b(AKIA|ASIA)[0-9A-Z]{16}(?![0-9A-Za-z_])"#),
         // Google API keys.
         Shape(["AIza"], #"\b(AIza)[0-9A-Za-z_-]{35}"#),
         // PEM and OpenSSH private keys and PGP private key blocks; one a cut left without its end, to the end of its body.
