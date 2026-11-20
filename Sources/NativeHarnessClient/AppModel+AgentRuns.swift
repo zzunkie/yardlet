@@ -230,6 +230,7 @@ extension AppModel {
             CreateHarnessSessionRequest(localSessionID: run.id, workspaceURL: run.workspaceURL, initialPrompt: nil))
         run.adapter = adapter
         run.handle = handle
+        if run.harness == .antigravityCLI { sessionTools.noteAntigravityConversation(handle.providerSessionID, of: run) }
         // A harness an agent runs subagents on is in use for Settings › Harness Accounts; a judge is Yardlet's own.
         if !run.isEvaluationJudge { AccountHarnessScope.SubagentUse.note(run.harness, in: preferences) }
         if run.harness == .codex, run.permission == .readOnly {

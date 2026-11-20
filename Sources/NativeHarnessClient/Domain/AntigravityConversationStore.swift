@@ -9,7 +9,7 @@ import Foundation
 ///   `app_data_dir` is `antigravity` are the desktop app's (its `~/.gemini/antigravity`), which the
 ///   CLI copies into its own store before it continues one, so they are not offered.
 /// - `cache/last_conversations.json`, the folder each `agy` run last continued, which names the
-///   folder of such a conversation (`ownFolder`).
+///   folder of such a conversation (`ownFolder`) when Yardlet did not start it.
 /// - `brain/<id>/.system_generated/logs/transcript_full.jsonl` (else `transcript.jsonl`), the
 ///   conversation's readable log: requests, answers, thinking and tool calls.
 /// - `brain/<id>/.system_generated/subagents/<subagent's conversation ID>.json`, the subagents the
@@ -48,11 +48,14 @@ struct AntigravityConversationStore: Sendable {
 
     /// Every conversation the CLI can continue by its ID: its own (`antigravity-cli`), not a
     /// subagent's (`nesting_depth` 0), with steps, and with a known folder: its own (`ownFolder`), else
-    /// the first it lists. Newest first.
-    func conversations() throws -> [ImportableConversation] {
+    /// the first it lists. Newest first. `startedByYardlet` is the folder Yardlet opened each conversation
+    /// it started in, by the conversation ID in lower case.
+    func conversations(startedByYardlet: [String: URL] = [:]) throws -> [ImportableConversation] {
         let lastByFolder = lastConversationFolders()
         return try continuable(summaries()).compactMap { summary -> ImportableConversation? in
-            guard let folder = Self.ownFolder(of: summary, lastContinuedIn: lastByFolder[summary.conversationID])
+            guard let folder = Self.ownFolder(of: summary,
+                                              startedIn: startedByYardlet[summary.conversationID.lowercased()],
+                                              lastContinuedIn: lastByFolder[summary.conversationID])
                     ?? summary.workspaceURLs.first else { return nil }
             return Self.importable(summary, in: folder)
         }
@@ -61,11 +64,14 @@ struct AntigravityConversationStore: Sendable {
 
     /// The conversations of one folder, newest first: those whose own folder it is, and those whose own
     /// folder is not known that list it among theirs.
-    func conversations(in folder: URL, limit: Int = 50) throws -> [ImportableConversation] {
+    func conversations(in folder: URL, startedByYardlet: [String: URL] = [:],
+                       limit: Int = 50) throws -> [ImportableConversation] {
         let target = Self.path(folder)
         let lastByFolder = lastConversationFolders()
         return Array(try continuable(summaries()).filter { summary in
-            if let own = Self.ownFolder(of: summary, lastContinuedIn: lastByFolder[summary.conversationID]) {
+            if let own = Self.ownFolder(of: summary,
+                                        startedIn: startedByYardlet[summary.conversationID.lowercased()],
+                                        lastContinuedIn: lastByFolder[summary.conversationID]) {
                 return Self.path(own) == target
             }
             return summary.workspaceURLs.contains { Self.path($0) == target }
@@ -90,11 +96,12 @@ struct AntigravityConversationStore: Sendable {
             parentProviderSessionID: summary.parentConversationID)
     }
 
-    /// The folder a conversation ran in, when it is known: the one `agy` last continued it in
+    /// The folder a conversation ran in, when it is known: the one Yardlet opened it in, for one Yardlet
+    /// started (a task's, a subagent's), the one `agy` last continued it in
     /// (`cache/last_conversations.json`), or the only one it lists. A conversation of a shared `agy acp`
-    /// process lists every folder the process served and is found in each of them.
-    static func ownFolder(of summary: Summary, lastContinuedIn: URL?) -> URL? {
-        lastContinuedIn ?? (summary.workspaceURLs.count == 1 ? summary.workspaceURLs.first : nil)
+    /// process lists every folder the process served, so one Yardlet has no record of is found in each.
+    static func ownFolder(of summary: Summary, startedIn: URL?, lastContinuedIn: URL?) -> URL? {
+        startedIn ?? lastContinuedIn ?? (summary.workspaceURLs.count == 1 ? summary.workspaceURLs.first : nil)
     }
 
     /// The title the CLI generated for a conversation, for the task's title.

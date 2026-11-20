@@ -275,12 +275,30 @@ final class AntigravityImportAndHistoryTests: XCTestCase {
         XCTAssertEqual(app.model.transcriptBySessionID[task.id]?.last?.content, .user(text: "Fixture request three"))
     }
 
-    /// The bulk sheet lists Antigravity's conversations beside the Claude and Codex apps'.
+    /// The bulk sheet lists Antigravity's conversations beside the Claude and Codex apps'. One Yardlet
+    /// started, for a task or a subagent, is in the folder Yardlet opened it in, whatever other folders its
+    /// shared `agy acp` process served or the CLI last continued it in, and in no other folder's list.
     func testTheOtherAppsListHasAntigravitysConversations() async throws {
         let fixture = try makeStore()
-        let app = try makeModel(store: fixture.store)
+        let task = SessionRecord(harness: .antigravityCLI, workspaceURL: fixture.otherProject,
+                                 runtimeExecutableURL: URL(filePath: "/tmp/agy"), title: "Task", providerSessionID: Self.i)
+        let app = try makeModel(store: fixture.store, sessions: [task])
+        app.model.sessionTools.runDirectory = root.appending(path: "agent-runs", directoryHint: .isDirectory)
+        app.model.sessionTools.noteAntigravityConversation(Self.h.uppercased(), of: AgentRun(
+            callerID: task.id, hostTaskID: task.id, harness: .antigravityCLI, prompt: "Review",
+            workspaceURL: fixture.project, depth: 1))
         let listing = await app.model.otherAppConversations(claudeConnection: nil)
         XCTAssertEqual(listing.antigravity.map(\.providerSessionID), [Self.e, Self.a, Self.h, Self.i, Self.b])
+        XCTAssertEqual(listing.antigravity.first { $0.providerSessionID == Self.h }?.workspaceURL, fixture.project)
+        XCTAssertEqual(listing.antigravity.first { $0.providerSessionID == Self.i }?.workspaceURL, fixture.otherProject)
+        func listed(in folder: URL) async throws -> [String] {
+            try await app.model.importableConversations(harness: .antigravityCLI, workspaceURL: folder, connection: nil)
+                .conversations.map(\.providerSessionID)
+        }
+        let inProject = try await listed(in: fixture.project)
+        XCTAssertEqual(inProject, [Self.e, Self.a, Self.h])
+        let inOtherProject = try await listed(in: fixture.otherProject)
+        XCTAssertEqual(inOtherProject, [Self.i, Self.b])
         XCTAssertNil(listing.antigravityError)
         XCTAssertTrue(listing.all.contains { $0.providerSessionID == Self.b })
         XCTAssertEqual(L10n.string("Conversations from the Claude and Codex apps, Claude Code and Codex run elsewhere, and Antigravity CLI. Their history stays where it is.",

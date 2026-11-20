@@ -663,6 +663,39 @@ final class SessionToolCenter {
         try? StateFile.write(encoder.encode(record), to: folder.appending(path: "\(run.id.uuidString.lowercased()).json"),
                              isPrivate: true)
     }
+
+    // MARK: Antigravity conversations
+
+    private nonisolated static let antigravityConversationsName = "antigravity-conversations.json"
+
+    /// Notes the Antigravity conversation a subagent runs and the folder it runs in, with its host task's
+    /// subagents and gone with them: `agy acp` lists in a conversation every folder its process served,
+    /// so only this says which one is the subagent's (`AntigravityConversationStore.ownFolder`).
+    /// `{conversation ID: folder}`, the ID in lower case.
+    func noteAntigravityConversation(_ conversationID: String, of run: AgentRun) {
+        guard let runDirectory else { return }
+        let file = runDirectory.appending(path: run.hostTaskID.uuidString.lowercased(), directoryHint: .isDirectory)
+            .appending(path: Self.antigravityConversationsName)
+        var folders = (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode([String: String].self, from: $0) }
+            ?? [:]
+        folders[conversationID.lowercased()] = run.workspaceURL.path(percentEncoded: false)
+        try? StateFile.write(JSONEncoder().encode(folders), to: file, isPrivate: true)
+    }
+
+    /// Every folder `noteAntigravityConversation` noted under `runDirectory`, by conversation ID. It reads
+    /// one small file per task that ran an Antigravity subagent, off the main thread.
+    nonisolated static func antigravityConversationFolders(in runDirectory: URL) -> [String: URL] {
+        let hosts = (try? FileManager.default.contentsOfDirectory(at: runDirectory, includingPropertiesForKeys: nil)) ?? []
+        var folders: [String: URL] = [:]
+        for host in hosts {
+            guard let data = try? Data(contentsOf: host.appending(path: antigravityConversationsName)),
+                  let noted = try? JSONDecoder().decode([String: String].self, from: data) else { continue }
+            for (id, path) in noted where PathRules.current.isAbsolute(path) {
+                folders[id] = URL(filePath: path, directoryHint: .isDirectory)
+            }
+        }
+        return folders
+    }
 }
 
 extension SessionToolCenter {

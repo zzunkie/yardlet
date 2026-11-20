@@ -4283,8 +4283,9 @@ final class AppModel {
         case .antigravityCLI:
             // Antigravity CLI's own index and logs, read and never written; nothing starts.
             let store = antigravityConversationStore
+            let startedByYardlet = antigravityFoldersStartedByYardlet()
             let conversations = try await Task.detached(priority: .userInitiated) {
-                try store.conversations(in: workspaceURL)
+                try store.conversations(in: workspaceURL, startedByYardlet: startedByYardlet())
             }.value
             return ImportableConversationPage(conversations: query.isEmpty ? conversations : conversations.filter {
                 $0.title.localizedCaseInsensitiveContains(query)
@@ -4307,6 +4308,25 @@ final class AppModel {
             }, nextCursor: page.nextCursor)
         default:
             return ImportableConversationPage(conversations: [])
+        }
+    }
+
+    /// The folder Yardlet opened each Antigravity conversation it started in, by conversation ID in lower
+    /// case: its tasks', listed and archived, and its subagents' (`SessionToolCenter.noteAntigravityConversation`),
+    /// which the returned reader reads where it is called, off the main thread.
+    func antigravityFoldersStartedByYardlet() -> @Sendable () -> [String: URL] {
+        var tasks: [String: URL] = [:]
+        for session in store.sessions where session.harness == .antigravityCLI {
+            if let id = session.providerSessionID { tasks[id.lowercased()] = session.workspaceURL }
+        }
+        for record in store.archivedSessions ?? [] where record.session.harness == .antigravityCLI {
+            if let id = record.session.providerSessionID { tasks[id.lowercased()] = record.session.workspaceURL }
+        }
+        let runDirectory = sessionTools.runDirectory
+        return { [tasks] in
+            var folders = runDirectory.map(SessionToolCenter.antigravityConversationFolders(in:)) ?? [:]
+            folders.merge(tasks) { _, task in task }
+            return folders
         }
     }
 
@@ -4537,9 +4557,10 @@ final class AppModel {
         }
         if runtimeSelections.selectedURL(for: .antigravityCLI) != nil {
             let store = antigravityConversationStore
+            let startedByYardlet = antigravityFoldersStartedByYardlet()
             do {
                 result.antigravity = try await Task.detached(priority: .userInitiated) {
-                    try store.conversations()
+                    try store.conversations(startedByYardlet: startedByYardlet())
                 }.value
             } catch {
                 result.antigravityError = error.localizedDescription

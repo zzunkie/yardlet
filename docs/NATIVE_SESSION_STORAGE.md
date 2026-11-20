@@ -950,11 +950,15 @@ Yardlet removes there is the CLI's extra copies of Yardlet's tool schemas, descr
   `app_data_dir`.
 - **What is imported:** rows whose `app_data_dir` is `antigravity-cli` (rows of the app, `antigravity`, are left out
   because the CLI can continue them only after copying them into its own store from the Other tab of `/resume`), with
-  `nesting_depth` 0 (subagent conversations excluded), `step_count` > 0 and a known folder. A conversation's own folder
-  is the one `cache/last_conversations.json` (folder → ID) names for it, else the only one in its `workspace_uris`. A
-  conversation an `agy acp` process ran lists every folder that process served, sorted, so its own folder is not
-  known: a project's import list shows it in each of those folders and imports it there, and the list of every folder
-  shows it under the first. An imported task has provider session ID =
+  `nesting_depth` 0 (subagent conversations excluded), `step_count` > 0 and a known folder. A conversation an `agy acp`
+  process ran lists every folder that process served, sorted, so its own folder is the one Yardlet opened it in when
+  Yardlet started it: its task's (the local index, listed or archived), or a `run_agent` subagent's, which Yardlet
+  notes as the subagent starts in `~/.yardlet/agent-runs/<host task>/antigravity-conversations.json`
+  (`{conversation ID: folder}`, the host task's kept subagents' folder, removed with them when the task is deleted).
+  Otherwise it is the one `cache/last_conversations.json` (folder → ID) names for it, else the only one in its
+  `workspace_uris`. One whose own folder is not known (another client's, or a subagent's from before Yardlet noted
+  them) is in the import list of each folder it lists and is imported there, and the list of every folder shows it
+  under the first. An imported task has provider session ID =
   `conversation_id`, the `.native` scope and no binding (Antigravity has a single keychain sign-in), and is detached.
   The title is the `title` the CLI made (or else the first line of `preview`), and the parent is
   `parent_conversation_id`. A conversation already imported opens the existing task. The CLI also records the
