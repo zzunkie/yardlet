@@ -721,7 +721,7 @@ final class BrowserAgentTools {
         switch tool {
         case VaultToolCatalog.fillCredential: try await fillCredential(arguments, on: page, sessionID: sessionID)
         case AgentToolCatalog.navigate: try await navigate(arguments, on: page, sessionID: sessionID)
-        case AgentToolCatalog.snapshot: try await snapshot(on: page)
+        case AgentToolCatalog.snapshot: try await snapshot(arguments, on: page)
         case AgentToolCatalog.click: try await click(arguments, on: page)
         case AgentToolCatalog.type: try await type(arguments, on: page, sessionID: sessionID)
         case AgentToolCatalog.pressKey: try await pressKey(arguments, on: page, sessionID: sessionID)
@@ -842,7 +842,11 @@ final class BrowserAgentTools {
         return .text("Loaded \(location.url)\nTitle: \(location.title)\(note)")
     }
 
-    private func snapshot(on page: BrowserAgentPage) async throws -> AgentToolResult {
+    /// The page as an accessibility tree, or with a reference the part of it under that element. A part reads the whole
+    /// page as well, so the references everywhere are what a full snapshot gives.
+    private func snapshot(_ arguments: JSONValue, on page: BrowserAgentPage) async throws -> AgentToolResult {
+        let scopeRef = arguments["ref"]?.stringValue.map { $0.hasPrefix("@") ? $0 : "@" + $0 }
+        let scope = try scopeRef.map { try element($0, on: page, scopingSnapshot: true) }
         let mark = page.cdp.eventLog.count
         // On a filled page, the fields that took a value and the text that shows one are left out by node: a code split
         // over one-digit boxes, or a part of a value, matches no scrubbed string.
@@ -853,12 +857,28 @@ final class BrowserAgentTools {
         }
         let read = try await readFrames(page)
         let names = page.referenceNames()
-        let rendered = BrowserAgentSnapshot.render(frames: read.frames, hidden: hidden, scrub: { [unowned self] in self.scrub($0) },
-                                                   named: names.named, nextNumber: names.next)
+        let scrub: (String) -> String = { [unowned self] in self.scrub($0) }
+        var rendered = BrowserAgentSnapshot.render(frames: read.frames, hidden: hidden, scrub: scrub, named: names.named,
+                                                   nextNumber: names.next)
+        var part = ""
+        if let scope, let scopeRef {
+            var named = names.named
+            for (name, element) in rendered.refs { named[element] = name }
+            guard let scoped = BrowserAgentSnapshot.render(scope, in: read.frames, hidden: hidden, scrub: scrub, named: named,
+                                                           nextNumber: rendered.nextNumber) else {
+                throw BrowserAgentToolError("\(scopeRef) has left the page since snapshot \(page.snapshotCount) of tab "
+                    + "\(page.tabID). browser_snapshot without ref gives the current references.",
+                    Self.missingReference(scopeRef, on: page))
+            }
+            rendered.refs.merge(scoped.refs) { _, inPart in inPart }
+            rendered.nextNumber = scoped.nextNumber
+            rendered.text = scoped.text.isEmpty ? "(\(scopeRef) shows nothing readable now: it may be hidden or empty.)" : scoped.text
+            part = ", only \(scopeRef) and what it holds"
+        }
         page.replaceRefs(rendered.refs, frameOwners: read.owners, eventMark: mark, nextNumber: rendered.nextNumber)
         let location = try await pageLocation(page)
         return .text("Page URL: \(location.url)\nPage title: \(location.title)\nSnapshot \(page.snapshotCount) of tab \(page.tabID)"
-            + "\n\n\(rendered.text)")
+            + "\(part)\n\n\(rendered.text)")
     }
 
     /// How long one frame's tree may take; a frame that does not answer in time is left out of the snapshot.
@@ -1755,33 +1775,35 @@ final class BrowserAgentTools {
 
     /// The element a reference names in the tab's latest snapshot. An element keeps its reference in later snapshots
     /// while it is on the page, and a navigation ends them all; the errors say which snapshot is the latest and why the
-    /// reference is not in it.
-    func element(_ ref: String, on page: BrowserAgentPage) throws -> BrowserAgentSnapshot.Ref {
+    /// reference is not in it. For a snapshot of one element's part, they point to a snapshot of the whole page.
+    func element(_ ref: String, on page: BrowserAgentPage, scopingSnapshot: Bool = false) throws -> BrowserAgentSnapshot.Ref {
         let normalized = ref.hasPrefix("@") ? ref : "@" + ref
         let latest = "snapshot \(page.snapshotCount) of tab \(page.tabID)"
         let missing = Self.missingReference(ref, on: page)
+        let retake = scopingSnapshot ? "browser_snapshot without ref" : "browser_snapshot"
         if let node = page.refs[normalized] {
             if let url = page.mainFrameNavigation(since: page.snapshotEventMark) {
                 page.clearRefs()
                 throw BrowserAgentToolError("\(ref) is stale: the page went to \(url.isEmpty ? "another document" : url) after "
-                    + "\(latest), which ends its references. browser_snapshot gives new ones.", missing)
+                    + "\(latest), which ends its references. \(retake) gives new ones.", missing)
             }
             return node
         }
         if page.snapshotCount == 0 {
             throw BrowserAgentToolError("There is no snapshot of tab \(page.tabID) yet, so \(ref) means nothing. Call "
-                + "browser_snapshot first and use its references.", missing)
+                + "\(retake) first and use its references.", missing)
         }
         if page.refsEndedByNavigation {
             throw BrowserAgentToolError("\(ref) is stale: the page navigated after \(latest), which ends its references. "
-                + "browser_snapshot gives new ones.", missing)
+                + "\(retake) gives new ones.", missing)
         }
         if let number = Int(normalized.dropFirst(2)), number >= 1, number < page.nextRefNumber {
             throw BrowserAgentToolError("\(ref) is not in \(latest), the latest: an earlier snapshot gave it to an element "
-                + "that has left the page or is no longer shown. browser_snapshot gives the current references.", missing)
+                + "that has left the page or is no longer shown. \(retake) gives the current references.", missing)
         }
         throw BrowserAgentToolError("No snapshot of tab \(page.tabID) gave \(ref): they gave @e1 to @e\(page.nextRefNumber - 1) "
-            + "so far, and \(latest) is the latest.", missing)
+            + "so far, and \(latest) is the latest." + (scopingSnapshot ? " \(retake) gives the current references." : ""),
+            missing)
     }
 
     /// A reference that names nothing on the page now: a new snapshot gives the current ones.

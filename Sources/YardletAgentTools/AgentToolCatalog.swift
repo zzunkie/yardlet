@@ -164,9 +164,13 @@ package enum AgentToolCatalog {
                 + "element or text on the page. Elements you can act on carry references such as @e3 for the other "
                 + "browser tools. An element keeps its reference in later snapshots while it stays on the page; a "
                 + "reference whose element is not in the latest snapshot stops working, and a navigation of the page "
-                + "ends them all. References are the tools' own and the user never sees them: name an element to the "
-                + "user by its label or text.",
-            inputSchema: pageInput([:]),
+                + "ends them all. With ref, it returns only that element and what it holds, with the same references, "
+                + "which costs far fewer tokens than the whole page when only that part matters or changed. References "
+                + "are the tools' own and the user never sees them: name an element to the user by its label or text.",
+            inputSchema: pageInput([
+                "ref": property("string", "Read only this element and what it holds: a reference from the tab's latest "
+                    + "browser_snapshot, such as @e3. Omit to read the whole page.")
+            ]),
             readOnly: true
         ),
         AgentToolDefinition(
@@ -257,7 +261,12 @@ package enum AgentToolCatalog {
         AgentToolDefinition(
             name: screenshot,
             title: "Screenshot",
-            description: "Capture the visible page, the full page, or one element as an image.",
+            description: "Capture the visible page, the full page, or one element as an image, to check how something "
+                + "looks. To read text or find an element, use browser_snapshot, which gives the exact text, what is off "
+                + "screen, and the references the other tools need. An image costs tokens by its area in pixels, and a "
+                + "model may scale a large one down until small text cannot be read, so when only part of the page "
+                + "matters, capture that element with ref rather than the full page. jpeg makes a smaller file than png, "
+                + "at the same token cost.",
             inputSchema: pageInput([
                 "ref": refProperty,
                 "fullPage": property("boolean", "Capture the whole scrollable page."),

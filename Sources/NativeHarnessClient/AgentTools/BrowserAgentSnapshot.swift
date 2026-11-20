@@ -88,6 +88,29 @@ enum BrowserAgentSnapshot {
                       refs: renderer.refs, isTruncated: renderer.isTruncated, nextNumber: renderer.nextNumber)
     }
 
+    /// One element and what it holds, its frames included, read as `render(frames:)` reads them and starting at no
+    /// indent; `refs` has only the references in that part. The text is empty when the element shows nothing, and the
+    /// result is nil when the element is not in the frames' trees.
+    static func render(_ scope: Ref, in frames: [Frame], maximumLength: Int = 60_000, hidden: Set<Ref> = [],
+                       scrub: @escaping (String) -> String = { $0 }, named: [Ref: String] = [:], nextNumber: Int = 1) -> Result? {
+        guard let main = frames.first,
+              let frame = frames.indices.first(where: { frames[$0].session == scope.session && frames[$0].holds(scope.node) }),
+              let id = frames[frame].nodes.first(where: { $0["backendDOMNodeId"]?.integerValue == Int64(scope.node) })?["nodeId"]?
+                .stringValue
+        else { return nil }
+        var renderer = Renderer(frames: frames, maximumLength: maximumLength,
+                                pageOrigin: rootURL(of: main.nodes).flatMap(origin(of:)), hidden: hidden, scrub: scrub)
+        renderer.named = named
+        renderer.nextNumber = nextNumber
+        renderer.lines = renderer.visit(id, in: frame, depth: 0, parentName: "")
+        var text = renderer.lines.joined(separator: "\n")
+        if renderer.isTruncated {
+            text += "\n… This part is larger than one snapshot; the rest was left out. Read a smaller part by the reference "
+                + "of an element in it, or with browser_evaluate."
+        }
+        return Result(text: text, refs: renderer.refs, isTruncated: renderer.isTruncated, nextNumber: renderer.nextNumber)
+    }
+
     private struct Renderer {
         let frames: [Frame]
         let byID: [[String: JSONValue]]

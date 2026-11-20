@@ -595,6 +595,73 @@ final class BrowserAgentToolsTests: XCTestCase {
         XCTAssertTrue(afterNavigation.text.contains("@e3 is stale: the page navigated after snapshot 2 of tab 4"), afterNavigation.text)
     }
 
+    /// A snapshot by reference reads only that element and what it holds, with the references a full snapshot gives:
+    /// new elements on either side of it are numbered in page order, and the page's other references go on as after a
+    /// full one. A reference it cannot read says to take a full snapshot.
+    func testSnapshotOfOneElementReadsItsPartWithTheReferencesOfAFullOne() async {
+        func node(_ id: String, _ role: String, _ name: String = "", children: [String] = [], backend: Int64,
+                  focusable: Bool = false) -> JSONValue {
+            .object([
+                "nodeId": .string(id), "role": .object(["type": .string("role"), "value": .string(role)]),
+                "name": .object(["type": .string("computedString"), "value": .string(name)]),
+                "childIds": .array(children.map { .string($0) }), "backendDOMNodeId": .integer(backend),
+                "properties": .array(focusable ? [.object(["name": .string("focusable"), "value": .object(["value": .bool(true)])])] : [])
+            ])
+        }
+        var nodes = [
+            node("1", "RootWebArea", "Shop", children: ["2", "3", "6"], backend: 1),
+            node("2", "button", "Menu", backend: 10),
+            node("3", "dialog", "Contact", children: ["4", "5"], backend: 11, focusable: true),
+            node("4", "textbox", "Email", backend: 12), node("5", "button", "Send", backend: 13),
+            node("6", "link", "Help", backend: 14)
+        ]
+        cdp.responders["Accessibility.getFullAXTree"] = { _ in .object(["nodes": .array(nodes)]) }
+        let unscoped = await run(AgentToolCatalog.snapshot, ["ref": .string("@e2")])
+        XCTAssertTrue(unscoped.text.contains("Call browser_snapshot without ref first"), unscoped.text)
+        let full = await run(AgentToolCatalog.snapshot)
+        XCTAssertEqual(Self.refs(in: full.text), ["@e1", "@e2", "@e3", "@e4", "@e5"], full.text)
+
+        // The menu leaves, a button comes before the dialog and a checkbox inside it.
+        nodes = [
+            node("1", "RootWebArea", "Shop", children: ["7", "3", "6"], backend: 1),
+            node("7", "button", "Cart", backend: 15),
+            node("3", "dialog", "Contact", children: ["4", "5", "8"], backend: 11, focusable: true),
+            node("4", "textbox", "Email", backend: 12), node("5", "button", "Send", backend: 13),
+            node("8", "checkbox", "Copy me", backend: 16), node("6", "link", "Help", backend: 14)
+        ]
+        let part = await run(AgentToolCatalog.snapshot, ["ref": .string("e2")])
+        XCTAssertFalse(part.isError, part.text)
+        XCTAssertEqual(part.text, """
+            Page URL: https://example.com/
+            Page title: Example Domain
+            Snapshot 2 of tab 4, only @e2 and what it holds
+
+            - dialog "Contact" [ref=@e2]
+              - textbox "Email" [ref=@e3]
+              - button "Send" [ref=@e4]
+              - checkbox "Copy me" [ref=@e7]
+            """)
+        XCTAssertEqual(page.refs["@e5"], .init(node: 14), "a reference outside the part still works")
+        XCTAssertEqual(page.refs["@e6"], .init(node: 15))
+        let left = await run(AgentToolCatalog.click, ["ref": .string("@e1")])
+        XCTAssertTrue(left.text.contains("@e1 is not in snapshot 2 of tab 4, the latest"), left.text)
+        let again = await run(AgentToolCatalog.snapshot)
+        XCTAssertEqual(Self.refs(in: again.text), ["@e6", "@e2", "@e3", "@e4", "@e7", "@e5"], again.text)
+
+        let unknown = await run(AgentToolCatalog.snapshot, ["ref": .string("@e99")])
+        XCTAssertEqual(unknown.failure?.kind, .notFound)
+        XCTAssertTrue(unknown.text.hasSuffix("browser_snapshot without ref gives the current references."), unknown.text)
+        let stale = await run(AgentToolCatalog.snapshot, ["ref": .string("@e1")])
+        XCTAssertTrue(stale.text.contains("browser_snapshot without ref gives the current references"), stale.text)
+        nodes.removeAll { ["3", "4", "5", "8"].contains($0["nodeId"]?.stringValue) }
+        nodes[0] = node("1", "RootWebArea", "Shop", children: ["7", "6"], backend: 1)
+        let gone = await run(AgentToolCatalog.snapshot, ["ref": .string("@e2")])
+        XCTAssertEqual(gone.text, "@e2 has left the page since snapshot 3 of tab 4. browser_snapshot without ref gives the "
+            + "current references.")
+        XCTAssertEqual(gone.failure?.kind, .notFound)
+        XCTAssertEqual(page.snapshotCount, 3, "a part that cannot be read is no snapshot")
+    }
+
     /// A link the agent clicked navigates without the navigate tool. The old document can stay
     /// alive in the back/forward cache and still answer for its nodes, so the navigation itself
     /// has to end the references.
