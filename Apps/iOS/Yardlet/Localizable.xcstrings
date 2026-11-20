@@ -653,6 +653,16 @@
         }
       }
     },
+    "Asking %@…": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에 요청하는 중…"
+          }
+        }
+      }
+    },
     "Asks for Face ID or your passcode each time you open Yardlet.": {
       "localizations": {
         "ko": {
@@ -793,6 +803,26 @@
         }
       }
     },
+    "Can't reach the Yardlet server. Check your connection and try again.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yardlet 서버에 연결할 수 없습니다. 인터넷 연결을 확인하고 다시 시도하세요."
+          }
+        }
+      }
+    },
+    "Can't reach this Mac. Check that it's on and that Allow remote connections is on in Yardlet there.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 Mac에 연결할 수 없습니다. Mac이 켜져 있고 그 Mac의 Yardlet에서 원격 연결 허용이 켜져 있는지 확인하세요."
+          }
+        }
+      }
+    },
     "Can't reach your Mac. Check that Yardlet is running there with Allow remote connections on, and that this phone is on the same Wi-Fi or Connect from outside is on.": {
       "localizations": {
         "ko": {
@@ -813,6 +843,26 @@
         }
       }
     },
+    "Check Your Mac": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac에서 확인하세요"
+          }
+        }
+      }
+    },
+    "Check that %@ shows the same number, then choose Allow there.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에 같은 숫자가 보이는지 확인하고, 그 Mac에서 허용을 누르세요."
+          }
+        }
+      }
+    },
     "Choose": {
       "localizations": {
         "ko": {
@@ -829,6 +879,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "파일 선택"
+          }
+        }
+      }
+    },
+    "Choose a Mac on Your Account": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "계정에서 Mac 고르기"
+          }
+        }
+      }
+    },
+    "Choose your Mac. It shows a number; allow this phone there when it matches the one here.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "연결할 Mac을 고르세요. Mac에 보이는 숫자가 이 휴대폰의 숫자와 같으면 Mac에서 허용하세요."
           }
         }
       }
@@ -1133,12 +1203,32 @@
         }
       }
     },
+    "Couldn't keep the sign-in on this iPhone. Try again.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 iPhone에 로그인 정보를 저장하지 못했습니다. 다시 시도하세요."
+          }
+        }
+      }
+    },
     "Couldn't load the subagent's conversation.": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "하위 에이전트의 대화를 불러오지 못했습니다."
+          }
+        }
+      }
+    },
+    "Couldn't sign in": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "로그인하지 못했습니다"
           }
         }
       }
@@ -1543,6 +1633,16 @@
         }
       }
     },
+    "Lists the Macs signed in to this account, to pair one without a QR code. Signing out leaves your paired Macs connected.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 계정으로 로그인한 Mac을 보여 주어 QR 코드 없이 연결할 수 있습니다. 로그아웃해도 이미 연결한 Mac은 그대로 연결되어 있습니다."
+          }
+        }
+      }
+    },
     "Loading…": {
       "localizations": {
         "ko": {
@@ -1569,6 +1669,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Mac과 설정"
+          }
+        }
+      }
+    },
+    "Macs on Your Account": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "계정의 Mac"
           }
         }
       }
@@ -1713,6 +1823,16 @@
         }
       }
     },
+    "No Mac is on this account yet. On your Mac, sign in with the same account under Yardlet › Settings… › Yardlet Account, and turn on Allow remote connections under Remote.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 계정에 등록된 Mac이 아직 없습니다. Mac의 Yardlet에서 설정… › Yardlet 계정을 열어 같은 계정으로 로그인하고, 원격 연결에서 원격 연결 허용을 켜세요."
+          }
+        }
+      }
+    },
     "No Scheduled Tasks": {
       "localizations": {
         "ko": {
@@ -1759,6 +1879,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "이 작업을 이어 갈 다른 계정이 없습니다."
+          }
+        }
+      }
+    },
+    "Nobody allowed the request within 2 minutes. Try again.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "2분 안에 허용하지 않아 요청이 끝났습니다. 다시 시도하세요."
           }
         }
       }
@@ -2083,6 +2213,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@에 연결함"
+          }
+        }
+      }
+    },
+    "Paired with this phone": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 휴대폰과 연결됨"
           }
         }
       }
@@ -2767,6 +2907,16 @@
         }
       }
     },
+    "Sign Out": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "로그아웃"
+          }
+        }
+      }
+    },
     "Sign in to %@ on %@ to start a task.": {
       "localizations": {
         "ko": {
@@ -2783,6 +2933,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@에서 하네스에 먼저 로그인하세요."
+          }
+        }
+      }
+    },
+    "Sign in with %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@로 로그인"
+          }
+        }
+      }
+    },
+    "Signed in": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "로그인 계정"
           }
         }
       }
@@ -2997,6 +3167,26 @@
         }
       }
     },
+    "The Mac has had too many requests. Try again in a few minutes.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac에 연결 요청이 너무 많았습니다. 몇 분 뒤 다시 시도하세요."
+          }
+        }
+      }
+    },
+    "The Mac is answering another device's request. Try again in a moment.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac이 다른 기기의 연결 요청을 기다리고 있습니다. 잠시 뒤 다시 시도하세요."
+          }
+        }
+      }
+    },
     "The agent handed this tab to you": {
       "localizations": {
         "ko": {
@@ -3077,12 +3267,32 @@
         }
       }
     },
+    "The request was refused.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac에서 연결 요청을 거절했습니다."
+          }
+        }
+      }
+    },
     "The rest of this change is on your Mac.": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "이 변경의 나머지는 Mac에서 볼 수 있습니다."
+          }
+        }
+      }
+    },
+    "The sign-in didn't finish. Try again.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "로그인을 마치지 못했습니다. 다시 시도하세요."
           }
         }
       }
@@ -3123,6 +3333,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "생각하는 중…"
+          }
+        }
+      }
+    },
+    "This Mac isn't signed in to your account now. On the Mac, sign in under Yardlet › Settings… › Yardlet Account.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 Mac은 지금 계정에 로그인되어 있지 않습니다. Mac의 Yardlet에서 설정… › Yardlet 계정을 열고 로그인하세요."
           }
         }
       }
@@ -3707,6 +3927,16 @@
         }
       }
     },
+    "Waiting for your Mac…": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac의 허용을 기다리는 중…"
+          }
+        }
+      }
+    },
     "Weekly": {
       "localizations": {
         "ko": {
@@ -3793,6 +4023,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "먼저 메시지를 쓰세요."
+          }
+        }
+      }
+    },
+    "Yardlet Account": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yardlet 계정"
           }
         }
       }
@@ -3943,6 +4183,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "요청이 %@ 모델로 라우팅되었습니다."
+          }
+        }
+      }
+    },
+    "Your sign-in ended. Sign in again.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "로그인이 끝났습니다. 다시 로그인하세요."
           }
         }
       }

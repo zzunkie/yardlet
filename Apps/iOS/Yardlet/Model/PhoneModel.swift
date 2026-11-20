@@ -24,6 +24,9 @@ final class PhoneModel {
     /// A task whose browser tab a notification asked to open, over its conversation (§15.18, §15.25).
     var browserToOpen: String?
     let lock = AppLock()
+    let account = PhoneAccount()
+    /// A request to one of the account's Macs (§12.1) while it is under way, or why it ended.
+    private(set) var accountLink: AccountLink?
 
     @ObservationIgnored private let store: RemoteHostStore
     @ObservationIgnored private let keys = KeychainClientKeys()
@@ -175,6 +178,96 @@ final class PhoneModel {
             String(localized: "Your Mac is busy with other connections. Try again in a moment.")
         default:
             String(localized: "Can't reach your Mac. Check that Yardlet is running there with Allow remote connections on, and that this phone is on the same Wi-Fi or Connect from outside is on.")
+        }
+    }
+
+    // MARK: - Linking through the account
+
+    enum AccountLink: Equatable {
+        /// Opening a connection to the Mac.
+        case asking(mac: String)
+        /// The Mac shows the request with this code and waits for someone to allow it there.
+        case waiting(mac: String, code: String)
+        case failed(mac: String, message: String)
+    }
+
+    /// The account's Mac this phone is paired with already, if any.
+    func pairedHost(_ mac: RemoteAccountClient.Mac) -> RemoteSavedHost? {
+        hosts.first { $0.hostKey == mac.macKey }
+    }
+
+    /// Asks one of the account's Macs to take this phone without a QR code (§12.1). The Mac, or a device already
+    /// paired with it, allows it by the code both show; then the Mac is saved and shown as pairing does. True once it is.
+    func link(_ mac: RemoteAccountClient.Mac) async -> Bool {
+        guard let relay = account.relayURL, let hostKey = RemoteEncoding.data(base64url: mac.macKey), hostKey.count == 32 else {
+            return false
+        }
+        accountLink = .asking(mac: mac.name)
+        let key = RemoteKeyPair.generate()
+        let target = RemoteHostTarget(hostKey: hostKey, direct: [], relayURL: relay.absoluteString, room: mac.room)
+        do {
+            let reply = try await RemoteHostConnection.link(target, clientKey: key, hello: Self.hello) { [weak self] code in
+                Task { @MainActor in
+                    guard case .asking? = self?.accountLink else { return }
+                    self?.accountLink = .waiting(mac: mac.name, code: code)
+                }
+            }
+            let previous = store.host(key: hostKey)
+            if let previous, let session, session.id == previous.id {
+                session.stop()
+                self.session = nil
+            }
+            var host = previous ?? RemoteSavedHost(name: mac.name, hostKey: hostKey, direct: [])
+            if let name = reply.server?.name, !name.isEmpty { host.name = name }
+            host.relayURL = relay.absoluteString
+            host.room = mac.room
+            host.alternateRelayURL = nil
+            host.deviceID = reply.deviceId
+            keys.save(key, hostID: host.id)
+            if previous != nil { PushKeys.delete(hostID: host.id) }
+            store.save(host)
+            hosts = store.all()
+            accountLink = nil
+            show(host)
+            requestNotificationPermission()
+            return true
+        } catch is CancellationError {
+            accountLink = nil
+        } catch let failure as RemoteHostConnection.LinkFailure {
+            accountLink = .failed(mac: mac.name, message: Self.linkMessage(failure))
+        } catch {
+            accountLink = .failed(mac: mac.name, message: String(localized: "Couldn't connect. Try again."))
+        }
+        return false
+    }
+
+    func clearAccountLink() {
+        accountLink = nil
+    }
+
+    static func linkMessage(_ failure: RemoteHostConnection.LinkFailure) -> String {
+        switch failure {
+        case .refused:
+            String(localized: "The request was refused.")
+        case .expired:
+            String(localized: "Nobody allowed the request within 2 minutes. Try again.")
+        case let .declined(error):
+            switch error.code {
+            case .linkUnavailable:
+                String(localized: "This Mac isn't signed in to your account now. On the Mac, sign in under Yardlet › Settings… › Yardlet Account.")
+            case .busy:
+                String(localized: "The Mac is answering another device's request. Try again in a moment.")
+            case .rateLimited:
+                String(localized: "The Mac has had too many requests. Try again in a few minutes.")
+            case .unsupportedVersion:
+                String(localized: "Update Yardlet on your Mac to connect this phone.")
+            case .unavailable:
+                String(localized: "Your Mac is busy with other connections. Try again in a moment.")
+            default:
+                String(localized: "Couldn't connect. Try again.")
+            }
+        case .unreachable:
+            String(localized: "Can't reach this Mac. Check that it's on and that Allow remote connections is on in Yardlet there.")
         }
     }
 

@@ -1,13 +1,16 @@
+import AuthenticationServices
 import SwiftUI
 import UserNotifications
 import YardletRemote
 
-/// The Macs this phone paired with, pairing another, App Lock and notifications.
+/// The Macs this phone paired with, pairing another, the Yardlet account, App Lock and notifications.
 struct SettingsView: View {
     @Environment(PhoneModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.webAuthenticationSession) private var webAuthenticationSession
     @State private var isScanning = false
     @State private var isPasting = false
+    @State private var showsAccountMacs = false
     @State private var removing: RemoteSavedHost?
     @State private var notifications: UNAuthorizationStatus = .notDetermined
 
@@ -46,6 +49,25 @@ struct SettingsView: View {
                         } label: {
                             Label("Paste a Pairing Link", systemImage: "link")
                         }
+                        if model.account.account != nil {
+                            Button {
+                                showsAccountMacs = true
+                            } label: {
+                                Label("Choose a Mac on Your Account", systemImage: "person.crop.circle")
+                            }
+                        } else {
+                            ForEach(model.account.providers, id: \.self) { provider in
+                                Button {
+                                    Task {
+                                        if await model.account.signIn(with: provider, using: webAuthenticationSession) {
+                                            showsAccountMacs = true
+                                        }
+                                    }
+                                } label: {
+                                    Label("Sign in with \(PhoneAccount.providerName(provider))", systemImage: "person.crop.circle")
+                                }
+                            }
+                        }
                     } label: {
                         Label("Pair a Mac", systemImage: "plus")
                     }
@@ -59,6 +81,23 @@ struct SettingsView: View {
                     Text("Macs")
                 } footer: {
                     Text("To pair a Mac, open Yardlet › Settings… › Remote on it and choose Pair… beside Pair a device. Swipe a Mac to remove it; it forgets this phone too.")
+                }
+
+                if let name = model.account.name {
+                    Section {
+                        LabeledContent("Signed in", value: name)
+                        Button("Sign Out", role: .destructive) { Task { await model.account.signOut() } }
+                    } header: {
+                        Text("Yardlet Account")
+                    } footer: {
+                        Text("Lists the Macs signed in to this account, to pair one without a QR code. Signing out leaves your paired Macs connected.")
+                    }
+                } else if let error = model.account.error, !showsAccountMacs {
+                    Section {
+                        Text(error).foregroundStyle(.red)
+                    } header: {
+                        Text("Yardlet Account")
+                    }
                 }
 
                 Section {
@@ -100,6 +139,7 @@ struct SettingsView: View {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
             .task { notifications = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus }
+            .task { await model.account.refreshProviders() }
             .confirmationDialog("Remove \(removing?.name ?? "")?", isPresented: Binding(
                 get: { removing != nil }, set: { if !$0 { removing = nil } }), titleVisibility: .visible,
                                 presenting: removing) { host in
@@ -119,6 +159,12 @@ struct SettingsView: View {
                     isPasting = false
                     dismiss()
                     Task { await model.pair(link) }
+                }
+            }
+            .sheet(isPresented: $showsAccountMacs, onDismiss: { model.account.error = nil }) {
+                AccountMacsView {
+                    showsAccountMacs = false
+                    dismiss()
                 }
             }
         }

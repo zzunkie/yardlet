@@ -427,6 +427,108 @@ public actor RemoteHostConnection {
         }
     }
 
+    // MARK: - Linking through an account
+
+    /// Why a link request (§12.1) ended without this client becoming a device.
+    public enum LinkFailure: Error, Equatable, Sendable {
+        /// The host, or one of its devices, refused it.
+        case refused
+        /// Nobody answered it within the host's time for a request.
+        case expired
+        /// The host refused in message 2: `linkUnavailable`, `busy`, `rateLimited` or `unsupportedVersion`.
+        case declined(RemoteError)
+        /// No path reached the host, or the connection ended before an answer.
+        case unreachable(String)
+    }
+
+    /// Asks a host the account lists to take this client as a new device without a pairing link (§12.1): message 1
+    /// commits to a nonce of this client's, message 2 brings the host's, and the first message reveals this client's.
+    /// `onCode` then gets the six digits both sides show, while the host shows the request. Returns message 2 with the
+    /// device the host made once it, or one of its devices, allowed it; the connection is closed either way.
+    public static func link(_ target: RemoteHostTarget, clientKey: RemoteKeyPair, hello: RemoteHandshakeHello,
+                            timing: Timing = Timing(),
+                            onCode: @escaping @Sendable (String) -> Void) async throws -> RemoteHandshakeReply {
+        let nonce = Data(RemoteRandom.bytes(RemoteLinkCode.nonceLength))
+        var hello = hello
+        hello.pair = nil
+        hello.link = true
+        hello.linkCommit = RemoteEncoding.base64url(RemoteLinkCode.commitment(phoneKey: clientKey.publicKey, nonce: nonce))
+        let won: RaceWinner
+        switch await race(candidates(target, includeRelay: true, timing: timing), clientKey: clientKey,
+                          hostKey: target.hostKey, hello: hello) {
+        case let .success(winner):
+            won = winner
+        case let .failure(failure):
+            try Task.checkCancellation()
+            if let error = failure.error { throw LinkFailure.declined(error) }
+            throw LinkFailure.unreachable(failure.reason)
+        }
+        let socket = won.socket
+        defer { socket.close() }
+        guard won.reply.pending == true,
+              let hostNonce = won.reply.linkNonce.flatMap(RemoteEncoding.data(base64url:)),
+              hostNonce.count == RemoteLinkCode.nonceLength else {
+            // A host without nonces would show another code than this client computes.
+            throw LinkFailure.declined(RemoteError(.unsupportedVersion, "The host did not take the link request"))
+        }
+        let code = RemoteLinkCode.code(macKey: target.hostKey, phoneKey: clientKey.publicKey, macNonce: hostNonce,
+                                       phoneNonce: nonce)
+
+        enum Arrival: Sendable {
+            case inbound(Inbound)
+            case closed(RemoteClientSocket.Closing)
+        }
+        let (arrivals, arrived) = AsyncStream.makeStream(of: Arrival.self)
+        socket.start(onMessage: { data in
+            if let inbound = decode(data) { arrived.yield(.inbound(inbound)) }
+        }, onClose: { closing in
+            arrived.yield(.closed(closing))
+            arrived.finish()
+        })
+        // The first message is the nonce; after it, only `ping` until the answer (§12.1, §13.3).
+        socket.send(RemoteRequestEnvelope(id: "reveal", request: .revealLink(nonce: nonce)).encoded())
+        let keepalive = Task {
+            var count = 0
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(timing.pingInterval))
+                guard !Task.isCancelled else { return }
+                if Date().timeIntervalSince(socket.lastReceived) > timing.silenceLimit { return socket.close() }
+                count += 1
+                socket.send(RemoteRequestEnvelope(id: "ping-\(count)", request: .ping).encoded())
+            }
+        }
+        defer { keepalive.cancel() }
+        return try await withTaskCancellationHandler {
+            var refused = false
+            for await arrival in arrivals {
+                switch arrival {
+                case let .inbound(.response(response)) where response.re == "reveal":
+                    guard response.ok else {
+                        throw LinkFailure.declined(response.error ?? RemoteError(.badRequest, "The host did not take the nonce"))
+                    }
+                    onCode(code)
+                case let .inbound(.event(event)) where event.event == .linked:
+                    var reply = won.reply
+                    reply.deviceId = event.deviceId
+                    return reply
+                case let .inbound(.event(event)) where event.event == .linkRefused:
+                    refused = true
+                case let .closed(closing):
+                    try Task.checkCancellation()
+                    if closing.code == Int(RemoteCloseCode.idle.rawValue) { throw LinkFailure.expired }
+                    if refused || closing.isRevoked { throw LinkFailure.refused }
+                    throw LinkFailure.unreachable(closing.reason)
+                default:
+                    break
+                }
+            }
+            try Task.checkCancellation()
+            throw LinkFailure.unreachable("Closed")
+        } onCancel: {
+            socket.close()
+        }
+    }
+
     // MARK: - Reading
 
     private struct Probe: Decodable {

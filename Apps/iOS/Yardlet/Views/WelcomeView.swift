@@ -1,11 +1,13 @@
 import SwiftUI
 import YardletRemote
 
-/// The first screen: connect to a Mac by its pairing code, or look around with the demo Mac.
+/// The first screen: connect to a Mac by its pairing code or through the account it is signed in to, or look around
+/// with the demo Mac.
 struct WelcomeView: View {
     @Environment(PhoneModel.self) private var model
     @State private var isScanning = false
     @State private var isPasting = false
+    @State private var showsAccountMacs = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -34,6 +36,18 @@ struct WelcomeView: View {
                         .padding(.vertical, 4)
                 }
                 .buttonStyle(CardButtonStyle(role: "primary"))
+                if model.account.account != nil {
+                    Button {
+                        showsAccountMacs = true
+                    } label: {
+                        Text("Choose a Mac on Your Account")
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 4)
+                    }
+                    .buttonStyle(CardButtonStyle(role: "secondary"))
+                } else {
+                    AccountSignInButtons { showsAccountMacs = true }
+                }
                 Button {
                     isPasting = true
                 } label: {
@@ -60,6 +74,7 @@ struct WelcomeView: View {
             .padding(.horizontal, 24)
             .padding(.bottom, 24)
         }
+        .task { await model.account.refreshProviders() }
         .overlay {
             if model.isPairing {
                 ProgressView("Connecting…")
@@ -78,6 +93,15 @@ struct WelcomeView: View {
                 isPasting = false
                 Task { await model.pair(link) }
             }
+        }
+        .sheet(isPresented: $showsAccountMacs, onDismiss: { model.account.error = nil }) {
+            AccountMacsView { showsAccountMacs = false }
+        }
+        .alert("Couldn't sign in", isPresented: Binding(get: { model.account.error != nil && !showsAccountMacs },
+                                                        set: { if !$0 { model.account.error = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(model.account.error ?? "")
         }
     }
 }

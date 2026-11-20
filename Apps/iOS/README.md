@@ -47,6 +47,11 @@ swift run --build-system native yardlet-remote-fixture
 Paste the pairing URL it prints into "Paste a Pairing Link", or open it in the Simulator with
 `xcrun simctl openurl booted '<pairing URL>'`.
 
+**Against a local relay:** a debug build takes `-relayURL <base URL>` in place of the built-in relay, for sign-in and
+the account's Macs, for example `-relayURL http://127.0.0.1:8787` with `relay/` under `wrangler dev` (relay/README.md)
+and the fixture started with `--relay ws://127.0.0.1:8787 --approve-links`, which allows a link request three seconds
+after it shows it.
+
 **Screens without touching them:** a debug build reads launch arguments for screenshots and checks: `-demo YES` starts
 the demo (without asking for notification permission, as "Try Without a Mac" does), `-openTask <task ID>` opens a
 task, and `-sheet newTask`, `-sheet settings` or `-sheet taskSettings` opens that sheet (`-sheet suggestionOptions`
@@ -71,6 +76,13 @@ xcrun simctl launch booted com.zzunkie.yardlet.remote -demo YES -openTask 0F1E00
 
 - A Mac is paired by its QR code (the camera) or its link, pasted or opened from another app; a link from outside
   the app is confirmed first.
+- Or through the Yardlet account (docs/REMOTE_PROTOCOL.md §14.4 and §12.1): "Sign in with GitHub" and "Sign in with
+  Google" sit beside Scan QR Code on the first screen and under Settings › Pair a Mac, one for each provider the relay
+  lists, and none when it lists none or does not answer. Sign-in runs in `ASWebAuthenticationSession` with PKCE and
+  lists the account's Macs; picking one asks it to let this phone in, and both show the same six digits until the Mac,
+  or a device already paired with it, allows it. The Mac is then saved as a QR code saves it. The account's token is in
+  the Keychain on this device only; Settings › Yardlet Account names the account and signs it out, which leaves the
+  Macs paired through it paired. The relay is `YardletRelayURL` in `Config/Yardlet-Info.plist`.
 - The phone's key for each Mac is in the Keychain, on this device only and never in a backup; the list of Macs
   (their public keys, addresses and relay room) is in Application Support, also left out of backups.
 - Only the Mac on screen is connected, and only while the app is in front: iOS suspends an app in the background, and

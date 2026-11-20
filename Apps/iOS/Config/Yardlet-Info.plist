@@ -34,6 +34,8 @@
 	<array>
 		<string>_yardlet._tcp</string>
 	</array>
+	<key>YardletRelayURL</key>
+	<string>https://relay.yardlet.app</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>

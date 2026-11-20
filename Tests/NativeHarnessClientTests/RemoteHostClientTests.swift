@@ -87,6 +87,53 @@ final class RemoteHostClientTests: XCTestCase {
         await connection.stop()
     }
 
+    /// A client the account led to a host links without a pairing link (§12.1): it shows the code the host shows,
+    /// becomes a device once the host allows it, and hears a refusal or a signed-out host for what it is.
+    func testAClientLinksThroughTheAccountShowingTheHostsCode() async throws {
+        let stack = try await LoopbackStack()
+        defer { stack.stop() }
+        let target = RemoteHostTarget(hostKey: stack.identity.noise.publicKey, direct: ["127.0.0.1:\(stack.port)"])
+        let hello = RemoteHandshakeHello(name: "iPhone", platform: "ios", appVersion: "test")
+        do {
+            _ = try await RemoteHostConnection.link(target, clientKey: .generate(), hello: hello) { _ in }
+            XCTFail("A host signed out of the account took a link request")
+        } catch let failure as RemoteHostConnection.LinkFailure {
+            guard case let .declined(error) = failure else { return XCTFail("\(failure)") }
+            XCTAssertEqual(error.code, .linkUnavailable)
+        }
+
+        await stack.server.setAcceptsLinks(true)
+        let key = RemoteKeyPair.generate()
+        let server = stack.server
+        let shown = Box<String?>(nil)
+        let reply = try await RemoteHostConnection.link(target, clientKey: key, hello: hello) { code in
+            shown.value = code
+            Task {
+                let request = await server.status.linkRequest
+                XCTAssertEqual(request?.code, code)
+                await server.answerLink(request?.id ?? "", approve: true)
+            }
+        }
+        XCTAssertEqual(shown.value?.count, 6)
+        let deviceID = try XCTUnwrap(reply.deviceId)
+        let device = await stack.devices.device(publicKey: key.publicKey)
+        XCTAssertEqual(device?.id, deviceID)
+        XCTAssertEqual(device?.platform, "ios")
+        XCTAssertEqual(reply.server?.name, "Loopback")
+
+        do {
+            _ = try await RemoteHostConnection.link(target, clientKey: .generate(), hello: hello) { _ in
+                Task {
+                    let request = await server.status.linkRequest
+                    await server.answerLink(request?.id ?? "", approve: false)
+                }
+            }
+            XCTFail("A refused link request made a device")
+        } catch let failure as RemoteHostConnection.LinkFailure {
+            XCTAssertEqual(failure, .refused)
+        }
+    }
+
     func testRelayAddressesAndCandidates() {
         XCTAssertEqual(RemoteHostTarget.relayURL(base: "https://relay.example.test", room: "abc")?.absoluteString,
                        "wss://relay.example.test/v1/rooms/abc/connect")
