@@ -711,7 +711,7 @@ window offers the same through `taskAction.move` (docs/REMOTE_PROTOCOL.md §15.3
 project's row in the sidebar moves to that project the same way, when its menu offers that project; the row shows it
 can take the task while it is dragged over it.
 
-A chat can become a project of its own folder too: for a task in no project whose folder no project holds
+A chat can become a project of its own folder too: for a task in no project whose folder no listed project holds
 (`TaskProjectMove.Options.canMakeProject`), "Move to project" ends with "New project" (the palette's "Move to new
 project"), and dropping its row on the sidebar's Projects title does the same. That title stays while chats are
 listed, even before there is a project, outside a search. The project then opens in Edit project with its name
@@ -720,11 +720,12 @@ not offer it. The storage contract is as follows.
 
 - **A chat made a project keeps its folder:** `AppModel.makeProject(from:)` moves the task by ID, as below, into a
   new project of the task's folder, named after the task's title as Chats lists it
-  (`TaskProjectMove.projectName(for:)`: the agent's own title or Yardlet's fallback, so no model turn starts). It adds
-  the project, as Add project does for a folder, only once the move is saved, so a move that fails leaves no project.
-  The folder stays where it is under its name (`new-chat-4`); only the project's name is new. Other tasks in the
-  folder that were not moved to Chats are listed in the project too, by the folder rule below. A task moved to Chats
-  from its project's own folder goes back with a move to that project instead.
+  (`TaskProjectMove.projectName(for:)`: the agent's own title or Yardlet's fallback, so no model turn starts). A
+  hidden project of the folder, which Remove project leaves, is taken instead and shown again under its own name. The
+  project is added, as Add project adds one for a folder, or shown again only once the move is saved, so a move that
+  fails leaves the projects as they were. The folder stays where it is under its name (`new-chat-4`). Other tasks in
+  the folder that were not moved to Chats are listed in the project too, by the folder rule below. A task moved to
+  Chats from its project's own folder goes back with a move to that project instead.
 - **Only three columns of the index row change:** `project_id` (the project moved to, NULL for Chats),
   `additional_roots` (`TaskProjectMove.additionalRoots`: the project's roots minus the task folder and, for a worktree,
   its origin root, or empty for Chats) and `moved_to_chats` (`INTEGER NOT NULL DEFAULT 0`,

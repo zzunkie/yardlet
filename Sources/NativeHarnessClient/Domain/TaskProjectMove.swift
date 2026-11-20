@@ -16,8 +16,9 @@ enum TaskProjectMove {
         /// and keeps working in its folder.
         var removableFrom: Project?
         /// Whether the task can become a project of its own folder (`AppModel.makeProject(from:)`):
-        /// a task in no project, as a chat is, whose folder no project holds. A task moved to Chats
-        /// from its project's folder goes back with a move to that project instead.
+        /// a task in no project, as a chat is, whose folder no listed project holds. A hidden project
+        /// of the folder, which Remove project leaves, is shown again with the task in it. A task moved
+        /// to Chats from its project's folder goes back with a move to that project instead.
         var canMakeProject = false
 
         static let none = Options()
@@ -65,8 +66,8 @@ enum TaskProjectMove {
     static func options(for session: SessionRecord, visibleProjects: [Project], projects: [Project]) -> Options {
         let current = ProjectProjection.project(for: session, in: projects)
         let destinations = visibleProjects.filter { !$0.isHidden && $0.id != current?.id }
-        let canMakeProject = current == nil
-            && ProjectProjection.project(containingRoot: session.workspaceURL, in: projects) == nil
+        // The listed projects only: a hidden one of the folder is shown again (`ProjectStore.ensureProject(forRoot:)`).
+        let canMakeProject = current == nil && !destinations.contains { $0.contains(root: session.workspaceURL) }
         return Options(destinations: destinations, removableFrom: current, canMakeProject: canMakeProject)
     }
 

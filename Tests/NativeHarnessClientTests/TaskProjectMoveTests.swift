@@ -176,7 +176,8 @@ final class TaskProjectMoveTests: XCTestCase {
     /// A chat whose folder no project holds becomes a project of that folder ("Move to project" ›
     /// "New project"): named after the chat as Chats lists it, holding only the chat's folder, with
     /// the chat moved into it by ID as a move to a project records it. Nothing else about the chat
-    /// changes. A task moved to Chats from its project's own folder goes back with a move instead.
+    /// changes. A task moved to Chats from its project's own folder goes back with a move instead, and
+    /// a chat whose project was removed makes that project its own again.
     func testAChatBecomesAProjectOfItsOwnFolder() async throws {
         let alphaProject = Project(name: "Alpha", primaryRoot: alpha)
         let chat = try task("Finish the OpenAI Game 2026 web game", in: chatFolder)
@@ -224,6 +225,19 @@ final class TaskProjectMoveTests: XCTestCase {
         XCTAssertTrue(fromChats.allows(alphaProject))
         let refused = await model.makeProject(from: movedOut)
         XCTAssertNil(refused)
+
+        // Moved to Chats with its project removed, which only hides the project, the chat offers New project
+        // again, and its folder's project comes back with it.
+        let inChats = try await move(moved, to: nil, in: model)
+        model.projects.hide(project.id)
+        XCTAssertTrue(model.projectMoveOptions(for: inChats, visibleProjects: visibleProjects(model)).canMakeProject,
+                      "A hidden project of its folder does not keep it from New project")
+        let remade = await model.makeProject(from: inChats)
+        let shownAgain = try XCTUnwrap(remade)
+        XCTAssertEqual(shownAgain.id, project.id)
+        XCTAssertFalse(shownAgain.isHidden)
+        XCTAssertEqual(model.store.sessions.first { $0.id == chat.id }?.projectID, project.id)
+        XCTAssertEqual(model.projects.projects.count, 2, "No second project of the folder")
     }
 
     /// A chat whose move is not saved stays a chat, and no project is left behind: the project is added
