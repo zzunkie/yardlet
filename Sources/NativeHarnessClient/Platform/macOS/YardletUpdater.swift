@@ -170,8 +170,31 @@ enum YardletUpdater {
         let script = root.appending(path: "installer.sh")
         try Data(installerScript.utf8).write(to: script, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path(percentEncoded: false))
-        let arguments = ["/bin/sh", script.path(percentEncoded: false), String(processID),
-                         target.path(percentEncoded: false), root.path(percentEncoded: false), relaunch ? "1" : "0"]
+        return try spawnDetached(["/bin/sh", script.path(percentEncoded: false), String(processID),
+                                  target.path(percentEncoded: false), root.path(percentEncoded: false), relaunch ? "1" : "0"])
+    }
+
+    /// Opens `target` again once `processID` has exited, as the installer does after an update, for a
+    /// relaunch with nothing to install (Settings › Language). Like the installer it runs in its own
+    /// session and gives up after two minutes if the app never quits.
+    @discardableResult
+    static func launchReopener(target: URL, processID: Int32) throws -> pid_t {
+        try spawnDetached(["/bin/sh", "-c", reopenerScript, "reopen", String(processID), target.path(percentEncoded: false)])
+    }
+
+    static let reopenerScript = #"""
+    n=0
+    while /bin/kill -0 "$1" 2>/dev/null; do
+      n=$((n + 1))
+      if [ "$n" -gt 600 ]; then exit 1; fi
+      /bin/sleep 0.2
+    done
+    /usr/bin/open "$2"
+    """#
+
+    /// Runs `arguments` with /bin/sh in a session of its own, with no inherited descriptors, so ending
+    /// the app's process group cannot stop it.
+    private static func spawnDetached(_ arguments: [String]) throws -> pid_t {
         var attributes: posix_spawnattr_t?
         var actions: posix_spawn_file_actions_t?
         posix_spawnattr_init(&attributes)

@@ -109,6 +109,28 @@ extension EnvironmentValues {
     }
 }
 
+/// Settings › Language's Relaunch: quits as Quit does and opens Yardlet again once it has exited. Equatable
+/// for the reason `YardletInstallUpdateAction` is.
+struct YardletRelaunchAction: Equatable {
+    let relaunch: @MainActor @Sendable () -> Void
+
+    @MainActor func callAsFunction() { relaunch() }
+
+    static func == (lhs: Self, rhs: Self) -> Bool { true }
+}
+
+private struct YardletRelaunchKey: EnvironmentKey {
+    static let defaultValue: YardletRelaunchAction? = nil
+}
+
+extension EnvironmentValues {
+    /// Nil where there is no app to relaunch, as in a test's window.
+    var yardletRelaunch: YardletRelaunchAction? {
+        get { self[YardletRelaunchKey.self] }
+        set { self[YardletRelaunchKey.self] = newValue }
+    }
+}
+
 private struct YardletUpdateWaitKey: EnvironmentKey {
     static let defaultValue: YardletUpdateWait? = nil
 }
@@ -207,6 +229,8 @@ final class NativeHarnessClientAppDelegate: NSObject, NSApplicationDelegate {
     /// Sparkle's installer waits for Yardlet to exit to install the update and open it again, from
     /// Install and Relaunch until its update session ends, whichever quit comes.
     private var sparkleRelaunchIsPending = false
+    /// The quit is Relaunch's (`relaunch()`): once it has stopped everything, Yardlet opens again.
+    private var reopensAfterQuit = false
     /// Test seam for the destructive termination decision. Production leaves this nil and uses
     /// the native warning alert below; tests can exercise Cancel/Quit without presenting a modal.
     var terminationPrompt: (([SessionRecord]) -> Bool)?
@@ -290,7 +314,7 @@ final class NativeHarnessClientAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let model else {
-            startUpdateInstallerIfChosen()
+            startWhatTheQuitIsFor()
             return .terminateNow
         }
 
@@ -306,12 +330,14 @@ final class NativeHarnessClientAppDelegate: NSObject, NSApplicationDelegate {
             // the wait last looked cancels this quit, and the wait goes on.
             if isForWaitedUpdate {
                 updateToInstall = nil
+                reopensAfterQuit = false
                 updateWait.keepWaiting()
                 return .terminateCancel
             }
             // Sparkle's installer waits for Yardlet to exit, so refusing its quit costs nothing:
             // Yardlet waits for the tasks and then quits on its own.
             if isForSparkleRelaunch {
+                reopensAfterQuit = false
                 waitForTasks(then: .sparkle)
                 return .terminateCancel
             }
@@ -322,6 +348,7 @@ final class NativeHarnessClientAppDelegate: NSObject, NSApplicationDelegate {
             }()
             guard shouldTerminate else {
                 updateToInstall = nil
+                reopensAfterQuit = false
                 return .terminateCancel
             }
         }
@@ -333,7 +360,7 @@ final class NativeHarnessClientAppDelegate: NSObject, NSApplicationDelegate {
             NativeSurfaceResourceRegistry.shared.stopAll()
             await model.remoteControl?.shutdown()
             await model.shutdown()
-            startUpdateInstallerIfChosen()
+            startWhatTheQuitIsFor()
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
@@ -451,8 +478,37 @@ final class NativeHarnessClientAppDelegate: NSObject, NSApplicationDelegate {
         requestTermination()
     }
 
-    private func startUpdateInstallerIfChosen() {
-        guard updateToInstall != nil else { return }
+    /// Quits through the same path as Quit, which asks about running tasks, and opens Yardlet again once
+    /// it has exited, as the restart after an update does: drafts, windows and the turns the quit cuts
+    /// off come back the same way.
+    func relaunch() {
+        Task { @MainActor in
+            // AppKit does not quit while a window shows a sheet, and Relaunch is chosen in Settings' sheet,
+            // which closes first.
+            let deadline = ContinuousClock.now + .seconds(2)
+            while NSApp.windows.contains(where: { $0.attachedSheet != nil }) {
+                guard ContinuousClock.now < deadline else { return }
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+            reopensAfterQuit = true
+            requestTermination()
+        }
+    }
+
+    /// Starts what the quit was chosen for: the staged build's installer, which opens Yardlet again
+    /// itself, or Relaunch's reopener.
+    private func startWhatTheQuitIsFor() {
+        let reopens = reopensAfterQuit
+        reopensAfterQuit = false
+        guard updateToInstall != nil else {
+            guard reopens else { return }
+            do {
+                try YardletUpdater.launchReopener(target: Bundle.main.bundleURL, processID: ProcessInfo.processInfo.processIdentifier)
+            } catch {
+                NSLog("Yardlet could not arrange to open again: %@", error.localizedDescription)
+            }
+            return
+        }
         updateToInstall = nil
         do {
             try YardletUpdater.launchInstaller(target: Bundle.main.bundleURL, processID: ProcessInfo.processInfo.processIdentifier)
@@ -488,6 +544,7 @@ struct NativeHarnessClientApp: App {
                 // Yardlet still gets the first window.
                 .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
                 .environment(\.yardletInstallUpdate, YardletInstallUpdateAction { [appDelegate] in appDelegate.offerStagedUpdate() })
+                .environment(\.yardletRelaunch, YardletRelaunchAction { [appDelegate] in appDelegate.relaunch() })
                 .environment(\.yardletUpdateWait, appDelegate.updateWait)
                 .environment(\.yardletSparkle, appDelegate.sparkle)
                 .environment(\.yardletStagedUpdate, appDelegate.stagedUpdate)

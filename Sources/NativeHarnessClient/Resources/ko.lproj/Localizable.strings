@@ -2034,6 +2034,7 @@
 "Quit %@" = "%@ 종료";
 "Language" = "언어";
 "Applies the next time you open Yardlet" = "다음에 Yardlet을 열 때부터 적용됩니다.";
+"Relaunch" = "다시 시작";
 "Show in menu bar" = "메뉴 막대에 표시";
 "Show Yardlet in the menu bar" = "메뉴 막대에 Yardlet 표시";
 "Launch at login" = "로그인할 때 열기";

@@ -88,6 +88,15 @@ enum L10n {
         return activeBundle.localizedString(forKey: key, value: fallback, table: nil)
     }
 
+    /// The localization the words come from. The bundle chose it as Yardlet opened and keeps it while
+    /// Yardlet runs, whatever the language preference says since.
+    static var shownLocalization: String? { activeBundle.preferredLocalizations.first }
+
+    /// The localization the bundle would choose for a launch that prefers `languages`.
+    static func localization(preferring languages: [String]) -> String? {
+        Bundle.preferredLocalizations(from: activeBundle.localizations, forPreferences: languages).first
+    }
+
     static func string(_ key: String, languageCode: String) -> String {
         guard let path = activeBundle.path(forResource: languageCode, ofType: "lproj"),
               let localizedBundle = Bundle(path: path) else {
@@ -120,8 +129,8 @@ enum L10n {
 /// Yardlet's language, kept where macOS keeps each app's own: `AppleLanguages` in the app's
 /// defaults, the value System Settings › General › Language & Region › Applications writes, so the
 /// two never disagree. System removes the key and leaves nothing behind. AppKit and the bundle read
-/// it as Yardlet opens, so a choice applies from the next launch; switching while running would mix
-/// languages in menus, system strings and views already drawn.
+/// it as Yardlet opens, so a choice applies from the next launch, which Settings › General offers as
+/// Relaunch; switching while running would mix languages in menus, system strings and views already drawn.
 enum AppLanguagePreference: String, CaseIterable, Identifiable {
     case system
     case english = "en"
@@ -149,6 +158,16 @@ enum AppLanguagePreference: String, CaseIterable, Identifiable {
         let codes = allCases.filter { $0 != .system }.map(\.rawValue)
         return Bundle.preferredLocalizations(from: codes, forPreferences: languages).first
             .flatMap(Self.init(rawValue:)) ?? .system
+    }
+
+    /// Whether opening Yardlet with this choice would show it in another language than it shows now,
+    /// so Settings offers to relaunch. System is the Mac's own languages, from the global domain: while
+    /// Yardlet runs with a language of its own, the languages it inherits start with that one.
+    func changesShownLanguage(in defaults: UserDefaults = .standard) -> Bool {
+        let languages = self == .system
+            ? defaults.persistentDomain(forName: UserDefaults.globalDomain)?[Self.key] as? [String] ?? Locale.preferredLanguages
+            : [rawValue]
+        return L10n.localization(preferring: languages) != L10n.shownLocalization
     }
 
     static func store(_ preference: Self, in defaults: UserDefaults = .standard) {
