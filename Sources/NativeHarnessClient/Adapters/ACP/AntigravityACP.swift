@@ -303,21 +303,37 @@ struct AntigravityModelCatalog: Equatable, Sendable {
     }
 }
 
+/// A notice `agy acp` writes into a turn itself, apart from the model's answer: one message chunk,
+/// "\n⚠ <words>\n", which reaches the client as text. Among them are a retry the CLI makes on its own
+/// ("API error (attempt 1): …"), steps it takes again after the model's output failed ("Model produced
+/// invalid output.", "The stream was interrupted. Please continue the task you were working on."),
+/// after which the turn goes on, and the error that ended the turn ("Agent execution terminated due to
+/// error."), after which nothing follows. The model writes its own warning sign with the emoji
+/// variation selector, which the CLI's notice does not have.
+enum AntigravityNotice {
+    /// The notice's words, when the chunk is one.
+    static func words(in chunk: String) -> String? {
+        guard chunk.unicodeScalars.starts(with: "\n\u{26A0} ".unicodeScalars) else { return nil }
+        let words = chunk.dropFirst(2).trimmingCharacters(in: .whitespacesAndNewlines)
+        return words.isEmpty || words.contains(where: \.isNewline) ? nil : words
+    }
+
+    /// A retry the CLI makes on its own, which the turn goes on after.
+    static func isRetry(_ words: String) -> Bool {
+        words.range(of: "(attempt ", options: .caseInsensitive) != nil
+    }
+}
+
 /// The plan limit that ended an Antigravity turn. `agy acp` sends nothing structured for it: the model
 /// request fails with `RESOURCE_EXHAUSTED` (code 429, reason `QUOTA_EXHAUSTED`, with the reset), which
 /// the CLI keeps in its own log and conversation file, while over ACP the prompt ends with `end_turn`
-/// after one message chunk the CLI writes itself, "\n⚠ <the service's words>\n" ("⚠ Individual quota
-/// reached. Please upgrade your subscription to increase your limits. Resets in 146h6m30s."). The CLI
-/// writes its other notices the same way, among them a retry it makes on its own ("⚠ API error
-/// (attempt 1): …"), so the limit is a notice that names a quota and is not a retry.
+/// after the CLI's notice (`AntigravityNotice`) of the service's words ("⚠ Individual quota reached.
+/// Please upgrade your subscription to increase your limits. Resets in 146h6m30s."). The limit is a
+/// notice that names a quota and is not a retry.
 enum AntigravityPlanLimit {
     static func limit(inNotice text: String, receivedAt: Date) -> HarnessRateLimit? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.first?.unicodeScalars.first == "\u{26A0}" else { return nil }
-        let words = trimmed.dropFirst().trimmingCharacters(in: .whitespaces)
-        guard !words.isEmpty, !words.contains(where: \.isNewline),
-              words.range(of: "quota", options: .caseInsensitive) != nil,
-              words.range(of: "(attempt ", options: .caseInsensitive) == nil else { return nil }
+        guard let words = AntigravityNotice.words(in: text), !AntigravityNotice.isRetry(words),
+              words.range(of: "quota", options: .caseInsensitive) != nil else { return nil }
         return HarnessRateLimit(status: .rejected, resetsAt: resetDelay(in: words).map(receivedAt.addingTimeInterval),
                                 message: words)
     }

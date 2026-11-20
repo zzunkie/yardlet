@@ -84,6 +84,16 @@ actor ACPAdapter:
     private var agentTurnFollowers: [UUID: AntigravityAgentTurnFollower] = [:]
     private var agentTurnReadTasks: [UUID: Task<Void, Never>] = [:]
     private var redeliveries: [UUID: AntigravityRedelivery] = [:]
+    /// Antigravity: the CLI's latest notice of the prompt running (`AntigravityNotice`) while nothing
+    /// the agent did has followed it. A prompt that ends there failed with its words; a step after it
+    /// shows it as the words it was.
+    private var heldNotices: [UUID: HeldNotice] = [:]
+
+    private struct HeldNotice {
+        let chunk: String
+        let messageID: String?
+        let words: String
+    }
 
     init(
         kind: HarnessKind,
@@ -348,7 +358,7 @@ actor ACPAdapter:
                 // brief chance to drain before closing the turn so the final text cannot arrive
                 // after turnCompleted on a busy UI thread.
                 try? await Task.sleep(for: .milliseconds(20))
-                await self?.finishPrompt(for: session)
+                await self?.finishPrompt(for: session, stopReason: result["stopReason"]?.stringValue)
             } catch {
                 guard !Task.isCancelled else { return }
                 await self?.failPrompt(error, for: session)
@@ -614,6 +624,7 @@ actor ACPAdapter:
         agentTurnReadTasks.removeValue(forKey: session.localSessionID)?.cancel()
         agentTurnFollowers.removeValue(forKey: session.localSessionID)
         redeliveries.removeValue(forKey: session.localSessionID)
+        heldNotices.removeValue(forKey: session.localSessionID)
         permissions = permissions.filter { $0.value.localSessionID != session.localSessionID }
         activities.removeValue(forKey: session.localSessionID)
         capabilityStateByLocalSessionID.removeValue(forKey: session.localSessionID)
@@ -799,6 +810,7 @@ actor ACPAdapter:
            let rpcID = value["id"] {
             if let providerSessionID = value["params"]?["sessionId"]?.stringValue,
                let localSessionID = localSessionIDByProviderID[providerSessionID] {
+                releaseHeldNotice(of: localSessionID, rawData: frame.data)
                 completeAssistantIfNeeded(for: localSessionID, rawData: frame.data)
             }
             await acceptPermissionRequest(value, rpcID: rpcID, rawData: frame.data, from: transport)
@@ -834,16 +846,26 @@ actor ACPAdapter:
         if updateKind == "agent_message_chunk",
            update["content"]?["type"]?.stringValue == "text",
            let text = update["content"]?["text"]?.stringValue {
+            let messageID = update["messageId"]?.stringValue
+            releaseHeldNotice(of: localSessionID, rawData: frame.data)
             // Antigravity's plan limit ends the turn with a notice of the CLI's own, not the model's
             // answer (`AntigravityPlanLimit`): the turn shows the limit card Claude Code's limit shows.
-            if kind == .antigravityCLI, let limit = AntigravityPlanLimit.limit(inNotice: text, receivedAt: Date()) {
-                completeAssistantIfNeeded(for: localSessionID, rawData: frame.data)
-                emit(.usageLimitReached(limit), for: localSessionID, rawData: frame.data)
-                return
+            // Its other notices but a retry wait for what follows them: the turn's end makes one its
+            // error, and any step after it shows it as it came.
+            if kind == .antigravityCLI, let words = AntigravityNotice.words(in: text) {
+                if let limit = AntigravityPlanLimit.limit(inNotice: text, receivedAt: Date()) {
+                    completeAssistantIfNeeded(for: localSessionID, rawData: frame.data)
+                    emit(.usageLimitReached(limit), for: localSessionID, rawData: frame.data)
+                    return
+                }
+                if !AntigravityNotice.isRetry(words) {
+                    heldNotices[localSessionID] = HeldNotice(chunk: text, messageID: messageID, words: words)
+                    return
+                }
             }
             acceptAssistantChunk(
                 text,
-                messageID: update["messageId"]?.stringValue,
+                messageID: messageID,
                 for: localSessionID,
                 rawData: frame.data
             )
@@ -851,6 +873,7 @@ actor ACPAdapter:
         }
 
         if ["agent_thought_chunk", "tool_call", "plan"].contains(updateKind) {
+            releaseHeldNotice(of: localSessionID, rawData: frame.data)
             completeAssistantIfNeeded(for: localSessionID, rawData: frame.data)
         }
 
@@ -995,13 +1018,22 @@ actor ACPAdapter:
     /// Called from the prompt's own task. One cancelled by closing its session or by its process
     /// ending has been accounted for there, and reports nothing more. A permission mode chosen
     /// while it ran takes the session to its lane first, before another prompt can start.
-    private func finishPrompt(for session: HarnessSessionHandle) async {
+    /// An Antigravity prompt that ended its turn on a notice of the CLI's own (`AntigravityNotice`)
+    /// failed, with the notice's words as its error, as one whose request failed.
+    private func finishPrompt(for session: HarnessSessionHandle, stopReason: String?) async {
         guard !Task.isCancelled else { return }
         try? await moveToItsLane(session)
         guard !Task.isCancelled else { return }
         let localSessionID = session.localSessionID
         promptTasks.removeValue(forKey: localSessionID)
         followAgentTurns(of: localSessionID)
+        if stopReason == "end_turn", let notice = heldNotices.removeValue(forKey: localSessionID) {
+            completeAssistantIfNeeded(for: localSessionID)
+            emit(.error(message: notice.words, recoverable: true), for: localSessionID)
+            emit(.sessionStatusChanged(.failed), for: localSessionID)
+            return
+        }
+        releaseHeldNotice(of: localSessionID)
         completeAssistantIfNeeded(for: localSessionID)
         emit(.turnCompleted, for: localSessionID)
         emit(.sessionStatusChanged(.ready), for: localSessionID)
@@ -1016,6 +1048,7 @@ actor ACPAdapter:
         let localSessionID = session.localSessionID
         promptTasks.removeValue(forKey: localSessionID)
         followAgentTurns(of: localSessionID)
+        releaseHeldNotice(of: localSessionID)
         completeAssistantIfNeeded(for: localSessionID)
         emit(.error(message: error.localizedDescription, recoverable: true), for: localSessionID)
         emit(.sessionStatusChanged(.failed), for: localSessionID)
@@ -1073,6 +1106,7 @@ actor ACPAdapter:
             let id = session.localSessionID
             if let prompt = promptTasks.removeValue(forKey: id) {
                 prompt.cancel()
+                releaseHeldNotice(of: id)
                 completeAssistantIfNeeded(for: id)
                 emit(.error(message: message, recoverable: true), for: id)
                 emit(.sessionStatusChanged(.failed), for: id)
@@ -1116,7 +1150,7 @@ actor ACPAdapter:
         _ text: String,
         messageID: String?,
         for localSessionID: UUID,
-        rawData: Data
+        rawData: Data?
     ) {
         guard !text.isEmpty else { return }
         if let current = assistantStreamByLocalSessionID[localSessionID],
@@ -1131,6 +1165,12 @@ actor ACPAdapter:
         stream.text += text
         assistantStreamByLocalSessionID[localSessionID] = stream
         emit(.assistantDelta(text), for: localSessionID, rawData: rawData)
+    }
+
+    /// A held notice of the CLI's own that something followed: its words, as they came.
+    private func releaseHeldNotice(of localSessionID: UUID, rawData: Data? = nil) {
+        guard let notice = heldNotices.removeValue(forKey: localSessionID) else { return }
+        acceptAssistantChunk(notice.chunk, messageID: notice.messageID, for: localSessionID, rawData: rawData)
     }
 
     private func completeAssistantIfNeeded(for localSessionID: UUID, rawData: Data? = nil) {

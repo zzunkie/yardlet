@@ -986,16 +986,23 @@ Yardlet removes there is the CLI's extra copies of Yardlet's tool schemas, descr
   approval and the turn only goes ready. The next prompt's stream repeats what the log showed; that is dropped
   (`AntigravityRedelivery`), texts by their words, which are the log's exactly, and tool calls by their order, since the
   log has no call IDs. A repeat that is not recognised shows twice rather than dropping the turn's own steps.
-- **Plan limit:** over ACP the CLI reports nothing structured when its plan limit stops a turn. The model request fails
-  with `RESOURCE_EXHAUSTED` (code 429, reason `QUOTA_EXHAUSTED`), which only its own log and conversation file keep;
-  the client gets one message chunk the CLI writes itself, `\n⚠ <the service's words>\n` ("⚠ Individual quota reached.
-  Please upgrade your subscription to increase your limits. Resets in 146h6m30s."), and the prompt ends with
-  `end_turn`. The CLI writes its other notices the same way, among them a retry it makes on its own ("⚠ API error
-  (attempt 1): …"), so a chunk is the limit only when it is such a notice, names a quota and is no retry
+- **Plan limit and the CLI's other notices:** over ACP the CLI reports nothing structured when its plan limit stops a
+  turn. The model request fails with `RESOURCE_EXHAUSTED` (code 429, reason `QUOTA_EXHAUSTED`), which only its own log
+  and conversation file keep; the client gets one message chunk the CLI writes itself, `\n⚠ <the service's words>\n`
+  ("⚠ Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 146h6m30s."), and
+  the prompt ends with `end_turn`. The CLI writes its other notices the same way, among them a retry it makes on its own
+  ("⚠ API error (attempt 1): …"), so a chunk is the limit only when it is such a notice, names a quota and is no retry
   (`AntigravityPlanLimit`). That chunk ends the turn's text so far and becomes the limit card a Claude Code limit shows,
   its reset read from the Go duration the words give; what the turn did before stays above it. A `run_agent` subagent
-  stopped this way ends as failed with the limit (docs/AGENT_BROWSER_TOOLS.md). Nothing continues or moves the task
-  on its own (docs/PROVIDER_CONNECTIONS.md, "Continuing after a usage limit").
+  stopped this way ends as failed with the limit (docs/AGENT_BROWSER_TOOLS.md). Nothing continues or moves the task on
+  its own (docs/PROVIDER_CONNECTIONS.md, "Continuing after a usage limit"). Every other notice but a retry waits for
+  what follows it (`AntigravityNotice`). The CLI takes a step again after some ("⚠ Model produced invalid output.",
+  "⚠ The stream was interrupted. Please continue the task you were working on."), and the turn goes on: the next text,
+  thinking, tool call, plan or approval request shows the notice where it came, as the CLI's words. A prompt that ends
+  with `end_turn` on a notice ("⚠ Agent execution terminated due to error.") failed: the turn ends as one whose request
+  failed, with the notice's words as its error, and a `run_agent` subagent ends as failed with those words. The model
+  writes its own warning sign with the emoji variation selector (`⚠️`), which the CLI's notice does not have, so it
+  stays the model's answer.
 - **Title:** the pull path for task titles (`ProviderSessionTitleResolver`) reads `title` from the index. It is not read
   before a print-mode task's first turn (local placeholder ID).
 - **Model list:** the collapsed model list a task read is kept in `antigravity` of `model-catalogs.json` (an optional

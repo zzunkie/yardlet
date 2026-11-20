@@ -1136,6 +1136,37 @@ final class ACPAdapterTests: XCTestCase {
         XCTAssertEqual(limitTurn, [.sessionStatusChanged(.running), .assistantDelta("Half of it is done."),
                                    .assistantDelta(retry), .assistantMessageCompleted("Half of it is done." + retry),
                                    .usageLimitReached(limit), .turnCompleted, .sessionStatusChanged(.ready)])
+
+        // Its other notices wait for what follows. One the agent goes on after shows as it came, where it
+        // came; the model's own warning sign is its answer. A turn that ends on one failed with its words.
+        let invalid = "\n⚠ Model produced invalid output.\n"
+        let warning = "\n⚠️ Back up first.\n"
+        let goesOn = await recorder.payloads.count
+        try await adapter.send("Try again", to: handle)
+        try await waitUntil { await transport.pendingPromptCount == 1 }
+        await transport.emit(log.answer(invalid))
+        await transport.emit(log.update(["sessionUpdate": .string("agent_thought_chunk"),
+                                         "content": .object(["type": .string("text"), "text": .string("Again.")])]))
+        await transport.emit(log.answer(warning))
+        await transport.completePrompt()
+        try await waitUntil { await ready() == 6 }
+        let wentOn = Array(await recorder.payloads.dropFirst(goesOn))
+        XCTAssertEqual(wentOn, [
+            .sessionStatusChanged(.running), .assistantDelta(invalid), .assistantMessageCompleted(invalid),
+            .reasoningDelta("Again."), .assistantDelta(warning), .assistantMessageCompleted(warning), .turnCompleted,
+            .sessionStatusChanged(.ready)])
+
+        let endsOnIt = await recorder.payloads.count
+        try await adapter.send("Once more", to: handle)
+        try await waitUntil { await transport.pendingPromptCount == 1 }
+        await transport.emit(log.answer("Part of it."))
+        await transport.emit(log.answer("\n⚠ Agent execution terminated due to error.\n"))
+        await transport.completePrompt()
+        try await waitUntil { await recorder.payloads.last == .sessionStatusChanged(.failed) }
+        let ended = Array(await recorder.payloads.dropFirst(endsOnIt))
+        XCTAssertEqual(ended, [
+            .sessionStatusChanged(.running), .assistantDelta("Part of it."), .assistantMessageCompleted("Part of it."),
+            .error(message: "Agent execution terminated due to error.", recoverable: true), .sessionStatusChanged(.failed)])
         await adapter.close(handle)
     }
 

@@ -1777,6 +1777,19 @@ final class SessionToolTests: XCTestCase {
         XCTAssertEqual(stopped.senderID, limited.id.uuidString)
         XCTAssertTrue(stopped.body.hasPrefix("Ended (failed: \(reason))."), stopped.body)
         XCTAssertTrue(stopped.body.hasSuffix("Two of five files moved."), stopped.body)
+
+        // One whose turn its harness ended on an error, as an Antigravity turn the CLI's notice ends,
+        // ends failed with the error's words.
+        _ = await call(model, "run_agent", ["harness": "claude-code", "prompt": "Audit", "background": true],
+                       from: fixture.caller)
+        let erred = try XCTUnwrap(model.sessionTools.runs(hostedBy: fixture.caller.id).first { $0.prompt == "Audit" })
+        try await waitUntil { await fixture.adapter.prompts(for: erred.id).count == 1 }
+        await fixture.adapter.emit(.sessionStatusChanged(.running), for: erred.id)
+        await fixture.adapter.emit(.error(message: "Agent execution terminated due to error.", recoverable: true),
+                                   for: erred.id)
+        await fixture.adapter.emit(.sessionStatusChanged(.failed), for: erred.id)
+        try await waitUntil { await told().count == 4 }
+        XCTAssertEqual(erred.state, .failed("Agent execution terminated due to error."))
         await model.shutdown()
     }
 
