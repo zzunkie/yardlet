@@ -26,9 +26,12 @@ import XCTest
 ///   password field, at a code field, with no field, and searched.
 /// - `settings-vault-browser-import-<language>-*`: the page with "Import from Another Browser…" beside its own imports.
 /// - `browser-import-sheet-<language>-*`, `browser-import-sheet-settings-<language>-*`, `browser-panel-menu-<language>-*`:
-///   that import's sheet over made-up Whale and Firefox folders, from a task's panel (the page's site chosen) and from
-///   Settings (none chosen), and the browser panel's ⋯ menu that also opens it. `<language>` is the one the run draws
-///   in (`-AppleLanguages '(ko)'` for Korean).
+///   that import's sheet over made-up Whale and Firefox folders and a Chrome one it may not read, with Whale the
+///   default browser, from a task's panel (the page's site chosen) and from Settings (none chosen), and the browser
+///   panel's ⋯ menu that also opens it. `<language>` is the one the run draws in (`-AppleLanguages '(ko)'` for Korean).
+/// - `browser-import-sheet-default-firefox-<language>-*`, `browser-import-sheet-unreadable-chrome-<language>-*`,
+///   `browser-import-picker-<language>-*`: the sheet opening on the default browser, Firefox with its sites or Chrome
+///   with where to allow Yardlet, and the browser list it offers then.
 @MainActor
 final class VaultSettingsRenderingTests: XCTestCase {
     private static let github = VaultItem(
@@ -110,7 +113,9 @@ final class VaultSettingsRenderingTests: XCTestCase {
     /// The import sheet (docs/BROWSER_SESSION_ISOLATION.md 10) over made-up Whale and Firefox folders, never a real
     /// browser's: from a task's panel the page's site is chosen first; from Settings none is, and the sheet says the
     /// sign-ins reach new tasks. Both offer the profile's whole visit history, checked as in Chrome's import dialog.
-    /// Then the panel's ⋯ menu, drawn as the system lays out its items, since a SwiftUI menu builds them only once open.
+    /// It opens on the default browser: Firefox with its sites, or Chrome, whose folder macOS keeps from Yardlet, with
+    /// where to allow Yardlet. Then the browsers it lists and the panel's ⋯ menu, drawn as the system lays out their
+    /// items, since a SwiftUI picker or menu builds them only once open.
     func testTheBrowserImportSheetAndMenuDraw() async throws {
         let directory = try WindowlessRender.directory("vault-qa")
         let support = FileManager.default.temporaryDirectory.appending(path: "VaultBrowserImport-\(UUID().uuidString)")
@@ -127,11 +132,17 @@ final class VaultSettingsRenderingTests: XCTestCase {
                   cookies: [.init(host: ".example.net", name: "session", value: "made-up")],
                   visits: [.init(url: "https://example.net/", date: now.addingTimeInterval(-3600))])
         ], installed: "Profiles/qa.default-release")
+        // Chrome's list of profiles exists but cannot be read, as macOS 27 keeps it from apps without Full Disk Access.
+        let chrome = support.appending(path: "Google/Chrome")
+        try FileManager.default.createDirectory(at: chrome, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: chrome.appending(path: "Local State"))
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: chrome.appending(path: "Local State").path)
 
         for (name, request) in [("browser-import-sheet", BrowserLoginImportRequest(site: "example.com")),
                                 ("browser-import-sheet-settings", BrowserLoginImportRequest(site: nil, forTask: false))] {
             for appearance in WindowlessRender.Appearance.allCases {
                 let sheet = BrowserLoginImportSheet(request: request, applicationSupport: support) { _, _, _ in } onDone: {}
+                    defaultBrowser: { "com.naver.Whale" }
                     .environment(\.colorScheme, appearance.colorScheme)
                 let host = WindowlessRender.Host(sheet, size: NSSize(width: 520, height: 700), appearance: appearance)
                 defer { host.close() }
@@ -155,6 +166,60 @@ final class VaultSettingsRenderingTests: XCTestCase {
                 try WindowlessRender.writePNG(try host.capture().bitmap,
                                               to: directory.appending(path: "\(name)-\(Self.language)-\(appearance.suffix).png"))
             }
+        }
+
+        for (name, browser) in [("browser-import-sheet-default-firefox", "org.mozilla.firefox"),
+                                ("browser-import-sheet-unreadable-chrome", "com.google.Chrome")] {
+            for appearance in WindowlessRender.Appearance.allCases {
+                let sheet = BrowserLoginImportSheet(request: BrowserLoginImportRequest(site: nil), applicationSupport: support)
+                    { _, _, _ in } onDone: {} defaultBrowser: { browser }
+                    .environment(\.colorScheme, appearance.colorScheme)
+                let host = WindowlessRender.Host(sheet, size: NSSize(width: 520, height: 700), appearance: appearance)
+                defer { host.close() }
+                let allow = L10n.string("Open Full Disk Access…")
+                // Chrome's lines show once the browsers are read; Firefox's sites follow its profile, in place of a spinner.
+                await host.settle(until: {
+                    let elements = host.accessibilityElements()
+                    return elements.contains { $0.label.contains(browser == "com.google.Chrome" ? allow : L10n.string("Import visit history")) }
+                        && !elements.contains { ["AXProgressIndicator", "AXBusyIndicator"].contains($0.role) }
+                })
+                host.window.setContentSize(host.hosting.fittingSize)
+                host.settle()
+                let spoken = host.accessibilityElements().map { "\($0.label) \($0.value)" }
+                if browser == "com.google.Chrome" {
+                    for text in [L10n.format("macOS doesn't let Yardlet read %@'s data until you allow it.", "Chrome"),
+                                 L10n.string("Open Files & Folders…"), allow] {
+                        XCTAssertTrue(spoken.contains { $0.contains(text) }, "No \(text): \(spoken)")
+                    }
+                    XCTAssertFalse(spoken.contains { $0.contains(L10n.string("Search sites")) }, "\(spoken)")
+                } else {
+                    XCTAssertTrue(spoken.contains { $0.contains("Firefox · default-release") }, "\(spoken)")
+                }
+                try WindowlessRender.writePNG(try host.capture().bitmap,
+                                              to: directory.appending(path: "\(name)-\(Self.language)-\(appearance.suffix).png"))
+            }
+        }
+
+        // The browsers the sheet lists with Chrome the default, each with its app's icon or a globe.
+        let choices = BrowserLoginImport.find(in: support, defaultBrowser: "com.google.Chrome").choices
+        XCTAssertEqual(choices.map(\.title), ["Chrome", "Whale · Personal", "Firefox · default-release"])
+        let items = choices.map { choice in
+            let item = NSMenuItem(title: choice.title, action: nil, keyEquivalent: "")
+            if let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: choice.browser.bundleID) {
+                item.image = NSWorkspace.shared.icon(forFile: app.path(percentEncoded: false))
+            } else {
+                item.image = NSImage(systemSymbolName: "globe", accessibilityDescription: nil)
+            }
+            item.image?.size = NSSize(width: 16, height: 16)
+            return item
+        }
+        let picker = MenuLine.lines(items)
+        let pickerSize = NSSize(width: 300, height: MenuPanel.height(picker) + 40)
+        try WindowlessRender.hostedInBothAppearances("browser-import-picker-\(Self.language)", in: directory, size: pickerSize) { appearance in
+            MenuPanel(lines: picker, width: 260, highlighted: 0)
+                .frame(width: pickerSize.width, height: pickerSize.height)
+                .background(appearance == .dark ? Color(white: 0.1) : Color(white: 0.85))
+                .environment(\.colorScheme, appearance.colorScheme)
         }
 
         let viewport = NSMenuItem(title: L10n.string("Viewport"), action: nil, keyEquivalent: "")

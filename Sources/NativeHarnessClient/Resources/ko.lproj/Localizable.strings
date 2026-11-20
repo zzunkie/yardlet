@@ -3108,7 +3108,10 @@
 "Import from Another Browser" = "다른 브라우저에서 가져오기";
 "The sites you choose open signed in, in this task and in new tasks. Their cookies already in Yardlet are replaced." = "고른 사이트는 이 작업과 새 작업에서 로그인된 채로 열립니다. Yardlet에 있던 그 사이트의 쿠키는 가져온 것으로 바뀝니다.";
 "No browser to import from was found on this Mac. Sign-ins import from Chromium and Firefox browsers such as Whale, Chrome, Arc, Comet and Zen." = "이 Mac에서 가져올 브라우저를 찾지 못했습니다. Whale, Chrome, Arc, Comet, Zen 같은 Chromium·Firefox 계열 브라우저에서 가져올 수 있습니다.";
-"macOS lets only apps with Full Disk Access read %@'s data, so it is not listed." = "%@의 데이터는 macOS가 전체 디스크 접근 권한이 있는 앱에만 열어 주어 목록에 없습니다.";
+"macOS doesn't let Yardlet read %@'s data until you allow it." = "macOS는 허용하기 전까지 Yardlet이 %@ 데이터를 읽지 못하게 막습니다.";
+"Turn on %@ under Yardlet in Files & Folders, or turn on Yardlet in Full Disk Access. If its profiles don't appear here after that, quit and reopen Yardlet." = "파일 및 폴더에서 Yardlet 아래 %@ 항목을 켜거나, 전체 디스크 접근 권한에서 Yardlet을 켜세요. 켠 뒤에도 프로필이 여기에 나타나지 않으면 Yardlet을 종료했다가 다시 여세요.";
+"Open Files & Folders…" = "파일 및 폴더 열기…";
+"Open Full Disk Access…" = "전체 디스크 접근 권한 열기…";
 "Search sites" = "사이트 검색";
 "When you import, macOS asks whether Yardlet may use “%@” in your keychain. Allow it to import." = "가져오기를 누르면 macOS가 키체인의 “%@” 항목을 써도 되는지 묻습니다. 허용해야 가져옵니다.";
 "This profile has no sites with cookies." = "이 프로필에는 쿠키가 있는 사이트가 없습니다.";

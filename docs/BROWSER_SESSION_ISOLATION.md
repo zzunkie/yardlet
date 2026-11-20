@@ -322,7 +322,8 @@ cookies across host restarts.
   then on.
 - **What the person does:** "Import from Another Browser…" opens one sheet from three places: the page's right-click
   menu in the browser panel, the panel's ⋯ menu under Viewport (Chrome keeps its import in its ⋮ menu and Safari in its
-  File menu, not only on a page), and Settings › Passwords beside "Import CSV…". Choose the browser and profile → check
+  File menu, not only on a page), and Settings › Passwords beside "Import CSV…". The sheet starts on the Mac's default
+  browser. Choose the browser and profile → check
   the sites (from the panel, the current page's site is at the top, already checked; from Settings none is) → keep or
   clear "Import visit history" → Import → when sites are checked from a Chromium browser, allow in the macOS keychain
   prompt ("Yardlet wants to use your confidential information stored in 'Whale Safe Storage' in your keychain."). When it
@@ -356,12 +357,14 @@ cookies across host restarts.
     thread.
   - Both the cookies and the history are read before anything is written, so a refused keychain item or a database that
     cannot be read imports nothing ("The browser's visit history could not be read. Try again in a moment.").
-- **Browsers it looks for:** In `~/Library/Application Support` it looks, in this order, for the
-  Chromium family Whale, Chrome, Edge, Brave, Arc, Comet, Vivaldi, Opera, Opera GX, Yandex, Helium and Chromium, and the
-  Firefox family Firefox, Zen, Floorp, LibreWolf and Waterfox. Folder and keychain names and the evidence are in the
-  table below. Only profiles with a cookie DB are shown, and the sheet shows the app bundle's icon when that
-  browser app is on the Mac, and a globe symbol otherwise (`NSWorkspace.urlForApplication(withBundleIdentifier:)`,
-  without running the app).
+- **Browsers it looks for:** In `~/Library/Application Support` it looks for the Chromium family Chrome, Edge, Brave,
+  Arc, Comet, Vivaldi, Opera, Opera GX, Whale, Yandex, Helium and Chromium, and the Firefox family Firefox, Zen, Floorp,
+  LibreWolf and Waterfox, in that order after the Mac's default web browser, which comes first. The default browser is
+  the app Launch Services opens an `https` link with (`NSWorkspace.urlForApplication(toOpen:)`, which starts nothing),
+  matched to a browser by bundle ID; when it is Safari or a browser not listed, the order stays as written. Folder and
+  keychain names and the evidence are in the table below. Only profiles with a cookie DB are shown, beside the browsers
+  macOS keeps from Yardlet (below), and the sheet shows the app bundle's icon when that browser app is on the Mac, and a
+  globe symbol otherwise (`NSWorkspace.urlForApplication(withBundleIdentifier:)`, without running the app).
   - Chromium family: profiles are read from `Local State` (the names in `profile.info_cache`, `profiles_order`,
     `last_used` first), and only profiles with a cookie DB (`<profile>/Network/Cookies`, otherwise `<profile>/Cookies`:
     Whale and Comet use the latter) are shown. When the browser folder itself is the first profile, as with Opera (a
@@ -370,23 +373,41 @@ cookies across host restarts.
   - Firefox family: from the `[Profile…]` sections of `profiles.ini` (`Name`, `Path`, under the browser folder when
     `IsRelative=1`), only profiles with `cookies.sqlite` are shown. The profile that the install uses (`Default` in
     `[Install…]`) comes first, then `Default=1`, then the rest in file order. The keychain is not used.
-- **macOS 27's browser folder protection (confirmed):** A rule set in macOS 27's `/usr/libexec/sandboxd`
-  (`defaultRules-3`) opens the Chrome (`Google/Chrome`), Brave (`BraveSoftware/Brave-Browser`), Edge (`Microsoft Edge`)
-  and Firefox (`Firefox`) folders only to that browser's own team ID and signing ID and to Safari's import service
-  (`com.apple.Safari.BrowserDataImportingService`, Chrome and Firefox only). When another app reads them, it gets
-  `Operation not permitted` with no prompt (confirmed by listing the Chrome folder from this task's shell and by the
-  `sandboxd` log "TCC denied kTCCServiceSystemPolicyAppDataDetailed for com.google.Chrome"; the DTS answer "intentional
-  change" in Apple Developer Forums 847030). The same report says apps with Full Disk Access can read them. So a browser
-  whose list file (`Local State`, `profiles.ini`) exists but cannot be read is not put in the list, and below the sheet
-  only its name is given, as "macOS lets only apps with Full Disk Access read Chrome's data, so it is not listed." There
-  is no prompt that asks for the permission and no settings button. `NativeMessagingHosts` and Chrome's
-  `ChromeFeatureState` and `Crashpad` are left out of the rule. The folders of Whale, Arc, Comet, Vivaldi, Opera,
-  Yandex, Helium and the Gecko browsers other than Firefox are not in the rule. Whether Yardlet (a signed app) is also
-  refused without a prompt when it reads them was not tested, because a prompt might appear on the user's screen (the
-  forum and Claude Code issue 81453 both report "refused without a prompt").
+- **macOS 27's browser folder protection:** A rule set in macOS 27's `/usr/libexec/sandboxd` (`defaultRules-3`; the
+  live copy ships in XProtect's `AppProtectionRules.plist`) opens the Chrome (`Google/Chrome`), Brave
+  (`BraveSoftware/Brave-Browser`), Edge (`Microsoft Edge`) and Firefox (`Firefox`) folders only to that browser's own
+  team ID and signing ID and to Safari's import service (`com.apple.Safari.BrowserDataImportingService`, Chrome and
+  Firefox only). Another app gets `Operation not permitted` (`EPERM`) with no prompt, even for a directory listing
+  (confirmed by listing the Chrome folder from a shell and by the `sandboxd` log "TCC denied
+  kTCCServiceSystemPolicyAppDataDetailed for com.google.Chrome"; the DTS answer "intentional change" in Apple Developer
+  Forums 847030). `NativeMessagingHosts` and Chrome's `ChromeFeatureState` and `Crashpad` are left out of the rule. The
+  folders of Whale, Arc, Comet, Vivaldi, Opera, Yandex, Helium and the Gecko browsers other than Firefox are not in it.
+  - Two settings open them, both in System Settings › Privacy & Security. **Files & Folders** lists, under the app that
+    was refused, one switch per browser whose folder it tried ("Finicky > Google Chrome" in the Finicky report on
+    macOS 27.0, off at first), and macOS later posts a throttled notification, "Data Access Blocked … tried to access
+    your data from other apps and was blocked. You can manage this at any time in Files & Folders settings."
+    **Full Disk Access** opens them all (the DTS answer, and a report that it worked once the app was restarted; System
+    Settings itself offers to quit and reopen an app that is running when it is turned on). Neither has an API that
+    asks for it. Both reports are from other apps; Yardlet's own grant has not been tried.
+  - What the sheet does: a browser whose list file (`Local State`, `profiles.ini`) cannot be read for want of permission
+    (`EPERM` or `EACCES`, which macOS 27 may return even for whether the file exists), or exists and cannot be read, is
+    listed in the browser menu with its icon, in its place in the order, so a Mac whose default browser is Chrome opens
+    the sheet on Chrome. Choosing it shows "macOS doesn't let Yardlet read Chrome's data until you allow it.", the two
+    places to allow it ("Turn on Chrome under Yardlet in Files & Folders, or turn on Yardlet in Full Disk Access. If its
+    profiles don't appear here after that, quit and reopen Yardlet."), and buttons that open each pane
+    (`x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders` and `?Privacy_AllFiles`);
+    Import is off. Opening the sheet reads the list file, so by then macOS has refused Yardlet once and lists the
+    browser under it in Files & Folders. Whenever Yardlet becomes active while such a browser is listed, and each time
+    the sheet opens, it looks again; a browser that became readable gives way to its first profile.
+  - The app process reads the browsers' files (the lists and site names when the sheet looks, the cookies, the history
+    and the keychain item on Import); the browser host only receives the chosen cookies through its pipe. So the grant
+    to Yardlet.app is the one that counts, and it follows Yardlet's signature: a development or QA build is a different
+    app to TCC.
+  - No public API was found that reads another browser's data for an app: the import service the rule opens is
+    Safari's own, with no documented interface.
 - **Safari is not included:** macOS opens Safari's cookies
   (`~/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies`) only to apps with "Full Disk
-  Access". That permission covers all of other apps' data, so Yardlet does not ask for it just for this one feature.
+  Access", and they are kept in Safari's own binary format, which Yardlet does not read.
 - **Site list:** From the copy of the cookie DB, only `host_key` and the last-used time are read (values are not read).
   Partitioned cookies (those with a non-empty `top_frame_site_key`) and expired cookies are not counted. Hosts are
   grouped by registrable domain (the Public Suffix List, the same list the vault uses), and IP addresses and `localhost`
@@ -456,14 +477,17 @@ cookies across host restarts.
   where the one the install uses differs from `Default=1`; a schema 17 `cookies.sqlite` left in WAL: a host-only Strict
   cookie on `accounts.example.net`, SameSite-unspecified, Secure None and non-Secure None cookies on `.example.net`, a
   container cookie with the same name, a partitioned cookie, an expired cookie) and a fake Chrome folder whose
-  `Local State` cannot be read. After Whale, it imports Firefox without the keychain, and checks that the profile order
-  is `Whale · Work`, `Whale · Person 1`, `Firefox · default-release`,
-  `Firefox · old`, and the unreadable browser `Chrome`; the Firefox site, read through the WAL, is `example.net`; the
+  `Local State` cannot be read. After Whale, it imports Firefox without the keychain, and checks that, with Whale as the
+  default browser, the sheet's order is `Whale · Work`, `Whale · Person 1`, the unreadable `Chrome`,
+  `Firefox · default-release` and `Firefox · old`; the Firefox site, read through the WAL, is `example.net`; the
   Firefox cookie shapes stored in the default profile are `qa_ff_signin accounts.example.net Secure HttpOnly Strict`,
   `qa_ff_session .example.net Secure HttpOnly (unspecified)`, `qa_ff_cross .example.net Secure HttpOnly None`,
   `qa_ff_plain .example.net non-Secure (unspecified)` (all with an expiry); the panel's task sends the same four values
   and no container value; the panel notice is "Imported the sign-in for example.net from Firefox."; and no values are in
-  the app or host logs. The sheet image (`import-sheet.png`) shows the Chrome notice line.
+  the app or host logs. The sheet image (`import-sheet.png`) opens on the default browser of the Mac that runs it.
+  `VaultSettingsRenderingTests.testTheBrowserImportSheetAndMenuDraw` draws the sheet over made-up folders with each
+  default browser fixed: Whale, Firefox (its profile and sites first) and Chrome (unreadable: the two lines, both
+  buttons, Import off), and the browser menu it lists.
 
 ### Supported browsers and evidence
 

@@ -3108,7 +3108,10 @@
 "Import from Another Browser" = "Import from Another Browser";
 "The sites you choose open signed in, in this task and in new tasks. Their cookies already in Yardlet are replaced." = "The sites you choose open signed in, in this task and in new tasks. Their cookies already in Yardlet are replaced.";
 "No browser to import from was found on this Mac. Sign-ins import from Chromium and Firefox browsers such as Whale, Chrome, Arc, Comet and Zen." = "No browser to import from was found on this Mac. Sign-ins import from Chromium and Firefox browsers such as Whale, Chrome, Arc, Comet and Zen.";
-"macOS lets only apps with Full Disk Access read %@'s data, so it is not listed." = "macOS lets only apps with Full Disk Access read %@'s data, so it is not listed.";
+"macOS doesn't let Yardlet read %@'s data until you allow it." = "macOS doesn't let Yardlet read %@'s data until you allow it.";
+"Turn on %@ under Yardlet in Files & Folders, or turn on Yardlet in Full Disk Access. If its profiles don't appear here after that, quit and reopen Yardlet." = "Turn on %@ under Yardlet in Files & Folders, or turn on Yardlet in Full Disk Access. If its profiles don't appear here after that, quit and reopen Yardlet.";
+"Open Files & Folders…" = "Open Files & Folders…";
+"Open Full Disk Access…" = "Open Full Disk Access…";
 "Search sites" = "Search sites";
 "When you import, macOS asks whether Yardlet may use “%@” in your keychain. Allow it to import." = "When you import, macOS asks whether Yardlet may use “%@” in your keychain. Allow it to import.";
 "This profile has no sites with cookies." = "This profile has no sites with cookies.";

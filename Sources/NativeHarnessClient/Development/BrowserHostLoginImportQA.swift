@@ -93,18 +93,18 @@ final class BrowserHostLoginImportQA {
             check("the made-up browser folders are written", false, error.localizedDescription)
             return await finish()
         }
-        let found = BrowserLoginImport.find()
+        let found = BrowserLoginImport.find(defaultBrowser: "com.naver.Whale")
         let profiles = found.profiles
-        record["profiles"] = .array(profiles.map { .string($0.title) })
+        record["profiles"] = .array(found.choices.map { .string($0.title) })
         guard let work = profiles.first, work.title == "Whale · Work",
               work.cookies.path(percentEncoded: false).hasPrefix(whale.path(percentEncoded: false)) else {
             check("Whale's last used profile is found first, in the QA home", false, "\(profiles.map(\.title))")
             return await finish()
         }
-        check("Firefox's profiles follow, the installation's own first, and Chrome is named as unreadable",
-              profiles.map(\.title) == ["Whale · Work", "Whale · Person 1", "Firefox · default-release", "Firefox · old"]
+        check("the default browser Whale leads, then Chrome offered as unreadable, then Firefox's profiles, the installation's own first",
+              found.choices.map(\.title) == ["Whale · Work", "Whale · Person 1", "Chrome", "Firefox · default-release", "Firefox · old"]
                 && found.unreadable.map(\.name) == ["Chrome"],
-              "\(profiles.map(\.title)) / unreadable \(found.unreadable.map(\.name))")
+              "\(found.choices.map(\.title)) / unreadable \(found.unreadable.map(\.name))")
         let sites = (try? BrowserLoginImport.sites(in: work).map(\.domain)) ?? []
         check("the profile's sites are listed by registrable domain, without partitioned or expired cookies' alone",
               Set(sites) == ["example.com", "localhost", "other.test"], "\(sites)")
