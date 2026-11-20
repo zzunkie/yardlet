@@ -1841,15 +1841,23 @@ final class RestartResumeTests: XCTestCase {
         let switches = host.accessibilityElements().filter { $0.role == NSAccessibility.Role.checkBox.rawValue }
         XCTAssertTrue(switches.contains { $0.label == L10n.string("Continue running work after a restart") },
             switches.description)
-        XCTAssertTrue(switches.contains { $0.label == L10n.string("Memory saver") }, switches.description)
-        // Chrome's three levels under the memory saver's switch, each with its line, at the sheet's size scrolled to them.
-        let radios = host.accessibilityElements().filter { $0.role == NSAccessibility.Role.radioButton.rawValue }
+        // The memory saver is in Settings › Browser, with Chrome's three levels under its switch, each with its line, at
+        // the sheet's size scrolled to them.
+        let browser = WindowlessRender.Host(SettingsCenterView(initialSection: SettingsSection.browser.rawValue,
+                                                               notificationCenter: MenuBarQuietNotificationCenter()), size: size)
+        defer { browser.close() }
+        browser.settle()
+        XCTAssertTrue(browser.accessibilityElements().contains { $0.role == NSAccessibility.Role.checkBox.rawValue
+            && $0.label == L10n.string("Memory saver") }, browser.accessibilityElements().description)
+        let radios = browser.accessibilityElements().filter { $0.role == NSAccessibility.Role.radioButton.rawValue }
         for level in BrowserMemorySaver.Level.allCases {
             XCTAssertTrue(radios.contains { $0.label.hasPrefix(level.title) && $0.label.contains(level.detail) }, radios.description)
         }
         for appearance in WindowlessRender.Appearance.allCases {
             let shown = WindowlessRender.Host(
-                SettingsCenterView(notificationCenter: MenuBarQuietNotificationCenter()).environment(\.colorScheme, appearance.colorScheme),
+                SettingsCenterView(initialSection: SettingsSection.browser.rawValue,
+                                   notificationCenter: MenuBarQuietNotificationCenter())
+                    .environment(\.colorScheme, appearance.colorScheme),
                 size: size, appearance: appearance)
             defer { shown.close() }
             shown.settle()

@@ -13,7 +13,7 @@ final class SettingsStructureTests: XCTestCase {
         XCTAssertNil(SettingsSection.yardletAccount.group)
         XCTAssertEqual(SettingsSection.Group.allCases.map { group in all.filter { $0.group == group } }, [
             [.general, .appearance, .keyboardShortcuts, .notifications, .instructions],
-            [.connectors, .vault, .remote],
+            [.connectors, .browser, .vault, .remote],
             [.harnesses, .accounts, .usage, .cliUpdates],
         ])
         XCTAssertEqual(all.dropFirst().compactMap(\.group), SettingsSection.Group.allCases.flatMap { group in

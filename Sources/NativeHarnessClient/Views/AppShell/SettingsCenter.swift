@@ -427,11 +427,9 @@ struct SettingsCenterView: View {
             case .yardletAccount:
                 if let remote { YardletAccountSettingsView(service: remote) }
             case .general:
-                let rows = remoteHost != nil
-                    ? RemoteHostSettingsProjection.generalRows(remoteHost?.hostSettings)
-                    : YardletSettingCatalog.rows(in: .general, context: settingsContext)
                 // The rows come from the settings catalog, which the agent's settings tools list too, under
                 // their headings.
+                let rows = catalogRows(in: .general)
                 VStack(alignment: .leading, spacing: 18) {
                     ForEach(GeneralSettingsGroup.allCases, id: \.self) { group in
                         let members = rows.filter { $0.generalGroup == group }
@@ -443,6 +441,15 @@ struct SettingsCenterView: View {
                                 }
                             }
                         }
+                    }
+                }
+                .disabled(!isRemoteWritable)
+            case .browser:
+                let rows = catalogRows(in: .browser)
+                SettingsGroup {
+                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, setting in
+                        if index > 0 { Divider() }
+                        generalRow(setting)
                     }
                 }
                 .disabled(!isRemoteWritable)
@@ -510,6 +517,13 @@ struct SettingsCenterView: View {
         }
     }
 
+    /// A section's rows from the settings catalog: this Mac's, or the ones another Mac sent values for.
+    private func catalogRows(in section: SettingsSection) -> [YardletSetting] {
+        remoteHost != nil
+            ? RemoteHostSettingsProjection.rows(in: section, remoteHost?.hostSettings)
+            : YardletSettingCatalog.rows(in: section, context: settingsContext)
+    }
+
     /// What the settings catalog reads its rows' presence from: the objects this window has.
     private var settingsContext: YardletSettingsContext {
         YardletSettingsContext(
@@ -550,8 +564,8 @@ struct SettingsCenterView: View {
         }
     }
 
-    /// One General row: the catalog's row for a setting in Yardlet's defaults, or the row of a setting kept
-    /// elsewhere. The Codex app's General rows (`settings.ide.language`, `settings.general.macMenuBar`) come
+    /// One General or Browser row: the catalog's row for a setting in Yardlet's defaults, or the row of a setting
+    /// kept elsewhere. The Codex app's General rows (`settings.ide.language`, `settings.general.macMenuBar`) come
     /// first and in its order.
     @ViewBuilder
     private func generalRow(_ setting: YardletSetting) -> some View {

@@ -12,7 +12,7 @@ host's structure is in [BROWSER_HOST](BROWSER_HOST.md).
   Yardlet drives the calling task's browser tabs over CDP. Each of those tabs is a tab of the task's right-hand panel. The tools act on the tab that `tabId` names, or else on the agent's active tab (usually the browser tab
   the panel showed last; section 2, "The tab the person uses"). The tools do not open the panel. The same server also offers the tools of the connectors the user connected
   ([CONNECTORS](CONNECTORS.md)). When it cannot reach Yardlet, the list is the browser tool list built into the server.
-- One toggle, "Agent browser tools" in Settings → General (on by default). When it is off, sessions that start or resume
+- One toggle, "Agent browser tools" in Settings → Browser (on by default). When it is off, sessions that start or resume
   from then on get no browser tools. The server still goes in, with the task suggestion tools (`spawn_task` and
   `dismiss_task`, section 2, "Task suggestion tools"), the session tools (section 2, "Session tools"), the settings tools
   (section 2, "Settings tools") and the tools of connected connectors.
@@ -262,7 +262,7 @@ built into the server (`builtInTools`) either.
   password of letters alone) is not found; a key drawn
   where no style reaches (a canvas, an image, a closed shadow root) stays in a picture, and a script that changes a
   value before returning it gets past the shapes: this keeps keys out of a task's history by accident, not from an agent
-  set on reading one. "Hide keys and tokens" in Settings → General (on by default) turns it off, in a team-signed build
+  set on reading one. "Hide keys and tokens" in Settings → Browser (on by default) turns it off, in a team-signed build
   only and after Touch ID or the login password (`VaultCenter.setHidesCredentials`). `update_setting` takes the same
   call, after the person allows it on the task's approval card ("Settings tools" below), so Touch ID or the password
   still comes; nothing else changes it, and the choice is kept in a keychain item of Yardlet's own (service `‹bundle id›.vault.settings`, there only while keys are shown)
@@ -614,9 +614,9 @@ The agent reads Yardlet's settings and changes one when the person asks in the c
 switch in Settings (`SettingsToolCatalog`). Both tools are listed with the session tools, for every task that has them.
 They answer from the catalog Settings draws from (`YardletSettingCatalog`): each setting's id, section, symbol, title,
 the lines under it and its tooltip in the person's language, its values, where the value lives, and whether a change
-asks every time. Settings › General draws its rows from it under their headings (App, Tasks, Browser, Terminal: each
-General setting names its heading), and the switches of the other sections take their words from it, so a setting
-added to Settings is added there and the tools list it.
+asks every time. Settings › General draws its rows from it under their headings (App, Tasks, Terminal: each
+General setting names its heading), Settings › Browser draws its rows from it too, and the switches of the other
+sections take their words from it, so a setting added to Settings is added there and the tools list it.
 
 | Tool | Arguments | Behavior |
 |---|---|---|

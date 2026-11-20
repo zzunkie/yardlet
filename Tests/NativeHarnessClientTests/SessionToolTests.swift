@@ -2993,6 +2993,7 @@ final class SessionToolTests: XCTestCase {
         XCTAssertTrue(mailbox.asksThePerson, "The caller asks, so every change asks")
 
         let cookies = try XCTUnwrap(settings.first { $0.id == "keep_cookies" })
+        XCTAssertEqual(cookies.section, L10n.string("Browser"))
         XCTAssertEqual(cookies.kind, "choice")
         XCTAssertEqual(cookies.value, "perTask")
         XCTAssertEqual(cookies.choices?.map(\.value), ["perTask", "shared"])
@@ -3021,8 +3022,8 @@ final class SessionToolTests: XCTestCase {
         let unasked = try await listedSettings(bypass.model, from: bypass.caller)
         XCTAssertEqual(unasked.first { $0.id == "mailbox" }?.asksThePerson, false)
         XCTAssertEqual(unasked.filter(\.asksThePerson).map(\.id),
-                       ["simulator", "keep_screen_unlocked", "agent_browser_tools", "keep_cookies", "page_suggestions",
-                        "share_terminal"])
+                       ["simulator", "keep_screen_unlocked", "share_terminal", "agent_browser_tools", "keep_cookies",
+                        "page_suggestions"])
         await fixture.model.shutdown()
         await bypass.model.shutdown()
     }
@@ -3138,7 +3139,7 @@ final class SessionToolTests: XCTestCase {
         let request = try await waitForApproval(in: fixture.caller.id, model: model)
         XCTAssertEqual(request.request.title, L10n.format("Change “%@”?", L10n.string("Keep cookies")))
         XCTAssertEqual(request.request.detail, [
-            L10n.format("%@ › %@", L10n.string("Settings"), L10n.string("General")),
+            L10n.format("%@ › %@", L10n.string("Settings"), L10n.string("Browser")),
             L10n.format("%@ → %@", L10n.string("Per task"), L10n.string("Shared by all tasks")),
             L10n.string("Tasks share your sign-ins. A task whose agent signs in to a site itself keeps that sign-in to itself. Sign-ins saved in the password manager work in every task")
         ].joined(separator: "\n"))

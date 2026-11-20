@@ -137,10 +137,12 @@ enum RemoteHostSettingsProjection {
         ).filter { $0 != .appearance && $0 != .keyboardShortcuts && $0 != .notifications }
     }
 
-    static func generalRows(_ settings: RemoteHostSettings?) -> [YardletSetting] {
+    /// The rows of General or Browser the host sent values for, less the ones another row draws under itself. The
+    /// section is this Mac's: a host that keeps a setting in another section sends it by its id all the same.
+    static func rows(in section: SettingsSection, _ settings: RemoteHostSettings?) -> [YardletSetting] {
         YardletSettingCatalog.all.filter { setting in
-            setting.section == .general
-                && setting.shownWhileOn.flatMap(YardletSettingCatalog.setting)?.section != .general
+            setting.section == section
+                && setting.shownWhileOn.flatMap(YardletSettingCatalog.setting)?.section != section
                 && settings?.values[setting.id] != nil
         }
     }

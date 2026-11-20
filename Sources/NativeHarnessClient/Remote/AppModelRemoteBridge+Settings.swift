@@ -15,7 +15,7 @@ extension AppModelRemoteBridge {
 
     static func isRemoteHostSetting(_ setting: YardletSetting) -> Bool {
         switch setting.section {
-        case .general, .instructions, .usage, .cliUpdates:
+        case .general, .browser, .instructions, .usage, .cliUpdates:
             !excludedRemoteSettingIDs.contains(setting.id)
         case .yardletAccount, .appearance, .keyboardShortcuts, .notifications, .accounts, .harnesses, .connectors, .vault, .remote:
             false
