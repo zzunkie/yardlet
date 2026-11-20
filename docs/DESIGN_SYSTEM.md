@@ -3,7 +3,9 @@
 Yardlet uses familiar agent controls inside a quiet native workbench. This document defines the
 consolidation target and maps it to today's implementation. It does **not** mean the new tokens
 have been implemented. The current source of shared values is
-[`ParityDesignSystem.swift`](../Sources/NativeHarnessClient/Views/ParityDesignSystem.swift).
+[`ParityDesignSystem.swift`](../Sources/NativeHarnessClient/Views/ParityDesignSystem.swift). The color
+presets' values and a person's own colors are in
+[`MacColorTheme.swift`](../Sources/NativeHarnessClient/Views/MacColorTheme.swift), which the same tokens read.
 
 ## Surface ownership
 
@@ -21,14 +23,17 @@ A even when their setting is Yardlet-specific. A remote conversation retains the
 Values are macOS points at the standard interface size. Use the existing `yardletInterfaceScale`
 (compact 0.94, standard 1, large 1.08) where the component already supports it; text must not be
 scaled twice. View › Zoom In and Zoom Out multiply it by the app's zoom (80% to 175%,
-`InterfaceZoom`), so a view that reads it follows both, code and the terminal included: a size in points
-as `size * yardletInterfaceScale`, a text style as `Font.yardlet(_:scale:)`, which draws exactly as the
+`InterfaceZoom`). The window applies the zoom once, when it sets the scale
+(`YardletWindowPreferences`), and no view reads `InterfaceZoom` itself, so a view that reads the
+scale follows both, code and the terminal included: a size in points as `size * yardletInterfaceScale`, a text style as `Font.yardlet(_:scale:)`, which draws exactly as the
 style at 1. SwiftUI's `dynamicTypeSize` does not change the size of macOS fonts, text styles such as
 `.body` included, so it is not a way to scale text. Native controls (buttons, pickers, switches) keep
 their system size. SF system text provides Korean fallback. Code (code blocks, diffs, command output, open
 files and the terminal) uses the code font Settings › Appearance chooses, `yardletCodeFont`: a view
 keeps its size for the standard code font, the system monospaced face at 12 points, and takes its
-font and size from it (`YardletCodeFont.size(_:scale:)`), so the default draws as before.
+font and size from it (`YardletCodeFont.size(_:scale:)`), so the default draws as before. That function
+multiplies the code font's chosen size by the same scale, so code follows the zoom once too. The Connect to
+Mac and Task Resource Usage windows do not apply the interface size, so their scale stays 1.
 
 | Proposed type token | Size / weight | Current mapping and consolidation |
 | --- | --- | --- |
@@ -40,7 +45,8 @@ font and size from it (`YardletCodeFont.size(_:scale:)`), so the default draws a
 
 This is a role migration, not a numeric search-and-replace. An 8 pt disclosure glyph is an icon,
 not caption text. Keep platform menu fonts and the existing interface-size preference. The terminal
-currently uses 12 pt multiplied by that scale; leave it out of a chrome-only font migration. Do not impose
+draws the code font at its chosen size (12 pt by default) multiplied by that scale; leave it out of a
+chrome-only font migration. Do not impose
 a fixed line-height on Korean text: validate its actual line boxes and wrapping.
 
 | Proposed token | Values | Current mapping and consolidation |
@@ -60,6 +66,10 @@ independent messages from grouped work.
 ### Semantic colors
 
 Keep `ParityTheme`'s adaptive surface palette. Accent follows the preference below.
+A color preset or a person's own colors do not form a second palette: they are inputs to these
+tokens (`MacColorTheme`, in the environment as `yardletColorTheme`). Their background shifts the
+surface rows together, their text color becomes the window's foreground color in place of the native
+label, and their accent is the Accent row; see Custom appearance. The table gives the defaults.
 The RGB figures below are the current palette's nominal calibrated components,
 rounded to 8-bit notation for reading. The contrast figures use the colors resolved to sRGB. They are neutral, not beige.
 
@@ -93,7 +103,10 @@ as the same token's bridge, not a second palette. Status colors retain their sem
 **Settings > Appearance > Color preset** defaults to **System**, resolved dynamically from
 [`NSColor.controlAccentColor`](https://developer.apple.com/documentation/appkit/nscolor/controlaccentcolor),
 which follows the person's macOS accent preference. Do not cache it as a fixed RGB value or assume
-its color space. **Ink**, **Grove** and **Iris** each provide an sRGB light/dark pair. The Mac settings tools expose the same choice as `accent`.
+its color space. **Ink**, **Grove** and **Iris** set only the accent, each an sRGB light/dark pair; the
+complete presets in Custom appearance set an accent pair with their background and text. `ParityTheme`
+builds every preset's adaptive accent from these pairs (`YardletAccentPreference.colors(in:)`). The Mac
+settings tools expose the same choice as `accent`.
 Links use primary text when the accent lacks text contrast. Prose links keep an accent underline.
 
 | Preset | Light | Dark | Minimum text contrast, light / dark |
@@ -136,7 +149,8 @@ Ember and Tidepool are Yardlet palettes. The third-party palette licenses are in
 Changing a color in either column shows **Custom** in the picker. Selecting a preset again
 replaces all six colors and keeps the interface font. System restores native colors in both
 columns. Save applies the choice. Searching Settings or the command palette for a preset name
-opens its row. The agent's `accent` setting accepts the same preset names as lowercase IDs.
+opens its row. The agent's `accent` setting accepts the same preset names as lowercase IDs and reads
+`custom` once a column overrides a color.
 
 Reset to defaults restores the system accent, the native surface and label colors, and the system
 interface font in a single action. It also clears a preset saved by an earlier version. The theme
@@ -180,7 +194,7 @@ These are consolidation targets; provider differences in meaning remain intact.
 | Composer | `PromptComposer`, 14 pt editor, 13 pt controls, 12 pt corner, 28 pt send target, 24 pt auxiliary controls. Controls wrap before the send action clips; when the context ring, the model control, the queue and send are all that is left on the last row and still do not fit, the model control drops its effort and then shortens its name from the end, as the Codex app drops the effort and both apps shorten the name, so send stays in view. A text field that wraps (`wrapsBetweenWords()`) and the conversation's prose break lines between words, as `Text` does: Korean at its spaces. Shared 32 pt outer conversation gutter; preserve provider-specific options. |
 | Panel header | `paneToolbarHeight` 40, 13 pt label, shared toolbar buttons and 8 pt content gaps. One header per panel; focus belongs to the pane whose control was used. |
 | Empty state | 18 pt title, 14 pt explanation, one primary next action, 16 pt vertical gap and 24/32 pt outer inset. Keep the real task composer available when useful. No large decorative badge or enclosure. |
-| Terminal/review | Native monospaced text, existing interface-size scaling, shared header/selection colors. Preserve ANSI/diff meaning and horizontal scrolling; never clip code to achieve a tidy silhouette. |
+| Terminal/review | The code font (`yardletCodeFont`) at the interface scale, shared header/selection colors. Preserve ANSI/diff meaning and horizontal scrolling; never clip code to achieve a tidy silhouette. |
 
 ## Reference measurements
 
@@ -235,7 +249,8 @@ requirement to copy Claude's warm light palette or Codex's every theme override.
 ## Adding or changing a value
 
 1. Choose a semantic role and reuse its token/component first. Put shared values in
-   `ParityDesignSystem.swift`; keep provider protocol data out of visual tokens.
+   `ParityDesignSystem.swift` and a color preset's values in `MacColorTheme.swift`; keep provider
+   protocol data out of visual tokens.
 2. If no role fits, show the smallest new value with its purpose and reference selector, or explain
    the Yardlet-specific need. A one-off literal needs the same justification as a token.
 3. Render the affected real view in light/dark, Korean/English, standard and narrow widths. Include
@@ -254,7 +269,7 @@ Menu commands continue to participate in System Settings > Keyboard > Keyboard S
 
 | Where the keyboard is | Default behavior |
 | --- | --- |
-| App and window menus | ⌘, opens Settings, ⌘K searches tasks and commands, and ⌘N opens New task. The Task, View, Edit, File, Window and Split View menus show the available keys for the current window. View › Zoom In (⌘+ or ⌘=), Zoom Out (⌘−) and Actual Size (⌘0) change the size of the text and code in the sidebar, home, conversation, composer, session rail and panels of every task window, as in the Claude and Codex apps; Settings and other sheets keep theirs. Yardlet keeps the zoom across launches, and Actual Size returns to Settings' interface size. A focused browser page or an image preview takes these keys for its own zoom first. |
+| App and window menus | ⌘, opens Settings, ⌘K searches tasks and commands, and ⌘N opens New task. The Task, View, Edit, File, Window and Split View menus show the available keys for the current window. View › Zoom In (⌘+ or ⌘=), Zoom Out (⌘−) and Actual Size (⌘0) change the size of the text and code in every task window, another Mac's included, as in the Claude and Codex apps: the sidebar, home, conversation, composer, session rail, panels, mailbox, calendar and schedules, and a sheet that sizes its text from the interface scale, such as the schedule editor. Settings' rows, menus and native controls keep their sizes. Yardlet keeps the zoom across launches, and Actual Size returns to Settings' interface size. A focused browser page or an image preview takes these keys for its own zoom first. |
 | Task window | ⌘1–4 select task surfaces. ⌃1–9 open pinned rows in sidebar order. ⌃Tab and ⌃⇧Tab move between window tabs, or between tasks when only one tab is open. ⌘⌥ and an arrow focus an adjacent pane. |
 | Composer | The existing send preference decides whether Return sends or inserts a line. The alternate follow-up uses ⌘Return or ⇧⌘Return. Typed commands and mentions take precedence over submission. Marked text stays with the input method. In the empty composer the send keys can allow one pending request, and Escape can deny one before stopping a turn. |
 | Terminal | ⌘J and Control-backtick toggle the terminal. The latter is handled by the window while its panel commands are enabled. ⇧⌘L attaches a shared terminal selection; the terminal and shell handle their own input. |
