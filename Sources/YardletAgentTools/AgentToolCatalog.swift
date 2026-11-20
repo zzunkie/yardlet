@@ -162,7 +162,8 @@ package enum AgentToolCatalog {
             title: "Page snapshot",
             description: "Read the page as an accessibility tree in text, its frames included: this is how to find an "
                 + "element or text on the page. Elements you can act on carry references such as @e3 for the other "
-                + "browser tools. An element keeps its reference in later snapshots while it stays on the page; a "
+                + "browser tools, and so do landmarks, forms, dialogs, tables and the like, for reading one part with "
+                + "ref. An element keeps its reference in later snapshots while it stays on the page; a "
                 + "reference whose element is not in the latest snapshot stops working, and a navigation of the page "
                 + "ends them all. With ref, it returns only that element and what it holds, with the same references, "
                 + "which costs far fewer tokens than the whole page when only that part matters or changed. References "

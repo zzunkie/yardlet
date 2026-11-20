@@ -56,6 +56,12 @@ enum BrowserAgentSnapshot {
         "gridcell", "PopUpButton", "ToggleButton", "TextField", "ComboBoxMenuButton", "ComboBoxSelect",
         "DisclosureTriangle", "Iframe", "heading"
     ]
+    /// Containers that get a reference although an agent does not act on them, so that a snapshot can read one of them
+    /// alone: landmarks, forms, dialogs, tables and the like. A region is a landmark only with a name.
+    private static let partRoles: Set<String> = [
+        "main", "navigation", "banner", "contentinfo", "complementary", "region", "form", "search", "dialog", "alertdialog",
+        "table", "grid", "article", "tabpanel", "menu", "toolbar"
+    ]
     private static let booleanProperties = ["checked", "pressed", "expanded", "selected", "disabled", "required",
                                             "focused", "readonly", "invalid"]
 
@@ -147,6 +153,16 @@ enum BrowserAgentSnapshot {
             self.pageOrigin = pageOrigin
         }
 
+        /// Takes back the reference of a container that shows nothing after all; a number it took last goes to the next
+        /// element, so the numbers stay in page order without gaps.
+        mutating func withdraw(_ ref: String, of element: Ref, isNew: Bool) {
+            refs[ref] = nil
+            if isNew, ref == "@e\(nextNumber - 1)" {
+                named[element] = nil
+                nextNumber -= 1
+            }
+        }
+
         /// The element's reference: the one it had, else the next number.
         mutating func reference(for element: Ref) -> String {
             let ref: String
@@ -227,8 +243,14 @@ enum BrowserAgentSnapshot {
                origin != pageOrigin {
                 line += " [origin=\(origin)]"
             }
-            if actionable, let backend {
-                line += " [ref=\(reference(for: Ref(node: backend, session: frames[frame].session)))]"
+            let marked = line.contains("[")
+            var part: (ref: String, element: Ref, isNew: Bool)?
+            if let backend, actionable || (partRoles.contains(role) && (role != "region" || !name.isEmpty)) {
+                let element = Ref(node: backend, session: frames[frame].session)
+                let isNew = named[element] == nil
+                let ref = reference(for: element)
+                line += " [ref=\(ref)]"
+                if !actionable { part = (ref, element, isNew) }
             }
             let value = BrowserAgentSnapshot.redactingMasked(BrowserAgentSnapshot.clean(scrub(node["value"]?["value"]?.stringValue
                 ?? node["value"]?["value"]?.integerValue.map(String.init) ?? "")))
@@ -251,8 +273,12 @@ enum BrowserAgentSnapshot {
             let textPrefix = indent(depth + 1) + "- text: "
             childLines = BrowserAgentSnapshot.joiningText(childLines, prefix: textPrefix)
             if childLines.isEmpty {
-                // A container left with nothing to say is not worth a line.
-                if name.isEmpty, value.isEmpty, !line.contains("["), !actionable { unemit(head) ; return [] }
+                // A container left with nothing to say is not worth a line, nor a reference.
+                if name.isEmpty, value.isEmpty, !marked, !actionable {
+                    unemit(head)
+                    if let part { withdraw(part.ref, of: part.element, isNew: part.isNew) }
+                    return []
+                }
                 return [head]
             }
             // A nameless element holding only text reads as one line.
