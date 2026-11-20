@@ -66,7 +66,7 @@ final class YardletMCPServerTests: XCTestCase {
             "browser_batch", "browser_tab_list", "browser_tab_new", "browser_tab_select", "browser_tab_close",
             "spawn_task", "dismiss_task",
             "list_tasks", "read_task", "send_message_to_task", "wait_tasks", "create_task", "run_agent", "archive_task",
-            "list_projects", "hide_project", "show_project", "list_accounts",
+            "list_projects", "create_project", "hide_project", "show_project", "list_accounts",
             "list_personal_agents", "read_personal_agent", "read_personal_agent_thread",
             "list_settings", "update_setting",
             "create_scheduled_task", "list_scheduled_tasks", "update_scheduled_task", "delete_scheduled_task",

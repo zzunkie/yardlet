@@ -23,7 +23,7 @@ struct AgentToolServerLaunch: Equatable, Sendable {
 
     /// The task suggestion and session tools under Claude Code's names, and `list_task_runs`. A
     /// chip, a read of the person's own tasks and projects, a message, child task or subagent in the
-    /// same project, and hiding or showing a project the person asked about need no card (the Claude
+    /// same project, and adding, hiding or showing a project the person asked about need no card (the Claude
     /// app runs its `spawn_task` and session tools so too, `allowedTools`); anything further, and every
     /// `archive_task`, the app itself asks the person about on one card, unless
     /// the task runs without asking.
