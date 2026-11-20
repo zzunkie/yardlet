@@ -595,23 +595,23 @@ final class BrowserAgentToolsTests: XCTestCase {
         XCTAssertTrue(afterNavigation.text.contains("@e3 is stale: the page navigated after snapshot 2 of tab 4"), afterNavigation.text)
     }
 
-    /// A snapshot by reference reads only that element and what it holds, with the references a full snapshot gives:
-    /// new elements on either side of it are numbered in page order, and the page's other references go on as after a
-    /// full one. A reference it cannot read says to take a full snapshot.
+    /// A container such as a dialog gets a reference, in page order (one that shows nothing gets none), and a snapshot
+    /// by reference reads only that element and what it holds, with the references a full snapshot gives: new elements
+    /// on either side of it are numbered in page order, and the page's other references go on as after a full one. A
+    /// reference it cannot read says to take a full snapshot.
     func testSnapshotOfOneElementReadsItsPartWithTheReferencesOfAFullOne() async {
-        func node(_ id: String, _ role: String, _ name: String = "", children: [String] = [], backend: Int64,
-                  focusable: Bool = false) -> JSONValue {
+        func node(_ id: String, _ role: String, _ name: String = "", children: [String] = [], backend: Int64) -> JSONValue {
             .object([
                 "nodeId": .string(id), "role": .object(["type": .string("role"), "value": .string(role)]),
                 "name": .object(["type": .string("computedString"), "value": .string(name)]),
                 "childIds": .array(children.map { .string($0) }), "backendDOMNodeId": .integer(backend),
-                "properties": .array(focusable ? [.object(["name": .string("focusable"), "value": .object(["value": .bool(true)])])] : [])
+                "properties": .array([])
             ])
         }
         var nodes = [
-            node("1", "RootWebArea", "Shop", children: ["2", "3", "6"], backend: 1),
-            node("2", "button", "Menu", backend: 10),
-            node("3", "dialog", "Contact", children: ["4", "5"], backend: 11, focusable: true),
+            node("1", "RootWebArea", "Shop", children: ["2", "9", "3", "6"], backend: 1),
+            node("2", "button", "Menu", backend: 10), node("9", "navigation", backend: 17),
+            node("3", "dialog", "Contact", children: ["4", "5"], backend: 11),
             node("4", "textbox", "Email", backend: 12), node("5", "button", "Send", backend: 13),
             node("6", "link", "Help", backend: 14)
         ]
@@ -620,12 +620,13 @@ final class BrowserAgentToolsTests: XCTestCase {
         XCTAssertTrue(unscoped.text.contains("Call browser_snapshot without ref first"), unscoped.text)
         let full = await run(AgentToolCatalog.snapshot)
         XCTAssertEqual(Self.refs(in: full.text), ["@e1", "@e2", "@e3", "@e4", "@e5"], full.text)
+        XCTAssertFalse(full.text.contains("navigation"), full.text)
 
         // The menu leaves, a button comes before the dialog and a checkbox inside it.
         nodes = [
             node("1", "RootWebArea", "Shop", children: ["7", "3", "6"], backend: 1),
             node("7", "button", "Cart", backend: 15),
-            node("3", "dialog", "Contact", children: ["4", "5", "8"], backend: 11, focusable: true),
+            node("3", "dialog", "Contact", children: ["4", "5", "8"], backend: 11),
             node("4", "textbox", "Email", backend: 12), node("5", "button", "Send", backend: 13),
             node("8", "checkbox", "Copy me", backend: 16), node("6", "link", "Help", backend: 14)
         ]
