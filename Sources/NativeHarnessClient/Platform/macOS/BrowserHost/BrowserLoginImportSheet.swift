@@ -2,10 +2,11 @@ import AppKit
 import SwiftUI
 
 /// The sheet of "Import from Another Browser…" (docs/BROWSER_SESSION_ISOLATION.md 10): a browser's profile with the
-/// browser app's icon, the sites it has cookies for to choose from (the page's own chosen first) with a search, the
-/// profile's visit history, and Import. Only the sites the person ticks bring their sign-ins; for a Chromium browser
-/// Import then reads its keychain item, which macOS asks about. The history is the whole profile's, checked at first as
-/// in Chrome's import dialog. A browser whose folder macOS keeps from Yardlet is named, not listed.
+/// browser app's icon, the Mac's default browser first, the sites it has cookies for to choose from (the page's own
+/// chosen first) with a search, the profile's visit history, and Import. Only the sites the person ticks bring their
+/// sign-ins; for a Chromium browser Import then reads its keychain item, which macOS asks about. The history is the whole
+/// profile's, checked at first as in Chrome's import dialog. A browser whose folder macOS keeps from Yardlet is listed
+/// too, and choosing it shows where to allow Yardlet; the sheet looks again whenever Yardlet becomes active.
 struct BrowserLoginImportSheet: View {
     let request: BrowserLoginImportRequest
     /// Where the browsers' folders are; a made-up one in tests.
@@ -13,10 +14,11 @@ struct BrowserLoginImportSheet: View {
     /// Imports the chosen sites from a profile, and its visit history when asked; the sheet shows what it throws.
     let onImport: (BrowserLoginImport.Profile, [String], Bool) async throws -> Void
     let onDone: () -> Void
-    @State private var profiles: [BrowserLoginImport.Profile]?
-    @State private var unreadable: [BrowserLoginImport.Browser] = []
+    /// The default browser's bundle identifier, asked each time the sheet looks; a fixed one in tests.
+    var defaultBrowser: () -> String? = BrowserLoginImport.defaultBrowserID
+    @State private var choices: [BrowserLoginImport.Choice]?
     @State private var icons: [String: NSImage] = [:]
-    @State private var profileID: String?
+    @State private var choiceID: String?
     @State private var sites: [BrowserLoginImport.Site]?
     @State private var chosen: Set<String> = []
     @State private var search = ""
@@ -24,7 +26,10 @@ struct BrowserLoginImportSheet: View {
     @State private var isImporting = false
     @State private var importsHistory = true
 
-    private var profile: BrowserLoginImport.Profile? { profiles?.first { $0.id == profileID } }
+    private var choice: BrowserLoginImport.Choice? { choices?.first { $0.id == choiceID } }
+    private var profile: BrowserLoginImport.Profile? {
+        if case .profile(let profile) = choice { profile } else { nil }
+    }
     private var withHistory: Bool { importsHistory && profile?.history != nil }
 
     var body: some View {
@@ -36,41 +41,23 @@ struct BrowserLoginImportSheet: View {
                 .padding(.vertical, 16)
             Divider()
             VStack(alignment: .leading, spacing: 12) {
-                if let profiles, profiles.isEmpty {
+                if let choices, choices.isEmpty {
                     Text(L10n.string("No browser to import from was found on this Mac. Sign-ins import from Chromium and Firefox browsers such as Whale, Chrome, Arc, Comet and Zen."))
                         .font(.callout)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
-                    Picker(L10n.string("Browser"), selection: $profileID) {
-                        ForEach(profiles ?? []) { profile in
-                            Label { Text(profile.title) } icon: { icon(for: profile.browser) }
-                                .tag(Optional(profile.id))
+                    Picker(L10n.string("Browser"), selection: $choiceID) {
+                        ForEach(choices ?? []) { choice in
+                            Label { Text(choice.title) } icon: { icon(for: choice.browser) }
+                                .tag(Optional(choice.id))
                         }
                     }
                     .fixedSize()
-                    Text(request.forTask
-                         ? L10n.string("The sites you choose open signed in, in this task and in new tasks. Their cookies already in Yardlet are replaced.")
-                         : L10n.string("The sites you choose open signed in, in new tasks. Their cookies already in Yardlet are replaced."))
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    TextField(L10n.string("Search sites"), text: $search)
-                        .textFieldStyle(.roundedBorder)
-                    siteList
-                    if !chosen.isEmpty, let service = profile?.browser.keychainService {
-                        Text(L10n.format("When you import, macOS asks whether Yardlet may use “%@” in your keychain. Allow it to import.", service))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                    if case .unreadable(let browser) = choice {
+                        permission(for: browser)
+                    } else {
+                        profileContent
                     }
-                    if profile?.history != nil { historyChoice }
-                }
-                if !unreadable.isEmpty {
-                    Text(L10n.format("macOS lets only apps with Full Disk Access read %@'s data, so it is not listed.",
-                                     unreadable.map(\.name).joined(separator: ", ")))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
                 if let failure {
                     Text(failure)
@@ -85,20 +72,75 @@ struct BrowserLoginImportSheet: View {
         }
         .frame(width: 520)
         .background(ParityTheme.canvas)
-        .task {
-            let support = applicationSupport
-            let found = await Task.detached { BrowserLoginImport.find(in: support) }.value
-            for browser in Set(found.profiles.map(\.browser)) {
-                guard let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: browser.bundleID) else { continue }
-                let image = NSWorkspace.shared.icon(forFile: app.path(percentEncoded: false))
-                image.size = NSSize(width: 16, height: 16)
-                icons[browser.name] = image
-            }
-            unreadable = found.unreadable
-            profiles = found.profiles
-            profileID = found.profiles.first?.id
+        .task { await look() }
+        .task(id: choiceID) { await loadSites() }
+        // Back from System Settings, a browser the person allowed lists its profiles.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            guard choices?.contains(where: { if case .unreadable = $0 { true } else { false } }) == true else { return }
+            Task { await look() }
         }
-        .task(id: profileID) { await loadSites() }
+    }
+
+    /// A profile's sites to choose from, the keychain line and the visit history.
+    @ViewBuilder
+    private var profileContent: some View {
+        Text(request.forTask
+             ? L10n.string("The sites you choose open signed in, in this task and in new tasks. Their cookies already in Yardlet are replaced.")
+             : L10n.string("The sites you choose open signed in, in new tasks. Their cookies already in Yardlet are replaced."))
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        TextField(L10n.string("Search sites"), text: $search)
+            .textFieldStyle(.roundedBorder)
+        siteList
+        if !chosen.isEmpty, let service = profile?.browser.keychainService {
+            Text(L10n.format("When you import, macOS asks whether Yardlet may use “%@” in your keychain. Allow it to import.", service))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        if profile?.history != nil { historyChoice }
+    }
+
+    /// Where to allow Yardlet to read a browser macOS keeps to itself: the browser under Yardlet in Files & Folders,
+    /// where macOS lists it once it has refused Yardlet, or Full Disk Access.
+    private func permission(for browser: BrowserLoginImport.Browser) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(L10n.format("macOS doesn't let Yardlet read %@'s data until you allow it.", browser.name))
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(L10n.format("Turn on %@ under Yardlet in Files & Folders, or turn on Yardlet in Full Disk Access. If its profiles don't appear here after that, quit and reopen Yardlet.", browser.name))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Button(L10n.string("Open Files & Folders…")) { NSWorkspace.shared.open(BrowserLoginImport.filesAndFoldersSettings) }
+                Button(L10n.string("Open Full Disk Access…")) { NSWorkspace.shared.open(BrowserLoginImport.fullDiskAccessSettings) }
+            }
+            .padding(.top, 4)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Finds the browsers, the default one first, keeping what is chosen when it is still there; a browser just
+    /// allowed gives way to its first profile.
+    private func look() async {
+        let support = applicationSupport
+        let preferred = defaultBrowser()
+        let found = await Task.detached { BrowserLoginImport.find(in: support, defaultBrowser: preferred) }.value
+        for browser in Set(found.choices.map(\.browser)) where icons[browser.name] == nil {
+            guard let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: browser.bundleID) else { continue }
+            let image = NSWorkspace.shared.icon(forFile: app.path(percentEncoded: false))
+            image.size = NSSize(width: 16, height: 16)
+            icons[browser.name] = image
+        }
+        let previous = choice
+        choices = found.choices
+        if let previous, !found.choices.contains(where: { $0.id == previous.id }) {
+            choiceID = found.choices.first { $0.browser == previous.browser }?.id ?? found.choices.first?.id
+        } else if previous == nil {
+            choiceID = found.choices.first?.id
+        }
     }
 
     /// The whole profile's visit history, apart from the sites chosen above.

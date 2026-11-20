@@ -1,3 +1,4 @@
+import AppKit
 import CommonCrypto
 import CryptoKit
 import CSQLite
@@ -10,8 +11,9 @@ import Security
 /// person may then add a Yardlet passkey on the site. Chromium browsers list their profiles in `Local State` and keep a
 /// profile's cookies in a `Cookies` database, values encrypted under a key made from a password in the login keychain
 /// (`<browser> Safe Storage`); Firefox browsers list theirs in `profiles.ini` and keep cookies in plain text in
-/// `cookies.sqlite`. macOS 27 lets only Chrome, Edge, Brave and Firefox themselves, or an app with Full Disk Access,
-/// read their folders; Safari keeps its cookies where only such an app reads them, so it is not offered. Listing a
+/// `cookies.sqlite`. macOS 27 lets only Chrome, Edge, Brave and Firefox themselves read their folders, unless the person
+/// allows Yardlet in Privacy & Security; such a browser is offered with the way to allow it. Safari keeps its cookies in
+/// a format of its own where only an app with Full Disk Access reads them, so it is not offered. Listing a
 /// profile's sites reads hosts only; the keychain is read when the person imports, and the key lives in memory for that
 /// import alone. Values go to the browser host and nowhere else. The same profiles' visit history (Chromium's `History`,
 /// Firefox's `places.sqlite`) can come along into the address field's history (`history(in:since:now:)`), with no key.
@@ -36,11 +38,10 @@ enum BrowserLoginImport {
         }
     }
 
-    /// Whale first, then the other Chromium browsers and the Firefox ones, each as its own bundle names its folder
-    /// (`CrProductDirName`, `application.ini`'s `Profile` or `Name`) and its keychain item; the evidence for each is in
-    /// docs/BROWSER_SESSION_ISOLATION.md 10. Opera GX shares Opera's item name.
+    /// The Chromium browsers and then the Firefox ones, each as its own bundle names its folder (`CrProductDirName`,
+    /// `application.ini`'s `Profile` or `Name`) and its keychain item; the evidence for each is in
+    /// docs/BROWSER_SESSION_ISOLATION.md 10. Opera GX shares Opera's item name. `find` puts the Mac's default browser first.
     static let knownBrowsers: [Browser] = [
-        ("Whale", "Naver/Whale", "Whale Safe Storage", "com.naver.Whale"),
         ("Chrome", "Google/Chrome", "Chrome Safe Storage", "com.google.Chrome"),
         ("Edge", "Microsoft Edge", "Microsoft Edge Safe Storage", "com.microsoft.edgemac"),
         ("Brave", "BraveSoftware/Brave-Browser", "Brave Safe Storage", "com.brave.Browser"),
@@ -49,6 +50,7 @@ enum BrowserLoginImport {
         ("Vivaldi", "Vivaldi", "Vivaldi Safe Storage", "com.vivaldi.Vivaldi"),
         ("Opera", "com.operasoftware.Opera", "Opera Safe Storage", "com.operasoftware.Opera"),
         ("Opera GX", "com.operasoftware.OperaGX", "Opera Safe Storage", "com.operasoftware.OperaGX"),
+        ("Whale", "Naver/Whale", "Whale Safe Storage", "com.naver.Whale"),
         ("Yandex", "Yandex/YandexBrowser", "Yandex Safe Storage", "ru.yandex.desktop.yandex-browser"),
         ("Helium", "net.imput.helium", "Helium Storage Key", "net.imput.helium"),
         ("Chromium", "Chromium", "Chromium Safe Storage", "org.chromium.Chromium")
@@ -75,10 +77,47 @@ enum BrowserLoginImport {
         var title: String { folder.isEmpty ? browser.name : "\(browser.name) · \(name)" }
     }
 
-    /// The profiles on this Mac that keep cookies, and the browsers with a folder here that Yardlet may not read.
+    /// What the sheet offers to import from: a profile that keeps cookies, or a browser with a folder here that macOS
+    /// keeps from Yardlet until the person allows it.
+    enum Choice: Hashable, Identifiable, Sendable {
+        case profile(Profile)
+        case unreadable(Browser)
+
+        var browser: Browser {
+            switch self {
+            case .profile(let profile): profile.browser
+            case .unreadable(let browser): browser
+            }
+        }
+
+        /// A profile's id holds a slash; a browser's name does not.
+        var id: String {
+            switch self {
+            case .profile(let profile): profile.id
+            case .unreadable(let browser): browser.name
+            }
+        }
+
+        var title: String {
+            switch self {
+            case .profile(let profile): profile.title
+            case .unreadable(let browser): browser.name
+            }
+        }
+    }
+
+    /// The profiles on this Mac that keep cookies and the browsers Yardlet may not read, in the order the sheet
+    /// offers them.
     struct Found: Sendable {
-        var profiles: [Profile]
-        var unreadable: [Browser]
+        var choices: [Choice]
+
+        var profiles: [Profile] {
+            choices.compactMap { if case .profile(let profile) = $0 { profile } else { nil } }
+        }
+
+        var unreadable: [Browser] {
+            choices.compactMap { if case .unreadable(let browser) = $0 { browser } else { nil } }
+        }
     }
 
     /// A site with cookies in a profile.
@@ -124,25 +163,58 @@ enum BrowserLoginImport {
         URL(filePath: NSHomeDirectory(), directoryHint: .isDirectory).appending(path: "Library/Application Support", directoryHint: .isDirectory)
     }
 
+    /// The bundle identifier of the app macOS opens web links with, asked of Launch Services without starting it.
+    static func defaultBrowserID() -> String? {
+        guard let link = URL(string: "https://example.com"),
+              let app = NSWorkspace.shared.urlForApplication(toOpen: link) else { return nil }
+        return Bundle(url: app)?.bundleIdentifier
+    }
+
+    /// Privacy & Security › Files & Folders, where macOS 27 lists under Yardlet each protected browser whose folder it
+    /// refused, and Full Disk Access, which opens them all (docs/BROWSER_SESSION_ISOLATION.md 10).
+    static let filesAndFoldersSettings = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders")!
+    static let fullDiskAccessSettings = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!
+
     // MARK: Browsers and sites
 
-    /// The browsers on this Mac with a profile that keeps cookies, in `knownBrowsers` order, each one's last used
-    /// profile first and then the browser's own order. A browser whose list of profiles exists but cannot be read is
-    /// `unreadable`: macOS 27 keeps Chrome's, Edge's, Brave's and Firefox's folders to themselves, without asking.
+    /// The browsers on this Mac with a profile that keeps cookies, the one with `defaultBrowser` for its bundle
+    /// identifier first and the rest in `browsers` order, each one's last used profile first and then the browser's own
+    /// order. A browser whose list of profiles cannot be read for want of permission is `unreadable`: macOS 27 keeps
+    /// Chrome's, Edge's, Brave's and Firefox's folders to themselves without asking, and may refuse to say even whether
+    /// a file in them exists.
     static func find(in applicationSupport: URL = BrowserLoginImport.applicationSupport,
-                     browsers: [Browser] = knownBrowsers) -> Found {
-        var found = Found(profiles: [], unreadable: [])
-        for browser in browsers {
+                     browsers: [Browser] = knownBrowsers, defaultBrowser: String? = nil) -> Found {
+        var ordered = browsers
+        if let defaultBrowser,
+           let index = ordered.firstIndex(where: { $0.bundleID.caseInsensitiveCompare(defaultBrowser) == .orderedSame }) {
+            ordered.insert(ordered.remove(at: index), at: 0)
+        }
+        var found = Found(choices: [])
+        for browser in ordered {
             let root = applicationSupport.appending(path: browser.folder, directoryHint: .isDirectory)
             let list = root.appending(path: browser.kind == .firefox ? "profiles.ini" : "Local State")
-            guard let data = try? Data(contentsOf: list) else {
-                if FileManager.default.fileExists(atPath: list.path(percentEncoded: false)) { found.unreadable.append(browser) }
+            let data: Data
+            do {
+                data = try Data(contentsOf: list)
+            } catch {
+                if isRefused(error) || FileManager.default.fileExists(atPath: list.path(percentEncoded: false)) {
+                    found.choices.append(.unreadable(browser))
+                }
                 continue
             }
-            found.profiles += browser.kind == .firefox ? firefoxProfiles(browser, root: root, list: data)
+            let profiles = browser.kind == .firefox ? firefoxProfiles(browser, root: root, list: data)
                 : chromiumProfiles(browser, root: root, list: data)
+            found.choices += profiles.map(Choice.profile)
         }
         return found
+    }
+
+    /// Whether reading failed for want of permission (`EPERM` from a sandbox rule, `EACCES` from the file's mode)
+    /// rather than for a missing file.
+    private static func isRefused(_ error: Error) -> Bool {
+        if (error as? CocoaError)?.code == .fileReadNoPermission { return true }
+        guard let underlying = (error as NSError).userInfo[NSUnderlyingErrorKey] as? NSError else { return false }
+        return underlying.domain == NSPOSIXErrorDomain && [Int(EPERM), Int(EACCES)].contains(underlying.code)
     }
 
     private static func chromiumProfiles(_ browser: Browser, root: URL, list: Data) -> [Profile] {

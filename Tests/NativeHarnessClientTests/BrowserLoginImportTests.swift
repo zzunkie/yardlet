@@ -68,8 +68,14 @@ final class BrowserLoginImportTests: XCTestCase {
             .init(folder: "", name: "", cookies: [])
         ], lastUsed: "", password: Self.password)
 
-        let profiles = BrowserLoginImport.find(in: support).profiles
+        // The Mac's default browser comes first, whatever its letter case, and the rest keep `knownBrowsers` order;
+        // a default browser that is not offered, as Safari is not, changes nothing.
+        let profiles = BrowserLoginImport.find(in: support, defaultBrowser: "com.naver.whale").profiles
         XCTAssertEqual(profiles.map(\.title), ["Whale · Work", "Whale · Default", "Whale · Empty", "Chrome · Person 1", "Opera"])
+        for defaultBrowser in [nil, "com.apple.Safari"] {
+            XCTAssertEqual(BrowserLoginImport.find(in: support, defaultBrowser: defaultBrowser).profiles.map(\.title),
+                           ["Chrome · Person 1", "Opera", "Whale · Work", "Whale · Default", "Whale · Empty"])
+        }
         XCTAssertEqual(profiles[2].cookies.lastPathComponent, "Cookies")
         XCTAssertEqual(profiles[2].cookies.deletingLastPathComponent().lastPathComponent, "Network")
         let whale = profiles[0]
@@ -143,15 +149,27 @@ final class BrowserLoginImportTests: XCTestCase {
                 .init(url: "https://www.google.com/search?q=zen", date: Date().addingTimeInterval(-60))
             ])
         ], installed: "Profiles/b.Work", marked: "Profiles/a.default")
-        // A browser whose list of profiles exists but cannot be read, as macOS 27 keeps Chrome's.
+        // A browser whose list of profiles exists but cannot be read, and one whose folder refuses even to say whether
+        // the list is there, as macOS 27 keeps Chrome's, Edge's, Brave's and Firefox's.
         let chrome = support.appending(path: "Google/Chrome")
         try FileManager.default.createDirectory(at: chrome, withIntermediateDirectories: true)
         try Data("{}".utf8).write(to: chrome.appending(path: "Local State"))
         try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: chrome.appending(path: "Local State").path)
+        let edge = support.appending(path: "Microsoft Edge")
+        try FileManager.default.createDirectory(at: edge, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: edge.appending(path: "Local State"))
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: edge.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: edge.path) }
 
+        // The sheet offers them beside the profiles, the default browser first, so an unreadable one may lead.
         let found = BrowserLoginImport.find(in: support)
+        XCTAssertEqual(found.choices.map(\.id), ["Chrome", "Edge", "Zen/Profiles/b.Work", "Zen/Profiles/a.default"])
         XCTAssertEqual(found.profiles.map(\.title), ["Zen · Work", "Zen · default"])
-        XCTAssertEqual(found.unreadable.map(\.name), ["Chrome"])
+        XCTAssertEqual(found.unreadable.map(\.name), ["Chrome", "Edge"])
+        XCTAssertEqual(BrowserLoginImport.find(in: support, defaultBrowser: "app.zen-browser.zen").choices.map(\.title),
+                       ["Zen · Work", "Zen · default", "Chrome", "Edge"])
+        XCTAssertEqual(BrowserLoginImport.find(in: support, defaultBrowser: "com.microsoft.edgemac").choices.map(\.title),
+                       ["Edge", "Chrome", "Zen · Work", "Zen · default"])
         let work = found.profiles[0]
         XCTAssertEqual(Set(try BrowserLoginImport.sites(in: work).map(\.domain)), ["example.com", "other.test"])
         let cookies = try BrowserLoginImport.cookies(in: work, sites: ["example.com"], password: Data())
