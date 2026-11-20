@@ -149,26 +149,22 @@ enum ParityTheme {
 
     private static let system = AccentPalette(.controlAccentColor)
 
-    private static func palette(for preference: YardletAccentPreference) -> AccentPalette {
-        switch preference {
-        case .system: system
-        case .ink: ink
-        case .grove: grove
-        case .iris: iris
+    private static let palettes: [YardletAccentPreference: AccentPalette] = {
+        var palettes: [YardletAccentPreference: AccentPalette] = [:]
+        for preset in YardletAccentPreference.allCases {
+            guard let light = preset.colors(in: .light).accent?.nsColor,
+                  let dark = preset.colors(in: .dark).accent?.nsColor else { continue }
+            palettes[preset] = AccentPalette(NSColor(name: "YardletAccent" + preset.rawValue.capitalized) { appearance in
+                appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+            })
         }
+        return palettes
+    }()
+
+    private static func palette(for preference: YardletAccentPreference) -> AccentPalette {
+        palettes[preference] ?? system
     }
 
-    private static let ink = pair("Ink", light: 0x143B6B, dark: 0x8CB8FA)
-    private static let grove = pair("Grove", light: 0x14664A, dark: 0x7AD1AD)
-    private static let iris = pair("Iris", light: 0x5C45AB, dark: 0xB8A6FA)
-
-    private static func pair(_ name: String, light: Int, dark: Int) -> AccentPalette {
-        AccentPalette(NSColor(name: "YardletAccent" + name) { appearance in
-            let rgb = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
-            return NSColor(srgbRed: CGFloat(rgb >> 16) / 255, green: CGFloat((rgb >> 8) & 255) / 255,
-                           blue: CGFloat(rgb & 255) / 255, alpha: 1)
-        })
-    }
     static let signal = Color(nsColor: NSColor(name: "YardletSignal") { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             ? NSColor(calibratedRed: 0.82, green: 0.93, blue: 0.17, alpha: 1)

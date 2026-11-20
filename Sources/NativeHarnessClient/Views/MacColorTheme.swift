@@ -45,6 +45,33 @@ struct ThemeColors: Hashable, Codable {
     var text: ThemeRGB?
 }
 
+extension YardletAccentPreference {
+    /// The accent bridges to AppKit as an adaptive NSColor. Empty fields use native surface and label colors.
+    private static let colors: [Self: (light: ThemeColors, dark: ThemeColors)] = {
+        func swatch(_ accent: String, _ background: String? = nil, _ text: String? = nil) -> ThemeColors {
+            ThemeColors(accent: ThemeRGB(accent), background: background.flatMap(ThemeRGB.init),
+                        text: text.flatMap(ThemeRGB.init))
+        }
+        return [
+            .ink: (swatch("#143B6B"), swatch("#8CB8FA")),
+            .grove: (swatch("#14664A"), swatch("#7AD1AD")),
+            .iris: (swatch("#5C45AB"), swatch("#B8A6FA")),
+            .nord: (swatch("#5E81AC", "#FEFEFE", "#2E3440"), swatch("#88C0D0", "#20242D", "#ECEFF4")),
+            .catppuccin: (swatch("#8839EF", "#FEFEFE", "#4C4F69"), swatch("#CBA6F7", "#1E1E2E", "#CDD6F4")),
+            .ember: (swatch("#943F20", "#FFFFFE", "#3B2823"), swatch("#F3AB82", "#211714", "#F7E7DA")),
+            .tidepool: (swatch("#006C68", "#FEFFFF", "#193537"), swatch("#75D7CB", "#102326", "#D5F3EE")),
+        ]
+    }()
+
+    static let completePresets = allCases.filter { $0.colors(in: .light).background != nil }
+    static let accentOnlyPresets = allCases.filter { $0 != .system && $0.colors(in: .light).background == nil }
+
+    func colors(in mode: ThemeMode) -> ThemeColors {
+        let pair = Self.colors[self]
+        return (mode == .light ? pair?.light : pair?.dark) ?? ThemeColors()
+    }
+}
+
 enum InterfaceFont: String, CaseIterable, Codable {
     case system, serif, rounded
     var title: String {
@@ -72,9 +99,22 @@ struct MacColorTheme: Hashable, Codable {
     var dark = ThemeColors()
     var font = InterfaceFont.system
 
-    subscript(mode: ThemeMode) -> ThemeColors {
+    subscript(overrides mode: ThemeMode) -> ThemeColors {
         get { mode == .light ? light : dark }
         set { if mode == .light { light = newValue } else { dark = newValue } }
+    }
+
+    /// The accent stays adaptive until an override replaces it. Surface and text colors inherit from the preset.
+    subscript(mode: ThemeMode) -> ThemeColors {
+        var colors = self[overrides: mode]
+        let base = preset.colors(in: mode)
+        colors.background = colors.background ?? base.background
+        colors.text = colors.text ?? base.text
+        return colors
+    }
+
+    var selectedPreset: YardletAccentPreference? {
+        light == ThemeColors() && dark == ThemeColors() ? preset : nil
     }
 
     static func read(_ data: Data?, legacy: YardletAccentPreference) -> Self {
@@ -95,17 +135,18 @@ struct MacColorTheme: Hashable, Codable {
             defaults.removeObject(forKey: Self.key)
         } else if let data = try? JSONEncoder().encode(self) {
             defaults.set(data, forKey: Self.key)
+            defaults.removeObject(forKey: YardletPreferenceKeys.accent)
         }
     }
 
     mutating func usePreset(_ newValue: YardletAccentPreference) {
         preset = newValue
-        light.accent = nil
-        dark.accent = nil
+        light = ThemeColors()
+        dark = ThemeColors()
     }
 
     func accent(in mode: ThemeMode) -> NSColor {
-        self[mode].accent?.nsColor ?? ParityTheme.accentColor(for: preset)
+        self[overrides: mode].accent?.nsColor ?? ParityTheme.accentColor(for: preset)
     }
 }
 

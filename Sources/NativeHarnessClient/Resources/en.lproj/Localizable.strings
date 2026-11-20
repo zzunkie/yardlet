@@ -4179,7 +4179,7 @@
 "Background" = "Background";
 "Text color" = "Text color";
 "An sRGB color in #RRGGBB format, or default." = "An sRGB color in #RRGGBB format, or default.";
-"Unknown accent" = "Unknown accent";
+"Unknown color preset" = "Unknown color preset";
 "Unknown font" = "Unknown font";
 "Use #RRGGBB or default." = "Use #RRGGBB or default.";
 "Text / background" = "Text / background";
@@ -4189,7 +4189,13 @@
 "Diff addition / background" = "Diff addition / background";
 "Diff removal / background" = "Diff removal / background";
 "%@ · %@  %.2f:1 (minimum %.2f:1)" = "%@ · %@  %.2f:1 (minimum %.2f:1)";
-"Accent preset" = "Accent preset";
+"Color themes" = "Color themes";
+"Accent only" = "Accent only";
+"Color preset" = "Color preset";
+"Nord" = "Nord";
+"Catppuccin" = "Catppuccin";
+"Ember" = "Ember";
+"Tidepool" = "Tidepool";
 
 "Select model %lld" = "Select model %lld";
 "Select option %lld" = "Select option %lld";
@@ -4311,7 +4317,7 @@
 "pull request, PR, checks, GitHub Actions, CI" = "pull request, PR, checks, GitHub Actions, CI";
 "update Yardlet, new version" = "update Yardlet, new version";
 "dark mode, light mode, appearance" = "dark mode, light mode, appearance";
-"color, highlight color, tint" = "color, highlight color, tint";
+"color theme, palette, highlight color, tint" = "color theme, palette, highlight color, tint";
 "text size, font size, zoom, bigger, smaller" = "text size, font size, zoom, bigger, smaller";
 "monospace, code, terminal font" = "monospace, code, terminal font";
 "dot, personal agent" = "dot, personal agent";

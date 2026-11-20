@@ -3058,6 +3058,21 @@ final class SessionToolTests: XCTestCase {
         XCTAssertTrue(editor.failures.isEmpty, editor.failures.map(\.message).description)
         XCTAssertEqual(MacColorTheme.current(in: defaults).font, .rounded, "A concurrent edit survives Save")
         XCTAssertEqual(MacColorTheme.current(in: defaults).dark.background?.hex, "#101820")
+        func change(_ id: String, to value: String) async {
+            let result = await call(fixture.model, "update_setting", ["id": id, "value": value],
+                                    from: fixture.caller)
+            XCTAssertFalse(result.isError, result.text)
+            editor.refresh()
+        }
+        await change("accent", to: "nord")
+        XCTAssertEqual(editor.draft.selectedPreset, .nord)
+        XCTAssertEqual(editor.draft.font, .rounded)
+        await change("light_text_color", to: "#221144")
+        XCTAssertNil(editor.draft.selectedPreset)
+        await change("accent", to: "nord")
+        XCTAssertEqual(editor.draft[.light].text, YardletAccentPreference.nord.colors(in: .light).text)
+        await change("accent", to: "system")
+        XCTAssertEqual(editor.draft, MacColorTheme(font: .rounded))
         editor.reset()
         XCTAssertEqual(MacColorTheme.current(in: defaults), MacColorTheme())
         XCTAssertNil(defaults.object(forKey: MacColorTheme.key))

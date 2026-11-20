@@ -18,14 +18,26 @@ final class AppearanceThemeDraft {
     func refresh() {
         let latest = MacColorTheme.current(in: defaults)
         guard latest != saved else { return }
-        for mode in ThemeMode.allCases {
-            for field in ThemeField.allCases where draft[mode][keyPath: field.key] == saved[mode][keyPath: field.key] {
-                draft[mode][keyPath: field.key] = latest[mode][keyPath: field.key]
+        // Picking another preset replaces the whole pair, including concurrent color overrides.
+        if draft.preset == saved.preset {
+            draft.preset = latest.preset
+            for mode in ThemeMode.allCases {
+                for field in ThemeField.allCases {
+                    let key = field.key
+                    if draft[overrides: mode][keyPath: key] == saved[overrides: mode][keyPath: key] {
+                        draft[overrides: mode][keyPath: key] = latest[overrides: mode][keyPath: key]
+                    }
+                }
             }
         }
         if draft.font == saved.font { draft.font = latest.font }
-        if draft.preset == saved.preset { draft.preset = latest.preset }
         saved = latest
+    }
+
+    func select(_ preset: YardletAccentPreference) {
+        refresh()
+        draft.usePreset(preset)
+        failures = []
     }
 
     func save() {
@@ -62,12 +74,13 @@ final class AppearanceThemeDraft {
     func set(_ color: Color, for field: ThemeField, in mode: ThemeMode) {
         var environment = EnvironmentValues()
         environment.colorScheme = mode.scheme
-        draft[mode][keyPath: field.key] = ThemeRGB(color.resolve(in: environment))
+        draft[overrides: mode][keyPath: field.key] = ThemeRGB(color.resolve(in: environment))
         if !failures.isEmpty { failures = ThemeContrast.failures(for: draft) }
     }
 }
 
 struct AppearanceThemeEditor: View {
+    @Environment(\.colorScheme) private var scheme
     @State private var model: AppearanceThemeDraft
     @AppStorage private var data: Data
     @AppStorage private var legacy: String
@@ -81,14 +94,23 @@ struct AppearanceThemeEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             SettingsGroup {
-                SettingsRow(title: L10n.string("Accent preset"), anchor: YardletSetting.accent.id) {
-                    Circle().fill(Color(nsColor: ParityTheme.accentColor(for: model.draft.preset)))
+                SettingsRow(title: YardletSetting.accent.title, anchor: YardletSetting.accent.id) {
+                    Circle().fill(Color(nsColor: model.draft.accent(in: ThemeMode(scheme))))
                         .overlay { Circle().strokeBorder(ParityTheme.strongSeparator) }
                         .frame(width: 12, height: 12).accessibilityHidden(true)
-                    Picker(YardletSetting.accent.title, selection: Binding(get: { model.draft.preset }, set: {
-                        model.draft.usePreset($0)
+                    Picker(YardletSetting.accent.title, selection: Binding(get: { model.draft.selectedPreset }, set: {
+                        if let preset = $0 { model.select(preset) }
                     })) {
-                        ForEach(YardletAccentPreference.allCases) { Text($0.title).tag($0) }
+                        if model.draft.selectedPreset == nil {
+                            Text(L10n.string("Custom")).tag(nil as YardletAccentPreference?).disabled(true)
+                        }
+                        Text(YardletAccentPreference.system.title).tag(Optional(YardletAccentPreference.system))
+                        Section(L10n.string("Color themes")) {
+                            presetOptions(YardletAccentPreference.completePresets)
+                        }
+                        Section(L10n.string("Accent only")) {
+                            presetOptions(YardletAccentPreference.accentOnlyPresets)
+                        }
                     }
                     .labelsHidden().fixedSize()
                 }
@@ -138,4 +160,7 @@ struct AppearanceThemeEditor: View {
         .onChange(of: legacy) { model.refresh() }
     }
 
+    private func presetOptions(_ presets: [YardletAccentPreference]) -> some View {
+        ForEach(presets) { Text($0.title).tag(Optional($0)) }
+    }
 }
