@@ -295,6 +295,8 @@ struct TaskSidebar: View {
     @State private var pickedInList: WindowItem?
     /// The families as drawn, for the rows' menus and drops.
     @State private var nesting = SidebarNesting()
+    /// A chat that can become a project is dragged over Projects.
+    @State private var isProjectsDropTargeted = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.sidebarHoverCard) private var hoverCard
     /// Where the list's content is in the window, for the rows' hover cards.
@@ -369,11 +371,18 @@ struct TaskSidebar: View {
                                 chatsEntry(chats)
                             }
 
-                            if !layout.sections.isEmpty || (layout.pinned.isEmpty && layout.chats == nil) {
+                            if !layout.sections.isEmpty || (layout.pinned.isEmpty && layout.chats == nil)
+                                || takesChatsOnProjects {
                                 ParitySectionTitle(title: L10n.string("Projects"), trailingAction: onAddProject ?? onNewTask,
                                 trailingLabel: L10n.string(onAddProject == nil ? "New task" : "Add project…"))
-                                    .padding(.horizontal, 13)
+                                    .padding(.horizontal, 9)
+                                    .background(isProjectsDropTargeted ? ParityTheme.selectedFill : .clear,
+                                                in: SidebarMetrics.rowShape())
+                                    .padding(.horizontal, 4)
                                     .padding(.top, layout.pinned.isEmpty && layout.chats == nil ? 0 : 16)
+                                    .modifier(SidebarProjectsDropModifier(
+                                        taskToMakeProject: taskToMakeProject, onMakeProject: onMakeProject,
+                                        isTargeted: $isProjectsDropTargeted))
                             }
 
                             if layout.sections.isEmpty, layout.pinned.isEmpty, layout.chats == nil, !searchText.isEmpty,
@@ -544,6 +553,24 @@ struct TaskSidebar: View {
                 .frame(height: SidebarMetrics.groupBottomSpacing - SidebarMetrics.rowSpacing)
                 .accessibilityHidden(true)
         }
+    }
+
+    /// A chat dropped on Projects becomes a project of its own folder, so the title stays while chats are
+    /// listed, even before there is a project, where the window makes projects and no search filters the list.
+    private var takesChatsOnProjects: Bool {
+        layout.chats != nil && onMakeProject != nil && searchText.isEmpty
+    }
+
+    /// The listed task with `id`, when a drop on Projects can make it a project of its own folder
+    /// (`TaskProjectMove.Options.canMakeProject`), as its row's "Move to project" menu would.
+    private func taskToMakeProject(_ id: UUID) -> SessionRecord? {
+        for row in layout.rows {
+            guard case let .session(session) = row.content, session.id == id else { continue }
+            let options = remoteProjectMoveOptions?(session) ?? TaskProjectMove.options(
+                for: session, visibleProjects: allGroups.compactMap(\.project), projects: projects.projects)
+            return options.canMakeProject ? session : nil
+        }
+        return nil
     }
 
     /// The Chats section, above the projects as in the Codex app: its rows read and act like the
@@ -2238,4 +2265,58 @@ private struct SidebarTaskDropModifier: ViewModifier {
             content
         }
     }
+}
+
+/// A task dragged over Projects: a chat whose folder no project holds becomes a project of its own
+/// folder when dropped there (`AppModel.makeProject(from:)`), as its row's "Move to project" ›
+/// "New project" makes it, and the title shows it can take the chat while it can. Without
+/// `onMakeProject` (another Mac's window) nothing is taken.
+private struct SidebarProjectsDropModifier: ViewModifier {
+    let taskToMakeProject: (UUID) -> SessionRecord?
+    let onMakeProject: ((SessionRecord) -> Void)?
+    @Binding var isTargeted: Bool
+
+    func body(content: Content) -> some View {
+        if let onMakeProject {
+            content.onDrop(of: [.yardletTaskReference], delegate: SidebarProjectsDrop(
+                taskToMakeProject: taskToMakeProject, onMakeProject: onMakeProject, isTargeted: $isTargeted))
+        } else {
+            content
+        }
+    }
+}
+
+private struct SidebarProjectsDrop: DropDelegate {
+    let taskToMakeProject: (UUID) -> SessionRecord?
+    let onMakeProject: (SessionRecord) -> Void
+    @Binding var isTargeted: Bool
+
+    func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: [.yardletTaskReference]) }
+
+    func dropEntered(info: DropInfo) { isTargeted = takesDraggedTask }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: takesDraggedTask ? .move : .forbidden)
+    }
+
+    func dropExited(info: DropInfo) { isTargeted = false }
+
+    func performDrop(info: DropInfo) -> Bool {
+        isTargeted = false
+        guard let provider = info.itemProviders(for: [.yardletTaskReference]).first else { return false }
+        let taskToMakeProject = taskToMakeProject, onMakeProject = onMakeProject
+        Task { @MainActor in
+            let taskID: UUID? = await withCheckedContinuation { continuation in
+                _ = provider.loadTransferable(type: TaskDragItem.self) { result in
+                    continuation.resume(returning: try? result.get().sessionID)
+                }
+            }
+            // The item dropped, which may have come from another window's sidebar.
+            if let session = taskID.flatMap(taskToMakeProject) { onMakeProject(session) }
+        }
+        return true
+    }
+
+    /// Whether the task whose drag started last can become a project here.
+    private var takesDraggedTask: Bool { SidebarNesting.draggedTaskID.flatMap(taskToMakeProject) != nil }
 }

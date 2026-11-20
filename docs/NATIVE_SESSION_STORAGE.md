@@ -712,7 +712,8 @@ follows.
 
 - **A chat can become a project of its own folder:** for a task in no project whose folder no project holds
   (`TaskProjectMove.Options.canMakeProject`), "Move to project" ends with "New project" (the palette's "Move to new
-  project"). `AppModel.makeProject(from:)` adds a project for the task's folder, as Add project does for a folder,
+  project"), and dropping its row on the sidebar's Projects title does the same; that title stays while chats are
+  listed, even before there is a project, outside a search. `AppModel.makeProject(from:)` adds a project for the task's folder, as Add project does for a folder,
   named after the task's title as Chats lists it (`TaskProjectMove.projectName(for:)`: the agent's own title or Yardlet's
   fallback, so no model turn starts), then moves the task into it by ID as below. The folder stays where it is under
   its name (`new-chat-4`); only the project's name is new, and Edit project opens with that name selected

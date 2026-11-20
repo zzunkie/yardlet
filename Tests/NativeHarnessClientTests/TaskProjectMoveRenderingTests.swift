@@ -265,6 +265,68 @@ final class TaskProjectMoveRenderingTests: XCTestCase {
         }
     }
 
+    /// A chat dropped on Projects becomes a project of its own folder, so Projects is listed under the
+    /// chats even before there is a project. Another Mac's window, which makes no project here, and a
+    /// search leave it out as before. Drawn into `.build/move-project-qa` as `projects-drop-target-*.png`,
+    /// light and dark.
+    func testProjectsIsListedUnderTheChatsToTakeADroppedChat() throws {
+        let home = URL(filePath: "/tmp/move-project-qa/home", directoryHint: .isDirectory)
+        let projects = ProjectStore(chatWorkspaceHome: home)
+        let now = Date()
+        func chat(_ title: String, in folder: String, minutesAgo: Double) -> SessionRecord {
+            SessionRecord(harness: .claudeCode,
+                          workspaceURL: home.appending(path: "Documents/Yardlet/2026-11-20/\(folder)", directoryHint: .isDirectory),
+                          runtimeExecutableURL: URL(filePath: "/tmp/agent"), title: title, titleOrigin: .provider,
+                          status: .ready, updatedAt: now.addingTimeInterval(-minutesAgo * 60))
+        }
+        let sessions = [chat("Plan the weekend trip", in: "new-chat", minutesAgo: 3),
+                        chat("Compare standing desks", in: "new-chat-2", minutesAgo: 20)]
+        let disclosure = SidebarDisclosureStore(
+            defaults: try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("projects-drop-qa"))))
+        func sidebar(makesProjects: Bool, search: String = "") -> TaskSidebar {
+            let groups = projects.visibleGroups(sessions: sessions)
+            let layout = SidebarProjection.layout(visibleGroups: groups, allGroups: groups,
+                                                  chats: projects.chats(sessions: sessions), splits: [],
+                                                  isFiltering: !search.isEmpty, disclosure: disclosure.disclosure,
+                                                  selection: .session(sessions[0].id))
+            return TaskSidebar(layout: layout, allGroups: groups, isRestoring: false, selection: .session(sessions[0].id),
+                searchText: .constant(search), onNewTask: {}, onActivate: { _ in }, onNewTaskInProject: { _ in },
+                onAddProject: {}, projects: projects, onEditProject: { _ in },
+                onArchiveProjectChats: { _ in }, onRemoveProject: { _ in }, onTogglePinned: { _ in },
+                onArchive: { _ in }, onDelete: { _ in }, onRename: { _ in }, onMarkRead: { _ in },
+                onMakeProject: makesProjects ? { _ in } : nil, disclosure: disclosure)
+        }
+        let size = NSSize(width: ParityTheme.sidebarWidth, height: 300)
+        func elements(_ view: TaskSidebar) -> [WindowlessRender.AccessibilityElement] {
+            let host = WindowlessRender.Host(view.frame(width: size.width, height: size.height, alignment: .top), size: size)
+            defer { host.close() }
+            host.settle()
+            return host.accessibilityElements()
+        }
+        func isTitle(_ text: String) -> (WindowlessRender.AccessibilityElement) -> Bool {
+            { $0.label == text || $0.value == text }
+        }
+
+        let shown = elements(sidebar(makesProjects: true))
+        let chatsTitle = try XCTUnwrap(shown.firstIndex(where: isTitle(L10n.string("Chats"))), "\(shown)")
+        let projectsTitle = try XCTUnwrap(shown.firstIndex(where: isTitle(L10n.string("Projects"))), "\(shown)")
+        let lastChat = try XCTUnwrap(shown.lastIndex { $0.label.hasPrefix("Compare standing desks") }, "\(shown)")
+        XCTAssertTrue(chatsTitle < lastChat && lastChat < projectsTitle, "Under the chats: \(shown)")
+        XCTAssertFalse(elements(sidebar(makesProjects: false)).contains(where: isTitle(L10n.string("Projects"))),
+                       "Another Mac's window makes no project here")
+        XCTAssertFalse(elements(sidebar(makesProjects: true, search: "trip")).contains(where: isTitle(L10n.string("Projects"))),
+                       "A search lists what matches")
+
+        let directory = try WindowlessRender.directory("move-project-qa")
+        try WindowlessRender.hostedInBothAppearances("projects-drop-target", in: directory, size: size) { appearance in
+            sidebar(makesProjects: true)
+                .tint(Color.primary)
+                .environment(\.colorScheme, appearance.colorScheme)
+                .frame(width: size.width, height: size.height, alignment: .top)
+                .background(ParityTheme.sidebar)
+        }
+    }
+
     /// The row titled `title`, in the window's top-left space.
     private func rowFrame(_ title: String, in host: WindowlessRender.Host<some View>) throws -> CGRect {
         host.hosting.layoutSubtreeIfNeeded()
