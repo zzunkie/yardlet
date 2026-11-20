@@ -71,15 +71,14 @@ protocol LaunchAtLoginBackend: Sendable {
     func unregister() throws
 }
 
-/// The app's own entry in Login Items.
+/// The app's own entry in Login Items. macOS reads an app it never added as not found, so that reads as off.
 struct MainAppLoginItem: LaunchAtLoginBackend {
     func status() async -> LaunchAtLogin.Status {
         await Task.detached(priority: .utility) {
             switch SMAppService.mainApp.status {
             case .enabled: LaunchAtLogin.Status.on
             case .requiresApproval: .needsApproval
-            case .notRegistered: .off
-            case .notFound: .unavailable
+            case .notRegistered, .notFound: .off
             @unknown default: .unavailable
             }
         }.value

@@ -33,7 +33,10 @@ Keeping a closed Mac awake needs root, so this setting uses a launch daemon insi
   `Contents/Library/LaunchDaemons/<app identifier>.lid-helper.plist` (from
   `Packaging/LidHelper-LaunchDaemon.plist`), program `Contents/Helpers/yardlet-lid-helper`. macOS asks the
   person to allow it once in System Settings › General › Login Items & Extensions, which a line under the
-  setting says until then. Turning the setting off unregisters it.
+  setting says until then; a registration macOS refused says "macOS did not add Yardlet's helper". Turning the
+  setting off unregisters it. macOS reads a helper the bundle carries but never registered as not found, as it
+  reads one the bundle does not carry, so whether this copy has a helper is decided from the bundle (below)
+  and not found reads as not registered.
 - **The helper** turns on the system power setting `SleepDisabled` (what `pmset -a disablesleep 1` sets) only
   while a connected Yardlet says over XPC that its tasks are working and the battery and heat allow it. While
   it is on the Mac does not sleep at all, Apple menu › Sleep included. The setting outlives the process and a
@@ -61,6 +64,9 @@ Keeping a closed Mac awake needs root, so this setting uses a launch daemon insi
   Off; while paused, with why it is not.
 - **No helper.** A development run, a build signed ad hoc and a QA copy under another identifier have none
   ("Not available in this copy of Yardlet"); a UI fixture does not offer the setting.
+- **No lid.** A Mac without a built-in lid (Mac mini, Mac Studio, iMac; IOKit reports no `AppleClamshellState`)
+  has nothing to close: neither Settings nor a remote device's host settings offer the setting, and a helper an
+  earlier run registered is unregistered at launch.
 
 ## What stays behind
 

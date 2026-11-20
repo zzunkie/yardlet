@@ -161,12 +161,13 @@ extension LidSleepHelperBackend {
         }.value
     }
 
+    /// macOS reads a helper this bundle carries but never registered as not found, as it reads one the bundle does
+    /// not carry; `init` has already found the property list, so here it is one to register.
     private nonisolated static func status(of service: SMAppService) -> LidSleepHelper.Status {
         switch service.status {
         case .enabled: return .ready
         case .requiresApproval: return .needsApproval
-        case .notRegistered: return .off
-        case .notFound: return .unavailable
+        case .notRegistered, .notFound: return .off
         @unknown default: return .unavailable
         }
     }

@@ -577,8 +577,13 @@ struct NativeHarnessClientApp: App {
                     }
                     if !model.usesVisualFixture, appDelegate.workActivity.lidHelper == nil {
                         let lidHelper = LidSleepHelper.live()
-                        model.lidSleepHelper = lidHelper
-                        appDelegate.workActivity.lidHelper = lidHelper
+                        if Clamshell.hasLid() {
+                            model.lidSleepHelper = lidHelper
+                            appDelegate.workActivity.lidHelper = lidHelper
+                        } else {
+                            // Nothing to close, so no setting; a helper an earlier run registered is removed.
+                            lidHelper.turnOff()
+                        }
                     }
                     if !model.usesVisualFixture, model.launchAtLogin == nil {
                         model.launchAtLogin = .live()

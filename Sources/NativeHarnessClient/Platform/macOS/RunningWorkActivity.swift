@@ -219,13 +219,18 @@ import YardletLidSleep
     }
 }
 
-/// Whether the built-in display's lid is closed (IOKit's power root domain; reads only).
+/// The built-in display's lid (IOKit's power root domain; reads only).
 enum Clamshell {
-    @MainActor static func isClosed() -> Bool {
+    @MainActor static func isClosed() -> Bool { state() as? Bool ?? false }
+
+    /// Whether this Mac has a lid at all: a Mac mini, Mac Studio or iMac has no clamshell state.
+    @MainActor static func hasLid() -> Bool { state() != nil }
+
+    @MainActor private static func state() -> CFTypeRef? {
         let root = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPMrootDomain"))
-        guard root != 0 else { return false }
+        guard root != 0 else { return nil }
         defer { IOObjectRelease(root) }
         return IORegistryEntryCreateCFProperty(root, "AppleClamshellState" as CFString, kCFAllocatorDefault, 0)?
-            .takeRetainedValue() as? Bool ?? false
+            .takeRetainedValue()
     }
 }
