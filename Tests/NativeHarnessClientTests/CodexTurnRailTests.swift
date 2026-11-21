@@ -27,6 +27,20 @@ final class CodexTurnRailTests: XCTestCase {
         }
     }
 
+    /// A click on a mark gives the rail the keyboard, whose arrow keys go on from the turn, and no focus ring is
+    /// drawn around the rail: the turn it marks shows where it is (docs/DESIGN_SYSTEM.md, Focus).
+    func testAClickedRailTakesTheArrowKeysWithoutAFocusRing() throws {
+        var focused: [String] = []
+        let host = makeHost(focusedTurnID: marks[1].id) { focused.append($0) }
+        defer { host.close() }
+        try click(try center(ofMark: 1, in: host), in: host)
+        try press(String(UnicodeScalar(NSDownArrowFunctionKey)!), keyCode: 125, in: host)
+        XCTAssertEqual(focused, [marks[1].id, marks[2].id])
+        func views(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(views) }
+        XCTAssertEqual(views(host.hosting).filter { String(describing: type(of: $0)).contains("FocusRing") }.count, 0,
+                       "The rail draws a focus ring")
+    }
+
     /// The rail in a window the window server has, so clicks and keys reach it: transparent, far off every screen,
     /// and the test app is never activated, so nothing comes to the front or takes the keyboard.
     private func makeHost(focusedTurnID: String?, onFocus: @escaping (String) -> Void)
@@ -73,5 +87,15 @@ final class CodexTurnRailTests: XCTestCase {
             host.window.sendEvent(event)
             host.settle(passes: 3, interval: 0.02)
         }
+    }
+
+    /// A key pressed in the window, sent as the window server sends it.
+    private func press(_ characters: String, keyCode: UInt16, in host: WindowlessRender.Host<some View>) throws {
+        let event = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: host.window.windowNumber, context: nil, characters: characters,
+            charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode))
+        host.window.sendEvent(event)
+        host.settle(passes: 4)
     }
 }

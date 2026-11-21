@@ -113,6 +113,9 @@ struct CodexTurnRail: View, Equatable {
         .frame(maxHeight: .infinity, alignment: .top)
         .padding(.vertical, 12)
         .focusable()
+        // A click on a mark gives the rail the arrow keys, and no ring is drawn around it: the turn it marks
+        // shows where it is, as the sidebar's selection does (docs/DESIGN_SYSTEM.md, Focus).
+        .focusEffectDisabled()
         .focused($isFocused)
         .focusSection()
         .onMacKeyPress(.previousItem) {
