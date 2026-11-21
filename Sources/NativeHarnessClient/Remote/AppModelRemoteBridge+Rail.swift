@@ -79,8 +79,9 @@ extension AppModelRemoteBridge {
         let roots = [session.workspaceURL] + session.additionalRoots.map { URL(filePath: $0) }
         var sources = instructionSources ?? TaskInstructionSources(origin: .detected, paths: [])
         sources.paths = sources.paths.filter { path in roots.contains { RemoteFileReader.relativePath(path, in: $0) != nil } }
+        // The task's place as the host's own rail names it: its project, Chats for a chat, else its folder.
         let content = SessionRailContent.make(
-            session: session, projectName: model.project(for: session)?.name ?? session.workspaceURL.lastPathComponent,
+            session: session, projectName: model.projects.displayName(for: session),
             instructionSources: sources, git: git, options: options, connectors: nil, account: account,
             entries: entries, codexPlan: codex?.thread?.turns.last(where: { $0.plan != nil })?.plan,
             pullRequest: model.pullRequests.pullRequest(for: session.id),
