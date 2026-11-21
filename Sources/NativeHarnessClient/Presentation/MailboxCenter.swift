@@ -58,7 +58,10 @@ final class MailboxCenter {
     @ObservationIgnored private var isWatching = false
     /// Windows that show the mailbox now.
     @ObservationIgnored private var visibleWindows: Set<UUID> = []
-    @ObservationIgnored private let defaults: UserDefaults
+    /// Where each account's history was read up to is kept; nil keeps it in memory only, as another Mac's window does
+    /// over its host's mailbox.
+    @ObservationIgnored private let defaults: UserDefaults?
+    @ObservationIgnored private var memoryCursors: [String: String] = [:]
     /// Told the threads new mail arrived in, newest first, after their inbox was read again.
     @ObservationIgnored var announce: (@MainActor ([MailThreadSummary]) -> Void)?
     /// How often each account is asked what changed (`MailAccountTransport.changes(since:)`).
@@ -67,9 +70,12 @@ final class MailboxCenter {
     static let openedLimit = 30
     static let longestWatchWait: Duration = .seconds(600)
 
-    init(defaults: UserDefaults = .yardlet) {
+    init(defaults: UserDefaults? = .yardlet) {
         self.defaults = defaults
     }
+
+    /// How the account's service is reached, for another Mac's window to read the host's mailbox (§15.38).
+    func transport(for accountID: UUID) -> (any MailAccountTransport)? { transports[accountID] }
 
     /// Whether a window shows the mailbox now.
     var isShown: Bool { !visibleWindows.isEmpty }
@@ -376,7 +382,8 @@ final class MailboxCenter {
         stopWatching()
         setAccounts([])
         hasUnseenMail = false
-        defaults.removeObject(forKey: MailboxPreference.cursorsKey)
+        memoryCursors = [:]
+        defaults?.removeObject(forKey: MailboxPreference.cursorsKey)
     }
 
     /// Asks every account what changed, now and every `watchInterval`, while Yardlet runs. No model
@@ -460,10 +467,15 @@ final class MailboxCenter {
     }
 
     private func cursor(for id: UUID) -> String? {
-        (defaults.dictionary(forKey: MailboxPreference.cursorsKey) as? [String: String])?[id.uuidString]
+        guard let defaults else { return memoryCursors[id.uuidString] }
+        return (defaults.dictionary(forKey: MailboxPreference.cursorsKey) as? [String: String])?[id.uuidString]
     }
 
     private func setCursor(_ cursor: String, for id: UUID) {
+        guard let defaults else {
+            memoryCursors[id.uuidString] = cursor
+            return
+        }
         var cursors = defaults.dictionary(forKey: MailboxPreference.cursorsKey) as? [String: String] ?? [:]
         guard cursors[id.uuidString] != cursor else { return }
         cursors[id.uuidString] = cursor
@@ -533,12 +545,12 @@ final class MailboxCenter {
     }
 
     /// A refused sign-in: a Gmail or Outlook token that no longer refreshes, or a password an IMAP server refused.
-    private static func isSignInRefusal(_ error: Error) -> Bool {
+    static func isSignInRefusal(_ error: Error) -> Bool {
         if case OAuthAPISession.Failure.signInRequired = error { return true }
         return (error as? MailFailure)?.kind == .signInRequired
     }
 
-    private static func failure(_ error: Error) -> MailFailure {
+    static func failure(_ error: Error) -> MailFailure {
         error as? MailFailure ?? MailFailure(kind: .unavailable, message: error.localizedDescription)
     }
 }

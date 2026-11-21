@@ -14,6 +14,8 @@ struct MailSidebar: View {
     let onSelectSection: (ShellSection) -> Void
     let onNewMessage: () -> Void
     let onRefresh: () -> Void
+    /// What the sidebar ends with in place of the account button: another Mac's window names its host there.
+    var footer: AnyView? = nil
     @Environment(\.yardletInterfaceScale) private var scale
 
     var body: some View {
@@ -68,7 +70,10 @@ struct MailSidebar: View {
                 .padding(.bottom, 12)
             }
             Rectangle().fill(ParityTheme.separator).frame(height: 1)
-            SidebarAccountButton(context: accountMenu).padding(.horizontal, 4).padding(.vertical, 5)
+            Group {
+                if let footer { footer } else { SidebarAccountButton(context: accountMenu) }
+            }
+            .padding(.horizontal, 4).padding(.vertical, 5)
         }
         .background(ParityTheme.sidebar)
     }

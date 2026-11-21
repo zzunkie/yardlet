@@ -238,6 +238,14 @@ connector › **Mail (IMAP)**, as Apple Mail and Thunderbird add them.
 - Agents read and draft through the Gmail connector's tools as before (docs/CONNECTORS.md, "Google");
   the mailbox shows the drafts they make.
 
+## From another Mac
+
+Another Mac's window onto this one shows this Mac's mailbox under the same words, read and written through this Mac
+while the mailbox is on here and the other Mac has its Mail and Calendar permission (Settings › Remote › Paired
+devices). The other Mac keeps what it reads in memory only, sends a draft's files up to this Mac to attach, opens links
+in its own browser and tells of no new mail; this Mac tells its own (docs/REMOTE_PROTOCOL.md, "15.38 The host's mail and
+calendar").
+
 ## Code
 
 | Location | Contents |

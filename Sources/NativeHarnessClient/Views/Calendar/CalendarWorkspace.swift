@@ -9,7 +9,7 @@ struct CalendarWorkspace: View {
     @Bindable var window: CalendarWindowState
     let schedules: [ScheduledTask]
     /// The window's title bar with the calendar's own row in it.
-    let titleBar: (AnyView) -> IntegratedTitleBar
+    let titleBar: (AnyView) -> AnyView
     let onOpenSchedule: (UUID) -> Void
     /// "Hand to an agent…": a chat whose draft names the event.
     let onAskAgent: (CalendarEvent, CalendarAccount) -> Void
@@ -129,4 +129,10 @@ extension EnvironmentValues {
         get { self[CalendarCenterKey.self] }
         set { self[CalendarCenterKey.self] = newValue }
     }
+}
+
+extension EnvironmentValues {
+    /// Whether the sidebar's words offer Personal agents: another Mac's window shows its host's tasks, mail and calendar,
+    /// and no personal agents.
+    @Entry var offersPersonalAgents = true
 }
