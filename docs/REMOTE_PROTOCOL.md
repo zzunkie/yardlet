@@ -568,6 +568,7 @@ reason words the refusal by its `code`.
 | `confirmation` | a choice the Mac asks to confirm, sent without `confirmed` (§15.16) |
 | `terminal` | the device's Terminal permission is off: a terminal, or a choice that lets an agent act without asking (§15.28) |
 | `fileWrites` | the device's Write files permission is off: a Review change (§15.26), a save from the Files panel (§15.27) or a file restore (§15.31) |
+| `mailCalendar` | the device's Mail and Calendar permission is off: a call of the host's calendar or mailbox (§15.38) |
 | `fileChanged` | the file is no longer the one the client read: it changed on the Mac since (§15.27) |
 | `account` | an account the Mac cannot start or move the task on now (§15.16, §15.33) |
 | `worktree` | a new worktree asked for outside a Git repository (§15.16, §15.35) |
@@ -2100,7 +2101,7 @@ saved or discarded.
 ### 15.28 Per-device permissions
 
 The host's saved device entry may carry `permissions: {"terminal": false, "fileWrites": false,
-"settings": false}`. An absent object or absent member means false. Existing pairings retain their keys,
+"settings": false, "mailCalendar": false}`. An absent object or absent member means false. Existing pairings retain their keys,
 identity and history; pairing a new device does not grant any of these permissions. Old clients need no changes.
 
 Only the person at this Mac can change them, in Settings › Remote › Paired devices. There is no remote request
@@ -2147,9 +2148,9 @@ refusals are coalesced per device, request type and result, independent of the u
 transition clears that device's refusal window so its first newly refused operation is recorded.
 
 These permissions authorize terminal sessions (§15.29), direct file writes (Review changes, `writeReview`, §15.26;
-the Files panel's save, `writeFile`, §15.27; and a file restore, `fileRewind`'s `restore`, §15.31) and host
-settings (§15.36, §15.37). A request refused for Terminal or Write files carries the reason `terminal` or
-`fileWrites` (§8). Credentials, vault entries, sign-in and remote device management remain on the host.
+the Files panel's save, `writeFile`, §15.27; and a file restore, `fileRewind`'s `restore`, §15.31), host
+settings (§15.36, §15.37) and the host's mail and calendar (`mailCalendar`, §15.38). A request refused for Terminal,
+Write files or Mail and Calendar carries the reason `terminal`, `fileWrites` or `mailCalendar` (§8). Credentials, vault entries, sign-in and remote device management remain on the host.
 
 `terminal` also guards every choice that lets an agent act without asking, since such an agent can run what a shell
 runs. Without it the host treats a request's `confirmed` as absent for `createTask`, a suggestion's Start
@@ -2726,6 +2727,65 @@ leaves those sections out of a remote host's Settings. Phones may ignore the fla
 - `hostAccountsChanged`: sent to connections watching `hostAccounts` when the host's accounts,
   runtime selections, connectors, related preferences or the device's `settings` permission change.
 
+### 15.38 The host's mail and calendar
+
+The optional snapshot flags `hostCalendar: true` and `hostMail: true` advertise the requests and event below, with
+which a remote desktop window shows the host's own calendar and mailbox: the accounts they hold there
+(docs/CALENDAR.md, "Accounts"; docs/MAILBOX.md, "Accounts"), read through the host's own transports, while each is on.
+Phones and older clients may ignore the flags and the event.
+
+- `mailCalendarState` (`watching?: bool`, default true) answers `mailCalendarState: {calendar, mailbox, permitted}`:
+  whether the host's calendar and mailbox are turned on there, and whether this device has its `mailCalendar`
+  permission (§15.28). It names no account, address or event, so any paired device reads it. While a connection
+  watches, the host sends `{"event": "mailCalendarChanged"}` when either is turned on or off, when their accounts
+  change, and when the device's `mailCalendar` permission changes; `watching: false` ends the watch.
+- `calendar` (`action`, optional `data`) is one call of the host's calendar. `data` is base64 of the call's JSON
+  arguments, at most 1 MiB, and a successful answer carries the call's JSON result the same way in `data`. The JSON
+  uses the calendar's own Codable shapes (`CalendarAccount`, `CalendarInfo`, `CalendarEvent`), which both Macs build
+  from the same code. Every `calendar` call requires the device's `mailCalendar` permission; without it the request is
+  refused with `notAllowed` and reason `mailCalendar`.
+
+| `action` | `data` | Answer |
+|---|---|---|
+| `accounts` | none | `{accounts, choices, showsSchedules}`: the host's calendar accounts, and which calendars the person showed or hid there |
+| `calendars` | `{accountID}` | the account's calendars |
+| `events` | `{accountID, calendar, from, to}` | the calendar's events overlapping the range, which spans at most 62 days |
+| `respond` | `{accountID, event, response}` | `{}` once the host's calendar answered the invitation on its service (`accepted`, `declined` or `tentative`) |
+
+- The host refuses an account its calendar does not hold (`notFound`), a calendar or event of another account, a
+  range out of bounds, an answer for an account whose service cannot answer invitations (`badRequest`), and any call
+  while its calendar is off (`unavailable`). A service that refuses the account's sign-in answers `unavailable` with
+  reason `signIn`; any other failure of the service answers `unavailable` with reason `failed` and the host's own words.
+- `respond` is a command (§4.4): the audit log records its kind, device, result and the action, never an event, an
+  address or a title. Reads are not written to the audit log; a refused permission is, as every refusal is.
+- `mail` (`action`, optional `data`, and for `saveDraft` optional `files`) is one call of the host's mailbox, in the
+  same form as `calendar`, with the mailbox's own Codable shapes (`MailAccount`, `MailFolder`, `MailPage`,
+  `MailThread`, `MailThreadChange`, `MailChanges`) and the same permission, refusals and reasons. Each action is one of
+  the mailbox's own requests of a service (docs/MAILBOX.md):
+
+| `action` | `data` | Answer |
+|---|---|---|
+| `accounts` | none | `{accounts}`: the host's mail accounts |
+| `folders` | `{accountID}` | the account's folders and labels |
+| `inbox`, `list`, `search` | `{accountID, pageToken?}` with `folder` for `list` and `query` for `search` | a page of threads and the next page's token |
+| `thread` | `{accountID, threadID}` | the thread with its messages |
+| `change` | `{accountID, threadID, change}` | `{}` once read, starred, archived, not spam or out of the Trash on the service |
+| `saveDraft` | `{accountID, composition}` | `{value}`: the draft's ID on the service |
+| `sendDraft`, `discardDraft` | `{accountID, draftID}` | `{}` |
+| `draftID` | `{accountID, messageID}` | `{value}`: the draft a thread's draft message is |
+| `changeCursor`, `changes` | `{accountID}`, or with `cursor` | `{value}` where the history stands now, or what arrived after `cursor` |
+
+- A draft's `composition` is what is written without its files: recipients, subject, words, the thread and message it
+  answers or forwards, and whether the draft's own files stay. Its new files are this device's finished uploads (§15.20),
+  named in `files` by upload ID, which the host attaches as the upload's own file under its own name; no path of the
+  client or the host travels. They are claimed for the call and released once it succeeds.
+- `change`, `saveDraft`, `sendDraft` and `discardDraft` are commands, audited by kind and action only, never an
+  address, a subject or a word of a message.
+- The client keeps what it reads in memory only, as the host's own calendar and mailbox do. The calendars the person
+  shows or hides in its window start from the host's choices and stay in that window, and where each mail account's
+  history was read up to stays in memory. The window follows new mail as the host's mailbox does, through `changes`,
+  to mark the sidebar's Mail and the home's unread mail, and posts no notification of it: the host tells its own.
+
 ## 16. Push notifications
 
 The Mac pushes to a device that registered (§15.6) and **has no open v2 connection**, for these
@@ -2890,7 +2950,16 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   the host. Without the `settings` permission those controls show disabled with a note naming the host's
   Settings › Remote › Paired devices. Signing in, adding, removing or sharing accounts, choosing a custom
   runtime file, and connecting or editing connectors stay on the host. Importing schedules from other apps and
-  the other side panels also stay on the host.
+  the other side panels also stay on the host. With `hostCalendar` (§15.38), the sidebar's words under Scheduled
+  tasks offer Calendar while the host's calendar is on (and never Personal agents): the local calendar's sidebar,
+  days and event over the host's accounts, the host's scheduled runs over the days, Accept and Decline answered
+  through the host, Hand to an agent… starting a chat on the host, and a sign-in to renew opening the host's
+  Settings › Connectors; the home's desk takes today from it. Without the device's `mailCalendar` permission the
+  calendar says where on the host to allow it. What it reads stays in memory and goes when the window closes. With
+  `hostMail` (§15.38), the words offer Mail too while the host's mailbox is on: the local mailbox's sidebar, threads
+  and writing over the host's accounts (a thread opened is marked read on the host's service; a draft's files are sent
+  up as uploads), Ask an agent starting a chat on the host, the service's web mail and a message's links opening in this
+  Mac's browser, and the home's desk counting the host's unread mail. It posts no notification of new mail.
 - **Paths:** as §11.4. While a host's window is open it browses Bonjour (§11.3) for the instance with the
   discovery id of the host key it saved, and resolves it to the host's name and port (`Name.local:47616`; the
   system resolves the name when connecting). Those addresses go first, never saved, then the direct addresses the

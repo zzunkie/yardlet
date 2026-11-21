@@ -342,6 +342,7 @@ final class RemoteSettingsPane {
         case .terminal: L10n.string("Terminal")
         case .fileWrites: L10n.string("Write files")
         case .settings: L10n.string("Change settings")
+        case .mailCalendar: L10n.string("Mail and Calendar")
         }
     }
 
@@ -350,6 +351,7 @@ final class RemoteSettingsPane {
         case .terminal: L10n.string("Run shell commands as the host user, and let agents act without asking.")
         case .fileWrites: L10n.string("Save and discard changes in the task's workspace.")
         case .settings: L10n.string("Change Yardlet settings on this computer.")
+        case .mailCalendar: L10n.string("Read and send mail, and read the calendar and answer invitations, with this computer's accounts.")
         }
     }
 
