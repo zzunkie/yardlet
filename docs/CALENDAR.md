@@ -158,6 +158,12 @@ calendar while the calendar is on.
 - The axis is drawn again only when what it shows changes, to the minute, so the time line moving draws no other part
   of the desk.
 
+## From another Mac
+
+Another Mac's window onto this one shows this Mac's calendar under the same words, read through this Mac while the
+calendar is on here and the other Mac has its Mail and Calendar permission (Settings › Remote › Paired devices). The
+other Mac keeps what it reads in memory only (docs/REMOTE_PROTOCOL.md, "15.38 The host's mail and calendar").
+
 ## Not included
 
 - Creating, moving or editing events on the screen or the desk. Agents do these with the calendar connectors' tools

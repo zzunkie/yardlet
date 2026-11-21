@@ -4373,3 +4373,9 @@
 "Find your Macs and connect from another device." = "Find your Macs and connect from another device.";
 "Check that both Macs are signed in to the same Yardlet account." = "Check that both Macs are signed in to the same Yardlet account.";
 "Couldn’t access the connection key. Unlock your keychain and try again." = "Couldn’t access the connection key. Unlock your keychain and try again.";
+"Mail and Calendar" = "Mail and Calendar";
+"Read and send mail, and read the calendar and answer invitations, with this Mac's accounts." = "Read and send mail, and read the calendar and answer invitations, with this Mac's accounts.";
+"Read and send mail, and read the calendar and answer invitations, with this computer's accounts." = "Read and send mail, and read the calendar and answer invitations, with this computer's accounts.";
+"To read mail and calendar from here, allow Mail and Calendar for this device in Settings › Remote › Paired devices on %@." = "To read mail and calendar from here, allow Mail and Calendar for this device in Settings › Remote › Paired devices on %@.";
+"Sign in to this account again in %@'s Settings › Connectors." = "Sign in to this account again in %@'s Settings › Connectors.";
+"The calendar's answer could not be read." = "The calendar's answer could not be read.";

@@ -76,6 +76,10 @@ final class AppModelRemoteBridge: RemoteBridge {
     var isObservingHostAccounts = false
     var answeredHostAccounts: RemoteAccountsState?
     var hostAccountsDefaultsObserver: NSObjectProtocol?
+    /// A device follows the host's mail and calendar (§15.38): what it was told last, and whether a read is watched.
+    var watchesMailCalendar = false
+    var isObservingMailCalendar = false
+    var answeredMailCalendar: MailCalendarSignature?
     var runtimeVersionNotes: [URL: (note: String, verified: Bool)] = [:]
     /// When a paired device last made the host reread each harness's accounts (§15.37).
     var hostAccountsRefreshedAt: [HarnessKind: Date] = [:]
@@ -125,6 +129,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         snapshot.tabLists = browser.isAvailable
         snapshot.hostSettings = true
         snapshot.hostAccounts = true
+        snapshot.hostCalendar = true
         return snapshot
     }
 

@@ -36,6 +36,8 @@ public enum RemoteBridgeChange: Equatable, Sendable {
     case hostSettings
     /// The host's Account Center, harness runtimes or connectors changed (§15.37).
     case hostAccounts
+    /// The host's mail or calendar was turned on or off, or their accounts changed (§15.38).
+    case mailCalendar
 }
 
 /// What a command asks of the Mac. `mayElevate`: the device has its Terminal permission (§15.28), without which a
@@ -242,7 +244,12 @@ public protocol RemoteBridge: AnyObject, Sendable {
                         enabled: Bool?) async -> Result<RemoteAccountsState, RemoteError>
     func setHostHarnessRuntime(harness: String, choiceID: String) async -> Result<RemoteAccountsState, RemoteError>
     func setHostConnector(id: String, enabled: Bool) async -> Result<RemoteAccountsState, RemoteError>
-
+    /// Whether the host's mail and calendar are on (§15.38); `permitted` is the server's to fill.
+    func mailCalendarState() async -> RemoteMailCalendarState
+    func setWatchingMailCalendar(_ watching: Bool) async
+    /// One call of the host's calendar, its JSON arguments in and its JSON answer out (§15.38). A bridge that answers
+    /// it says so in its snapshot (`hostCalendar`).
+    func calendar(action: String, data: Data?) async -> Result<Data, RemoteError>
 }
 
 extension RemoteBridge {
@@ -252,6 +259,9 @@ extension RemoteBridge {
     public func saveHostInstructions(text: String) async -> Result<RemoteHostSettings, RemoteError> { .failure(RemoteError(.unavailable)) }
     public func hostCLIUpdate(action: String, harness: String?) async -> Result<RemoteHostSettings, RemoteError> { .failure(RemoteError(.unavailable)) }
     public func setWatchingHostAccounts(_ watching: Bool) async {}
+    public func mailCalendarState() async -> RemoteMailCalendarState { RemoteMailCalendarState() }
+    public func setWatchingMailCalendar(_ watching: Bool) async {}
+    public func calendar(action: String, data: Data?) async -> Result<Data, RemoteError> { .failure(RemoteError(.unavailable)) }
     public func hostAccounts(refreshHarnesses: [String]) async -> Result<RemoteAccountsState, RemoteError> {
         .failure(RemoteError(.unavailable))
     }
@@ -473,6 +483,8 @@ public actor RemoteServer {
         /// It watches `hostSettings`, so it is told when the host's Settings sheet values change (§15.36).
         var followsHostSettings = false
         var followsHostAccounts = false
+        /// It watches `mailCalendarState`, so it is told when the host's mail or calendar change (§15.38).
+        var followsMailCalendar = false
         /// The file it read last (the path the Mac read) and where its next part starts (§15.22): a read that goes on
         /// from there is not written to the audit log again.
         var fileRead: FileRead?
@@ -1139,6 +1151,9 @@ public actor RemoteServer {
         for (id, connection) in connections where connection.deviceID == deviceID && connection.followsHostAccounts {
             send(accountsEvent, to: id)
         }
+        for (id, connection) in connections where connection.deviceID == deviceID && connection.followsMailCalendar {
+            send(RemoteEvent(.mailCalendarChanged), to: id)
+        }
         for handler in permissionObservers.values { handler(deviceID, effective) }
     }
 
@@ -1223,8 +1238,13 @@ public actor RemoteServer {
         guard permissionsLoaded, permissionRequestsEnabled, let connection = connections[id], connection.isProven,
               let deviceID = connection.deviceID, !revokedDeviceIDs.contains(deviceID),
               !removingDeviceIDs.contains(deviceID), effectivePermissions[deviceID]?[permission] == true else {
-            return RemoteError(.notAllowed, reason: permission == .terminal ? .terminal
-                               : permission == .fileWrites ? .fileWrites : nil)
+            let reason: RemoteRefusal? = switch permission {
+            case .terminal: .terminal
+            case .fileWrites: .fileWrites
+            case .mailCalendar: .mailCalendar
+            case .settings: nil
+            }
+            return RemoteError(.notAllowed, reason: reason)
         }
         return nil
     }
@@ -2086,6 +2106,35 @@ public actor RemoteServer {
                 case let .failure(error): return error
                 }
             } answer: { $0.hostAccountsState = state }
+        case let .mailCalendarState(watching):
+            connections[id]?.followsMailCalendar = watching
+            await updateWatched()
+            var response = RemoteResponse(re: envelope.id)
+            if watching {
+                var state = await bridge.mailCalendarState()
+                state.permitted = permissionError(.mailCalendar, on: id) == nil
+                response.mailCalendarState = state
+            }
+            respond(response, to: id)
+        case let .calendar(action, data):
+            if request.isCommand {
+                var answer: Data?
+                await command(envelope.id, request: request, on: id) {
+                    switch await self.bridge.calendar(action: action, data: data) {
+                    case let .success(data): answer = data; return nil
+                    case let .failure(error): return error
+                    }
+                } answer: { $0.data = answer }
+            } else {
+                switch await bridge.calendar(action: action, data: data) {
+                case let .success(data):
+                    var response = RemoteResponse(re: envelope.id)
+                    response.data = data
+                    respond(response, to: id)
+                case let .failure(error):
+                    respond(.failure(envelope.id, error), to: id)
+                }
+            }
         case let .uploadFile(part):
             guard let deviceID = connection.deviceID else { return }
             switch uploads.receive(part, from: deviceID, now: now()) {
@@ -2140,6 +2189,7 @@ public actor RemoteServer {
             response.tabFramesInFlight = published?.browserTabs == true ? true : nil
             response.hostSettings = published?.hostSettings == true ? true : nil
             response.hostAccounts = published?.hostAccounts == true ? true : nil
+            response.hostCalendar = published?.hostCalendar == true ? true : nil
             response.suggestionOptions = published?.suggestionOptions == true ? true : nil
             response.serverTime = RemoteJSON.milliseconds(now())
             respond(response, to: id)
@@ -2464,6 +2514,7 @@ public actor RemoteServer {
         await bridge.setWatchedRailTasks(Set(connections.values.flatMap(\.followsRail)))
         await bridge.setWatchesHostSettings(connections.values.contains(where: \.followsHostSettings))
         await bridge.setWatchingHostAccounts(connections.values.contains(where: \.followsHostAccounts))
+        await bridge.setWatchingMailCalendar(connections.values.contains(where: \.followsMailCalendar))
         guard tasks != watched else { return }
         watched = tasks
         await bridge.setWatchedTasks(tasks)
@@ -2531,6 +2582,11 @@ public actor RemoteServer {
         case .hostAccounts:
             let event = RemoteEvent(.hostAccountsChanged)
             for (id, connection) in connections where connection.followsHostAccounts {
+                send(event, to: id)
+            }
+        case .mailCalendar:
+            let event = RemoteEvent(.mailCalendarChanged)
+            for (id, connection) in connections where connection.followsMailCalendar {
                 send(event, to: id)
             }
         }
