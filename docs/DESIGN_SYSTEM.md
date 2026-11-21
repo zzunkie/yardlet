@@ -93,7 +93,7 @@ rounded to 8-bit notation for reading. The contrast figures use the colors resol
 | Fill / `subtleFill`, `hoverFill`, `selectedFill` | Primary × 3.5% / 6.5% / 9.5% | Primary × 3.5% / 6.5% / 9.5% | Rest, hover, selection |
 | Request panel / `requestPanelFill` | Elevated + primary × 4.5% (drawn ≈ #F5F5F5) | Elevated + primary × 4.5% (drawn ≈ #363636) | A waiting request's panel, a shade off the canvas and the composer |
 | Status / proposed `status.success`, `warning`, `danger` | Native system green/orange/red | Native system green/orange/red | Alias scattered status colors; always pair with text or an icon |
-| Focus / proposed `focus` | Native focus indicator | Native focus indicator | Keep native focus rings; never substitute a faint border. A waiting request's panel draws none: its question shows the focused choice by the selection fill, a field its caret, an answer button the key that gives it |
+| Focus / proposed `focus` | Native focus indicator | Native focus indicator | Keep native focus rings; never substitute a faint border. A waiting request's panel draws none: its question shows the focused choice by the selection fill, a field its caret, an answer button the key that gives it. Nor does the turn rail beside a conversation, which a click on a mark gives the arrow keys: the turn it marks shows where it is |
 
 Secondary is not disabled. Essential instructions use primary or secondary text, never tertiary text
 or a status color alone. Check normal text against 4.5:1 and essential control indicators against 3:1

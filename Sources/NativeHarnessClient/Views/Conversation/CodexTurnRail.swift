@@ -84,7 +84,8 @@ struct CodexTurnRail: View, Equatable {
 
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 4) {
+                    // The marks' places meet (`Mark`), so a click between two lines goes to one of them.
+                    LazyVStack(spacing: 0) {
                         ForEach(Array(turns.enumerated()), id: \.element.id) { index, turn in
                             Mark(number: index + 1, count: turns.count, status: turn.status,
                                  isFocused: index == focusedIndex) { [focusAction] in
@@ -112,6 +113,9 @@ struct CodexTurnRail: View, Equatable {
         .frame(maxHeight: .infinity, alignment: .top)
         .padding(.vertical, 12)
         .focusable()
+        // A click on a mark gives the rail the arrow keys, and no ring is drawn around it: the turn it marks
+        // shows where it is, as the sidebar's selection does (docs/DESIGN_SYSTEM.md, Focus).
+        .focusEffectDisabled()
         .focused($isFocused)
         .focusSection()
         .onMacKeyPress(.previousItem) {
@@ -144,7 +148,10 @@ struct CodexTurnRail: View, Equatable {
                 Capsule()
                     .fill(isFocused ? Color.primary.opacity(0.72) : Color.secondary.opacity(0.38))
                     .frame(width: isFocused ? 7 : 5, height: isFocused ? 2 : 1)
-                    .frame(width: 18, height: 7)
+                    // The turn's whole place takes the click, not the short line alone: the rail's width, and
+                    // the 11 pt from one mark to the next, which the marks were drawn apart by already.
+                    .frame(width: 24, height: 11)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .parityPointer()
