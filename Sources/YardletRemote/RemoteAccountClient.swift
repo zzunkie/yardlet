@@ -6,7 +6,8 @@ import FoundationNetworking
 
 /// The relay's optional accounts (docs/REMOTE_PROTOCOL.md §14.4), from an app's side: the sign-in
 /// address with PKCE, exchanging the one-time code for a token, and listing, registering and removing
-/// Macs, and enrolling a device on a Mac on the account. Task content stays on the host.
+/// Macs, and enrolling a device on a Mac on the account. Task content stays on the host. Also a phone's
+/// push targets in a Mac's room (§14.5).
 public struct RemoteAccountClient: Sendable {
     public struct Account: Codable, Equatable, Sendable {
         public var id: String
@@ -135,12 +136,33 @@ public struct RemoteAccountClient: Sendable {
         try await send("v1/auth/logout", method: "POST", token: token)
     }
 
+    // MARK: - Push targets
+
+    /// Binds this phone's push token to the Mac's room (§14.5): the target `held` names when the room still holds it
+    /// for the token, or nil when the relay sent the target to the token in a push instead. The phone gives the target
+    /// to that Mac; the relay pushes to it for that room alone, and the Mac never holds the token.
+    public func registerPushTarget(room: String, provider: String, token: String, held: String?) async throws -> String? {
+        struct Answer: Decodable { var target: String? }
+        var body = ["provider": provider, "token": token]
+        body["target"] = held
+        return try await request("v1/rooms/\(room)/push-targets", method: "POST", body: body, as: Answer.self).target
+    }
+
+    /// Ends a target this phone registered, so its Mac can no longer push to it (§14.5).
+    public func removePushTarget(room: String, target: String) async throws {
+        try await send("v1/rooms/\(room)/push-targets", method: "DELETE", body: ["target": target])
+    }
+
     // MARK: - HTTP
 
-    private func send(_ path: String, method: String, token: String) async throws {
+    private func send(_ path: String, method: String, token: String? = nil, body: [String: String]? = nil) async throws {
         var request = URLRequest(url: baseURL.appending(path: path))
         request.httpMethod = method
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        }
         let (data, response) = try await session.data(for: request)
         try Self.check(data, response)
     }

@@ -10,6 +10,10 @@ export type PushError = "unregistered" | "invalid" | "rateLimited" | "unavailabl
 export type PushProvider = "fcm" | "apns" | "apns-sandbox";
 const PROVIDERS: readonly string[] = ["fcm", "apns", "apns-sandbox"] satisfies PushProvider[];
 
+export function isPushProvider(value: unknown): value is PushProvider {
+  return typeof value === "string" && PROVIDERS.includes(value);
+}
+
 export interface Push {
   provider: PushProvider;
   to: string;
@@ -45,14 +49,14 @@ export function fcmCredentials(env: Env): FcmCredentials | null {
 /** Reads a relay `push` message; null when a field is missing or wrong. No `provider` means FCM. */
 export function parsePush(message: Record<string, unknown>): Push | null {
   const { provider = "fcm", to, urgent, collapse, ttl, data } = message;
-  if (typeof provider !== "string" || !PROVIDERS.includes(provider)) return null;
+  if (!isPushProvider(provider)) return null;
   if (typeof to !== "string" || to === "") return null;
   if (urgent !== undefined && typeof urgent !== "boolean") return null;
   if (collapse !== undefined && (typeof collapse !== "string" || encoder.encode(collapse).length > 64)) return null;
   if (ttl !== undefined && (typeof ttl !== "number" || !Number.isInteger(ttl) || ttl < 0)) return null;
   if (typeof data !== "object" || data === null || Array.isArray(data)) return null;
   if (!Object.values(data).every((value) => typeof value === "string")) return null;
-  return { provider: provider as PushProvider, to, urgent: urgent === true, collapse, ttl, data: data as Record<string, string> };
+  return { provider, to, urgent: urgent === true, collapse, ttl, data: data as Record<string, string> };
 }
 
 // One access token per isolate, reused until shortly before it expires.

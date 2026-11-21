@@ -95,6 +95,23 @@ export async function openPhone(room: string, mac: Peer): Promise<{ phone: Peer;
   return { phone, c: open.c as number };
 }
 
+/** Asks to bind a push token to `room` as a phone does (§14.5), naming the target it holds, if any. */
+export function registerTarget(room: string, provider: string, token: string, held?: string): Promise<Response> {
+  return exports.default.fetch(`${RELAY}/v1/rooms/${room}/push-targets`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ provider, token, target: held }),
+  });
+}
+
+export function removeTarget(room: string, target: string): Promise<Response> {
+  return exports.default.fetch(`${RELAY}/v1/rooms/${room}/push-targets`, {
+    method: "DELETE",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ target }),
+  });
+}
+
 export function macFrame(c: number, payload: Uint8Array): Uint8Array {
   const frame = new Uint8Array(4 + payload.length);
   new DataView(frame.buffer).setUint32(0, c);
