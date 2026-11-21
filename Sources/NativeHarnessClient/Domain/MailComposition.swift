@@ -3,7 +3,7 @@ import Foundation
 /// A message the person writes in the mailbox: new, a reply, a reply to all, or a forward. It is kept in
 /// memory while it is written and saved only as a draft on the account's service.
 struct MailComposition: Equatable, Sendable {
-    enum Kind: Hashable, Sendable { case new, reply, replyAll, forward }
+    enum Kind: String, Codable, Hashable, Sendable { case new, reply, replyAll, forward }
 
     /// One message being written, from its start to its last save.
     let id = UUID()

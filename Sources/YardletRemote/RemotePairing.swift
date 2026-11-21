@@ -171,26 +171,31 @@ public struct RemotePushRegistration: Codable, Equatable, Sendable {
 /// Additional host access is granted only in this Mac's paired-device settings.
 public enum RemoteDevicePermission: String, Codable, CaseIterable, Hashable, Sendable {
     case terminal, fileWrites, settings
+    /// The host's mail and calendar, read and acted on from the remote window (§15.38).
+    case mailCalendar
 }
 
 public struct RemoteDevicePermissions: Codable, Equatable, Sendable {
     public var terminal: Bool
     public var fileWrites: Bool
     public var settings: Bool
+    public var mailCalendar: Bool
 
-    public init(terminal: Bool = false, fileWrites: Bool = false, settings: Bool = false) {
+    public init(terminal: Bool = false, fileWrites: Bool = false, settings: Bool = false, mailCalendar: Bool = false) {
         self.terminal = terminal
         self.fileWrites = fileWrites
         self.settings = settings
+        self.mailCalendar = mailCalendar
     }
 
-    private enum CodingKeys: String, CodingKey { case terminal, fileWrites, settings }
+    private enum CodingKeys: String, CodingKey { case terminal, fileWrites, settings, mailCalendar }
 
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         terminal = try values.decodeIfPresent(Bool.self, forKey: .terminal) ?? false
         fileWrites = try values.decodeIfPresent(Bool.self, forKey: .fileWrites) ?? false
         settings = try values.decodeIfPresent(Bool.self, forKey: .settings) ?? false
+        mailCalendar = try values.decodeIfPresent(Bool.self, forKey: .mailCalendar) ?? false
     }
 
     public subscript(_ permission: RemoteDevicePermission) -> Bool {
@@ -199,6 +204,7 @@ public struct RemoteDevicePermissions: Codable, Equatable, Sendable {
             case .terminal: terminal
             case .fileWrites: fileWrites
             case .settings: settings
+            case .mailCalendar: mailCalendar
             }
         }
         set {
@@ -206,6 +212,7 @@ public struct RemoteDevicePermissions: Codable, Equatable, Sendable {
             case .terminal: terminal = newValue
             case .fileWrites: fileWrites = newValue
             case .settings: settings = newValue
+            case .mailCalendar: mailCalendar = newValue
             }
         }
     }
