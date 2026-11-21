@@ -39,7 +39,7 @@ final class PhoneAccount {
         if account != nil, token == nil { keep(nil) }
     }
 
-    private static var configuredRelay: URL? {
+    static var configuredRelay: URL? {
         #if DEBUG
         if let text = UserDefaults.standard.string(forKey: "relayURL") { return URL(string: text) }
         #endif

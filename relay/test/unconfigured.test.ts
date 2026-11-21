@@ -1,6 +1,7 @@
 import { exports } from "cloudflare:workers";
 import { afterEach, expect, it, vi } from "vitest";
-import { RELAY, openMac } from "./helpers";
+import { rawFcmTokensUntil } from "../src/room";
+import { RELAY, openMac, registerTarget } from "./helpers";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -8,11 +9,15 @@ afterEach(() => {
 
 it("answers notConfigured without FCM or APNs credentials", async () => {
   const fetch = vi.spyOn(globalThis, "fetch");
-  const { mac } = await openMac();
+  const { mac, key } = await openMac();
+  for (const [provider, token] of [["fcm", "registration-token-1"], ["apns", "00fe"]]) {
+    const response = await registerTarget(key.room, provider, token);
+    expect(response.status).toBe(501);
+    expect(await response.json()).toEqual({ error: "notConfigured" });
+  }
+  vi.spyOn(Date, "now").mockReturnValue(rawFcmTokensUntil - 1);
   mac.ws.send(JSON.stringify({ t: "push", id: "p1", to: "registration-token-1", urgent: true, data: { v: "1" } }));
   expect(await mac.json()).toEqual({ t: "pushed", id: "p1", ok: false, error: "notConfigured" });
-  mac.ws.send(JSON.stringify({ t: "push", id: "p2", provider: "apns", to: "00fe", urgent: true, data: { v: "1" } }));
-  expect(await mac.json()).toEqual({ t: "pushed", id: "p2", ok: false, error: "notConfigured" });
   expect(fetch).not.toHaveBeenCalled();
 });
 
