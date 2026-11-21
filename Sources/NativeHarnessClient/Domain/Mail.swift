@@ -19,7 +19,7 @@ enum MailProvider: String, Codable, Hashable, Sendable {
 
 /// One mailbox shown in the mailbox: an account Yardlet already signs in to for its connectors. `id` is
 /// that sign-in's ID (`ConnectorRecord.credentialID`), so the mailbox and the agents' tools share it.
-struct MailAccount: Identifiable, Hashable, Sendable {
+struct MailAccount: Identifiable, Codable, Hashable, Sendable {
     let id: UUID
     let address: String
     let provider: MailProvider
@@ -37,7 +37,7 @@ struct MailAccount: Identifiable, Hashable, Sendable {
     }
 }
 
-struct MailAddress: Hashable, Sendable {
+struct MailAddress: Codable, Hashable, Sendable {
     var name: String?
     var address: String
 
@@ -53,7 +53,7 @@ struct MailAddress: Hashable, Sendable {
 
 /// What a folder is for, as the service marks it: the mailbox orders, names and treats each role alike
 /// across services.
-enum MailFolderRole: Int, Comparable, Hashable, Sendable {
+enum MailFolderRole: Int, Codable, Comparable, Hashable, Sendable {
     case inbox, starred, sent, drafts, archive, spam, trash, label
 
     static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
@@ -63,7 +63,7 @@ enum MailFolderRole: Int, Comparable, Hashable, Sendable {
 }
 
 /// A folder or label of an account, as its service gives it. Labels may nest (`Clients/Quotes`).
-struct MailFolder: Identifiable, Hashable, Sendable {
+struct MailFolder: Identifiable, Codable, Hashable, Sendable {
     /// The service's ID: a Gmail label ID, a Graph folder ID or an IMAP path.
     let id: String
     var name: String
@@ -92,7 +92,7 @@ struct MailThreadKey: Hashable, Codable, Sendable {
 }
 
 /// A line of the mailbox's list: what the service's list answer gives, without bodies.
-struct MailThreadSummary: Identifiable, Hashable, Sendable {
+struct MailThreadSummary: Identifiable, Codable, Hashable, Sendable {
     let id: MailThreadKey
     var subject: String
     /// The thread's senders, newest first, each once.
@@ -107,7 +107,7 @@ struct MailThreadSummary: Identifiable, Hashable, Sendable {
     var hasDraft: Bool
 }
 
-struct MailAttachment: Identifiable, Hashable, Sendable {
+struct MailAttachment: Identifiable, Codable, Hashable, Sendable {
     let id: String
     var name: String
     var size: Int
@@ -115,7 +115,7 @@ struct MailAttachment: Identifiable, Hashable, Sendable {
 }
 
 /// One message of an opened thread. Bodies are read only when a thread is opened and kept in memory.
-struct MailMessage: Identifiable, Hashable, Sendable {
+struct MailMessage: Identifiable, Codable, Hashable, Sendable {
     let id: String
     var from: MailAddress
     var to: [MailAddress]
@@ -137,7 +137,7 @@ struct MailMessage: Identifiable, Hashable, Sendable {
     var replyTo: [MailAddress] = []
 }
 
-struct MailThread: Hashable, Sendable {
+struct MailThread: Codable, Hashable, Sendable {
     var summary: MailThreadSummary
     /// Oldest first, drafts where the service keeps them.
     var messages: [MailMessage]
@@ -146,13 +146,13 @@ struct MailThread: Hashable, Sendable {
 }
 
 /// One page of a list or a search.
-struct MailPage: Sendable {
+struct MailPage: Codable, Sendable {
     var threads: [MailThreadSummary]
     var nextPageToken: String?
 }
 
 /// What changes the mailbox makes to a thread on the service.
-enum MailThreadChange: Hashable, Sendable {
+enum MailThreadChange: Codable, Hashable, Sendable {
     case read(Bool)
     case starred(Bool)
     /// Out of the inbox, kept in the account.
@@ -164,7 +164,7 @@ enum MailThreadChange: Hashable, Sendable {
 }
 
 /// What changed in an account after a cursor (`MailAccountTransport.changes(since:)`).
-struct MailChanges: Equatable, Sendable {
+struct MailChanges: Codable, Equatable, Sendable {
     /// Where to ask from next time.
     var cursor: String
     /// Whether the inbox changed at all, so its list is read again.

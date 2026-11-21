@@ -5629,6 +5629,7 @@ final class AppModel {
         stopFollowingAccountMoves()
         // Before their runtimes close: the subagents the quit cuts off, kept for their callers.
         interruptAgentRunsForQuit()
+        await sessionTools.keptRunWriter.flushed()
         await endSideChatsForQuit()
         // The quit has written down what was still in line; nothing more begins, and the timers
         // that would continue a task stop.

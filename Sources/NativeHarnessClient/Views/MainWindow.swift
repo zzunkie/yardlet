@@ -2135,7 +2135,7 @@ struct MainWindow: View {
                                                                           content: AnyView(titleBar(for: nil))))
                     } else if sidebarSection == .calendar {
                         CalendarWorkspace(center: model.calendar, window: calendarWindow, schedules: model.scheduledTasks.schedules,
-                                          titleBar: { titleBar(for: nil, accessory: $0) }, onOpenSchedule: showSchedule,
+                                          titleBar: { AnyView(titleBar(for: nil, accessory: $0)) }, onOpenSchedule: showSchedule,
                                           onAskAgent: { event, account in
                                               newTaskDraft.takeReference(CalendarText.handoff(event, account: account,
                                                                                               calendar: calendarWindow.calendar))

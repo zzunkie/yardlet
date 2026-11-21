@@ -97,6 +97,41 @@ final class SubagentStatePerformanceTests: XCTestCase {
         XCTAssertLessThan(median(line), .milliseconds(20), "The card's line does not draw the turn's cards")
     }
 
+    func testKeepingALongFinishedRunHandsOffItsFinalStateAndForgettingItWins() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let center = SessionToolCenter(defaults: UserDefaults(suiteName: testDefaultsSuite("KeptRun"))!)
+        center.runDirectory = directory
+        let host = UUID()
+        let run = AgentRun(callerID: host, hostTaskID: host, harness: .codex, model: nil,
+                           prompt: "Survey", workspaceURL: workspace, depth: 1)
+        var state = longThread(id: "kept")
+        let note = String(repeating: "Progress ", count: 512)
+        for index in 0..<cardsPerLatestTurn {
+            let id = "note-\(index)"
+            state.thread?.turns[earlierTurns].items.append(decoder.item(
+                from: message(id, note, phase: "commentary"), fallbackID: id, lifecycle: .completed))
+        }
+        run.codexState = state
+        run.state = .completed
+        let clock = ContinuousClock()
+        let handed = clock.measure { center.keep(run) }
+        // The live run can change before the writer has finished. It saves the state it was handed.
+        run.codexState = nil
+        let disk = try clock.measure {
+            let kept = try XCTUnwrap(center.keptRun(run.id, hostTaskID: host))
+            XCTAssertEqual(kept.entries.count, cardsPerLatestTurn + 2 * (earlierTurns + 1))
+        }
+        print(String(format: "[perf] keeping a Codex subagent with %d cards and %d notes: handoff %.3f ms, read after save %.3f ms",
+                     cardsPerLatestTurn + earlierTurns * cardsPerEarlierTurn, cardsPerLatestTurn, handed.milliseconds, disk.milliseconds))
+        XCTAssertLessThan(handed, .milliseconds(20))
+
+        // Discarding the task immediately after a save must remove the queued conversation too.
+        center.keep(run)
+        center.forget(host)
+        XCTAssertNil(center.keptRun(run.id, hostTaskID: host))
+    }
+
     // MARK: - Fixtures
 
     /// Earlier finished turns and a latest running turn of MCP cards with large results, ending on

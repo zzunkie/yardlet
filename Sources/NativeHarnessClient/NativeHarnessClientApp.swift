@@ -308,6 +308,7 @@ final class NativeHarnessClientAppDelegate: NSObject, NSApplicationDelegate {
         remoteHosts?.persistNow()
         // The process ends when this returns: the state files handed over are written first.
         StateFileWriter.shared.flush()
+        model?.sessionTools.keptRunWriter.flush()
         // Keep the native-surface boundary intact even when AppKit terminates without running
         // the asynchronous confirmed-Quit reply path (for example, a normal system shutdown).
         NativeSurfaceResourceRegistry.shared.stopAll()

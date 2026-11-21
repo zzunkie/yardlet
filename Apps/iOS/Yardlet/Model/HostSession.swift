@@ -247,8 +247,10 @@ final class HostSession: Identifiable {
             schedulesChanges += 1
         case .tabFrame, .browserTabsChanged, .tabCopied:
             browser.receive(event)
-        case .linked, .linkRefused, .terminalOutput, .terminalClosed, .hostSettingsChanged, .hostAccountsChanged:
-            // Not shown on the phone yet: terminals, host settings and accounts (§15.29, §15.36, §15.37).
+        case .linked, .linkRefused, .terminalOutput, .terminalClosed, .hostSettingsChanged, .hostAccountsChanged,
+             .mailCalendarChanged:
+            // Not shown on the phone yet: terminals, host settings and accounts, mail and calendar (§15.29, §15.36,
+            // §15.37, §15.38).
             // `linked` and `linkRefused` go only to the connection that asked (§12.1).
             break
         }
@@ -833,7 +835,8 @@ final class HostSession: Identifiable {
         case .queue: String(localized: "Messages are waiting in the queue, so this can't be done now.")
         case .running: String(localized: "This can be done once the turn ends.")
         case .hostOnly: String(localized: "Do this on \(host).")
-        case .failed, .form: nil
+        // The phone sends no mail or calendar call (§15.38).
+        case .failed, .form, .mailCalendar: nil
         }
     }
 }

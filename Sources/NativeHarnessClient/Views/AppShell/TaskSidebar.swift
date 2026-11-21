@@ -1586,11 +1586,13 @@ struct SidebarSectionTabs: View {
     @Environment(\.personalAgentWatch) private var personalAgentWatch
     @Environment(\.mailbox) private var mailbox
     @Environment(\.calendarCenter) private var calendar
+    @Environment(\.offersPersonalAgents) private var offersPersonalAgents
 
     private var sections: [ShellSection] {
         ShellSection.allCases.filter { section in
             switch section {
-            case .tasks, .personalAgents: true
+            case .tasks: true
+            case .personalAgents: offersPersonalAgents || selection == .personalAgents
             case .mail: mailbox?.isEnabled == true || selection == .mail
             case .calendar: calendar?.isEnabled == true || selection == .calendar
             }
