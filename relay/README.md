@@ -9,7 +9,7 @@ Cloudflare Worker with two Durable Object classes:
   Mac is connected and stores none of them. It also sends the Mac's encrypted push notifications through FCM
   (Android) or APNs (iOS).
 - `Account`, one per optional sign-in account (GitHub or Google). It keeps the account's Macs (name, room and
-  public keys), sign-in token hashes and pending one-time codes. It never sees tasks or conversations.
+  public keys), sign-in token hashes, pending one-time codes and short-lived enrollment grant hashes. It never sees tasks or conversations.
 
 The contract is [the remote protocol](../docs/REMOTE_PROTOCOL.md), §14 (relay and accounts), §11.2 (rooms) and
 §16 (push). Logs never hold frame contents, push tokens, signatures or sign-in secrets.

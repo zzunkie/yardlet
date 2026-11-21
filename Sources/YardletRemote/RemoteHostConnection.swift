@@ -465,6 +465,7 @@ public actor RemoteHostConnection {
         }
         let socket = won.socket
         defer { socket.close() }
+        if won.reply.ok, won.reply.deviceId != nil { return won.reply }
         guard won.reply.pending == true,
               let hostNonce = won.reply.linkNonce.flatMap(RemoteEncoding.data(base64url:)),
               hostNonce.count == RemoteLinkCode.nonceLength else {

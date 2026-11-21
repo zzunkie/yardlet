@@ -2074,7 +2074,6 @@
 "Link code" = "Link code";
 "Allow it if the phone shows the same number." = "Allow it if the phone shows the same number.";
 "Sign in with %@" = "Sign in with %@";
-"Find this Mac from a new phone without the QR code." = "Find this Mac from a new phone without the QR code.";
 "The sign-in did not finish." = "The sign-in did not finish.";
 "Starting…" = "Starting…";
 "Can't listen for connections: %@" = "Can't listen for connections: %@";
@@ -3983,7 +3982,6 @@
 "Harness Accounts" = "Harness Accounts";
 "Integrations" = "Integrations";
 "Not signed in" = "Not signed in";
-"Turn on remote connections so a new phone can find this Mac." = "Turn on remote connections so a new phone can find this Mac.";
 "This Yardlet server doesn't offer sign-in." = "This Yardlet server doesn't offer sign-in.";
 "Cloud" = "Cloud";
 "Codex Cloud" = "Codex Cloud";
@@ -4364,3 +4362,14 @@
 "While a task works, the display doesn't sleep, so the screen doesn't lock and computer use keeps working." = "While a task works, the display doesn't sleep, so the screen doesn't lock and computer use keeps working.";
 "Agents sign in with what is saved here in the browser panel, without seeing the passwords." = "Agents sign in with what is saved here in the browser panel, without seeing the passwords.";
 "Offers to save them from forms you send in the browser panel, and fills them there for you. Agents can't fill a card." = "Offers to save them from forms you send in the browser panel, and fills them there for you. Agents can't fill a card.";
+"Macs on your account" = "Macs on your account";
+"Confirm %@ on the other Mac or on a phone already connected to it." = "Confirm %@ on the other Mac or on a phone already connected to it.";
+"Couldn’t load the Macs on your account. Try refreshing." = "Couldn’t load the Macs on your account. Try refreshing.";
+"The connection request expired. Try again." = "The connection request expired. Try again.";
+"Use a connection link" = "Use a connection link";
+"No more Macs to connect on this account." = "No more Macs to connect on this account.";
+"Macs signed in to this account can connect to this Mac." = "Macs signed in to this account can connect to this Mac.";
+"Turn on remote connections to connect to this Mac from another device." = "Turn on remote connections to connect to this Mac from another device.";
+"Find your Macs and connect from another device." = "Find your Macs and connect from another device.";
+"Check that both Macs are signed in to the same Yardlet account." = "Check that both Macs are signed in to the same Yardlet account.";
+"Couldn’t access the connection key. Unlock your keychain and try again." = "Couldn’t access the connection key. Unlock your keychain and try again.";

@@ -8,11 +8,14 @@ struct RemoteConnectWindow: View {
     static let sceneID = "remote-connect"
 
     let directory: RemoteHostDirectory
+    var service: RemoteControlService? = nil
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
     @State private var link = ""
     @State private var error: String?
     @State private var isPairing = false
+    @State private var showingLink = false
+    @State private var linkingAccountMac = false
     @State private var hostToRemove: RemoteSavedHost?
 
     var body: some View {
@@ -20,38 +23,35 @@ struct RemoteConnectWindow: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(L10n.string("Connect to a Mac"))
                     .font(.title3.weight(.semibold))
-                Text(L10n.string("Follow and drive another Mac's tasks here. On that Mac, open Settings › Remote, choose Pair…, then Copy link, and paste the link below."))
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    TextField(L10n.string("Connection link"), text: $link, prompt: Text(verbatim: "yardlet-remote://pair?…"))
-                        .textFieldStyle(.roundedBorder)
-                        .onSubmit(pair)
-                        .accessibilityLabel(L10n.string("Connection link"))
-                    Button(L10n.string("Connect"), action: pair)
-                        .parityProminentButton()
-                        .disabled(link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isPairing)
-                }
-                if isPairing {
-                    HStack(spacing: 6) {
-                        ProgressView().controlSize(.small)
-                        Text(L10n.string("Connecting…")).font(.caption).foregroundStyle(.secondary)
-                    }
-                } else if let error {
-                    Text(error)
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    Text(L10n.string("The link works once, for 5 minutes. Pair once while both Macs are together; from then on this Mac connects on the same network, over Tailscale or through the Yardlet server."))
-                        .font(.caption)
+                if service?.account == nil {
+                    Text(L10n.string("Follow and drive another Mac's tasks here. On that Mac, open Settings › Remote, choose Pair…, then Copy link, and paste the link below."))
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+            }
+
+            if let service, let account = service.account {
+                RemoteAccountMacList(service: service, directory: directory, onOpen: open, busy: $linkingAccountMac)
+                    .id(account.id)
+                    .disabled(isPairing)
+            } else if let service, service.relayURL != nil {
+                HStack {
+                    ForEach(service.accountProviders, id: \.self) { provider in
+                        Button(L10n.format("Sign in with %@", YardletAccountSettingsView.providerName(provider))) {
+                            Task { await service.signIn(with: provider) }
+                        }
+                        .disabled(service.isSigningIn)
+                    }
+                }
+                .task { await service.refreshAccountPage() }
+                if let message = service.accountError { Text(message).font(.caption) }
+            }
+
+            if service?.account == nil {
+                linkForm
+            } else {
+                DisclosureGroup(L10n.string("Use a connection link"), isExpanded: $showingLink) { linkForm }
             }
 
             if !directory.hosts.isEmpty {
@@ -108,8 +108,39 @@ struct RemoteConnectWindow: View {
         }
     }
 
+    private var linkForm: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                TextField(L10n.string("Connection link"), text: $link, prompt: Text(verbatim: "yardlet-remote://pair?…"))
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(pair)
+                    .accessibilityLabel(L10n.string("Connection link"))
+                Button(L10n.string("Connect"), action: pair)
+                    .parityProminentButton()
+                    .disabled(link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isPairing || linkingAccountMac)
+            }
+            if isPairing {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text(L10n.string("Connecting…")).font(.caption).foregroundStyle(.secondary)
+                }
+            } else if let error {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text(L10n.string("The link works once, for 5 minutes. Pair once while both Macs are together; from then on this Mac connects on the same network, over Tailscale or through the Yardlet server."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
     private func takeOpenedLink() {
         guard let opened = directory.openedLink else { return }
+        showingLink = true
         link = opened
         error = nil
         directory.openedLink = nil
@@ -117,7 +148,7 @@ struct RemoteConnectWindow: View {
 
     private func pair() {
         let text = link
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !isPairing else { return }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !isPairing, !linkingAccountMac else { return }
         isPairing = true
         error = nil
         Task {

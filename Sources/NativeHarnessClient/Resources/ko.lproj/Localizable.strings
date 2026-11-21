@@ -2074,7 +2074,6 @@
 "Link code" = "확인 숫자";
 "Allow it if the phone shows the same number." = "휴대폰에 같은 숫자가 보이면 허용하세요.";
 "Sign in with %@" = "%@로 로그인";
-"Find this Mac from a new phone without the QR code." = "새 휴대폰에서 QR 코드 없이 이 Mac을 찾습니다.";
 "The sign-in did not finish." = "로그인이 끝나지 않았습니다.";
 "Starting…" = "시작 중…";
 "Can't listen for connections: %@" = "연결을 받을 수 없습니다: %@";
@@ -3983,7 +3982,6 @@
 "Harness Accounts" = "하네스 계정";
 "Integrations" = "통합";
 "Not signed in" = "로그인하지 않음";
-"Turn on remote connections so a new phone can find this Mac." = "원격 연결을 켜야 새 휴대폰이 이 Mac을 찾을 수 있습니다.";
 "This Yardlet server doesn't offer sign-in." = "이 Yardlet 서버는 로그인을 제공하지 않습니다.";
 "Cloud" = "클라우드";
 "Codex Cloud" = "Codex Cloud";
@@ -4364,3 +4362,14 @@
 "While a task works, the display doesn't sleep, so the screen doesn't lock and computer use keeps working." = "작업이 진행되는 동안 디스플레이가 잠자기에 들지 않아 화면이 잠기지 않고, 컴퓨터 사용도 계속 동작합니다.";
 "Agents sign in with what is saved here in the browser panel, without seeing the passwords." = "에이전트가 여기 저장된 로그인 정보로 브라우저 패널에서 로그인합니다. 비밀번호는 에이전트에게 보이지 않습니다.";
 "Offers to save them from forms you send in the browser panel, and fills them there for you. Agents can't fill a card." = "브라우저 패널에서 보낸 양식의 주소와 카드를 저장할지 묻고, 다음에 그곳에서 대신 채워 줍니다. 에이전트는 카드를 채우지 못합니다.";
+"Macs on your account" = "내 계정의 Mac";
+"Confirm %@ on the other Mac or on a phone already connected to it." = "상대 Mac이나 이미 연결된 휴대폰에서 숫자 %@을 확인하고 연결을 허용하세요.";
+"Couldn’t load the Macs on your account. Try refreshing." = "계정의 Mac 목록을 불러오지 못했습니다. 새로고침해 보세요.";
+"The connection request expired. Try again." = "연결 요청이 만료되었습니다. 다시 시도하세요.";
+"Use a connection link" = "연결 링크 사용";
+"No more Macs to connect on this account." = "이 계정에서 새로 연결할 Mac이 없습니다.";
+"Macs signed in to this account can connect to this Mac." = "같은 계정에 로그인한 다른 Mac에서 이 Mac에 연결할 수 있습니다.";
+"Turn on remote connections to connect to this Mac from another device." = "다른 기기에서 이 Mac에 접속하려면 원격 연결을 켜세요.";
+"Find your Macs and connect from another device." = "내 계정의 Mac을 찾아 다른 기기에서 연결할 수 있습니다.";
+"Check that both Macs are signed in to the same Yardlet account." = "두 Mac이 같은 Yardlet 계정에 로그인되어 있는지 확인하세요.";
+"Couldn’t access the connection key. Unlock your keychain and try again." = "연결 키에 접근할 수 없습니다. 키체인을 잠금 해제한 뒤 다시 시도하세요.";

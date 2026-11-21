@@ -5,6 +5,7 @@ import type { Provider } from "./oauth";
 const CODE_TTL_MS = 2 * 60_000;
 const TOKEN_IDLE_MS = 90 * 24 * 60 * 60_000;
 const MAX_MACS = 20;
+const GRANT_TTL_MS = 60_000;
 const MAX_NAME = 64;
 const encoder = new TextEncoder();
 
@@ -39,6 +40,8 @@ export class Account extends DurableObject<Env> {
         provider TEXT NOT NULL, name TEXT NOT NULL, expires_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS tokens (
         hash TEXT PRIMARY KEY, device_name TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS link_grants (
+        hash TEXT PRIMARY KEY, issuer TEXT NOT NULL, room TEXT NOT NULL, client_key TEXT NOT NULL, expires_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS macs (
         room TEXT PRIMARY KEY, mac_key TEXT NOT NULL, relay_key TEXT NOT NULL, name TEXT NOT NULL,
         updated_at INTEGER NOT NULL);
@@ -145,8 +148,35 @@ export class Account extends DurableObject<Env> {
     return { status: 200, body: { ok: true } };
   }
 
+  /** A grant enrolls one Noise key on one registered host of this account. Only its hash is kept. */
+  async issueLinkGrant(tokenHash: string, room: string, clientKey: string, grantHash: string): Promise<ApiResult> {
+    if (!this.authorize(tokenHash)) return unauthorized;
+    const sql = this.ctx.storage.sql;
+    if (!sql.exec("SELECT 1 FROM macs WHERE room = ?", room).toArray().length) {
+      return { status: 404, body: { error: "unknownMac" } };
+    }
+    const now = Date.now();
+    sql.exec("DELETE FROM link_grants WHERE expires_at <= ? OR (issuer = ? AND room = ?)", now, tokenHash, room);
+    sql.exec("INSERT INTO link_grants VALUES (?, ?, ?, ?, ?)", grantHash, tokenHash, room, clientKey, now + GRANT_TTL_MS);
+    return { status: 200 };
+  }
+
+  /** The host supplies its own room and the peer key authenticated by Noise. Consume atomically. */
+  async redeemLinkGrant(tokenHash: string, room: string, clientKey: string, grantHash: string): Promise<ApiResult> {
+    if (!this.authorize(tokenHash)) return unauthorized;
+    const now = Date.now();
+    const used = this.ctx.storage.sql.exec(
+      `DELETE FROM link_grants WHERE hash = ? AND room = ? AND client_key = ? AND expires_at > ?
+       AND EXISTS (SELECT 1 FROM macs WHERE room = link_grants.room)
+       AND EXISTS (SELECT 1 FROM tokens WHERE hash = link_grants.issuer AND last_used_at >= ?)
+       RETURNING 1`, grantHash, room, clientKey, now, now - TOKEN_IDLE_MS,
+    ).toArray().length;
+    return used ? { status: 200, body: { ok: true } } : { status: 403, body: { error: "invalidGrant" } };
+  }
+
   async deleteMac(tokenHash: string, room: string): Promise<ApiResult> {
     if (!this.authorize(tokenHash)) return unauthorized;
+    this.ctx.storage.sql.exec("DELETE FROM link_grants WHERE room = ?", room);
     this.ctx.storage.sql.exec("DELETE FROM macs WHERE room = ?", room);
     return { status: 204 };
   }

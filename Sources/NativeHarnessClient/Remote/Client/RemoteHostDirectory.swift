@@ -29,6 +29,7 @@ final class RemoteHostDirectory {
     enum PairingFailure: Error, Equatable {
         case notALink
         case linkSpent
+        case keyUnavailable
         case unreachable(String)
         case refused(String)
 
@@ -36,6 +37,7 @@ final class RemoteHostDirectory {
             switch self {
             case .notALink: L10n.string("This isn't a Yardlet connection link. Copy it again from Settings › Remote on the other Mac.")
             case .linkSpent: L10n.string("This link was already used or has expired. Make a new one in Settings › Remote on the other Mac.")
+            case .keyUnavailable: L10n.string("Couldn’t access the connection key. Unlock your keychain and try again.")
             case let .unreachable(name): L10n.format("Can't reach %@. Check that it's awake and that remote connections are on.", name)
             case let .refused(name): L10n.format("%@ didn't accept the connection.", name)
             }
@@ -180,6 +182,71 @@ final class RemoteHostDirectory {
         host.update(from: reply)
         keys.save(key, hostID: host.id)
         store.save(host)
+        hosts = store.all()
+        return host
+    }
+
+    /// Enroll through the signed-in account; older hosts ask a paired device to compare a number.
+    func connect(to mac: RemoteAccountClient.Mac, service: RemoteControlService,
+                 onCode: @escaping @Sendable (String) -> Void) async throws -> RemoteSavedHost {
+        guard let relay = service.relayURL, let accountID = service.account?.id,
+              let publicKey = RemoteEncoding.data(base64url: mac.macKey), publicKey.count == 32 else {
+            throw PairingFailure.refused(mac.name)
+        }
+        if let host = store.host(key: publicKey) {
+            guard keys.load(hostID: host.id) != nil else { throw PairingFailure.keyUnavailable }
+            return host
+        }
+        var host = RemoteSavedHost(name: mac.name, hostKey: publicKey, direct: [])
+        let key = RemoteKeyPair.generate()
+        // Reserve a new key before asking the host to trust it. A refused or cancelled request releases it.
+        keys.save(key, hostID: host.id)
+        var enrolled = false
+        defer { if !enrolled { keys.delete(hostID: host.id) } }
+        guard keys.load(hostID: host.id) == key else { throw PairingFailure.keyUnavailable }
+        // Look on the LAN while fetching the grant. A host allowing only local connections need not open a relay room.
+        var nearby: [String] = []
+        let (found, addresses) = AsyncStream<[String]>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let stop = discovery?.watch(RemoteIdentity.discoveryID(for: publicKey)) { resolved in
+            nearby = resolved
+            if !resolved.isEmpty { addresses.yield(resolved) }
+        }
+        let deadline = Task { [timing] in
+            try? await Task.sleep(for: .seconds(timing.directTimeout))
+            addresses.finish()
+        }
+        defer {
+            stop?()
+            deadline.cancel()
+            addresses.finish()
+        }
+        var greeting = hello
+        greeting.accountGrant = try await service.accountGrant(for: mac, key: key.publicKey, accountID: accountID)
+        try Task.checkCancellation()
+        var target = RemoteHostTarget(hostKey: publicKey, direct: nearby, relayURL: relay.absoluteString, room: mac.room)
+        let reply: RemoteHandshakeReply
+        do {
+            reply = try await RemoteHostConnection.link(target, clientKey: key, hello: greeting, timing: timing, onCode: onCode)
+        } catch let failure as RemoteHostConnection.LinkFailure {
+            guard case .unreachable = failure, target.direct.isEmpty, stop != nil else { throw failure }
+            var resolved = found.makeAsyncIterator()
+            guard let direct = await resolved.next() else { throw failure }
+            try Task.checkCancellation()
+            target = RemoteHostTarget(hostKey: publicKey, direct: direct)
+            reply = try await RemoteHostConnection.link(target, clientKey: key, hello: greeting, timing: timing, onCode: onCode)
+        }
+        host.direct = target.direct
+        host.update(from: reply)
+        // A host that waited for approval sends no directory until the next handshake.
+        if reply.pending == true {
+            host.room = mac.room
+            host.relayURL = relay.absoluteString
+        } else if host.direct.isEmpty && host.relayURL == nil {
+            host.room = mac.room
+            host.relayURL = target.relayURL
+        }
+        store.save(host)
+        enrolled = true
         hosts = store.all()
         return host
     }

@@ -2931,6 +2931,8 @@ public struct RemoteHandshakeHello: Codable, Equatable, Sendable {
     public var link: Bool?
     /// With `link`: the commitment to the nonce the phone reveals once message 2 is in (§12.1), base64url.
     public var linkCommit: String?
+    /// One-use account enrollment, bound to this host and the initiator’s Noise key.
+    public var accountGrant: String?
 
     public init(v: Int = RemoteProtocol.secureVersion, name: String? = nil, platform: String? = nil,
                 appVersion: String? = nil, pair: String? = nil, link: Bool? = nil, linkCommit: String? = nil) {

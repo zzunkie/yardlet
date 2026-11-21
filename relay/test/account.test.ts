@@ -159,6 +159,38 @@ describe("sign-in", () => {
 });
 
 describe("account", () => {
+  it("enrolls only the specified client key on a registered Mac of the same account, once and before expiry", async () => {
+    const owner = await signIn("github", "9011");
+    const other = await signIn("github", "9012");
+    const host = await macKey();
+    const second = await macKey();
+    await registerMac(owner.token, owner.account.id, host);
+    await registerMac(owner.token, owner.account.id, second);
+    const clientKey = (await macKey()).publicKey;
+    const post = (path: string, token: string, body: object) =>
+      call(path, { ...bearer(token), method: "POST", body: JSON.stringify(body) });
+    const path = (room: string) => `/v1/account/macs/${room}/link-grants`;
+    const issue = async () => (await (await post(path(host.room), owner.token, { clientKey })).json()) as { grant: string };
+    const use = (room: string, token: string, key: string, grant: string) =>
+      post(path(room) + "/redeem", token, { clientKey: key, grant });
+    expect((await post(path(host.room), other.token, { clientKey })).status).toBe(404);
+    const first = await issue();
+    expect(first.grant).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect((await use(host.room, other.token, clientKey, first.grant)).status).toBe(403);
+    expect((await use(second.room, owner.token, clientKey, first.grant)).status).toBe(403);
+    expect((await use(host.room, owner.token, second.publicKey, first.grant)).status).toBe(403);
+    const results = await Promise.all([1, 2].map(() => use(host.room, owner.token, clientKey, first.grant)));
+    expect(results.map(result => result.status).sort()).toEqual([200, 403]);
+    const late = await issue();
+    const stub = env.ACCOUNT.get(env.ACCOUNT.idFromName(owner.account.id));
+    await runInDurableObject(stub, (_, state) => { state.storage.sql.exec("UPDATE link_grants SET expires_at = 0"); });
+    expect((await use(host.room, owner.token, clientKey, late.grant)).status).toBe(403);
+    const signedOut = await issue();
+    const secondSignIn = await signIn("github", "9011");
+    await call("/v1/auth/logout", { ...bearer(owner.token), method: "POST" });
+    expect((await use(host.room, secondSignIn.token, clientKey, signedOut.grant)).status).toBe(403);
+  });
+
   it("registers Macs signed with their relay key, at most 20", async () => {
     const { token, account } = await signIn("github", "1006");
     const key = await macKey();

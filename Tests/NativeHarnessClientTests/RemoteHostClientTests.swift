@@ -76,6 +76,30 @@ final class RemoteHostClientTests: XCTestCase {
         await connection.stop()
     }
 
+    func testAccountEnrollmentChecksTheHandshakeKeyAndKeepsDevicePermissions() async throws {
+        let stack = try await LoopbackStack()
+        defer { stack.stop() }
+        let target = RemoteHostTarget(hostKey: stack.identity.noise.publicKey, direct: ["127.0.0.1:\(stack.port)"])
+        let key = RemoteKeyPair.generate()
+        let grant = RemoteEncoding.base64url(Data(RemoteRandom.bytes(32)))
+        var hello = RemoteHandshakeHello(name: "MacBook", platform: "macos")
+        hello.accountGrant = grant
+        await stack.server.setAcceptsLinks(true) { supplied, peer in supplied == grant && peer == key.publicKey }
+        do {
+            _ = try await RemoteHostConnection.link(target, clientKey: .generate(), hello: hello) { _ in XCTFail("Unexpected approval") }
+            XCTFail("Wrong client key enrolled")
+        } catch let failure as RemoteHostConnection.LinkFailure {
+            guard case let .declined(error) = failure else { return XCTFail("\(failure)") }
+            XCTAssertEqual(error.code, .notAllowed)
+        }
+        let reply = try await RemoteHostConnection.link(target, clientKey: key, hello: hello) { _ in XCTFail("Unexpected approval") }
+        let id = try XCTUnwrap(reply.deviceId)
+        let device = await stack.devices.device(id)
+        XCTAssertEqual(device?.permissions, RemoteDevicePermissions())
+        let reconnect = try await stack.phone(key: key, hello: .init(name: "MacBook"))
+        XCTAssertEqual(reconnect.reply.deviceId, id)
+    }
+
     func testAnUnknownKeyIsTakenForRemoved() async throws {
         let stack = try await LoopbackStack()
         defer { stack.stop() }

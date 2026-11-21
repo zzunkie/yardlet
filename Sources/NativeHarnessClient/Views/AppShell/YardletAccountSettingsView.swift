@@ -18,8 +18,13 @@ struct YardletAccountSettingsView: View {
                     .foregroundStyle(service.accountError == nil ? Color.secondary : Color.orange)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
+                if service.account != nil, service.isEnabled {
+                    Text(L10n.string("Macs signed in to this account can connect to this Mac."))
+                        .font(SettingsMetrics.detailFont)
+                        .foregroundStyle(.secondary)
+                }
                 if !service.isEnabled {
-                    Text(L10n.string("Turn on remote connections so a new phone can find this Mac."))
+                    Text(L10n.string("Turn on remote connections to connect to this Mac from another device."))
                         .font(SettingsMetrics.detailFont)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -62,7 +67,7 @@ struct YardletAccountSettingsView: View {
         case false?: return L10n.string("Can't reach the Yardlet server")
         case true? where service.accountProviders.isEmpty:
             return L10n.string("This Yardlet server doesn't offer sign-in.")
-        default: return L10n.string("Find this Mac from a new phone without the QR code.")
+        default: return L10n.string("Find your Macs and connect from another device.")
         }
     }
 

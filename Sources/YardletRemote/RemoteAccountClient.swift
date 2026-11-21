@@ -6,7 +6,7 @@ import FoundationNetworking
 
 /// The relay's optional accounts (docs/REMOTE_PROTOCOL.md §14.4), from an app's side: the sign-in
 /// address with PKCE, exchanging the one-time code for a token, and listing, registering and removing
-/// Macs. The account only finds the person's Macs; nothing of a task passes through it.
+/// Macs, and enrolling a device on a Mac on the account. Task content stays on the host.
 public struct RemoteAccountClient: Sendable {
     public struct Account: Codable, Equatable, Sendable {
         public var id: String
@@ -26,6 +26,11 @@ public struct RemoteAccountClient: Sendable {
     public struct Failure: Error, Equatable, Sendable {
         public var status: Int
         public var code: String
+
+        public init(status: Int, code: String) {
+            self.status = status
+            self.code = code
+        }
 
         /// The token no longer works: sign in again.
         public var isUnauthorized: Bool { status == 401 }
@@ -102,6 +107,24 @@ public struct RemoteAccountClient: Sendable {
             "macKey": macKey, "relayKey": RemoteEncoding.base64url(identity.relayPublicKey), "name": name,
             "sig": RemoteEncoding.base64url(signature)
         ], as: Answer.self)
+    }
+
+    /// A one-use enrollment for the authenticated Noise key on this host. Older relays only support
+    /// the number both devices compare; a missing host or an authentication failure is still an error.
+    public func linkGrant(token: String, room: String, clientKey: Data) async throws -> String? {
+        struct Answer: Decodable { var grant: String }
+        do {
+            return try await request("v1/account/macs/\(room)/link-grants", method: "POST", token: token,
+                                     body: ["clientKey": RemoteEncoding.base64url(clientKey)], as: Answer.self).grant
+        } catch let error as Failure where error.status == 404 && error.code == "http404" {
+            return nil
+        }
+    }
+
+    public func redeemLinkGrant(_ grant: String, token: String, room: String, clientKey: Data) async throws -> Bool {
+        struct Answer: Decodable { var ok: Bool }
+        return try await request("v1/account/macs/\(room)/link-grants/redeem", method: "POST", token: token,
+                                 body: ["grant": grant, "clientKey": RemoteEncoding.base64url(clientKey)], as: Answer.self).ok
     }
 
     public func removeMac(token: String, room: String) async throws {

@@ -744,6 +744,13 @@ code and asks one to link:
   `unsupportedVersion` (no `linkCommit`: an older phone app; 4426).
 - Approving in Settings takes a click: the Allow button is not the default button.
 
+A signed-in desktop client can include an optional `accountGrant` alongside `link` and `linkCommit`.
+The host redeems it with its own account token and room, using the initiator key authenticated by Noise (§14.4).
+Success returns the usual successful enrollment in message 2, with the same initial device permissions as QR pairing.
+A failed check refuses the connection. Older hosts ignore the field and show the number for an existing device
+to approve. When the relay lacks grant support the client uses the number flow directly. As with QR pairing,
+an enrolled device reconnects with its own key until removed in Settings › Remote.
+
 ## 13. v2 handshake and messages
 
 ### 13.1 Handshake
@@ -902,8 +909,7 @@ address and 8 in a room; a new one closes the oldest of them (4503). A socket st
 
 ### 14.4 Accounts
 
-Optional (the QR stays the way to pair without one). The account only lists the person's Macs and lets a new
-phone ask one of them to link (§12.1); it never carries tasks or conversations.
+Optional (the QR stays the way to pair without one). The account lists the person's Macs and authorizes device enrollment (§12.1).
 
 On the Mac it is Settings › Yardlet Account, first in Settings' list with the account or "Not signed in" under its
 name. Signing in works with remote connections on or off; while they are off, the page says the account finds this
@@ -920,6 +926,8 @@ them with the token.
 | `POST /v1/auth/token` `{"code", "codeVerifier", "deviceName"}` | the app, once | `{"token": "<account>.<secret>", "account": {"id", "provider", "name"}}` |
 | `GET /v1/account` | `Authorization: Bearer <token>` | `{"id", "provider", "name", "macs": [{"room", "macKey", "relayKey", "name", "updatedAt"}]}` |
 | `PUT /v1/account/macs/<room>` `{"macKey", "relayKey", "name", "sig"}` | the Mac | `{"ok": true}` |
+| `POST /v1/account/macs/<room>/link-grants` | `{clientKey}` | `{grant}`, a random 32-byte base64url secret valid for 60 seconds |
+| `POST /v1/account/macs/<room>/link-grants/redeem` | `{grant,clientKey}` | `{ok:true}` once, for that account, registered room and client key while the issuing sign-in is valid |
 | `DELETE /v1/account/macs/<room>` | the Mac or a phone | `204` |
 | `POST /v1/auth/logout` | | `204`: this token stops working |
 | `DELETE /v1/account` | | `204`: the account, its Macs and every token are deleted |
@@ -2803,7 +2811,7 @@ Claude subagents open in the local subtask pane with host reads and Stop, compos
 same notice lines, banked resets use the common confirmation, and file restore uses the common
 preview sheet plus a client confirmation and the host's file-write permission.
 
-Yardlet on another Mac follows a Mac's tasks over this protocol, unchanged: File › Connect to Mac… pairs with a
+File › Connect to Mac… lists other Macs on the signed-in account and can connect through §12.1. It also accepts a
 link from §12 (copied on the host, pasted or opened as a `yardlet-remote` link; nothing pairs until the person
 chooses Connect), and each paired host opens in a window of its own. The host lists it among its devices with the
 `platform` `macos` it sends in message 1, and removes it as it removes a phone.

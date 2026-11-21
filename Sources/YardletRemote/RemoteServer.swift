@@ -575,6 +575,9 @@ public actor RemoteServer {
     private var registeringPairing: RemotePairingTicket?
     private var directory: (direct: [String], relay: RemoteHandshakeReply.Relay?) = ([], nil)
     /// Link requests are taken while the Mac is signed in to an account (§12.1).
+    public typealias RedeemAccountGrant = @Sendable (String, Data) async -> Bool
+    private var redeemAccountGrant: RedeemAccountGrant?
+    private var checkingGrant: UUID?
     private var acceptsLinks = false
     private var link: PendingLink?
     /// When link requests were taken, for `linksPerWindow`.
@@ -649,7 +652,9 @@ public actor RemoteServer {
         macKey = key
     }
 
-    public func setAcceptsLinks(_ accepts: Bool) {
+    public func setAcceptsLinks(_ accepts: Bool, redeemGrant: RedeemAccountGrant? = nil) {
+        redeemAccountGrant = accepts ? redeemGrant : nil
+        if !accepts { checkingGrant = nil }
         acceptsLinks = accepts
         guard !accepts, let pending = link else { return }
         if let request = pending.request {
@@ -805,26 +810,45 @@ public actor RemoteServer {
             guard let commitment = hello.linkCommit.flatMap(RemoteEncoding.data(base64url:)), commitment.count == 32 else {
                 return refuse(.unsupportedVersion, "Update the app to link through an account", .unsupportedVersion)
             }
-            guard link == nil else { return refuse(.busy, "Another link request is waiting", .unavailable) }
+            guard link == nil, checkingGrant == nil else { return refuse(.busy, "Another link request is waiting", .unavailable) }
             let time = now()
             linkTimes.removeAll { time.timeIntervalSince($0) >= Self.linkWindow }
             guard linkTimes.count < Self.linksPerWindow else {
                 return refuse(.rateLimited, "Too many link requests; try again later", .rateLimited)
             }
             linkTimes.append(time)
-            makeRoomForWaiting()
-            let id = UUID()
-            connections[id] = Connection(channel: channel, path: path, openedAt: time, lastReceivedAt: time,
-                                         limiter: RemoteRateLimiter(now: time))
-            let nonce = Data(RemoteRandom.bytes(RemoteLinkCode.nonceLength))
-            link = PendingLink(connection: id, key: publicKey, name: name.isEmpty ? "Phone" : name, platform: platform,
-                               commitment: commitment, macNonce: nonce)
-            ensureSweeper()
-            var reply = RemoteHandshakeReply(ok: false)
-            reply.pending = true
-            reply.linkNonce = RemoteEncoding.base64url(nonce)
-            reply.server = configuration.server
-            return .pending(id, reply)
+            if let grant = hello.accountGrant {
+                guard grant.utf8.count == 43, let redeemAccountGrant else {
+                    return refuse(.notAllowed, "Account enrollment is unavailable", .unauthenticated)
+                }
+                let check = UUID()
+                checkingGrant = check
+                defer { if checkingGrant == check { checkingGrant = nil } }
+                guard await redeemAccountGrant(grant, publicKey), checkingGrant == check, acceptsLinks else {
+                    return refuse(.notAllowed, "Account enrollment was not authorized", .unauthenticated)
+                }
+                do {
+                    device = try await registerDevice(name: name, publicKey: publicKey, platform: platform, resetsPermissions: true)
+                } catch {
+                    return refuse(.unavailable, "The device could not be saved", .unavailable)
+                }
+                paired = true
+                audit?.record(device: device.id, type: "accountLink", task: nil, result: "ok", at: now())
+            } else {
+                makeRoomForWaiting()
+                let id = UUID()
+                connections[id] = Connection(channel: channel, path: path, openedAt: time, lastReceivedAt: time,
+                                             limiter: RemoteRateLimiter(now: time))
+                let nonce = Data(RemoteRandom.bytes(RemoteLinkCode.nonceLength))
+                link = PendingLink(connection: id, key: publicKey, name: name.isEmpty ? "Phone" : name, platform: platform,
+                                   commitment: commitment, macNonce: nonce)
+                ensureSweeper()
+                var reply = RemoteHandshakeReply(ok: false)
+                reply.pending = true
+                reply.linkNonce = RemoteEncoding.base64url(nonce)
+                reply.server = configuration.server
+                return .pending(id, reply)
+            }
         } else {
             return refuse(.unknownDevice, "This phone is not paired with this Mac", .revoked)
         }
@@ -1309,6 +1333,7 @@ public actor RemoteServer {
 
     /// Closes every connection: the remote was turned off, or Yardlet quits.
     public func shutdown(reason: String) {
+        checkingGrant = nil
         // Accepted configuration writes still finish in order, but cannot reopen runtime access.
         permissionRequestsEnabled = false
         let devicesToEnd = Set(effectivePermissions.keys).union(connections.values.compactMap(\.deviceID))

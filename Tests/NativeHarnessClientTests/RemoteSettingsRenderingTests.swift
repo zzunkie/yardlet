@@ -322,7 +322,7 @@ final class RemoteSettingsRenderingTests: XCTestCase {
             defaults: defaults, environment: [:], interfaces: { [] }, resolveName: { _ in nil }, listens: false,
             isOnPower: { true }, macName: "MacBook Pro", appVersion: "test")
         await service.start()
-        let offLine = L10n.string("Turn on remote connections so a new phone can find this Mac.")
+        let offLine = L10n.string("Turn on remote connections to connect to this Mac from another device.")
 
         for (name, enabled, signedIn) in [("yardlet-account-remote-off", false, false), ("yardlet-account-signed-out", true, false),
                                           ("yardlet-account-signed-in", true, true),
@@ -348,6 +348,19 @@ final class RemoteSettingsRenderingTests: XCTestCase {
                 XCTAssertTrue(host.accessibilityElements().contains { $0.label == SettingsSection.yardletAccount.title
                     && $0.value == (signedIn ? "GitHub · octocat" : L10n.string("Not signed in")) }, name)
             }
+        }
+        let studio = RemoteIdentity.generate()
+        StubRelay.macs = [["room": studio.room, "macKey": RemoteEncoding.base64url(studio.noise.publicKey),
+                           "relayKey": RemoteEncoding.base64url(studio.relayPublicKey), "name": "Mac Studio"]]
+        let hosts = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
+                                        hello: .init(name: "Test", platform: "macos"))
+        for appearance in WindowlessRender.Appearance.allCases {
+            let window = WindowlessRender.Host(RemoteConnectWindow(directory: hosts, service: service)
+                .environment(\.colorScheme, appearance.colorScheme), size: NSSize(width: 540, height: 245), appearance: appearance)
+            defer { window.close() }
+            try await waitUntil { window.accessibilityElements().contains { $0.label == L10n.format("Open %@", "Mac Studio") } }
+            try WindowlessRender.writePNG(try window.capture().bitmap,
+                                          to: directory.appending(path: "remote-account-connect-\(appearance.suffix).png"))
         }
         XCTAssertFalse(service.isEnabled)
         await service.shutdown()

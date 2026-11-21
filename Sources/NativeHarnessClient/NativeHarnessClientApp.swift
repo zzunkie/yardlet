@@ -791,7 +791,7 @@ struct NativeHarnessClientApp: App {
 
         Window(L10n.string("Connect to Mac"), id: RemoteConnectWindow.sceneID) {
             YardletWindowPreferences(usesVisualFixture: model.usesVisualFixture, appliesInterfaceSize: false) {
-                RemoteConnectWindow(directory: remoteHosts)
+                RemoteConnectWindow(directory: remoteHosts, service: model.remoteControl)
             }
         }
         .windowResizability(.contentSize)

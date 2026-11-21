@@ -11,6 +11,7 @@ import {
   stateExpiry,
 } from "./oauth";
 
+const encoder = new TextEncoder();
 const APP_REDIRECT = "yardlet-remote://auth";
 const MAX_CLIENT_STATE = 128;
 const MAX_DEVICE_NAME = 64;
@@ -42,6 +43,23 @@ export async function handleAccountRoute(request: Request, env: Env): Promise<Re
     if (method === "GET") return withToken(request, env, (account, hash) => account.getAccount(hash));
     if (method === "DELETE") return withToken(request, env, (account, hash) => account.deleteAccount(hash));
     return notAllowed();
+  }
+  const link = /^\/v1\/account\/macs\/([a-z2-7]{32})\/link-grants(\/redeem)?$/.exec(path);
+  if (link) {
+    if (method !== "POST") return notAllowed();
+    const room = link[1];
+    const body = await request.json<{ clientKey?: string; grant?: string }>().catch(() => null);
+    if (typeof body?.clientKey !== "string" || !CODE_CHALLENGE.test(body.clientKey)) return error(400, "badRequest");
+    const clientKey = body.clientKey;
+    if (link[2]) {
+      if (typeof body.grant !== "string" || !CODE_CHALLENGE.test(body.grant)) return error(400, "badRequest");
+      const grantHash = await hashSecret(encoder.encode(body.grant));
+      return withToken(request, env, (account, hash) => account.redeemLinkGrant(hash, room, clientKey, grantHash));
+    }
+    const grant = toBase64Url(crypto.getRandomValues(new Uint8Array(32)));
+    const grantHash = await hashSecret(encoder.encode(grant));
+    const issued = await withToken(request, env, (account, hash) => account.issueLinkGrant(hash, room, clientKey, grantHash));
+    return issued.ok ? json(200, { grant }) : issued;
   }
   const mac = MAC_ROUTE.exec(path);
   if (mac) {

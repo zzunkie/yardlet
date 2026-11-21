@@ -94,6 +94,7 @@ final class RemoteControlService {
     @ObservationIgnored private let builtInRelay: (url: String, alternate: String?)?
     @ObservationIgnored private var secureListener: (any RemoteDirectListening)?
     @ObservationIgnored private var relayClient: RemoteRelayClient?
+    @ObservationIgnored private var accountGeneration = UUID()
     @ObservationIgnored private let accountToken: any RemoteSecretStoring
     @ObservationIgnored private let webSignIn: @MainActor (URL, String) async throws -> URL
     @ObservationIgnored private var stopWatchingNetwork: (() -> Void)?
@@ -160,16 +161,26 @@ final class RemoteControlService {
     /// Reads the providers, and with a saved token puts this Mac on the account again (its name may
     /// have changed) and takes link requests. A token the relay no longer knows is dropped.
     func refreshAccount() async {
-        guard isEnabled, let client = accountClient else { return }
+        guard isEnabled, !isSigningIn, let client = accountClient else { return }
+        let generation = accountGeneration
         await readAccountProviders(client)
-        guard let token = await withAccountToken({ $0.load() }) else { return keep(account: nil) }
+        let saved = await withAccountToken { $0.load() }
+        guard generation == accountGeneration else { return }
+        guard let token = saved else {
+            keep(account: nil)
+            await server.setAcceptsLinks(false)
+            return
+        }
         guard let identity = await ensureIdentity() else { return }
         do {
             let current = try await client.account(token: token)
+            guard generation == accountGeneration else { return }
             try await client.registerMac(token: token, identity: identity, name: macName, accountID: current.id)
+            guard generation == accountGeneration else { return }
             keep(account: current)
-            await server.setAcceptsLinks(true)
+            await acceptAccountLinks(for: current.id)
         } catch let failure as RemoteAccountClient.Failure where failure.isUnauthorized {
+            guard generation == accountGeneration else { return }
             await withAccountToken { $0.delete() }
             keep(account: nil)
             await server.setAcceptsLinks(false)
@@ -197,6 +208,49 @@ final class RemoteControlService {
         }
     }
 
+    private func acceptAccountLinks(for accountID: String) async {
+        await server.setAcceptsLinks(true) { [weak self] grant, key in
+            await self?.redeem(grant, for: key, accountID: accountID) ?? false
+        }
+    }
+
+    private func redeem(_ grant: String, for key: Data, accountID: String) async -> Bool {
+        guard isEnabled, account?.id == accountID, let room = identity?.room, let client = accountClient,
+              let token = await withAccountToken({ $0.load() }) else { return false }
+        let accepted = try? await client.redeemLinkGrant(grant, token: token, room: room, clientKey: key)
+        return accepted == true && isEnabled && account?.id == accountID && identity?.room == room
+    }
+
+    /// The outgoing client's account works even when this Mac does not accept incoming connections.
+    func otherAccountMacs() async throws -> [RemoteAccountClient.Mac] {
+        guard let client = accountClient, let expected = account?.id else { return [] }
+        let generation = accountGeneration
+        let current: RemoteAccountClient.Account
+        do {
+            guard let token = await withAccountToken({ $0.load() }) else {
+                throw RemoteAccountClient.Failure(status: 401, code: "unauthorized")
+            }
+            current = try await client.account(token: token)
+        } catch let failure as RemoteAccountClient.Failure where failure.isUnauthorized {
+            if generation == accountGeneration && account?.id == expected {
+                keep(account: nil)
+                await server.setAcceptsLinks(false)
+            }
+            throw failure
+        }
+        let local = await loadIdentity(create: false)
+        guard current.id == expected, account?.id == expected, let local else { return [] }
+        return (current.macs ?? []).filter { $0.room != local.room }
+    }
+
+    func accountGrant(for mac: RemoteAccountClient.Mac, key: Data, accountID: String) async throws -> String? {
+        guard let client = accountClient, account?.id == accountID,
+              let token = await withAccountToken({ $0.load() }) else { throw CancellationError() }
+        let grant = try await client.linkGrant(token: token, room: mac.room, clientKey: key)
+        guard account?.id == accountID else { throw CancellationError() }
+        return grant
+    }
+
     /// The account Settings names, kept for the next launch without its list of Macs.
     private func keep(account: RemoteAccountClient.Account?) {
         self.account = account
@@ -212,6 +266,7 @@ final class RemoteControlService {
     /// connections off; the account finds this Mac once they are on.
     func signIn(with provider: String) async {
         guard let client = accountClient, !isSigningIn else { return }
+        accountGeneration = UUID()
         isSigningIn = true
         accountError = nil
         defer { isSigningIn = false }
@@ -229,7 +284,7 @@ final class RemoteControlService {
             await withAccountToken { $0.save(token) }
             try await client.registerMac(token: token, identity: identity, name: macName, accountID: signedIn.id)
             keep(account: signedIn)
-            await server.setAcceptsLinks(true)
+            await acceptAccountLinks(for: signedIn.id)
         } catch is CancellationError {
             return
         } catch {
@@ -239,6 +294,12 @@ final class RemoteControlService {
 
     /// Takes this Mac off the account and forgets the token; link requests stop.
     func signOut() async {
+        guard !isSigningIn else { return }
+        isSigningIn = true
+        defer { isSigningIn = false }
+        accountGeneration = UUID()
+        keep(account: nil)
+        await server.setAcceptsLinks(false)
         if let client = accountClient, let token = await withAccountToken({ $0.load() }) {
             if let identity = await loadIdentity(create: false) { try? await client.removeMac(token: token, room: identity.room) }
             try? await client.logout(token: token)

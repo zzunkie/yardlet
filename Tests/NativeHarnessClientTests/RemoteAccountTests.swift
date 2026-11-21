@@ -115,6 +115,63 @@ final class RemoteAccountTests: XCTestCase {
         XCTAssertEqual(built.relayAlternateURL?.absoluteString, "https://relay-two.example.test")
     }
 
+    func testDesktopCanEnrollWithAnAlreadyConnectedPhoneOnAnOlderRelay() async throws {
+        let stack = try await LoopbackStack(name: "Mac Studio")
+        defer { stack.stop() }
+        let ticket = await stack.server.openPairing()
+        let phone = try await stack.phone(key: .generate(), hello: .init(name: "iPhone", platform: "ios",
+                                                                         pair: RemoteEncoding.base64url(ticket.secret)))
+        defer { phone.close() }
+        await stack.server.setAcceptsLinks(true)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteAccountTests.legacy")))
+        defaults.set("ws://127.0.0.1:\(stack.port)", forKey: RemoteControlService.relayURLKey)
+        defaults.set(Data(#"{"id":"ACC","provider":"github"}"#.utf8), forKey: RemoteControlService.accountKey)
+        StubRelay.accountPort = Int(stack.port)
+        let identity = stack.identity
+        StubRelay.macs = [["room": identity.room, "macKey": RemoteEncoding.base64url(identity.noise.publicKey),
+                           "relayKey": RemoteEncoding.base64url(identity.relayPublicKey), "name": "Mac Studio"]]
+        let client = RemoteControlService(bridge: FakeBridge(), deviceStore: RemoteDeviceStore(fileURL: nil), audit: nil,
+                                          identityStore: RemoteMemoryIdentityStore(.generate()),
+                                          accountToken: RemoteMemorySecret("ACC.secret"), defaults: defaults,
+                                          environment: [:], listens: false)
+        let listed = try await client.otherAccountMacs()
+        let mac = try XCTUnwrap(listed.first)
+        struct LockedKeys: RemoteClientKeyStoring {
+            func load(hostID: String) -> RemoteKeyPair? { nil }
+            func save(_ key: RemoteKeyPair, hostID: String) {}
+            func delete(hostID: String) {}
+        }
+        let locked = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: LockedKeys(), hello: .init())
+        let callsBefore = StubRelay.calls
+        do {
+            _ = try await locked.connect(to: mac, service: client) { _ in XCTFail("Unexpected link request") }
+            XCTFail("A client with no usable key enrolled")
+        } catch let failure as RemoteHostDirectory.PairingFailure {
+            XCTAssertEqual(failure, .keyUnavailable)
+        }
+        XCTAssertEqual(StubRelay.calls, callsBefore, "The host receives no request until the key can be saved")
+        XCTAssertTrue(locked.hosts.isEmpty)
+        let directory = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
+                                            hello: .init(name: "Laptop", platform: "macos"))
+        let number = Box<String?>(nil)
+        let connecting = Task {
+            try await directory.connect(to: mac, service: client) { number.value = $0 }
+        }
+        defer { connecting.cancel() }
+        try await waitUntil { number.value != nil && !phone.events(.linkRequest).isEmpty }
+        let request = try XCTUnwrap(phone.events(.linkRequest).first)
+        XCTAssertEqual(request.code, number.value)
+        let id = try XCTUnwrap(request.requestId)
+        let approval = RemoteRequestEnvelope(id: "approve", request: .answerLink(requestID: id, approve: true))
+        try await phone.send(String(decoding: approval.encoded(), as: UTF8.self))
+        let host = try await connecting.value
+        XCTAssertEqual(host.room, identity.room)
+        let model = try XCTUnwrap(directory.model(for: host.id))
+        defer { directory.close(host.id) }
+        try await waitUntil { model.hasSnapshot }
+        XCTAssertEqual(host.name, "Mac Studio")
+    }
+
     func testTheMacSignsInPutsItselfOnTheAccountAndTakesLinkRequests() async throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteAccountTests")))
         defaults.set("wss://relay.example.test", forKey: RemoteControlService.relayURLKey)
@@ -157,6 +214,14 @@ final class RemoteAccountTests: XCTestCase {
         XCTAssertTrue(registered.signatureValid, "The relay can check the Mac holds the room's key")
         XCTAssertEqual(registered.name, "MacBook Pro")
 
+        let studio = RemoteIdentity.generate()
+        StubRelay.macs = [(identity, "This Mac"), (studio, "Mac Studio")].map { item, name in
+            ["room": item.room, "macKey": RemoteEncoding.base64url(item.noise.publicKey),
+             "relayKey": RemoteEncoding.base64url(item.relayPublicKey), "name": name]
+        }
+        let accountMacs = try await service.otherAccountMacs()
+        XCTAssertEqual(accountMacs.map(\.name), ["Mac Studio"], "Outgoing connections work with hosting off and omit this Mac")
+
         // The next launch names the account before anything reaches the Keychain or the relay.
         let relaunched = RemoteControlService(
             bridge: FakeBridge(), deviceStore: RemoteDeviceStore(fileURL: nil), audit: nil, defaults: defaults,
@@ -170,6 +235,19 @@ final class RemoteAccountTests: XCTestCase {
         let asking = try await PipePhone.link(server: service.server, macStatic: identity.noise, name: "Pixel 10")
         XCTAssertEqual(asking.reveal?.ok, true)
         await service.answerLink(approve: false)
+
+        let peer = RemoteKeyPair.generate()
+        StubRelay.grantKey = RemoteEncoding.base64url(peer.publicKey)
+        let localMac = try JSONDecoder().decode(RemoteAccountClient.Mac.self,
+                                                from: JSONSerialization.data(withJSONObject: StubRelay.macs[0]))
+        let grant = try await service.accountGrant(for: localMac, key: peer.publicKey, accountID: "ACC")
+        var hello = RemoteHandshakeHello(name: "Laptop", platform: "macos", link: true,
+                                         linkCommit: RemoteEncoding.base64url(Data(RemoteRandom.bytes(32))))
+        hello.accountGrant = try XCTUnwrap(grant)
+        let enrolled = try await PipePhone.connect(server: service.server, macStatic: identity.noise, phoneKey: peer,
+                                                    hello: hello, targetKey: identity.noise.publicKey, expectsReply: true)
+        XCTAssertTrue(enrolled.reply.ok)
+        XCTAssertTrue(StubRelay.calls.contains("POST /v1/account/macs/\(identity.room)/link-grants/redeem"))
 
         await service.signOut()
         XCTAssertNil(service.account)
@@ -195,16 +273,26 @@ final class StubRelay: URLProtocol {
     nonisolated(unsafe) static var challenge: String?
     nonisolated(unsafe) static var registered: Registration?
     nonisolated(unsafe) static var calls: [String] = []
+    nonisolated(unsafe) static var grantKey: String?
+    nonisolated(unsafe) static var accountPort: Int?
+    nonisolated(unsafe) static var macs: [[String: String]] = []
     nonisolated(unsafe) static var providers = ["github"]
 
     static func reset() {
         challenge = nil
         registered = nil
+        macs = []
+        grantKey = nil
+        accountPort = nil
         calls = []
         providers = ["github"]
     }
 
-    override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "relay.example.test" }
+    override class func canInit(with request: URLRequest) -> Bool {
+        guard let url = request.url else { return false }
+        return url.host == "relay.example.test" || (url.host == "127.0.0.1" && url.port == accountPort &&
+            url.scheme == "http" && url.path().hasPrefix("/v1/account"))
+    }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
@@ -229,7 +317,7 @@ final class StubRelay: URLProtocol {
                 answer = ["error": "unauthorized"]
             }
         case ("GET", "/v1/account") where authorized:
-            answer = ["id": "ACC", "provider": "github", "name": "octocat", "macs": []]
+            answer = ["id": "ACC", "provider": "github", "name": "octocat", "macs": Self.macs]
         case ("PUT", let path) where authorized && path.hasPrefix("/v1/account/macs/"):
             let room = String(path.dropFirst("/v1/account/macs/".count))
             let relayKey = RemoteEncoding.data(base64url: json["relayKey"] ?? "") ?? Data()
@@ -238,6 +326,15 @@ final class StubRelay: URLProtocol {
             let valid = (try? Curve25519.Signing.PublicKey(rawRepresentation: relayKey).isValidSignature(signature, for: message)) ?? false
             Self.registered = Registration(room: room, name: json["name"] ?? "",
                                            signatureValid: valid && RemoteIdentity.room(for: relayKey) == room)
+        case ("POST", let path) where authorized && path.hasSuffix("/link-grants"):
+            if let key = Self.grantKey, json["clientKey"] == key {
+                answer = ["grant": RemoteEncoding.base64url(Data(repeating: 5, count: 32))]
+            } else {
+                status = 404
+                answer = [:]
+            }
+        case ("POST", let path) where authorized && path == "/v1/account/macs/\(Self.registered?.room ?? "")/link-grants/redeem":
+            answer = ["ok": json["clientKey"] == Self.grantKey && json["grant"] == RemoteEncoding.base64url(Data(repeating: 5, count: 32))]
         case ("DELETE", _), ("POST", "/v1/auth/logout"):
             status = authorized ? 204 : 401
         default:
