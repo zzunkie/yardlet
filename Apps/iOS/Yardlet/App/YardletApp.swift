@@ -45,9 +45,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, @preconcurrency UNUser
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {}
 
     /// A background push (docs/REMOTE_PROTOCOL.md §16): a task stopped waiting, so its notification goes, and its count
-    /// on the badge with it.
+    /// on the badge with it. Or the push target a relay sent while the app registers with it (§14.5).
     func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any])
         async -> UIBackgroundFetchResult {
+        if let target = userInfo["pushTarget"] as? String, let room = userInfo["room"] as? String {
+            PushTargets.received(target: target, room: room)
+            return .newData
+        }
         guard let opened = PushNotice.open(userInfo), let taskID = opened.event.taskId,
               PushNotice.withdraws(opened.event) else { return .noData }
         await PushNotice.withdraw { $1 == taskID }

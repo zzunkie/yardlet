@@ -5,7 +5,8 @@
 // America, Europe) keep Cloudflare's own choice. A hint counts only when the object is first made.
 
 /** The Durable Object name of a room. The prefix changed when rooms began to be placed by country, so
- * every room is made again where its Mac is; a room keeps nothing between connections. */
+ * every room is made again where its Mac is; a room keeps nothing between connections but its push targets (§14.5),
+ * which a new prefix would leave behind until phones register again. */
 export function roomObjectName(room: string): string {
   return `v2:${room}`;
 }
@@ -16,8 +17,8 @@ export function roomObjectName(room: string): string {
  * 1012 and the Mac, connecting again, lands in the new object. The Worker never routes outside requests here. */
 export const moveRoomPath = "/v1/internal/move-room";
 
-/** Until when a phone's connection also tells the room's old object to let its Mac go. Every Mac has
- * connected again by then (a restart, sleep or a network change reconnects it). */
+/** Until when a phone's request for a room (a connection or a push target) also tells the room's old object to let
+ * its Mac go. Every Mac has connected again by then (a restart, sleep or a network change reconnects it). */
 export const moveRoomsUntil = Date.UTC(2026, 11, 31);
 
 const northeastAsia = new Set(["KR", "JP", "TW", "HK", "MO", "CN", "MN"]);

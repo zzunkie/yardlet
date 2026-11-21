@@ -664,6 +664,7 @@ No TLS on direct paths: the Noise handshake authenticates the Mac by its static 
 | Mac relay key | Ed25519 | The Mac's Keychain. Opens the Mac's room on the relay (§14.2). |
 | Phone static key | X25519, one per paired Mac | The phone's secure storage (Android: sealed with a Keystore key, no backup). The Mac stores its public key. |
 | Push key | 32 random bytes, one per device | Made by the Mac on `registerPush` (§15.6), kept in the Mac's device list and the phone's secure storage. |
+| Push target | 32 random bytes, one per phone token in a room | Made by the relay when a phone binds its push token to the Mac's room (§14.5), kept in the room and given to the Mac in `registerPush`. |
 
 - **Room:** `base32(SHA-256(relay public key)[0..<20])`, RFC 4648 alphabet in lowercase, no padding:
   32 characters `[a-z2-7]`.
@@ -833,10 +834,12 @@ more Noise transport messages:
 | `GET /v1/health` | anyone | `200 ok` |
 | `GET /v1/rooms/<room>/host` (WebSocket) | the Mac | §14.2 |
 | `GET /v1/rooms/<room>/connect` (WebSocket) | a phone | §14.3. `404` when no Mac holds the room, `429` when the room has 8 phones the Mac answered, `400` for a malformed room |
+| `POST`, `DELETE /v1/rooms/<room>/push-targets` | a phone | §14.5 |
 
-One room per Mac. The relay keeps a room only in memory while its Mac is connected; it stores nothing
-and logs no frame contents. What it sees: rooms, IP addresses, when sockets open and close, frame sizes
-and times, and a push's token (FCM's registration token or APNs' device token) while sending it.
+One room per Mac. The relay keeps a room's sockets only in memory while its Mac is connected and logs no frame
+contents; what it stores for a room is the push targets its phones registered (§14.5). What it sees: rooms, IP
+addresses, when sockets open and close, frame sizes and times, and the push tokens phones register (FCM's
+registration token or APNs' device token).
 
 ### 14.2 The Mac's socket
 
@@ -869,12 +872,15 @@ on the first address, whose callbacks the providers know.
 8. Push, at most 60 a minute per room:
 
    ```json
-   {"t": "push", "id": "p3", "provider": "fcm", "to": "<the device's token>", "urgent": true, "collapse": "<≤ 64 bytes>",
+   {"t": "push", "id": "p3", "provider": "fcm", "to": "<the device's push target>", "urgent": true, "collapse": "<≤ 64 bytes>",
     "ttl": 3600, "data": {"v": "1", "k": "<push key id>", "y": "<sealed payload>"}}
    ```
 
-   `provider` and `to` are what the device registered (§15.6); a push without `provider` goes through FCM. The
-   relay sends `data`:
+   `provider` and `to` are what the device registered (§15.6). `to` is a push target of this room (§14.5): the relay
+   sends to the token and provider the phone bound to it, whatever `provider` says. A target this room does not hold
+   goes nowhere (`unregistered`), whichever Mac had it, and so does a `to` that is not a target, with one exception
+   until 1 February 2027 (UTC): an FCM registration token itself, which Android apps from before targets give the Mac.
+   Such a push without `provider` goes through FCM. The relay sends `data`:
 
    - `fcm`: as an FCM HTTP v1 data message (`android.priority` HIGH when `urgent`, else NORMAL; `collapse_key`;
      `ttl`).
@@ -888,8 +894,9 @@ on the first address, whose callbacks the providers know.
      `apns-priority: 5`, `"aps": {"content-available": 1}`).
 
    It answers `{"t": "pushed", "id": "p3", "ok": true}` or `{"t": "pushed", "id": "p3", "ok": false, "error":
-   "unregistered"}`. Errors: `unregistered` (the token is gone: forget it; FCM answered 404 or `UNREGISTERED`, APNs
-   410 or 400 `BadDeviceToken` or `DeviceTokenNotForTopic`), `invalid` (a field or the provider is wrong, or the
+   "unregistered"}`. Errors: `unregistered` (the target or token is gone: forget it; the room holds no such target,
+   or FCM answered 404 or `UNREGISTERED`, APNs 410 or 400 `BadDeviceToken` or `DeviceTokenNotForTopic`, and the room
+   then removes the target), `invalid` (a field or the provider is wrong, or the
    service refused the message), `rateLimited`, `unavailable` (the service failed, could not be reached or refused the
    relay's credentials), `notConfigured` (the relay has no credentials for that provider).
 
@@ -953,6 +960,43 @@ them with the token.
   provider), `invalidSignature` (403), `tooMany` (409), `providerFailed` (502).
 - Provider credentials are the relay's secrets: `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GOOGLE_CLIENT_ID`,
   `GOOGLE_CLIENT_SECRET`, `AUTH_STATE_SECRET`, and `PUBLIC_URL` (the relay's own https base, for callbacks).
+
+### 14.5 Push targets
+
+A phone binds its push token to a Mac's room and gives that Mac only the target the relay made for it. The relay sends a
+push only to a target the sending room holds (§14.2), and sends a new target only to the token itself, in a push the
+phone takes only while it registers in that room. A target thus reaches a Mac only through the phone, and registering a
+token someone else knows gains them nothing. The phone ends its target when it removes the Mac. It sends its token only
+to the relay its app is built with, the one holding the app's push credentials, and only for a Mac that uses that
+relay: a Mac names its relay itself, and no other relay can push to the app.
+
+| request | who | answer |
+|---|---|---|
+| `POST /v1/rooms/<room>/push-targets` `{"provider", "token", "target"}` | a phone | `200` `{"target": "<32 random bytes>"}`, or `202` `{"sent": true}` |
+| `DELETE /v1/rooms/<room>/push-targets` `{"target"}` | a phone | `204` |
+
+- `provider` and `token` are the phone's own, as in §15.6: `fcm` and the FCM registration token (printable ASCII
+  without spaces), or `apns` or `apns-sandbox` and the APNs device token in hex, kept in lowercase; at most 4,096
+  characters. `target`, optional, is the one the phone holds for this room. Anything else is `badRequest` (400), and a
+  body over 8 KB is `tooLarge` (413).
+- A registration is taken only while the room's Mac is connected (`notFound`, 404, otherwise).
+- When the room holds `target` for that token, the answer is `200` with it. Otherwise the relay pushes the token's
+  target in this room, the one it has or a new one, to the token itself and answers `202` without it: through FCM a
+  high-priority data message, through APNs a background push (`apns-push-type: background`, `apns-priority: 5`,
+  `"aps": {"content-available": 1}`), each carrying `{"pushTarget": "<target>", "room": "<room>"}` and living 300 s. A
+  token is sent its target at most once in 30 s (`rateLimited`, 429), and the push counts toward the room's 60 a minute
+  (§14.2). When the service refuses it, the answer is the push's error (§14.2) with a status (`unregistered` 410,
+  `invalid` 400, `rateLimited` 429, `unavailable` 503, `notConfigured` 501), and a new target is not kept.
+- A room holds at most 64 targets; a new one past that is `tooMany` (409).
+- The room keeps each target with its provider, token and when it was last registered or pushed to, until the phone
+  ends it, the push service answers `unregistered` for its token (§14.2), or nobody registered or pushed to it for 90
+  days. A room whose last target ended stores nothing.
+- `DELETE` ends a target whether or not the room's Mac is connected, and answers `204` for one the room does not hold.
+- Errors are JSON `{"error": "…"}`.
+- The phone registers before it sends `registerPush` (§15.6), naming the target it holds, and on `202` waits about
+  30 s for the push; it takes a `pushTarget` only for a room it is registering in. `registerPush`'s `token` is then the
+  target. It ends the target when it removes the Mac, or learns the Mac removed it (4403), and tries again later when the
+  relay cannot be reached.
 
 ## 15. v2 requests and fields
 
@@ -1036,16 +1080,20 @@ characters). Errors as §15.3.
 ### 15.6 Push and devices
 
 ```json
-{"id": "15", "type": "registerPush", "provider": "fcm", "token": "<FCM registration token>"}
+{"id": "15", "type": "registerPush", "provider": "fcm", "token": "<push target>"}
 ```
 
 ```json
 {"re": "15", "ok": true, "pushKey": "<32 bytes>", "pushKeyId": "<16 hex>"}
 ```
 
-- `provider` is `fcm` (Android; `token` is the FCM registration token), `apns` (an iOS build signed for production:
-  TestFlight or the App Store) or `apns-sandbox` (an iOS build signed for development); for APNs `token` is the device
-  token in lowercase hex. Any other provider is `badRequest`.
+- `provider` is `fcm` (Android), `apns` (an iOS build signed for production: TestFlight or the App Store) or
+  `apns-sandbox` (an iOS build signed for development). Any other provider is `badRequest`.
+- `token` is the push target the Mac's relay gave the phone for the Mac's room (§14.5), which binds the phone's own
+  token there: the FCM registration token, or the APNs device token in lowercase hex. The Mac keeps the target and
+  never sees the token. A phone whose Mac uses no relay, or another relay than the one its app is built with, registers
+  nothing, since only that relay can push to it. Android apps from before targets send the FCM registration token
+  itself, which the relay takes until 1 February 2027 (§14.2).
 - Registering again (a new token) keeps the push key. `{"type": "unregisterPush"}` stops pushes.
 - `{"type": "forgetDevice"}`: the phone unpairs itself; the Mac answers `ok`, removes the device and
   closes (4403).

@@ -74,6 +74,8 @@ final class HostSession: Identifiable {
     /// The push key the Mac made for this phone (§15.6), to keep for the notification service extension.
     @ObservationIgnored var onPushKey: ((_ key: Data, _ keyID: String) -> Void)?
 
+    /// The registration under way, so one ends before the next begins and the Mac keeps the latest target.
+    @ObservationIgnored private var registeringPush: Task<Void, Never>?
     @ObservationIgnored private var connector: RemoteHostConnection?
     @ObservationIgnored private let clientKey: RemoteKeyPair
     @ObservationIgnored private let hello: RemoteHandshakeHello
@@ -192,6 +194,7 @@ final class HostSession: Identifiable {
         case .revoked:
             failPending()
             connection = .removed
+            if !isDemo { PushTargets.remove(hostID: id) }
         case .stopped:
             failPending()
             if connection != .removed { connection = .stopped }
@@ -344,11 +347,24 @@ final class HostSession: Identifiable {
 
     // MARK: - Push
 
+    /// The Mac pushes through its relay, which sends only to a target bound to the Mac's room (§14.5): on each
+    /// connection the phone binds its token there and gives the Mac the target, never the token.
     private func registerPush() {
-        guard isConnected, !isDemo, let registration = pushRegistration else { return }
-        request(.registerPush(provider: registration.provider, token: registration.token)) { [weak self] response in
-            guard let self, response.ok, let text = response.pushKey, let key = RemoteEncoding.data(base64url: text),
-                  let keyID = response.pushKeyId else { return }
+        guard isConnected, !isDemo, let registration = pushRegistration,
+              let relay = PushTargets.relay(for: host), let room = host.room else { return }
+        let connection = connectionNumber
+        let previous = registeringPush
+        registeringPush = Task { [weak self, id] in
+            await previous?.value
+            // The connection this was asked on ended while an earlier registration ran (the Mac removed, the app sent to
+            // the background): nothing is registered for it.
+            guard let self, connectionNumber == connection, isConnected else { return }
+            guard let target = await PushTargets.register(provider: registration.provider, token: registration.token,
+                                                          relay: relay, room: room, hostID: id),
+                  connectionNumber == connection, isConnected else { return }
+            let answer = await response(to: .registerPush(provider: registration.provider, token: target))
+            guard answer.ok, let text = answer.pushKey, let key = RemoteEncoding.data(base64url: text),
+                  let keyID = answer.pushKeyId else { return }
             onPushKey?(key, keyID)
         }
     }

@@ -96,10 +96,13 @@ xcrun simctl launch booted com.zzunkie.yardlet.remote -demo YES -openTask 0F1E00
 
 ## Notifications
 
-The Mac seals each push for this phone with the push key it made when the phone registered (§15.6, §16). The app
-registers its APNs token with `provider` `apns` (TestFlight and App Store builds) or `apns-sandbox` (a build signed
-for development, read from its provisioning profile), and keeps the push key in the Keychain group it shares with the
-extension. The relay sends an urgent push as an alert with `mutable-content`; the extension opens it with the key its
+The Mac seals each push for this phone with the push key it made when the phone registered (§15.6, §16). On every
+connection to a Mac on the app's own relay (`YardletRelayURL`), the app binds its APNs token to the Mac's room there
+and registers the target the relay answers, or sends in a background push the app takes only while it registers there
+(§14.5), with `provider` `apns` (TestFlight and App Store builds) or `apns-sandbox` (a build signed for development,
+read from its provisioning profile); the Mac never holds the token, and the app sends it to no other relay. Removing the Mac, or the Mac removing
+the phone, ends the target on the relay, and a removal the relay did not take is tried again when the app next comes
+to the front. The app keeps the push key in the Keychain group it shares with the extension. The relay sends an urgent push as an alert with `mutable-content`; the extension opens it with the key its
 `k` names and shows the task, what waits and the Mac's name, or keeps the app's own fallback words when it cannot.
 A push that only withdraws a notice is a background push the app reads to remove that task's notifications. The relay
 needs the APNs key to send any of this (relay/README.md).

@@ -121,6 +121,7 @@ final class PhoneModel {
         }
         keys.delete(hostID: hostID)
         PushKeys.delete(hostID: hostID)
+        PushTargets.remove(hostID: hostID)
         Task { await PushNotice.withdraw { host, _ in host == hostID } }
         MacFileStore.clear(hostID: hostID)
         store.remove(hostID)
@@ -351,6 +352,7 @@ final class PhoneModel {
             lock.appCameToFront()
             // Opens the connection closed in the background, or tries an open one again now.
             session?.reconnectNow()
+            PushTargets.removeWaiting()
             // Back before the demo's notification showed: it waits for the next time the person leaves.
             if let at = demoNoticeAt, Date() < at {
                 UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [Self.demoNotice])
