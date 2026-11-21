@@ -412,6 +412,9 @@ final class SessionToolCenter {
     @ObservationIgnored private let madeTasksKey = "Yardlet.sessionTools.depth"
     /// Where a finished subagent's conversation is kept, under its host task; nil keeps none (tests).
     @ObservationIgnored var runDirectory: URL?
+    /// A long conversation must not delay unrelated state files such as composer drafts.
+    let keptRunWriter = StateFileWriter()
+    @ObservationIgnored private var pendingRunWrites: [URL: UUID] = [:]
     /// A shorter wait than the caller harness's limit, for tests.
     @ObservationIgnored var waitCeilingOverride: Duration?
     /// Shorter waits than `SessionToolPolicy`'s self-archive waits, for tests.
@@ -629,6 +632,9 @@ final class SessionToolCenter {
         guard let runDirectory else { return nil }
         let url = runDirectory.appending(path: hostTaskID.uuidString.lowercased(), directoryHint: .isDirectory)
             .appending(path: "\(id.uuidString.lowercased()).json")
+        // The rail normally reads an earlier launch's file. Opening one should not wait for
+        // another run's transcript to finish saving.
+        if pendingRunWrites[url] != nil { keptRunWriter.flush() }
         guard let data = try? Data(contentsOf: url) else { return nil }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -645,6 +651,7 @@ final class SessionToolCenter {
             runs[run.id] = nil
         }
         if let folder = runDirectory?.appending(path: taskID.uuidString.lowercased(), directoryHint: .isDirectory) {
+            keptRunWriter.flush()
             try? FileManager.default.removeItem(at: folder)
         }
     }
@@ -653,15 +660,22 @@ final class SessionToolCenter {
     func keep(_ run: AgentRun) {
         guard let runDirectory else { return }
         let folder = runDirectory.appending(path: run.hostTaskID.uuidString.lowercased(), directoryHint: .isDirectory)
+        let file = folder.appending(path: "\(run.id.uuidString.lowercased()).json")
         let record = KeptAgentRun(id: run.id, callerID: run.callerID, harness: run.harness.rawValue,
                                   model: run.model, prompt: run.prompt, workspacePath: run.workspaceURL.path(percentEncoded: false),
                                   startedAt: run.startedAt, state: run.state.word, answer: run.answer,
-                                  entries: run.codexState.map(CodexTranscriptSnapshotProjection.entries(from:))
-                                      ?? run.entries)
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        try? StateFile.write(encoder.encode(record), to: folder.appending(path: "\(run.id.uuidString.lowercased()).json"),
-                             isPrivate: true)
+                                  entries: run.entries)
+        let writeID = UUID()
+        pendingRunWrites[file] = writeID
+        keptRunWriter.write(file, done: { [weak self] _ in
+            if self?.pendingRunWrites[file] == writeID { self?.pendingRunWrites[file] = nil }
+        }) { [codexState = run.codexState] in
+            var snapshot = record
+            if let codexState { snapshot.entries = CodexTranscriptSnapshotProjection.entries(from: codexState) }
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            try StateFile.write(encoder.encode(snapshot), to: file, isPrivate: true)
+        }
     }
 
     // MARK: Antigravity conversations

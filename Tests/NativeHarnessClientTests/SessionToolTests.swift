@@ -1672,6 +1672,7 @@ final class SessionToolTests: XCTestCase {
         // Kept with the caller, readable only by the user.
         let file = fixture.runs.appending(path: fixture.caller.id.uuidString.lowercased())
             .appending(path: "\(run.id.uuidString.lowercased()).json")
+        await model.sessionTools.keptRunWriter.flushed()
         let kept = try JSONDecoder.iso8601.decode(KeptAgentRun.self, from: Data(contentsOf: file))
         XCTAssertEqual(kept.answer, "README explains the build.")
         XCTAssertEqual(kept.model, "haiku")
