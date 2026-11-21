@@ -131,6 +131,9 @@ final class RemoteHostModel: Identifiable {
     private(set) var offersHostCalendar = false
     var mailCalendarState: RemoteMailCalendarState?
     let calendar = CalendarCenter(defaults: nil)
+    /// The host answers `mail` (§15.38): its mailbox as this window reads it, in memory only, telling no new mail here.
+    private(set) var offersHostMail = false
+    let mailbox = MailboxCenter(defaults: nil)
 
     /// Called for each `attention` event, for a notification of the host's task.
     @ObservationIgnored var onAttention: ((RemoteEvent) -> Void)?
@@ -241,6 +244,7 @@ final class RemoteHostModel: Identifiable {
         files.removeAll()
         mailCalendarState = nil
         calendar.setEnabled(false)
+        mailbox.setEnabled(false)
     }
 
     /// The person asked to try now, or the network changed.
@@ -425,6 +429,7 @@ final class RemoteHostModel: Identifiable {
             browser.takesFramesInFlight = response.browserTabs == true && response.tabFramesInFlight == true
             offersHostAccounts = response.hostAccounts == true
             offersHostCalendar = response.hostCalendar == true
+            offersHostMail = response.hostMail == true
             Task { await readMailCalendarState() }
             hasSnapshot = true
             hostTakesPresence = response.presence == true

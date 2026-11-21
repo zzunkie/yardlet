@@ -4379,3 +4379,4 @@
 "To read mail and calendar from here, allow Mail and Calendar for this device in Settings › Remote › Paired devices on %@." = "To read mail and calendar from here, allow Mail and Calendar for this device in Settings › Remote › Paired devices on %@.";
 "Sign in to this account again in %@'s Settings › Connectors." = "Sign in to this account again in %@'s Settings › Connectors.";
 "The calendar's answer could not be read." = "The calendar's answer could not be read.";
+"The mailbox's answer could not be read." = "The mailbox's answer could not be read.";

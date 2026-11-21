@@ -357,6 +357,8 @@ public struct RemoteSnapshot: Equatable, Sendable {
     public var hostAccounts: Bool = false
     /// The bridge answers `mailCalendarState` and `calendar` from the host's own calendar (§15.38).
     public var hostCalendar: Bool = false
+    /// The bridge answers `mail` from the host's own mailbox (§15.38).
+    public var hostMail: Bool = false
     /// The bridge answers `suggestionOptions` and starts a suggestion with the client's choices (§15.9).
     public var suggestionOptions: Bool = false
 
@@ -1225,8 +1227,10 @@ public enum RemoteRequest: Equatable, Sendable {
     /// Whether the host's mail and calendar are on and this device may use them, and with `watching` being told when
     /// that changes (§15.38).
     case mailCalendarState(watching: Bool = true)
-    /// One call of the host's calendar: `action` names it, `data` carries its JSON arguments (§15.38).
+    /// One call of the host's calendar or mailbox: `action` names it, `data` carries its JSON arguments, and a draft's
+    /// `files` name finished uploads (§15.20, §15.38).
     case calendar(action: String, data: Data?)
+    case mail(action: String, data: Data?, files: [String] = [])
 
     public var type: String {
         switch self {
@@ -1236,6 +1240,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case .setHostConnector: "setHostConnector"
         case .mailCalendarState: "mailCalendarState"
         case .calendar: "calendar"
+        case .mail: "mail"
         case .subtask: "subtask"
         case .cancelAccountMove: "cancelAccountMove"
         case .fileRewind: "fileRewind"
@@ -1345,7 +1350,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case .hostSettings: nil
         case .setHostSetting, .saveHostInstructions, .hostCLIUpdate: .settings
         case .mailCalendarState: nil
-        case .calendar: .mailCalendar
+        case .calendar, .mail: .mailCalendar
         case .snapshot, .subscribeTask, .loadOlder, .unsubscribeTask, .ping, .sendMessage,
              .stopTurn, .markRead, .answerQuestion, .reviewPlan, .createTask, .newTaskOptions, .limitAccounts,
              .continueWithAccount, .setAutoContinue, .actOnQueued, .answerHandoff, .chooseAnswer, .uploadFile, .registerPush,
@@ -1383,7 +1388,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case .projectWorkspaceFiles, .snapshot, .ping, .createTask, .newTaskOptions, .registerPush, .unregisterPush, .forgetDevice,
              .answerLink, .uploadFile, .revealLink, .scheduledTasks, .runScheduledTask, .setScheduledTaskEnabled,
              .presence, .hostSettings, .setHostSetting, .saveHostInstructions, .hostCLIUpdate,
-             .hostAccounts, .setHostAccount, .setHostHarnessRuntime, .setHostConnector, .mailCalendarState, .calendar: nil
+             .hostAccounts, .setHostAccount, .setHostHarnessRuntime, .setHostConnector, .mailCalendarState, .calendar, .mail: nil
         }
     }
 
@@ -1402,7 +1407,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case let .setHostAccount(harness, accountID, _, settingID, _): settingID ?? accountID ?? harness
         case let .setHostHarnessRuntime(harness, choiceID): "\(harness):\(choiceID)"
         case let .setHostConnector(id, _): id
-        case let .calendar(action, _): action
+        case let .calendar(action, _), let .mail(action, _, _): action
         default: nil
         }
     }
@@ -1433,6 +1438,7 @@ public enum RemoteRequest: Equatable, Sendable {
         switch self {
         case .setHostAccount, .setHostHarnessRuntime, .setHostConnector: true
         case let .calendar(action, _): RemoteProtocol.calendarCommands.contains(action)
+        case let .mail(action, _, _): RemoteProtocol.mailCommands.contains(action)
         case .nextStep: true
         case .useUsageReset: true
         case let .subtask(_, _, stop): stop
@@ -2068,8 +2074,9 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             request = .setHostConnector(id: connectorID, enabled: enabled)
         case "mailCalendarState":
             request = .mailCalendarState(watching: wire.watching != false)
-        case "calendar":
-            guard let action = required(wire.action), RemoteProtocol.calendarActions.contains(action) else {
+        case "calendar", "mail":
+            let actions = type == "calendar" ? RemoteProtocol.calendarActions : RemoteProtocol.mailActions
+            guard let action = required(wire.action), actions.contains(action) else {
                 return fail(.badRequest, "Unknown \(type) action")
             }
             var data: Data?
@@ -2080,7 +2087,11 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
                 guard let decoded = Data(base64Encoded: encoded) else { return fail(.badRequest, "Invalid base64 data") }
                 data = decoded
             }
-            request = .calendar(action: action, data: data)
+            let files = wire.files ?? []
+            if type == "calendar" || action != "saveDraft" {
+                guard files.isEmpty else { return fail(.badRequest, "Only a draft names files") }
+            }
+            request = type == "calendar" ? .calendar(action: action, data: data) : .mail(action: action, data: data, files: files)
         default:
             return fail(.unknownType, "Unknown type \(type)")
         }
@@ -2369,6 +2380,10 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         case let .calendar(action, data):
             wire.action = action
             wire.data = data?.base64EncodedString()
+        case let .mail(action, data, files):
+            wire.action = action
+            wire.data = data?.base64EncodedString()
+            wire.files = files.isEmpty ? nil : files
         }
         return (try? RemoteJSON.encoder.encode(wire)) ?? Data()
     }
@@ -2521,8 +2536,9 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     public var settingsPage: RemoteHostSettings?
     public var hostAccounts: Bool?
     public var hostAccountsState: RemoteAccountsState?
-    /// `snapshot`: the Mac answers `mailCalendarState` and `calendar` (§15.38).
+    /// `snapshot`: the Mac answers `mailCalendarState` and `calendar`, and `mail` (§15.38).
     public var hostCalendar: Bool?
+    public var hostMail: Bool?
     public var mailCalendarState: RemoteMailCalendarState?
 
     public init(re: String, ok: Bool = true, error: RemoteError? = nil) {

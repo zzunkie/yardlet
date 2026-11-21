@@ -7,20 +7,25 @@ extension RemoteHostModel {
     /// Whether the host's calendar is on and this device may read it, then the host's accounts; told again by
     /// `mailCalendarChanged` while the window is open.
     func readMailCalendarState() async {
-        guard offersHostCalendar, isConnected else {
-            if !offersHostCalendar { mailCalendarState = nil; calendar.setEnabled(false) }
+        guard offersHostCalendar || offersHostMail, isConnected else {
+            if !offersHostCalendar && !offersHostMail {
+                mailCalendarState = nil
+                calendar.setEnabled(false)
+                mailbox.setEnabled(false)
+            }
             return
         }
         let answer = await response(to: .mailCalendarState(watching: true))
         guard answer.ok, let state = answer.mailCalendarState else { return }
         mailCalendarState = state
         await followHostCalendar()
+        await followHostMail()
     }
 
     /// The calendar shows while the host's is on; it holds the host's accounts while this device may read them, and
     /// none otherwise, so the window says where the permission is.
     private func followHostCalendar() async {
-        guard let state = mailCalendarState, state.calendar else {
+        guard offersHostCalendar, let state = mailCalendarState, state.calendar else {
             calendar.setEnabled(false)
             return
         }

@@ -4379,3 +4379,4 @@
 "To read mail and calendar from here, allow Mail and Calendar for this device in Settings › Remote › Paired devices on %@." = "여기서 메일과 캘린더를 보려면 %@의 설정 › 원격 연결 › 연결된 기기에서 이 기기에 “메일과 캘린더”를 허용하세요.";
 "Sign in to this account again in %@'s Settings › Connectors." = "%@의 설정 › 커넥터에서 이 계정에 다시 로그인하세요.";
 "The calendar's answer could not be read." = "캘린더의 응답을 읽을 수 없습니다.";
+"The mailbox's answer could not be read." = "메일함의 응답을 읽을 수 없습니다.";

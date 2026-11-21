@@ -250,6 +250,9 @@ public protocol RemoteBridge: AnyObject, Sendable {
     /// One call of the host's calendar, its JSON arguments in and its JSON answer out (§15.38). A bridge that answers
     /// it says so in its snapshot (`hostCalendar`).
     func calendar(action: String, data: Data?) async -> Result<Data, RemoteError>
+    /// One call of the host's mailbox (§15.38); a draft's `files` are this device's finished uploads. A bridge that
+    /// answers it says so in its snapshot (`hostMail`).
+    func mail(action: String, data: Data?, files: [RemoteFile]) async -> Result<Data, RemoteError>
 }
 
 extension RemoteBridge {
@@ -262,6 +265,9 @@ extension RemoteBridge {
     public func mailCalendarState() async -> RemoteMailCalendarState { RemoteMailCalendarState() }
     public func setWatchingMailCalendar(_ watching: Bool) async {}
     public func calendar(action: String, data: Data?) async -> Result<Data, RemoteError> { .failure(RemoteError(.unavailable)) }
+    public func mail(action: String, data: Data?, files: [RemoteFile]) async -> Result<Data, RemoteError> {
+        .failure(RemoteError(.unavailable))
+    }
     public func hostAccounts(refreshHarnesses: [String]) async -> Result<RemoteAccountsState, RemoteError> {
         .failure(RemoteError(.unavailable))
     }
@@ -2135,6 +2141,35 @@ public actor RemoteServer {
                     respond(.failure(envelope.id, error), to: id)
                 }
             }
+        case let .mail(action, data, ids):
+            if request.isCommand {
+                var answer: Data?
+                await command(envelope.id, request: request, on: id) {
+                    let files: [RemoteFile]
+                    switch self.uploadedFiles(ids, on: id) {
+                    case let .success(found): files = found
+                    case let .failure(error): return error
+                    }
+                    switch await self.bridge.mail(action: action, data: data, files: files) {
+                    case let .success(data):
+                        self.uploads.release(ids)
+                        answer = data
+                        return nil
+                    case let .failure(error):
+                        self.uploads.unclaim(ids, now: self.now())
+                        return error
+                    }
+                } answer: { $0.data = answer }
+            } else {
+                switch await bridge.mail(action: action, data: data, files: []) {
+                case let .success(data):
+                    var response = RemoteResponse(re: envelope.id)
+                    response.data = data
+                    respond(response, to: id)
+                case let .failure(error):
+                    respond(.failure(envelope.id, error), to: id)
+                }
+            }
         case let .uploadFile(part):
             guard let deviceID = connection.deviceID else { return }
             switch uploads.receive(part, from: deviceID, now: now()) {
@@ -2190,6 +2225,7 @@ public actor RemoteServer {
             response.hostSettings = published?.hostSettings == true ? true : nil
             response.hostAccounts = published?.hostAccounts == true ? true : nil
             response.hostCalendar = published?.hostCalendar == true ? true : nil
+            response.hostMail = published?.hostMail == true ? true : nil
             response.suggestionOptions = published?.suggestionOptions == true ? true : nil
             response.serverTime = RemoteJSON.milliseconds(now())
             respond(response, to: id)

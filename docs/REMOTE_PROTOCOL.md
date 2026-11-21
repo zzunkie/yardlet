@@ -2729,16 +2729,16 @@ leaves those sections out of a remote host's Settings. Phones may ignore the fla
 
 ### 15.38 The host's mail and calendar
 
-The optional snapshot flag `hostCalendar: true` advertises the requests and event below, with which a remote desktop
-window shows the host's own calendar: the accounts the host's calendar holds (docs/CALENDAR.md, "Accounts"), read
-through the host's own transports, while the host's calendar is on. Phones and older clients may ignore the flag and
-the event.
+The optional snapshot flags `hostCalendar: true` and `hostMail: true` advertise the requests and event below, with
+which a remote desktop window shows the host's own calendar and mailbox: the accounts they hold there
+(docs/CALENDAR.md, "Accounts"; docs/MAILBOX.md, "Accounts"), read through the host's own transports, while each is on.
+Phones and older clients may ignore the flags and the event.
 
 - `mailCalendarState` (`watching?: bool`, default true) answers `mailCalendarState: {calendar, mailbox, permitted}`:
   whether the host's calendar and mailbox are turned on there, and whether this device has its `mailCalendar`
   permission (§15.28). It names no account, address or event, so any paired device reads it. While a connection
-  watches, the host sends `{"event": "mailCalendarChanged"}` when either is turned on or off, when the calendar's
-  accounts change, and when the device's `mailCalendar` permission changes; `watching: false` ends the watch.
+  watches, the host sends `{"event": "mailCalendarChanged"}` when either is turned on or off, when their accounts
+  change, and when the device's `mailCalendar` permission changes; `watching: false` ends the watch.
 - `calendar` (`action`, optional `data`) is one call of the host's calendar. `data` is base64 of the call's JSON
   arguments, at most 1 MiB, and a successful answer carries the call's JSON result the same way in `data`. The JSON
   uses the calendar's own Codable shapes (`CalendarAccount`, `CalendarInfo`, `CalendarEvent`), which both Macs build
@@ -2758,8 +2758,33 @@ the event.
   reason `signIn`; any other failure of the service answers `unavailable` with reason `failed` and the host's own words.
 - `respond` is a command (§4.4): the audit log records its kind, device, result and the action, never an event, an
   address or a title. Reads are not written to the audit log; a refused permission is, as every refusal is.
-- The client keeps what it reads in memory only, as the host's own calendar does, and the calendars the person shows
-  or hides in its window start from the host's choices and stay in that window.
+- `mail` (`action`, optional `data`, and for `saveDraft` optional `files`) is one call of the host's mailbox, in the
+  same form as `calendar`, with the mailbox's own Codable shapes (`MailAccount`, `MailFolder`, `MailPage`,
+  `MailThread`, `MailThreadChange`, `MailChanges`) and the same permission, refusals and reasons. Each action is one of
+  the mailbox's own requests of a service (docs/MAILBOX.md):
+
+| `action` | `data` | Answer |
+|---|---|---|
+| `accounts` | none | `{accounts}`: the host's mail accounts |
+| `folders` | `{accountID}` | the account's folders and labels |
+| `inbox`, `list`, `search` | `{accountID, pageToken?}` with `folder` for `list` and `query` for `search` | a page of threads and the next page's token |
+| `thread` | `{accountID, threadID}` | the thread with its messages |
+| `change` | `{accountID, threadID, change}` | `{}` once read, starred, archived, not spam or out of the Trash on the service |
+| `saveDraft` | `{accountID, composition}` | `{value}`: the draft's ID on the service |
+| `sendDraft`, `discardDraft` | `{accountID, draftID}` | `{}` |
+| `draftID` | `{accountID, messageID}` | `{value}`: the draft a thread's draft message is |
+| `changeCursor`, `changes` | `{accountID}`, or with `cursor` | `{value}` where the history stands now, or what arrived after `cursor` |
+
+- A draft's `composition` is what is written without its files: recipients, subject, words, the thread and message it
+  answers or forwards, and whether the draft's own files stay. Its new files are this device's finished uploads (§15.20),
+  named in `files` by upload ID, which the host attaches as the upload's own file under its own name; no path of the
+  client or the host travels. They are claimed for the call and released once it succeeds.
+- `change`, `saveDraft`, `sendDraft` and `discardDraft` are commands, audited by kind and action only, never an
+  address, a subject or a word of a message.
+- The client keeps what it reads in memory only, as the host's own calendar and mailbox do. The calendars the person
+  shows or hides in its window start from the host's choices and stay in that window, and where each mail account's
+  history was read up to stays in memory. The window follows new mail as the host's mailbox does, through `changes`,
+  to mark the sidebar's Mail and the home's unread mail, and posts no notification of it: the host tells its own.
 
 ## 16. Push notifications
 
@@ -2930,7 +2955,11 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   days and event over the host's accounts, the host's scheduled runs over the days, Accept and Decline answered
   through the host, Hand to an agent… starting a chat on the host, and a sign-in to renew opening the host's
   Settings › Connectors; the home's desk takes today from it. Without the device's `mailCalendar` permission the
-  calendar says where on the host to allow it. What it reads stays in memory and goes when the window closes.
+  calendar says where on the host to allow it. What it reads stays in memory and goes when the window closes. With
+  `hostMail` (§15.38), the words offer Mail too while the host's mailbox is on: the local mailbox's sidebar, threads
+  and writing over the host's accounts (a thread opened is marked read on the host's service; a draft's files are sent
+  up as uploads), Ask an agent starting a chat on the host, the service's web mail and a message's links opening in this
+  Mac's browser, and the home's desk counting the host's unread mail. It posts no notification of new mail.
 - **Paths:** as §11.4. While a host's window is open it browses Bonjour (§11.3) for the instance with the
   discovery id of the host key it saved, and resolves it to the host's name and port (`Name.local:47616`; the
   system resolves the name when connecting). Those addresses go first, never saved, then the direct addresses the

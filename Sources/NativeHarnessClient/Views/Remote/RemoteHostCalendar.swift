@@ -15,6 +15,7 @@ extension RemoteHostView {
             shell.section = section
         }
         if section == .calendar, model.offersSchedules { model.schedules.load() }
+        if section == .mail { model.mailbox.noteShown() }
     }
 
     @ViewBuilder var calendarSidebar: some View {
@@ -79,7 +80,7 @@ extension RemoteHostView {
     }
 
     /// "Hand to an agent…": a new chat on the host whose draft names it, as the local window starts one.
-    private func askAgent(_ reference: String) {
+    func askAgent(_ reference: String) {
         drafts.newTaskProjectID = RemoteTaskProjection.chatsProjectID
         let draft = drafts.newTask
         if !draft.text.contains(reference) {
@@ -89,7 +90,7 @@ extension RemoteHostView {
         showHome()
     }
 
-    private var permissionWords: String {
+    var permissionWords: String {
         RemoteHostModel.message(for: RemoteError(.notAllowed, reason: .mailCalendar), host: model.name)
     }
 }

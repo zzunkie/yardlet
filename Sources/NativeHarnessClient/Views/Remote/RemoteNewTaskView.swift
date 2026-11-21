@@ -55,7 +55,7 @@ struct RemoteNewTaskView: View {
         GeometryReader { viewport in
             if showsDesk {
                 // The host's desk, as the local home's: what the host's tasks wait on, what runs and what finished.
-                // Today is the host's calendar, read through it (§15.38); the host's mail is not read from here.
+                // Today and the unread mail are the host's, read through it (§15.38).
                 DeskHome(
                     activity: activity, size: viewport.size, onAction: perform,
                     keyboard: $listKeyboard, focus: $listFocus,

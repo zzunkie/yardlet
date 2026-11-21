@@ -130,6 +130,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         snapshot.hostSettings = true
         snapshot.hostAccounts = true
         snapshot.hostCalendar = true
+        snapshot.hostMail = true
         return snapshot
     }
 

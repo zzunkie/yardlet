@@ -21,6 +21,11 @@ extension RemoteProtocol {
     public static let calendarActions: Set<String> = ["accounts", "calendars", "events", "respond"]
     /// The calls that change something on the service, which are commands (§4.4).
     public static let calendarCommands: Set<String> = ["respond"]
+    /// The calls `mail` takes (§15.38), one for each of the mailbox's own requests of a service.
+    public static let mailActions: Set<String> = ["accounts", "folders", "inbox", "list", "search", "thread", "change",
+                                                  "saveDraft", "sendDraft", "discardDraft", "draftID", "changeCursor",
+                                                  "changes"]
+    public static let mailCommands: Set<String> = ["change", "saveDraft", "sendDraft", "discardDraft"]
     /// A call's JSON arguments, at most.
     public static let maxMailCalendarCallBytes = 1_048_576
 }

@@ -165,6 +165,8 @@ final class RemoteProtocolTests: XCTestCase {
             .mailCalendarState(watching: false),
             .calendar(action: "accounts", data: nil),
             .calendar(action: "events", data: Data(#"{"accountID":"6D3B0A6E-1F7A-4C52-9C55-6A2B8F0D1E01"}"#.utf8)),
+            .mail(action: "inbox", data: Data(#"{"accountID":"6D3B0A6E-1F7A-4C52-9C55-6A2B8F0D1E01"}"#.utf8)),
+            .mail(action: "saveDraft", data: Data("{}".utf8), files: ["8A1C2D3E-0000-4000-8000-000000000001"]),
             .taskRail(taskID: "T1"),
             .taskRail(taskID: "T1", watching: false),
             .railAction(taskID: "T1", action: "stop"),

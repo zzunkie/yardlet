@@ -229,6 +229,8 @@ struct RemoteHostView: View {
                             RemoteScheduleList(model: model)
                         } else if showsCalendar {
                             calendarSidebar
+                        } else if showsMail {
+                            mailSidebar
                         } else {
                             sidebar
                         }
@@ -252,7 +254,16 @@ struct RemoteHostView: View {
         .tint(Color.primary)
         // The sidebar's words and the home's desk read the host's calendar; the host's window lists no personal agents.
         .environment(\.calendarCenter, model.calendar)
+        .environment(\.mailbox, model.mailbox)
         .environment(\.offersPersonalAgents, false)
+        // The mailbox shown here has been seen; a window leaves the mailbox when the host turns it off.
+        .onChange(of: showsMail, initial: true) { _, shown in model.mailbox.setVisible(shown, window: shell.id) }
+        .onDisappear { model.mailbox.setVisible(false, window: shell.id) }
+        .onChange(of: model.mailbox.isEnabled) { _, enabled in
+            guard !enabled else { return }
+            shell.mailWindow.reset()
+            if shell.section == .mail { shell.section = .tasks }
+        }
         // A window leaves the calendar when the host turns it off.
         .onChange(of: model.calendar.isEnabled) { _, enabled in
             guard !enabled else { return }
@@ -342,7 +353,7 @@ struct RemoteHostView: View {
             grouping: $grouping,
             onNewTask: showNewTask,
             onShowSchedules: model.offersSchedules ? { showSchedules() } : nil,
-            onSelectSection: model.offersHostCalendar ? { selectSection($0) } : nil,
+            onSelectSection: model.offersHostCalendar || model.offersHostMail ? { selectSection($0) } : nil,
             onActivate: activate,
             onNewTaskInProject: { folder in showNewTaskInProject(mirror.projectIDs[folder.standardizedFileURL]) },
             projects: shell.projects,
@@ -426,6 +437,8 @@ struct RemoteHostView: View {
     private var detail: some View {
         if showsCalendar {
             calendarDetail
+        } else if showsMail {
+            mailDetail
         } else {
             taskDetail
         }
@@ -713,8 +726,11 @@ final class RemoteHostShell {
     var closedTabs: [WindowItem] = []
     /// What the sidebar lists, as the local window's words switch it: the host's tasks, or its calendar.
     var section: ShellSection = .tasks
-    /// The calendar's days and chosen event, as the local window keeps its own.
+    /// The calendar's days and chosen event, and the mailbox's list, thread and search, as the local window keeps its own.
     let calendarWindow = CalendarWindowState()
+    let mailWindow = MailWindowState()
+    /// The window, for the mailbox to know when a window shows it.
+    let id = UUID()
 
     /// The shown tab now shows `shown`, unless another tab already does.
     func follow(_ shown: WindowItem, from old: WindowItem) {
