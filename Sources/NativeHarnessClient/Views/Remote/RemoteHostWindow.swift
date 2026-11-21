@@ -205,6 +205,9 @@ struct RemoteHostView: View {
     /// (`SidebarOrderHold.holdAll`).
     @State private var sidebarOrderHold = SidebarOrderHold()
     @State private var isPointerOverSidebarList = false
+    /// ⌘K, and the command chosen in it, carried out once the palette has closed (`RemoteCommandPalette`).
+    @State private var isPresentingCommandPalette = false
+    @State private var pendingCommand: CommandPaletteItem?
     @Environment(\.accessibilityReduceMotion) var reduceMotion
 
     init(model: RemoteHostModel, directory: RemoteHostDirectory, drafts: RemoteComposerDrafts = RemoteComposerDrafts(),
@@ -282,8 +285,18 @@ struct RemoteHostView: View {
                 remoteHost: model
             )
         }
+        .sheet(isPresented: $isPresentingCommandPalette, onDismiss: {
+            let command = pendingCommand
+            pendingCommand = nil
+            command?.action()
+        }) {
+            let palette = RemoteCommandPalette(model: model, commands: taskCommands, showsRail: shell.showsRail)
+            CommandPaletteView(items: palette.items, tasks: palette.tasks, onSelect: { pendingCommand = $0 })
+        }
         .focusedSceneValue(\.yardletTaskCommands, taskCommands)
         .focusedSceneValue(\.yardletSplitCommands, splitCommands)
+        // File › Search Tasks and Commands, off while the host's Settings sheet is up.
+        .focusedSceneValue(\.yardletCommandPalettePresented, model.showsSettings ? nil : $isPresentingCommandPalette)
         .onChange(of: windowSelection) { old, new in
             shell.follow(new, from: old)
             holdSidebarOrder()
@@ -634,6 +647,12 @@ struct RemoteHostView: View {
         model.schedules.load()
     }
 
+    /// Opens or closes the shown task's side panel or terminal, as its title bar's buttons do.
+    private func togglePanel(_ taskID: String, _ targetID: String) {
+        shell.panels[taskID] = TaskSurfaceNavigationProjection.toggledPanelState(
+            current: shell.panels[taskID] ?? .init(), targetID: targetID, terminalLocation: TerminalLocation.current())
+    }
+
     private func toggleSidebar() {
         withAnimation(ParityMotion.easeInOut(reduceMotion: reduceMotion)) { shell.isSidebarVisible.toggle() }
     }
@@ -688,6 +707,15 @@ struct RemoteHostView: View {
         commands.archive = { id in model.send(.archiveTask(taskID: id.uuidString)) }
         commands.shownTaskID = shownTaskID
         commands.toggleSessionRail = { shell.showsRail.toggle() }
+        if case let .task(taskID) = model.selection, shownTaskID != nil {
+            // The View menu's side panel and terminal keys, as the title bar's buttons toggle them.
+            commands.sessionRailTitle = L10n.string(shell.showsRail ? "Hide session rail" : "Show session rail")
+            commands.panels = shell.panels[taskID] ?? .init()
+            commands.toggleSidePanel = { togglePanel(taskID, TaskSurfaceNavigationProjection.sidePanelToggleID) }
+            if model.offersTerminals {
+                commands.toggleTerminal = { togglePanel(taskID, TaskSurface.terminal.rawValue) }
+            }
+        }
         commands.markUnread = { id in model.send(.taskAction(taskID: id.uuidString, action: .init(.markUnread))) }
         commands.showArchivedTasks = model.taskActions ? { model.showsArchive = true } : nil
         if model.newTask != nil { commands.newTask = { showNewTask() } }
