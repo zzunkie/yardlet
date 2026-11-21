@@ -53,7 +53,9 @@ final class CalendarCenter {
     @ObservationIgnored private var refreshing: Task<Void, Never>?
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var calendarsByKey: [CalendarKey: CalendarInfo] = [:]
-    @ObservationIgnored private let defaults: UserDefaults
+    /// Where the person's choices are kept; nil keeps them in memory only, as another Mac's window keeps the choices
+    /// it made over its host's calendars.
+    @ObservationIgnored private let defaults: UserDefaults?
     /// How long what was read stands: a screen that shows it again within this reads nothing, and a screen that
     /// keeps showing it has it read again this often.
     @ObservationIgnored var refreshInterval: Duration = .seconds(300)
@@ -68,7 +70,7 @@ final class CalendarCenter {
         var readAt: ContinuousClock.Instant
     }
 
-    init(defaults: UserDefaults = .yardlet) {
+    init(defaults: UserDefaults? = .yardlet) {
         self.defaults = defaults
     }
 
@@ -76,8 +78,8 @@ final class CalendarCenter {
         guard enabled != isEnabled else { return }
         isEnabled = enabled
         if enabled {
-            choices = defaults.dictionary(forKey: CalendarPreference.choicesKey) as? [String: Bool] ?? [:]
-            showsSchedules = defaults.object(forKey: CalendarPreference.schedulesKey) as? Bool ?? true
+            choices = defaults?.dictionary(forKey: CalendarPreference.choicesKey) as? [String: Bool] ?? [:]
+            showsSchedules = defaults?.object(forKey: CalendarPreference.schedulesKey) as? Bool ?? true
         } else {
             forget()
         }
@@ -101,6 +103,16 @@ final class CalendarCenter {
     }
 
     func account(_ id: UUID) -> CalendarAccount? { accounts.first { $0.id == id } }
+
+    /// How the account's service is reached, for another Mac's window to read the host's calendar (§15.38).
+    func transport(for accountID: UUID) -> (any CalendarAccountTransport)? { transports[accountID] }
+
+    /// Starts from choices made elsewhere: another Mac's window over its host's calendar takes the host's own.
+    func adopt(choices: [String: Bool], showsSchedules: Bool) {
+        guard isEnabled else { return }
+        self.choices = choices
+        self.showsSchedules = showsSchedules
+    }
 
     // MARK: - Showing
 
@@ -156,7 +168,7 @@ final class CalendarCenter {
         guard isEnabled, isShown(calendar) != shown else { return }
         let key = copies[calendar.id] ?? calendar.id
         choices[Self.choiceKey(key)] = shown
-        defaults.set(choices, forKey: CalendarPreference.choicesKey)
+        defaults?.set(choices, forKey: CalendarPreference.choicesKey)
         for range in Array(reads.keys) { mergeEvents(range) }
         if shown { Task { await read(Array(reads.keys), only: [key] + copies.filter { $0.value == key }.map(\.key)) } }
     }
@@ -164,7 +176,7 @@ final class CalendarCenter {
     func setShowsSchedules(_ shows: Bool) {
         guard isEnabled, shows != showsSchedules else { return }
         showsSchedules = shows
-        defaults.set(shows, forKey: CalendarPreference.schedulesKey)
+        defaults?.set(shows, forKey: CalendarPreference.schedulesKey)
     }
 
     private static func choiceKey(_ key: CalendarKey) -> String {
@@ -393,11 +405,12 @@ final class CalendarCenter {
         calendarsByKey = [:]
         choices = [:]
         showsSchedules = true
-        defaults.removeObject(forKey: CalendarPreference.choicesKey)
-        defaults.removeObject(forKey: CalendarPreference.schedulesKey)
+        defaults?.removeObject(forKey: CalendarPreference.choicesKey)
+        defaults?.removeObject(forKey: CalendarPreference.schedulesKey)
     }
 
-    private static func failure(_ error: Error) -> CalendarFailure {
+    /// What went wrong, in the calendar's words: a refused sign-in, or the service's own failure.
+    static func failure(_ error: Error) -> CalendarFailure {
         if case OAuthAPISession.Failure.signInRequired = error {
             return CalendarFailure(kind: .signInRequired, message: L10n.string("Sign in to this account again in Settings › Connectors."))
         }

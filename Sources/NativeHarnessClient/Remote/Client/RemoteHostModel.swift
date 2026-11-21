@@ -126,6 +126,11 @@ final class RemoteHostModel: Identifiable {
     @ObservationIgnored lazy var remoteRuntimeSelections: RuntimeSelectionStore = makeRemoteRuntimeSelectionsStore()
     @ObservationIgnored lazy var remoteConnectorCenter: ConnectorCenter = makeRemoteConnectorCenter()
     @ObservationIgnored lazy var remoteAccountCenterModel: AccountCenterModel = AccountCenterModel(connections: remoteConnections)
+    /// The host answers `mailCalendarState` and `calendar` (§15.38): whether its calendar is on and this device may read
+    /// it, and the host's calendar as this window reads it, kept in memory only, its choices too.
+    private(set) var offersHostCalendar = false
+    var mailCalendarState: RemoteMailCalendarState?
+    let calendar = CalendarCenter(defaults: nil)
 
     /// Called for each `attention` event, for a notification of the host's task.
     @ObservationIgnored var onAttention: ((RemoteEvent) -> Void)?
@@ -234,6 +239,8 @@ final class RemoteHostModel: Identifiable {
         connection = .stopped
         files.savePanels()
         files.removeAll()
+        mailCalendarState = nil
+        calendar.setEnabled(false)
     }
 
     /// The person asked to try now, or the network changed.
@@ -333,6 +340,8 @@ final class RemoteHostModel: Identifiable {
             if schedules.isFollowing { schedules.load() }
         case .hostAccountsChanged:
             if watchingHostAccountsCount > 0 { Task { await loadHostAccounts() } }
+        case .mailCalendarChanged:
+            Task { await readMailCalendarState() }
         case .tabFrame, .browserTabsChanged, .tabCopied:
             browser.receive(event)
         case .terminalOutput, .terminalClosed:
@@ -415,6 +424,8 @@ final class RemoteHostModel: Identifiable {
             browser.listsTabs = response.browserTabs == true && response.tabLists == true
             browser.takesFramesInFlight = response.browserTabs == true && response.tabFramesInFlight == true
             offersHostAccounts = response.hostAccounts == true
+            offersHostCalendar = response.hostCalendar == true
+            Task { await readMailCalendarState() }
             hasSnapshot = true
             hostTakesPresence = response.presence == true
             toldPresence = nil
@@ -716,6 +727,7 @@ final class RemoteHostModel: Identifiable {
         case .terminal: L10n.format("To use this from here, allow Terminal for this device in Settings › Remote › Paired devices on %@.", host)
         case .fileWrites: L10n.format("To change files from here, allow Write files for this device in Settings › Remote › Paired devices on %@.", host)
         case .fileChanged: L10n.string("This file changed on disk. Your edits are preserved.")
+        case .mailCalendar: L10n.format("To read mail and calendar from here, allow Mail and Calendar for this device in Settings › Remote › Paired devices on %@.", host)
         case .account: L10n.format("That account can't be used on %@ now.", host)
         case .worktree: L10n.string("The folder isn't in a Git repository, so it can't have a worktree.")
         case .attachments: L10n.string("This harness doesn't take these pictures or files.")

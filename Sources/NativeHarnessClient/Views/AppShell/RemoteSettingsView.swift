@@ -267,6 +267,7 @@ struct RemoteSettingsView: View {
                     permissionToggle(.terminal, title: "Terminal", device: device)
                     permissionToggle(.fileWrites, title: "Write files", device: device)
                     permissionToggle(.settings, title: "Change settings", device: device)
+                    permissionToggle(.mailCalendar, title: "Mail and Calendar", device: device)
                 }
                 .padding(.leading, RemoteSettingsIcon.width + 12)
                 .padding(.bottom, 12)
@@ -333,6 +334,7 @@ struct RemoteSettingsView: View {
         case .terminal: L10n.string("Run shell commands as the host user, and let agents act without asking.")
         case .fileWrites: L10n.string("Save and discard changes in the task's workspace.")
         case .settings: nil
+        case .mailCalendar: L10n.string("Read and send mail, and read the calendar and answer invitations, with this Mac's accounts.")
         }
     }
 

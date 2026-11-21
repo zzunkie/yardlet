@@ -195,8 +195,8 @@ private struct RemoteHostWindowTag: NSViewRepresentable {
 struct RemoteHostView: View {
     let model: RemoteHostModel
     let directory: RemoteHostDirectory
-    @State private var drafts: RemoteComposerDrafts
-    @State private var shell = RemoteHostShell()
+    @State var drafts: RemoteComposerDrafts
+    @State var shell = RemoteHostShell()
     @State private var windowWidth: CGFloat?
     /// How the task list groups its rows, as this Mac's own windows group theirs.
     @AppStorage(SidebarGrouping.defaultsKey, store: .yardlet) private var grouping = SidebarGrouping.project
@@ -205,7 +205,7 @@ struct RemoteHostView: View {
     /// (`SidebarOrderHold.holdAll`).
     @State private var sidebarOrderHold = SidebarOrderHold()
     @State private var isPointerOverSidebarList = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) var reduceMotion
 
     init(model: RemoteHostModel, directory: RemoteHostDirectory, drafts: RemoteComposerDrafts = RemoteComposerDrafts(),
          shell: RemoteHostShell = RemoteHostShell()) {
@@ -227,6 +227,8 @@ struct RemoteHostView: View {
                                                                toggle: toggleActivity))
                         if model.showsSchedules {
                             RemoteScheduleList(model: model)
+                        } else if showsCalendar {
+                            calendarSidebar
                         } else {
                             sidebar
                         }
@@ -248,6 +250,15 @@ struct RemoteHostView: View {
         .ignoresSafeArea(.container, edges: .top)
         // Ordinary controls stay monochrome, as in the local window; status, links and Send opt into the accent.
         .tint(Color.primary)
+        // The sidebar's words and the home's desk read the host's calendar; the host's window lists no personal agents.
+        .environment(\.calendarCenter, model.calendar)
+        .environment(\.offersPersonalAgents, false)
+        // A window leaves the calendar when the host turns it off.
+        .onChange(of: model.calendar.isEnabled) { _, enabled in
+            guard !enabled else { return }
+            shell.calendarWindow.reset()
+            if shell.section == .calendar { shell.section = .tasks }
+        }
         .navigationTitle(model.name)
         .navigationSubtitle(RemoteConnectionText.line(model.connection))
         .modifier(RemotePresence(model: model))
@@ -331,6 +342,7 @@ struct RemoteHostView: View {
             grouping: $grouping,
             onNewTask: showNewTask,
             onShowSchedules: model.offersSchedules ? { showSchedules() } : nil,
+            onSelectSection: model.offersHostCalendar ? { selectSection($0) } : nil,
             onActivate: activate,
             onNewTaskInProject: { folder in showNewTaskInProject(mirror.projectIDs[folder.standardizedFileURL]) },
             projects: shell.projects,
@@ -412,6 +424,15 @@ struct RemoteHostView: View {
 
     @ViewBuilder
     private var detail: some View {
+        if showsCalendar {
+            calendarDetail
+        } else {
+            taskDetail
+        }
+    }
+
+    @ViewBuilder
+    private var taskDetail: some View {
         switch model.selection {
         case let .task(taskID):
             if let conversation = model.conversations[taskID] {
@@ -428,7 +449,8 @@ struct RemoteHostView: View {
         case .newTask:
             // The new task draws its refusals under its own composer.
             plainDetail(showsRefusal: false) {
-                RemoteNewTaskView(model: model, draft: drafts.newTask, chosenProjectID: $drafts.newTaskProjectID)
+                RemoteNewTaskView(model: model, draft: drafts.newTask, chosenProjectID: $drafts.newTaskProjectID,
+                                  onOpenEvent: showEvent, onOpenSchedule: openHostSchedule)
             }
         case let .schedule(id):
             plainDetail {
@@ -478,6 +500,8 @@ struct RemoteHostView: View {
             content()
         }
     }
+
+    var titleBarContext: RemoteTitleBarContext { titleBar }
 
     private var titleBar: RemoteTitleBarContext {
         RemoteTitleBarContext(isSidebarVisible: shell.isSidebarVisible, toggleSidebar: toggleSidebar, newTask: showNewTask,
@@ -567,6 +591,7 @@ struct RemoteHostView: View {
     }
 
     private func activate(_ item: WindowItem) {
+        shell.section = .tasks
         switch item {
         case let .session(id): model.select(.task(id.uuidString))
         case .home: showNewTask()
@@ -574,8 +599,13 @@ struct RemoteHostView: View {
         }
     }
 
+    func showHome() { showNewTask() }
+
+    func showHostSchedules() { showSchedules() }
+
     private func showNewTask() {
         guard model.newTask != nil else { return }
+        shell.section = .tasks
         model.select(.newTask)
     }
 
@@ -586,6 +616,7 @@ struct RemoteHostView: View {
     }
 
     private func showSchedules() {
+        shell.section = .tasks
         model.showsSchedules = true
         model.schedules.load()
     }
@@ -680,6 +711,10 @@ final class RemoteHostShell {
     var tabs: [WindowItem] = []
     /// Closed tabs, the latest last, for Reopen Closed Tab.
     var closedTabs: [WindowItem] = []
+    /// What the sidebar lists, as the local window's words switch it: the host's tasks, or its calendar.
+    var section: ShellSection = .tasks
+    /// The calendar's days and chosen event, as the local window keeps its own.
+    let calendarWindow = CalendarWindowState()
 
     /// The shown tab now shows `shown`, unless another tab already does.
     func follow(_ shown: WindowItem, from old: WindowItem) {
@@ -789,7 +824,7 @@ private struct RemoteDraftAutosave: View {
 
 /// One line above the conversation while the host cannot be reached, closed its connection, or removed
 /// this Mac. What was last read stays below it; sending waits for the connection.
-private struct RemoteConnectionBanner: View {
+struct RemoteConnectionBanner: View {
     let model: RemoteHostModel
     let directory: RemoteHostDirectory
 
@@ -839,7 +874,7 @@ private struct RemoteConnectionBanner: View {
 
 /// The sidebar's last row, where the local window keeps its account button: the host's name and how it is reached, and
 /// its menu (connect again, the paired Macs, and removing the host from this Mac).
-private struct RemoteHostFooter: View {
+struct RemoteHostFooter: View {
     let model: RemoteHostModel
     let directory: RemoteHostDirectory
     @State private var isHovering = false

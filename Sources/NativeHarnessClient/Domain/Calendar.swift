@@ -2,7 +2,7 @@ import Foundation
 
 /// The service a calendar account is read through: Google Calendar, Outlook through Microsoft Graph, or the
 /// Mac's own calendars through EventKit (the iCloud, Exchange, CalDAV and other accounts added to Calendar).
-enum CalendarProvider: String, Hashable, Sendable {
+enum CalendarProvider: String, Codable, Hashable, Sendable {
     case google
     case outlook
     case apple
@@ -23,7 +23,7 @@ enum CalendarProvider: String, Hashable, Sendable {
 /// One account the calendar shows: a calendar connector connected in Settings › Connectors. `id` is the
 /// connector's sign-in for Google and Outlook (`ConnectorRecord.credentialID`), so the calendar and the agents'
 /// tools share it, and the connector's own ID for the Mac's calendars.
-struct CalendarAccount: Identifiable, Hashable, Sendable {
+struct CalendarAccount: Identifiable, Codable, Hashable, Sendable {
     let id: UUID
     let provider: CalendarProvider
     /// The account's address; nil for the Mac's calendars, which hold several accounts.
@@ -37,13 +37,13 @@ struct CalendarAccount: Identifiable, Hashable, Sendable {
 }
 
 /// A calendar across all accounts: the account it belongs to and the service's own calendar ID.
-struct CalendarKey: Hashable, Sendable {
+struct CalendarKey: Codable, Hashable, Sendable {
     let accountID: UUID
     let calendarID: String
 }
 
 /// A calendar of an account, as its service lists it.
-struct CalendarInfo: Identifiable, Hashable, Sendable {
+struct CalendarInfo: Identifiable, Codable, Hashable, Sendable {
     let id: CalendarKey
     /// The name the person sees in the service's own app.
     var name: String
@@ -62,14 +62,14 @@ struct CalendarInfo: Identifiable, Hashable, Sendable {
 }
 
 /// How the account answered an invitation.
-enum CalendarResponse: String, Hashable, Sendable {
+enum CalendarResponse: String, Codable, Hashable, Sendable {
     case needsAction
     case accepted
     case declined
     case tentative
 }
 
-struct CalendarPerson: Hashable, Sendable {
+struct CalendarPerson: Codable, Hashable, Sendable {
     var name: String?
     var email: String?
     /// Their answer, where the service gives one.
@@ -84,7 +84,7 @@ struct CalendarPerson: Hashable, Sendable {
 
 /// An event across all accounts: its calendar, the service's event ID, and for the Mac's calendars the start
 /// of the occurrence when it is one of a recurring event's (Google and Outlook give each occurrence an ID).
-struct CalendarEventKey: Hashable, Sendable {
+struct CalendarEventKey: Codable, Hashable, Sendable {
     let calendar: CalendarKey
     let eventID: String
     var occurrence: Date? = nil
@@ -92,7 +92,7 @@ struct CalendarEventKey: Hashable, Sendable {
 
 /// One event, or one occurrence of a recurring event, as the calendar shows it. Events are read only for the
 /// days a screen shows and kept in memory only.
-struct CalendarEvent: Identifiable, Hashable, Sendable {
+struct CalendarEvent: Identifiable, Codable, Hashable, Sendable {
     let id: CalendarEventKey
     /// The event's title as the service gives it; empty when it has none.
     var title: String

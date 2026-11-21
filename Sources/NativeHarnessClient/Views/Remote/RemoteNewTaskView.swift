@@ -12,6 +12,9 @@ struct RemoteNewTaskView: View {
     @Bindable var draft: TaskComposerDraft
     /// The project New task in a project chose from the sidebar, which the screen starts in once.
     @Binding var chosenProjectID: String?
+    /// The desk's today: an event shown on the host's calendar, a run's schedule opened among the host's schedules.
+    var onOpenEvent: (CalendarEvent) -> Void = { _ in }
+    var onOpenSchedule: (UUID) -> Void = { _ in }
     /// The project, harness, account and settings chosen, as the host answers them, and the start (`RemoteNewTaskForm`).
     @State private var form: RemoteNewTaskForm
     @State private var showsAccounts = false
@@ -29,10 +32,13 @@ struct RemoteNewTaskView: View {
     /// What the host's projects count, for the header over them.
     @State private var projectFacts = NewTaskHomeProjectFacts()
 
-    init(model: RemoteHostModel, draft: TaskComposerDraft, chosenProjectID: Binding<String?>) {
+    init(model: RemoteHostModel, draft: TaskComposerDraft, chosenProjectID: Binding<String?>,
+         onOpenEvent: @escaping (CalendarEvent) -> Void = { _ in }, onOpenSchedule: @escaping (UUID) -> Void = { _ in }) {
         self.model = model
         self.draft = draft
         _chosenProjectID = chosenProjectID
+        self.onOpenEvent = onOpenEvent
+        self.onOpenSchedule = onOpenSchedule
         _form = State(initialValue: RemoteNewTaskForm(model: model, draft: draft))
     }
 
@@ -49,7 +55,7 @@ struct RemoteNewTaskView: View {
         GeometryReader { viewport in
             if showsDesk {
                 // The host's desk, as the local home's: what the host's tasks wait on, what runs and what finished.
-                // The host's mail is not read from here, so its lines do not show.
+                // Today is the host's calendar, read through it (§15.38); the host's mail is not read from here.
                 DeskHome(
                     activity: activity, size: viewport.size, onAction: perform,
                     keyboard: $listKeyboard, focus: $listFocus,
@@ -231,8 +237,10 @@ struct RemoteNewTaskView: View {
         case .chooseChat:
             form.projectID = RemoteTaskProjection.chatsProjectID
             isFocused = true
-        case .openSchedule, .openEvent:
-            break
+        case let .openSchedule(id):
+            onOpenSchedule(id)
+        case let .openEvent(event):
+            onOpenEvent(event)
         }
     }
 
