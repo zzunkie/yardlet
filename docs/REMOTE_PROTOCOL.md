@@ -2825,7 +2825,10 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   by state, the nested tasks and each row's mark, the activity view, the
   title bar's buttons and a hidden sidebar, and in place of the account button the host's name and how it is reached.
   The Task and View menus and their keys act on it as on the local window (new task, previous and next task, the next
-  one needing attention, Pin, Archive, the sidebar, the activity view, Find in the conversation), and it has the local
+  one needing attention, Pin, Archive, the sidebar, the activity view, the shown task's rail, side panel (⌘⌥B) and
+  terminal (⌘J), Find in the conversation), File › Search Tasks and Commands (⌘K) opens the local palette with the
+  host's tasks and the commands this window carries out through the host (what acts on this Mac alone, such as
+  importing conversations or Show in Finder, is left out), and it has the local
   window's tabs (New Tab, Close Tab, Reopen Closed Tab, the next and previous tab, a row's Open in New Tab, ⌃1–⌃9 for the
   pinned rows). Its home lists the host's projects with what their tasks need, as the local home does, and a task's
   session rail is the local rail: where the task runs (its project and harness; the folder stays the host's), its

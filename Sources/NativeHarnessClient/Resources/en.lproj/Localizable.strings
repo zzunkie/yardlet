@@ -752,6 +752,7 @@
 "Settings sections" = "Settings sections";
 "Use the arrow keys to switch settings sections." = "Use the arrow keys to switch settings sections.";
 "Change appearance, notifications, and app preferences." = "Change appearance, notifications, and app preferences.";
+"Change %@'s settings." = "Change %@'s settings.";
 "Yardlet-owned" = "Yardlet-owned";
 "Runtime-owned" = "Runtime-owned";
 "Granular" = "Granular";

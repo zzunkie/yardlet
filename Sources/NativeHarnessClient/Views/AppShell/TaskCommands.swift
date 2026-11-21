@@ -25,6 +25,8 @@ struct YardletTaskCommandSet {
     /// The window's session rail and the task it would toggle for, which the View menu names.
     var sessionRail: SessionRailWindowState? = nil
     var shownTaskID: UUID? = nil
+    /// The rail item's words where the window has no `sessionRail` (another Mac's window).
+    var sessionRailTitle: String? = nil
     var toggleSessionRail: () -> Void = {}
     /// The shown task's panels, which the View menu toggles as the Codex app's View menu does
     /// ("Toggle Changes Panel" ⌘⌥B, "Toggle Bottom Panel" ⌘J; the Claude app's terminal is ⌘J too).
@@ -151,7 +153,8 @@ struct YardletTaskCommands: Commands {
             }
             .keyboardShortcut(MacShortcut.toggleSidebar.menuBinding)
             .disabled(task == nil)
-            Button(task?.sessionRail?.toggleTitle(for: task?.shownTaskID) ?? L10n.string("Show session rail")) {
+            Button(task?.sessionRail?.toggleTitle(for: task?.shownTaskID) ?? task?.sessionRailTitle
+                   ?? L10n.string("Show session rail")) {
                 task?.toggleSessionRail()
             }
             .keyboardShortcut(MacShortcut.toggleSessionRail.menuBinding)
