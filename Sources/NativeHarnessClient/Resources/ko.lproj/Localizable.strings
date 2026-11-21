@@ -752,6 +752,7 @@
 "Settings sections" = "설정 섹션";
 "Use the arrow keys to switch settings sections." = "화살표 키로 설정 섹션을 전환하세요.";
 "Change appearance, notifications, and app preferences." = "화면, 알림과 앱 설정을 변경합니다.";
+"Change %@'s settings." = "%@의 설정을 변경합니다.";
 "Yardlet-owned" = "Yardlet 소유";
 "Runtime-owned" = "런타임 소유";
 "Granular" = "세부 설정";
