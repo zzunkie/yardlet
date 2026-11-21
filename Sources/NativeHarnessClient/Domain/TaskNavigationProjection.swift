@@ -199,7 +199,7 @@ enum TaskNavigationProjection {
 @MainActor
 final class ConversationSearchMemo: Observable {
     /// A task's conversation as the model holds it, read without observing it.
-    struct Conversation {
+    struct Conversation: Sendable {
         var transcript: [TranscriptEntry]?
         var codex: CodexTaskState?
 
@@ -211,7 +211,7 @@ final class ConversationSearchMemo: Observable {
 
     /// What was searched of a task, and where it matched: the entries or turns before a match, or all
     /// of them when none matched, do not hold the search.
-    private struct Result {
+    private struct Result: Sendable {
         var entries: [TranscriptEntry] = []
         var entryMatch: Int?
         var turns: [CodexTurnState] = []
@@ -223,6 +223,14 @@ final class ConversationSearchMemo: Observable {
     private let read: (SessionRecord.ID) -> Conversation
     private var query = ""
     private var results: [SessionRecord.ID: Result] = [:]
+    private struct Change: Sendable {
+        var transcript: TranscriptChange?
+        var codex = false
+    }
+
+    private var pending: [SessionRecord.ID: Change] = [:]
+    private var worker: Task<Void, Never>?
+    private var matchingIDs: Set<SessionRecord.ID> = []
     /// Changes when a task searched comes to match or stops matching.
     private var answers = 0
 
@@ -235,74 +243,124 @@ final class ConversationSearchMemo: Observable {
     func matches(_ id: SessionRecord.ID, query: String) -> Bool {
         registrar.access(self, keyPath: \.answers)
         if query != self.query {
+            clear()
             self.query = query
-            results.removeAll()
         }
-        if let kept = results[id] { return kept.matches }
-        let conversation = read(id)
-        var result = Result()
-        (result.entries, result.entryMatch) = search(conversation.transcript ?? [], after: nil, change: .unknown)
-        (result.turns, result.turnMatch) = search(conversation.codex?.thread?.turns ?? [], after: nil)
-        results[id] = result
-        return result.matches
+        if results[id] == nil {
+            results[id] = Result()
+            pending[id] = Change(transcript: .unknown, codex: true)
+            schedule()
+        }
+        return matchingIDs.contains(id)
     }
 
-    /// `id`'s transcript was set; `change` says what became of the entries searched.
     func transcriptChanged(_ id: SessionRecord.ID, change: TranscriptChange) {
-        guard var result = results[id] else { return }
-        let before = result.matches
-        (result.entries, result.entryMatch) = search(read(id).transcript ?? [],
-                                                     after: (result.entries, result.entryMatch), change: change)
-        settle(result, for: id, matchedBefore: before)
+        guard results[id] != nil else { return }
+        let earlier = pending[id]?.transcript
+        pending[id, default: Change()].transcript = earlier?.then(change) ?? change
+        schedule()
     }
 
-    /// `id`'s Codex state was set.
     func codexStateChanged(_ id: SessionRecord.ID) {
-        guard var result = results[id] else { return }
-        let before = result.matches
-        (result.turns, result.turnMatch) = search(read(id).codex?.thread?.turns ?? [],
-                                                  after: (result.turns, result.turnMatch))
-        settle(result, for: id, matchedBefore: before)
+        guard results[id] != nil else { return }
+        pending[id, default: Change()].codex = true
+        schedule()
     }
 
-    /// Lets the conversations go once there is no search.
     func clear() {
+        worker?.cancel()
+        worker = nil
         query = ""
         results.removeAll()
+        matchingIDs.removeAll()
+        pending.removeAll()
     }
 
-    private func settle(_ result: Result, for id: SessionRecord.ID, matchedBefore: Bool) {
-        results[id] = result
-        guard result.matches != matchedBefore else { return }
-        registrar.withMutation(of: self, keyPath: \.answers) { answers &+= 1 }
+    private struct Work: Sendable {
+        var id: SessionRecord.ID
+        var conversation: Conversation
+        var previous: Result
+        var change: Change
     }
 
-    /// The first entry of `entries` that holds the search, from the first one `change` did not keep of
-    /// the entries searched before.
-    private func search(
-        _ entries: [TranscriptEntry], after earlier: ([TranscriptEntry], Int?)?, change: TranscriptChange
-    ) -> ([TranscriptEntry], Int?) {
-        var start = 0
-        if let (searched, match) = earlier {
-            if let match, match - change.dropped >= 0, match - change.dropped < change.kept {
-                return (entries, match - change.dropped)
+    /// Collect one render's requests together. Changes received during a scan are relative to
+    /// its snapshot, so keep its result as their starting point and publish only current answers.
+    private func schedule() {
+        guard worker == nil else { return }
+        worker = Task { [weak self] in
+            while let self, !Task.isCancelled {
+                let work = pending.compactMap { id, change in
+                    results[id].map { Work(id: id, conversation: read(id), previous: $0, change: change) }
+                }
+                pending.removeAll(keepingCapacity: true)
+                let scanned = await Self.scan(work, query: query)
+                guard !Task.isCancelled else { return }
+                var changed = false
+                for (id, result) in scanned {
+                    results[id] = result
+                    if pending[id] == nil, result.matches != matchingIDs.contains(id) {
+                        if result.matches { matchingIDs.insert(id) } else { matchingIDs.remove(id) }
+                        changed = true
+                    }
+                }
+                if changed {
+                    registrar.withMutation(of: self, keyPath: \.answers) { answers &+= 1 }
+                }
+                if pending.isEmpty {
+                    worker = nil
+                    return
+                }
             }
-            start = max(0, min((match ?? searched.count) - change.dropped, change.kept, entries.count))
         }
-        let query = query
-        return (entries, entries[start...].firstIndex { TaskNavigationProjection.transcriptEntry($0, contains: query) })
     }
 
-    /// The first turn of `turns` that holds the search, from the first one that is not as it was searched.
-    private func search(_ turns: [CodexTurnState], after earlier: ([CodexTurnState], Int?)?) -> ([CodexTurnState], Int?) {
-        var start = 0
-        if let (searched, match) = earlier {
-            if let match, match < turns.count, turns[match] == searched[match] { return (turns, match) }
-            let clean = min(match ?? searched.count, turns.count)
-            while start < clean, turns[start] == searched[start] { start += 1 }
+    @concurrent
+    private static func scan(_ work: [Work], query: String) async -> [(SessionRecord.ID, Result)] {
+        var scanned: [(SessionRecord.ID, Result)] = []
+        for item in work {
+            if Task.isCancelled { break }
+            var result = item.previous
+            if let change = item.change.transcript {
+                (result.entries, result.entryMatch) = search(item.conversation.transcript ?? [],
+                    after: (result.entries, result.entryMatch), change: change, query: query)
+            }
+            if item.change.codex {
+                (result.turns, result.turnMatch) = search(item.conversation.codex?.thread?.turns ?? [],
+                    after: (result.turns, result.turnMatch), query: query)
+            }
+            scanned.append((item.id, result))
         }
-        let query = query
-        return (turns, turns[start...].firstIndex { CodexHistorySearchProjection.contains(in: $0, trimmedQuery: query) })
+        return scanned
+    }
+
+    /// Searches from the first entry the change did not keep, reusing a match in its unchanged prefix.
+    private nonisolated static func search(
+        _ entries: [TranscriptEntry], after earlier: ([TranscriptEntry], Int?), change: TranscriptChange, query: String
+    ) -> ([TranscriptEntry], Int?) {
+        let (searched, match) = earlier
+        if let match, match - change.dropped >= 0, match - change.dropped < change.kept {
+            return (entries, match - change.dropped)
+        }
+        let start = max(0, min((match ?? searched.count) - change.dropped, change.kept, entries.count))
+        let index = entries[start...].firstIndex {
+            Task.isCancelled || TaskNavigationProjection.transcriptEntry($0, contains: query)
+        }
+        return (entries, index)
+    }
+
+    /// Searches from the first turn that differs from its last searched value.
+    private nonisolated static func search(
+        _ turns: [CodexTurnState], after earlier: ([CodexTurnState], Int?), query: String
+    ) -> ([CodexTurnState], Int?) {
+        let (searched, match) = earlier
+        if let match, match < turns.count, turns[match] == searched[match] { return (turns, match) }
+        let clean = min(match ?? searched.count, turns.count)
+        var start = 0
+        while start < clean, !Task.isCancelled, turns[start] == searched[start] { start += 1 }
+        let index = turns[start...].firstIndex {
+            Task.isCancelled || CodexHistorySearchProjection.contains(in: $0, trimmedQuery: query)
+        }
+        return (turns, index)
     }
 }
 

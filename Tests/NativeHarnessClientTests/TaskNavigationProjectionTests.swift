@@ -252,7 +252,7 @@ final class TaskNavigationProjectionTests: XCTestCase {
     /// The sidebar search's memo searches a task again from what its change did not keep, and tells its
     /// reader only when the task comes to match or stops matching, as a task streams.
     @MainActor
-    func testConversationSearchFollowsChangesAndTellsOnlyWhenAMatchComesOrGoes() {
+    func testConversationSearchFollowsChangesAndTellsOnlyWhenAMatchComesOrGoes() async throws {
         final class Told: @unchecked Sendable { var count = 0 }
         let id = UUID(), told = Told()
         var conversation = ConversationSearchMemo.Conversation(transcript: LongConversationFixture.claude(turns: 40))
@@ -271,6 +271,7 @@ final class TaskNavigationProjectionTests: XCTestCase {
         stream("Still reading")
         XCTAssertEqual(told.count, 0, "A change that matches nothing tells nothing")
         stream("The ledger is balanced")
+        try await waitUntil { matches() }
         XCTAssertEqual(told.count, 1)
         XCTAssertTrue(matches())
         observe()
@@ -279,6 +280,7 @@ final class TaskNavigationProjectionTests: XCTestCase {
         XCTAssertEqual(told.count, 1)
         conversation.transcript = Array(conversation.transcript!.prefix(10))
         memo.transcriptChanged(id, change: .unknown)
+        try await waitUntil { !matches() }
         XCTAssertEqual(told.count, 2)
         XCTAssertFalse(matches())
         observe()
@@ -290,14 +292,37 @@ final class TaskNavigationProjectionTests: XCTestCase {
         conversation.codex = LongConversationFixture.codex(
             threadID: "thread-search", turns: turns.dropLast() + [LongConversationFixture.codexTurn(19, tag: "ledger ")])
         memo.codexStateChanged(id)
+        try await waitUntil { matches() }
         XCTAssertEqual(told.count, 3, "The newest turn came to hold the search")
         XCTAssertTrue(matches())
         observe()
         conversation.codex = LongConversationFixture.codex(
             threadID: "thread-search", turns: [LongConversationFixture.codexTurn(0, tag: "edited ")] + turns.dropFirst())
         memo.codexStateChanged(id)
+        try await waitUntil { !matches() }
         XCTAssertEqual(told.count, 4, "The turn that held it went")
         XCTAssertFalse(matches())
+    }
+
+    @MainActor
+    func testChangingTheSidebarQueryCollectsOneBatchForTheLatestQuery() async throws {
+        let ids = (0..<20).map { _ in UUID() }
+        let entries = LongConversationFixture.claude(turns: 1_000) + [
+            TranscriptEntry(content: .assistant(text: "latest needle", isStreaming: false))
+        ]
+        var reads = 0
+        let memo = ConversationSearchMemo { _ in
+            reads += 1
+            return .init(transcript: entries)
+        }
+        for query in ["obsolete", "latest needle"] {
+            for id in ids {
+                XCTAssertFalse(memo.matches(id, query: query))
+            }
+        }
+        XCTAssertEqual(reads, 0, "Drawing the sidebar queues the scans without reading the histories")
+        try await waitUntil { ids.allSatisfy { memo.matches($0, query: "latest needle") } }
+        XCTAssertEqual(reads, ids.count)
     }
 
     func testRenamedProjectSearchRetainsItsTasksAndWorkspaceIdentity() throws {

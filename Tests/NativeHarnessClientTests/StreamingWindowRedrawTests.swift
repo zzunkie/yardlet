@@ -96,7 +96,7 @@ final class StreamingWindowRedrawTests: XCTestCase {
                 turns: 100, seed: "task-\(index)", tag: index.isMultiple(of: 2) ? "ledger " : "")
         }
         window.search("ledger")
-        XCTAssertTrue(window.lists(window.tasks[2]), "The search finds a task by its conversation")
+        try await waitUntil { window.lists(window.tasks[2]) }
         XCTAssertFalse(window.lists(shown), "The shown task's conversation does not hold the search")
         let searching = await window.measure("12 tool calls with a search open") {
             await ClaudeToolCallStream(emit: { await transport.emit($0) },
@@ -104,8 +104,9 @@ final class StreamingWindowRedrawTests: XCTestCase {
         }
         XCTAssertLessThanOrEqual(searching[.mainWindow], 2, "Streaming redrew the window while the sidebar searches")
         // The shown task's conversation comes to hold the search: the window lists it.
-        let found = await window.measure("the shown task's answer comes to hold the search") {
+        let found = try await window.measure("the shown task's answer comes to hold the search") {
             model.mutateTranscript(for: shown.id, publishImmediately: true) { $0.apply(.assistantDelta(" The ledger")) }
+            try await waitUntil { window.lists(shown) }
         }
         XCTAssertGreaterThanOrEqual(found[.mainWindow], 1, "The window lists the task the search now finds")
         XCTAssertTrue(window.lists(shown), "The search finds what streamed")
@@ -377,11 +378,11 @@ final class StreamingWindowRedrawTests: XCTestCase {
         }
 
         /// The body evaluations `work` caused, and the main thread's time for it, printed.
-        func measure(_ name: String, _ work: () async -> Void) async -> Counts {
+        func measure(_ name: String, _ work: () async throws -> Void) async rethrows -> Counts {
             host.settle(passes: 6, interval: 0.01)
             ViewBodyCensus.reset()
             let start = MainThreadClock.now()
-            await work()
+            try await work()
             host.settle(passes: 20, interval: 0.01)
             let counts = Counts(values: ViewBodyCensus.counts)
             print("[redraw] \(name): window \(counts[.mainWindow]), rows \(counts[.sidebarRow]), "
