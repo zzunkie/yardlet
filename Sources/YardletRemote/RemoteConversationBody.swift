@@ -14,7 +14,16 @@ public struct RemoteConversationBody: Codable, Equatable, Sendable {
     public var background: Bool?
     public var files: [File]?
     public var mcp: [Block]?
+    public var widget: Widget?
     public init() {}
+
+    public struct Widget: Codable, Equatable, Sendable {
+        public var title: String
+        public var code: String
+        public init(title: String, code: String) {
+            self.title = title; self.code = code
+        }
+    }
 
     public struct File: Codable, Equatable, Sendable {
         public var path: String
@@ -68,6 +77,7 @@ extension RemoteConversationBody {
             total + [block.text, block.name, block.title, block.uri, block.mimeType].reduce(0) { $0 + ($1?.utf8.count ?? 0) }
                 + (block.image?.data.count ?? 0) * 4 / 3 + 160
         }
-        return textBytes + fileBytes + blockBytes + 160
+        let widgetBytes = widget.map { $0.title.utf8.count + $0.code.utf8.count + 64 } ?? 0
+        return textBytes + fileBytes + blockBytes + widgetBytes + 160
     }
 }

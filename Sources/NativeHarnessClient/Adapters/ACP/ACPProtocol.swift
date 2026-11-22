@@ -279,9 +279,25 @@ struct ACPEventProjector: Sendable {
             title: title,
             detail: detail(from: update) ?? fallback?.detail,
             input: inputText(from: update) ?? fallback?.input,
-            output: content.output ?? fallback?.output,
+            output: content.output ?? outputText(from: update["rawOutput"]) ?? fallback?.output,
             diff: content.diff ?? fallback?.diff
         )
+    }
+
+    private func outputText(from rawOutput: JSONValue?) -> String? {
+        guard let rawOutput, rawOutput != .null else { return nil }
+        if case let .string(text) = rawOutput {
+            return text.isEmpty ? nil : text
+        }
+        if let items = rawOutput["content"]?.arrayValue {
+            let texts = items.compactMap { $0["text"]?.stringValue ?? $0["content"]?["text"]?.stringValue }
+            let joined = texts.joined(separator: "\n")
+            if !joined.isEmpty { return joined }
+        }
+        if let text = rawOutput["text"]?.stringValue ?? rawOutput["output"]?.stringValue, !text.isEmpty {
+            return text
+        }
+        return rawOutput.readableText
     }
 
     /// ACP tool content is a list that mixes text, terminal output, and file changes. Yardlet

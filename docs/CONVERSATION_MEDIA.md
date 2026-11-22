@@ -145,10 +145,13 @@ Claude Code and the ACP harnesses have no `visualize` skill, so Yardlet gives th
 "Widget tool"). Codex does not get it. Its description is five sentences, and it stays behind Claude Code's tool
 search, so it adds little to a turn's prompt.
 
-- **In the conversation.** A completed call that Yardlet answered (its answer has words only Yardlet's has) is a tool
-  row whose detail is the view, open unless the person folds it, standing alone and kept in view in a folded turn,
-  as a connector's MCP App view is (`ConversationWidget`). The view is drawn from the call's arguments, which the
-  harness keeps in its own history, so it is drawn again when the conversation is reopened; Yardlet keeps nothing.
+- **In the conversation.** A completed call that Yardlet answered (its answer has words only Yardlet's has, or an ACP
+  call to Yardlet's namespaced `show_widget` tool whose harness omitted the tool output) is a tool row whose detail is
+  the view, open unless the person folds it, standing alone and kept in view in a folded turn, as a connector's MCP App
+  view is (`ConversationWidget`). The view is drawn from the call's arguments, which the harness keeps in its own
+  history, so it is drawn again when the conversation is reopened; Yardlet keeps nothing. Full-detail remote desktop
+  subscriptions carry the widget in `RemoteConversationBody.widget` (up to `RemoteText.fullTextLimit`) so remote Mac
+  windows draw the same sandboxed view.
 - **The page.** The fragment in the system's plain styles with Yardlet's small bridge (no kit), in the same sandbox,
   policy, pool, size, expanding and failure card as a Codex visualization (`MCPAppViewController.startWidget`). Its
   `prefers-color-scheme` is the app's appearance.

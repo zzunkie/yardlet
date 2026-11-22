@@ -250,6 +250,9 @@ enum RemoteTurnProjection {
         tool.name = item.body?.toolName ?? ""
         tool.output = item.body?.output
         tool.errorMessage = item.body?.error
+        if let widget = item.body?.widget {
+            tool.widget = ConversationWidget(title: widget.title, code: widget.code)
+        }
         if let additions = item.additions, let deletions = item.deletions {
             tool.lineCounts = .init(additions: additions, deletions: deletions)
         }

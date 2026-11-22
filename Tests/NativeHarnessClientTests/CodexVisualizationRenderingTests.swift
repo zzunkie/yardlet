@@ -4,6 +4,7 @@ import WebKit
 import XCTest
 @testable import NativeHarnessClient
 @testable import YardletAgentTools
+@testable import YardletRemote
 
 /// A Codex inline visualization drawn by the real web view in its message: the isolation it runs under (another
 /// origin than Yardlet's page, no bridge handler, nothing fetched, no window), the height it reports, the state it
@@ -190,6 +191,73 @@ final class CodexVisualizationRenderingTests: XCTestCase {
                 path: "show-widget-\(appearance.suffix).png"))
             await drawn.park()
         }
+    }
+
+    func testAntigravityAndRemoteShowWidgetProjection() throws {
+        let html = "<div>Hello widget</div>"
+        let input = String(decoding: try JSONSerialization.data(withJSONObject: [
+            "title": "Architecture map", "widget_code": html
+        ]), as: UTF8.self)
+
+        // ACP `rawOutput` is captured when `content` is absent (string or MCP content array).
+        let projector = ACPEventProjector()
+        let withRawString = projector.toolCall(from: .object([
+            "toolCallId": .string("call-1"), "kind": .string("other"),
+            "title": .string("Run mcp_yardlet_9f2cf821_show_widget"), "status": .string("completed"),
+            "rawInput": .object(["title": .string("Architecture map"), "widget_code": .string(html)]),
+            "rawOutput": .string(WidgetToolCatalog.result)
+        ]))
+        XCTAssertEqual(withRawString?.activity.output, WidgetToolCatalog.result)
+        XCTAssertEqual(ConversationWidget.of(try XCTUnwrap(withRawString?.activity))?.title, "Architecture map")
+
+        let withRawMCP = projector.toolCall(from: .object([
+            "toolCallId": .string("call-2"), "kind": .string("other"),
+            "title": .string("Run mcp_yardlet_9f2cf821_show_widget"), "status": .string("completed"),
+            "rawInput": .object(["title": .string("Architecture map"), "widget_code": .string(html)]),
+            "rawOutput": .object(["content": .array([.object(["type": .string("text"), "text": .string(WidgetToolCatalog.result)])])])
+        ]))
+        XCTAssertEqual(withRawMCP?.activity.output, WidgetToolCatalog.result)
+
+        // When an ACP harness omits output altogether (or in saved transcripts predating rawOutput capture),
+        // Yardlet's namespaced show_widget call still projects its view, while bare/failed/Claude-app calls do not.
+        let antigravityCall = HarnessActivity(id: "call-3", kind: "other",
+                                              title: "Run mcp_yardlet_9f2cf821_show_widget", input: input, output: nil)
+        XCTAssertEqual(ConversationWidget.of(antigravityCall), ConversationWidget(title: "Architecture map", code: html))
+        let failedCall = HarnessActivity(id: "call-4", kind: "other", title: "Run mcp_yardlet_9f2cf821_show_widget",
+                                         outcome: .failed, input: input, output: nil)
+        XCTAssertNil(ConversationWidget.of(failedCall))
+        let bareCall = HarnessActivity(id: "call-5", kind: "show_widget", title: "show_widget", input: input, output: nil)
+        XCTAssertNil(ConversationWidget.of(bareCall), "An unnamespaced show_widget without Yardlet's answer stays a tool line")
+
+        // Full-detail remote subscriptions carry the widget in `RemoteConversationBody.widget`, keep it out of
+        // folded work, and restore `tool.widget` on the remote Mac client; compact subscriptions omit the body.
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        let entries = [
+            TranscriptEntry(createdAt: start, content: .user(text: "Draw the map.")),
+            TranscriptEntry(createdAt: start.addingTimeInterval(1), content: .activity(antigravityCall, state: .completed)),
+            TranscriptEntry(createdAt: start.addingTimeInterval(2), content: .assistant(text: "Done.", isStreaming: false))
+        ]
+        let presentation = TranscriptConversationProjection.presentation(
+            from: entries, harness: .antigravityCLI, status: .ready, latestTurnIsComplete: true)
+        let turn = try XCTUnwrap(presentation.turns.first)
+        let compact = RemoteConversationProjection.turn(turn, harness: .antigravityCLI, workspaceURL: nil, full: nil)
+        let compactTool = try XCTUnwrap(compact.items.first { $0.activity == "tool" })
+        XCTAssertNil(compactTool.body)
+
+        let full = RemoteConversationProjection.turn(turn, harness: .antigravityCLI, workspaceURL: nil, full: .init())
+        let fullTool = try XCTUnwrap(full.items.first { $0.activity == "tool" })
+        XCTAssertNil(fullTool.inWork, "Widget rows stay visible when a turn folds")
+        XCTAssertEqual(fullTool.body?.widget, RemoteConversationBody.Widget(title: "Architecture map", code: html))
+
+        let encoded = try JSONEncoder().encode(full.items)
+        let decoded = try JSONDecoder().decode([RemoteItem].self, from: encoded)
+        let remoteTurn = RemoteTurnProjection.turn(decoded, turnID: full.id, details: [:], hostName: "Studio")
+        let remoteWidgetTool = remoteTurn.work.compactMap { item -> ConversationTool? in
+            if case let .tool(tool) = item.kind { return tool }
+            return nil
+        }.first
+        XCTAssertEqual(remoteWidgetTool?.widget, ConversationWidget(title: "Architecture map", code: html))
+        XCTAssertEqual(remoteWidgetTool?.drawsView, true)
     }
 
     /// For review, not for CI: the `show_widget` call whose MCP `tools/call` params are in the file

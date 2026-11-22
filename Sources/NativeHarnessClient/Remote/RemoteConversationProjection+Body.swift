@@ -44,6 +44,9 @@ extension RemoteConversationProjection {
             body.detail = RemoteText.short(tool.detail, RemoteItemDetail.outputLimit)
             body.error = RemoteText.short(tool.errorMessage, RemoteText.errorLimit)
             if case .mcp = tool.kind { body.toolName = RemoteText.short(tool.name, RemoteText.titleLimit) }
+            if let widget = tool.widget, widget.code.utf8.count <= RemoteText.fullTextLimit {
+                body.widget = .init(title: widget.title, code: widget.code)
+            }
             var budget = RemoteItemDetail.outputLimit
             var imageBudget = 4
             body.mcp = tool.mcpResult?.blocks.prefix(50).compactMap { block in
