@@ -220,6 +220,7 @@ enum RemoteRailProjection {
             guard let id = value.targetID.flatMap(UUID.init(uuidString:)) else { return nil }
             kind = .childTask(id)
         case "codexThread": kind = .codexThread(value.targetID ?? value.id)
+        case "antigravitySubagent": kind = .antigravitySubagent(value.targetID ?? value.id)
         case "yardletAgent": kind = .yardletAgent(agentID: value.targetID.flatMap(UUID.init(uuidString:)), prompt: value.title)
         case "harnessSubtask": kind = .harnessSubtask(HarnessActivity(id: value.targetID ?? value.id,
             kind: "Agent", title: value.title))

@@ -526,6 +526,8 @@ struct TaskDetail: View {
                 case let .harnessSubtask(activity): subtasks?.open(activity)
                 case let .codexThread(threadID):
                     workspaceState.showPanelDetail(.codexThread(threadID, title: agent.title))
+                case let .antigravitySubagent(conversationID):
+                    workspaceState.showPanelDetail(.antigravitySubagent(conversationID, title: agent.title))
                 case let .yardletAgent(agentID?, _):
                     workspaceState.showPanelDetail(.agentRun(agentID, title: agent.title))
                 case .yardletAgent(nil, _): break
@@ -589,6 +591,18 @@ struct TaskDetail: View {
                 },
                 onClose: workspaceState.closePanelDetail)
                 .id(threadID)
+        case let .antigravitySubagent(conversationID, title):
+            AntigravitySubagentPane(
+                conversationID: conversationID, title: title, workspaceURL: session.workspaceURL,
+                refreshKey: "\(session.status)|\(session.completionState)",
+                load: { [railServices] in
+                    guard let railServices else {
+                        throw HarnessAdapterError.capabilityUnavailable(L10n.string("The child conversation could not be read."))
+                    }
+                    return try await railServices.agents.readAntigravitySubagent(conversationID)
+                },
+                onClose: workspaceState.closePanelDetail)
+                .id(conversationID)
         case let .claudeTaskOutput(activityID, title):
             let activity = runningOrLatestActivity(activityID)
             BackgroundOutputPane(

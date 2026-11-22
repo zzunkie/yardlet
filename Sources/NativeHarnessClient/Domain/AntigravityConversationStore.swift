@@ -254,6 +254,101 @@ struct AntigravityConversationStore: Sendable {
         return data
     }
 
+    // MARK: - Subagents
+
+    /// A subagent `agy` started for a conversation (`brain/<id>/.system_generated/subagents/<child>.json`).
+    struct Subagent: Equatable, Sendable {
+        enum Status: Equatable, Sendable {
+            case running
+            case completed
+            case stopped
+        }
+
+        let conversationID: String
+        let role: String?
+        let typeName: String?
+        let status: Status
+        let startedAt: Date?
+        let spawnStepIndex: Int?
+
+        var displayTitle: String {
+            let trimmedRole = role?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !trimmedRole.isEmpty { return trimmedRole }
+            let trimmedType = typeName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !trimmedType.isEmpty { return trimmedType }
+            return L10n.format("Subagent %@", String(conversationID.prefix(8)))
+        }
+    }
+
+    /// The subagents `agy` recorded under `conversationID`, in spawn order.
+    func subagents(of conversationID: String) -> [Subagent] {
+        guard Self.isSafeComponent(conversationID) else { return [] }
+        let directory = root.appending(path: "brain/\(conversationID)/.system_generated/subagents",
+                                       directoryHint: .isDirectory)
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: [.creationDateKey, .contentModificationDateKey])) ?? []
+        var result: [Subagent] = []
+        for url in files where url.pathExtension == "json" {
+            guard Self.isRegularFile(url, maximumBytes: 1 << 20),
+                  let data = try? Data(contentsOf: url),
+                  let record = try? JSONDecoder().decode(JSONValue.self, from: data),
+                  let childID = record["conversationId"]?.stringValue,
+                  Self.isSafeComponent(childID) else { continue }
+            let descriptor = record["subagentDescriptor"]
+            let role = descriptor?["role"]?.stringValue
+            let typeName = descriptor?["typeName"]?.stringValue
+            let state = record["state"]?.stringValue ?? ""
+            let spawnStep = record["spawnStepIndex"]?.integerValue.map(Int.init)
+            let values = try? url.resourceValues(forKeys: [.creationDateKey, .contentModificationDateKey])
+            let startedAt = values?.creationDate ?? values?.contentModificationDate
+            let atRest = transcriptURL(conversationID: childID).map(Self.lastRecordIsAtRest(of:)) ?? false
+            let status: Subagent.Status = if atRest {
+                .completed
+            } else if state == "SUBAGENT_STATE_KILLED" {
+                .stopped
+            } else {
+                .running
+            }
+            result.append(Subagent(conversationID: childID, role: role, typeName: typeName,
+                                   status: status, startedAt: startedAt, spawnStepIndex: spawnStep))
+        }
+        return result.sorted { left, right in
+            let leftDate = left.startedAt ?? .distantPast
+            let rightDate = right.startedAt ?? .distantPast
+            if leftDate != rightDate { return leftDate < rightDate }
+            if (left.spawnStepIndex ?? 0) != (right.spawnStepIndex ?? 0) {
+                return (left.spawnStepIndex ?? 0) < (right.spawnStepIndex ?? 0)
+            }
+            return left.conversationID < right.conversationID
+        }
+    }
+
+    /// Whether `childConversationID` is recorded as a subagent of `parentConversationID`.
+    func hasSubagent(_ childConversationID: String, of parentConversationID: String) -> Bool {
+        guard Self.isSafeComponent(parentConversationID), Self.isSafeComponent(childConversationID) else { return false }
+        let file = root.appending(
+            path: "brain/\(parentConversationID)/.system_generated/subagents/\(childConversationID).json"
+        )
+        return Self.isRegularFile(file, maximumBytes: 1 << 20)
+    }
+
+    /// Whether the log's last non-empty record is a finished `PLANNER_RESPONSE` with no tool calls,
+    /// reading only the tail of the file so polling stays O(1).
+    private static func lastRecordIsAtRest(of url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        guard let size = try? handle.seekToEnd(), size > 0 else { return false }
+        let tailWindow: UInt64 = 64 * 1024
+        let start = size > tailWindow ? size - tailWindow : 0
+        try? handle.seek(toOffset: start)
+        guard let data = try? handle.readToEnd(),
+              let lastLine = data.split(separator: 0x0A, omittingEmptySubsequences: true).last,
+              let record = try? JSONDecoder().decode(JSONValue.self, from: Data(lastLine)) else { return false }
+        return record["type"]?.stringValue == "PLANNER_RESPONSE"
+            && record["status"]?.stringValue?.uppercased() == "DONE"
+            && (record["tool_calls"]?.arrayValue?.isEmpty ?? true)
+    }
+
     // MARK: - What its tools made
 
     /// A picture `generate_image` saved.

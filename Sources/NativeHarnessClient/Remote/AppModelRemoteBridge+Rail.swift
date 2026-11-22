@@ -36,8 +36,10 @@ extension AppModelRemoteBridge {
             railCache[session.id] = (key, git, sources)
         }
         let terminals = session.harness == .codex ? await model.codexBackgroundTerminals(of: session) ?? [] : []
+        let antigravitySubagents = session.harness == .antigravityCLI ? await model.antigravitySubagents(of: session) : []
         guard let current = self.session(taskID) else { return .failure(RemoteError(.notFound)) }
-        if !terminals.isEmpty { railHasTerminals.insert(current.id) } else { railHasTerminals.remove(current.id) }
+        let hasActiveWork = !terminals.isEmpty || antigravitySubagents.contains { $0.status == .running }
+        if hasActiveWork { railHasTerminals.insert(current.id) } else { railHasTerminals.remove(current.id) }
         if watchedRails.contains(current.id), let pr = model.pullRequests.pullRequest(for: current.id) {
             model.pullRequestDetails.showRemote(taskID: current.id, pullRequest: pr, folder: current.workspaceURL)
         } else { model.pullRequestDetails.hideRemote(taskID: current.id) }
@@ -46,7 +48,8 @@ extension AppModelRemoteBridge {
         let read = { [self] in
             guard let latest = self.session(taskID) else { return RemoteRailFacts() }
             return Self.railFacts(session: latest, model: model, git: railCache[latest.id]?.git,
-                                  terminals: terminals, instructionSources: railCache[latest.id]?.sources,
+                                  terminals: terminals, antigravitySubagents: antigravitySubagents,
+                                  instructionSources: railCache[latest.id]?.sources,
                                   agentCalls: agentCalls)
         }
         let facts: RemoteRailFacts
@@ -63,7 +66,9 @@ extension AppModelRemoteBridge {
     }
 
     static func railFacts(session: SessionRecord, model: AppModel, git: SessionRailGitInfo?,
-                          terminals: [CodexBackgroundTerminal] = [], instructionSources: TaskInstructionSources? = nil,
+                          terminals: [CodexBackgroundTerminal] = [],
+                          antigravitySubagents: [AntigravityConversationStore.Subagent] = [],
+                          instructionSources: TaskInstructionSources? = nil,
                           agentCalls: SessionRailAgents.Calls = SessionRailAgents.Calls()) -> RemoteRailFacts {
         let entries = model.transcript(for: session.id).railEntries
         let codex = model.codexRailStateBySessionID[session.id]
@@ -87,6 +92,7 @@ extension AppModelRemoteBridge {
             pullRequestState: model.pullRequestDetails.state(for: session.id),
             autoFix: model.pullRequestDetails.autoFix.record(for: session.id),
             autoFixPrompt: .current(), codexState: codex,
+            antigravitySubagents: antigravitySubagents,
             agentRuns: model.railAgentRuns(hostedBy: session.id), agentCalls: agentCalls,
             childTasks: model.railChildTasks(of: session.id),
             backgroundTerminals: terminals)
@@ -138,6 +144,7 @@ extension AppModelRemoteBridge {
             case let .childTask(id): kind = "childTask"; target = id.uuidString
             case let .yardletAgent(id, _): kind = "yardletAgent"; target = id?.uuidString
             case let .codexThread(id): kind = "codexThread"; target = id
+            case let .antigravitySubagent(id): kind = "antigravitySubagent"; target = id
             case let .harnessSubtask(activity): kind = "harnessSubtask"; target = activity.id
             }
             var row = RemoteRailFacts.Agent(id: agent.id, kind: kind, targetID: target, title: Self.safeRailText(agent.title, roots: roots),

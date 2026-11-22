@@ -23,6 +23,8 @@ struct SessionRailAgents: Equatable {
             case harnessSubtask(HarnessActivity)
             /// A Codex child thread, read in the side panel from the thread itself.
             case codexThread(String)
+            /// An Antigravity CLI subagent (`invoke_subagent`), read in the side panel from its own log.
+            case antigravitySubagent(String)
             /// A `run_agent` subagent: by its ID once the call named it, else by its prompt.
             case yardletAgent(agentID: UUID?, prompt: String)
             /// A child task; opening it goes to the task, as the Codex app opens a created chat.
@@ -71,7 +73,7 @@ struct SessionRailAgents: Equatable {
         var opensPanel: Bool {
             switch kind {
             case let .harnessSubtask(activity): activity.subtask?.hasConversation == true
-            case .codexThread: true
+            case .codexThread, .antigravitySubagent: true
             case let .yardletAgent(agentID, _): agentID != nil
             case .childTask: false
             }
@@ -199,9 +201,11 @@ struct SessionRailAgents: Equatable {
     ///   - children: the child tasks `create_task` made for it.
     /// - Returns: nil when the task has no agents.
     static func make(harness: HarnessKind, entries: [TranscriptEntry], codexState: CodexTaskState?,
+                     antigravitySubagents: [AntigravityConversationStore.Subagent] = [],
                      runs: [Run] = [], calls: Calls = Calls(), children: [Child] = []) -> SessionRailAgents? {
         var agents = subtasks(in: entries, harness: harness)
         agents += codexThreads(in: codexState)
+        agents += Self.antigravitySubagents(antigravitySubagents)
         agents += yardletAgents(harness: harness, entries: entries, codexState: codexState, runs: runs, read: calls)
         agents += children.map { child in
             Agent(id: "task:\(child.id.uuidString)", kind: .childTask(child.id), title: child.title,
@@ -211,6 +215,23 @@ struct SessionRailAgents: Equatable {
         }
         guard !agents.isEmpty else { return nil }
         return SessionRailAgents(agents: ordered(agents))
+    }
+
+    private static func antigravitySubagents(_ subagents: [AntigravityConversationStore.Subagent]) -> [Agent] {
+        subagents.map { subagent in
+            let status: Agent.Status = switch subagent.status {
+            case .running: .running
+            case .completed: .completed
+            case .stopped: .stopped
+            }
+            return Agent(
+                id: "antigravity:\(subagent.conversationID)",
+                kind: .antigravitySubagent(subagent.conversationID),
+                title: subagent.displayTitle,
+                status: status,
+                startedAt: subagent.startedAt
+            )
+        }
     }
 
     /// Running ones first in the order they started, the rest newest first; a nested agent follows

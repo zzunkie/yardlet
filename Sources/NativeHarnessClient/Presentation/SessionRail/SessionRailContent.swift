@@ -198,6 +198,7 @@ struct SessionRailContent: Equatable {
         autoFixPrompt: PullRequestAutoFixPrompt = .ask,
         codexChanges: [CodexChangeHandoff] = [],
         codexState: CodexTaskState? = nil,
+        antigravitySubagents: [AntigravityConversationStore.Subagent] = [],
         generatedFiles: [Output] = [],
         agentRuns: [SessionRailAgents.Run] = [],
         agentCalls: SessionRailAgents.Calls = SessionRailAgents.Calls(),
@@ -246,6 +247,7 @@ struct SessionRailContent: Equatable {
             progress: plan.flatMap { $0.steps.isEmpty ? nil : Progress(plan: $0) },
             changes: hasChanges ? changes : nil,
             agents: SessionRailAgents.make(harness: session.harness, entries: entries, codexState: codexState,
+                                           antigravitySubagents: antigravitySubagents,
                                            runs: agentRuns, calls: agentCalls, children: childTasks),
             suggestions: suggestionResolution.map { resolution in
                 ConversationTaskSuggestionProjection.suggestions(in: entries, codexState: codexState)

@@ -102,6 +102,60 @@ struct CodexChildThreadPane: View {
     }
 }
 
+/// An Antigravity CLI subagent's log in the side panel, read from its own `transcript_full.jsonl`:
+/// nothing loads or resumes it. It reads again when its task moves and on Refresh.
+struct AntigravitySubagentPane: View {
+    let conversationID: String
+    let title: String
+    let workspaceURL: URL
+    let refreshKey: String
+    let load: @MainActor () async throws -> AntigravityTranscript
+    let onClose: () -> Void
+    @State private var transcript: AntigravityTranscript?
+    @State private var error: String?
+    @State private var loading = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            WorkSurfaceHeader(title: title, systemName: "person.2", workspaceURL: workspaceURL, onClose: onClose) {
+                ParityIconButton(systemName: "arrow.clockwise", help: L10n.string("Refresh")) {
+                    Task { await refresh() }
+                }
+                .disabled(loading)
+            }
+            if let transcript, !transcript.entries.isEmpty {
+                ConversationTimeline(
+                    source: .transcript(entries: transcript.entries, harness: .antigravityCLI,
+                                        status: .ready, latestTurnIsComplete: true),
+                    placement: .panel)
+            } else if let error {
+                WorkSurfaceEmptyState(title: L10n.string("Child conversation unavailable"), message: error,
+                                      systemName: "text.bubble")
+            } else if loading {
+                ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                WorkSurfaceEmptyState(title: L10n.string("No child conversation yet"), systemName: "text.bubble")
+            }
+        }
+        .environment(\.transcriptWorkspaceURL, workspaceURL)
+        .task(id: "\(conversationID)|\(refreshKey)") { await refresh() }
+    }
+
+    private func refresh() async {
+        loading = true
+        defer { loading = false }
+        do {
+            let read = try await load()
+            guard !Task.isCancelled else { return }
+            if read != transcript { transcript = read }
+            error = nil
+        } catch {
+            guard !Task.isCancelled, transcript == nil else { return }
+            self.error = error.localizedDescription
+        }
+    }
+}
+
 /// A background task's output in the side panel: the Claude app's Background tasks pane ("View live
 /// output") and the Codex app's background terminal tab ("No output yet"). It follows the output
 /// while the task runs and keeps to its newest part.

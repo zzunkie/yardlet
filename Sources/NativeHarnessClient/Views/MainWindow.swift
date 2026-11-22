@@ -2509,6 +2509,10 @@ struct MainWindow: View {
             services.stopTerminal = { terminal in try await model.stopCodexBackgroundTerminal(terminal.processID, of: session) }
             services.stopAllTerminals = { try await model.stopAllCodexBackgroundTerminals(of: session) }
         }
+        if session.harness == .antigravityCLI {
+            services.readAntigravitySubagents = { await model.antigravitySubagents(of: session) }
+            services.readAntigravitySubagent = { id in try await model.readAntigravitySubagent(id, of: session) }
+        }
         return services
     }
 
