@@ -336,6 +336,10 @@ actor ACPAdapter:
         }
         replayingProviderSessionIDs.remove(session.providerSessionID)
         stopFollowingAgentTurns(of: session.localSessionID)
+        // Any assistant stream or notice left over from an autonomous turn was already shown as deltas
+        // and finalized when the new request was appended; drop it so it cannot flush into the new turn.
+        heldNotices.removeValue(forKey: session.localSessionID)
+        assistantStreamByLocalSessionID.removeValue(forKey: session.localSessionID)
         emit(.sessionStatusChanged(.running), for: session.localSessionID)
         let id = takeRequestID()
         let transport = transport(of: session.localSessionID)
@@ -393,9 +397,7 @@ actor ACPAdapter:
             ACPProtocol.cancel(providerSessionID: session.providerSessionID)
         )
         // A prompt's turn ends with its answer; an agent's own turn has no answer to wait for.
-        for payload in agentTurnFollowers[session.localSessionID]?.stop() ?? [] {
-            emit(payload, for: session.localSessionID)
-        }
+        emitAgentTurnPayloads(agentTurnFollowers[session.localSessionID]?.stop() ?? [], for: session.localSessionID)
     }
 
     func respond(
@@ -832,6 +834,12 @@ actor ACPAdapter:
             return
         }
         if redeliveries[localSessionID]?.absorbs(update) == true { return }
+        if promptTasks[localSessionID] == nil,
+           ACPReplayTranscript.conversationUpdates.contains(updateKind ?? ""),
+           updateKind != "user_message_chunk",
+           let payloads = agentTurnFollowers[localSessionID]?.noteLiveStream() {
+            for payload in payloads { emit(payload, for: localSessionID, rawData: frame.data) }
+        }
         if updateKind == "turn_completed",
            let usage = projector.usage(from: update) {
             emit(.usageUpdated(usage), for: localSessionID, rawData: frame.data)
@@ -1076,7 +1084,18 @@ actor ACPAdapter:
     }
 
     private func readAgentTurn(of localSessionID: UUID) {
-        for payload in agentTurnFollowers[localSessionID]?.read() ?? [] {
+        emitAgentTurnPayloads(agentTurnFollowers[localSessionID]?.read() ?? [], for: localSessionID)
+    }
+
+    private func emitAgentTurnPayloads(_ payloads: [HarnessEventPayload], for localSessionID: UUID) {
+        for payload in payloads {
+            switch payload {
+            case .turnCompleted, .sessionStatusChanged(.ready):
+                releaseHeldNotice(of: localSessionID)
+                completeAssistantIfNeeded(for: localSessionID)
+            default:
+                break
+            }
             emit(payload, for: localSessionID)
         }
     }

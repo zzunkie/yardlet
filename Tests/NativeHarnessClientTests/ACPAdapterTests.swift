@@ -1265,6 +1265,113 @@ final class ACPAdapterTests: XCTestCase {
         XCTAssertEqual(approving.read(at: start + .seconds(60)), [.sessionStatusChanged(.ready)])
     }
 
+    /// Newer `agy acp` streams autonomous turns live over `session/update` between prompts. The log
+    /// follower then only detects when that turn rests instead of emitting a second copy, and the live
+    /// assistant stream is completed before `.turnCompleted` (and cleared on the next prompt if a
+    /// prompt arrives mid-stream) so the previous answer never leaks into the next turn.
+    func testAntigravityLiveStreamedAutonomousTurnIsNotDuplicatedOrLeakedIntoNextPrompt() async throws {
+        let log = try AntigravityLogFixture()
+        defer { log.remove() }
+        let transport = FakeACPTransport(exposesAntigravity: true)
+        let adapter = log.adapter(transport: transport)
+        let handle = try await adapter.createSession(log.sessionRequest)
+        let recorder = ACPPayloadRecorder()
+        let collector = Task { for await event in await adapter.events(for: handle) { await recorder.append(event.payload) } }
+        defer { collector.cancel() }
+
+        try await adapter.send("Start", to: handle)
+        try await waitUntil { await transport.pendingPromptCount == 1 }
+        await transport.emit(log.answer("Running background job."))
+        await transport.completePrompt()
+        try await waitUntil { await recorder.payloads.contains(.turnCompleted) }
+
+        let beforeAutonomous = await recorder.payloads.count
+        // Autonomous turn streams live over ACP before the log flush arrives.
+        await transport.emit(log.update(["sessionUpdate": .string("agent_thought_chunk"),
+                                         "content": .object(["type": .string("text"), "text": .string("Checking job.\n\n")])]))
+        await transport.emit(log.answer("\n\nFinal report from background job."))
+        try await waitUntil { await recorder.payloads.contains(.assistantDelta("\n\nFinal report from background job.")) }
+
+        // The log records the same autonomous turn and reaches rest.
+        try log.append(.systemMessage(10),
+                       .response(11, thinking: "Checking job.", answer: "Final report from background job."))
+        try await waitUntil {
+            await recorder.payloads.dropFirst(beforeAutonomous).contains(.sessionStatusChanged(.ready))
+        }
+        let autonomous = Array(await recorder.payloads.dropFirst(beforeAutonomous))
+        XCTAssertEqual(autonomous, [
+            .sessionStatusChanged(.running),
+            .reasoningDelta("Checking job.\n\n"),
+            .assistantDelta("\n\nFinal report from background job."),
+            .assistantMessageCompleted("\n\nFinal report from background job."),
+            .turnCompleted,
+            .sessionStatusChanged(.ready)
+        ])
+
+        // Next user prompt starts with a thought chunk: previous autonomous answer must NOT be re-emitted.
+        let beforeNext = await recorder.payloads.count
+        try await adapter.send("Next question", to: handle)
+        try await waitUntil { await transport.pendingPromptCount == 1 }
+        await transport.emit(log.update(["sessionUpdate": .string("agent_thought_chunk"),
+                                         "content": .object(["type": .string("text"), "text": .string("New thought.")])]))
+        await transport.emit(log.answer("New answer."))
+        await transport.completePrompt()
+        try await waitUntil {
+            await recorder.payloads.dropFirst(beforeNext).contains(.sessionStatusChanged(.ready))
+        }
+        let nextTurn = Array(await recorder.payloads.dropFirst(beforeNext))
+        XCTAssertEqual(nextTurn, [
+            .sessionStatusChanged(.running),
+            .reasoningDelta("New thought."),
+            .assistantDelta("New answer."),
+            .assistantMessageCompleted("New answer."),
+            .turnCompleted,
+            .sessionStatusChanged(.ready)
+        ])
+
+        // Even if the user sends a prompt mid-stream before the autonomous turn rests, stale buffered
+        // assistant text is discarded on sendPrompt and never flushed into the new turn.
+        await transport.emit(log.answer("\n\nUnfinished autonomous text."))
+        try await waitUntil { await recorder.payloads.contains(.assistantDelta("\n\nUnfinished autonomous text.")) }
+        let beforeMidStream = await recorder.payloads.count
+        try await adapter.send("Interrupting prompt", to: handle)
+        try await waitUntil { await transport.pendingPromptCount == 1 }
+        await transport.emit(log.update(["sessionUpdate": .string("agent_thought_chunk"),
+                                         "content": .object(["type": .string("text"), "text": .string("Handling prompt.")])]))
+        await transport.emit(log.answer("Prompt reply."))
+        await transport.completePrompt()
+        try await waitUntil {
+            await recorder.payloads.dropFirst(beforeMidStream).contains(.sessionStatusChanged(.ready))
+        }
+        let midStreamTurn = Array(await recorder.payloads.dropFirst(beforeMidStream))
+        XCTAssertEqual(midStreamTurn, [
+            .sessionStatusChanged(.running),
+            .reasoningDelta("Handling prompt."),
+            .assistantDelta("Prompt reply."),
+            .assistantMessageCompleted("Prompt reply."),
+            .turnCompleted,
+            .sessionStatusChanged(.ready)
+        ])
+
+        // Multi-chunk redelivery with leading and internal newlines stays matched across chunks.
+        var redelivery = AntigravityRedelivery()
+        redelivery.expect(answer: "Para 1\n\nPara 2")
+        XCTAssertTrue(redelivery.absorbs(.object([
+            "sessionUpdate": .string("agent_message_chunk"),
+            "content": .object(["type": .string("text"), "text": .string("\n\nPara 1\n\n")])
+        ])))
+        XCTAssertTrue(redelivery.absorbs(.object([
+            "sessionUpdate": .string("agent_message_chunk"),
+            "content": .object(["type": .string("text"), "text": .string("Para 2\n\n")])
+        ])))
+        XCTAssertFalse(redelivery.absorbs(.object([
+            "sessionUpdate": .string("agent_message_chunk"),
+            "content": .object(["type": .string("text"), "text": .string("Fresh reply")])
+        ])))
+
+        await adapter.close(handle)
+    }
+
     private func permissionOption(_ id: String, _ name: String, _ kind: String) -> JSONValue {
         .object([
             "optionId": .string(id),

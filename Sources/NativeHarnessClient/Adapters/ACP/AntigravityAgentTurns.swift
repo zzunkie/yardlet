@@ -42,6 +42,9 @@ struct AntigravityAgentTurnFollower: Sendable {
     private var turnLines = Data()
     private var shown: [UUID: TranscriptEntryContent] = [:]
     private var isRunning = false
+    /// `agy acp` streamed this autonomous turn live over `session/update`, so the log only tracks
+    /// when the turn rests or goes quiet instead of emitting a second copy or expecting redelivery.
+    private var streamsLive = false
     private var lastLine: ContinuousClock.Instant
     /// What was shown from the log, which the next prompt's stream repeats.
     private(set) var redelivery: AntigravityRedelivery
@@ -62,6 +65,15 @@ struct AntigravityAgentTurnFollower: Sendable {
         self.redelivery = redelivery
         lastLine = .now
         position = store.transcriptURL(conversationID: conversationID).flatMap(Self.size(of:)) ?? 0
+    }
+
+    /// Marks that `agy acp` is streaming this autonomous turn live over `session/update`.
+    mutating func noteLiveStream(at now: ContinuousClock.Instant = .now) -> [HarnessEventPayload] {
+        streamsLive = true
+        lastLine = now
+        guard !isRunning else { return [] }
+        isRunning = true
+        return [.sessionStatusChanged(.running)]
     }
 
     /// What the log added, as the events of the agent's turn.
@@ -90,22 +102,24 @@ struct AntigravityAgentTurnFollower: Sendable {
         lastLine = now
         var payloads: [HarnessEventPayload] = isRunning ? [] : [.sessionStatusChanged(.running)]
         isRunning = true
-        for entry in AntigravityTranscriptParser.entries(conversationID: conversationID, jsonl: turnLines)
-        where shown[entry.id] != entry.content {
-            let isNew = shown[entry.id] == nil
-            shown[entry.id] = entry.content
-            switch entry.content {
-            case let .reasoning(text, _):
-                redelivery.expect(thought: text)
-                payloads.append(.reasoningCompleted(text))
-            case let .assistant(text, _):
-                redelivery.expect(answer: text)
-                payloads.append(.assistantMessageCompleted(text))
-            case let .activity(activity, _):
-                if isNew { redelivery.expectToolCall() }
-                payloads.append(.activityCompleted(activity))
-            default:
-                break
+        if !streamsLive {
+            for entry in AntigravityTranscriptParser.entries(conversationID: conversationID, jsonl: turnLines)
+            where shown[entry.id] != entry.content {
+                let isNew = shown[entry.id] == nil
+                shown[entry.id] = entry.content
+                switch entry.content {
+                case let .reasoning(text, _):
+                    redelivery.expect(thought: text)
+                    payloads.append(.reasoningCompleted(text))
+                case let .assistant(text, _):
+                    redelivery.expect(answer: text)
+                    payloads.append(.assistantMessageCompleted(text))
+                case let .activity(activity, _):
+                    if isNew { redelivery.expectToolCall() }
+                    payloads.append(.activityCompleted(activity))
+                default:
+                    break
+                }
             }
         }
         return atRest ? payloads + endTurn() : payloads
@@ -118,6 +132,7 @@ struct AntigravityAgentTurnFollower: Sendable {
 
     private mutating func endTurn() -> [HarnessEventPayload] {
         isRunning = false
+        streamsLive = false
         turnLines = Data()
         shown = [:]
         return [.turnCompleted, .sessionStatusChanged(.ready)]
@@ -131,6 +146,7 @@ struct AntigravityAgentTurnFollower: Sendable {
         guard isRunning, lastLine.duration(to: now) >= quietLimit else { return [] }
         guard stepsWaitForApproval, let call = callsWithoutResult.first else {
             isRunning = false
+            streamsLive = false
             return [.sessionStatusChanged(.ready)]
         }
         let row = HarnessActivity(
@@ -202,8 +218,12 @@ struct AntigravityRedelivery: Equatable, Sendable {
     /// come in several; the log's words are trimmed where the stream's may not be.
     private static func take(_ chunk: String?, from expected: inout [String]) -> Bool {
         guard let chunk, let first = expected.first else { return false }
-        let text = first.hasPrefix(chunk) ? chunk : chunk.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard first.hasPrefix(text) else { return false }
+        let candidates = [
+            chunk,
+            String(chunk.drop(while: \.isWhitespace)),
+            chunk.trimmingCharacters(in: .whitespacesAndNewlines)
+        ]
+        guard let text = candidates.first(where: { first.hasPrefix($0) }) else { return false }
         let rest = String(first.dropFirst(text.count))
         if rest.isEmpty { expected.removeFirst() } else { expected[0] = rest }
         return true
