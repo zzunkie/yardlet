@@ -2199,6 +2199,84 @@ final class RemoteServerTests: XCTestCase {
         let log = try String(contentsOf: harness.auditURL, encoding: .utf8)
         XCTAssertFalse(log.contains("secret-account@example.com"))
     }
+
+    func testConnectorSetupIsPrivateToItsConnectionAndEndsWhenAccessIsLost() async throws {
+        let clock = RemoteTestClock()
+        let harness = try await ServerHarness(clock: clock)
+        let client = try await harness.authenticatedPhone()
+        let observer = try await harness.authenticatedPhone()
+        let owner = try XCTUnwrap(client.id).uuidString
+        let otherOwner = try XCTUnwrap(observer.id).uuidString
+        let operationID = UUID().uuidString
+        var sequence = 0
+        func ask(_ setup: RemoteConnectorSetupRequest, on channel: TestChannel) async throws -> RemoteResponse {
+            sequence += 1
+            clock.advance(by: 1)
+            let id = "connector-\(sequence)"
+            let envelope = RemoteRequestEnvelope(id: id, request: .connectorSetup(setup))
+            await harness.send(String(decoding: envelope.encoded(), as: UTF8.self), on: channel)
+            return try await channel.response(id)
+        }
+        let start = RemoteConnectorSetupRequest(action: .start, operationID: operationID,
+                                               draft: .init(presetID: "github", token: "private-input-token"))
+        let refused = try await ask(start, on: client)
+        XCTAssertEqual(refused.error?.code, .notAllowed)
+        let before = await harness.bridge.connectorSetupRequests
+        XCTAssertTrue(before.isEmpty)
+        let devices = await harness.devices.all()
+        for device in devices { try await harness.server.setPermission(.settings, allowed: true, for: device.id) }
+
+        let started = try await ask(start, on: client)
+        XCTAssertEqual(started.connectorSetup?.operationID, operationID)
+        XCTAssertEqual(started.connectorSetup?.step?.url, "https://example.com/sign-in?state=private-oauth-state")
+        let stolen = try await ask(.init(action: .poll, operationID: operationID), on: observer)
+        XCTAssertEqual(stolen.error?.code, .notFound)
+        XCTAssertNil(stolen.connectorSetup)
+        let polled = try await ask(.init(action: .poll, operationID: operationID), on: client)
+        XCTAssertNotNil(polled.connectorSetup?.step)
+        let received = await harness.bridge.connectorSetupRequests
+        XCTAssertEqual(received.map(\.owner), [owner, otherOwner, owner])
+        XCTAssertTrue(observer.events(.hostAccountsChanged).isEmpty)
+        let log = try String(contentsOf: harness.auditURL, encoding: .utf8)
+        XCTAssertFalse(log.contains("private-input-token"))
+        XCTAssertFalse(log.contains("private-oauth-state"))
+        XCTAssertEqual(harness.audit.entries().filter { $0.type == "connectorSetup" && $0.result == "ok" }.map(\.input),
+                       [operationID], "Polling does not add repeated audit lines")
+
+        // A device permission change cancels every setup belonging to its connections.
+        for device in devices { try await harness.server.setPermission(.settings, allowed: false, for: device.id) }
+        try await waitUntil { await harness.bridge.cancelledConnectorSetupOwners.contains(owner) }
+        let afterRevocation = try await ask(.init(action: .poll, operationID: operationID), on: client)
+        XCTAssertEqual(afterRevocation.error?.code, .notAllowed)
+        for device in devices { try await harness.server.setPermission(.settings, allowed: true, for: device.id) }
+        _ = try await ask(.init(action: .start, operationID: UUID().uuidString, draft: .init(presetID: "linear")), on: client)
+        let cancelledBeforeClose = await harness.bridge.cancelledConnectorSetupOwners.filter { $0 == owner }.count
+        await harness.server.closed(try XCTUnwrap(client.id))
+        try await waitUntil {
+            await harness.bridge.cancelledConnectorSetupOwners.filter { $0 == owner }.count > cancelledBeforeClose
+        }
+    }
+
+    func testConnectorSetupDoesNotReturnSignInMaterialAfterPermissionRevocationDuringBridgeCall() async throws {
+        let harness = try await ServerHarness()
+        let client = try await harness.authenticatedPhone()
+        let deviceList = await harness.devices.all()
+        let device = try XCTUnwrap(deviceList.first)
+        try await harness.server.setPermission(.settings, allowed: true, for: device.id)
+        await harness.bridge.holdNextConnectorSetup()
+        let request = RemoteRequest.connectorSetup(.init(action: .start, operationID: UUID().uuidString,
+                                                         draft: .init(presetID: "linear")))
+        await harness.send(String(decoding: RemoteRequestEnvelope(id: "held", request: request).encoded(), as: UTF8.self),
+                           on: client)
+        try await waitUntil { await harness.bridge.connectorSetupWaiting }
+        try await harness.server.setPermission(.settings, allowed: false, for: device.id)
+        await harness.bridge.releaseConnectorSetup()
+        let reply = try await client.response("held")
+        XCTAssertEqual(reply.error?.code, .notAllowed)
+        XCTAssertNil(reply.connectorSetup)
+        let owner = try XCTUnwrap(client.id).uuidString
+        try await waitUntil { await harness.bridge.cancelledConnectorSetupOwners.contains(owner) }
+    }
 }
 
 // MARK: - Harness
@@ -2553,6 +2631,14 @@ actor FakeBridge: RemoteBridge {
     private(set) var hostAccountChanges: [(harness: String?, accountID: String?, automaticAssignment: Bool?, settingID: String?, enabled: Bool?)] = []
     private(set) var hostRuntimeChanges: [(harness: String, choiceID: String)] = []
     private(set) var hostConnectorChanges: [(id: String, enabled: Bool)] = []
+    private(set) var connectorSetupRequests: [(request: RemoteConnectorSetupRequest, owner: String)] = []
+    private(set) var cancelledConnectorSetupOwners: [String] = []
+    private var connectorSetupOwners: [String: String] = [:]
+    private var holdConnectorSetup = false
+    private var connectorSetupContinuation: CheckedContinuation<Void, Never>?
+    var connectorSetupWaiting: Bool { connectorSetupContinuation != nil }
+    func holdNextConnectorSetup() { holdConnectorSetup = true }
+    func releaseConnectorSetup() { connectorSetupContinuation?.resume(); connectorSetupContinuation = nil }
     private var accountsState: RemoteAccountsState = {
         var account = RemoteAccount(id: "acc-1", name: "secret-account@example.com", current: true, available: true)
         account.state = .signedIn
@@ -2587,6 +2673,22 @@ actor FakeBridge: RemoteBridge {
     func setHostConnector(id: String, enabled: Bool) -> Result<RemoteAccountsState, RemoteError> {
         hostConnectorChanges.append((id, enabled))
         return .success(accountsState)
+    }
+    func connectorSetup(_ request: RemoteConnectorSetupRequest, owner: String) async -> Result<RemoteConnectorSetupState, RemoteError> {
+        connectorSetupRequests.append((request, owner))
+        if holdConnectorSetup {
+            holdConnectorSetup = false
+            await withCheckedContinuation { connectorSetupContinuation = $0 }
+        }
+        if request.action == .start { connectorSetupOwners[request.operationID] = owner }
+        guard connectorSetupOwners[request.operationID] == owner else { return .failure(RemoteError(.notFound)) }
+        return .success(.init(operationID: request.operationID,
+                              step: .init(id: UUID().uuidString, kind: .open,
+                                          url: "https://example.com/sign-in?state=private-oauth-state")))
+    }
+    func cancelConnectorSetups(owner: String) {
+        cancelledConnectorSetupOwners.append(owner)
+        connectorSetupOwners = connectorSetupOwners.filter { $0.value != owner }
     }
 }
 

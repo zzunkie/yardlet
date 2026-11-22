@@ -27,6 +27,14 @@ extension RemoteHostModel {
     }
 
     var remoteConnectorsNote: String {
+        if hostAccountsState?.connectorSetup == true {
+            if canEditHostSettings {
+                return L10n.format("Connect services on %@ and sign in with this computer's browser.", name)
+            }
+            return L10n.format(
+                "To connect services or turn connectors on or off from here, allow Change settings for this device in Settings › Remote › Paired devices on %@.", name
+            )
+        }
         if canEditHostSettings {
             return L10n.format("Connect services, sign in, or edit connectors on %@.", name)
         }

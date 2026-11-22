@@ -14,6 +14,8 @@ struct ConnectorSettingsView: View {
     var canEditSettings = true
     var remoteNote: String? = nil
     var claudeAIConnectorsOverride: Binding<Bool>? = nil
+    var onRemoteAdd: (() -> Void)? = nil
+    var onRemoteConnect: ((ConnectorRecord) -> Void)? = nil
     @State private var adding: ConnectorAddSheet.Start?
     @AppStorage(ClaudeAIConnectorPreference.key) private var claudeAIConnectors = false
     @AppStorage(Self.importDismissedKey) private var importDismissed = false
@@ -54,13 +56,14 @@ struct ConnectorSettingsView: View {
                         .settingsAnchor(SettingsSearch.Anchor.addConnector)
                     Spacer(minLength: 8)
                     // With none yet, the empty state holds the one "Add connector".
-                    if !isRemote, !center.connectors.isEmpty {
+                    if (!isRemote || onRemoteAdd != nil), !center.connectors.isEmpty {
                         Button {
-                            adding = .directory
+                            addConnector()
                         } label: {
                             Label(L10n.string("Add connector"), systemImage: "plus")
                         }
                         .controlSize(.small)
+                        .disabled(!canEditSettings)
                     }
                 }
                 .frame(minHeight: 22)
@@ -75,7 +78,8 @@ struct ConnectorSettingsView: View {
                                 record: record,
                                 isRemote: isRemote,
                                 canEditSettings: canEditSettings,
-                                onSetUp: { adding = .preset($0) }
+                                onSetUp: { adding = .preset($0) },
+                                onRemoteConnect: onRemoteConnect
                             )
                         }
                     }
@@ -120,17 +124,22 @@ struct ConnectorSettingsView: View {
                 .foregroundStyle(.secondary)
             Text(L10n.string("No connectors yet"))
                 .font(SettingsMetrics.groupTitleFont)
-            if !isRemote {
-                Button(L10n.string("Add connector")) { adding = .directory }
+            if !isRemote || onRemoteAdd != nil {
+                Button(L10n.string("Add connector"), action: addConnector)
                     .parityProminentButton()
                     .controlSize(.small)
                     .padding(.top, 2)
+                    .disabled(!canEditSettings)
             }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 24)
         .padding(.horizontal, 16)
         .parityCard()
+    }
+
+    private func addConnector() {
+        if isRemote { onRemoteAdd?() } else { adding = .directory }
     }
 
     private var claudeAIRow: some View {
@@ -363,6 +372,7 @@ private struct ConnectorRow: View {
     var canEditSettings = true
     /// Opens Add connector at a service's page (Gmail's Google OAuth app).
     var onSetUp: (ConnectorPreset) -> Void = { _ in }
+    var onRemoteConnect: ((ConnectorRecord) -> Void)? = nil
     @State private var entering: Entry?
     @State private var token = ""
     @State private var clientID = ""
@@ -423,6 +433,11 @@ private struct ConnectorRow: View {
             if !isRemote {
                 primaryAction
                 moreMenu
+            } else if let onRemoteConnect, record.status != .connected, record.program == nil,
+                      record.localService == nil || record.localService?.accountProvider != nil {
+                Button(L10n.string("Reconnect")) { onRemoteConnect(record) }
+                    .controlSize(.small)
+                    .disabled(!canEditSettings || center.activity[record.id] != nil)
             }
         }
         .padding(.vertical, 12)

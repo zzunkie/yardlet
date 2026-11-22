@@ -76,6 +76,7 @@ final class AppModelRemoteBridge: RemoteBridge {
     var isObservingHostAccounts = false
     var answeredHostAccounts: RemoteAccountsState?
     var hostAccountsDefaultsObserver: NSObjectProtocol?
+    let connectorSetups = RemoteConnectorSetupCoordinator()
     /// A device follows the host's mail and calendar (§15.38): what it was told last, and whether a read is watched.
     var watchesMailCalendar = false
     var isObservingMailCalendar = false

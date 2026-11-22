@@ -1224,6 +1224,7 @@ public enum RemoteRequest: Equatable, Sendable {
                         settingID: String? = nil, enabled: Bool? = nil)
     case setHostHarnessRuntime(harness: String, choiceID: String)
     case setHostConnector(id: String, enabled: Bool)
+    case connectorSetup(RemoteConnectorSetupRequest)
     /// Whether the host's mail and calendar are on and this device may use them, and with `watching` being told when
     /// that changes (§15.38).
     case mailCalendarState(watching: Bool = true)
@@ -1238,6 +1239,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case .setHostAccount: "setHostAccount"
         case .setHostHarnessRuntime: "setHostHarnessRuntime"
         case .setHostConnector: "setHostConnector"
+        case .connectorSetup: "connectorSetup"
         case .mailCalendarState: "mailCalendarState"
         case .calendar: "calendar"
         case .mail: "mail"
@@ -1334,7 +1336,7 @@ public enum RemoteRequest: Equatable, Sendable {
         switch self {
         case let .answerApproval(_, _, answer, _): answer == .allowForSession ? .terminal : nil
         case .hostAccounts: nil
-        case .setHostAccount, .setHostHarnessRuntime, .setHostConnector: .settings
+        case .setHostAccount, .setHostHarnessRuntime, .setHostConnector, .connectorSetup: .settings
         case .taskRail, .railAction: nil
         case .nextStep: nil
         case .usageReset, .useUsageReset: nil
@@ -1388,7 +1390,8 @@ public enum RemoteRequest: Equatable, Sendable {
         case .projectWorkspaceFiles, .snapshot, .ping, .createTask, .newTaskOptions, .registerPush, .unregisterPush, .forgetDevice,
              .answerLink, .uploadFile, .revealLink, .scheduledTasks, .runScheduledTask, .setScheduledTaskEnabled,
              .presence, .hostSettings, .setHostSetting, .saveHostInstructions, .hostCLIUpdate,
-             .hostAccounts, .setHostAccount, .setHostHarnessRuntime, .setHostConnector, .mailCalendarState, .calendar, .mail: nil
+             .hostAccounts, .setHostAccount, .setHostHarnessRuntime, .setHostConnector, .connectorSetup,
+             .mailCalendarState, .calendar, .mail: nil
         }
     }
 
@@ -1407,6 +1410,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case let .setHostAccount(harness, accountID, _, settingID, _): settingID ?? accountID ?? harness
         case let .setHostHarnessRuntime(harness, choiceID): "\(harness):\(choiceID)"
         case let .setHostConnector(id, _): id
+        case let .connectorSetup(setup): setup.operationID
         case let .calendar(action, _), let .mail(action, _, _): action
         default: nil
         }
@@ -1437,6 +1441,7 @@ public enum RemoteRequest: Equatable, Sendable {
     public var isCommand: Bool {
         switch self {
         case .setHostAccount, .setHostHarnessRuntime, .setHostConnector: true
+        case let .connectorSetup(setup): setup.action != .poll
         case let .calendar(action, _): RemoteProtocol.calendarCommands.contains(action)
         case let .mail(action, _, _): RemoteProtocol.mailCommands.contains(action)
         case .nextStep: true
@@ -1569,6 +1574,7 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         var harnesses: [String]?
         var automaticAssignment: Bool?
         var sha256: String?
+        var connectorSetup: RemoteConnectorSetupRequest?
     }
 
     private struct WireImage: Codable {
@@ -2072,6 +2078,10 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
                 return fail(.badRequest, "Missing targetId or enabled")
             }
             request = .setHostConnector(id: connectorID, enabled: enabled)
+        case "connectorSetup":
+            guard let setup = wire.connectorSetup else { return fail(.badRequest, "Missing connector setup") }
+            if let error = setup.validationError { return fail(error.code, error.message) }
+            request = .connectorSetup(setup)
         case "mailCalendarState":
             request = .mailCalendarState(watching: wire.watching != false)
         case "calendar", "mail":
@@ -2375,6 +2385,8 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         case let .setHostConnector(connectorID, enabled):
             wire.targetId = connectorID
             wire.enabled = enabled
+        case let .connectorSetup(setup):
+            wire.connectorSetup = setup
         case let .mailCalendarState(watching):
             wire.watching = watching ? nil : false
         case let .calendar(action, data):
@@ -2536,6 +2548,7 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     public var settingsPage: RemoteHostSettings?
     public var hostAccounts: Bool?
     public var hostAccountsState: RemoteAccountsState?
+    public var connectorSetup: RemoteConnectorSetupState?
     /// `snapshot`: the Mac answers `mailCalendarState` and `calendar`, and `mail` (§15.38).
     public var hostCalendar: Bool?
     public var hostMail: Bool?

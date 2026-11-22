@@ -2747,11 +2747,13 @@ leaves those sections out of a remote host's Settings. Phones may ignore the fla
     host), `toolCount`, and optional display metadata (`subtitle`, `source`, `presetId`,
     `localService`, `account`, `serverHost`, `programSummary`, `usesRegisteredClient`, `activity`,
     `failure`). Full server URLs, OAuth client secrets, tokens and program environment variables
-    never travel.
+    are not included in this shared snapshot.
   - `picksNewTaskAccount`, `continuesAtUsageLimit`, `movesTasksToAccountWithRoom`,
     `claudeAIConnectors`, optional `cannotReadConnectors`, optional `xcodeDescription`, optional
     `harnessesWithTasks`, optional `harnessesWithSubagents`, optional `newTaskHarness`, and optional
     `editable` (`true` when the requesting device currently has the `settings` permission, §15.28).
+    Optional `connectorSetup: true` advertises the private connector setup exchange below; clients
+    leave Add connector and Reconnect out when the host does not advertise it.
 - `setHostAccount` (`harness?: string`, `accountId?: string`, `automaticAssignment?: bool`,
   `settingId?: string`, `enabled?: bool`): requires the device's `settings` permission (§15.28).
   Chooses the account new tasks use for `harness` (`accountId` naming a selectable account or
@@ -2766,14 +2768,54 @@ leaves those sections out of a remote host's Settings. Phones may ignore the fla
   filesystem path stays on the host.
 - `setHostConnector` (`id: string`, `enabled: bool`): requires the device's `settings` permission.
   Turns a connected host connector on or off for the host, or toggles `claude_ai_connectors` through
-  the host's settings catalog. Connecting, OAuth sign-in, token entry, registered OAuth app setup,
-  adding and removing connectors stay on the host.
+  the host's settings catalog. New connections and sign-in use `connectorSetup`; removing connectors
+  and editing their saved configuration stay on the host.
 - `setHostAccount`, `setHostHarnessRuntime` and `setHostConnector` are commands and return the
   updated `hostAccountsState`. The audit log records their kind, device, result and target identifier
   (`settingId` or `accountId`, `<harness>=<choiceId>`, or connector `id`), never account labels,
   emails or credentials.
 - `hostAccountsChanged`: sent to connections watching `hostAccounts` when the host's accounts,
   runtime selections, connectors, related preferences or the device's `settings` permission change.
+
+#### Connector setup from a remote desktop
+
+`connectorSetup` carries a nested `connectorSetup` request and returns a private `connectorSetup`
+state. Every action requires `settings`, including reading a pending sign-in. The server binds the
+operation to the authenticated connection, not an owner supplied by the client. Another connection,
+even from the same paired device, cannot read or answer it.
+
+- The request has `action` (`start`, `poll`, `answer`, `cancel`) and a UUID `operationID` chosen by
+  the client. `start` supplies `draft` for a new connector or an existing UUID `connectorID` to reconnect.
+  A reconnect may include an authentication-only draft to correct a token or OAuth client without
+  creating a duplicate; it cannot change the connector's preset, name or server address.
+  A draft names a host-resolved `presetID`, or a custom `serverURL` and optional `name`, and may
+  carry newly entered `token`, `tokenHeader`, `clientID`, `clientSecret`, or Microsoft `tenant`.
+  These inputs travel over the existing encrypted connection to the host's secure store; saved
+  credentials are never read back to the client. Field sizes and operation identifiers are checked
+  before handling or auditing the request.
+- The state has `operationID`, optional `connectorID`, `status` (`working`, `connected`, `failed`,
+  `cancelled`), and optional `step` or user-facing `message`. A step has its own UUID `id` and `kind`:
+  `listen` asks the client for a loopback listener using the host's OAuth `state` and optional fixed
+  `port`; `open` asks it to open `url` in its default browser and may carry GitHub's `deviceCode`;
+  `confirm` carries the existing cross-site sign-in question; `callback` awaits the browser redirect.
+- `answer` carries `reply` with `stepID` and either `value` (the listener URL or callback URL) or
+  `accepted` (the browser/confirmation result). The host requires a loopback HTTP redirect at
+  `127.0.0.1`, the requested fixed port when present, `/callback`, and the matching OAuth state.
+  PKCE, discovery, dynamic registration, token exchange and credential storage run on the host.
+  The client stops its listener when setup ends; it never persists the operation's credentials.
+- Setup supports network MCP presets, custom HTTP servers, access tokens, registered OAuth clients,
+  GitHub device sign-in, and Google/Microsoft account presets. Apps configured on the host can be
+  reused; entering an account provider's app configures it on the host. Programs, local apps,
+  Mac data permissions, mail-password setup and App Store Connect key files remain host-side flows.
+- There is at most one active operation per connection, with a five-minute deadline. Cancellation,
+  transport loss or loss of `settings` permission cancels the host work and pending browser exchange.
+  Completed operation history is bounded. Authorization URLs, callbacks, codes and credential inputs
+  are never broadcast through `hostAccountsChanged` or included in the audit log. The audit records
+  mutation kind and operation UUID; polling does not create repeated audit entries.
+
+The desktop client polls only while the setup sheet is active, opens the browser on that desktop,
+and refreshes the host's account state after completion. Phones and older clients can ignore this
+capability. The shared connector list still contains only the normal display projection.
 
 ### 15.38 The host's mail and calendar
 
@@ -3000,7 +3042,9 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   usage-limit switches, picking a discovered harness runtime, and turning a connected connector on or off act on
   the host. Without the `settings` permission those controls show disabled with a note naming the host's
   Settings › Remote › Paired devices. Signing in, adding, removing or sharing accounts, choosing a custom
-  runtime file, and connecting or editing connectors stay on the host. Importing schedules from other apps and
+  runtime file, and editing or removing saved connectors stay on the host. Hosts advertising `connectorSetup`
+  also offer Add connector and Reconnect from the remote desktop, with sign-in in that desktop's browser
+  and credentials kept on the host (§15.37). Importing schedules from other apps and
   the other side panels also stay on the host. With `hostCalendar` (§15.38), the sidebar's words under Scheduled
   tasks offer Calendar while the host's calendar is on (and never Personal agents): the local calendar's sidebar,
   days and event over the host's accounts, the host's scheduled runs over the days, Accept and Decline answered

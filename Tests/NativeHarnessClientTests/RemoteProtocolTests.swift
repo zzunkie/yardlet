@@ -161,6 +161,8 @@ final class RemoteProtocolTests: XCTestCase {
             .setHostAccount(settingID: "move_tasks_with_room", enabled: false),
             .setHostHarnessRuntime(harness: "codex", choiceID: "choice-1"),
             .setHostConnector(id: "connector-id", enabled: true),
+            .connectorSetup(.init(action: .start, operationID: "00000000-0000-4000-8000-000000000001",
+                                  draft: .init(presetID: "github", token: "input-token"))),
             .mailCalendarState(),
             .mailCalendarState(watching: false),
             .calendar(action: "accounts", data: nil),
@@ -213,6 +215,65 @@ final class RemoteProtocolTests: XCTestCase {
         return Set(cases.matches(in: declaration, range: NSRange(declaration.startIndex..., in: declaration)).compactMap {
             Range($0.range(at: 1), in: declaration).map { String(declaration[$0]) }
         })
+    }
+
+    func testConnectorSetupBoundsCredentialsAndKeepsBrowserRepliesOutOfAuditTargets() throws {
+        let operationID = UUID().uuidString
+        let stepID = UUID().uuidString
+        let callback = "http://127.0.0.1:47823/callback?state=private-state&code=private-code"
+        let requests: [RemoteConnectorSetupRequest] = [
+            .init(action: .start, operationID: operationID,
+                  draft: .init(name: "Custom", serverURL: "https://example.com/mcp", token: "private-token",
+                               tokenHeader: "X-API-Key", clientID: "client", clientSecret: "private-client-secret")),
+            .init(action: .start, operationID: operationID, connectorID: UUID().uuidString),
+            .init(action: .start, operationID: operationID, draft: .init(token: "corrected-token"),
+                  connectorID: UUID().uuidString),
+            .init(action: .start, operationID: operationID,
+                  draft: .init(clientID: "corrected-client", clientSecret: "corrected-secret"), connectorID: UUID().uuidString),
+            .init(action: .poll, operationID: operationID),
+            .init(action: .answer, operationID: operationID, reply: .init(stepID: stepID, value: callback)),
+            .init(action: .answer, operationID: operationID, reply: .init(stepID: stepID, accepted: false)),
+            .init(action: .cancel, operationID: operationID)
+        ]
+        for setup in requests {
+            let request = RemoteRequest.connectorSetup(setup)
+            let envelope = RemoteRequestEnvelope(id: "setup", request: request)
+            XCTAssertEqual(try RemoteRequestEnvelope.decode(envelope.encoded()).get(), envelope)
+            XCTAssertEqual(request.requiredPermission, .settings)
+            XCTAssertEqual(request.isCommand, setup.action != .poll)
+            XCTAssertEqual(request.auditTarget, operationID)
+            XCTAssertNil(request.taskID)
+            XCTAssertNil(request.settingID)
+        }
+        let invalid: [RemoteConnectorSetupRequest] = [
+            .init(action: .start, operationID: "private-token", draft: .init(presetID: "github")),
+            .init(action: .start, operationID: operationID),
+            .init(action: .start, operationID: operationID, draft: .init()),
+            .init(action: .start, operationID: operationID, draft: .init(presetID: "github"), connectorID: UUID().uuidString),
+            .init(action: .start, operationID: operationID, draft: .init(serverURL: "https://other.example/mcp"),
+                  connectorID: UUID().uuidString),
+            .init(action: .start, operationID: operationID, draft: .init(name: "Retargeted"), connectorID: UUID().uuidString),
+            .init(action: .poll, operationID: operationID, draft: .init(presetID: "github")),
+            .init(action: .cancel, operationID: operationID, reply: .init(stepID: stepID, accepted: true)),
+            .init(action: .answer, operationID: operationID),
+            .init(action: .answer, operationID: operationID, reply: .init(stepID: "not-a-step", accepted: true)),
+            .init(action: .answer, operationID: operationID, reply: .init(stepID: stepID, value: callback, accepted: true)),
+            .init(action: .start, operationID: operationID, draft: .init(presetID: "github", token: String(repeating: "x", count: 16_385))),
+            .init(action: .answer, operationID: operationID, reply: .init(stepID: stepID, value: String(repeating: "x", count: 16_385)))
+        ]
+        for setup in invalid {
+            let envelope = RemoteRequestEnvelope(id: "setup", request: .connectorSetup(setup))
+            guard case let .failure(failure) = RemoteRequestEnvelope.decode(envelope.encoded()) else {
+                XCTFail("Invalid setup was accepted")
+                continue
+            }
+            XCTAssertTrue([.badRequest, .tooLarge].contains(failure.error.code))
+            XCTAssertFalse(failure.error.message.contains("private-token"))
+        }
+        var response = RemoteResponse(re: "setup")
+        response.connectorSetup = .init(operationID: operationID,
+                                       step: .init(id: stepID, kind: .listen, port: 47823, state: "private-state"))
+        XCTAssertEqual(try JSONDecoder().decode(RemoteResponse.self, from: JSONEncoder().encode(response)), response)
     }
 
     func testTheDocumentedRequestsDecode() throws {

@@ -15,6 +15,14 @@ protocol OAuthUserAgent: Sendable {
     func confirm(_ confirmation: ConnectorSignInConfirmation) async -> Bool
 }
 
+/// A remote setup uses its initiating device's browser for this task and the connection task it starts.
+/// Other sign-ins, including ones already running locally, keep the center's normal user agent.
+enum ConnectorSignInContext {
+    @TaskLocal static var userAgent: (any OAuthUserAgent)?
+    @TaskLocal static var onCancel: (@MainActor @Sendable () -> Void)?
+    @TaskLocal static var onAccountSettled: (@MainActor @Sendable (UUID) -> Void)?
+}
+
 protocol OAuthLoopbackReceiving: Sendable {
     var redirectURI: URL { get }
     /// The first request to the redirect path that carries the sign-in's `state`, with its query. A
@@ -605,6 +613,7 @@ final class ConnectorCenter: ConnectorToolProviding {
         client: (id: String, secret: String?)? = nil,
         preset: ConnectorPreset? = nil
     ) async throws -> ConnectorRecord {
+        try Task.checkCancellation()
         // Xcode and the Mac's data are Yardlet's own servers, one of each on this Mac.
         if let service = preset?.localService, service == .xcode || service.isMac { return addLocal(service) }
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -625,11 +634,11 @@ final class ConnectorCenter: ConnectorToolProviding {
         let id = record.id
         let destination = record.credentialDestination
         if let token = token?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty {
-            try await store(at: destination) { try $0.save(.token(token), for: id) }
+            try await saveCredential(.token(token), for: id, at: destination)
             record.authorization = .token
         } else if let client, let clientID = Self.trimmed(client.id) {
             let secret = Self.trimmed(client.secret)
-            try await store(at: destination) { try $0.save(.client(id: clientID, secret: secret), for: id) }
+            try await saveCredential(.client(id: clientID, secret: secret), for: id, at: destination)
             record.oauthClientID = clientID
             record.authorization = .oauth
         }
@@ -671,9 +680,8 @@ final class ConnectorCenter: ConnectorToolProviding {
     func saveGoogleApp(clientID: String, secret: String?) async throws {
         guard let id = Self.trimmed(clientID) else { return }
         let credential = ConnectorCredential.client(id: id, secret: Self.trimmed(secret))
-        try await store(at: ConnectorAccountProvider.google.credentialDestination) {
-            try $0.save(credential, for: GoogleOAuth.appCredentialID)
-        }
+        try await saveCredential(credential, for: GoogleOAuth.appCredentialID,
+                                 at: ConnectorAccountProvider.google.credentialDestination)
         googleAppClientID = id
     }
 
@@ -845,7 +853,40 @@ final class ConnectorCenter: ConnectorToolProviding {
         cancelConnect(id)
         await connectTasks[id]?.value
         await pendingDeletion?.value
-        try await store(at: destination) { try $0.save(credential, for: id) }
+        try await saveCredential(credential, for: id, at: destination)
+        sessions[id] = nil
+    }
+
+    /// Updates an existing MCP connector's credentials without starting a sign-in. Remote setup owns when its
+    /// browser context starts, and must not change the saved destination when retrying a failed connection.
+    func setAuthentication(_ id: UUID, token: String?, tokenHeader: String?, clientID: String?, clientSecret: String?) async throws {
+        guard let record = record(id), record.localService == nil, record.program == nil, !isConnecting(id) else {
+            throw CancellationError()
+        }
+        if let token = Self.trimmed(token) {
+            try await saveCredential(.token(token), for: id, at: record.credentialDestination)
+            guard self.record(id) != nil else {
+                try await store { try $0.delete(id) }
+                throw CancellationError()
+            }
+            update(id) {
+                $0.authorization = .token
+                $0.oauthClientID = nil
+                if let tokenHeader { $0.tokenHeader = Self.trimmed(tokenHeader) }
+            }
+        } else if let clientID = Self.trimmed(clientID) {
+            try await saveCredential(.client(id: clientID, secret: Self.trimmed(clientSecret)), for: id,
+                                     at: record.credentialDestination)
+            guard self.record(id) != nil else {
+                try await store { try $0.delete(id) }
+                throw CancellationError()
+            }
+            update(id) {
+                $0.authorization = .oauth
+                $0.oauthClientID = clientID
+                $0.tokenHeader = nil
+            }
+        }
         sessions[id] = nil
     }
 
@@ -894,6 +935,10 @@ final class ConnectorCenter: ConnectorToolProviding {
     /// Waits for a connection started by `connect`; for callers that need the outcome.
     func waitForConnection(_ id: UUID) async {
         await connectTasks[taskKey(id)]?.value
+    }
+
+    func isConnecting(_ id: UUID) -> Bool {
+        connectTasks[taskKey(id)] != nil
     }
 
     func cancelConnect(_ id: UUID) {
@@ -990,6 +1035,7 @@ final class ConnectorCenter: ConnectorToolProviding {
                 }
             }
             let icons = await session.serverIcons()
+            try Task.checkCancellation()
             update(id) {
                 $0.status = .connected
                 $0.tools = tools
@@ -997,6 +1043,7 @@ final class ConnectorCenter: ConnectorToolProviding {
                 $0.serverIcons = icons.isEmpty ? nil : icons
             }
         } catch let error where Self.isCancellation(error) {
+            ConnectorSignInContext.onCancel?()
             return
         } catch {
             if Task.isCancelled { return }
@@ -1022,13 +1069,16 @@ final class ConnectorCenter: ConnectorToolProviding {
     private func signInAndUse(_ record: ConnectorRecord, challenge: BearerChallenge?, session: ConnectorSession) async throws {
         let credential = try await signIn(record, challenge: challenge)
         let id = record.id
-        try await store(at: record.credentialDestination) { try $0.save(credential, for: id) }
+        try await saveCredential(credential, for: id, at: record.credentialDestination)
         await session.use(credential)
+        try Task.checkCancellation()
         update(id) { $0.authorization = .oauth }
     }
 
     private func signIn(_ record: ConnectorRecord, challenge: BearerChallenge?) async throws -> ConnectorCredential {
-        guard let userAgent = environment.userAgent else { throw ConnectorOAuthError.cannotOpenBrowser }
+        guard let userAgent = ConnectorSignInContext.userAgent ?? environment.userAgent else {
+            throw ConnectorOAuthError.cannotOpenBrowser
+        }
         if signsInOnGitHub(record), let clientID = environment.gitHubClientID {
             return try await signInOnGitHub(record, clientID: clientID, userAgent: userAgent)
         }
@@ -1103,7 +1153,7 @@ final class ConnectorCenter: ConnectorToolProviding {
         let code = try await GitHubDeviceSignIn.requestCode(clientID: clientID, endpoints: endpoints, http: http)
         deviceCodes[record.id] = code.userCode
         defer { deviceCodes[record.id] = nil }
-        environment.copyToClipboard(code.userCode)
+        if ConnectorSignInContext.userAgent == nil { environment.copyToClipboard(code.userCode) }
         activity[record.id] = .waitingForBrowser
         guard await userAgent.open(code.verificationURI) else { throw ConnectorOAuthError.cannotOpenBrowser }
         let now = environment.now
@@ -1178,19 +1228,24 @@ final class ConnectorCenter: ConnectorToolProviding {
             }
             let identity = try await accountAddress(provider, session: reading, granted: granted)
             if let address, address.lowercased() != identity.lowercased() {
-                let text = switch provider {
+                let text = if ConnectorSignInContext.userAgent != nil {
+                    L10n.string("The service signed in to a different account. Reconnect and choose the original account.")
+                } else { switch provider {
                 case .google: L10n.format("Google signed in %@, not %@. Reconnect and choose %@.", identity, address, address)
                 case .microsoft: L10n.format("Microsoft signed in %@, not %@. Reconnect and choose %@.", identity, address, address)
-                }
+                } }
                 for record in accountRecords(accountID) { failures[record.id] = text }
                 return
             }
             if let signedIn {
-                try await store(at: destination) { try $0.save(signedIn, for: accountID) }
+                try await saveCredential(signedIn, for: accountID, at: destination)
                 await session.use(signedIn)
             }
-            try await settleAccount(accountID, provider: provider, address: identity, credential: credential)
+            try Task.checkCancellation()
+            let target = try await settleAccount(accountID, provider: provider, address: identity, credential: credential)
+            ConnectorSignInContext.onAccountSettled?(target)
         } catch let error where Self.isCancellation(error) {
+            ConnectorSignInContext.onCancel?()
             // A first sign-in the person cancelled, in Yardlet or on the provider's page, leaves no
             // account behind.
             if address == nil {
@@ -1245,7 +1300,8 @@ final class ConnectorCenter: ConnectorToolProviding {
     /// already has that address. Each service is connected when the sign-in holds its
     /// permissions, and says so otherwise.
     private func settleAccount(_ accountID: UUID, provider: ConnectorAccountProvider, address: String,
-                               credential: ConnectorCredential?) async throws {
+                               credential: ConnectorCredential?) async throws -> UUID {
+        try Task.checkCancellation()
         let records = accountRecords(accountID)
         var target = accountID
         if records.allSatisfy({ $0.account == nil }),
@@ -1254,7 +1310,7 @@ final class ConnectorCenter: ConnectorToolProviding {
             // was granted before as well (Google's `include_granted_scopes`, Microsoft's consent).
             let destination = provider.credentialDestination
             if let credential = try await store(at: destination, { try $0.load(accountID) }) {
-                try await store(at: destination) { try $0.save(credential, for: existing.id) }
+                try await saveCredential(credential, for: existing.id, at: destination)
             }
             try await store { try $0.delete(accountID) }
             accountSessions[accountID] = nil
@@ -1293,6 +1349,7 @@ final class ConnectorCenter: ConnectorToolProviding {
                 update(record.id) { $0.slug = slug }
             }
         }
+        return target
     }
 
     /// One sign-in in the browser for an account's services: the provider's app, the fixed
@@ -1300,7 +1357,9 @@ final class ConnectorCenter: ConnectorToolProviding {
     /// service's permissions.
     private func signIn(_ provider: ConnectorAccountProvider, account accountID: UUID, address: String?,
                         services: [LocalConnectorService]) async throws -> ConnectorCredential {
-        guard let userAgent = environment.userAgent else { throw ConnectorOAuthError.cannotOpenBrowser }
+        guard let userAgent = ConnectorSignInContext.userAgent ?? environment.userAgent else {
+            throw ConnectorOAuthError.cannotOpenBrowser
+        }
         let plan: OAuthPlan
         let client: OAuthClient
         let parameters: [String: String]
@@ -2488,6 +2547,36 @@ final class ConnectorCenter: ConnectorToolProviding {
         }
     }
 
+    /// A keychain prompt cannot be interrupted once it is open. If its caller is cancelled while a save waits,
+    /// restore the previous value before returning, provided no newer writer has replaced our value meanwhile.
+    /// A new connector therefore cannot leave a credential without a corresponding saved record.
+    private func saveCredential(_ credential: ConnectorCredential, for id: UUID, at destination: String) async throws {
+        try Task.checkCancellation()
+        let wasSavedConnector = record(id) != nil
+        let credentials = environment.credentials
+        let saved = credential.bound(to: destination)
+        let write = Task.detached {
+            try Task.checkCancellation()
+            let previous = try credentials.load(id)
+            try Task.checkCancellation()
+            try credentials.save(saved, for: id)
+            return previous
+        }
+        let previous = try await withTaskCancellationHandler {
+            try await write.value
+        } onCancel: { write.cancel() }
+        guard !Task.isCancelled else {
+            // Removing a connector also cancels its sign-in; restoring its old token would undo that removal.
+            let restored = wasSavedConnector && record(id) == nil ? nil : previous
+            try? await Task.detached {
+                guard try credentials.load(id) == saved else { return }
+                if let restored { try credentials.save(restored, for: id) }
+                else { try credentials.delete(id) }
+            }.value
+            throw CancellationError()
+        }
+    }
+
     /// Runs a secure-store operation off the main actor: the keychain can wait on a system prompt.
     private func store<T: Sendable>(_ operation: @escaping @Sendable (any ConnectorCredentialStoring) throws -> T) async throws -> T {
         let credentials = environment.credentials
@@ -2554,7 +2643,12 @@ final class ConnectorCenter: ConnectorToolProviding {
     }
 
     private func message(for error: Error, connector record: ConnectorRecord) -> String {
-        switch error {
+        // An OAuth/MCP provider may echo an input secret in its error. Remote setup results and the shared
+        // connector snapshot both use this safe message; unrelated local connections keep their diagnostics.
+        if ConnectorSignInContext.userAgent != nil {
+            return L10n.string("The service could not be connected. Check its setup and try again.")
+        }
+        return switch error {
         case ConnectorSession.Failure.signInRequired:
             record.authorization == .token
                 ? L10n.string("The server did not accept the access token.")
