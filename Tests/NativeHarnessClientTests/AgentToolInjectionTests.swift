@@ -535,4 +535,124 @@ final class AgentToolInjectionTests: XCTestCase {
             XCTAssertTrue((error as? BrowserAgentToolError)?.message.contains("no browser engine") == true)
         }
     }
+
+    // MARK: - Antigravity connector gateway
+
+    @MainActor
+    private final class FakeConnectorTools: ConnectorToolProviding {
+        var tools: [ToolJSON]
+        var services: [String]
+        var calls: [(name: String, arguments: ToolJSON)] = []
+
+        init(tools: [ToolJSON], services: [String]) {
+            self.tools = tools
+            self.services = services
+        }
+
+        var offersTools: Bool { !tools.isEmpty }
+        func connectorTools(for context: ConnectorToolContext) async -> [ToolJSON] { tools }
+        func serviceNames(for context: ConnectorToolContext) -> [String] { services }
+        func callConnectorTool(named name: String, arguments: ToolJSON, for context: ConnectorToolContext) async -> AgentToolResult? {
+            guard tools.contains(where: { $0["name"]?.stringValue == name }) else { return nil }
+            calls.append((name, arguments))
+            return .text("ran \(name)")
+        }
+    }
+
+    func testAntigravityUsesCompactConnectorGatewayWhileOtherHarnessesListRawConnectorTools() async throws {
+        let connectorTools: [ToolJSON] = [
+            .object([
+                "name": .string("gmail_search_messages"),
+                "description": .string("[Gmail] Search messages in a mailbox."),
+                "inputSchema": .object(["type": .string("object"), "properties": .object(["query": .object(["type": .string("string")])])])
+            ]),
+            .object([
+                "name": .string("linear_list_issues"),
+                "description": .string("[Linear] List issues in a workspace."),
+                "inputSchema": .object(["type": .string("object"), "properties": .object(["team": .object(["type": .string("string")])])])
+            ])
+        ]
+        let connectors = FakeConnectorTools(tools: connectorTools, services: ["Gmail", "Linear"])
+        let broker = broker()
+        broker.connectors = connectors
+
+        let agyTask = UUID()
+        let agyLaunch = try XCTUnwrap(broker.agentToolServer(
+            for: agyTask, workspaceRoots: [],
+            connectorScope: ConnectorTaskScope(harness: .antigravityCLI, nativeServers: [])
+        ))
+        let agyToken = try XCTUnwrap(agyLaunch.environment[AgentToolEnvironment.token])
+        let agyListRaw = await broker.list(AgentToolCall(
+            token: agyToken, session: agyTask.uuidString, tool: "", arguments: .object([:]), method: AgentToolCall.listMethod
+        ))
+        let agyList = try XCTUnwrap(agyListRaw)
+        let agyNames = Set(agyList.tools.compactMap { $0["name"]?.stringValue })
+        XCTAssertTrue(agyNames.contains(ConnectorGatewayToolCatalog.listTools))
+        XCTAssertTrue(agyNames.contains(ConnectorGatewayToolCatalog.callTool))
+        XCTAssertFalse(agyNames.contains("gmail_search_messages"))
+        XCTAssertFalse(agyNames.contains("linear_list_issues"))
+        let listDesc = agyList.tools.first { $0["name"]?.stringValue == ConnectorGatewayToolCatalog.listTools }?["description"]?.stringValue ?? ""
+        XCTAssertTrue(listDesc.contains("Gmail") && listDesc.contains("Linear"), listDesc)
+
+        // Discovery filters by service and exact tool name.
+        let filtered = await broker.handle(AgentToolCall(
+            token: agyToken, session: agyTask.uuidString,
+            tool: ConnectorGatewayToolCatalog.listTools,
+            arguments: .object(["service": .string("gmail")])
+        ))
+        XCTAssertFalse(filtered.isError, filtered.text)
+        XCTAssertTrue(filtered.text.contains("gmail_search_messages"), filtered.text)
+        XCTAssertFalse(filtered.text.contains("linear_list_issues"), filtered.text)
+
+        // Dispatch calls through ConnectorToolProviding with exact arguments.
+        let called = await broker.handle(AgentToolCall(
+            token: agyToken, session: agyTask.uuidString,
+            tool: ConnectorGatewayToolCatalog.callTool,
+            arguments: .object([
+                "tool": .string("gmail_search_messages"),
+                "arguments": .object(["query": .string("from:alice")])
+            ])
+        ))
+        XCTAssertFalse(called.isError, called.text)
+        XCTAssertEqual(called.text, "ran gmail_search_messages")
+        XCTAssertEqual(connectors.calls.count, 1)
+        XCTAssertEqual(connectors.calls[0].name, "gmail_search_messages")
+        XCTAssertEqual(connectors.calls[0].arguments["query"], .string("from:alice"))
+
+        // Unknown connector tool suggests similar names from the underlying catalog.
+        let unknown = await broker.handle(AgentToolCall(
+            token: agyToken, session: agyTask.uuidString,
+            tool: ConnectorGatewayToolCatalog.callTool,
+            arguments: .object(["tool": .string("gmail_missing")])
+        ))
+        XCTAssertTrue(unknown.isError)
+        XCTAssertTrue(unknown.text.contains("gmail_search_messages"), unknown.text)
+
+        // Non-Antigravity harnesses still receive raw connector tools directly.
+        let claudeTask = UUID()
+        let claudeLaunch = try XCTUnwrap(broker.agentToolServer(
+            for: claudeTask, workspaceRoots: [],
+            connectorScope: ConnectorTaskScope(harness: .claudeCode, nativeServers: [])
+        ))
+        let claudeToken = try XCTUnwrap(claudeLaunch.environment[AgentToolEnvironment.token])
+        let claudeListRaw = await broker.list(AgentToolCall(
+            token: claudeToken, session: claudeTask.uuidString, tool: "", arguments: .object([:]), method: AgentToolCall.listMethod
+        ))
+        let claudeList = try XCTUnwrap(claudeListRaw)
+        let claudeNames = Set(claudeList.tools.compactMap { $0["name"]?.stringValue })
+        XCTAssertTrue(claudeNames.contains("gmail_search_messages"))
+        XCTAssertTrue(claudeNames.contains("linear_list_issues"))
+        XCTAssertFalse(claudeNames.contains(ConnectorGatewayToolCatalog.listTools))
+
+        // When no connectors are connected, Antigravity does not list the gateway tools.
+        connectors.tools = []
+        connectors.services = []
+        let emptyListRaw = await broker.list(AgentToolCall(
+            token: agyToken, session: agyTask.uuidString, tool: "", arguments: .object([:]), method: AgentToolCall.listMethod
+        ))
+        let emptyList = try XCTUnwrap(emptyListRaw)
+        let emptyNames = Set(emptyList.tools.compactMap { $0["name"]?.stringValue })
+        XCTAssertFalse(emptyNames.contains(ConnectorGatewayToolCatalog.listTools))
+        XCTAssertFalse(emptyNames.contains(ConnectorGatewayToolCatalog.callTool))
+    }
 }

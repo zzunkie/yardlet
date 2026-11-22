@@ -541,6 +541,13 @@ becomes `yardlet_` and the first 8 hex digits of the spec's SHA-256 (16, then al
 then `mcp_yardlet_<8 hex>_<tool>`, which is why connector tool names stop at 43 characters. The CLI keeps each server
 name's tool schemas in `~/.gemini/antigravity-cli/mcp/<name>/` and does not remove them.
 
+Because Antigravity CLI packs MCP tools smallest-first into a shared eager schema budget and omits tools that do not
+fit, listing hundreds of connector tools flat pushes both Yardlet's larger core tools (`create_task`, `list_tasks`,
+`send_message_to_task`, `browser_click`, `browser_snapshot`) and most connector tools out of the session. When
+connectors are enabled for an Antigravity task, `AgentToolBroker` lists two gateway tools (`list_connector_tools` and
+`call_connector_tool`, `ConnectorGatewayToolCatalog`) in place of raw connector schemas; every call still runs through
+`ConnectorCenter.callConnectorTool` with the same per-task toggles, validation, sign-in checks and credential scrubbing.
+
 ## 7. UI
 
 - **Settings → Connectors:** a one-paragraph introduction (every harness and account) → "Your

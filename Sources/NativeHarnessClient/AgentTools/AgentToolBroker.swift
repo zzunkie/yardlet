@@ -299,11 +299,50 @@ final class AgentToolBroker: AgentToolLaunchProviding {
             }
             return await simulators.callSimulatorTool(named: call.tool, arguments: call.arguments, callerID: sessionID)
         }
+        if ConnectorGatewayToolCatalog.definition(named: call.tool) != nil {
+            return await handleConnectorGateway(call, for: sessionID)
+        }
         if let result = await connectors?.callConnectorTool(named: call.tool, arguments: call.arguments,
                                                              for: connectorContext(sessionID)) {
             return result
         }
         return await unknownTool(call.tool, for: sessionID)
+    }
+
+    private func handleConnectorGateway(_ call: AgentToolCall, for sessionID: UUID) async -> AgentToolResult {
+        if call.tool == ConnectorGatewayToolCatalog.listTools {
+            let connectorTools = await filteredConnectorTools(for: sessionID)
+            return ConnectorGatewayToolCatalog.formatList(
+                tools: connectorTools,
+                service: call.arguments["service"]?.stringValue,
+                query: call.arguments["query"]?.stringValue,
+                exactTool: call.arguments["tool"]?.stringValue
+            )
+        }
+        let innerTool = (call.arguments["tool"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !innerTool.isEmpty else {
+            return .failure("\(ConnectorGatewayToolCatalog.callTool) requires a non-empty tool name.",
+                            .invalidArguments, retry: .withChanges)
+        }
+        if Self.ownDefinition(named: innerTool) != nil {
+            return .failure("\(innerTool) is a direct Yardlet tool, not a connector tool. Call \(innerTool) directly.",
+                            .invalidArguments, retry: .withChanges)
+        }
+        let innerArguments: ToolJSON
+        if let raw = call.arguments["arguments"], raw != .null {
+            guard case .object = raw else {
+                return .failure("\(ConnectorGatewayToolCatalog.callTool) arguments must be a JSON object.",
+                                .invalidArguments, retry: .withChanges)
+            }
+            innerArguments = raw
+        } else {
+            innerArguments = .object([:])
+        }
+        if let result = await connectors?.callConnectorTool(named: innerTool, arguments: innerArguments,
+                                                             for: connectorContext(sessionID)) {
+            return result
+        }
+        return await unknownConnectorTool(innerTool, for: sessionID)
     }
 
     /// The result with the keys and tokens in its text hidden (`CredentialText`), unless the person turned that off.
@@ -327,7 +366,7 @@ final class AgentToolBroker: AgentToolLaunchProviding {
             ?? TaskSuggestionToolCatalog.definition(named: name) ?? SessionToolCatalog.definition(named: name)
             ?? TerminalToolCatalog.definition(named: name) ?? SettingsToolCatalog.definition(named: name)
             ?? ScheduleToolCatalog.definition(named: name) ?? SimulatorToolCatalog.definition(named: name)
-            ?? WidgetToolCatalog.definition(named: name)
+            ?? WidgetToolCatalog.definition(named: name) ?? ConnectorGatewayToolCatalog.definition(named: name)
     }
 
     /// `show_widget` for the harnesses other than Codex, whose model has the `visualize` skill and its own folder
@@ -362,6 +401,32 @@ final class AgentToolBroker: AgentToolLaunchProviding {
                         details: ["tool": .string(name), "similar": .array(family.map(ToolJSON.string))])
     }
 
+    private func unknownConnectorTool(_ name: String, for sessionID: UUID) async -> AgentToolResult {
+        let names = await filteredConnectorTools(for: sessionID).compactMap { $0["name"]?.stringValue }
+        let family = AgentToolNames.family(of: name, in: names)
+        let message = family.isEmpty
+            ? "This task has no connected connector tool named \(name). Call \(ConnectorGatewayToolCatalog.listTools) to list available tools."
+            : "This task has no connected connector tool named \(name). Its tools of that kind: \(AgentToolNames.listed(family))."
+        return .failure(message, .unknownTool, retry: .withChanges,
+                        details: ["tool": .string(name), "similar": .array(family.map(ToolJSON.string))])
+    }
+
+    private func usesConnectorGateway(for sessionID: UUID) -> Bool {
+        connectorScopes[sessionID]?.harness == .antigravityCLI
+    }
+
+    private static let ownReservedNames: Set<String> = Set(
+        (TaskSuggestionToolCatalog.tools + SessionToolCatalog.tools + SettingsToolCatalog.tools
+            + ScheduleToolCatalog.tools + SimulatorToolCatalog.tools + ConnectorGatewayToolCatalog.staticTools
+            + [VaultToolCatalog.tool, TerminalToolCatalog.tool, WidgetToolCatalog.tool]).map(\.name)
+    )
+
+    private func filteredConnectorTools(for sessionID: UUID) async -> [ToolJSON] {
+        (await connectors?.connectorTools(for: connectorContext(sessionID)) ?? []).filter {
+            !Self.ownReservedNames.contains($0["name"]?.stringValue ?? "")
+        }
+    }
+
     /// The task's tools: the browser catalog when it was on, the simulator tools when the Simulator switch was on and a
     /// platform's devices can be used, the task suggestion tools, the session tools and the settings tools,
     /// `read_terminal` while the terminal is shared, the scheduled-task tools, then connected connectors' tools, less any whose name is one of Yardlet's own (a
@@ -391,14 +456,16 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         let sessionTools = sessions == nil ? [] : (SessionToolCatalog.tools + SettingsToolCatalog.tools).map(\.json)
         let terminalTools = sessions != nil && sharesTerminal() ? [TerminalToolCatalog.tool.json] : []
         let scheduleTools = schedules == nil ? [] : ScheduleToolCatalog.tools.map(\.json)
-        let ownNames = Set((TaskSuggestionToolCatalog.tools + SessionToolCatalog.tools + SettingsToolCatalog.tools
-            + ScheduleToolCatalog.tools + SimulatorToolCatalog.tools
-            + [VaultToolCatalog.tool, TerminalToolCatalog.tool, WidgetToolCatalog.tool]).map(\.name))
-        let connectorTools = (await connectors?.connectorTools(for: connectorContext(sessionID)) ?? []).filter {
-            !ownNames.contains($0["name"]?.stringValue ?? "")
+        let connectorTools = await filteredConnectorTools(for: sessionID)
+        let exposedConnectorTools: [ToolJSON]
+        if usesConnectorGateway(for: sessionID), !connectorTools.isEmpty {
+            let services = connectors?.serviceNames(for: connectorContext(sessionID)) ?? []
+            exposedConnectorTools = ConnectorGatewayToolCatalog.tools(services: services).map(\.json)
+        } else {
+            exposedConnectorTools = connectorTools
         }
         return browser + vaultTools + simulatorTools + suggestionTools + widgetTools + sessionTools + terminalTools
-            + scheduleTools + connectorTools
+            + scheduleTools + exposedConnectorTools
     }
 
     // MARK: Tool list changes
