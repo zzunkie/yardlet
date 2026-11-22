@@ -55,4 +55,33 @@ final class RemoteRailTests: XCTestCase {
         if case let .failure(error) = draft { XCTAssertEqual(error.code, .notAllowed) }
         else { XCTFail("A fix draft must follow confirmation") }
     }
+
+    /// Another Mac's Environment card names the task's place as the host's own rail does: its project, Chats for a
+    /// chat, whose folder (`new-chat-2`) is only where Yardlet keeps it, else its folder.
+    func testTheRailNamesATasksPlaceAsTheHostsOwnRailDoes() throws {
+        let home = URL(filePath: "/tmp/remote-rail-home", directoryHint: .isDirectory)
+        let claude = URL(filePath: "/tmp/claude")
+        let website = Project(name: "Website", primaryRoot: URL(filePath: "/tmp/remote-rail-website"))
+        let sessions = [
+            SessionRecord(harness: .claudeCode,
+                          workspaceURL: ChatWorkspaces.yardletRoot(home: home).appending(path: "2026-11-21/new-chat-2"),
+                          runtimeExecutableURL: claude, title: "Plan the trip"),
+            SessionRecord(harness: .claudeCode, workspaceURL: website.primaryRoot, runtimeExecutableURL: claude,
+                          title: "Fix the header"),
+            SessionRecord(harness: .claudeCode, workspaceURL: URL(filePath: "/tmp/remote-rail-folder"),
+                          runtimeExecutableURL: claude, title: "Look around")
+        ]
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteRailTests")))
+        let model = AppModel(
+            store: SessionStore(sessions: sessions, repository: InMemorySessionRepository(sessions: sessions)),
+            runtimeSelections: RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false),
+            preferences: defaults,
+            projectRepository: InMemoryProjectRepository(
+                snapshot: ProjectSnapshot(projects: [website], didImportFolderPreferences: true)),
+            chatWorkspaceHome: home, legacyProjectFolderPreferences: LegacyProjectFolderPreferences(),
+            sessionTitleResolver: { _ in nil }, restoresIndexOnLaunch: false)
+        defer { Task { await model.shutdown() } }
+        XCTAssertEqual(sessions.map { AppModelRemoteBridge.railFacts(session: $0, model: model, git: nil).folderName },
+                       [L10n.string("Chats"), "Website", "remote-rail-folder"])
+    }
 }
