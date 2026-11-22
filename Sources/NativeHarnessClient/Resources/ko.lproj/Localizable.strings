@@ -1774,6 +1774,7 @@
 "Move to project" = "프로젝트로 이동";
 "Move to project: %@" = "프로젝트로 이동: %@";
 "Move to Chats" = "채팅으로 이동";
+"Move to new project" = "새 프로젝트로 이동";
 /* Codex app directives drawn in a message: file citations, review comments, a suggested task, a visualization (the Codex app's own words). */
 "line %lld" = "%lld번째 줄";
 "lines %lld-%lld" = "%lld-%lld줄";

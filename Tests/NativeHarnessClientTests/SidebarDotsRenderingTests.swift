@@ -823,7 +823,7 @@ private final class RecordedDragSessions {
 /// posting a mouse drag, which would come onto the real screen. Its pasteboard holds the task as the
 /// row's drag item writes it.
 @MainActor
-private final class TaskRowDrag: NSObject, @MainActor NSDraggingInfo {
+final class TaskRowDrag: NSObject, @MainActor NSDraggingInfo {
     let draggingDestinationWindow: NSWindow?
     let draggingLocation: NSPoint
     let draggingPasteboard: NSPasteboard

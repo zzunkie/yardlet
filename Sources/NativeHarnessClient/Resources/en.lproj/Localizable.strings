@@ -1774,6 +1774,7 @@
 "Move to project" = "Move to project";
 "Move to project: %@" = "Move to project: %@";
 "Move to Chats" = "Move to Chats";
+"Move to new project" = "Move to new project";
 /* Codex app directives drawn in a message: file citations, review comments, a suggested task, a visualization (the Codex app's own words). */
 "line %lld" = "line %lld";
 "lines %lld-%lld" = "lines %lld-%lld";
