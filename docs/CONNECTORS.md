@@ -530,6 +530,27 @@ not kept.
   "Review…", which opens its page. "Hide"
   (`YardletConnectorImportDismissed`) folds the section.
 
+### Connecting from a remote desktop
+
+Settings → Connectors in a remote desktop window offers Add connector and Reconnect when the host
+supports connector setup and the paired device has Change settings permission. Older hosts retain
+the existing display and on/off controls. The remote form adds network MCP presets or a custom HTTP
+server, accepts an access token or a registered OAuth client, and can add Google/Microsoft accounts.
+Account providers reuse the host's configured OAuth app when the app fields are left blank. After a
+failed attempt, corrected credentials update the same connector; leaving them blank retries the
+saved sign-in. An omitted token header preserves the saved header when correcting a token.
+
+The remote desktop opens its own default browser and loopback listener. The host still performs
+discovery, client registration, PKCE, token exchange and secure storage. Browser instructions and
+the callback travel only over the initiating connection's encrypted setup exchange; saved credentials
+are not copied to the client or exposed in the shared connector list. GitHub's device code appears
+in the remote sheet without replacing the host clipboard.
+
+Closing the sheet, losing the connection or Change settings permission, or reaching the five-minute
+deadline cancels pending setup. Programs, local app connections, macOS data permissions, mail passwords
+and App Store Connect key files are still set up on the host. Editing a connector's destination and
+removing it also remain on the host. The wire contract is in [Remote protocol §15.37](REMOTE_PROTOCOL.md#1537-host-accounts-harness-runtimes-and-connectors).
+
 ### Antigravity
 
 Antigravity CLI runs over ACP (`agy acp`, from 1.4.11) and gets connectors as the other ACP agents do, through

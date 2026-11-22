@@ -79,6 +79,12 @@ struct RemoteSettingsHarnessesSection: View {
 /// fed by the host's connectors and `claude.ai` connector setting.
 struct RemoteSettingsConnectorsSection: View {
     @Bindable var model: RemoteHostModel
+    @State private var setup: Setup?
+
+    private struct Setup: Identifiable {
+        let id = UUID()
+        var record: ConnectorRecord? = nil
+    }
 
     var body: some View {
         ConnectorSettingsView(
@@ -89,13 +95,18 @@ struct RemoteSettingsConnectorsSection: View {
             claudeAIConnectorsOverride: Binding(
                 get: { model.hostAccountsState?.claudeAIConnectors ?? false },
                 set: { model.setHostConnector(YardletSetting.claudeAIConnectors.id, enabled: $0) }
-            )
+            ),
+            onRemoteAdd: model.hostAccountsState?.connectorSetup == true ? { setup = Setup() } : nil,
+            onRemoteConnect: model.hostAccountsState?.connectorSetup == true ? { setup = Setup(record: $0) } : nil
         )
         .task {
             await model.watchHostAccounts()
         }
         .onDisappear {
             model.unwatchHostAccounts()
+        }
+        .sheet(item: $setup) { selection in
+            RemoteConnectorSetupSheet(model: model, reconnecting: selection.record) { setup = nil }
         }
     }
 }

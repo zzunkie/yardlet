@@ -109,6 +109,8 @@ public struct RemoteAccountsState: Codable, Equatable, Sendable {
     public var harnessesWithSubagents: [String]?
     public var newTaskHarness: String?
     public var editable: Bool?
+    /// The host can add connectors and route sign-in through the initiating remote client.
+    public var connectorSetup: Bool?
 
     public init(
         accounts: [RemoteAccount] = [],
@@ -123,7 +125,8 @@ public struct RemoteAccountsState: Codable, Equatable, Sendable {
         harnessesWithTasks: [String]? = nil,
         harnessesWithSubagents: [String]? = nil,
         newTaskHarness: String? = nil,
-        editable: Bool? = nil
+        editable: Bool? = nil,
+        connectorSetup: Bool? = nil
     ) {
         self.accounts = accounts
         self.harnesses = harnesses
@@ -138,5 +141,6 @@ public struct RemoteAccountsState: Codable, Equatable, Sendable {
         self.harnessesWithSubagents = harnessesWithSubagents
         self.newTaskHarness = newTaskHarness
         self.editable = editable
+        self.connectorSetup = connectorSetup
     }
 }

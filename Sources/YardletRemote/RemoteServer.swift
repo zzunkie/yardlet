@@ -244,6 +244,8 @@ public protocol RemoteBridge: AnyObject, Sendable {
                         enabled: Bool?) async -> Result<RemoteAccountsState, RemoteError>
     func setHostHarnessRuntime(harness: String, choiceID: String) async -> Result<RemoteAccountsState, RemoteError>
     func setHostConnector(id: String, enabled: Bool) async -> Result<RemoteAccountsState, RemoteError>
+    func connectorSetup(_ request: RemoteConnectorSetupRequest, owner: String) async -> Result<RemoteConnectorSetupState, RemoteError>
+    func cancelConnectorSetups(owner: String) async
     /// Whether the host's mail and calendar are on (§15.38); `permitted` is the server's to fill.
     func mailCalendarState() async -> RemoteMailCalendarState
     func setWatchingMailCalendar(_ watching: Bool) async
@@ -281,6 +283,10 @@ extension RemoteBridge {
     public func setHostConnector(id: String, enabled: Bool) async -> Result<RemoteAccountsState, RemoteError> {
         .failure(RemoteError(.unavailable))
     }
+    public func connectorSetup(_ request: RemoteConnectorSetupRequest, owner: String) async -> Result<RemoteConnectorSetupState, RemoteError> {
+        .failure(RemoteError(.unavailable))
+    }
+    public func cancelConnectorSetups(owner: String) async {}
     public func setWatchedRailTasks(_ taskIDs: Set<String>) async {}
     public func railDraft(taskID: String, confirmed: Bool) async -> Result<String, RemoteError> { .failure(RemoteError(.unavailable)) }
     public func taskRail(taskID: String) async -> Result<RemoteRailFacts, RemoteError> { .failure(RemoteError(.unavailable)) }
@@ -735,6 +741,7 @@ public actor RemoteServer {
         endTabWatch(on: id)
         endTerminals(on: id, reason: "disconnected")
         revokeFileWrites(on: id)
+        Task { await bridge.cancelConnectorSetups(owner: id.uuidString) }
         Task { await self.updateWatched() }
         publishStatus()
     }
@@ -1150,6 +1157,11 @@ public actor RemoteServer {
         let effective = permissionRequestsEnabled ? permissions : RemoteDevicePermissions()
         if !effective.fileWrites { revokeFileWrites(deviceID: deviceID) }
         if !effective.terminal { endTerminals(deviceID: deviceID, reason: "notAllowed") }
+        if !effective.settings {
+            for (id, connection) in connections where connection.deviceID == deviceID {
+                Task { await bridge.cancelConnectorSetups(owner: id.uuidString) }
+            }
+        }
         for (id, connection) in connections where connection.deviceID == deviceID && connection.followsHostSettings {
             send(RemoteEvent(.hostSettingsChanged), to: id)
         }
@@ -2112,6 +2124,26 @@ public actor RemoteServer {
                 case let .failure(error): return error
                 }
             } answer: { $0.hostAccountsState = state }
+        case let .connectorSetup(setup):
+            let owner = id.uuidString
+            let result = await bridge.connectorSetup(setup, owner: owner)
+            // The bridge can suspend while a keychain operation is pending. A lost connection or revoked
+            // permission must neither receive sign-in material nor leave a new setup running after that await.
+            if let error = permissionError(.settings, on: id) {
+                await bridge.cancelConnectorSetups(owner: owner)
+                respond(.failure(envelope.id, error), to: id)
+                return
+            }
+            var response = RemoteResponse(re: envelope.id)
+            switch result {
+            case let .success(state): response.connectorSetup = state
+            case let .failure(error): response = .failure(envelope.id, error)
+            }
+            respond(response, to: id)
+            if setup.action != .poll {
+                audit?.record(device: connections[id]?.deviceID, type: request.type, task: nil,
+                              input: setup.operationID, result: response.error?.code.rawValue ?? "ok", at: now())
+            }
         case let .mailCalendarState(watching):
             connections[id]?.followsMailCalendar = watching
             await updateWatched()

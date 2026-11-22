@@ -2829,6 +2829,7 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertEqual(initial.connectors.map(\.name), ["GitHub", "Linear", "Local server"])
         XCTAssertEqual(initial.connectors.first?.toolCount, 2)
         XCTAssertEqual(initial.connectors.first?.enabled, true)
+        XCTAssertEqual(initial.connectorSetup, true)
 
         _ = try await bridge.setHostAccount(
             harness: "claude-code", accountID: work.id, automaticAssignment: true, settingID: nil, enabled: nil

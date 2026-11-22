@@ -243,7 +243,8 @@ extension AppModelRemoteBridge {
             xcodeDescription: model.connectorCenter?.xcodeDescription,
             harnessesWithTasks: withTasks.map(\.rawValue).sorted(),
             harnessesWithSubagents: withSubagents.map(\.rawValue).sorted(),
-            newTaskHarness: newTaskHarness?.rawValue
+            newTaskHarness: newTaskHarness?.rawValue,
+            connectorSetup: supportsConnectorSetup ? true : nil
         )
     }
 
