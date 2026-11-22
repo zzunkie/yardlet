@@ -3003,6 +3003,10 @@
 "Site" = "Site";
 "Site for “%@”" = "Site for “%@”";
 "No two-factor QR code is in the picture." = "No two-factor QR code is in the picture.";
+"Copy password for %@" = "Copy password for %@";
+"copy the saved password" = "copy the saved password";
+"Password copied. It will be cleared from the clipboard in 90 seconds." = "Password copied. It will be cleared from the clipboard in 90 seconds.";
+"Password was not copied." = "Password was not copied.";
 "Copy Code" = "Copy Code";
 "Code %@, %lld seconds left" = "Code %@, %lld seconds left";
 "Use a strong password for %@? The password manager saves it." = "Use a strong password for %@? The password manager saves it.";

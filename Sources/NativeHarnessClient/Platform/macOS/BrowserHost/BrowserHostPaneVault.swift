@@ -610,6 +610,18 @@ extension BrowserHostPaneController {
         fill(item, codeOnly: codes || !item.hasPassword && item.hasOneTimeCode)
     }
 
+    func copyPasswordForPerson(_ item: VaultItem) {
+        isVaultPickerShown = false
+        Task { @MainActor in
+            guard let password = await vault.passwordForCopy(of: item.id) else {
+                return showVaultNotice(L10n.string("Password was not copied."))
+            }
+            MacAgentToolService.shared.broker.noteVaultValues([password])
+            VaultClipboard.copy(password, to: vaultPasteboard)
+            showVaultNotice(L10n.string("Password copied. It will be cleared from the clipboard in 90 seconds."))
+        }
+    }
+
     /// Saves the page's site in the item the person filled there from the list (design §16).
     func acceptVaultLinkOffer() {
         guard let offer = vaultLinkOffer else { return }

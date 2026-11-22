@@ -277,10 +277,16 @@ final class VaultTests: XCTestCase {
         XCTAssertNil(declined)
         XCTAssertEqual(reasons.count, 1)
         XCTAssertTrue(reasons[0].contains("app.northwind.test") && reasons[0].contains("dashboard.stripe.com"), reasons[0])
+        // Copying needs confirmation even for a password saved for this page.
+        let declinedCopy = await center.passwordForCopy(of: northwind.id)
+        XCTAssertNil(declinedCopy)
         answer = true
         let confirmed = await center.valuesForPerson(stripe, origin: page)
         XCTAssertEqual(confirmed?.password, "correct horse")
         XCTAssertEqual(confirmed?.confirmedBy, .touchID)
+
+        let confirmedCopy = await center.passwordForCopy(of: northwind.id)
+        XCTAssertEqual(confirmedCopy, "correct horse")
 
         // A list drawn before the person saved a site in the item holds it as it was; the fill takes it as saved now.
         var notices = 0

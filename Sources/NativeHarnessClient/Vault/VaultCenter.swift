@@ -888,6 +888,14 @@ final class VaultCenter: ObservableObject {
         return grant
     }
 
+    /// A copy can be pasted anywhere, so it requires the same confirmation as revealing a password in Settings.
+    func passwordForCopy(of itemID: UUID) async -> String? {
+        guard isAllowedBuild, isEnabled,
+              await confirmPerson(L10n.string("copy the saved password")) else { return nil }
+        guard isEnabled, let item = items.first(where: { $0.id == itemID }), item.hasPassword else { return nil }
+        return try? trustedSecret(of: item)?.password
+    }
+
     /// The key button's list for a page (design §16): the page's own items and, for a search, every other item it
     /// finds by name, username or site. `kind` keeps to the items that give what the page's field takes, a sign-in or
     /// a two-factor code (the code bar's list). The page's items come as Chrome orders a site's sign-ins: the one used
