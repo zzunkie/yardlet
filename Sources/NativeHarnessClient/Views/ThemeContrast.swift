@@ -60,6 +60,35 @@ enum ThemeContrast {
         }
     }
 
+    /// Adjusts a tinted text color toward the theme's label color only as much as needed to reach 4.5:1
+    /// contrast over `background`, preserving hue across all color presets.
+    static func readableTint(_ color: Color, over background: Color.Resolved,
+                             in environment: EnvironmentValues, minimum: Float = 4.5) -> Color {
+        let base = color.resolve(in: environment)
+        if ratio(base, background) >= minimum { return color }
+        let mode = ThemeMode(environment.colorScheme)
+        let target = (environment.yardletColorTheme[mode].text?.color ?? .primary).resolve(in: environment)
+        var low: Float = 0
+        var high: Float = 1
+        var best = target
+        for _ in 0..<8 {
+            let mid = (low + high) * 0.5
+            let mixed = Color.Resolved(
+                red: base.red * (1 - mid) + target.red * mid,
+                green: base.green * (1 - mid) + target.green * mid,
+                blue: base.blue * (1 - mid) + target.blue * mid,
+                opacity: 1
+            )
+            if ratio(mixed, background) >= minimum {
+                best = mixed
+                high = mid
+            } else {
+                low = mid
+            }
+        }
+        return Color(red: Double(best.red), green: Double(best.green), blue: Double(best.blue))
+    }
+
     static func failures(for theme: MacColorTheme) -> [Failure] {
         ThemeMode.allCases.flatMap { mode -> [Failure] in
             var result: [Failure] = []

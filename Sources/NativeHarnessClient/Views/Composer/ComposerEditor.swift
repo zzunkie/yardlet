@@ -233,12 +233,12 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
 
             footer
         }
-        .background(ParityTheme.input, in: RoundedRectangle(cornerRadius: ParityTheme.composerCornerRadius))
-        .overlay {
-            RoundedRectangle(cornerRadius: ParityTheme.composerCornerRadius)
-                .stroke(isBashMode ? ParityTheme.accent
-                    : isFocused.wrappedValue ? ParityTheme.strongSeparator : ParityTheme.separator)
-        }
+        .background(ParityTheme.input, in: RoundedRectangle(cornerRadius: ParityTheme.composerCornerRadius, style: .continuous))
+        .parityElevatedSurface(
+            cornerRadius: ParityTheme.composerCornerRadius,
+            isFocused: isFocused.wrappedValue,
+            accentBorder: isBashMode
+        )
         .overlay {
             if let receive = externalInput {
                 // Backspace in the empty composer returns bash mode to chat.

@@ -103,8 +103,10 @@ enum ParityRadius {
     static let control: CGFloat = 6
     /// A row, an option, an attachment, a code or preview box.
     static let row: CGFloat = 8
-    /// A panel, a popover, a sheet, the composer.
+    /// A panel, a popover, a sheet.
     static let surface: CGFloat = 12
+    /// The composer container: 14 pt outer with 8 pt inner padding nests 6 pt inner controls (`14 - 8 = 6`).
+    static let composer: CGFloat = 14
 }
 
 private extension Font.TextStyle {
@@ -216,8 +218,8 @@ enum ParityTheme {
     static let toolbarHeight: CGFloat = 46
     static let paneToolbarHeight: CGFloat = 40
     static let contentWidth: CGFloat = 768
-    /// Claude Code's composer corner (`--cds-radius-composer`, 2026-10-15 user decision).
-    static let composerCornerRadius = ParityRadius.surface
+    /// Composer corner radius (`ParityRadius.composer`, 14 pt) nesting 6 pt controls inside 8 pt padding.
+    static let composerCornerRadius = ParityRadius.composer
     static let panelCornerRadius = ParityRadius.surface
     /// Claude Code's conversation gutter (`--chat-gutter`), also the composer's.
     static let conversationInset = ParitySpace.s32
@@ -270,29 +272,30 @@ enum ParityTheme {
     static let canvas = Color(ThemeSurface.canvas)
     static let originalCanvas = Color(nsColor: NSColor(name: "YardletCanvas") { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(calibratedWhite: 0.075, alpha: 1)
-            : NSColor(calibratedWhite: 0.995, alpha: 1)
+            ? NSColor(srgbRed: 0.098, green: 0.102, blue: 0.118, alpha: 1) // #191A1E
+            : NSColor(srgbRed: 0.980, green: 0.980, blue: 0.984, alpha: 1) // #FAFAFB
     })
     static let sidebar = Color(ThemeSurface.sidebar)
     static let originalSidebar = Color(nsColor: NSColor(name: "YardletSidebar") { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(calibratedWhite: 0.105, alpha: 1)
-            : NSColor(calibratedWhite: 0.965, alpha: 1)
+            ? NSColor(srgbRed: 0.125, green: 0.133, blue: 0.157, alpha: 1) // #202228
+            : NSColor(srgbRed: 0.953, green: 0.957, blue: 0.965, alpha: 1) // #F3F4F6
     })
     static let elevated = Color(ThemeSurface.elevated)
     static let originalElevated = Color(nsColor: NSColor(name: "YardletElevated") { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(calibratedWhite: 0.135, alpha: 1)
+            ? NSColor(srgbRed: 0.149, green: 0.157, blue: 0.188, alpha: 1) // #262830
             : .white
     })
     static let input = Color(ThemeSurface.input)
     static let originalInput = Color(nsColor: NSColor(name: "YardletInput") { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(calibratedWhite: 0.155, alpha: 1)
+            ? NSColor(srgbRed: 0.169, green: 0.180, blue: 0.216, alpha: 1) // #2B2E37
             : .white
     })
-    static let separator = Color.primary.opacity(0.10)
-    static let strongSeparator = Color.primary.opacity(0.12)
+    static let separator = Color.primary.opacity(0.09)
+    static let strongSeparator = Color.primary.opacity(0.16)
+    static let darkTopHighlight = Color.white.opacity(0.08)
     static let subtleFill = Color.primary.opacity(0.035)
     static let selectedFill = Color.primary.opacity(0.095)
     static let hoverFill = Color.primary.opacity(0.065)
@@ -449,14 +452,17 @@ struct ParityIconButton: View {
     var body: some View {
         Button(action: action) {
             if isProminent {
-                // The primary action (send) is Claude Code's rounded square, in Yardlet's colors.
+                // Primary send action uses the active theme accent when enabled and dims quietly when empty.
                 Image(systemName: systemName)
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(ParityTheme.primaryActionForeground)
+                    .foregroundStyle(isEnabled ? AnyShapeStyle(ParityTheme.onAccent) : AnyShapeStyle(.tertiary))
                     .frame(width: 28, height: 28)
-                    .background(ParityTheme.primaryActionFill, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .opacity(isEnabled ? 1 : 0.4)
-                    .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .background(
+                        isEnabled ? AnyShapeStyle(ParityTheme.accent) : AnyShapeStyle(ParityTheme.subtleFill),
+                        in: RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous)
+                    )
+                    .opacity(isEnabled && isHovering ? 0.9 : 1)
+                    .contentShape(RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous))
             } else {
                 Image(systemName: systemName)
                     .font(.system(size: 13, weight: .semibold))
@@ -676,5 +682,80 @@ struct WindowDragRegion: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSView, context: Context) {
         (nsView as? WindowDragNSView)?.onPress = onPress
+    }
+}
+
+/// Crisp elevated surface treatment: dual-layer soft shadow in light mode and a 1 pt top-edge specular
+/// highlight in dark mode, with stronger hairline contrast when macOS Increase Contrast is enabled.
+private struct ParitySurfaceElevation: ViewModifier {
+    let cornerRadius: CGFloat
+    var isFocused: Bool = false
+    var accentBorder: Bool = false
+
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        content
+            .overlay {
+                if colorScheme == .dark, !accentBorder {
+                    shape
+                        .strokeBorder(
+                            LinearGradient(
+                                colors: [ParityTheme.darkTopHighlight, .clear],
+                                startPoint: .top,
+                                endPoint: UnitPoint(x: 0.5, y: 0.22)
+                            ),
+                            lineWidth: 1
+                        )
+                        .allowsHitTesting(false)
+                }
+            }
+            .overlay {
+                shape
+                    .strokeBorder(borderColor, lineWidth: contrast == .increased ? 1.25 : 1)
+                    .allowsHitTesting(false)
+            }
+            .shadow(color: colorScheme == .light ? .black.opacity(0.035) : .clear, radius: 1, y: 1)
+            .shadow(color: colorScheme == .light ? .black.opacity(isFocused ? 0.075 : 0.05) : .clear, radius: 10, y: 4)
+    }
+
+    private var borderColor: Color {
+        if accentBorder { return ParityTheme.accent }
+        if contrast == .increased { return Color.primary.opacity(isFocused ? 0.42 : 0.28) }
+        return isFocused ? ParityTheme.strongSeparator : ParityTheme.separator
+    }
+}
+
+extension View {
+    func parityElevatedSurface(cornerRadius: CGFloat = ParityRadius.surface,
+                               isFocused: Bool = false, accentBorder: Bool = false) -> some View {
+        modifier(ParitySurfaceElevation(cornerRadius: cornerRadius, isFocused: isFocused, accentBorder: accentBorder))
+    }
+}
+
+/// Non-status 6-hue project dot palette (indigo, teal, purple, plum, slate, bronze), excluding status
+/// green, orange, red, and pure running blue so project markers never collide with task status indicators.
+enum ParityProjectPalette {
+    static let lightHexes = ["#5B5FC7", "#0F8B8D", "#7C4DFF", "#A44A7B", "#52657A", "#9A6B3F"]
+    static let darkHexes  = ["#818CF8", "#2DD4BF", "#A78BFA", "#E879A8", "#94A3B8", "#D4A373"]
+
+    static func index(for name: String) -> Int {
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in name.lowercased().utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return Int(hash % UInt64(lightHexes.count))
+    }
+
+    static func color(for name: String) -> Color {
+        let idx = index(for: name)
+        return Color(nsColor: NSColor(name: "YardletProjectHue\(idx)") { appearance in
+            let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            let hex = isDark ? darkHexes[idx] : lightHexes[idx]
+            return ThemeRGB(hex)?.nsColor ?? .secondaryLabelColor
+        })
     }
 }

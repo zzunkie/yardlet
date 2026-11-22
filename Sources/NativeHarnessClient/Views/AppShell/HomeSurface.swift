@@ -922,7 +922,6 @@ private struct NewTaskComposer: View {
             if addMenuPage == .commands { addMenuPage = nil }
         }
         .onDisappear { commandRequestID = nil; commandLoad?.cancel() }
-        .shadow(color: .black.opacity(0.055), radius: 12, y: 4)
         .onChange(of: availableHarnessIDs, initial: true) { _, _ in
             draft.prepare(
                 defaultProject: projects.first,

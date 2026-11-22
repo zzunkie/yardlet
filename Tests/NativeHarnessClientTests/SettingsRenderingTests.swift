@@ -80,6 +80,19 @@ import XCTest
             let failures = ThemeContrast.failures(for: theme)
             XCTAssertTrue(failures.isEmpty, "\(preset): \(failures.map(\.message))")
         }
+        // Default theme and tinted text contrast adjustment pass 4.5:1 across light and dark modes.
+        XCTAssertTrue(ThemeContrast.failures(for: MacColorTheme()).isEmpty)
+        for mode in ThemeMode.allCases {
+            var env = EnvironmentValues()
+            env.colorScheme = mode.scheme
+            env.yardletColorTheme = MacColorTheme()
+            let bg = ThemeSurface.canvas.resolve(in: env)
+            for sample in [Color.orange, Color.green, ParityProjectPalette.color(for: "yardlet")] {
+                let adjusted = ThemeContrast.readableTint(sample, over: bg, in: env).resolve(in: env)
+                XCTAssertGreaterThanOrEqual(Self.contrast(adjusted, bg), 4.49, "\(mode): \(sample)")
+            }
+        }
+        XCTAssertEqual(ParityProjectPalette.index(for: "Yardlet"), ParityProjectPalette.index(for: "yardlet"))
     }
 
     func testThemeProtectsFixedColorsOnTheirDefaultAndCustomBackgrounds() throws {
