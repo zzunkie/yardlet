@@ -146,10 +146,15 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     /// A `tools/watch` held for a task: the fingerprint of the list its server's client has.
     private struct ToolListWatch {
         let fingerprint: String?
-        let continuation: CheckedContinuation<Bool, Never>
+        let continuation: CheckedContinuation<AgentToolListWatchReply, Never>
         let expiry: Task<Void, Never>
     }
     private var toolListWatches: [UUID: [UUID: ToolListWatch]] = [:]
+    /// Tokens explicitly released by `releaseAgentTools(for:)`, bounded FIFO so late `tools/watch`
+    /// probes from a lingering `yardlet-mcp` still receive `released: true` and exit cleanly.
+    private var releasedTokens: [String: UUID] = [:]
+    private var releasedTokenOrder: [String] = []
+    private static let maximumReleasedTokens = 512
     private var pendingToolListCheck: Task<Void, Never>?
 
     init(environment: Environment, tools: BrowserAgentTools) {
@@ -218,17 +223,31 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         tools.vaultScrub.carries(text)
     }
 
-    /// Ends a task's token and closes its browser tab.
+    /// Ends a task's token, tells any running `yardlet-mcp` watch that the task was released, and
+    /// closes its browser tab.
     func releaseAgentTools(for localSessionID: UUID) {
-        for id in Array((toolListWatches[localSessionID] ?? [:]).keys) {
-            finishToolListWatch(id, of: localSessionID, changed: false)
+        if let token = tokens.removeValue(forKey: localSessionID) {
+            recordReleasedToken(token, for: localSessionID)
         }
-        tokens.removeValue(forKey: localSessionID)
+        for id in Array((toolListWatches[localSessionID] ?? [:]).keys) {
+            finishToolListWatch(id, of: localSessionID, reply: AgentToolListWatchReply(changed: false, released: true))
+        }
         workspaceRoots.removeValue(forKey: localSessionID)
         browserToolsByTask.removeValue(forKey: localSessionID)
         simulatorToolsByTask.removeValue(forKey: localSessionID)
         connectorScopes.removeValue(forKey: localSessionID)
         tools.closeTab(for: localSessionID)
+    }
+
+    private func recordReleasedToken(_ token: String, for sessionID: UUID) {
+        if releasedTokens[token] == nil {
+            releasedTokenOrder.append(token)
+            if releasedTokenOrder.count > Self.maximumReleasedTokens {
+                let evicted = releasedTokenOrder.removeFirst()
+                releasedTokens.removeValue(forKey: evicted)
+            }
+        }
+        releasedTokens[token] = sessionID
     }
 
     /// A stand-in task's launch, with no harness to scope its connectors (QA, tests).
@@ -471,24 +490,26 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     // MARK: Tool list changes
 
     /// Holds a `tools/watch` until the task's list differs from `arguments.fingerprint` while the
-    /// task is between turns (`true`), or until `toolListWatchHold` passes (`false`). Nil when the
-    /// call's token does not match.
+    /// task is between turns (`changed: true`), until the task is explicitly released (`released: true`),
+    /// or until `toolListWatchHold` passes (`changed: false`). Nil when the call's token does not match.
     func watch(_ call: AgentToolCall) async -> AgentToolListWatchReply? {
+        if let sessionID = UUID(uuidString: call.session), releasedTokens[call.token] == sessionID {
+            return AgentToolListWatchReply(changed: false, released: true)
+        }
         guard let sessionID = authorizedSession(call) else { return nil }
         let fingerprint = call.arguments["fingerprint"]?.stringValue
         let id = UUID()
         let hold = toolListWatchHold
-        let changed = await withCheckedContinuation { continuation in
+        return await withCheckedContinuation { continuation in
             let expiry = Task { [weak self] in
                 try? await Task.sleep(for: hold)
                 guard !Task.isCancelled else { return }
-                self?.finishToolListWatch(id, of: sessionID, changed: false)
+                self?.finishToolListWatch(id, of: sessionID, reply: AgentToolListWatchReply(changed: false))
             }
             toolListWatches[sessionID, default: [:]][id] = ToolListWatch(
                 fingerprint: fingerprint, continuation: continuation, expiry: expiry)
             Task { [weak self] in await self?.tellToolListChanges(to: sessionID) }
         }
-        return AgentToolListWatchReply(changed: changed)
     }
 
     /// Something a task's tools are made from changed (`ConnectorCenter.onToolsChanged`). Once the
@@ -521,15 +542,15 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         // A turn may have begun while the list was made.
         guard !isTaskInTurn(sessionID) else { return }
         for (id, watch) in toolListWatches[sessionID] ?? [:] where watch.fingerprint != current {
-            finishToolListWatch(id, of: sessionID, changed: true)
+            finishToolListWatch(id, of: sessionID, reply: AgentToolListWatchReply(changed: true))
         }
     }
 
-    private func finishToolListWatch(_ id: UUID, of sessionID: UUID, changed: Bool) {
+    private func finishToolListWatch(_ id: UUID, of sessionID: UUID, reply: AgentToolListWatchReply) {
         guard let watch = toolListWatches[sessionID]?.removeValue(forKey: id) else { return }
         if toolListWatches[sessionID]?.isEmpty == true { toolListWatches.removeValue(forKey: sessionID) }
         watch.expiry.cancel()
-        watch.continuation.resume(returning: changed)
+        watch.continuation.resume(returning: reply)
     }
 
     /// Watches held now, per task (tests).

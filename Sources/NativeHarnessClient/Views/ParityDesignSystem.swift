@@ -433,17 +433,36 @@ struct ParityComposerControl: View {
 /// A control's words, no wider than `limit` and no wider than they are. `frame(maxWidth:)` would
 /// grow to whatever it is offered up to the limit, spreading a short title away from its icon and
 /// chevron in a row that offers more, such as the session rail's Settings card.
-private struct ParityLabelWidth: Layout {
+struct ParityLabelWidth: Layout {
     let limit: CGFloat
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    struct Cache {
+        var natural: CGSize?
+    }
+
+    func makeCache(subviews: Subviews) -> Cache { Cache() }
+
+    func updateCache(_ cache: inout Cache, subviews: Subviews) {
+        cache.natural = nil
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
         guard let label = subviews.first else { return .zero }
-        let width = min(label.sizeThatFits(.unspecified).width, limit, proposal.width ?? .infinity)
+        let natural = cache.natural ?? {
+            let measured = label.sizeThatFits(.unspecified)
+            cache.natural = measured
+            return measured
+        }()
+        let width = min(natural.width, limit, proposal.width ?? .infinity)
+        // Skip the second measurement when the single-line label already fits the offered bounds.
+        if width >= natural.width, proposal.height == nil || proposal.height == natural.height {
+            return natural
+        }
         let size = label.sizeThatFits(ProposedViewSize(width: width, height: proposal.height))
         return CGSize(width: max(width, size.width), height: size.height)
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
         subviews.first?.place(at: CGPoint(x: bounds.midX, y: bounds.midY), anchor: .center,
                               proposal: ProposedViewSize(bounds.size))
     }

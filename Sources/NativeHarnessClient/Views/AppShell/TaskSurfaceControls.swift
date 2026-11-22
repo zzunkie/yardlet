@@ -11,6 +11,32 @@ extension TaskSurface {
     }
 }
 
+/// Hidden shortcut buttons extracted into concrete view types so `TaskSurfaceControls.body` does not
+/// construct deeply nested opaque modifier metadata inside a `ForEach` closure.
+private struct TaskSurfaceShortcutButtons: View {
+    let surfaces: [TaskSurface]
+    let act: (TaskSurface) -> Void
+
+    var body: some View {
+        ForEach(surfaces) { surface in
+            TaskSurfaceShortcutButton(surface: surface, act: act)
+        }
+    }
+}
+
+private struct TaskSurfaceShortcutButton: View {
+    let surface: TaskSurface
+    let act: (TaskSurface) -> Void
+
+    var body: some View {
+        Button { act(surface) } label: { EmptyView() }
+            .keyboardShortcut(surface.shortcutCommand.binding)
+            .focusable(false)
+            .hidden()
+            .accessibilityHidden(true)
+    }
+}
+
 /// A header button's symbol on the selected fill while its panel shows, and on the hover fill under the
 /// pointer, as the title bar's other buttons (`ParityIconButton`) answer the pointer.
 private struct TaskSurfaceButtonLabel: View {
@@ -99,11 +125,10 @@ struct TaskSurfaceControls: View {
         .background {
             // Keep existing commands registered independently of the visible panel toggles.
             if registersShortcuts {
-                ForEach(shortcutSurfaces.filter { !unavailableSurfaces.contains($0) }) { surface in
-                    Button { act(surface) } label: { EmptyView() }
-                        .keyboardShortcut(surface.shortcutCommand.binding)
-                        .focusable(false).hidden().accessibilityHidden(true)
-                }
+                TaskSurfaceShortcutButtons(
+                    surfaces: shortcutSurfaces.filter { !unavailableSurfaces.contains($0) },
+                    act: act
+                )
             }
         }
         .fixedSize()

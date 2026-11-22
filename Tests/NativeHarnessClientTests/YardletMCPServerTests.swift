@@ -299,4 +299,54 @@ final class YardletMCPServerTests: XCTestCase {
         XCTAssertTrue(call?["result"]?["content"]?.arrayValue?.first?["text"]?.stringValue?
             .contains("Yardlet is not running") == true)
     }
+
+    /// When a harness (such as a shared Codex app-server or Antigravity daemon) keeps standard input
+    /// open after its task is archived, `yardlet-mcp` still exits cleanly once the app answers its
+    /// `tools/watch` with `released: true`.
+    func testTheBuiltServerExitsWhenItsTaskIsReleasedEvenWhileInputStaysOpen() async throws {
+        let executable = Bundle(for: Self.self).bundleURL.deletingLastPathComponent()
+            .appending(path: AgentToolEnvironment.executableName)
+        guard FileManager.default.isExecutableFile(atPath: executable.path(percentEncoded: false)) else {
+            throw XCTSkip("yardlet-mcp is not built next to the tests")
+        }
+        let directory = privateDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appending(path: "tools.sock").path(percentEncoded: false)
+        let listener = try UnixSocketListener(path: path) { body, _ in
+            guard let call = try? JSONDecoder().decode(AgentToolCall.self, from: body) else { return Data() }
+            if call.method == AgentToolCall.listMethod {
+                let list = AgentToolList(tools: [], fingerprint: "fp-1")
+                return (try? JSONEncoder().encode(list)) ?? Data()
+            }
+            if call.method == AgentToolCall.watchMethod {
+                return (try? JSONEncoder().encode(AgentToolListWatchReply(changed: false, released: true))) ?? Data()
+            }
+            return Data()
+        }
+        defer { listener.stop() }
+        let process = Process()
+        process.executableURL = executable
+        process.environment = [
+            AgentToolEnvironment.endpoint: path,
+            AgentToolEnvironment.token: "released-token",
+            AgentToolEnvironment.session: UUID().uuidString
+        ]
+        let input = Pipe()
+        let output = Pipe()
+        process.standardInput = input
+        process.standardOutput = output
+        try process.run()
+        defer {
+            if process.isRunning { process.terminate() }
+            try? input.fileHandleForWriting.close()
+        }
+        let requests = [
+            #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#,
+            #"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#
+        ]
+        // Keep `input` intentionally open to mirror a shared harness keeping the pipe open.
+        try input.fileHandleForWriting.write(contentsOf: Data((requests.joined(separator: "\n") + "\n").utf8))
+        try await waitUntil(timeout: .seconds(10)) { !process.isRunning }
+        XCTAssertEqual(process.terminationStatus, 0)
+    }
 }

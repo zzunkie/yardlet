@@ -125,12 +125,23 @@ final class ConnectorLiveToolsTests: XCTestCase {
         let expired = await invoker.waitForToolListChange(from: second.fingerprint)
         XCTAssertEqual(expired, .unchanged)
 
-        // An archived task's watches end, and its token is refused.
+        // An archived task's watches end with `.released` so its lingering `yardlet-mcp` process
+        // exits cleanly even if its harness keeps stdin open, while tool calls stay refused and an
+        // unrecognized token from another run still returns `.unavailable`.
         rig.broker.releaseAgentTools(for: task)
         let released = await unchanged.value
-        XCTAssertEqual(released, .unchanged)
-        let refused = await invoker.waitForToolListChange(from: second.fingerprint)
-        XCTAssertEqual(refused, .unavailable)
+        XCTAssertEqual(released, .released)
+        let followUpWatch = await invoker.waitForToolListChange(from: second.fingerprint)
+        XCTAssertEqual(followUpWatch, .released)
+        let toolCallAfterRelease = await invoker.call(tool: "browser_snapshot", arguments: .object([:]))
+        XCTAssertTrue(toolCallAfterRelease.isError)
+        let unknownInvoker = UnixSocketToolInvoker(environment: [
+            AgentToolEnvironment.endpoint: rig.path,
+            AgentToolEnvironment.token: "unknown-token",
+            AgentToolEnvironment.session: task.uuidString
+        ])
+        let unknownWatch = await unknownInvoker.waitForToolListChange(from: second.fingerprint)
+        XCTAssertEqual(unknownWatch, .unavailable)
     }
 
     func testConnectorChangesReachOnlyTheTasksWhoseListChanged() async throws {

@@ -379,6 +379,7 @@ package struct UnixSocketToolInvoker: AgentToolInvoking {
         guard let reply = await Self.exchange(endpoint: endpoint, body: body, timeout: timeout),
               let answer = try? JSONDecoder().decode(AgentToolListWatchReply.self, from: reply)
         else { return .unavailable }
+        if answer.released { return .released }
         return answer.changed ? .changed : .unchanged
     }
 

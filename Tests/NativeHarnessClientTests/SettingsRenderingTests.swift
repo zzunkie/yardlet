@@ -102,6 +102,36 @@ import XCTest
         XCTAssertEqual(ParityProjectPalette.index(for: "Yardlet"), ParityProjectPalette.index(for: "yardlet"))
     }
 
+    func testParityLabelWidthCachesNaturalMeasurementAcrossProposals() {
+        final class MeasureProbe: Layout {
+            var count = 0
+            let natural: CGSize
+            init(natural: CGSize) { self.natural = natural }
+            func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+                count += 1
+                let w = min(natural.width, proposal.width ?? natural.width)
+                return CGSize(width: w, height: proposal.height ?? natural.height)
+            }
+            func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {}
+        }
+
+        let probe = MeasureProbe(natural: CGSize(width: 64, height: 16))
+        let host = WindowlessRender.Host(
+            ViewThatFits(in: .horizontal) {
+                ParityLabelWidth(limit: 138) {
+                    probe { Color.clear }
+                }
+            }
+            .frame(width: 200, height: 24),
+            size: CGSize(width: 220, height: 40),
+            appearance: .light
+        )
+        defer { host.close() }
+        host.settle()
+        // Without caching, ViewThatFits probes (.unspecified, .infinity, concrete width) each measured twice (6+ calls).
+        XCTAssertLessThanOrEqual(probe.count, 2, "Expected cached single natural measurement, got \(probe.count)")
+    }
+
     func testThemeProtectsFixedColorsOnTheirDefaultAndCustomBackgrounds() throws {
         var theme = MacColorTheme(preset: .ink)
         XCTAssertTrue(ThemeContrast.failures(for: theme).isEmpty)

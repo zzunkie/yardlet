@@ -26,6 +26,9 @@ package enum AgentToolListWatch: Equatable, Sendable {
     /// The app cannot be asked: it is not running, does not know this task's token, or did not
     /// start this server.
     case unavailable
+    /// The app explicitly released this task's tools (for example when the task was archived or
+    /// discarded); the per-task MCP server should exit cleanly.
+    case released
 }
 
 /// The minimum of the Model Context Protocol a harness needs to list and call Yardlet's tools:
@@ -210,11 +213,28 @@ package enum MCPStdioLoop {
         write: @escaping @Sendable (Data) async -> Void
     ) async {
         // Not one of the group's tasks: when input ends, calls still running finish and the
-        // server exits without waiting on a watch the app may be holding.
-        let watch = Task { await server.watchToolList(firstDelay: watchFirstDelay, notify: write) }
-        defer { watch.cancel() }
-        await withDiscardingTaskGroup { group in
+        // server exits without waiting on a watch the app may be holding. When the app explicitly
+        // releases the task's tools, stop reading further lines so in-flight calls finish and the
+        // process exits even if its harness keeps standard input open.
+        let (activeLines, activeContinuation) = AsyncStream.makeStream(of: String.self)
+        let forward = Task {
             for await line in lines {
+                activeContinuation.yield(line)
+            }
+            activeContinuation.finish()
+        }
+        let watch = Task {
+            await server.watchToolList(firstDelay: watchFirstDelay, notify: write) {
+                activeContinuation.finish()
+            }
+        }
+        defer {
+            watch.cancel()
+            forward.cancel()
+            activeContinuation.finish()
+        }
+        await withDiscardingTaskGroup { group in
+            for await line in activeLines {
                 guard !line.allSatisfy(\.isWhitespace) else { continue }
                 group.addTask {
                     let message = Data(line.utf8)
@@ -345,7 +365,8 @@ extension MCPServer {
         retryDelay: Duration = .seconds(15),
         maximumRetryDelay: Duration = .seconds(300),
         minimumInterval: Duration = .seconds(2),
-        notify: @escaping @Sendable (Data) async -> Void
+        notify: @escaping @Sendable (Data) async -> Void,
+        onReleased: @escaping @Sendable () -> Void = {}
     ) async {
         guard var listed = await listing.next(after: 0) else { return }
         try? await Task.sleep(for: firstDelay)
@@ -371,6 +392,9 @@ extension MCPServer {
             case .unavailable:
                 try? await Task.sleep(for: retry)
                 retry = min(retry * 2, maximumRetryDelay)
+            case .released:
+                onReleased()
+                return
             }
         }
     }

@@ -101,9 +101,27 @@ package struct AgentToolListWatchReply: Codable, Equatable, Sendable {
     /// The task's list differs from the one the server's client last listed; false when the
     /// app's hold ran out first.
     package var changed: Bool
+    /// True when Yardlet explicitly released the task's tools (for example when the task was
+    /// archived or discarded), so its per-task `yardlet-mcp` process can exit cleanly.
+    package var released: Bool
 
-    package init(changed: Bool) {
+    package init(changed: Bool, released: Bool = false) {
         self.changed = changed
+        self.released = released
+    }
+
+    private enum CodingKeys: String, CodingKey { case changed, released }
+
+    package init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        changed = try container.decode(Bool.self, forKey: .changed)
+        released = try container.decodeIfPresent(Bool.self, forKey: .released) ?? false
+    }
+
+    package func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(changed, forKey: .changed)
+        if released { try container.encode(true, forKey: .released) }
     }
 }
 
