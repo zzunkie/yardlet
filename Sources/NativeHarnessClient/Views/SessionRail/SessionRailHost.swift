@@ -65,6 +65,12 @@ struct SessionRailAgentServices {
     var readCodexThread: @MainActor (String) async throws -> CodexTaskState = { _ in
         throw HarnessAdapterError.capabilityUnavailable(L10n.string("The child conversation could not be read."))
     }
+    /// Reads an Antigravity task's subagents from its CLI store; nil where the task is not Antigravity.
+    var readAntigravitySubagents: (@MainActor () async -> [AntigravityConversationStore.Subagent])? = nil
+    /// Reads an Antigravity subagent's log for the side panel.
+    var readAntigravitySubagent: @MainActor (String) async throws -> AntigravityTranscript = { _ in
+        throw HarnessAdapterError.capabilityUnavailable(L10n.string("The child conversation could not be read."))
+    }
     /// Reads a Claude Code background task's output.
     var readTaskOutput: @MainActor (HarnessActivity) async -> ClaudeTaskOutputReader.Output? = { _ in nil }
     /// The session jobs a Claude Code task's running CLI holds (`AppModel.sessionJobs(of:)`).
@@ -111,6 +117,7 @@ struct SessionRailHost: View {
 
     @State private var readGit: SessionRailGitInfo?
     @State private var backgroundTerminals: [CodexBackgroundTerminal] = []
+    @State private var antigravitySubagents: [AntigravityConversationStore.Subagent] = []
     @State private var instructionSources: TaskInstructionSources?
     @State private var account: SessionRailAccount?
     /// The `run_agent` calls the rail read, so a draw reads only the calls that changed.
@@ -132,6 +139,7 @@ struct SessionRailHost: View {
             autoFixPrompt: PullRequestAutoFixPrompt(rawValue: autoFixPrompt) ?? .ask,
             codexChanges: codexChanges,
             codexState: codexState,
+            antigravitySubagents: antigravitySubagents,
             generatedFiles: services.generatedFiles(),
             agentRuns: services.agents.agentRuns(),
             agentCalls: agentCalls,
@@ -163,6 +171,9 @@ struct SessionRailHost: View {
     /// every few seconds: the App Server sends no notice when a background terminal starts or ends.
     private var terminalsKey: String { "\(session.id)|\(session.status)|\(isAttached)" }
     private var isAttached: Bool { services.agents.readBackgroundTerminals != nil && session.providerSessionID != nil }
+    private var antigravitySubagentsKey: String {
+        "\(session.id)|\(session.providerSessionID ?? "")|\(session.status)|\(services.agents.readAntigravitySubagents != nil)"
+    }
 
     /// Git is read again when the task's turn ends or its folder changes, and when Yardlet comes back
     /// to the front.
@@ -175,6 +186,7 @@ struct SessionRailHost: View {
                         actions: actions, isRaised: isRaised)
             .task(id: gitKey) { await refreshGit() }
             .task(id: terminalsKey) { await followBackgroundTerminals() }
+            .task(id: antigravitySubagentsKey) { await followAntigravitySubagents() }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                 Task { await refreshGit() }
             }
@@ -204,6 +216,23 @@ struct SessionRailHost: View {
             guard !Task.isCancelled else { return }
             if listed != backgroundTerminals { backgroundTerminals = listed }
             let pause: Duration = isTurnRunning || !listed.isEmpty ? .seconds(5) : .seconds(30)
+            try? await Task.sleep(for: pause)
+        }
+    }
+
+    /// Reads an Antigravity task's subagents from disk while the rail shows the task: every 5 seconds
+    /// while a turn or any subagent is running, else every 30 seconds.
+    private func followAntigravitySubagents() async {
+        guard let read = services.agents.readAntigravitySubagents else {
+            if !antigravitySubagents.isEmpty { antigravitySubagents = [] }
+            return
+        }
+        while !Task.isCancelled {
+            let listed = await read()
+            guard !Task.isCancelled else { return }
+            if listed != antigravitySubagents { antigravitySubagents = listed }
+            let hasRunning = listed.contains { $0.status == .running }
+            let pause: Duration = isTurnRunning || hasRunning ? .seconds(5) : .seconds(30)
             try? await Task.sleep(for: pause)
         }
     }

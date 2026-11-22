@@ -772,6 +772,8 @@ enum TaskPanelDetail: Equatable, Sendable {
     case agentRun(UUID, title: String)
     /// A Codex child thread, read from the thread.
     case codexThread(String, title: String)
+    /// An Antigravity CLI subagent, read from its own log.
+    case antigravitySubagent(String, title: String)
     /// A Claude Code background task's output, by its activity.
     case claudeTaskOutput(activityID: String, title: String)
     /// A Codex background terminal's output, by the command item that started it.
@@ -781,8 +783,8 @@ enum TaskPanelDetail: Equatable, Sendable {
 
     var title: String {
         switch self {
-        case let .agentRun(_, title), let .codexThread(_, title), let .claudeTaskOutput(_, title),
-             let .codexTerminal(_, _, title): title
+        case let .agentRun(_, title), let .codexThread(_, title), let .antigravitySubagent(_, title),
+             let .claudeTaskOutput(_, title), let .codexTerminal(_, _, title): title
         }
     }
 }

@@ -66,6 +66,37 @@ extension AppModel {
         return try await reader.readThreadPresentation(threadID: threadID, newestTurns: CodexThreadPaging.newestTurns)
     }
 
+    /// An Antigravity task's own subagents (`invoke_subagent`), read from the CLI's subagents folder
+    /// for its account without attaching a runtime.
+    func antigravitySubagents(of session: SessionRecord) async -> [AntigravityConversationStore.Subagent] {
+        guard session.harness == .antigravityCLI,
+              let conversationID = session.providerSessionID,
+              !AntigravityACPOptions.isPrintModePlaceholder(conversationID, localSessionID: session.id) else {
+            return []
+        }
+        let root = ProviderSessionTitlePaths.live().forAccount(session.connection).antigravityRoot
+        return await Task.detached(priority: .utility) {
+            AntigravityConversationStore(root: root).subagents(of: conversationID)
+        }.value
+    }
+
+    /// Reads an Antigravity subagent's own log for the side panel without attaching or resuming it.
+    func readAntigravitySubagent(_ conversationID: String, of session: SessionRecord) async throws -> AntigravityTranscript {
+        guard session.harness == .antigravityCLI,
+              let parentID = session.providerSessionID,
+              !AntigravityACPOptions.isPrintModePlaceholder(parentID, localSessionID: session.id) else {
+            throw HarnessAdapterError.capabilityUnavailable(L10n.string("The child conversation could not be read."))
+        }
+        let root = ProviderSessionTitlePaths.live().forAccount(session.connection).antigravityRoot
+        return try await Task.detached(priority: .utility) {
+            let store = AntigravityConversationStore(root: root)
+            guard store.hasSubagent(conversationID, of: parentID) else {
+                throw HarnessAdapterError.capabilityUnavailable(L10n.string("The child conversation could not be read."))
+            }
+            return try store.readTranscript(conversationID: conversationID)
+        }.value
+    }
+
     // MARK: - Background tasks
 
     /// The newest part of a Claude Code background task's output, from the file the CLI writes it to.

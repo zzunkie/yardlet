@@ -238,6 +238,87 @@ final class SessionRailAgentsTests: XCTestCase {
         XCTAssertNil(SessionRailAgents.make(harness: .claudeCode, entries: [], codexState: nil), "No agents, no card")
     }
 
+    /// Antigravity CLI subagents come from `brain/<id>/.system_generated/subagents/*.json` and each
+    /// child's log tail: active ones list first, finished ones are completed, interrupted killed ones
+    /// are stopped, and every row opens its log beside the task.
+    func testAntigravitySubagentsReadStoreMetadataAndStatusAndOpenPanel() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "agy-rail-subagents-\(UUID().uuidString.prefix(8))", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let parentID = "parent-conv-1"
+        let subagentsDir = root.appending(path: "brain/\(parentID)/.system_generated/subagents", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: subagentsDir, withIntermediateDirectories: true)
+
+        func writeSubagent(id: String, role: String?, typeName: String, state: String, step: Int, lastRecord: String?) throws {
+            var descriptor: [String: Any] = ["typeName": typeName]
+            if let role { descriptor["role"] = role }
+            let meta: [String: Any] = [
+                "conversationId": id,
+                "subagentDescriptor": descriptor,
+                "state": state,
+                "spawnStepIndex": step
+            ]
+            let data = try JSONSerialization.data(withJSONObject: meta)
+            try data.write(to: subagentsDir.appending(path: "\(id).json"))
+            if let lastRecord {
+                let logs = root.appending(path: "brain/\(id)/.system_generated/logs", directoryHint: .isDirectory)
+                try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+                try Data((lastRecord + "\n").utf8).write(to: logs.appending(path: "transcript_full.jsonl"))
+            }
+        }
+
+        try writeSubagent(
+            id: "sub-running", role: "PR #1478 Reviewer", typeName: "research",
+            state: "SUBAGENT_STATE_ALIVE", step: 10,
+            lastRecord: #"{"step_index":5,"type":"GENERIC","source":"MODEL","status":"DONE","content":"tool output"}"#
+        )
+        try writeSubagent(
+            id: "sub-done-alive", role: "Area 1 Auditor", typeName: "research",
+            state: "SUBAGENT_STATE_ALIVE", step: 2,
+            lastRecord: #"{"step_index":9,"type":"PLANNER_RESPONSE","source":"MODEL","status":"DONE","content":"Audit done."}"#
+        )
+        try writeSubagent(
+            id: "sub-done-killed", role: nil, typeName: "image-generator",
+            state: "SUBAGENT_STATE_KILLED", step: 4,
+            lastRecord: #"{"step_index":3,"type":"PLANNER_RESPONSE","source":"MODEL","status":"DONE","content":"Saved."}"#
+        )
+        try writeSubagent(
+            id: "sub-stopped", role: "Cancelled Worker", typeName: "self",
+            state: "SUBAGENT_STATE_KILLED", step: 6,
+            lastRecord: #"{"step_index":2,"type":"PLANNER_RESPONSE","source":"MODEL","status":"DONE","tool_calls":[{"name":"run_command"}]}"#
+        )
+
+        let store = AntigravityConversationStore(root: root)
+        let subagents = store.subagents(of: parentID)
+        XCTAssertEqual(subagents.count, 4)
+        let byID = Dictionary(uniqueKeysWithValues: subagents.map { ($0.conversationID, $0) })
+        XCTAssertEqual(byID["sub-running"]?.status, .running)
+        XCTAssertEqual(byID["sub-running"]?.displayTitle, "PR #1478 Reviewer")
+        XCTAssertEqual(byID["sub-done-alive"]?.status, .completed)
+        XCTAssertEqual(byID["sub-done-killed"]?.status, .completed)
+        XCTAssertEqual(byID["sub-done-killed"]?.displayTitle, "image-generator")
+        XCTAssertEqual(byID["sub-stopped"]?.status, .stopped)
+        XCTAssertTrue(store.hasSubagent("sub-running", of: parentID))
+        XCTAssertFalse(store.hasSubagent("unrelated-conv", of: parentID))
+
+        let card = try XCTUnwrap(SessionRailAgents.make(
+            harness: .antigravityCLI, entries: [], codexState: nil, antigravitySubagents: subagents
+        ))
+        XCTAssertEqual(card.activeCount, 1)
+        XCTAssertEqual(card.agents.first?.kind, .antigravitySubagent("sub-running"))
+        XCTAssertEqual(card.agents.first?.status, .running)
+        XCTAssertTrue(card.agents.allSatisfy(\.opensPanel))
+
+        let rail = SessionRailContent.make(
+            session: Fixtures.session(.antigravityCLI), projectName: "p",
+            instructionSources: TaskInstructionSources(origin: .detected, paths: []), git: nil,
+            options: Self.options(.antigravityCLI), connectors: nil, account: nil, entries: [],
+            codexPlan: nil, pullRequest: nil, pullRequestState: nil, antigravitySubagents: subagents
+        )
+        XCTAssertTrue(rail.cards(SessionRailPreferences()).contains(.agents))
+        XCTAssertEqual(rail.rollup(.agents), L10n.format("%lld running", 1))
+    }
+
     // MARK: - Background work
 
     /// The CLI's output file is found by session and task under its temp root, and its newest part is
