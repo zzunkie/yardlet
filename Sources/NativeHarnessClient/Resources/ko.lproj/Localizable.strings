@@ -1823,6 +1823,10 @@
 "Unread response" = "읽지 않은 응답";
 "Hide nested sessions" = "중첩된 세션 숨기기";
 "Show nested sessions" = "중첩된 세션 표시";
+"New nested task" = "하위 작업 시작";
+"Nested under %@" = "상위 작업: %@";
+"Clear parent task" = "상위 작업 해제";
+"Switch to chat" = "채팅으로 전환";
 "1 nested session" = "중첩된 세션 1개";
 "%lld nested sessions" = "중첩된 세션 %lld개";
 "1 more nested session" = "중첩된 세션 1개 더 보기";

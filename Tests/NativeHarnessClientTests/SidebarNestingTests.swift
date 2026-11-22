@@ -338,7 +338,8 @@ final class SidebarNestingTests: XCTestCase {
 
     func testNewStringsAreLocalized() {
         for key in ["No chats", "Expand folder", "Collapse folder", "Show more", "Expanded", "Collapsed",
-                    "Group by", "State", "Idle"] {
+                    "Group by", "State", "Idle", "New nested task", "Nested under %@",
+                    "Clear parent task", "Switch to chat"] {
             XCTAssertEqual(L10n.string(key, languageCode: "en"), key)
             XCTAssertNotEqual(L10n.string(key, languageCode: "ko"), key, key)
         }
@@ -428,6 +429,64 @@ final class SidebarNestingRenderingTests: XCTestCase {
                 onArchive: { _ in }, onDelete: { _ in }, onRename: { _ in }, onMarkRead: { _ in },
                 disclosure: disclosure)
                 .environment(\.shellBusyTaskIDs, [shellBusy.id])
+        }
+    }
+
+    func testCollapsedParentTaskExposesExpandChevronButton() throws {
+        let alpha = URL(filePath: "/tmp/sidebar-qa/family-alpha", directoryHint: .isDirectory)
+        let projects = ProjectStore()
+        _ = projects.ensureProject(forRoot: alpha)
+        let now = Date()
+        let parent = SessionRecord(harness: .claudeCode, workspaceURL: alpha,
+                                   runtimeExecutableURL: URL(filePath: "/tmp/claude"),
+                                   title: "Coordinate release", titleOrigin: .provider, updatedAt: now)
+        let child1 = SessionRecord(harness: .codex, workspaceURL: alpha,
+                                   runtimeExecutableURL: URL(filePath: "/tmp/codex"),
+                                   title: "Run tests", titleOrigin: .provider,
+                                   updatedAt: now.addingTimeInterval(-60), parentTaskID: parent.id)
+        let child2 = SessionRecord(harness: .codex, workspaceURL: alpha,
+                                   runtimeExecutableURL: URL(filePath: "/tmp/codex"),
+                                   title: "Update changelog", titleOrigin: .provider,
+                                   updatedAt: now.addingTimeInterval(-120), parentTaskID: parent.id)
+        let groups = projects.visibleGroups(sessions: [parent, child1, child2])
+        let disclosure = SidebarDisclosureStore(defaults: try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("sidebar-family-qa"))))
+        let familyKey = SidebarProjection.familyKey(for: parent.id)
+        disclosure.collapse(familyKey)
+
+        let size = NSSize(width: ParityTheme.sidebarWidth, height: 340)
+        let collapsedLayout = SidebarProjection.layout(visibleGroups: groups, allGroups: groups, splits: [],
+                                                       isFiltering: false, disclosure: disclosure.disclosure,
+                                                       selection: .session(parent.id))
+        try render(name: "sidebar-family-collapsed", size: size) {
+            TaskSidebar(layout: collapsedLayout, allGroups: groups, isRestoring: false, selection: .session(parent.id),
+                searchText: .constant(""), onNewTask: {}, onActivate: { _ in }, onNewTaskInProject: { _ in },
+                projects: projects, onEditProject: { _ in },
+                onArchiveProjectChats: { _ in }, onRemoveProject: { _ in }, onTogglePinned: { _ in },
+                onArchive: { _ in }, onDelete: { _ in }, onRename: { _ in }, onMarkRead: { _ in },
+                disclosure: disclosure)
+        }
+
+        let host = WindowlessRender.Host(
+            SidebarHost(shown: ShownItem(.session(parent.id)), groups: groups, projects: projects, disclosure: disclosure)
+                .frame(width: size.width, height: size.height),
+            size: size, appearance: .light)
+        defer { host.close() }
+        host.settle(passes: 8)
+        let elements = host.accessibilityElements()
+        XCTAssertTrue(elements.contains { $0.role == "AXButton" && $0.label == L10n.string("Show nested sessions") },
+                      "Collapsed parent row keeps an inline expand button visible without hover: \(elements.map(\.description).joined(separator: "\n"))")
+
+        disclosure.expand(familyKey)
+        let expandedLayout = SidebarProjection.layout(visibleGroups: groups, allGroups: groups, splits: [],
+                                                      isFiltering: false, disclosure: disclosure.disclosure,
+                                                      selection: .session(parent.id))
+        try render(name: "sidebar-family-expanded", size: size) {
+            TaskSidebar(layout: expandedLayout, allGroups: groups, isRestoring: false, selection: .session(parent.id),
+                searchText: .constant(""), onNewTask: {}, onActivate: { _ in }, onNewTaskInProject: { _ in },
+                projects: projects, onEditProject: { _ in },
+                onArchiveProjectChats: { _ in }, onRemoveProject: { _ in }, onTogglePinned: { _ in },
+                onArchive: { _ in }, onDelete: { _ in }, onRename: { _ in }, onMarkRead: { _ in },
+                disclosure: disclosure)
         }
     }
 

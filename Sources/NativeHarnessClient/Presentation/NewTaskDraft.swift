@@ -33,11 +33,33 @@ final class NewTaskDraft {
     /// project, or there was none to start in. Only an untouched draft waits for its first project.
     var startsChat: Bool { workspaceURL == nil && hasPreparedWorkspace }
 
+    /// The parent task this draft will nest under in the sidebar when sent (transient; cleared on send
+    /// or when switching destination away from the parent's project or Chats).
+    struct ParentTask: Equatable, Sendable {
+        let id: UUID
+        let title: String
+    }
+
+    var parentTask: ParentTask?
+
     /// Starts the next task as a chat instead of in a project's folder.
     func chooseChat() {
+        parentTask = nil
         workspaceURL = nil
         projectID = nil
         hasPreparedWorkspace = true
+    }
+
+    /// Prepares the draft to start a nested task under `parent`, in its project or in Chats.
+    func startNested(under parent: SessionRecord, project: Project?, isChat: Bool) {
+        if isChat || parent.isMovedToChats {
+            chooseChat()
+        } else {
+            projectID = project?.id ?? parent.projectID
+            workspaceURL = project?.primaryRoot ?? parent.originWorkspaceURL ?? parent.workspaceURL
+            hasPreparedWorkspace = true
+        }
+        parentTask = ParentTask(id: parent.id, title: parent.title)
     }
     var harness: HarnessKind? { didSet { if harness != oldValue { onChange?() } } }
     var connectionSelection: [HarnessKind: String] = [:] {
@@ -259,7 +281,7 @@ final class NewTaskDraft {
             // A chat's folder is made for it; it has no repository to make a worktree of.
             startsInNewWorktree: workspaceURL != nil && startsInNewWorktree,
             providerOptions: modelChoices[harness]?.providerOptions(for: harness) ?? [:],
-            suggestion: suggestion, sentByPerson: true
+            suggestion: suggestion, sentByPerson: true, parentTaskID: parentTask?.id
         )
         pendingSubmission = submission
         creationFailed = false
@@ -278,8 +300,9 @@ final class NewTaskDraft {
         pendingSubmission = nil
         creationFailed = !succeeded
         creationError = succeeded ? nil : error
-        // The suggestion has its task now, even when edits made during the start stay in the draft.
+        // The suggestion and parent link have their task now, even when edits made during the start stay in the draft.
         if succeeded, suggestion != nil, suggestion == submission.suggestion { suggestion = nil }
+        if succeeded, parentTask != nil, parentTask?.id == submission.parentTaskID { parentTask = nil }
         // A late result must not erase input edited while the start was pending.
         if succeeded, text == submission.originalText, attachments == submission.attachments,
            harness == submission.harness,

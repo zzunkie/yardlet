@@ -1329,6 +1329,47 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         }
         host.settle(passes: 6)
     }
+
+    func testHeroClearProjectSwitchesToChatAndParentBadgeClearsParentLink() throws {
+        let directory = try WindowlessRender.directory("new-task-qa")
+        let runtimes = try runtimes()
+        let fixture = homeFixture()
+        let parent = try XCTUnwrap(fixture.activity.sessions.first { $0.title == "Refactor sidebar rows" })
+        let size = NSSize(width: 960, height: 640)
+
+        for appearance in WindowlessRender.Appearance.allCases {
+            let draft = NewTaskDraft()
+            draft.startNested(under: parent, project: fixture.projects[0], isChat: false)
+            let host = WindowlessRender.Host(
+                home(.quiet, fixture: fixture, size: size, scheme: appearance.colorScheme, runtimes: runtimes, draft: draft),
+                size: size, appearance: appearance)
+            defer { host.close() }
+            host.settle(passes: 10)
+            try WindowlessRender.writePNG(try host.capture().bitmap,
+                                          to: directory.appending(path: "home-nested-hero-\(appearance.suffix).png"))
+
+            XCTAssertNotNil(controls(in: host).first { $0.label == L10n.string("Clear parent task") })
+            XCTAssertNotNil(controls(in: host).first { $0.label == L10n.string("Switch to chat") })
+            XCTAssertNotNil(draft.parentTask)
+
+            if appearance == .light {
+                // Clicks reach SwiftUI only in an ordered offscreen window.
+                host.window.alphaValue = 0
+                host.window.setFrameOrigin(NSPoint(x: -20_000, y: -20_000))
+                host.window.orderFrontRegardless()
+                host.settle(passes: 6)
+                let clearBefore = try XCTUnwrap(controls(in: host).first { $0.label == L10n.string("Clear parent task") })
+                try click(clearBefore, in: host)
+                XCTAssertNil(draft.parentTask, "Clear button removes the parent badge without leaving the project")
+                XCTAssertEqual(draft.workspaceURL, fixture.projects[0].primaryRoot)
+
+                let switchToChat = try XCTUnwrap(controls(in: host).first { $0.label == L10n.string("Switch to chat") })
+                try click(switchToChat, in: host)
+                XCTAssertTrue(draft.startsChat, "Project clear button switches directly to a chat")
+                XCTAssertNil(draft.workspaceURL)
+            }
+        }
+    }
 }
 
 /// The tasks' own conversations and composers as the window gives them to the home's reply

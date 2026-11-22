@@ -262,6 +262,8 @@ struct TaskSidebar: View {
     /// Moves a task in the sidebar's families, under another task or to the top level (nil), from
     /// its row's menu or a drop on a row (`TaskNesting`).
     var onNest: ((UUID, UUID?) -> Void)? = { _, _ in }
+    /// Starts a new task nested under the chosen sidebar task, from its row's context menu.
+    var onNewNestedTask: ((SessionRecord) -> Void)? = nil
     /// The projects' own actions (pin, edit, Show in Finder, archive chats, remove) change this Mac's projects and
     /// folders. Another Mac's window lists its host's, which only the host changes: they show dimmed there.
     var managesProjects = true
@@ -735,7 +737,8 @@ struct TaskSidebar: View {
                     onMakeProject: onMakeProject.map { make in { make(session) } },
                     onDropTask: splitActions.combine.map { combine in { dropped in combine(dropped, session.id) } },
                     // A task moves among the families of its project's list, which the states mix.
-                    nesting: onNest == nil || row.project != nil ? nil : nesting
+                    nesting: onNest == nil || row.project != nil ? nil : nesting,
+                    onNewNestedTask: onNewNestedTask
                 )
                 .equatable()
             case let .split(split, members):
@@ -1388,6 +1391,7 @@ struct SidebarTaskEntry: View, @MainActor Equatable {
     /// going under or beside it (`TaskNesting`). Without it (the activity view) a task dropped on the
     /// row joins it in a split view.
     var nesting: SidebarNesting? = nil
+    var onNewNestedTask: ((SessionRecord) -> Void)? = nil
     @State private var isDropTargeted = false
     /// Where a task dragged over the row would go.
     @State private var nestDrop: TaskNesting.Drop?
@@ -1414,6 +1418,7 @@ struct SidebarTaskEntry: View, @MainActor Equatable {
             && (lhs.onMarkUnread != nil) == (rhs.onMarkUnread != nil)
             && (lhs.onMoveToProject != nil) == (rhs.onMoveToProject != nil)
             && (lhs.onMakeProject != nil) == (rhs.onMakeProject != nil)
+            && (lhs.onNewNestedTask != nil) == (rhs.onNewNestedTask != nil)
     }
 
     @ViewBuilder var menuContents: some View {
@@ -1426,7 +1431,10 @@ struct SidebarTaskEntry: View, @MainActor Equatable {
             if let openInSidePanel {
                 Button(L10n.string("Open in Side Panel")) { openInSidePanel.open(session.id) }
             }
-            if openInNewTab != nil || openInSplitView != nil || openInSidePanel != nil {
+            if let onNewNestedTask {
+                Button(L10n.string("New nested task")) { onNewNestedTask(session) }
+            }
+            if openInNewTab != nil || openInSplitView != nil || openInSidePanel != nil || onNewNestedTask != nil {
                 Divider()
             }
             Button(session.isPinned ? L10n.string("Unpin") : L10n.string("Pin")) {
@@ -1469,6 +1477,7 @@ struct SidebarTaskEntry: View, @MainActor Equatable {
             subtitle: subtitle,
             projectName: projectName,
             familyPlace: familyPlace,
+            familyToggle: familyToggle,
             isSelected: isSelected || isDropTargeted,
             onSelect: onSelect,
             onTogglePinned: { onTogglePinned(session) },
@@ -1978,6 +1987,8 @@ private struct TaskRow: View {
     var projectName: String? = nil
     /// Where the row sits in its family, when it is nested under the task it was started from.
     var familyPlace: SidebarFamilyPlace? = nil
+    /// Hiding or showing the tasks nested under this one, when it has any.
+    var familyToggle: SidebarFamilyToggle? = nil
     let isSelected: Bool
     let onSelect: () -> Void
     let onTogglePinned: () -> Void
@@ -2014,6 +2025,7 @@ private struct TaskRow: View {
     /// hover buttons, as an archived row being restored does.
     private var isRenaming: Bool { renamingTaskIDs.contains(session.id) }
     private var showsHoverActions: Bool { isHovering && !isRenaming }
+    private var showsCollapsedFamilyButton: Bool { !isRenaming && !showsHoverActions && familyToggle?.isCollapsed == true }
 
     private var cpuPercent: Int? {
         resources.flatMap { SidebarTaskIndicatorProjection.cpuPercent(for: [session.id], busyCPU: $0.busyCPU(of: [session.id])) }
@@ -2098,7 +2110,8 @@ private struct TaskRow: View {
                         SidebarRowTrailingItemsView(items: trailingItems)
                     }
                 }
-                .padding(.trailing, showsHoverActions ? 53 : SidebarMetrics.rowTrailingPadding)
+                .padding(.trailing, showsHoverActions ? (familyToggle != nil ? 76 : 53)
+                         : (showsCollapsedFamilyButton ? SidebarMetrics.rowTrailingPadding + 22 : SidebarMetrics.rowTrailingPadding))
                 .frame(height: rowHeight)
                 .contentShape(Rectangle())
                 .background(alignment: .leading) {
@@ -2120,6 +2133,13 @@ private struct TaskRow: View {
 
             if showsHoverActions {
                 HStack(spacing: 1) {
+                    if let familyToggle {
+                        TaskRowActionButton(
+                            systemName: familyToggle.isCollapsed ? "chevron.right" : "chevron.down",
+                            label: familyToggle.title,
+                            action: { hoverCard?.dismiss(); familyToggle.action() }
+                        )
+                    }
                     // The Task menu's keys act on the shown task, so only its row names them.
                     TaskRowActionButton(
                         systemName: session.isPinned ? "pin.fill" : "pin",
@@ -2134,6 +2154,13 @@ private struct TaskRow: View {
                         action: { hoverCard?.dismiss(); onArchive() }
                     )
                 }
+                .padding(.trailing, 4)
+            } else if showsCollapsedFamilyButton, let familyToggle {
+                TaskRowActionButton(
+                    systemName: "chevron.right",
+                    label: familyToggle.title,
+                    action: { hoverCard?.dismiss(); familyToggle.action() }
+                )
                 .padding(.trailing, 4)
             }
         }

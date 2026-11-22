@@ -119,7 +119,10 @@ struct RemoteNewTaskView: View {
     /// The title naming the project the new task starts in, which is its menu, and the composer.
     private var newTask: some View {
         VStack(spacing: 0) {
-            NewTaskHeroTitle(kind: form.heroKind) { destinationMenuItems }
+            NewTaskHeroTitle(
+                kind: form.heroKind,
+                onClearProject: isChat ? nil : { form.projectID = RemoteTaskProjection.chatsProjectID }
+            ) { destinationMenuItems }
             if isChat {
                 NewTaskDestinationButton(title: L10n.string("Chat (no project)"), systemName: "bubble.left") {
                     destinationMenuItems

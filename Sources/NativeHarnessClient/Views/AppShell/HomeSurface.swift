@@ -274,9 +274,17 @@ struct NewTaskHome: View {
             NewTaskHeroTitle(
                 kind: NewTaskHeroTitleKind(startsChat: draft.startsChat, workspaceURL: draft.workspaceURL,
                                             isInRepository: isInRepository, projectName: projectName),
+                onClearProject: draft.workspaceURL == nil ? nil : { draft.chooseChat() },
                 destination: { NewTaskDestinationMenuItems(draft: draft, projects: projects, onChooseWorkspace: onChooseWorkspace) }
             )
             .accessibilitySortPriority(ParityAccessibility.mainContent + 1)
+
+            if let parent = draft.parentTask {
+                NewTaskParentBadge(title: parent.title) {
+                    draft.parentTask = nil
+                }
+                .padding(.top, 8)
+            }
 
             if draft.workspaceURL == nil {
                 NewTaskDestinationButton(title: destinationTitle, systemName: draft.startsChat ? "bubble.left" : "folder") {
@@ -420,6 +428,8 @@ struct NewTaskHomeNoticeLine: View {
 /// as the Codex app's `projectSelect` is.
 struct NewTaskHeroTitle<Destination: View>: View {
     let kind: NewTaskHeroTitleKind
+    /// Switches from the selected project to a chat with no project; nil hides the clear button.
+    var onClearProject: (() -> Void)? = nil
     @ViewBuilder let destination: () -> Destination
     @Environment(\.yardletInterfaceScale) private var interfaceScale
 
@@ -456,47 +466,106 @@ struct NewTaskHeroTitle<Destination: View>: View {
     }
 
     private func projectMenu(_ name: String, size: CGFloat) -> some View {
-        NewTaskProjectNameMenu(name: name, size: size * interfaceScale, items: destination)
+        NewTaskProjectNameMenu(name: name, size: size * interfaceScale, onClear: onClearProject, items: destination)
     }
 }
 
 /// The project's name in the title, which opens the project menu: underlined with dots, brighter
-/// while the pointer is on it.
+/// while the pointer is on it, with a small clear button beside it to switch directly to a chat.
 private struct NewTaskProjectNameMenu<Items: View>: View {
     let name: String
     let size: CGFloat
+    var onClear: (() -> Void)? = nil
     @ViewBuilder let items: () -> Items
     @State private var isHovering = false
+    @State private var isHoveringClear = false
 
     var body: some View {
-        Menu {
-            items()
-        } label: {
-            // The dots are drawn under the name rather than as an underline style: a styled title
-            // reaches assistive technologies as an attributed string where a plain one is expected.
-            Text(name)
-                .font(.system(size: size, weight: .semibold))
-                .tracking(-0.45)
-                .foregroundStyle(isHovering ? Color.primary : Color.primary.opacity(0.88))
-                .lineLimit(1)
-                .padding(.bottom, max(2, size * 0.08))
-                .overlay(alignment: .bottom) {
-                    NewTaskDottedLine()
-                        .stroke(Color.secondary.opacity(isHovering ? 0.9 : 0.6),
-                                style: StrokeStyle(lineWidth: max(1, size / 18), lineCap: .round,
-                                                   dash: [max(1, size / 18), max(3, size / 7)]))
-                        .frame(height: max(1, size / 18))
+        HStack(alignment: .firstTextBaseline, spacing: 2) {
+            Menu {
+                items()
+            } label: {
+                // The dots are drawn under the name rather than as an underline style: a styled title
+                // reaches assistive technologies as an attributed string where a plain one is expected.
+                Text(name)
+                    .font(.system(size: size, weight: .semibold))
+                    .tracking(-0.45)
+                    .foregroundStyle(isHovering ? Color.primary : Color.primary.opacity(0.88))
+                    .lineLimit(1)
+                    .padding(.bottom, max(2, size * 0.08))
+                    .overlay(alignment: .bottom) {
+                        NewTaskDottedLine()
+                            .stroke(Color.secondary.opacity(isHovering ? 0.9 : 0.6),
+                                    style: StrokeStyle(lineWidth: max(1, size / 18), lineCap: .round,
+                                                       dash: [max(1, size / 18), max(3, size / 7)]))
+                            .frame(height: max(1, size / 18))
+                    }
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .parityPointer()
+            .onHover { isHovering = $0 }
+            .help(L10n.string("Project"))
+            .accessibilityLabel(L10n.string("Project"))
+            .accessibilityValue(name)
+
+            if let onClear {
+                Button(action: onClear) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: max(10, size * 0.42), weight: .semibold))
+                        .foregroundStyle(isHoveringClear ? Color.primary : Color.secondary)
+                        .frame(width: max(18, size * 0.72), height: max(18, size * 0.72))
+                        .background(isHoveringClear ? ParityTheme.hoverFill : .clear, in: Circle())
+                        .contentShape(Circle())
                 }
+                .buttonStyle(.plain)
+                .parityPointer()
+                .onHover { isHoveringClear = $0 }
+                .alignmentGuide(.firstTextBaseline) { [size] d in d[VerticalAlignment.center] + size * 0.28 }
+                .help(L10n.string("Switch to chat"))
+                .accessibilityLabel(L10n.string("Switch to chat"))
+            }
         }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .parityPointer()
-        .onHover { isHovering = $0 }
-        .help(L10n.string("Project"))
-        .accessibilityLabel(L10n.string("Project"))
-        .accessibilityValue(name)
+    }
+}
+
+/// Shown under the title while the draft starts a nested task under an existing sidebar task.
+private struct NewTaskParentBadge: View {
+    let title: String
+    let onClear: () -> Void
+    @State private var isHoveringClear = false
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "arrow.turn.down.right")
+                .font(.system(size: 10.5 * interfaceScale, weight: .medium))
+                .foregroundStyle(.secondary)
+            Text(L10n.format("Nested under %@", title))
+                .font(.system(size: 12 * interfaceScale))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Button(action: onClear) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9.5 * interfaceScale, weight: .semibold))
+                    .foregroundStyle(isHoveringClear ? Color.primary : Color.secondary)
+                    .frame(width: 16, height: 16)
+                    .background(isHoveringClear ? ParityTheme.hoverFill : .clear, in: Circle())
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .parityPointer()
+            .onHover { isHoveringClear = $0 }
+            .help(L10n.string("Clear parent task"))
+            .accessibilityLabel(L10n.string("Clear parent task"))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(ParityTheme.subtleFill, in: Capsule())
+        .frame(maxWidth: 420 * interfaceScale)
     }
 }
 
@@ -546,6 +615,7 @@ enum NewTaskDestination {
 
     @MainActor
     static func select(_ project: Project, draft: NewTaskDraft, onChooseWorkspace: (URL) -> Void) {
+        draft.parentTask = nil
         draft.projectID = project.id
         draft.workspaceURL = project.primaryRoot
         onChooseWorkspace(project.primaryRoot)
@@ -554,6 +624,7 @@ enum NewTaskDestination {
     @MainActor
     static func chooseFolder(draft: NewTaskDraft, projects: [Project], onChooseWorkspace: (URL) -> Void) {
         guard let selectedURL = askForFolder() else { return }
+        draft.parentTask = nil
         draft.workspaceURL = selectedURL
         draft.projectID = projects.first { $0.contains(root: selectedURL) }?.id
         onChooseWorkspace(selectedURL)

@@ -175,4 +175,47 @@ final class NewTaskDraftTests: XCTestCase {
         XCTAssertEqual(draft.text, "Another task")
         XCTAssertFalse(draft.creationFailed)
     }
+
+    func testStartNestedLinksParentTaskAndClearsOnSendOrDestinationChange() throws {
+        let project = Project(name: "Alpha", primaryRoot: firstProject)
+        let worktree = URL(filePath: "/tmp/yardlet-worktrees/alpha/fix-ux")
+        let parent = SessionRecord(
+            harness: .codex, workspaceURL: worktree, runtimeExecutableURL: runtime,
+            title: "Coordinate UI polish", projectID: project.id,
+            originWorkspacePath: firstProject.path(percentEncoded: false), worktreeName: "fix-ux"
+        )
+        let draft = makeDraft()
+        draft.startNested(under: parent, project: project, isChat: false)
+        XCTAssertEqual(draft.parentTask, .init(id: parent.id, title: "Coordinate UI polish"))
+        XCTAssertEqual(draft.projectID, project.id)
+        XCTAssertEqual(draft.workspaceURL, firstProject, "Worktree parents resolve back to the project root")
+        XCTAssertFalse(draft.startsChat)
+
+        let submission = try XCTUnwrap(draft.beginSubmission(runtimeURL: runtime))
+        XCTAssertEqual(submission.parentTaskID, parent.id)
+        draft.complete(submission, succeeded: false)
+        XCTAssertEqual(draft.parentTask?.id, parent.id, "Failed start keeps the parent link")
+
+        let retry = try XCTUnwrap(draft.beginSubmission(runtimeURL: runtime))
+        draft.complete(retry, succeeded: true)
+        XCTAssertNil(draft.parentTask, "Successful start clears the transient parent link")
+
+        // Starting nested under a chat enters chat mode while keeping the parent link, and choosing
+        // chat directly clears an active parent link.
+        let chatParent = SessionRecord(harness: .claudeCode, workspaceURL: URL(filePath: "/tmp/chats/new-chat-1"),
+                                       runtimeExecutableURL: runtime, title: "Brainstorm")
+        draft.startNested(under: chatParent, project: nil, isChat: true)
+        XCTAssertTrue(draft.startsChat)
+        XCTAssertNil(draft.workspaceURL)
+        XCTAssertEqual(draft.parentTask, .init(id: chatParent.id, title: "Brainstorm"))
+        draft.chooseChat()
+        XCTAssertNil(draft.parentTask)
+
+        // Switching to another project also clears the parent link.
+        draft.startNested(under: parent, project: project, isChat: false)
+        let other = Project(name: "Beta", primaryRoot: secondProject)
+        NewTaskDestination.select(other, draft: draft, onChooseWorkspace: { _ in })
+        XCTAssertNil(draft.parentTask)
+        XCTAssertEqual(draft.projectID, other.id)
+    }
 }

@@ -2074,6 +2074,7 @@ struct MainWindow: View {
                         onActivate: activateRow,
                         onNewTaskInProject: { workspaceURL in
                             let project = projects.ensureProject(forRoot: workspaceURL)
+                            newTaskDraft.parentTask = nil
                             newTaskDraft.projectID = project.id
                             newTaskDraft.workspaceURL = project.primaryRoot
                             showNewTask()
@@ -2097,6 +2098,12 @@ struct MainWindow: View {
                         onMoveToProject: moveTask,
                         onMakeProject: makeProject,
                         onNest: { task, parent in Task { await model.nest(task, under: parent) } },
+                        onNewNestedTask: { session in
+                            let isChat = projects.isChat(session)
+                            let project = isChat ? nil : model.project(for: session)
+                            newTaskDraft.startNested(under: session, project: project, isChat: isChat)
+                            showNewTask()
+                        },
                         splitActions: SidebarSplitActions(
                             togglePinned: { model.splits.togglePinned($0.id) },
                             rename: presentSplitRename,

@@ -1825,6 +1825,10 @@
 "Unread response" = "Unread response";
 "Hide nested sessions" = "Hide nested sessions";
 "Show nested sessions" = "Show nested sessions";
+"New nested task" = "New nested task";
+"Nested under %@" = "Nested under %@";
+"Clear parent task" = "Clear parent task";
+"Switch to chat" = "Switch to chat";
 "1 nested session" = "1 nested session";
 "%lld nested sessions" = "%lld nested sessions";
 "1 more nested session" = "1 more nested session";
