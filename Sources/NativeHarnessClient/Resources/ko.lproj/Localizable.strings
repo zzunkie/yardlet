@@ -3002,6 +3002,10 @@
 "Site" = "사이트";
 "Site for “%@”" = "“%@” 사이트";
 "No two-factor QR code is in the picture." = "그림에서 2단계 인증 QR 코드를 찾지 못했습니다.";
+"Copy password for %@" = "%@ 계정의 비밀번호 복사";
+"copy the saved password" = "저장한 비밀번호 복사";
+"Password copied. It will be cleared from the clipboard in 90 seconds." = "비밀번호를 복사했습니다. 90초 후 클립보드에서 지워집니다.";
+"Password was not copied." = "비밀번호를 복사하지 않았습니다.";
 "Copy Code" = "코드 복사";
 "Code %@, %lld seconds left" = "코드 %1$@, %2$lld초 남음";
 "Use a strong password for %@? The password manager saves it." = "%@에 강력한 비밀번호를 쓸까요? 비밀번호 관리자에 저장됩니다.";

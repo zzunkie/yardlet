@@ -5,6 +5,8 @@ import SwiftUI
 /// and the toolbar lists of 1Password and Bitwarden offer. A row names the account first and says what it fills.
 /// Choosing a row fills the page for the person; the list never goes to an agent.
 struct VaultPickerView: View {
+    static let width: CGFloat = 372
+
     @ObservedObject var vault: VaultCenter
     /// The page's origin as the browser reports it.
     let origin: String?
@@ -14,6 +16,7 @@ struct VaultPickerView: View {
     var first: UUID? = nil
     @Binding var query: String
     let onPick: (VaultItem) -> Void
+    let onCopyPassword: (VaultItem) -> Void
     @State private var selected: UUID?
     /// The row the arrow keys moved to, which the list scrolls to (a row the pointer is over is in view already).
     @State private var keyed: UUID?
@@ -37,7 +40,7 @@ struct VaultPickerView: View {
             .frame(height: min(max(listHeight, 24), 320))
         }
         .padding(10)
-        .frame(width: 340)
+        .frame(width: Self.width)
         .onAppear { isSearchFocused = true }
         .onChange(of: query) { _, _ in selected = nil }
     }
@@ -134,6 +137,17 @@ struct VaultPickerView: View {
     /// A row: the account, what choosing it fills, and what tells it apart from the site's others; an item saved for
     /// other sites also says where.
     private func row(_ item: VaultItem, here: Bool) -> some View {
+        HStack(spacing: 2) {
+            fillButton(item, here: here)
+            if item.hasPassword, kind != .code {
+                ParityIconButton(systemName: "doc.on.doc", help: L10n.format("Copy password for %@", item.accountTitle)) {
+                    onCopyPassword(item)
+                }
+            }
+        }
+    }
+
+    private func fillButton(_ item: VaultItem, here: Bool) -> some View {
         let place = item.sites.first.map { site in
             item.sites.count == 1 ? site : L10n.format("%@ and %lld more", site, Int64(item.sites.count - 1))
         } ?? L10n.string("No site")

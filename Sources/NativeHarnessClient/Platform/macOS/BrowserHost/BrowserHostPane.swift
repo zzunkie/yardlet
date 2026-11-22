@@ -114,7 +114,7 @@ final class BrowserHostPaneController {
     var vaultPickerKind: VaultPickerKind?
     var vaultPickerQuery = ""
     var vaultLinkOffer: BrowserVaultLinkOffer?
-    /// Where a code goes when the page has no field for it (QA fixtures put their own, not the person's clipboard).
+    /// The pasteboard for passwords and codes copied from the picker. QA supplies its own.
     @ObservationIgnored var vaultPasteboard: NSPasteboard = .general
     /// Setup codes the person said no to, not offered again while the tab is shown.
     @ObservationIgnored var dismissedSetups: Set<Data> = []
@@ -1551,9 +1551,8 @@ struct BrowserHostPane: View {
             VaultPickerView(vault: vault, origin: controller.tab?.currentURL.flatMap(VaultSite.origin(of:)),
                             kind: controller.vaultPickerKind,
                             first: controller.vaultItemFromEarlierStep(on: controller.tab?.currentURL),
-                            query: $controller.vaultPickerQuery) { item in
-                controller.fillForPerson(item)
-            }
+                            query: $controller.vaultPickerQuery, onPick: controller.fillForPerson,
+                            onCopyPassword: controller.copyPasswordForPerson)
         }
     }
 

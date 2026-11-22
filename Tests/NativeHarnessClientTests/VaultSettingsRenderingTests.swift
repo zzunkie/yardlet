@@ -292,7 +292,7 @@ final class VaultSettingsRenderingTests: XCTestCase {
         XCTAssertTrue(shown.contains { $0.contains("GitHub (work)") }, "\(shown)")
         XCTAssertFalse(shown.contains { $0.contains("Example Bank") || $0.contains("Fabrikam") }, "The search let through: \(shown)")
 
-        let pickerSize = NSSize(width: 340, height: 400)
+        let pickerSize = NSSize(width: VaultPickerView.width, height: 400)
         let pickers: [(name: String, origin: String, query: String, codes: Bool, expected: [String])] = [
             ("vault-picker", "https://github.com", "", false, [L10n.format("Saved for %@", "github.com"), "GitHub (work)"]),
             ("vault-picker-search", "https://www.fabrikam.test", "ada", false,
@@ -302,9 +302,11 @@ final class VaultSettingsRenderingTests: XCTestCase {
              [L10n.string("Nothing is saved for this site. Search for a sign-in or code saved elsewhere.")])
         ]
         for picker in pickers {
+            var filled: [UUID] = []
+            var copied: [UUID] = []
             let content = VaultPickerView(vault: vault, origin: picker.origin, kind: picker.codes ? .code : nil,
                                           query: .constant(picker.query),
-                                          onPick: { _ in })
+                                          onPick: { filled.append($0.id) }, onCopyPassword: { copied.append($0.id) })
                 .frame(width: pickerSize.width, height: pickerSize.height, alignment: .top)
             let captures = try WindowlessRender.hostedInBothAppearances(picker.name, in: directory, size: pickerSize) {
                 appearance in content.environment(\.colorScheme, appearance.colorScheme).background(.background)
@@ -313,6 +315,17 @@ final class VaultSettingsRenderingTests: XCTestCase {
             let host = WindowlessRender.Host(content, size: pickerSize)
             host.settle()
             let spoken = host.accessibilityElements().map { "\($0.label) \($0.value)" }
+            let copy = L10n.format("Copy password for %@", Self.github.accountTitle)
+            if picker.name == "vault-picker" {
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: copy))
+                XCTAssertEqual(copied, [Self.github.id])
+                XCTAssertTrue(filled.isEmpty)
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: Self.github.accountTitle))
+                XCTAssertEqual(filled, [Self.github.id])
+                XCTAssertEqual(copied, [Self.github.id])
+            } else if picker.codes {
+                XCTAssertFalse(spoken.contains { $0.contains(copy) })
+            }
             host.close()
             for text in picker.expected { XCTAssertTrue(spoken.contains { $0.contains(text) }, "\(picker.name): no \(text) in \(spoken)") }
             if picker.codes {
@@ -348,7 +361,7 @@ final class VaultSettingsRenderingTests: XCTestCase {
                       hasOneTimeCode: true)
         ]
         let vault = vault(items: [Self.github] + items)
-        let size = NSSize(width: 340, height: 360)
+        let size = NSSize(width: VaultPickerView.width, height: 360)
         let lists: [(name: String, query: String, kind: VaultPickerKind?, shown: [String], hidden: [String])] = [
             ("vault-picker-aws-passwords", "", .signIn,
              [L10n.format("Passwords for %@", "signin.aws.amazon.com"), "notebook \(L10n.string("Password")), 111122223333",
@@ -364,7 +377,7 @@ final class VaultSettingsRenderingTests: XCTestCase {
         ]
         for list in lists {
             let content = VaultPickerView(vault: vault, origin: "https://signin.aws.amazon.com", kind: list.kind,
-                                          query: .constant(list.query), onPick: { _ in })
+                                          query: .constant(list.query), onPick: { _ in }, onCopyPassword: { _ in })
                 .frame(width: size.width, height: size.height, alignment: .top)
             let captures = try WindowlessRender.hostedInBothAppearances(list.name, in: directory, size: size) { appearance in
                 content.environment(\.colorScheme, appearance.colorScheme).background(.background)
