@@ -637,6 +637,7 @@ struct DeskSectionTitle: View {
 /// same line, so a home redraw that changed nothing it shows leaves it alone.
 struct DeskWaitingRow: View, @MainActor Equatable {
     @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @Environment(\.self) private var environment
     let item: DeskWaitingItem
     let place: String
     var detailLines = 2
@@ -660,15 +661,22 @@ struct DeskWaitingRow: View, @MainActor Equatable {
 #endif
         NewTaskHomeRow(isHighlighted: isHighlighted, isAnswering: isAnswering, symbol: "arrowshape.turn.up.left",
                        markRead: onMarkRead, action: { onChoose((NSApp.currentEvent?.clickCount ?? 1) > 1) }) {
-            VStack(alignment: .leading, spacing: 3) {
-                // The place goes before the title is cut.
-                ViewThatFits(in: .horizontal) {
-                    firstLine(showsPlace: true)
-                    firstLine(showsPlace: false)
-                }
-                if let detail {
-                    detailText(detail)
-                        .padding(.leading, 21)
+            HStack(alignment: .center, spacing: 9) {
+                RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                    .fill(statusBarColor)
+                    .frame(width: 3)
+                    .padding(.vertical, 2)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    // The place goes before the title is cut.
+                    ViewThatFits(in: .horizontal) {
+                        firstLine(showsPlace: true)
+                        firstLine(showsPlace: false)
+                    }
+                    if let detail {
+                        detailText(detail)
+                            .padding(.leading, 21)
+                    }
                 }
             }
             .padding(.vertical, 6)
@@ -676,12 +684,26 @@ struct DeskWaitingRow: View, @MainActor Equatable {
         .accessibilityAddTraits(isAnswering ? .isSelected : [])
     }
 
+    private var statusBarColor: Color {
+        switch item.kind {
+        case .request(.awaitingApproval): .green
+        case .request: .orange
+        case .stopped(.failed), .checksFailed: .red
+        case .stopped: .orange
+        case .report: ParityTheme.accent
+        }
+    }
+
+    private var readableLabelColor: Color {
+        ThemeContrast.readableTint(statusBarColor, over: ThemeSurface.canvas.resolve(in: environment), in: environment)
+    }
+
     private func firstLine(showsPlace: Bool) -> some View {
         HStack(spacing: 7) {
             mark.accessibilityHidden(true)
             Text(label)
-                .font(.system(size: 12 * interfaceScale))
-                .foregroundStyle(.secondary)
+                .font(.system(size: 12 * interfaceScale, weight: .medium))
+                .foregroundStyle(readableLabelColor)
                 .lineLimit(1)
                 .fixedSize()
             HarnessIdentityIcon(harness: item.session.harness, size: 14)
@@ -691,11 +713,17 @@ struct DeskWaitingRow: View, @MainActor Equatable {
                 .lineLimit(1)
                 .layoutPriority(1)
             if showsPlace {
-                Text(place)
-                    .font(.system(size: 12 * interfaceScale))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .fixedSize()
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(ParityProjectPalette.color(for: place))
+                        .frame(width: 6, height: 6)
+                        .accessibilityHidden(true)
+                    Text(place)
+                        .font(.system(size: 12 * interfaceScale))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .fixedSize()
+                }
             }
             Spacer(minLength: 8)
             NewTaskHomeTime(date: item.session.updatedAt)

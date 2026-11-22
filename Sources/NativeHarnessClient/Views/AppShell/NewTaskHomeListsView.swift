@@ -364,9 +364,13 @@ struct NewTaskHomeLists: View {
     /// today, and its open pull requests.
     private func header(_ summary: NewTaskProjectSummary, isChosen: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: summary.project == nil ? "bubble.left" : (isChosen ? "folder.fill" : "folder"))
+            Image(systemName: summary.project == nil ? "bubble.left" : (isChosen ? "folder.fill" : "folder.fill"))
                 .font(.system(size: 12 * interfaceScale, weight: .medium))
-                .foregroundStyle(isChosen ? AnyShapeStyle(ParityTheme.accent) : AnyShapeStyle(.secondary))
+                .foregroundStyle(
+                    isChosen ? AnyShapeStyle(ParityTheme.accent)
+                        : (summary.project == nil ? AnyShapeStyle(.secondary)
+                           : AnyShapeStyle(ParityProjectPalette.color(for: summary.name)))
+                )
                 .frame(width: 16)
             Text(summary.name)
                 .font(.system(size: 14.5 * interfaceScale, weight: .semibold))
@@ -728,8 +732,10 @@ struct NewTaskHomeRow<Content: View>: View {
     @ViewBuilder let content: Content
     @State private var isHovering = false
     @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        let revealsSymbol = (isHovering || isHighlighted || isAnswering) && !(isHovering && markRead != nil)
         ZStack(alignment: .trailing) {
             Button(action: action) {
                 HStack(spacing: 7) {
@@ -737,8 +743,9 @@ struct NewTaskHomeRow<Content: View>: View {
                     if showsChevron {
                         Image(systemName: symbol)
                             .font(.yardlet(.caption2, scale: interfaceScale).weight(.semibold))
-                            .foregroundStyle(isAnswering ? AnyShapeStyle(ParityTheme.accent) : AnyShapeStyle(.tertiary))
-                            .opacity(isHovering && markRead != nil ? 0 : 1)
+                            .foregroundStyle(isAnswering ? AnyShapeStyle(ParityTheme.accent) : AnyShapeStyle(.secondary))
+                            .opacity(revealsSymbol ? 1 : 0)
+                            .animation(ParityMotion.easeOut(reduceMotion: reduceMotion, duration: 0.1), value: revealsSymbol)
                             .accessibilityHidden(true)
                     }
                 }

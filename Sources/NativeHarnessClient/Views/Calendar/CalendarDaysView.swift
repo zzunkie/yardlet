@@ -273,8 +273,8 @@ struct CalendarEventBlock: View {
             .padding(.top, 2)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background { background }
-            .clipShape(RoundedRectangle(cornerRadius: 4))
-            .contentShape(RoundedRectangle(cornerRadius: 4))
+            .clipShape(RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous))
         }
         .buttonStyle(.plain)
         .parityPointer()
@@ -284,12 +284,13 @@ struct CalendarEventBlock: View {
     }
 
     @ViewBuilder private var background: some View {
+        let shape = RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous)
         if event.awaitsAnswer {
-            RoundedRectangle(cornerRadius: 4).fill(color.opacity(isSelected ? 0.22 : 0.06))
-                .overlay(RoundedRectangle(cornerRadius: 4)
-                    .strokeBorder(color, style: StrokeStyle(lineWidth: isSelected ? 2 : 1, dash: isSelected ? [] : [4, 2])))
+            shape.fill(color.opacity(isSelected ? 0.24 : 0.08))
+                .overlay(shape.strokeBorder(color, style: StrokeStyle(lineWidth: isSelected ? 2 : 1, dash: isSelected ? [] : [4, 2])))
         } else {
-            RoundedRectangle(cornerRadius: 4).fill(color.opacity(isSelected ? 0.34 : 0.18))
+            shape.fill(color.opacity(isSelected ? 0.36 : 0.22))
+                .overlay(shape.strokeBorder(color.opacity(isSelected ? 0.55 : 0.28), lineWidth: 0.5))
                 .overlay(alignment: .leading) { Rectangle().fill(color).frame(width: 3) }
         }
     }
@@ -304,20 +305,26 @@ struct CalendarAllDayBlock: View {
     @Environment(\.yardletInterfaceScale) private var scale
 
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous)
         Button(action: action) {
             Text(CalendarText.title(event))
                 .font(.system(size: 11 * scale, weight: .medium))
                 .lineLimit(1)
-                .padding(.horizontal, 6)
+                .padding(.leading, 8)
+                .padding(.trailing, 6)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .frame(height: 20 * scale)
-                .background(color.opacity(isSelected ? 0.34 : 0.18), in: RoundedRectangle(cornerRadius: 4))
+                .background {
+                    shape.fill(color.opacity(isSelected ? 0.36 : 0.22))
+                        .overlay(alignment: .leading) { Rectangle().fill(color).frame(width: 3) }
+                }
+                .clipShape(shape)
                 .overlay {
                     if event.awaitsAnswer {
-                        RoundedRectangle(cornerRadius: 4).strokeBorder(color, style: StrokeStyle(lineWidth: 1, dash: [4, 2]))
+                        shape.strokeBorder(color, style: StrokeStyle(lineWidth: 1, dash: [4, 2]))
                     }
                 }
-                .contentShape(RoundedRectangle(cornerRadius: 4))
+                .contentShape(shape)
         }
         .buttonStyle(.plain)
         .parityPointer()
@@ -327,7 +334,24 @@ struct CalendarAllDayBlock: View {
     }
 }
 
-/// A Yardlet scheduled run on its layer: a dashed outline with a clock, which opens the schedule.
+/// Subtle diagonal hatch pattern distinguishing scheduled agent runs from calendar meetings.
+private struct CalendarDiagonalStripes: Shape {
+    var spacing: CGFloat = 7
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        guard rect.width > 0, rect.height > 0 else { return path }
+        var x = -rect.height
+        while x < rect.width + rect.height {
+            path.move(to: CGPoint(x: x, y: rect.maxY))
+            path.addLine(to: CGPoint(x: x + rect.height, y: rect.minY))
+            x += spacing
+        }
+        return path
+    }
+}
+
+/// A Yardlet scheduled run on its layer: diagonal hatch with a clock, which opens the schedule.
 struct CalendarRunBlock: View {
     let slot: CalendarScheduleSlot
     let calendar: Calendar
@@ -335,22 +359,27 @@ struct CalendarRunBlock: View {
     @Environment(\.yardletInterfaceScale) private var scale
 
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous)
         Button(action: action) {
             HStack(spacing: 3) {
                 Image(systemName: "clock").font(.system(size: 8.5 * scale, weight: .semibold))
                 Text(slot.name).font(.system(size: 10.5 * scale, weight: .medium)).lineLimit(1)
             }
             .foregroundStyle(.secondary)
-            .padding(.leading, 5)
+            .padding(.leading, 6)
             .padding(.trailing, 3)
             .padding(.top, 2)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background {
-                RoundedRectangle(cornerRadius: 4).fill(ParityTheme.subtleFill)
-                    .overlay(RoundedRectangle(cornerRadius: 4)
-                        .strokeBorder(ParityTheme.strongSeparator, style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
+                ZStack {
+                    shape.fill(ParityTheme.subtleFill)
+                    CalendarDiagonalStripes()
+                        .stroke(Color.primary.opacity(0.055), lineWidth: 1)
+                }
+                .clipShape(shape)
+                .overlay(shape.strokeBorder(ParityTheme.separator, lineWidth: 1))
             }
-            .contentShape(RoundedRectangle(cornerRadius: 4))
+            .contentShape(shape)
         }
         .buttonStyle(.plain)
         .parityPointer()
@@ -360,7 +389,7 @@ struct CalendarRunBlock: View {
     }
 }
 
-/// A day's recurring runs in the all-day row, dashed like a run: "12 recurring runs · 5 left". Choosing it shows the
+/// A day's recurring runs in the all-day row: "12 recurring runs · 5 left". Choosing it shows the
 /// day, whose runs stand listed beside its hours.
 struct CalendarRecurringLine: View {
     let count: Int
@@ -370,10 +399,11 @@ struct CalendarRecurringLine: View {
     @Environment(\.yardletInterfaceScale) private var scale
 
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous)
         let text = left > 0 && left < count ? L10n.format("%lld recurring runs · %lld left", count, left)
             : L10n.format("%lld recurring runs", count)
         Button(action: action) {
-            HStack(spacing: 3) {
+            HStack(spacing: 4) {
                 Image(systemName: "clock.arrow.circlepath").font(.system(size: 9 * scale, weight: .semibold))
                 Text(text).font(.system(size: 11 * scale, weight: .medium).monospacedDigit()).lineLimit(1)
             }
@@ -382,11 +412,15 @@ struct CalendarRecurringLine: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: 20 * scale)
             .background {
-                RoundedRectangle(cornerRadius: 4).fill(ParityTheme.subtleFill)
-                    .overlay(RoundedRectangle(cornerRadius: 4)
-                        .strokeBorder(ParityTheme.strongSeparator, style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
+                ZStack {
+                    shape.fill(ParityTheme.subtleFill)
+                    CalendarDiagonalStripes()
+                        .stroke(Color.primary.opacity(0.05), lineWidth: 1)
+                }
+                .clipShape(shape)
+                .overlay(shape.strokeBorder(ParityTheme.separator, lineWidth: 1))
             }
-            .contentShape(RoundedRectangle(cornerRadius: 4))
+            .contentShape(shape)
         }
         .buttonStyle(.plain)
         .parityPointer()

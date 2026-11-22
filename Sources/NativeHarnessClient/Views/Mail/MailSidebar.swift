@@ -325,16 +325,26 @@ struct MailThreadRow: View {
     var isSetAside = false
     let isSelected: Bool
     let onSelect: () -> Void
+    @State private var isHovering = false
     @Environment(\.yardletInterfaceScale) private var scale
+    @Environment(\.self) private var environment
 
     var body: some View {
+        let primarySender = thread.senders.first ?? MailAddress(name: MailText.senders(thread, me: me), address: thread.id.threadID)
         Button(action: onSelect) {
-            HStack(alignment: .top, spacing: 0) {
-                Circle()
-                    .fill(thread.isUnread ? ParityTheme.accent : .clear)
-                    .frame(width: 7 * scale, height: 7 * scale)
-                    .padding(.top, 5 * scale)
-                    .frame(width: 16 * scale)
+            HStack(alignment: .top, spacing: 8 * scale) {
+                ZStack(alignment: .topLeading) {
+                    MailSenderInitial(address: primarySender, size: 24 * scale)
+                        .padding(.top, 2 * scale)
+                    if thread.isUnread {
+                        Circle()
+                            .fill(ParityTheme.accent)
+                            .frame(width: 7 * scale, height: 7 * scale)
+                            .overlay(Circle().stroke(ParityTheme.sidebar, lineWidth: 1.5))
+                            .offset(x: -2, y: 0)
+                    }
+                }
+                .padding(.leading, 6 * scale)
                 VStack(alignment: .leading, spacing: 2 * scale) {
                     HStack(spacing: 4) {
                         Text(MailText.senders(thread, me: me))
@@ -351,7 +361,9 @@ struct MailThreadRow: View {
                     }
                     HStack(spacing: 4) {
                         if thread.hasDraft {
-                            Text(L10n.string("Draft")).foregroundStyle(.orange)
+                            Text(L10n.string("Draft"))
+                                .foregroundStyle(ThemeContrast.readableTint(.orange,
+                                    over: ThemeSurface.sidebar.resolve(in: environment), in: environment))
                         }
                         Text(MailText.subject(thread.subject)).lineLimit(1)
                     }
@@ -366,11 +378,13 @@ struct MailThreadRow: View {
             .padding(.vertical, 7 * scale)
             .padding(.trailing, SidebarMetrics.rowTrailingPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isSelected ? ParityTheme.selectedFill : .clear, in: SidebarMetrics.rowShape())
+            .background(isSelected ? ParityTheme.selectedFill : (isHovering ? ParityTheme.hoverFill : .clear),
+                        in: SidebarMetrics.rowShape())
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .parityPointer()
+        .onHover { isHovering = $0 }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(MailText.senders(thread, me: me))
         .accessibilityValue(accessibilityValue)

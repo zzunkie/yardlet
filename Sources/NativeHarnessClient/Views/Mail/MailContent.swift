@@ -353,15 +353,16 @@ struct MailFoldedMessage: View {
 /// The sender's first letter in a circle, tinted by the address so one sender keeps one tint.
 struct MailSenderInitial: View {
     let address: MailAddress
+    var size: CGFloat = Self.size
     static let size: CGFloat = 28
 
     var body: some View {
         let letter = address.displayName.trimmingCharacters(in: .punctuationCharacters.union(.whitespaces)).first
             .map { String($0).uppercased() } ?? "?"
         Text(letter)
-            .font(.system(size: 13, weight: .semibold))
+            .font(.system(size: max(10, size * 0.46), weight: .semibold))
             .foregroundStyle(.white)
-            .frame(width: Self.size, height: Self.size)
+            .frame(width: size, height: size)
             .background(Self.tint(for: address.address), in: Circle())
             .accessibilityHidden(true)
     }
@@ -380,11 +381,11 @@ struct MailPrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 12.5 * scale, weight: .medium))
-            .foregroundStyle(ParityTheme.primaryActionForeground)
+            .foregroundStyle(ParityTheme.onAccentButton)
             .padding(.horizontal, 12)
             .frame(minHeight: 26 * scale)
-            .background(ParityTheme.primaryActionFill.opacity(configuration.isPressed ? 0.8 : 1),
-                        in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .background(ParityTheme.accentButtonFill.opacity(configuration.isPressed ? 0.85 : 1),
+                        in: RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous))
             .parityPointer()
     }
 }

@@ -89,6 +89,38 @@ enum ThemeContrast {
         return Color(red: Double(best.red), green: Double(best.green), blue: Double(best.blue))
     }
 
+    /// Resolves a filled accent button's background and foreground so saturated mid-luminance accents
+    /// (such as macOS's default blue, luminance ~0.21) darken slightly to pair with crisp white labels
+    /// at >= 4.5:1 instead of falling back to black text on bright blue, while light accents keep black text.
+    static func accentButtonColors(for accent: Color.Resolved,
+                                   in environment: EnvironmentValues) -> (fill: Color.Resolved, foreground: Color.Resolved) {
+        let white = Color.white.resolve(in: environment)
+        let black = Color.black.resolve(in: environment)
+        let lum = luminance(accent)
+        if lum <= 0.179 { return (accent, white) }
+        if lum >= 0.30 { return (accent, black) }
+        var low: Float = 0
+        var high: Float = 1
+        var best = black
+        for _ in 0..<8 {
+            let mid = (low + high) * 0.5
+            let factor = 1 - mid
+            let darkened = Color.Resolved(
+                red: accent.red * factor,
+                green: accent.green * factor,
+                blue: accent.blue * factor,
+                opacity: 1
+            )
+            if ratio(darkened, white) >= 4.5 {
+                best = darkened
+                high = mid
+            } else {
+                low = mid
+            }
+        }
+        return (best, white)
+    }
+
     static func failures(for theme: MacColorTheme) -> [Failure] {
         ThemeMode.allCases.flatMap { mode -> [Failure] in
             var result: [Failure] = []

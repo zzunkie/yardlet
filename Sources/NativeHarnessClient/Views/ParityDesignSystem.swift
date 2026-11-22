@@ -146,7 +146,7 @@ extension EnvironmentValues {
 }
 
 private struct AccentStyle: ShapeStyle, Hashable {
-    enum Role { case accent, text, onAccent }
+    enum Role { case accent, text, onAccent, buttonFill, onButtonFill }
     var role: Role = .accent
 
     func resolve(in environment: EnvironmentValues) -> Color.Resolved {
@@ -160,14 +160,26 @@ private struct AccentStyle: ShapeStyle, Hashable {
                 return ThemeContrast.readableAccent(theme, in: environment)
             case .onAccent:
                 return (ThemeContrast.luminance(accent) > 0.179 ? Color.black : .white).resolve(in: environment)
+            case .buttonFill:
+                return ThemeContrast.accentButtonColors(for: accent, in: environment).fill
+            case .onButtonFill:
+                return ThemeContrast.accentButtonColors(for: accent, in: environment).foreground
             }
         }
-        let color = switch role {
-        case .accent: ParityTheme.accentColor(for: environment.yardletAccent)
-        case .text: ParityTheme.linkTextColor(for: environment.yardletAccent)
-        case .onAccent: ParityTheme.foregroundOnAccent(for: environment.yardletAccent)
+        switch role {
+        case .accent:
+            return Color(nsColor: ParityTheme.accentColor(for: environment.yardletAccent)).resolve(in: environment)
+        case .text:
+            return Color(nsColor: ParityTheme.linkTextColor(for: environment.yardletAccent)).resolve(in: environment)
+        case .onAccent:
+            return Color(nsColor: ParityTheme.foregroundOnAccent(for: environment.yardletAccent)).resolve(in: environment)
+        case .buttonFill:
+            let accent = Color(nsColor: ParityTheme.accentColor(for: environment.yardletAccent)).resolve(in: environment)
+            return ThemeContrast.accentButtonColors(for: accent, in: environment).fill
+        case .onButtonFill:
+            let accent = Color(nsColor: ParityTheme.accentColor(for: environment.yardletAccent)).resolve(in: environment)
+            return ThemeContrast.accentButtonColors(for: accent, in: environment).foreground
         }
-        return Color(nsColor: color).resolve(in: environment)
     }
 }
 
@@ -231,6 +243,8 @@ enum ParityTheme {
     /// Link text keeps the label color when this accent is too pale for text.
     static let accentText = Color(AccentStyle(role: .text))
     static let onAccent = Color(AccentStyle(role: .onAccent))
+    static let accentButtonFill = Color(AccentStyle(role: .buttonFill))
+    static let onAccentButton = Color(AccentStyle(role: .onButtonFill))
 
     /// AppKit and SwiftUI take their accent from the same adaptive color.
     static func accentColor(for preference: YardletAccentPreference) -> NSColor {
@@ -455,10 +469,10 @@ struct ParityIconButton: View {
                 // Primary send action uses the active theme accent when enabled and dims quietly when empty.
                 Image(systemName: systemName)
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(isEnabled ? AnyShapeStyle(ParityTheme.onAccent) : AnyShapeStyle(.tertiary))
+                    .foregroundStyle(isEnabled ? AnyShapeStyle(ParityTheme.onAccentButton) : AnyShapeStyle(.tertiary))
                     .frame(width: 28, height: 28)
                     .background(
-                        isEnabled ? AnyShapeStyle(ParityTheme.accent) : AnyShapeStyle(ParityTheme.subtleFill),
+                        isEnabled ? AnyShapeStyle(ParityTheme.accentButtonFill) : AnyShapeStyle(ParityTheme.subtleFill),
                         in: RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous)
                     )
                     .opacity(isEnabled && isHovering ? 0.9 : 1)

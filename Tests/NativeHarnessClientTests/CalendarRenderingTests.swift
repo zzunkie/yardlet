@@ -33,6 +33,14 @@ final class CalendarRenderingTests: XCTestCase {
         }
         XCTAssertGreaterThan(slotCount, 500, "A heavy week")
         var cost = ["\(slotCount) runs in the week, worked out and split by day in \(split)"]
+        let previousSidebarWidth = UserDefaults.yardlet.object(forKey: SidebarWidth.defaultsKey)
+        defer {
+            if let previousSidebarWidth {
+                UserDefaults.yardlet.set(previousSidebarWidth, forKey: SidebarWidth.defaultsKey)
+            } else {
+                UserDefaults.yardlet.removeObject(forKey: SidebarWidth.defaultsKey)
+            }
+        }
         for (size, sidebar) in [(NSSize(width: 1280, height: 820), 240.0), (NSSize(width: 1800, height: 1125), 351.0)] {
             for appearance in WindowlessRender.Appearance.allCases {
                 SidebarWidth.store(sidebar, in: .yardlet)
@@ -66,8 +74,9 @@ final class CalendarRenderingTests: XCTestCase {
                 try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "week-\(name)"))
                 var elements = host.accessibilityElements()
                 var report = elements.map(\.description).joined(separator: "\n")
-                let invitation = try XCTUnwrap(elements.first { $0.label.hasPrefix(text("투자사 통화", "Investor call")) })
-                XCTAssertEqual(invitation.value, L10n.string("Not replied"))
+                XCTAssertTrue(elements.contains {
+                    $0.label.hasPrefix(text("투자사 통화", "Investor call")) && $0.value == L10n.string("Not replied")
+                }, "Unreplied invitation should report Not replied: \(report)")
                 // The heavy week: each day's recurring runs are one line of the all-day row, and only the one-off
                 // runs stand among the meetings.
                 let calendar = Calendar.autoupdatingCurrent

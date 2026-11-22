@@ -34,6 +34,7 @@ struct CalendarEventDetail: View {
         .padding(20 * scale)
         .frame(width: Self.width * scale, alignment: .topLeading)
         .frame(maxHeight: .infinity, alignment: .top)
+        .overlay(alignment: .top) { Rectangle().fill(color.opacity(0.85)).frame(height: 3) }
         .overlay(alignment: .leading) { Rectangle().fill(ParityTheme.separator).frame(width: 1) }
         .id(event.id)
     }

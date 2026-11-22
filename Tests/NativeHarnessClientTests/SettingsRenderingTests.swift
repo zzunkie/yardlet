@@ -91,6 +91,13 @@ import XCTest
                 let adjusted = ThemeContrast.readableTint(sample, over: bg, in: env).resolve(in: env)
                 XCTAssertGreaterThanOrEqual(Self.contrast(adjusted, bg), 4.49, "\(mode): \(sample)")
             }
+            for preset in YardletAccentPreference.allCases {
+                var buttonEnv = env
+                buttonEnv.yardletColorTheme = MacColorTheme(preset: preset)
+                let fill = ParityTheme.accentButtonFill.resolve(in: buttonEnv)
+                let label = ParityTheme.onAccentButton.resolve(in: buttonEnv)
+                XCTAssertGreaterThanOrEqual(Self.contrast(fill, label), 4.49, "\(preset) \(mode) accent button")
+            }
         }
         XCTAssertEqual(ParityProjectPalette.index(for: "Yardlet"), ParityProjectPalette.index(for: "yardlet"))
     }
