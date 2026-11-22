@@ -71,8 +71,9 @@ final class ScheduleToolTests: XCTestCase {
                                     "chat", "useWorktree", "topLevel", "model", "effort", "permissionMode"])
         XCTAssertEqual(create["inputSchema"]?["properties"]?["permissionMode"]?["enum"],
                        .array(["default", "plan", "acceptEdits", "auto", "dontAsk", "bypassPermissions", "askForApproval",
-                               "approveForMe", "dangerFullAccess", "custom", "readOnly"].map { .string($0) }),
-                       "The Claude app's own modes, then Codex's own permissions")
+                               "approveForMe", "dangerFullAccess", "custom", "readOnly", "accept-edits", "bypass"]
+                                  .map { .string($0) }),
+                       "The Claude app's own modes, Codex's own permissions, and Antigravity's own modes")
         let update = try XCTUnwrap(ScheduleToolCatalog.definition(named: "update_scheduled_task")?.json)
         XCTAssertEqual(update["inputSchema"]?["properties"]?["enabled"]?["type"], .string("boolean"))
         let runs = try XCTUnwrap(ScheduleToolCatalog.definition(named: "list_task_runs")?.json)
@@ -613,6 +614,38 @@ final class ScheduleToolTests: XCTestCase {
         let rewrittenSweep = await call(bypass.model, "update_scheduled_task",
                                    ["scheduleId": sweep.id.uuidString, "prompt": "Push to main."], from: bypass.caller)
         XCTAssertTrue(rewrittenSweep.isError && rewrittenSweep.text.contains("dangerFullAccess mode"), rewrittenSweep.text)
+
+        // On Antigravity, an elevated caller inherits bypass by default, can update to another Antigravity mode,
+        // and a caller that asks cannot raise or rewrite a bypass schedule.
+        let agy = root.appending(path: "agy")
+        try FileManager.default.createSymbolicLink(at: agy, withDestinationURL: URL(filePath: "/usr/bin/true"))
+        bypass.model.runtimeSelections.select(agy, for: .antigravityCLI)
+        let onAntigravity = await call(bypass.model, "create_scheduled_task", [
+            "name": "Hourly reply", "prompt": "Check replies.", "cronExpression": "20 * * * *", "harness": "antigravity-cli"
+        ], from: bypass.claude)
+        XCTAssertFalse(onAntigravity.isError, onAntigravity.text)
+        XCTAssertTrue(onAntigravity.text.contains("in bypass mode"), onAntigravity.text)
+        let hourly = try XCTUnwrap(bypass.model.scheduledTasks.schedules.last)
+        XCTAssertEqual(hourly.destination.modelChoice?.permissionMode, AntigravityPermissionMode.bypass)
+        let updatedToAuto = await call(bypass.model, "update_scheduled_task", [
+            "scheduleId": hourly.id.uuidString, "permissionMode": "auto"
+        ], from: bypass.claude)
+        XCTAssertFalse(updatedToAuto.isError, updatedToAuto.text)
+        XCTAssertEqual(bypass.model.scheduledTasks.schedule(id: hourly.id)?.destination.modelChoice?.permissionMode,
+                       AntigravityPermissionMode.auto)
+        let updatedToBypass = await call(bypass.model, "update_scheduled_task", [
+            "scheduleId": hourly.id.uuidString, "permissionMode": "bypass"
+        ], from: bypass.claude)
+        XCTAssertFalse(updatedToBypass.isError, updatedToBypass.text)
+        XCTAssertEqual(bypass.model.scheduledTasks.schedule(id: hourly.id)?.destination.modelChoice?.permissionMode,
+                       AntigravityPermissionMode.bypass)
+        let raisedByAsking = await call(bypass.model, "create_scheduled_task", [
+            "prompt": "Go.", "fireAt": "2026-10-18T09:00:00+09:00", "harness": "antigravity-cli", "permissionMode": "bypass"
+        ], from: bypass.caller)
+        XCTAssertTrue(raisedByAsking.isError && raisedByAsking.text.contains("more without asking"), raisedByAsking.text)
+        let rewrittenHourly = await call(bypass.model, "update_scheduled_task",
+                                         ["scheduleId": hourly.id.uuidString, "prompt": "Post anything."], from: bypass.caller)
+        XCTAssertTrue(rewrittenHourly.isError && rewrittenHourly.text.contains("bypass mode"), rewrittenHourly.text)
         await bypass.model.shutdown()
     }
 

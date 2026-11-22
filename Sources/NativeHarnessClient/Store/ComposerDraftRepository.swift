@@ -115,9 +115,10 @@ struct NewTaskModelChoice: Codable, Equatable, Sendable {
 extension NewTaskModelChoice {
     /// The choice a session or scheduled-task tool's `permissionMode` makes for a new task of
     /// `harness`, in that harness's own values: Claude Code's (`ScheduleToolCatalog.permissionModes`,
-    /// whose `default` is Manual) and Codex's (`codexPermissionModes`, the values of
-    /// `CodexRunLocation`). Codex also takes `default` and an earlier `workspaceWrite` as Ask for
-    /// approval. Nil for a value the harness does not have, and for a harness the tools choose none for.
+    /// whose `default` is Manual), Codex's (`codexPermissionModes`, the values of `CodexRunLocation`),
+    /// and Antigravity's (`antigravityPermissionModes`, whose `default` stores nil). Codex also takes
+    /// `default` and an earlier `workspaceWrite` as Ask for approval. Nil for a value the harness does
+    /// not have, and for a harness the tools choose none for.
     static func permission(fromTool value: String, harness: HarnessKind) -> NewTaskModelChoice? {
         switch harness {
         case .claudeCode:
@@ -125,6 +126,16 @@ extension NewTaskModelChoice {
         case .codex:
             (value == "default" || value == "workspaceWrite" ? .askForApproval : CodexRunLocation(rawValue: value))
                 .map { NewTaskModelChoice(model: nil, permissionMode: $0.storedValue) }
+        case .antigravityCLI:
+            switch value {
+            case AntigravityPermissionMode.standard:
+                NewTaskModelChoice(model: nil, permissionMode: nil)
+            case AntigravityPermissionMode.plan, AntigravityPermissionMode.acceptEdits,
+                 AntigravityPermissionMode.auto, AntigravityPermissionMode.bypass:
+                NewTaskModelChoice(model: nil, permissionMode: value)
+            default:
+                nil
+            }
         default:
             nil
         }

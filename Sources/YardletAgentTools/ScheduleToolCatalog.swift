@@ -117,17 +117,23 @@ package enum ScheduleToolCatalog {
     /// Codex's permissions, the Codex app's menu: Ask for approval (the default), Approve for me, Full access and
     /// Custom (`config.toml`), then Read-only, which its menu offers only where policy allows nothing more.
     package static let codexPermissionModes = ["askForApproval", "approveForMe", "dangerFullAccess", "custom", "readOnly"]
+    /// Antigravity CLI's permissions: Default, Plan (read-only), Accept edits, Auto, and Bypass permissions.
+    package static let antigravityPermissionModes = ["default", "plan", "accept-edits", "auto", "bypass"]
 
     /// `permissionMode` for a new task, which the session tools take too: one property whose values are each
     /// harness's own.
     package static func permissionModeProperty(_ lead: String) -> ToolJSON {
-        .object([
+        var all = permissionModes
+        for mode in codexPermissionModes + antigravityPermissionModes where !all.contains(mode) {
+            all.append(mode)
+        }
+        return .object([
             "type": .string("string"),
-            "enum": .array((permissionModes + codexPermissionModes.filter { !permissionModes.contains($0) })
-                .map { .string($0) }),
+            "enum": .array(all.map { .string($0) }),
             "description": .string(lead + " Claude Code: " + permissionModes.joined(separator: ", ")
                 + ". Codex: askForApproval (the default), approveForMe, dangerFullAccess (Full access), custom "
-                + "(config.toml's) and readOnly. No freer than this task's own.")
+                + "(config.toml's) and readOnly. Antigravity: "
+                + antigravityPermissionModes.joined(separator: ", ") + ". No freer than this task's own.")
         ])
     }
 
@@ -155,8 +161,8 @@ package enum ScheduleToolCatalog {
         Key.model: property("string", "Each new task's model id. Defaults to the harness's."),
         Key.effort: property("string", "A reasoning effort the model accepts."),
         Key.permissionMode: permissionModeProperty("Each new task's permissions, in its harness's own values. "
-            + "Defaults to this task's when it runs without asking (Auto or bypassPermissions, dangerFullAccess) or "
-            + "reads only, in that harness's terms, else the harness's default.")
+            + "Defaults to this task's when it runs without asking (Auto or bypassPermissions, dangerFullAccess, "
+            + "bypass) or reads only, in that harness's terms, else the harness's default.")
     ]
 
     package static let tools: [AgentToolDefinition] = [

@@ -1583,7 +1583,8 @@ final class SessionToolTests: XCTestCase {
         }
 
         let fixture = try Fixture(callerOptions: [ClaudeLaunchOption.permissionMode: ClaudePermissionMode.bypassPermissions],
-                                  codexOptions: [CodexRunLocation.storageKey: CodexRunLocation.dangerFullAccess.rawValue])
+                                  codexOptions: [CodexRunLocation.storageKey: CodexRunLocation.dangerFullAccess.rawValue],
+                                  antigravity: FakeHarnessAdapter(kind: .antigravityCLI))
         defer { fixture.tearDown() }
         let model = fixture.model
         func child(_ prompt: String, _ arguments: [String: Any], from callerID: UUID) async throws -> SessionRecord {
@@ -1608,6 +1609,12 @@ final class SessionToolTests: XCTestCase {
         started = try await child("Watch the parser", ["harness": "codex", "permissionMode": "approveForMe"],
                                   from: fixture.caller.id)
         XCTAssertEqual(started.providerOptions[CodexRunLocation.storageKey], CodexRunLocation.approveForMe.rawValue)
+        started = try await child("Check replies", ["harness": "antigravity-cli", "permissionMode": "bypass"],
+                                  from: fixture.caller.id)
+        XCTAssertEqual(started.providerOptions[AntigravityPermissionMode.optionID], AntigravityPermissionMode.bypass)
+        started = try await child("Auto replies", ["harness": "antigravity-cli", "permissionMode": "auto"],
+                                  from: fixture.caller.id)
+        XCTAssertEqual(started.providerOptions[AntigravityPermissionMode.optionID], AntigravityPermissionMode.auto)
 
         // A task that asks may not start one that does not, and each harness takes only its own values.
         let asking = fixture.sibling.id
@@ -1628,7 +1635,13 @@ final class SessionToolTests: XCTestCase {
             "must be one of askForApproval, approveForMe, dangerFullAccess, custom, readOnly"), wrongWords.text)
         let elsewhere = await call(model, "create_task", ["prompt": "Deploy", "harness": "opencode",
                                                           "permissionMode": "default"], callerID: asking)
-        XCTAssertTrue(elsewhere.text.contains("permissionMode is for Claude Code and Codex"), elsewhere.text)
+        XCTAssertTrue(elsewhere.text.contains("permissionMode is for Claude Code, Codex and Antigravity"), elsewhere.text)
+        let agyRaised = await call(model, "create_task", ["prompt": "Deploy", "harness": "antigravity-cli",
+                                                          "permissionMode": "bypass"], callerID: asking)
+        XCTAssertTrue(agyRaised.isError && agyRaised.text.contains("lets the task do more without asking"), agyRaised.text)
+        let agyWrong = await call(model, "create_task", ["prompt": "Deploy", "harness": "antigravity-cli",
+                                                         "permissionMode": "bypassPermissions"], callerID: asking)
+        XCTAssertTrue(agyWrong.text.contains("must be one of default, plan, accept-edits, auto, bypass"), agyWrong.text)
         XCTAssertFalse(model.store.sessions.contains { $0.title == "Deploy" })
         await model.shutdown()
     }
@@ -2430,7 +2443,8 @@ final class SessionToolTests: XCTestCase {
     func testACodexTaskArchivesItsThreadOnlyAfterTheItemCompletedAndTheInterruptedTurnEnded() async throws {
         // Both run without asking, so neither the message nor the archive waits on a card.
         let fixture = try Fixture(callerOptions: [ClaudeLaunchOption.permissionMode: ClaudePermissionMode.bypassPermissions],
-                                  codexOptions: [CodexRunLocation.storageKey: CodexRunLocation.dangerFullAccess.rawValue])
+                                  codexOptions: [CodexRunLocation.storageKey: CodexRunLocation.dangerFullAccess.rawValue],
+                                  antigravity: FakeHarnessAdapter(kind: .antigravityCLI))
         defer { fixture.tearDown() }
         let model = fixture.model
         let codex = fixture.codexAdapter

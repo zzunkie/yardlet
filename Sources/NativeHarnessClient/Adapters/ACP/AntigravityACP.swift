@@ -170,6 +170,17 @@ enum AntigravityPermissionMode {
 
     static func isElevated(_ value: String?) -> Bool { value == bypass }
 
+    /// Rank on Claude Code's permission freedom scale (`ClaudePermissionMode.freedom`) for ceiling checks.
+    static func freedom(_ mode: String?) -> Int {
+        switch mode {
+        case plan: ClaudePermissionMode.freedom(ClaudePermissionMode.plan)
+        case acceptEdits: ClaudePermissionMode.freedom(ClaudePermissionMode.acceptEdits)
+        case auto: ClaudePermissionMode.freedom(ClaudePermissionMode.auto)
+        case bypass: ClaudePermissionMode.freedom(ClaudePermissionMode.bypassPermissions)
+        default: ClaudePermissionMode.freedom(nil)
+        }
+    }
+
     /// Over ACP (`agy acp`) the agent asks before what needs approval, and its session mode (`mode`)
     /// decides what it approves without asking: Default asks for each step the person's settings do
     /// not allow, and Accept edits and Auto, where the CLI offers them, approve some steps themselves.

@@ -1539,30 +1539,37 @@ extension AppModel: SessionToolHandling {
         switch harness {
         case .claudeCode: ClaudeLaunchOption.permissionMode
         case .codex: CodexRunLocation.storageKey
+        case .antigravityCLI: AntigravityPermissionMode.optionID
         default: nil
         }
     }
 
     /// The permission a call names for a new task of `harness` (`permissionMode`, in that harness's own
-    /// values), as `NewTaskModelChoice.permissionMode` keeps it: nil is Codex's Ask for approval. Refused for
-    /// a value the harness does not have, and for one that does more without asking than the caller may
-    /// (Claude Code's mode and Codex's permission against `scheduleModeCeiling`), which only the person
-    /// chooses.
+    /// values), as `NewTaskModelChoice.permissionMode` keeps it: nil is Codex's Ask for approval or
+    /// Antigravity's Default. Refused for a value the harness does not have, and for one that does more
+    /// without asking than the caller may (`scheduleModeCeiling`), which only the person chooses.
     func sessionToolPermission(_ value: String, harness: HarnessKind, caller: SessionToolCaller,
                                subject: String, personChooses place: String) -> Result<String?, SessionToolError> {
         guard Self.permissionKey(for: harness) != nil else {
-            return .failure(SessionToolError(message: "permissionMode is for Claude Code and Codex; "
+            return .failure(SessionToolError(message: "permissionMode is for Claude Code, Codex and Antigravity; "
                 + "\(harness.displayName) tasks use that harness's own default permissions."))
         }
         guard let choice = NewTaskModelChoice.permission(fromTool: value, harness: harness) else {
-            let values = harness == .codex ? ScheduleToolCatalog.codexPermissionModes : ScheduleToolCatalog.permissionModes
+            let values = switch harness {
+            case .codex: ScheduleToolCatalog.codexPermissionModes
+            case .antigravityCLI: ScheduleToolCatalog.antigravityPermissionModes
+            default: ScheduleToolCatalog.permissionModes
+            }
             return .failure(SessionToolError(message: "permissionMode for \(harness.displayName) must be one of "
                 + values.joined(separator: ", ") + "."))
         }
-        let freer = harness == .claudeCode
-            ? ClaudePermissionMode.freedom(choice.permissionMode) > scheduleModeCeiling(caller)
-            : choice.codexRunLocation.freedom > scheduleModeCeiling(caller)
-        guard !freer else {
+        let freedom = switch harness {
+        case .claudeCode: ClaudePermissionMode.freedom(choice.permissionMode)
+        case .codex: choice.codexRunLocation.freedom
+        case .antigravityCLI: AntigravityPermissionMode.freedom(choice.permissionMode)
+        default: Self.freedom(of: .standard)
+        }
+        guard freedom <= scheduleModeCeiling(caller) else {
             return .failure(SessionToolError(message: "permissionMode \(value) lets \(subject) do more without asking "
                 + "than this task may; the person can choose it in \(place)."))
         }

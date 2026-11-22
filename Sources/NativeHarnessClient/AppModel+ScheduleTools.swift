@@ -220,9 +220,11 @@ extension AppModel: ScheduleToolHandling {
             guard ClaudePermissionMode.freedom(choice.permissionMode) > scheduleModeCeiling(caller) else { return nil }
         case .codex:
             guard choice.codexRunLocation.freedom > scheduleModeCeiling(caller) else { return nil }
+        case .antigravityCLI:
+            guard AntigravityPermissionMode.freedom(choice.permissionMode) > scheduleModeCeiling(caller) else { return nil }
         default:
             guard caller.permission == .readOnly else { return nil }
-            return "a read-only task schedules new tasks only on Claude Code and Codex, whose runs keep reading only; "
+            return "a read-only task schedules new tasks only on Claude Code, Codex and Antigravity, whose runs keep reading only; "
                 + "the person can schedule others in Scheduled tasks."
         }
         return "its runs would use \(named) mode, which does more without asking than this task may; the person can "
@@ -803,6 +805,9 @@ extension AppModel {
            case let location = CodexRunLocation.restored(from: host.providerOptions), location != .custom {
             return max(ceiling, location.freedom)
         }
+        if caller.harness == .antigravityCLI, caller.permission != .readOnly, let host {
+            return max(ceiling, AntigravityPermissionMode.freedom(host.providerOptions[AntigravityPermissionMode.optionID]))
+        }
         return ceiling
     }
 
@@ -816,8 +821,8 @@ extension AppModel {
     }
 
     /// How much a schedule's runs do without asking, on the same scale: the permission its new tasks start with
-    /// (Claude Code's mode, Codex's permission, any other harness's default), or the permission of the task its
-    /// runs continue, each a message into that task. Codex's Custom counts as the most here, where
+    /// (Claude Code's mode, Codex's permission, Antigravity's mode, any other harness's default), or the permission
+    /// of the task its runs continue, each a message into that task. Codex's Custom counts as the most here, where
     /// `scheduleModeCeiling` lets it raise nothing: what `config.toml` allows is not known either way.
     func scheduleRunFreedom(_ schedule: ScheduledTask) -> Int {
         let destination = schedule.destination
@@ -827,6 +832,7 @@ extension AppModel {
             switch destination.harness {
             case .claudeCode: return ClaudePermissionMode.freedom(choice.permissionMode)
             case .codex: return choice.codexRunLocation.freedom
+            case .antigravityCLI: return AntigravityPermissionMode.freedom(choice.permissionMode)
             default: return Self.freedom(of: .standard)
             }
         case .continueTask:
@@ -837,6 +843,7 @@ extension AppModel {
             switch target.harness {
             case .claudeCode: return ClaudePermissionMode.freedom(target.providerOptions[ClaudeLaunchOption.permissionMode])
             case .codex: return CodexRunLocation.restored(from: target.providerOptions).freedom
+            case .antigravityCLI: return AntigravityPermissionMode.freedom(target.providerOptions[AntigravityPermissionMode.optionID])
             default: return Self.freedom(of: sessionToolPermission(of: target))
             }
         }
