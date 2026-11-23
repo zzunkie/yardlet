@@ -770,9 +770,13 @@ removes the pending record. A successful retry replaces that record with `starte
   process (with the task's terminals), any Codex App Server for a Codex task, Yardlet itself for an ACP harness
   (`AppModel.agentToolHarnessProcesses`). When a task is archived or deleted, the app revokes its token and closes all
   of that task's tabs.
-- When nothing answers at the socket, the server says whether the Yardlet that started it has quit (its
+- When nothing answers at the socket, a tool call says whether the Yardlet that started the server has quit (its
   `YARDLET_TOOLS_APP_PID` is gone) or still runs with the connection gone, which starting or resuming a task in Yardlet
-  connects again; a server without the variable says either. A call that went out and got no answer in time, or whose
+  connects again; a server without the variable says either. When `YARDLET_TOOLS_APP_PID` has already exited (or the
+  running app answers that the task's token was released), `yardlet-mcp` omits duplicate instructions, answers
+  `tools/list` with an empty list instead of falling back to `builtInTools`, and exits cleanly so a harness that replays
+  saved MCP server specs on resume does not attach a stale duplicate server alongside the current run's. A call that
+  went out and got no answer in time, or whose
   connection closed first, may have run there: its error says that the outcome is unknown (`outcome_unknown`). For a
   server started without the environment variables, "Yardlet did not start this MCP server…"; for a build without CEF,
   "no browser engine…". Each comes back as a tool error.

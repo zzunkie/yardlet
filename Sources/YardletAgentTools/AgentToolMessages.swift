@@ -62,10 +62,30 @@ package struct AgentToolList: Codable, Equatable, Sendable {
     /// The app's fingerprint of `tools`, which the server sends back with `tools/watch`. Only the
     /// app computes it, so a list that crossed the socket is never compared with itself re-encoded.
     package var fingerprint: String?
+    /// True when this server's task or Yardlet app run has ended, so the server should advertise no
+    /// tools and exit cleanly rather than falling back to the static built-in catalog.
+    package var released: Bool
 
-    package init(tools: [ToolJSON], fingerprint: String? = nil) {
+    package init(tools: [ToolJSON], fingerprint: String? = nil, released: Bool = false) {
         self.tools = tools
         self.fingerprint = fingerprint
+        self.released = released
+    }
+
+    private enum CodingKeys: String, CodingKey { case tools, fingerprint, released }
+
+    package init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        tools = try container.decode([ToolJSON].self, forKey: .tools)
+        fingerprint = try container.decodeIfPresent(String.self, forKey: .fingerprint)
+        released = try container.decodeIfPresent(Bool.self, forKey: .released) ?? false
+    }
+
+    package func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(tools, forKey: .tools)
+        try container.encodeIfPresent(fingerprint, forKey: .fingerprint)
+        if released { try container.encode(true, forKey: .released) }
     }
 }
 

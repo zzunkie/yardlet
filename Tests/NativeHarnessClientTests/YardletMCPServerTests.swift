@@ -349,4 +349,72 @@ final class YardletMCPServerTests: XCTestCase {
         try await waitUntil(timeout: .seconds(10)) { !process.isRunning }
         XCTAssertEqual(process.terminationStatus, 0)
     }
+
+    /// When a harness (such as Antigravity CLI replaying a saved conversation after a Yardlet
+    /// restart) starts a stale `yardlet-mcp` whose `YARDLET_TOOLS_APP_PID` has already exited, the
+    /// server omits duplicate instructions, returns an empty `tools/list` instead of falling back
+    /// to the 45-tool built-in catalog, and exits cleanly even while standard input stays open.
+    func testTheBuiltServerReturnsNoToolsAndExitsWhenItsYardletAppHasExited() async throws {
+        let executable = Bundle(for: Self.self).bundleURL.deletingLastPathComponent()
+            .appending(path: AgentToolEnvironment.executableName)
+        guard FileManager.default.isExecutableFile(atPath: executable.path(percentEncoded: false)) else {
+            throw XCTSkip("yardlet-mcp is not built next to the tests")
+        }
+        let ended = Process()
+        ended.executableURL = URL(filePath: "/usr/bin/true")
+        try ended.run()
+        ended.waitUntilExit()
+        let deadPID = String(ended.processIdentifier)
+        let missingSocket = privateDirectory().appending(path: "tools.sock").path(percentEncoded: false)
+
+        let invoker = UnixSocketToolInvoker(environment: [
+            AgentToolEnvironment.endpoint: missingSocket,
+            AgentToolEnvironment.token: "stale-token",
+            AgentToolEnvironment.session: UUID().uuidString,
+            AgentToolEnvironment.appProcess: deadPID
+        ])
+        XCTAssertTrue(invoker.appProcessHasExited)
+        XCTAssertTrue(invoker.serverHasEnded)
+        let listed = await invoker.listTools()
+        XCTAssertEqual(listed, AgentToolList(tools: [], fingerprint: nil, released: true))
+        let watch = await invoker.waitForToolListChange(from: nil)
+        XCTAssertEqual(watch, .released)
+
+        let process = Process()
+        process.executableURL = executable
+        process.environment = [
+            AgentToolEnvironment.endpoint: missingSocket,
+            AgentToolEnvironment.token: "stale-token",
+            AgentToolEnvironment.session: UUID().uuidString,
+            AgentToolEnvironment.appProcess: deadPID,
+            AgentToolEnvironment.services: "Gmail\nLinear"
+        ]
+        let input = Pipe()
+        let output = Pipe()
+        process.standardInput = input
+        process.standardOutput = output
+        try process.run()
+        defer {
+            if process.isRunning { process.terminate() }
+            try? input.fileHandleForWriting.close()
+        }
+        let requests = [
+            #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#,
+            #"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#
+        ]
+        // Keep `input` intentionally open to mirror `agy acp` keeping a restored MCP server open.
+        try input.fileHandleForWriting.write(contentsOf: Data((requests.joined(separator: "\n") + "\n").utf8))
+        try await waitUntil(timeout: .seconds(10)) { !process.isRunning }
+        XCTAssertEqual(process.terminationStatus, 0)
+
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        let replies = try String(decoding: data, as: UTF8.self).split(separator: "\n").map {
+            try JSONDecoder().decode(ToolJSON.self, from: Data($0.utf8))
+        }
+        let initialized = try XCTUnwrap(replies.first { $0["id"] == .integer(1) })
+        XCTAssertNil(initialized["result"]?["instructions"], "A dead-app server must not emit duplicate instructions")
+        let listReply = try XCTUnwrap(replies.first { $0["id"] == .integer(2) })
+        XCTAssertEqual(listReply["result"]?["tools"], .array([]),
+                       "A dead-app server returns no tools instead of falling back to builtInTools")
+    }
 }

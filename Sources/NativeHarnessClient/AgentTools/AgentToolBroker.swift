@@ -195,8 +195,15 @@ final class AgentToolBroker: AgentToolLaunchProviding {
             AgentToolEnvironment.session: localSessionID.uuidString,
             AgentToolEnvironment.appProcess: String(ProcessInfo.processInfo.processIdentifier)
         ]
-        let services = connectors?.serviceNames(for: connectorContext(localSessionID)) ?? []
-        if !services.isEmpty { launchEnvironment[AgentToolEnvironment.services] = services.joined(separator: "\n") }
+        // Antigravity persists the session's `mcpServers` spec in its conversation database and
+        // hashes differing specs into separate servers on `session/load`. Keeping its launch
+        // environment free of the mutable connected-services list prevents duplicate `yardlet`
+        // servers when connectors change before a resume within the same Yardlet run; connected
+        // services are still advertised dynamically in `list_connector_tools`.
+        if connectorScope?.harness != .antigravityCLI {
+            let services = connectors?.serviceNames(for: connectorContext(localSessionID)) ?? []
+            if !services.isEmpty { launchEnvironment[AgentToolEnvironment.services] = services.joined(separator: "\n") }
+        }
         return AgentToolServerLaunch(
             command: executable.path(percentEncoded: false),
             environment: launchEnvironment,
@@ -312,11 +319,12 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         }
         if SimulatorToolCatalog.definition(named: call.tool) != nil, let simulators {
             guard simulatorToolsByTask[sessionID] == true else {
-                return .failure("The Simulator feature was off in Yardlet's settings when this task started. The person "
-                    + "can turn it on in Settings → General → Simulator; the tools come once the task starts or resumes.",
-                    .refused, retry: .no)
+                return Self.simulatorFeatureOff
             }
             return await simulators.callSimulatorTool(named: call.tool, arguments: call.arguments, callerID: sessionID)
+        }
+        if SimulatorGatewayToolCatalog.definition(named: call.tool) != nil, let simulators {
+            return await handleSimulatorGateway(call, for: sessionID, simulators: simulators)
         }
         if ConnectorGatewayToolCatalog.definition(named: call.tool) != nil {
             return await handleConnectorGateway(call, for: sessionID)
@@ -326,6 +334,54 @@ final class AgentToolBroker: AgentToolLaunchProviding {
             return result
         }
         return await unknownTool(call.tool, for: sessionID)
+    }
+
+    private static let simulatorFeatureOff = AgentToolResult.failure(
+        "The Simulator feature was off in Yardlet's settings when this task started. The person "
+            + "can turn it on in Settings → General → Simulator; the tools come once the task starts or resumes.",
+        .refused, retry: .no
+    )
+
+    private func handleSimulatorGateway(
+        _ call: AgentToolCall,
+        for sessionID: UUID,
+        simulators: any SimulatorToolHandling
+    ) async -> AgentToolResult {
+        guard simulatorToolsByTask[sessionID] == true else {
+            return Self.simulatorFeatureOff
+        }
+        if call.tool == SimulatorGatewayToolCatalog.listTools {
+            guard simulators.simulatorPlatformIsUsable else {
+                return .text("No usable simulator or Android platform is available right now.")
+            }
+            return SimulatorGatewayToolCatalog.formatList(tool: call.arguments["tool"]?.stringValue)
+        }
+        let innerTool = (call.arguments["tool"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !innerTool.isEmpty else {
+            return .failure("\(SimulatorGatewayToolCatalog.callTool) requires a non-empty tool name.",
+                            .invalidArguments, retry: .withChanges)
+        }
+        guard let definition = SimulatorToolCatalog.definition(named: innerTool) else {
+            let names = SimulatorToolCatalog.tools.map(\.name)
+            return .failure("No simulator tool named \(innerTool). Available simulator tools: \(AgentToolNames.listed(names)).",
+                            .unknownTool, retry: .withChanges,
+                            details: ["tool": .string(innerTool), "similar": .array(names.map(ToolJSON.string))])
+        }
+        let innerArguments: ToolJSON
+        if let raw = call.arguments["arguments"], raw != .null {
+            guard case .object = raw else {
+                return .failure("\(SimulatorGatewayToolCatalog.callTool) arguments must be a JSON object.",
+                                .invalidArguments, retry: .withChanges)
+            }
+            innerArguments = raw
+        } else {
+            innerArguments = .object([:])
+        }
+        if let failure = AgentToolArgumentCheck.failure(tool: innerTool, arguments: innerArguments,
+                                                        schema: definition.inputSchema) {
+            return failure
+        }
+        return await simulators.callSimulatorTool(named: innerTool, arguments: innerArguments, callerID: sessionID)
     }
 
     private func handleConnectorGateway(_ call: AgentToolCall, for sessionID: UUID) async -> AgentToolResult {
@@ -380,12 +436,31 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         return hidden
     }
 
+    private static let ownDefinitionsByName: [String: AgentToolDefinition] = {
+        var map: [String: AgentToolDefinition] = [:]
+        let catalogs: [[AgentToolDefinition]] = [
+            AgentToolCatalog.browserTools,
+            [VaultToolCatalog.tool],
+            TaskSuggestionToolCatalog.tools,
+            SessionToolCatalog.tools,
+            [TerminalToolCatalog.tool],
+            SettingsToolCatalog.tools,
+            ScheduleToolCatalog.tools,
+            SimulatorToolCatalog.tools,
+            SimulatorGatewayToolCatalog.tools,
+            [WidgetToolCatalog.tool],
+            ConnectorGatewayToolCatalog.staticTools
+        ]
+        for catalog in catalogs {
+            for definition in catalog {
+                map[definition.name] = definition
+            }
+        }
+        return map
+    }()
+
     private static func ownDefinition(named name: String) -> AgentToolDefinition? {
-        AgentToolCatalog.definition(named: name) ?? VaultToolCatalog.definition(named: name)
-            ?? TaskSuggestionToolCatalog.definition(named: name) ?? SessionToolCatalog.definition(named: name)
-            ?? TerminalToolCatalog.definition(named: name) ?? SettingsToolCatalog.definition(named: name)
-            ?? ScheduleToolCatalog.definition(named: name) ?? SimulatorToolCatalog.definition(named: name)
-            ?? WidgetToolCatalog.definition(named: name) ?? ConnectorGatewayToolCatalog.definition(named: name)
+        ownDefinitionsByName[name]
     }
 
     /// `show_widget` for the harnesses other than Codex, whose model has the `visualize` skill and its own folder
@@ -430,15 +505,29 @@ final class AgentToolBroker: AgentToolLaunchProviding {
                         details: ["tool": .string(name), "similar": .array(family.map(ToolJSON.string))])
     }
 
-    private func usesConnectorGateway(for sessionID: UUID) -> Bool {
+    private func usesCompactToolSurface(for sessionID: UUID) -> Bool {
         connectorScopes[sessionID]?.harness == .antigravityCLI
     }
 
-    private static let ownReservedNames: Set<String> = Set(
-        (TaskSuggestionToolCatalog.tools + SessionToolCatalog.tools + SettingsToolCatalog.tools
-            + ScheduleToolCatalog.tools + SimulatorToolCatalog.tools + ConnectorGatewayToolCatalog.staticTools
-            + [VaultToolCatalog.tool, TerminalToolCatalog.tool, WidgetToolCatalog.tool]).map(\.name)
-    )
+    private static let ownReservedNames: Set<String> = {
+        var names: Set<String> = []
+        let catalogs: [[AgentToolDefinition]] = [
+            TaskSuggestionToolCatalog.tools,
+            SessionToolCatalog.tools,
+            SettingsToolCatalog.tools,
+            ScheduleToolCatalog.tools,
+            SimulatorToolCatalog.tools,
+            SimulatorGatewayToolCatalog.tools,
+            ConnectorGatewayToolCatalog.staticTools,
+            [VaultToolCatalog.tool, TerminalToolCatalog.tool, WidgetToolCatalog.tool]
+        ]
+        for catalog in catalogs {
+            for definition in catalog {
+                names.insert(definition.name)
+            }
+        }
+        return names
+    }()
 
     private func filteredConnectorTools(for sessionID: UUID) async -> [ToolJSON] {
         (await connectors?.connectorTools(for: connectorContext(sessionID)) ?? []).filter {
@@ -465,26 +554,35 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     }
 
     private func tools(for sessionID: UUID) async -> [ToolJSON] {
+        let compact = usesCompactToolSurface(for: sessionID)
         let browserOn = browserToolsByTask[sessionID] != false
-        let browser = browserOn ? AgentToolCatalog.browserTools.map(\.json) : []
-        let vaultTools = browserOn && vault?.offersTool == true ? [VaultToolCatalog.tool.json] : []
-        let simulatorTools = simulatorToolsByTask[sessionID] == true && simulators?.simulatorPlatformIsUsable == true
-            ? SimulatorToolCatalog.tools.map(\.json) : []
-        let suggestionTools = suggestions == nil ? [] : TaskSuggestionToolCatalog.tools.map(\.json)
-        let widgetTools = offersWidget(to: sessionID) ? [WidgetToolCatalog.tool.json] : []
-        let sessionTools = sessions == nil ? [] : (SessionToolCatalog.tools + SettingsToolCatalog.tools).map(\.json)
-        let terminalTools = sessions != nil && sharesTerminal() ? [TerminalToolCatalog.tool.json] : []
-        let scheduleTools = schedules == nil ? [] : ScheduleToolCatalog.tools.map(\.json)
+        let browserDefinitions = browserOn ? AgentToolCatalog.browserTools : []
+        let vaultDefinitions = browserOn && vault?.offersTool == true ? [VaultToolCatalog.tool] : []
+        let simulatorUsable = simulatorToolsByTask[sessionID] == true && simulators?.simulatorPlatformIsUsable == true
+        let simulatorDefinitions: [AgentToolDefinition]
+        if simulatorUsable {
+            simulatorDefinitions = compact ? SimulatorGatewayToolCatalog.tools : SimulatorToolCatalog.tools
+        } else {
+            simulatorDefinitions = []
+        }
+        let suggestionDefinitions = suggestions == nil ? [] : TaskSuggestionToolCatalog.tools
+        let widgetDefinitions = offersWidget(to: sessionID) ? [WidgetToolCatalog.tool] : []
+        let sessionDefinitions = sessions == nil ? [] : (SessionToolCatalog.tools + SettingsToolCatalog.tools)
+        let terminalDefinitions = sessions != nil && sharesTerminal() ? [TerminalToolCatalog.tool] : []
+        let scheduleDefinitions = schedules == nil ? [] : ScheduleToolCatalog.tools
+        let coreDefinitions = browserDefinitions + vaultDefinitions + simulatorDefinitions + suggestionDefinitions
+            + widgetDefinitions + sessionDefinitions + terminalDefinitions + scheduleDefinitions
+        let coreTools = compact ? AntigravityCompactTools.compact(coreDefinitions) : coreDefinitions.map(\.json)
+
         let connectorTools = await filteredConnectorTools(for: sessionID)
         let exposedConnectorTools: [ToolJSON]
-        if usesConnectorGateway(for: sessionID), !connectorTools.isEmpty {
+        if compact, !connectorTools.isEmpty {
             let services = connectors?.serviceNames(for: connectorContext(sessionID)) ?? []
             exposedConnectorTools = ConnectorGatewayToolCatalog.tools(services: services).map(\.json)
         } else {
             exposedConnectorTools = connectorTools
         }
-        return browser + vaultTools + simulatorTools + suggestionTools + widgetTools + sessionTools + terminalTools
-            + scheduleTools + exposedConnectorTools
+        return coreTools + exposedConnectorTools
     }
 
     // MARK: Tool list changes
@@ -574,6 +672,10 @@ final class AgentToolBroker: AgentToolLaunchProviding {
             return (try? JSONEncoder().encode(reply)) ?? Data()
         }
         if call.method == AgentToolCall.listMethod {
+            if let sessionID = UUID(uuidString: call.session), releasedTokens[call.token] == sessionID {
+                let empty = AgentToolList(tools: [], fingerprint: nil, released: true)
+                return (try? JSONEncoder().encode(empty)) ?? Data()
+            }
             // A refused list is an error result, which the server cannot read as a list, so the
             // harness sees the browser catalog and the first call explains the token.
             guard let list = await list(call) else { return (try? JSONEncoder().encode(Self.unrecognizedToken)) ?? Data() }

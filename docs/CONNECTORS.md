@@ -563,11 +563,17 @@ then `mcp_yardlet_<8 hex>_<tool>`, which is why connector tool names stop at 43 
 name's tool schemas in `~/.gemini/antigravity-cli/mcp/<name>/` and does not remove them.
 
 Because Antigravity CLI packs MCP tools smallest-first into a shared eager schema budget and omits tools that do not
-fit, listing hundreds of connector tools flat pushes both Yardlet's larger core tools (`create_task`, `list_tasks`,
-`send_message_to_task`, `browser_click`, `browser_snapshot`) and most connector tools out of the session. When
-connectors are enabled for an Antigravity task, `AgentToolBroker` lists two gateway tools (`list_connector_tools` and
-`call_connector_tool`, `ConnectorGatewayToolCatalog`) in place of raw connector schemas; every call still runs through
-`ConnectorCenter.callConnectorTool` with the same per-task toggles, validation, sign-in checks and credential scrubbing.
+fit, listing hundreds of connector tools or full verbose core schemas pushes Yardlet's largest tools (`create_task`,
+`update_scheduled_task`, `create_scheduled_task`, `spawn_task`, `run_agent`, `browser_snapshot`) out of the session.
+For Antigravity tasks, `AgentToolBroker` uses a compact tool surface: connected services are listed through two gateway
+tools (`list_connector_tools` and `call_connector_tool`, `ConnectorGatewayToolCatalog`), simulator actions through two
+gateway tools (`list_simulator_tools` and `call_simulator_tool`, `SimulatorGatewayToolCatalog`), and core tool prose is
+projected concisely (`AntigravityCompactTools`) without changing structural schemas or affecting Claude Code and Codex.
+Every gateway call still runs through `ConnectorCenter.callConnectorTool` or `SimulatorAgentTools` with the same
+per-task toggles, validation, approvals, sign-in checks and credential scrubbing. Antigravity's launch environment omits
+the mutable `YARDLET_TOOLS_SERVICES` variable so a task's `mcpServers` spec stays identical across resumes in the same
+Yardlet run, and any stale `yardlet-mcp` server restored by `agy` from a previous Yardlet run (`YARDLET_TOOLS_APP_PID`
+no longer running) or a released token omits duplicate instructions, returns an empty `tools/list`, and exits cleanly.
 
 ## 7. UI
 

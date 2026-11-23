@@ -259,7 +259,9 @@ Rotation, appearance, location, pinching and the Mac's clipboard are not in the 
 ## Agent tools
 
 A task's agent sees and drives the device its task attached through ten tools of Yardlet's MCP server
-(docs/AGENT_BROWSER_TOOLS.md, "Simulator tools"). A task gets them when the switch was on as its session started or
+(docs/AGENT_BROWSER_TOOLS.md, "Simulator tools"); Antigravity CLI tasks access the same ten tools through the compact
+`list_simulator_tools` and `call_simulator_tool` gateway (`SimulatorGatewayToolCatalog`) with identical validation and
+approvals. A task gets them when the switch was on as its session started or
 resumed, as "Agent browser tools" works, while a platform's devices can be used: a running task's list gains them
 once the check finds a usable Xcode or Android SDK, and loses them when the switch turns off, as nothing runs then.
 Android emulators and devices are driven the same way, through the scrcpy stream their Simulator tab uses ("The

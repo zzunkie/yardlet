@@ -2,6 +2,9 @@ import Foundation
 
 /// Runs a tool somewhere else: in the app, reached over its local endpoint.
 package protocol AgentToolInvoking: Sendable {
+    /// True when the Yardlet app run that started this server has already exited, so this server
+    /// cannot reconnect and should advertise no instructions or tools and exit cleanly.
+    var serverHasEnded: Bool { get }
     func call(tool: String, arguments: ToolJSON) async -> AgentToolResult
     /// The tools this task may call as MCP `tools/list` entries, with the app's fingerprint of
     /// them, or nil when the app cannot say (it is not running, or this server was not started by
@@ -13,6 +16,7 @@ package protocol AgentToolInvoking: Sendable {
 }
 
 extension AgentToolInvoking {
+    package var serverHasEnded: Bool { false }
     package func listTools() async -> AgentToolList? { nil }
     package func waitForToolListChange(from fingerprint: String?) async -> AgentToolListWatch { .unavailable }
 }
@@ -111,7 +115,7 @@ package struct MCPServer: Sendable {
             return resultReply(id: id, .object([:]))
         case "tools/list":
             let app = await invoker.listTools()
-            await listing.listed(fingerprint: app?.fingerprint)
+            await listing.listed(fingerprint: app?.fingerprint, released: app?.released == true)
             return resultReply(id: id, .object(["tools": .array(app?.tools ?? tools.map(\.json))]))
         case "tools/call":
             guard let toolName = params["name"]?.stringValue else {
@@ -146,7 +150,7 @@ package struct MCPServer: Sendable {
             "capabilities": .object(["tools": .object(["listChanged": .bool(true)])]),
             "serverInfo": .object(["name": .string(name), "title": .string("Yardlet"), "version": .string(self.version)])
         ]
-        if let instructions { result["instructions"] = .string(instructions) }
+        if let instructions, !invoker.serverHasEnded { result["instructions"] = .string(instructions) }
         return .object(result)
     }
 
@@ -309,6 +313,7 @@ package actor MCPToolListing {
     package struct Listed: Equatable, Sendable {
         package var number: Int
         package var fingerprint: String?
+        package var released: Bool = false
     }
 
     package private(set) var latest: Listed?
@@ -316,8 +321,8 @@ package actor MCPToolListing {
 
     package init() {}
 
-    func listed(fingerprint: String?) {
-        let listed = Listed(number: (latest?.number ?? 0) + 1, fingerprint: fingerprint)
+    func listed(fingerprint: String?, released: Bool = false) {
+        let listed = Listed(number: (latest?.number ?? 0) + 1, fingerprint: fingerprint, released: released)
         latest = listed
         for (id, waiter) in waiters where waiter.after < listed.number {
             waiters.removeValue(forKey: id)
@@ -369,6 +374,10 @@ extension MCPServer {
         onReleased: @escaping @Sendable () -> Void = {}
     ) async {
         guard var listed = await listing.next(after: 0) else { return }
+        if listed.released {
+            onReleased()
+            return
+        }
         try? await Task.sleep(for: firstDelay)
         var retry = retryDelay
         var lastTold: ContinuousClock.Instant?
