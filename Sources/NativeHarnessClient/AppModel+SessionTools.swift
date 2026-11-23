@@ -170,7 +170,6 @@ extension AppModel: SessionToolHandling {
     private func listTasks(_ arguments: JSONValue, caller: SessionToolCaller) async -> AgentToolResult {
         let scope = arguments["scope"]?.stringValue ?? "project"
         guard scope == "project" || scope == "all" else { return .error("scope must be \"project\" or \"all\".") }
-        let includeArchived = Self.bool(arguments["include_archived"]) == true
         let limit = Self.integer(arguments["limit"]).map { min(max($0, 1), SessionToolPolicy.listMaximumLimit) }
             ?? SessionToolPolicy.listDefaultLimit
         var states: Set<String>?
@@ -185,6 +184,7 @@ extension AppModel: SessionToolHandling {
             }
             states = Set(words.compactMap { $0 })
         }
+        let includeArchived = Self.bool(arguments["include_archived"]) == true || states?.contains("archived") == true
         var olderThan: Date?
         if let value = arguments["older_than"] {
             guard let date = value.stringValue.flatMap(Self.listDate) else {

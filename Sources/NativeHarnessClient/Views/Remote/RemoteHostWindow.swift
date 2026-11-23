@@ -388,7 +388,7 @@ struct RemoteHostView: View {
             remoteProjectMoveOptions: model.projectMoveOptions,
             footer: AnyView(RemoteHostFooter(model: model, directory: directory)),
             disclosure: shell.disclosure,
-            activity: activity(mirror),
+            activity: activeSection == .tasks ? activity(mirror) : nil,
             onPointerOverList: { isOver in
                 isPointerOverSidebarList = isOver
                 holdSidebarOrder()
@@ -656,11 +656,13 @@ struct RemoteHostView: View {
         withAnimation(ParityMotion.easeInOut(reduceMotion: reduceMotion)) { shell.isSidebarVisible.toggle() }
     }
 
-    /// Whether the sidebar shows the activity view: the scheduled tasks show in its place while it stays on.
-    private var isActivityShown: Bool { shell.isSidebarVisible && shell.isShowingActivity && !model.showsSchedules }
+    /// Whether the sidebar shows the activity view: the scheduled tasks, Mail and Calendar show in its place while it stays on.
+    private var isActivityShown: Bool {
+        shell.isSidebarVisible && shell.isShowingActivity && !model.showsSchedules && !showsMail && !showsCalendar
+    }
 
     /// Turns the activity view on, keeping where its tasks are listed while it stays on, or off while it shows.
-    /// Over the scheduled tasks, or with the sidebar hidden, it shows it.
+    /// Over the scheduled tasks, Mail, Calendar, or with the sidebar hidden, it shows it.
     private func toggleActivity() {
         let wasShown = isActivityShown
         model.showsSchedules = false
@@ -670,6 +672,7 @@ struct RemoteHostView: View {
                 shell.activityPlaces = [:]
             } else {
                 let mirror = model.sidebar
+                shell.section = .tasks
                 shell.activityPlaces = TaskAttentionProjection.places(
                     of: mirror.sessions, details: mirror.details, kept: shell.isShowingActivity ? shell.activityPlaces : [:])
                 shell.isShowingActivity = true
@@ -682,14 +685,18 @@ struct RemoteHostView: View {
     /// window reads its own (`TaskCommandTargets`), carried out through the host. Actions an older host does not
     /// advertise stay dimmed; the panels are the host's.
     private var taskCommands: YardletTaskCommandSet {
+        let showingTasks = !showsMail && !showsCalendar
         let mirror = model.sidebar
         let layout = sidebarLayout(mirror)
-        let activity = activity(mirror)
-        let shown = shownTaskID.flatMap { id in mirror.sessions.first { $0.id == id } }
-        var targets = TaskCommandTargets.make(
-            layout: activity?.layout ?? layout, selection: activity?.selection ?? windowSelection, shownSession: shown,
-            sidebarSessions: mirror.sessions, splits: [], details: mirror.details)
-        if !model.taskActions { targets.markUnread = nil }
+        let activity = showingTasks ? activity(mirror) : nil
+        let shown = showingTasks ? shownTaskID.flatMap { id in mirror.sessions.first { $0.id == id } } : nil
+        var targets = TaskCommandTargets()
+        if showingTasks {
+            targets = TaskCommandTargets.make(
+                layout: activity?.layout ?? layout, selection: activity?.selection ?? windowSelection, shownSession: shown,
+                sidebarSessions: mirror.sessions, splits: [], details: mirror.details)
+            if !model.taskActions { targets.markUnread = nil }
+        }
         var commands = YardletTaskCommandSet()
         commands.targets = targets
         commands.isSidebarVisible = shell.isSidebarVisible
@@ -704,9 +711,9 @@ struct RemoteHostView: View {
             if case let .session(id, isPinned) = target { model.send(.setPinned(taskID: id.uuidString, pinned: !isPinned)) }
         }
         commands.archive = { id in model.send(.archiveTask(taskID: id.uuidString)) }
-        commands.shownTaskID = shownTaskID
+        commands.shownTaskID = showingTasks ? shownTaskID : nil
         commands.toggleSessionRail = { shell.showsRail.toggle() }
-        if case let .task(taskID) = model.selection, shownTaskID != nil {
+        if showingTasks, case let .task(taskID) = model.selection, shownTaskID != nil {
             // The View menu's side panel and terminal keys, as the title bar's buttons toggle them.
             commands.sessionRailTitle = L10n.string(shell.showsRail ? "Hide session rail" : "Show session rail")
             commands.panels = shell.panels[taskID] ?? .init()

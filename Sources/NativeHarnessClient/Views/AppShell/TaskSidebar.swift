@@ -824,7 +824,7 @@ struct TaskSidebar: View {
                 title: activityTitle(for: session),
                 subtitle: subtitle.isEmpty ? nil : subtitle,
                 projectName: projectName(of: session),
-                isSelected: activity.selectedSessionID == session.id,
+                isSelected: section == .tasks && activity.selectedSessionID == session.id,
                 onSelect: { pick(.session(session.id)) },
                 onTogglePinned: onTogglePinned,
                 onArchive: onArchive,

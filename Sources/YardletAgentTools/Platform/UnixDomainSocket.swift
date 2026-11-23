@@ -364,7 +364,8 @@ package struct UnixSocketToolInvoker: AgentToolInvoking {
             || tool == AgentToolCatalog.handoff
             || tool == SimulatorToolCatalog.handoff
             || (tool == SimulatorGatewayToolCatalog.callTool
-                && arguments["tool"]?.stringValue == SimulatorToolCatalog.handoff)
+                && arguments["tool"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    == SimulatorToolCatalog.handoff)
         let timeout = waits ? sessionToolTimeout : timeout
         let appProcess = appProcess
         return await withCheckedContinuation { continuation in

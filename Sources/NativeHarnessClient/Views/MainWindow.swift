@@ -486,6 +486,8 @@ struct MainWindow: View {
     /// The sidebar's "Tasks | Personal agents" words: the agents in the task list's place, under the same
     /// Home and Scheduled tasks, the chosen one's conversation beside it. The tasks keep what they showed.
     private func showPersonalAgents() {
+        closeStandIns()
+        closeArchivedTasks()
         withAnimation(ParityMotion.easeInOut(reduceMotion: reduceMotion)) {
             isSidebarVisible = true
             sidebarSection = .personalAgents
@@ -532,6 +534,8 @@ struct MainWindow: View {
 
     /// The calendar in the task list's place, its days beside it. The tasks keep what they showed.
     private func showCalendar() {
+        closeStandIns()
+        closeArchivedTasks()
         withAnimation(ParityMotion.easeInOut(reduceMotion: reduceMotion)) {
             isSidebarVisible = true
             sidebarSection = .calendar
@@ -549,6 +553,8 @@ struct MainWindow: View {
 
     /// The mailbox in the task list's place, the chosen thread beside it. The tasks keep what they showed.
     private func showMail() {
+        closeStandIns()
+        closeArchivedTasks()
         withAnimation(ParityMotion.easeInOut(reduceMotion: reduceMotion)) {
             isSidebarVisible = true
             sidebarSection = .mail
@@ -1313,7 +1319,7 @@ struct MainWindow: View {
     /// While a sheet, alert, or the environment panel is up, the task commands wait for it.
     private func taskCommands(_ lists: SidebarLists) -> YardletTaskCommandSet {
         var targets = TaskCommandTargets()
-        if !hasPresentedModal, let layout = lists.layout {
+        if !hasPresentedModal, sidebarSection == .tasks, let layout = lists.layout {
             targets = TaskCommandTargets.make(
                 layout: sidebarActivity.map(\.layout) ?? layout,
                 selection: schedulesWindow.isShowing ? .home : model.splits.selection,
