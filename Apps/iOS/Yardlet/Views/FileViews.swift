@@ -112,7 +112,11 @@ struct FileProgressBar: View {
             Button("Cancel", action: cancel).font(.footnote.weight(.semibold))
         }
         .padding(12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(YardletPalette.surfaceContainerHigh, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.75)
+        )
         .padding(.horizontal, 12)
     }
 

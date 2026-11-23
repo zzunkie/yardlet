@@ -105,7 +105,11 @@ struct SlashList: View {
         .scrollBounceBehavior(.basedOnSize)
         .frame(maxHeight: 232)
         .fixedSize(horizontal: false, vertical: true)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(YardletPalette.surfaceContainer, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.75)
+        )
     }
 }
 
@@ -170,16 +174,16 @@ private struct SelectableText: UIViewRepresentable {
         let view = UITextView()
         view.isEditable = false
         view.isSelectable = true
-        view.font = .preferredFont(forTextStyle: .body)
         view.adjustsFontForContentSizeCategory = true
-        view.textColor = .label
         view.backgroundColor = .clear
         view.textContainerInset = UIEdgeInsets(top: 12, left: 12, bottom: 24, right: 12)
-        view.text = text
+        view.attributedText = YardletTypography.attributedProse(text)
         return view
     }
 
     func updateUIView(_ view: UITextView, context: Context) {
-        if view.text != text { view.text = text }
+        if view.text != text {
+            view.attributedText = YardletTypography.attributedProse(text)
+        }
     }
 }

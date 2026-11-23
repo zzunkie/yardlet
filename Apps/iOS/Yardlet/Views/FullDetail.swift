@@ -97,9 +97,9 @@ private struct PreviewThumbnail: View {
             .scaledToFill()
             .frame(width: min(160, max(56, 88 * ratio)), height: 88)
             // A picture as light as the page (a screenshot) still reads as one.
-            .background(Color(.secondarySystemBackground))
+            .background(YardletPalette.surfaceContainerLow)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color(.separator), lineWidth: 0.5))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.75))
     }
 }
 
@@ -226,7 +226,11 @@ struct CodeBlock: View {
                 .padding(12)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(YardletPalette.surfaceContainerLow, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.5)
+        )
     }
 }
 

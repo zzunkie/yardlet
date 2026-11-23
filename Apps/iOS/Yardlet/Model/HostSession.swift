@@ -47,6 +47,18 @@ final class HostSession: Identifiable {
     private(set) var composerStates: [String: RemoteComposerState] = [:]
     /// Link requests (§12.1) waiting for an answer from any of the Mac's devices, the oldest first (§15.11).
     private(set) var linkRequests: [LinkRequest] = []
+    struct Capabilities: Equatable {
+        var scheduledTasks = false
+        var hostSettings = false
+        var hostAccounts = false
+        var hostCalendar = false
+        var hostMail = false
+    }
+
+    /// Capabilities advertised by the connected Mac's snapshot.
+    private(set) var capabilities = Capabilities()
+    /// Mail and Calendar availability and device permission on the connected Mac (§15.38); nil until read.
+    private(set) var mailCalendarState: RemoteMailCalendarState?
     /// The Mac lists its scheduled tasks, runs one now, and pauses or resumes one (§15.21).
     private(set) var scheduledTasks = false
     /// Counts the Mac's `schedulesChanged` (§15.21), so a Schedules screen open reads the list again.
@@ -247,10 +259,10 @@ final class HostSession: Identifiable {
             schedulesChanges += 1
         case .tabFrame, .browserTabsChanged, .tabCopied:
             browser.receive(event)
-        case .linked, .linkRefused, .terminalOutput, .terminalClosed, .hostSettingsChanged, .hostAccountsChanged,
-             .mailCalendarChanged:
-            // Not shown on the phone yet: terminals, host settings and accounts, mail and calendar (§15.29, §15.36,
-            // §15.37, §15.38).
+        case .mailCalendarChanged:
+            Task { await refreshMailCalendarState() }
+        case .linked, .linkRefused, .terminalOutput, .terminalClosed, .hostSettingsChanged, .hostAccountsChanged:
+            // Not shown on the phone yet: terminals, host settings and accounts (§15.29, §15.36, §15.37).
             // `linked` and `linkRefused` go only to the connection that asked (§12.1).
             break
         }
@@ -318,7 +330,28 @@ final class HostSession: Identifiable {
         taskFiles = snapshot.taskFiles == true
         nextSteps = snapshot.nextSteps == true
         subtasks = snapshot.subtasks == true
+        capabilities = Capabilities(
+            scheduledTasks: snapshot.scheduledTasks == true,
+            hostSettings: snapshot.hostSettings == true,
+            hostAccounts: snapshot.hostAccounts == true,
+            hostCalendar: snapshot.hostCalendar == true,
+            hostMail: snapshot.hostMail == true
+        )
         browser.apply(snapshot)
+        if capabilities.hostCalendar || capabilities.hostMail {
+            Task { await refreshMailCalendarState() }
+        } else {
+            mailCalendarState = nil
+        }
+    }
+
+    /// Reads Mail and Calendar readiness and this device's permission from the Mac (§15.38).
+    func refreshMailCalendarState() async {
+        guard isConnected, capabilities.hostCalendar || capabilities.hostMail else { return }
+        let response = await response(to: .mailCalendarState(watching: true))
+        if response.ok, let state = response.mailCalendarState {
+            mailCalendarState = state
+        }
     }
 
     private func applyTasks(changed: [RemoteTask], removed: [String]) {
@@ -835,8 +868,9 @@ final class HostSession: Identifiable {
         case .queue: String(localized: "Messages are waiting in the queue, so this can't be done now.")
         case .running: String(localized: "This can be done once the turn ends.")
         case .hostOnly: String(localized: "Do this on \(host).")
-        // The phone sends no mail or calendar call (§15.38).
-        case .failed, .form, .mailCalendar: nil
+        case .mailCalendar:
+            String(localized: "To use Mail and Calendar from here, allow Mail and Calendar for this device in Settings › Remote › Paired devices on \(host).")
+        case .failed, .form: nil
         }
     }
 }

@@ -23,19 +23,27 @@ struct TaskSettingsView: View {
             Form {
                 ForEach(settings, id: \.id) { setting in
                     row(setting)
+                        .listRowBackground(YardletPalette.surfaceContainerLow)
                 }
                 if settings.isEmpty {
-                    Text("\(session.name) offers no settings for this task now.").foregroundStyle(.secondary)
+                    Text("\(session.name) offers no settings for this task now.")
+                        .foregroundStyle(YardletPalette.onSurfaceVariant)
+                        .listRowBackground(YardletPalette.surfaceContainerLow)
                 }
                 if let refusal {
                     Section {
-                        Text(refusal).font(.footnote).foregroundStyle(.red)
+                        Text(refusal).font(.footnote).foregroundStyle(YardletPalette.error)
                     }
+                    .listRowBackground(YardletPalette.surfaceContainerLow)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(YardletPalette.background)
             .disabled(isApplying || !session.isConnected)
             .navigationTitle("Model and Permissions")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(YardletPalette.background, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }

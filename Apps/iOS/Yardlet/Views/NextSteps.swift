@@ -84,7 +84,11 @@ private struct CodexQuestionsDock: View {
                 }), axis: .vertical)
                 .lineLimit(1...4)
                 .padding(10)
-                .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .background(YardletPalette.surfaceContainerLow, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.5)
+                )
             HStack(spacing: 8) {
                 if index > 0 {
                     Button("Previous") { index -= 1 }
@@ -107,8 +111,8 @@ private struct CodexQuestionsDock: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.bar)
-        .overlay(alignment: .top) { Divider() }
+        .background(YardletPalette.surface)
+        .overlay(alignment: .top) { Rectangle().fill(YardletPalette.outlineVariant).frame(height: 0.5) }
     }
 
     private var options: some View {
@@ -195,8 +199,8 @@ private struct ImplementPlanDock: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.bar)
-        .overlay(alignment: .top) { Divider() }
+        .background(YardletPalette.surface)
+        .overlay(alignment: .top) { Rectangle().fill(YardletPalette.outlineVariant).frame(height: 0.5) }
     }
 }
 

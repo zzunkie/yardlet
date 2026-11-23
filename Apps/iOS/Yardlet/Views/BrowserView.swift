@@ -350,7 +350,7 @@ struct BrowserView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.secondarySystemBackground))
+        .background(YardletPalette.surfaceContainerLow)
         .overlay(alignment: .top) { CommandErrorBanner(session: session).padding(.top, 8) }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
             pageBottom = frame.maxY
@@ -422,7 +422,7 @@ struct BrowserView: View {
             .padding(.vertical, 8)
             .disabled(!isEnabled)
         }
-        .background(.bar)
+        .background(YardletPalette.surface)
     }
 }
 
@@ -435,8 +435,8 @@ private struct Bar<Content: View>: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(.secondarySystemBackground))
-            .overlay(alignment: .bottom) { Divider() }
+            .background(YardletPalette.surfaceContainerLow)
+            .overlay(alignment: .bottom) { Rectangle().fill(YardletPalette.outlineVariant).frame(height: 0.5) }
     }
 }
 

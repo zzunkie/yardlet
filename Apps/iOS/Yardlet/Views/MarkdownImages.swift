@@ -776,8 +776,8 @@ private struct MarkdownPictureItemView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color(.separator), lineWidth: 0.5))
+        .background(YardletPalette.surfaceContainerLow, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.75))
     }
 
     // MARK: Inline data:image/...
@@ -874,8 +874,8 @@ private struct MarkdownPictureItemView: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color(.separator), lineWidth: 0.5))
+            .background(YardletPalette.surfaceContainerLow, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.75))
         }
     }
 
@@ -904,11 +904,11 @@ private struct MarkdownPictureItemView: View {
                 .resizable()
                 .scaledToFit()
                 .frame(maxWidth: .infinity, maxHeight: maxHeight, alignment: .leading)
-                .background(Color(.secondarySystemBackground))
+                .background(YardletPalette.surfaceContainerLow)
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(Color(.separator), lineWidth: 0.5)
+                        .strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.75)
                 )
         }
         .buttonStyle(.plain)
@@ -940,7 +940,7 @@ private struct MarkdownPictureItemView: View {
 
     private var imagePlaceholder: some View {
         RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .fill(Color(.secondarySystemBackground))
+            .fill(YardletPalette.surfaceContainerLow)
             .frame(maxWidth: isOneOfSeveral ? .infinity : 260, minHeight: isOneOfSeveral ? 110 : 140,
                    maxHeight: isOneOfSeveral ? 140 : 180)
             .overlay {
@@ -950,7 +950,7 @@ private struct MarkdownPictureItemView: View {
             }
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(Color(.separator), lineWidth: 0.5)
+                    .strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.75)
             )
     }
 
@@ -1000,7 +1000,7 @@ private struct MarkdownPictureItemView: View {
         .font(.footnote)
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color(.separator), lineWidth: 0.5))
+        .background(YardletPalette.surfaceContainerLow, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.75))
     }
 }

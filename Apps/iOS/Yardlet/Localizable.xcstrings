@@ -101,6 +101,26 @@
         }
       }
     },
+    "%@ doesn't offer Calendar over remote yet. Update Yardlet on your Mac to enable it.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 아직 원격 캘린더를 지원하지 않습니다. Mac의 Yardlet을 업데이트해 사용하세요."
+          }
+        }
+      }
+    },
+    "%@ doesn't offer Mail over remote yet. Update Yardlet on your Mac to enable it.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 아직 원격 메일을 지원하지 않습니다. Mac의 Yardlet을 업데이트해 사용하세요."
+          }
+        }
+      }
+    },
     "%@ doesn't offer that choice now. Pick again.": {
       "localizations": {
         "ko": {
@@ -247,6 +267,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@에서 이 휴대폰을 지웠습니다. 다시 연결하려면 새로 짝지으세요."
+          }
+        }
+      }
+    },
+    "%@ supports remote settings and connectors. Controls for iOS are coming soon.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 원격 설정과 커넥터를 지원합니다. iOS 제어 화면은 곧 추가될 예정입니다."
           }
         }
       }
@@ -433,6 +463,26 @@
         }
       }
     },
+    "Account and App": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "계정 및 앱"
+          }
+        }
+      }
+    },
+    "Add Mac": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac 추가"
+          }
+        }
+      }
+    },
     "Add Photos": {
       "localizations": {
         "ko": {
@@ -573,6 +623,16 @@
         }
       }
     },
+    "App Settings": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "앱 설정"
+          }
+        }
+      }
+    },
     "Approaching your session limit": {
       "localizations": {
         "ko": {
@@ -683,6 +743,16 @@
         }
       }
     },
+    "Available on %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 사용 가능"
+          }
+        }
+      }
+    },
     "Available once this turn ends.": {
       "localizations": {
         "ko": {
@@ -769,6 +839,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "브라우저 탭에서 기다리는 중"
+          }
+        }
+      }
+    },
+    "Calendar": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "캘린더"
+          }
+        }
+      }
+    },
+    "Calendar on %@ is permitted and ready. Mobile Calendar view is coming soon.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@의 캘린더가 허용되어 준비되었습니다. 모바일 캘린더 화면은 곧 제공될 예정입니다."
           }
         }
       }
@@ -863,6 +953,16 @@
         }
       }
     },
+    "Checking Mail and Calendar access on %@…": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 메일 및 캘린더 접근 권한을 확인하는 중…"
+          }
+        }
+      }
+    },
     "Choose": {
       "localizations": {
         "ko": {
@@ -903,12 +1003,32 @@
         }
       }
     },
+    "Clear": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "지우기"
+          }
+        }
+      }
+    },
     "Close": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "닫기"
+          }
+        }
+      }
+    },
+    "Close Search": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "검색 닫기"
           }
         }
       }
@@ -1023,6 +1143,36 @@
         }
       }
     },
+    "Connect a calendar account in Yardlet on %@ to view your schedule here.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "여기에서 일정을 보려면 %@의 Yardlet에서 캘린더 계정을 연결하세요."
+          }
+        }
+      }
+    },
+    "Connect a mail account in Yardlet on %@ to view your inbox here.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "여기에서 받은편지함을 보려면 %@의 Yardlet에서 메일 계정을 연결하세요."
+          }
+        }
+      }
+    },
+    "Connect to %@ to check Mail and Calendar availability.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "메일과 캘린더 사용 가능 여부를 확인하려면 %@에 연결하세요."
+          }
+        }
+      }
+    },
     "Connect to apps running on it": {
       "localizations": {
         "ko": {
@@ -1063,6 +1213,16 @@
         }
       }
     },
+    "Connected": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "연결됨"
+          }
+        }
+      }
+    },
     "Connected directly": {
       "localizations": {
         "ko": {
@@ -1079,6 +1239,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "중계 서버로 연결됨"
+          }
+        }
+      }
+    },
+    "Connecting": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "연결 중"
           }
         }
       }
@@ -1543,6 +1713,26 @@
         }
       }
     },
+    "Host Settings": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "호스트 설정"
+          }
+        }
+      }
+    },
+    "Host Settings and Connectors": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "호스트 설정 및 커넥터"
+          }
+        }
+      }
+    },
     "I'm Done": {
       "localizations": {
         "ko": {
@@ -1753,6 +1943,36 @@
         }
       }
     },
+    "Mail": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "메일"
+          }
+        }
+      }
+    },
+    "Mail on %@ is permitted and ready. Mobile Mail view is coming soon.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@의 메일이 허용되어 준비되었습니다. 모바일 메일 화면은 곧 제공될 예정입니다."
+          }
+        }
+      }
+    },
+    "Manage settings and connectors": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "설정 및 커넥터 관리"
+          }
+        }
+      }
+    },
     "Manage windows on all your displays": {
       "localizations": {
         "ko": {
@@ -1883,6 +2103,16 @@
         }
       }
     },
+    "New task in %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 새 작업"
+          }
+        }
+      }
+    },
     "Next": {
       "localizations": {
         "ko": {
@@ -1933,6 +2163,16 @@
         }
       }
     },
+    "No matching tasks": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "일치하는 작업이 없습니다"
+          }
+        }
+      }
+    },
     "No messages yet.": {
       "localizations": {
         "ko": {
@@ -1959,6 +2199,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "2분 안에 허용하지 않아 요청이 끝났습니다. 다시 시도하세요."
+          }
+        }
+      }
+    },
+    "Not Set Up": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "설정 안 됨"
           }
         }
       }
@@ -2049,6 +2299,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "확인"
+          }
+        }
+      }
+    },
+    "Offline": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "오프라인"
           }
         }
       }
@@ -2357,6 +2617,16 @@
         }
       }
     },
+    "Permission Off": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "권한 꺼짐"
+          }
+        }
+      }
+    },
     "Photo Library": {
       "localizations": {
         "ko": {
@@ -2537,6 +2807,16 @@
         }
       }
     },
+    "Ready": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "준비됨"
+          }
+        }
+      }
+    },
     "Receiving…": {
       "localizations": {
         "ko": {
@@ -2573,6 +2853,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "다시 연결하는 중…"
+          }
+        }
+      }
+    },
+    "Refresh Status": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "상태 새로고침"
           }
         }
       }
@@ -2643,6 +2933,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "사진 빼기"
+          }
+        }
+      }
+    },
+    "Removed": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "제거됨"
           }
         }
       }
@@ -2783,6 +3083,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@에서 만든 예약된 작업이 여기에 나옵니다."
+          }
+        }
+      }
+    },
+    "Search Tasks": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "작업 검색"
           }
         }
       }
@@ -3027,6 +3337,16 @@
         }
       }
     },
+    "Sign in to list your Macs": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "로그인하여 내 Mac 보기"
+          }
+        }
+      }
+    },
     "Sign in to the harness on %@ first.": {
       "localizations": {
         "ko": {
@@ -3227,6 +3547,16 @@
         }
       }
     },
+    "Switch Mac or open menu": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac 전환 또는 메뉴 열기"
+          }
+        }
+      }
+    },
     "Tabs": {
       "localizations": {
         "ko": {
@@ -3243,6 +3573,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "사진 찍기"
+          }
+        }
+      }
+    },
+    "Tasks": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "작업"
           }
         }
       }
@@ -3747,6 +4087,16 @@
         }
       }
     },
+    "To use Mail and Calendar from here, allow Mail and Calendar for this device in Settings › Remote › Paired devices on %@.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "여기에서 메일과 캘린더를 사용하려면 %@의 설정 › 원격 › 페어링된 기기에서 이 기기의 메일 및 캘린더 권한을 허용하세요."
+          }
+        }
+      }
+    },
     "To use this from here, allow Terminal for this device in Settings › Remote › Paired devices on %@.": {
       "localizations": {
         "ko": {
@@ -3793,6 +4143,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "다시 시도"
+          }
+        }
+      }
+    },
+    "Try another task title, project, or agent name.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다른 작업 제목, 프로젝트 또는 에이전트 이름으로 검색해 보세요."
           }
         }
       }
@@ -3933,6 +4293,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "제목 없는 작업"
+          }
+        }
+      }
+    },
+    "Update Yardlet on %@ to manage host settings and connectors from your phone.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "휴대폰에서 호스트 설정과 커넥터를 관리하려면 %@의 Yardlet을 업데이트하세요."
           }
         }
       }

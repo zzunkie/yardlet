@@ -49,11 +49,11 @@ struct ConversationWidgetCard: View {
                 }
             }
         }
-        .background(Color(.systemBackground))
+        .background(YardletPalette.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color(.separator), lineWidth: 0.5)
+                .strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.75)
         )
         .sheet(isPresented: $isExpanded) {
             WidgetExpandedSheet(title: title, code: widget.code)
@@ -97,7 +97,7 @@ struct ConversationWidgetCard: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(Color(.secondarySystemBackground))
+        .background(YardletPalette.surfaceContainerLow)
     }
 
     private var failureView: some View {

@@ -81,13 +81,21 @@ struct ComposerView: View {
                     if editing == nil && isRunning && task?.steers == true && !draft.isEmpty { followUpMenu }
                     actionButton
                 }
-                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .background(YardletPalette.surfaceContainer,
+                            in: RoundedRectangle(cornerRadius: YardletMetrics.radiusComposer, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: YardletMetrics.radiusComposer, style: .continuous)
+                        .strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.75)
+                )
             }
         }
         .padding(.horizontal, 12)
         .padding(.top, 8)
         .padding(.bottom, 8)
-        .background(.bar)
+        .background(YardletPalette.surface)
+        .overlay(alignment: .top) {
+            Rectangle().fill(YardletPalette.outlineVariant).frame(height: 0.5)
+        }
         .onAppear { draft = UserDefaults.standard.string(forKey: draftKey) ?? "" }
         .onChange(of: draft) { _, text in
             // The words being edited are the turn's, not the draft, which stays as it was.
@@ -181,8 +189,10 @@ struct ComposerView: View {
         } label: {
             Image(systemName: "plus")
                 .font(.body.weight(.semibold))
+                .foregroundStyle(YardletPalette.onSurface)
                 .frame(width: 36, height: 36)
-                .background(Color(.secondarySystemBackground), in: Circle())
+                .background(YardletPalette.surfaceContainer, in: Circle())
+                .overlay(Circle().strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.75))
         }
         .accessibilityLabel(acceptsImages || acceptsFiles ? Text("Attach") : Text("Slash Commands"))
     }
@@ -230,9 +240,10 @@ struct ComposerView: View {
         } label: {
             Text(mode == .steer ? "Steer" : "Queue")
                 .font(.caption.weight(.semibold))
+                .foregroundStyle(YardletPalette.onSurface)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
-                .background(Color(.tertiarySystemFill), in: Capsule())
+                .background(YardletPalette.surfaceContainerHigh, in: Capsule())
         }
         .padding(.bottom, 9)
     }
@@ -261,16 +272,17 @@ struct ComposerView: View {
                         } label: {
                             HStack(spacing: 6) {
                                 Image(systemName: item.queueFailed == true ? "exclamationmark.circle" : "clock")
-                                    .foregroundStyle(item.queueFailed == true ? Color.red : Color.secondary)
+                                    .foregroundStyle(item.queueFailed == true ? YardletPalette.error : YardletPalette.onSurfaceVariant)
                                 Text(item.text ?? "").lineLimit(1)
                             }
                             .font(.footnote)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
                             .frame(maxWidth: 240)
-                            .background(Color(.secondarySystemBackground), in: Capsule())
+                            .background(YardletPalette.surfaceContainer, in: Capsule())
+                            .overlay(Capsule().strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.5))
                         }
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(YardletPalette.onSurface)
                         .accessibilityHint(Text("Queued message actions"))
                     }
                 }
@@ -356,9 +368,10 @@ struct ComposerView: View {
                         Image(systemName: "xmark").font(.caption2.weight(.bold))
                     }
                     .font(.footnote.weight(.medium))
+                    .foregroundStyle(YardletPalette.onSurface)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
-                    .background(Color(.tertiarySystemFill), in: Capsule())
+                    .background(YardletPalette.surfaceContainerHigh, in: Capsule())
                 }
                 .buttonStyle(.plain)
                 .disabled(!controlsUp || isSending)
@@ -371,7 +384,7 @@ struct ComposerView: View {
                     Image(systemName: "chevron.up.chevron.down").font(.caption2)
                 }
                 .font(.footnote)
-                .foregroundStyle(settings.contains { $0.elevated == true } ? Color.orange : Color.secondary)
+                .foregroundStyle(settings.contains { $0.elevated == true } ? YardletPalette.Status.limit : YardletPalette.onSurfaceVariant)
             }
             .buttonStyle(.plain)
         }
@@ -403,7 +416,8 @@ struct ComposerView: View {
                         .padding(.horizontal, 10)
                         .frame(height: 36)
                         .frame(maxWidth: 220)
-                        .background(Color(.secondarySystemBackground), in: Capsule())
+                        .background(YardletPalette.surfaceContainer, in: Capsule())
+                        .overlay(Capsule().strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.5))
                     }
                     .buttonStyle(.plain)
                     .accessibilityHint(file.state == .failed ? Text("Not sent. Tap to try again.") : Text(verbatim: ""))

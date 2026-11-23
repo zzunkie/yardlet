@@ -74,12 +74,18 @@ struct WelcomeView: View {
             .padding(.horizontal, 24)
             .padding(.bottom, 24)
         }
+        .background(YardletPalette.background.ignoresSafeArea())
         .task { await model.account.refreshProviders() }
         .overlay {
             if model.isPairing {
                 ProgressView("Connecting…")
                     .padding(24)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .background(YardletPalette.surfaceContainerHigh,
+                                in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.75)
+                    )
             }
         }
         .sheet(isPresented: $isScanning) {
@@ -135,7 +141,10 @@ struct PasteLinkView: View {
                         Text("On your Mac, choose Copy link under the pairing code, then paste the link here.")
                     }
                 }
+                .listRowBackground(YardletPalette.surfaceContainerLow)
             }
+            .scrollContentBackground(.hidden)
+            .background(YardletPalette.background)
             .navigationTitle("Pairing Link")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

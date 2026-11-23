@@ -19,6 +19,8 @@ struct RootView: View {
                 WelcomeView()
             }
         }
+        .background(YardletPalette.background.ignoresSafeArea())
+        .tint(YardletPalette.primary)
         .onChange(of: isCovered, initial: true) { _, covered in
             LockCover.shared.show(covered, lock: model.lock)
         }
@@ -60,15 +62,20 @@ struct LockView: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            Image(systemName: "lock.fill").font(.system(size: 40)).foregroundStyle(.secondary)
-            Text("Yardlet is locked").font(.headline)
+            Image(systemName: "lock.fill")
+                .font(.system(size: 40))
+                .foregroundStyle(YardletPalette.onSurfaceVariant)
+            Text("Yardlet is locked")
+                .font(.headline)
+                .foregroundStyle(YardletPalette.onSurface)
             if lock.isLocked {
                 Button("Unlock") { Task { await lock.unlock() } }
                     .prominentButton()
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.systemBackground))
+        .background(YardletPalette.background)
+        .tint(YardletPalette.primary)
     }
 }
 

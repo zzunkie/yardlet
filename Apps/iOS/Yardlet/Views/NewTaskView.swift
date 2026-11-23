@@ -6,6 +6,7 @@ import YardletRemote
 /// harness, model, effort, permission mode and worktree the Mac offers now (docs/REMOTE_PROTOCOL.md §15.5, §15.16).
 struct NewTaskView: View {
     let session: HostSession
+    var initialProjectID: String?
     let onStarted: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var text = ""
@@ -41,8 +42,9 @@ struct NewTaskView: View {
                     }
                 } footer: {
                     // Under the words, where it is seen: Start is at the top and the keyboard covers the end of the form.
-                    if let error { Text(error).foregroundStyle(.red) }
+                    if let error { Text(error).foregroundStyle(YardletPalette.error) }
                 }
+                .listRowBackground(YardletPalette.surfaceContainerLow)
                 Section {
                     Picker("Project", selection: $projectID) {
                         ForEach(projects, id: \.id) { project in
@@ -66,9 +68,14 @@ struct NewTaskView: View {
                 } footer: {
                     if isLoading { Text("Reading what \(session.name) offers…") }
                 }
+                .listRowBackground(YardletPalette.surfaceContainerLow)
             }
+            .scrollContentBackground(.hidden)
+            .background(YardletPalette.background)
             .navigationTitle("New Task")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(YardletPalette.background, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
@@ -79,7 +86,13 @@ struct NewTaskView: View {
             }
             .disabled(isStarting)
             .onAppear {
-                if projectID.isEmpty { projectID = projects.first?.id ?? "" }
+                if projectID.isEmpty {
+                    if let initialProjectID, projects.contains(where: { $0.id == initialProjectID }) {
+                        projectID = initialProjectID
+                    } else {
+                        projectID = projects.first?.id ?? ""
+                    }
+                }
                 isWriting = true
             }
             .task(id: projectID) { await readOptions() }

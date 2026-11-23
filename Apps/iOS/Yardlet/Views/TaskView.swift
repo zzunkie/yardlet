@@ -50,10 +50,12 @@ struct TaskView: View {
                 ProgressView()
             }
         }
+        .background(YardletPalette.background)
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
         // An opaque bar: words scrolled under it would otherwise read through the title and its buttons.
-        .toolbarBackground(Color(.systemBackground), for: .navigationBar)
+        .toolbarBackground(YardletPalette.background, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .modifier(TaskSubtitle(title: title, subtitle: subtitle))
         .toolbar {
@@ -236,10 +238,10 @@ struct TaskView: View {
                         Image(systemName: "arrow.down")
                             .font(.body.weight(.semibold))
                             .frame(width: 40, height: 40)
-                            .background(.regularMaterial, in: Circle())
-                            .overlay(Circle().strokeBorder(Color(.separator), lineWidth: 0.5))
+                            .background(YardletPalette.surfaceContainerHigh, in: Circle())
+                            .overlay(Circle().strokeBorder(YardletPalette.outline, lineWidth: 0.75))
                     }
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(YardletPalette.onSurface)
                     .accessibilityLabel("Jump to Latest")
                     .padding(16)
                     .transition(.opacity)
@@ -684,7 +686,12 @@ struct UserMessageView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .foregroundStyle(YardletPalette.onSurface)
+        .background(YardletPalette.surfaceContainer, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.5)
+        )
     }
 }
 
@@ -697,14 +704,20 @@ struct AssistantView: View {
     var body: some View {
         if item.role == "commentary" {
             MarkdownView(text: item.text ?? "", font: .subheadline, opensFiles: opensFiles)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(YardletPalette.onSurfaceVariant)
         } else if item.role == "proposedPlan" {
             VStack(alignment: .leading, spacing: 8) {
-                Label("Proposed plan", systemImage: "list.bullet.clipboard").font(.subheadline.weight(.semibold))
+                Label("Proposed plan", systemImage: "list.bullet.clipboard")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(YardletPalette.onSurface)
                 MarkdownView(text: item.text ?? "", opensFiles: opensFiles)
             }
             .padding(14)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(YardletPalette.surfaceContainerLow, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.75)
+            )
         } else {
             MarkdownView(text: item.text ?? "", opensFiles: opensFiles)
         }
@@ -744,21 +757,21 @@ struct ActivityLine: View {
                 icon
                     .font(.footnote)
                     .frame(width: 16)
-                    .foregroundStyle(item.status == "failed" ? Color.red : Color.secondary)
+                    .foregroundStyle(item.status == "failed" ? YardletPalette.Status.failed : YardletPalette.onSurfaceVariant)
                 VStack(alignment: .leading, spacing: 2) {
                     words
                         .font(.subheadline)
                         .lineLimit(3)
                         .multilineTextAlignment(.leading)
                     if let detail = item.detail, !detail.isEmpty, item.activity == "reasoning" || item.status == "failed" {
-                        Text(detail).font(.footnote).foregroundStyle(.secondary).lineLimit(4)
+                        Text(detail).font(.footnote).foregroundStyle(YardletPalette.onSurfaceVariant).lineLimit(4)
                     }
                 }
                 Spacer(minLength: 0)
                 if let additions = item.additions, let deletions = item.deletions {
                     HStack(spacing: 4) {
-                        Text("+\(additions)").foregroundStyle(.green)
-                        Text("−\(deletions)").foregroundStyle(.red)
+                        Text("+\(additions)").foregroundStyle(YardletPalette.Status.approval)
+                        Text("−\(deletions)").foregroundStyle(YardletPalette.Status.failed)
                     }
                     .font(.footnote.monospacedDigit())
                 }

@@ -66,14 +66,19 @@ struct SuggestionOptionsView: View {
                     Text(title).textCase(nil)
                 } footer: {
                     if let error {
-                        Text(error).foregroundStyle(.red)
+                        Text(error).foregroundStyle(YardletPalette.error)
                     } else if readID != nil {
                         Text("Reading what \(session.name) offers…")
                     }
                 }
+                .listRowBackground(YardletPalette.surfaceContainerLow)
             }
+            .scrollContentBackground(.hidden)
+            .background(YardletPalette.background)
             .navigationTitle("Options")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(YardletPalette.background, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {

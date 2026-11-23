@@ -115,6 +115,7 @@ struct AccountMacsView: View {
                     Text("Choose your Mac. It shows a number; allow this phone there when it matches the one here.")
                 }
             }
+            .listRowBackground(YardletPalette.surfaceContainerLow)
 
             if let name = model.account.name {
                 Section {
@@ -126,8 +127,11 @@ struct AccountMacsView: View {
                         }
                     }
                 }
+                .listRowBackground(YardletPalette.surfaceContainerLow)
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(YardletPalette.background)
         .refreshable { await model.account.loadMacs() }
     }
 
