@@ -253,10 +253,9 @@ enum WidgetDocument {
           let timer = null;
           const measure = () => {
             const body = document.body;
-            const doc = document.documentElement;
-            if (!body || !doc) { return; }
+            if (!body) { return; }
             const rectHeight = body.getBoundingClientRect().height;
-            const height = Math.ceil(Math.max(body.scrollHeight, rectHeight, doc.scrollHeight));
+            const height = Math.ceil(Math.max(body.scrollHeight, rectHeight));
             if (height > 0 && Math.abs(height - last) >= 1) {
               last = height;
               try {
@@ -383,6 +382,7 @@ private struct WidgetWebView: UIViewRepresentable {
         private(set) var loadedToken: Int = -1
         private var allowedHost: String?
         private var reportedHeight: CGFloat = 0
+        private var isNavigationInFlight = false
         private var lastExternalOpen = Date.distantPast
 
         init(parent: WidgetWebView) {
@@ -394,13 +394,21 @@ private struct WidgetWebView: UIViewRepresentable {
             loadedCode = code
             loadedToken = reloadToken
             reportedHeight = 0
+            isNavigationInFlight = true
 
             let host = "view-" + UUID().uuidString.lowercased()
             allowedHost = host
             schemeHandler.setDocument(host: host, html: WidgetDocument.html(for: code))
-            parent.isLoading = true
-            parent.hasFailed = false
             updateScrollBehavior(for: webView)
+
+            if !parent.isLoading || parent.hasFailed {
+                Task { @MainActor [weak self] in
+                    guard let self, self.loadedCode == code, self.loadedToken == reloadToken,
+                          self.isNavigationInFlight else { return }
+                    if !self.parent.isLoading { self.parent.isLoading = true }
+                    if self.parent.hasFailed { self.parent.hasFailed = false }
+                }
+            }
 
             if let url = URL(string: "\(WidgetDocument.scheme)://\(host)/") {
                 webView.load(URLRequest(url: url))
@@ -430,6 +438,7 @@ private struct WidgetWebView: UIViewRepresentable {
                 parent.measuredHeight = clamped
             }
             if parent.isLoading {
+                isNavigationInFlight = false
                 parent.isLoading = false
             }
         }
@@ -473,22 +482,26 @@ private struct WidgetWebView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            isNavigationInFlight = false
             parent.isLoading = false
         }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
             if (error as NSError).code == NSURLErrorCancelled { return }
+            isNavigationInFlight = false
             parent.isLoading = false
             parent.hasFailed = true
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
             if (error as NSError).code == NSURLErrorCancelled { return }
+            isNavigationInFlight = false
             parent.isLoading = false
             parent.hasFailed = true
         }
 
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            isNavigationInFlight = false
             parent.isLoading = false
             parent.hasFailed = true
         }
@@ -564,6 +577,7 @@ private final class WidgetSchemeHandler: NSObject, WKURLSchemeHandler {
                 headerFields: [
                     "Content-Type": "text/html; charset=utf-8",
                     "Content-Security-Policy": WidgetDocument.policy,
+                    "Referrer-Policy": "no-referrer",
                     "Cache-Control": "no-store",
                     "X-Content-Type-Options": "nosniff"
                 ]

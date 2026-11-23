@@ -85,7 +85,10 @@ struct TaskView: View {
             if imageLoader == nil { imageLoader = MarkdownImageLoader(session: session, taskID: taskID) }
             session.browser.follow(taskID)
         }
-        .onDisappear { session.browser.unfollow(taskID) }
+        .onDisappear {
+            session.browser.unfollow(taskID)
+            imageLoader?.cancelAll()
+        }
         // What the task made: read when it opens, on each connection and when a turn starts or ends.
         .task(id: OutputsReading(offered: session.taskFiles && session.isConnected, running: task?.running == true)) {
             await session.loadOutputs(taskID)

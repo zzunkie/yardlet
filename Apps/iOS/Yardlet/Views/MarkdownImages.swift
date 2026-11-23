@@ -319,12 +319,23 @@ enum WebImageLoader {
     private final class Fetch: NSObject, URLSessionDataDelegate, @unchecked Sendable {
         private let lock = NSLock()
         private var continuation: CheckedContinuation<Data?, Never>?
+        private var finished = false
+        private var finalResult: Data?
         private var data = Data()
         private var refused = false
         private var reachedOnlyPublicAddresses = true
 
         func start(_ continuation: CheckedContinuation<Data?, Never>) {
-            lock.withLock { self.continuation = continuation }
+            let immediate: (Bool, Data?) = lock.withLock {
+                if finished {
+                    return (true, finalResult)
+                }
+                self.continuation = continuation
+                return (false, nil)
+            }
+            if immediate.0 {
+                continuation.resume(returning: immediate.1)
+            }
         }
 
         func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
@@ -371,9 +382,13 @@ enum WebImageLoader {
 
         func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
             let (continuation, result) = lock.withLock { () -> (CheckedContinuation<Data?, Never>?, Data?) in
-                defer { self.continuation = nil }
                 let ok = error == nil && !refused && reachedOnlyPublicAddresses && !data.isEmpty
-                return (self.continuation, ok ? data : nil)
+                let resolved = ok ? data : nil
+                finished = true
+                finalResult = resolved
+                let pending = self.continuation
+                self.continuation = nil
+                return (pending, resolved)
             }
             continuation?.resume(returning: result)
         }
@@ -390,8 +405,8 @@ final class MarkdownImageLoader {
     enum Phase: Equatable {
         case loading
         case loaded(UIImage)
-        /// Exceeded the 5 MB automatic download cap; shows a tap-to-load chip instead.
-        case tooLarge(size: Int)
+        /// Exceeded the 5 MB automatic download cap (or host file limit when size is nil); shows a tap-to-load/open chip.
+        case tooLarge(size: Int?)
         case failed
 
         static func == (lhs: Phase, rhs: Phase) -> Bool {
@@ -416,7 +431,7 @@ final class MarkdownImageLoader {
     @ObservationIgnored private let taskID: String?
     @ObservationIgnored private var tasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var activeAutoLoads = 0
-    @ObservationIgnored private var autoLoadWaiters: [CheckedContinuation<Void, Never>] = []
+    @ObservationIgnored private var autoLoadWaiters: [(id: UUID, continuation: CheckedContinuation<Void, Never>)] = []
 
     init(session: HostSession? = nil, taskID: String? = nil) {
         self.session = session
@@ -469,23 +484,33 @@ final class MarkdownImageLoader {
         phases[key] = .loading
         let maxBytes = manual ? Self.manualLoadMaxBytes : Self.autoLoadMaxBytes
         tasks[key]?.cancel()
-        tasks[key] = Task { [weak self] in
-            guard let self else { return }
+        tasks[key] = Task { [weak self, weak session] in
+            var acquired = false
             if !manual {
-                await self.acquireAutoLoadSlot()
+                acquired = await self?.acquireAutoLoadSlot() ?? false
+                guard acquired else {
+                    self?.clearLoadingState(for: key)
+                    return
+                }
             }
             defer {
-                if !manual { self.releaseAutoLoadSlot() }
+                if acquired { self?.releaseAutoLoadSlot() }
             }
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, let session else {
+                self?.clearLoadingState(for: key)
+                return
+            }
 
             let result = await session.readFileData(path, of: taskID, maxBytes: maxBytes)
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else {
+                self?.clearLoadingState(for: key)
+                return
+            }
 
             switch result {
             case let .success(data):
                 let decoded = await MarkdownImageDecoder.decodeDownsampled(data)
-                guard !Task.isCancelled else { return }
+                guard let self, !Task.isCancelled else { return }
                 self.tasks[key] = nil
                 if let decoded {
                     MarkdownImageCache.shared.store(decoded, forKey: key)
@@ -494,12 +519,13 @@ final class MarkdownImageLoader {
                     self.phases[key] = .failed
                 }
             case let .failure(.tooLarge(size)):
+                guard let self else { return }
                 self.tasks[key] = nil
                 self.phases[key] = .tooLarge(size: size)
             case .failure(.cancelled):
-                self.tasks[key] = nil
-                self.phases[key] = nil
+                self?.clearLoadingState(for: key)
             case .failure:
+                guard let self else { return }
                 self.tasks[key] = nil
                 self.phases[key] = .failed
             }
@@ -519,35 +545,79 @@ final class MarkdownImageLoader {
         tasks[key]?.cancel()
         tasks[key] = Task { [weak self] in
             let data = await WebImageLoader.load(url)
-            guard let self, !Task.isCancelled else { return }
+            guard !Task.isCancelled else {
+                self?.clearLoadingState(for: key)
+                return
+            }
             guard let data, let decoded = await MarkdownImageDecoder.decodeDownsampled(data) else {
-                guard !Task.isCancelled else { return }
+                guard let self, !Task.isCancelled else { return }
                 self.tasks[key] = nil
                 self.phases[key] = .failed
                 return
             }
-            guard !Task.isCancelled else { return }
+            guard let self, !Task.isCancelled else { return }
             self.tasks[key] = nil
             MarkdownImageCache.shared.store(decoded, forKey: key)
             self.phases[key] = .loaded(decoded)
         }
     }
 
-    private func acquireAutoLoadSlot() async {
-        while activeAutoLoads >= Self.maxConcurrentAutoLoads {
-            await withCheckedContinuation { continuation in
-                autoLoadWaiters.append(continuation)
-            }
-            if Task.isCancelled { return }
+    /// Cancels all queued and in-flight loads when leaving the conversation screen.
+    func cancelAll() {
+        let running = tasks
+        tasks = [:]
+        running.values.forEach { $0.cancel() }
+        for (key, phase) in phases where phase == .loading {
+            phases[key] = nil
         }
+        let waiters = autoLoadWaiters
+        autoLoadWaiters = []
+        waiters.forEach { $0.continuation.resume() }
+    }
+
+    private func clearLoadingState(for key: String) {
+        tasks[key] = nil
+        if phases[key] == .loading {
+            phases[key] = nil
+        }
+    }
+
+    /// Waits for an auto-load concurrency slot. Returns `true` only when `activeAutoLoads` was actually incremented.
+    private func acquireAutoLoadSlot() async -> Bool {
+        while activeAutoLoads >= Self.maxConcurrentAutoLoads {
+            if Task.isCancelled { return false }
+            let waiterID = UUID()
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { continuation in
+                    if Task.isCancelled {
+                        continuation.resume()
+                    } else {
+                        autoLoadWaiters.append((waiterID, continuation))
+                    }
+                }
+            } onCancel: {
+                Task { @MainActor [weak self] in
+                    self?.resumeWaiter(id: waiterID)
+                }
+            }
+            if Task.isCancelled { return false }
+        }
+        guard !Task.isCancelled else { return false }
         activeAutoLoads += 1
+        return true
+    }
+
+    private func resumeWaiter(id: UUID) {
+        guard let index = autoLoadWaiters.firstIndex(where: { $0.id == id }) else { return }
+        let waiter = autoLoadWaiters.remove(at: index)
+        waiter.continuation.resume()
     }
 
     private func releaseAutoLoadSlot() {
         activeAutoLoads = max(0, activeAutoLoads - 1)
         if !autoLoadWaiters.isEmpty {
             let next = autoLoadWaiters.removeFirst()
-            next.resume()
+            next.continuation.resume()
         }
     }
 
@@ -555,7 +625,7 @@ final class MarkdownImageLoader {
         tasks.values.forEach { $0.cancel() }
         let waiters = autoLoadWaiters
         autoLoadWaiters = []
-        waiters.forEach { $0.resume() }
+        waiters.forEach { $0.continuation.resume() }
     }
 }
 
@@ -594,8 +664,8 @@ private struct MarkdownPictureItemView: View {
     @Environment(\.markdownImageLoader) private var loader
     @State private var localFallbackSheet: OpenedPreview?
     @State private var standaloneWebLoader: MarkdownImageLoader?
-    @State private var dataImage: UIImage?
-    @State private var dataFailed = false
+    @State private var dataImage: (key: String, image: UIImage)?
+    @State private var dataFailedKey: String?
 
     private var target: MarkdownPictureTarget { MarkdownPictureTarget(picture.source) }
 
@@ -663,9 +733,9 @@ private struct MarkdownPictureItemView: View {
         }
     }
 
-    private func largeLocalImageChip(path: String, size: Int, loader: MarkdownImageLoader) -> some View {
-        let formattedSize = Int64(size).formatted(.byteCount(style: .file))
-        let canLoadInline = size <= MarkdownImageLoader.manualLoadMaxBytes
+    private func largeLocalImageChip(path: String, size: Int?, loader: MarkdownImageLoader) -> some View {
+        let formattedSize = size.map { Int64($0).formatted(.byteCount(style: .file)) }
+        let canLoadInline = size.map { $0 <= MarkdownImageLoader.manualLoadMaxBytes } ?? false
         return HStack(spacing: 8) {
             Button {
                 if let url = ConversationLinks.fileLink(path) { openURL(url) }
@@ -676,9 +746,11 @@ private struct MarkdownPictureItemView: View {
                     Text(verbatim: picture.label)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    Text(verbatim: formattedSize)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    if let formattedSize {
+                        Text(verbatim: formattedSize)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
                 .font(.footnote)
             }
@@ -713,22 +785,28 @@ private struct MarkdownPictureItemView: View {
     @ViewBuilder
     private func dataImageView(raw: String) -> some View {
         let cacheKey = "data:\(raw.hashValue):\(raw.count)"
-        if let cached = dataImage ?? MarkdownImageCache.shared.image(forKey: cacheKey) {
+        let currentImage = (dataImage?.key == cacheKey ? dataImage?.image : nil)
+            ?? MarkdownImageCache.shared.image(forKey: cacheKey)
+        if let cached = currentImage {
             renderedImage(cached, link: linkURL)
-        } else if dataFailed {
+        } else if dataFailedKey == cacheKey {
             staticChip(systemImage: "photo", detail: nil)
         } else {
             imagePlaceholder
                 .task(id: cacheKey) {
+                    if dataImage?.key != cacheKey { dataImage = nil }
+                    if dataFailedKey != cacheKey { dataFailedKey = nil }
                     if let cached = MarkdownImageCache.shared.image(forKey: cacheKey) {
-                        dataImage = cached
+                        dataImage = (cacheKey, cached)
                         return
                     }
                     if let decoded = await MarkdownImageDecoder.decodeDataURI(raw) {
+                        guard !Task.isCancelled else { return }
                         MarkdownImageCache.shared.store(decoded, forKey: cacheKey)
-                        dataImage = decoded
+                        dataImage = (cacheKey, decoded)
                     } else {
-                        dataFailed = true
+                        guard !Task.isCancelled else { return }
+                        dataFailedKey = cacheKey
                     }
                 }
         }

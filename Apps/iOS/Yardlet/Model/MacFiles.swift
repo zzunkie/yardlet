@@ -215,8 +215,8 @@ enum ConversationLinks {
 // MARK: - In-memory file reading for inline images (§15.22)
 
 enum MacFileDataFailure: Error, Equatable, Sendable {
-    /// The file exceeds the requested byte limit; carries the host-reported byte size.
-    case tooLarge(size: Int)
+    /// The file exceeds the requested byte limit; carries the host-reported byte size when known.
+    case tooLarge(size: Int?)
     case refused(RemoteError?)
     case changing
     case notConnected
@@ -252,7 +252,7 @@ extension HostSession {
                     try? await Task.sleep(for: .seconds(1))
                     continue
                 case .tooLarge?:
-                    return .failure(.tooLarge(size: maxBytes + 1))
+                    return .failure(.tooLarge(size: nil))
                 default:
                     return .failure(.refused(part.error))
                 }
