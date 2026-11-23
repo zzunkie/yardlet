@@ -25,6 +25,7 @@ struct HomeView: View {
         case macSheet
         case settings
         case hostSettings
+        case connectors
         case newTask
         case scanQR
         case pasteLink
@@ -75,11 +76,11 @@ struct HomeView: View {
                         .opacity(selectedTab == .tasks ? 1 : 0)
                         .allowsHitTesting(selectedTab == .tasks)
                         .accessibilityHidden(selectedTab != .tasks)
-                    MailTabPlaceholderView(session: session)
+                    MailTabPlaceholderView(session: session, onOpenConnectors: { activeSheet = .connectors })
                         .opacity(selectedTab == .mail ? 1 : 0)
                         .allowsHitTesting(selectedTab == .mail)
                         .accessibilityHidden(selectedTab != .mail)
-                    CalendarTabPlaceholderView(session: session)
+                    CalendarTabPlaceholderView(session: session, onOpenConnectors: { activeSheet = .connectors })
                         .opacity(selectedTab == .calendar ? 1 : 0)
                         .allowsHitTesting(selectedTab == .calendar)
                         .accessibilityHidden(selectedTab != .calendar)
@@ -108,6 +109,7 @@ struct HomeView: View {
                             activeSheet = nil
                         },
                         onOpenHostSettings: { transitionSheet(to: .hostSettings) },
+                        onOpenConnectors: { transitionSheet(to: .connectors) },
                         onOpenAppSettings: { transitionSheet(to: .settings) },
                         onScanQR: { transitionSheet(to: .scanQR) },
                         onPasteLink: { transitionSheet(to: .pasteLink) },
@@ -116,7 +118,9 @@ struct HomeView: View {
                 case .settings:
                     SettingsView()
                 case .hostSettings:
-                    HostSettingsPlaceholderSheet(session: session)
+                    HostSettingsView(session: session)
+                case .connectors:
+                    ConnectorsView(session: session, isPresentedAsSheet: true)
                 case .newTask:
                     NewTaskView(session: session, initialProjectID: defaultNewTaskProject?.id) { taskID in
                         activeSheet = nil
@@ -759,6 +763,7 @@ struct MacSheet: View {
     let session: HostSession
     let onOpenSchedules: () -> Void
     let onOpenHostSettings: () -> Void
+    let onOpenConnectors: () -> Void
     let onOpenAppSettings: () -> Void
     let onScanQR: () -> Void
     let onPasteLink: () -> Void
@@ -915,9 +920,16 @@ struct MacSheet: View {
                 }
                 sheetRow(
                     systemImage: "slider.horizontal.3",
-                    title: "Host Settings and Connectors",
+                    title: "Host Settings",
                     detail: hostSettingsSubtitle,
                     action: onOpenHostSettings
+                )
+                hairline
+                sheetRow(
+                    systemImage: "powerplug",
+                    title: "Connectors",
+                    detail: connectorsSubtitle,
+                    action: onOpenConnectors
                 )
             }
             .background(YardletPalette.surfaceContainerLow,
@@ -970,9 +982,21 @@ struct MacSheet: View {
 
     private var hostSettingsSubtitle: String {
         if session.capabilities.hostSettings || session.capabilities.hostAccounts {
-            return String(localized: "Available on \(session.name)")
+            return String(localized: "Usage, accounts, instructions and CLI updates")
         }
-        return String(localized: "Manage settings and connectors")
+        return String(localized: "Update Yardlet on \(session.name) to manage")
+    }
+
+    private var connectorsSubtitle: String {
+        if let connectors = session.hostAccounts?.connectors {
+            let connected = connectors.filter { $0.status == "connected" }.count
+            if connected > 0 { return String(localized: "\(connected) connected") }
+            if !connectors.isEmpty { return String(localized: "\(connectors.count) configured") }
+        }
+        if session.capabilities.hostAccounts {
+            return String(localized: "Manage connected services")
+        }
+        return String(localized: "Update Yardlet on \(session.name) to manage")
     }
 
     private func sheetSectionTitle(_ title: LocalizedStringKey) -> some View {
@@ -1047,61 +1071,18 @@ struct MacSheet: View {
     }
 }
 
-/// Placeholder sheet for Host Settings & Connectors (ready for Track B to replace with live controls).
-private struct HostSettingsPlaceholderSheet: View {
-    let session: HostSession
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                MonochromeCard(fill: YardletPalette.surfaceContainerLow, padding: 20) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Image(systemName: "slider.horizontal.3")
-                            .font(.title2)
-                            .foregroundStyle(YardletPalette.onSurfaceVariant)
-                        Text("Host Settings and Connectors")
-                            .font(.headline)
-                            .foregroundStyle(YardletPalette.onSurface)
-                        if session.capabilities.hostSettings || session.capabilities.hostAccounts {
-                            Text("\(session.name) supports remote settings and connectors. Controls for iOS are coming soon.")
-                                .font(.subheadline)
-                                .foregroundStyle(YardletPalette.onSurfaceVariant)
-                        } else {
-                            Text("Update Yardlet on \(session.name) to manage host settings and connectors from your phone.")
-                                .font(.subheadline)
-                                .foregroundStyle(YardletPalette.onSurfaceVariant)
-                        }
-                    }
-                }
-                .padding(16)
-            }
-            .background(YardletPalette.background)
-            .navigationTitle("Host Settings")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(YardletPalette.background, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
-        }
-        .presentationDetents([.medium])
-        .presentationDragIndicator(.visible)
-    }
-}
-
 // MARK: - Mail & Calendar Tab Placeholders (Track C Ready)
 
 /// Mail tab in the unified 3-tab mobile shell, checking live host capabilities and `mailCalendar` permission state.
 struct MailTabPlaceholderView: View {
     let session: HostSession
+    var onOpenConnectors: () -> Void = {}
 
     var body: some View {
         MailCalendarPlaceholderView(
             session: session,
-            kind: .mail
+            kind: .mail,
+            onOpenConnectors: onOpenConnectors
         )
     }
 }
@@ -1109,11 +1090,13 @@ struct MailTabPlaceholderView: View {
 /// Calendar tab in the unified 3-tab mobile shell, checking live host capabilities and `mailCalendar` permission state.
 struct CalendarTabPlaceholderView: View {
     let session: HostSession
+    var onOpenConnectors: () -> Void = {}
 
     var body: some View {
         MailCalendarPlaceholderView(
             session: session,
-            kind: .calendar
+            kind: .calendar,
+            onOpenConnectors: onOpenConnectors
         )
     }
 }
@@ -1140,6 +1123,7 @@ private struct MailCalendarPlaceholderView: View {
 
     let session: HostSession
     let kind: Kind
+    let onOpenConnectors: () -> Void
     @State private var isRefreshing = false
 
     private var hostSupportsKind: Bool {
@@ -1185,21 +1169,30 @@ private struct MailCalendarPlaceholderView: View {
                             Button("Retry") { session.reconnectNow() }
                                 .prominentButton()
                         } else if hostSupportsKind {
-                            Button {
-                                isRefreshing = true
-                                Task {
-                                    await session.refreshMailCalendarState()
-                                    isRefreshing = false
+                            HStack(spacing: 10) {
+                                if let state = session.mailCalendarState,
+                                   state.permitted,
+                                   !hostHasService,
+                                   session.capabilities.hostAccounts {
+                                    Button("Manage Connectors", action: onOpenConnectors)
+                                        .prominentButton()
                                 }
-                            } label: {
-                                if isRefreshing {
-                                    ProgressView().controlSize(.small)
-                                } else {
-                                    Text("Refresh Status")
+                                Button {
+                                    isRefreshing = true
+                                    Task {
+                                        await session.refreshMailCalendarState()
+                                        isRefreshing = false
+                                    }
+                                } label: {
+                                    if isRefreshing {
+                                        ProgressView().controlSize(.small)
+                                    } else {
+                                        Text("Refresh Status")
+                                    }
                                 }
+                                .buttonStyle(.bordered)
+                                .disabled(isRefreshing)
                             }
-                            .buttonStyle(.bordered)
-                            .disabled(isRefreshing)
                         }
                     }
                 }

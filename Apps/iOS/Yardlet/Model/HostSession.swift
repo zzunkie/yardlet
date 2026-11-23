@@ -59,6 +59,14 @@ final class HostSession: Identifiable {
     private(set) var capabilities = Capabilities()
     /// Mail and Calendar availability and device permission on the connected Mac (§15.38); nil until read.
     private(set) var mailCalendarState: RemoteMailCalendarState?
+    /// The Mac's Settings page as last read (§15.36); nil until read.
+    private(set) var hostSettings: RemoteHostSettings?
+    /// The Mac's Accounts, Harnesses and Connectors state as last read (§15.37); nil until read.
+    private(set) var hostAccounts: RemoteAccountsState?
+    /// Counts the Mac's `hostSettingsChanged` notifications (§15.36).
+    private(set) var hostSettingsChanges = 0
+    /// Counts the Mac's `hostAccountsChanged` notifications (§15.37).
+    private(set) var hostAccountsChanges = 0
     /// The Mac lists its scheduled tasks, runs one now, and pauses or resumes one (§15.21).
     private(set) var scheduledTasks = false
     /// Counts the Mac's `schedulesChanged` (§15.21), so a Schedules screen open reads the list again.
@@ -106,6 +114,10 @@ final class HostSession: Identifiable {
     /// The detail each conversation was last asked for in.
     @ObservationIgnored private var subscribedDetail: [String: RemoteConversationDetail] = [:]
     @ObservationIgnored static let keptSubscriptions = 6
+    @ObservationIgnored private var watchingHostSettingsCount = 0
+    @ObservationIgnored private var watchingHostAccountsCount = 0
+    @ObservationIgnored private var readingHostSettings = false
+    @ObservationIgnored private var dirtyHostSettings = false
 
     init(host: RemoteSavedHost, clientKey: RemoteKeyPair, hello: RemoteHandshakeHello, store: RemoteHostStore?,
          isDemo: Bool = false) {
@@ -261,8 +273,18 @@ final class HostSession: Identifiable {
             browser.receive(event)
         case .mailCalendarChanged:
             Task { await refreshMailCalendarState() }
-        case .linked, .linkRefused, .terminalOutput, .terminalClosed, .hostSettingsChanged, .hostAccountsChanged:
-            // Not shown on the phone yet: terminals, host settings and accounts (§15.29, §15.36, §15.37).
+        case .hostSettingsChanged:
+            hostSettingsChanges += 1
+            if watchingHostSettingsCount > 0 {
+                Task { _ = await fetchHostSettings(watching: true) }
+            }
+        case .hostAccountsChanged:
+            hostAccountsChanges += 1
+            if watchingHostAccountsCount > 0 {
+                Task { _ = await fetchHostAccounts(watching: true) }
+            }
+        case .linked, .linkRefused, .terminalOutput, .terminalClosed:
+            // Not shown on the phone yet: terminals (§15.29).
             // `linked` and `linkRefused` go only to the connection that asked (§12.1).
             break
         }
@@ -343,6 +365,20 @@ final class HostSession: Identifiable {
         } else {
             mailCalendarState = nil
         }
+        if capabilities.hostSettings {
+            if watchingHostSettingsCount > 0 {
+                Task { _ = await fetchHostSettings(watching: true) }
+            }
+        } else {
+            hostSettings = nil
+        }
+        if capabilities.hostAccounts {
+            if watchingHostAccountsCount > 0 {
+                Task { _ = await fetchHostAccounts(watching: true) }
+            }
+        } else {
+            hostAccounts = nil
+        }
     }
 
     /// Reads Mail and Calendar readiness and this device's permission from the Mac (§15.38).
@@ -352,6 +388,159 @@ final class HostSession: Identifiable {
         if response.ok, let state = response.mailCalendarState {
             mailCalendarState = state
         }
+    }
+
+    // MARK: - Host Settings & Accounts (§15.36, §15.37)
+
+    func watchHostSettings() async {
+        watchingHostSettingsCount += 1
+        _ = await fetchHostSettings(watching: true)
+    }
+
+    func unwatchHostSettings() {
+        guard watchingHostSettingsCount > 0 else { return }
+        watchingHostSettingsCount -= 1
+        if watchingHostSettingsCount == 0, capabilities.hostSettings, isConnected {
+            request(.hostSettings(watching: false))
+        }
+    }
+
+    @discardableResult
+    func fetchHostSettings(watching: Bool = true) async -> RemoteHostSettings? {
+        guard isConnected, capabilities.hostSettings else { return nil }
+        guard !readingHostSettings else {
+            dirtyHostSettings = true
+            return hostSettings
+        }
+        readingHostSettings = true
+        defer { readingHostSettings = false }
+        repeat {
+            dirtyHostSettings = false
+            let answer = await response(to: .hostSettings(watching: watching))
+            guard capabilities.hostSettings else { return nil }
+            if answer.ok, let page = answer.settingsPage {
+                if hostSettings != page { hostSettings = page }
+            } else if !answer.ok {
+                commandError = Self.message(for: answer.error, host: name)
+            }
+        } while dirtyHostSettings && isConnected
+        return hostSettings
+    }
+
+    @discardableResult
+    func setHostSetting(id: String, value: String, confirmed: Bool = false) async -> Bool {
+        guard isConnected, capabilities.hostSettings else { return false }
+        let answer = await response(to: .setHostSetting(setting: id, value: value, confirmed: confirmed))
+        if answer.ok, let page = answer.settingsPage {
+            hostSettings = page
+            return true
+        }
+        commandError = Self.message(for: answer.error, host: name, otherwise: [
+            .notAllowed: String(localized: "Allow Change settings for this device on \(name) to edit settings.")
+        ])
+        return false
+    }
+
+    @discardableResult
+    func saveHostInstructions(text: String) async -> Bool {
+        guard isConnected, capabilities.hostSettings else { return false }
+        let answer = await response(to: .saveHostInstructions(text: text))
+        if answer.ok, let page = answer.settingsPage {
+            hostSettings = page
+            return true
+        }
+        commandError = Self.message(for: answer.error, host: name, otherwise: [
+            .notAllowed: String(localized: "Allow Change settings for this device on \(name) to edit instructions.")
+        ])
+        return false
+    }
+
+    @discardableResult
+    func runHostCLIUpdate(action: String, harness: String? = nil) async -> Bool {
+        guard isConnected, capabilities.hostSettings else { return false }
+        let answer = await response(to: .hostCLIUpdate(action: action, harness: harness))
+        if answer.ok, let page = answer.settingsPage {
+            hostSettings = page
+            return true
+        }
+        commandError = Self.message(for: answer.error, host: name, otherwise: [
+            .notAllowed: String(localized: "Allow Change settings for this device on \(name) to update CLIs.")
+        ])
+        return false
+    }
+
+    func watchHostAccounts() async {
+        watchingHostAccountsCount += 1
+        _ = await fetchHostAccounts(watching: true)
+    }
+
+    func unwatchHostAccounts() {
+        guard watchingHostAccountsCount > 0 else { return }
+        watchingHostAccountsCount -= 1
+        if watchingHostAccountsCount == 0, capabilities.hostAccounts, isConnected {
+            request(.hostAccounts(watching: false))
+        }
+    }
+
+    @discardableResult
+    func fetchHostAccounts(watching: Bool = true, refreshHarnesses: [String] = []) async -> RemoteAccountsState? {
+        guard isConnected, capabilities.hostAccounts else { return nil }
+        let answer = await response(to: .hostAccounts(watching: watching, refreshHarnesses: refreshHarnesses))
+        if answer.ok, let state = answer.hostAccountsState {
+            if hostAccounts != state { hostAccounts = state }
+            return state
+        }
+        if !answer.ok {
+            commandError = Self.message(for: answer.error, host: name)
+        }
+        return nil
+    }
+
+    @discardableResult
+    func setHostAccount(
+        harness: String? = nil,
+        accountID: String? = nil,
+        automaticAssignment: Bool? = nil,
+        settingID: String? = nil,
+        enabled: Bool? = nil
+    ) async -> Bool {
+        guard isConnected, capabilities.hostAccounts else { return false }
+        let answer = await response(to: .setHostAccount(
+            harness: harness,
+            accountID: accountID,
+            automaticAssignment: automaticAssignment,
+            settingID: settingID,
+            enabled: enabled
+        ))
+        if answer.ok {
+            if let state = answer.hostAccountsState { hostAccounts = state }
+            return true
+        }
+        commandError = Self.message(for: answer.error, host: name, otherwise: [
+            .notAllowed: String(localized: "Allow Change settings for this device on \(name) to change accounts.")
+        ])
+        return false
+    }
+
+    @discardableResult
+    func setHostConnector(id: String, enabled: Bool) async -> Bool {
+        guard isConnected, capabilities.hostAccounts else { return false }
+        let answer = await response(to: .setHostConnector(id: id, enabled: enabled))
+        if answer.ok {
+            if let state = answer.hostAccountsState { hostAccounts = state }
+            return true
+        }
+        commandError = Self.message(for: answer.error, host: name, otherwise: [
+            .notAllowed: String(localized: "Allow Change settings for this device on \(name) to change connectors.")
+        ])
+        return false
+    }
+
+    func sendConnectorSetup(_ setup: RemoteConnectorSetupRequest) async -> RemoteResponse {
+        guard isConnected, capabilities.hostAccounts else {
+            return .failure(setup.operationID, RemoteError(.unavailable, "Not connected"))
+        }
+        return await response(to: .connectorSetup(setup))
     }
 
     private func applyTasks(changed: [RemoteTask], removed: [String]) {
