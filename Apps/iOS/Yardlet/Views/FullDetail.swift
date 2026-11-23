@@ -14,6 +14,7 @@ extension RemoteItem {
         guard let body, activity != "fileChange" else { return false }
         return [body.output, body.detail, body.error, body.reasoning].contains { $0?.isBlank == false }
             || body.mcp?.isEmpty == false
+            || body.widget != nil
     }
 
     /// Tapping the line opens something: a subagent's card, what the line holds, or what `itemDetail` reads (§15.8).
@@ -29,19 +30,28 @@ private extension String {
 /// Shows a picture's preview whole. The task's screen sets it, so the picture stays open while the conversation
 /// under it changes; elsewhere a strip opens its own.
 struct OpenPreviewAction {
-    let open: (RemoteImagePreview) -> Void
+    let open: (OpenedPreview) -> Void
 
-    func callAsFunction(_ preview: RemoteImagePreview) { open(preview) }
+    func callAsFunction(_ preview: RemoteImagePreview) { open(OpenedPreview(preview: preview)) }
+    func callAsFunction(image: UIImage, name: String?) { open(OpenedPreview(image: image, name: name)) }
 }
 
 extension EnvironmentValues {
     @Entry var openPreview: OpenPreviewAction?
 }
 
-/// A picture opened whole.
+/// A picture opened whole, either from a remote preview payload or a decoded inline Markdown image.
 struct OpenedPreview: Identifiable {
+    enum Source {
+        case preview(RemoteImagePreview)
+        case image(UIImage, name: String?)
+    }
+
     let id = UUID()
-    let preview: RemoteImagePreview
+    let source: Source
+
+    init(preview: RemoteImagePreview) { source = .preview(preview) }
+    init(image: UIImage, name: String?) { source = .image(image, name: name) }
 }
 
 /// A row of pictures' previews in the message's order; tapping one shows it whole. Previews the phone cannot read are
@@ -56,7 +66,7 @@ struct PreviewStrip: View {
             row
             ScrollView(.horizontal, showsIndicators: false) { row }
         }
-        .sheet(item: $opened) { PreviewViewer(preview: $0.preview) }
+        .sheet(item: $opened) { PreviewViewer(source: $0.source) }
     }
 
     private var row: some View {
@@ -93,25 +103,42 @@ private struct PreviewThumbnail: View {
     }
 }
 
-/// One preview as large as the screen allows (the Mac sends at most 480 pixels on its long side), with its name.
+/// One picture as large as the screen allows, with its name.
 struct PreviewViewer: View {
-    let preview: RemoteImagePreview
+    let source: OpenedPreview.Source
     @Environment(\.dismiss) private var dismiss
+
+    init(preview: RemoteImagePreview) { source = .preview(preview) }
+    init(source: OpenedPreview.Source) { self.source = source }
+
+    private var image: UIImage? {
+        switch source {
+        case let .preview(preview): PreviewImages.image(preview.data)
+        case let .image(image, _): image
+        }
+    }
+
+    private var name: String? {
+        switch source {
+        case let .preview(preview): preview.name
+        case let .image(_, name): name
+        }
+    }
 
     var body: some View {
         NavigationStack {
             Group {
-                if let image = PreviewImages.image(preview.data) {
+                if let image {
                     Image(uiImage: image)
                         .resizable()
                         .scaledToFit()
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .padding(16)
-                        .accessibilityLabel(preview.name ?? String(localized: "Picture"))
+                        .accessibilityLabel(name ?? String(localized: "Picture"))
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .navigationTitle(preview.name ?? String(localized: "Picture"))
+            .navigationTitle(name ?? String(localized: "Picture"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
@@ -232,6 +259,11 @@ struct LineBodyView: View, @MainActor Equatable {
                     ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                         McpBlockView(block: block)
                     }
+                }
+            }
+            if let widget = body.widget {
+                section(nil) {
+                    ConversationWidgetCard(id: "\(item.id):detail", widget: widget)
                 }
             }
             if let error = shown(body.error) {

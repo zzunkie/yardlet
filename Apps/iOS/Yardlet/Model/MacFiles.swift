@@ -130,9 +130,20 @@ enum ConversationLinks {
     /// The file a link names: a code span's (`fileLink`) or an answer's own link to a path.
     static func file(_ url: URL) -> String? {
         if url.scheme == fileScheme {
-            return URLComponents(url: url, resolvingAgainstBaseURL: false).map(\.path).flatMap { path($0) }
+            guard let raw = URLComponents(url: url, resolvingAgainstBaseURL: false)?.path, !raw.isEmpty else { return nil }
+            if let normalized = path(raw) { return normalized }
+            // A Markdown image/file chip may name a bare workspace-relative file such as `chart.png`.
+            return bareFilePath(raw)
         }
         return path(url.absoluteString, link: true)
+    }
+
+    private static func bareFilePath(_ raw: String) -> String? {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, text.count <= 1_024, !text.contains("/"), !text.hasPrefix("$"),
+              !text.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) || "*?<>|\"`\\".unicodeScalars.contains($0) })
+        else { return nil }
+        return hasExtension(text) ? text : nil
     }
 
     /// The link a code span that names a file opens.
@@ -199,4 +210,82 @@ enum ConversationLinks {
     private static let macTopFolders: Set<String> = [
         "Users", "Volumes", "private", "tmp", "var", "opt", "etc", "Applications", "Library", "System", "usr", "home"
     ]
+}
+
+// MARK: - In-memory file reading for inline images (§15.22)
+
+enum MacFileDataFailure: Error, Equatable, Sendable {
+    /// The file exceeds the requested byte limit; carries the host-reported byte size.
+    case tooLarge(size: Int)
+    case refused(RemoteError?)
+    case changing
+    case notConnected
+    case cancelled
+}
+
+extension HostSession {
+    /// Reads a task file directly into memory via `readFile` (§15.22) without writing to disk. Stops immediately on
+    /// the first part if the reported size exceeds `maxBytes` so mobile and relay bandwidth are protected.
+    func readFileData(_ path: String, of taskID: String, maxBytes: Int) async -> Result<Data, MacFileDataFailure> {
+        let maxRestarts = 3
+        let maxRateLimitedWaits = 10
+        var firstSize: Int?
+        var firstModifiedAt: Int64?
+        var buffer = Data()
+        var offset = 0
+        var restarts = 0
+        var waits = 0
+
+        while true {
+            if Task.isCancelled { return .failure(.cancelled) }
+            guard isConnected else { return .failure(.notConnected) }
+
+            let part = await response(to: .readFile(taskID: taskID, path: path, offset: offset))
+            if Task.isCancelled { return .failure(.cancelled) }
+
+            guard part.ok else {
+                switch part.error?.code {
+                case .unavailable?:
+                    return .failure(.notConnected)
+                case .rateLimited? where waits < maxRateLimitedWaits:
+                    waits += 1
+                    try? await Task.sleep(for: .seconds(1))
+                    continue
+                case .tooLarge?:
+                    return .failure(.tooLarge(size: maxBytes + 1))
+                default:
+                    return .failure(.refused(part.error))
+                }
+            }
+
+            waits = 0
+            guard let size = part.size, let chunk = part.data, part.offset == offset, offset + chunk.count <= size else {
+                return .failure(.refused(nil))
+            }
+            if size > maxBytes {
+                return .failure(.tooLarge(size: size))
+            }
+            if let expectedSize = firstSize, size != expectedSize || part.modifiedAt != firstModifiedAt {
+                restarts += 1
+                guard restarts <= maxRestarts else { return .failure(.changing) }
+                firstSize = nil
+                firstModifiedAt = nil
+                buffer.removeAll(keepingCapacity: true)
+                offset = 0
+                continue
+            }
+            if firstSize == nil {
+                firstSize = size
+                firstModifiedAt = part.modifiedAt
+                buffer.reserveCapacity(size)
+            }
+            buffer.append(chunk)
+            if buffer.count > maxBytes {
+                return .failure(.tooLarge(size: size))
+            }
+            offset += chunk.count
+            if offset >= size { return .success(buffer) }
+            if chunk.isEmpty { return .failure(.refused(nil)) }
+        }
+    }
 }

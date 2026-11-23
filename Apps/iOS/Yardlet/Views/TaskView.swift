@@ -18,6 +18,8 @@ struct TaskView: View {
     @State private var openedSubtask: String?
     /// A picture shown whole, over the conversation as it goes on changing.
     @State private var openedPreview: OpenedPreview?
+    /// Memory-only loader for inline Markdown local task images and explicitly loaded web images.
+    @State private var imageLoader: MarkdownImageLoader?
     @State private var isShowingSettings = false
     @State private var isConfirmingArchive = false
     /// The end of the conversation is in view; otherwise a button takes the person back to it.
@@ -80,6 +82,7 @@ struct TaskView: View {
         }
         .onAppear {
             conversation = session.open(taskID)
+            if imageLoader == nil { imageLoader = MarkdownImageLoader(session: session, taskID: taskID) }
             session.browser.follow(taskID)
         }
         .onDisappear { session.browser.unfollow(taskID) }
@@ -125,7 +128,7 @@ struct TaskView: View {
                 LineDetailView(session: session, taskID: taskID, item: item)
             }
         }
-        .sheet(item: $openedPreview) { PreviewViewer(preview: $0.preview) }
+        .sheet(item: $openedPreview) { PreviewViewer(source: $0.source) }
         .navigationDestination(item: $openedSubtask) { childTask in
             TaskView(session: session, taskID: childTask)
         }
@@ -241,7 +244,8 @@ struct TaskView: View {
             }
             .environment(\.openURL, OpenURLAction(handler: open))
             .scrollDismissesKeyboard(.interactively)
-            .environment(\.openPreview, OpenPreviewAction { openedPreview = OpenedPreview(preview: $0) })
+            .environment(\.openPreview, OpenPreviewAction { openedPreview = $0 })
+            .environment(\.markdownImageLoader, imageLoader)
             .overlay {
                 if !conversation.isLoaded { ProgressView() }
             }
@@ -396,6 +400,7 @@ struct TurnView: View, @MainActor Equatable {
     static func == (lhs: TurnView, rhs: TurnView) -> Bool {
         lhs.turn == rhs.turn && lhs.isWorkOpen == rhs.isWorkOpen && lhs.context.task == rhs.context.task
             && lhs.context.offersTurnActions == rhs.context.offersTurnActions
+            && lhs.context.session.taskFiles == rhs.context.session.taskFiles
     }
 
     var body: some View {
@@ -721,6 +726,9 @@ struct ActivityLine: View {
             }
             if let images = item.images, !images.isEmpty {
                 PreviewStrip(previews: images).padding(.leading, 24)
+            }
+            if let widget = item.body?.widget {
+                ConversationWidgetCard(id: item.id, widget: widget)
             }
         }
     }
