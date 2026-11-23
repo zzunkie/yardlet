@@ -1,7 +1,9 @@
+#if canImport(IOSurface) && canImport(CoreImage) && canImport(ImageIO)
 import CoreImage
-import Foundation
 import ImageIO
 import IOSurface
+#endif
+import Foundation
 import Observation
 import YardletRemote
 
@@ -38,9 +40,11 @@ final class RemoteTabBridge {
         /// A password typed into a page keeps the agent's scripts and pictures off it, as the panel's vault watch does
         /// (the vault or the wallet is on).
         var marksTypedSecrets: @MainActor () -> Bool = { false }
+        #if canImport(IOSurface) && canImport(CoreImage) && canImport(ImageIO)
         /// The tab's latest painted view frame (`BrowserFrame` and its `IOSurfaceRef`), when the host shares frames as
         /// IOSurfaces (macOS CEF). Nil falls back to `Page.captureScreenshot`.
         var latestSurface: @MainActor (BrowserTabID) -> (frame: BrowserFrame, surface: IOSurfaceRef)? = { _ in nil }
+        #endif
     }
 
     /// Persistent per-tab CDP frame-navigation state so repeated captures on an unchanged non-`file:` document can
@@ -68,9 +72,22 @@ final class RemoteTabBridge {
         }
     }
 
-    private struct SendableSurface: @unchecked Sendable {
+    #if canImport(IOSurface) && canImport(CoreImage) && canImport(ImageIO)
+    /// Pins an `IOSurfaceRef` for its lifetime so `SurfaceRing` cannot recycle it while off-main-thread JPEG encoding
+    /// runs, and guarantees the use count is released on every exit path.
+    private final class PinnedSurface: @unchecked Sendable {
         let surface: IOSurfaceRef
+
+        init(_ surface: IOSurfaceRef) {
+            self.surface = surface
+            IOSurfaceIncrementUseCount(surface)
+        }
+
+        deinit {
+            IOSurfaceDecrementUseCount(surface)
+        }
     }
+    #endif
 
     private struct Followed {
         var listToken: UUID
@@ -253,9 +270,12 @@ final class RemoteTabBridge {
                     keys[key] = .some(nil)
                 } else {
                     var order = (watchOrder[key] ?? [:]).filter { current.contains($0.key) }
-                    for viewport in current where order[viewport] == nil {
+                    let added = current.filter { order[$0] == nil }
+                    if !added.isEmpty {
                         watchSequence &+= 1
-                        order[viewport] = watchSequence
+                        for viewport in added {
+                            order[viewport] = watchSequence
+                        }
                     }
                     watchOrder[key] = order
                     let chosen = order.max { lhs, rhs in
@@ -277,7 +297,8 @@ final class RemoteTabBridge {
             observeTabs(of: session, in: client)
         }
         paintTold = paintTold.filter { key in followed.values.contains { $0.watched[key] != nil } }
-        for key in Array(settleTasks.keys) where !activeKeys.contains(key) {
+        let cadenceKeys = Set(settleTasks.keys).union(lastCaptureAt.keys).union(lastCaptureWasMotion.keys)
+        for key in cadenceKeys where !activeKeys.contains(key) {
             clearCaptureCadence(for: key)
         }
         if !followed.isEmpty { observeWaits() }
@@ -435,11 +456,14 @@ final class RemoteTabBridge {
         let isMotion = lastCaptureAt[tab.key].map { now - $0 < Self.motionWindow } ?? false
         let quality = isMotion ? Self.motionJPEGQuality : Self.jpegQuality
 
+        #if canImport(IOSurface) && canImport(CoreImage) && canImport(ImageIO)
         // Fast path: encode directly from the host's latest matching IOSurface off the main thread.
-        if let candidate = matchingSurface(for: tab) {
+        // Requires `Page.enable` so subframe navigations are observed; acquires and pins the IOSurface only AFTER
+        // all pre-capture async checks complete so SurfaceRing cannot recycle it across an await.
+        if frameGuard.pageEnabled, hasEligibleSurface(for: tab) {
+            let emulationRevisionBefore = tab.emulationRevision
             let isFilePage = tab.currentURL?.lowercased().hasPrefix("file:") == true
-            let alreadyVerified = frameGuard.pageEnabled
-                && !isFilePage
+            let alreadyVerified = !isFilePage
                 && !frameGuard.verifiedHasFileFrame
                 && frameGuard.verifiedNavigations == page
                 && frameGuard.verifiedGeneration == frameGuard.frameGeneration
@@ -469,21 +493,29 @@ final class RemoteTabBridge {
                 }
                 guard tab.navigations == page else { return .failure(RemoteError(.unavailable, "The page moved")) }
             }
-            let genBeforeEncode = frameGuard.frameGeneration
             let filesBeforeEncode = frameGuard.navigatedFiles
             frameGuard.navigatedFiles.removeAll()
             for file in filesBeforeEncode {
                 if let refusal = await outsideFiles(file, taskID: taskID, in: tab) { return .failure(refusal) }
             }
-            if let encoded = await Self.encodeSurfaceJPEG(SendableSurface(surface: candidate.surface),
-                                                          maxWidth: maxWidth, maxHeight: maxHeight, quality: quality) {
+            if let refusal = blocked(tab) { return .failure(refusal) }
+            let genBeforeEncode = frameGuard.frameGeneration
+            // Acquire and immediately pin the surface synchronously after all pre-capture awaits.
+            if tab.navigations == page,
+               tab.emulationRevision == emulationRevisionBefore,
+               let candidate = acquirePinnedSurface(for: tab),
+               let encoded = await Self.encodeSurfaceJPEG(candidate.pinned, maxWidth: maxWidth, maxHeight: maxHeight,
+                                                          quality: quality) {
                 if let refusal = blocked(tab) { return .failure(refusal) }
                 let duringEncodeFiles = frameGuard.navigatedFiles
                 frameGuard.navigatedFiles.removeAll()
                 for file in duringEncodeFiles {
                     if let refusal = await outsideFiles(file, taskID: taskID, in: tab) { return .failure(refusal) }
                 }
-                guard tab.navigations == page, frameGuard.frameGeneration == genBeforeEncode else {
+                guard tab.navigations == page,
+                      tab.emulationRevision == emulationRevisionBefore,
+                      frameGuard.frameGeneration == genBeforeEncode,
+                      candidate.frame.sequence > tab.minimumValidFrameSequence else {
                     return .failure(RemoteError(.unavailable, "The page moved"))
                 }
                 if isFilePage || frameGuard.verifiedHasFileFrame, let verifiedMark {
@@ -497,6 +529,7 @@ final class RemoteTabBridge {
                                                viewportWidth: candidate.viewportWidth, viewportHeight: candidate.viewportHeight))
             }
         }
+        #endif
 
         // Fallback path: CDP `Page.captureScreenshot` (headless/non-Mac hosts or before the first matching IOSurface).
         var navigatedFiles: Set<String> = []
@@ -584,12 +617,14 @@ final class RemoteTabBridge {
             switch method {
             case "Page.frameNavigated":
                 frameGuard.frameGeneration &+= 1
+                frameGuard.tab?.invalidateSurfaceSequence()
                 if let address = params["frame"]?["url"]?.stringValue,
                    address.lowercased().hasPrefix("file:") {
                     frameGuard.navigatedFiles.insert(address)
                 }
-            case "Page.frameAttached", "Page.frameDetached":
+            case "Page.frameAttached", "Page.frameDetached", "Page.navigatedWithinDocument":
                 frameGuard.frameGeneration &+= 1
+                frameGuard.tab?.invalidateSurfaceSequence()
             default:
                 break
             }
@@ -598,11 +633,29 @@ final class RemoteTabBridge {
         return frameGuard
     }
 
-    /// Returns the host's latest painted IOSurface when it matches the tab's expected CSS viewport and backing scale.
-    private func matchingSurface(for tab: BrowserTab) -> (frame: BrowserFrame, surface: IOSurfaceRef, viewportWidth: Double, viewportHeight: Double)? {
+    #if canImport(IOSurface) && canImport(CoreImage) && canImport(ImageIO)
+    /// Checks whether the tab currently has a valid, in-order IOSurface candidate without retaining or pinning it
+    /// across async security checks.
+    private func hasEligibleSurface(for tab: BrowserTab) -> Bool {
+        validatedSurface(for: tab) != nil
+    }
+
+    /// Acquires and immediately pins the tab's latest IOSurface when its frame sequence is strictly newer than the
+    /// last invalidation (navigation, subframe change, or emulation change), not ahead of main-actor event delivery,
+    /// and matches the tab's expected CSS viewport and backing scale.
+    private func acquirePinnedSurface(for tab: BrowserTab)
+        -> (frame: BrowserFrame, pinned: PinnedSurface, viewportWidth: Double, viewportHeight: Double)? {
+        guard let validated = validatedSurface(for: tab) else { return nil }
+        return (validated.frame, PinnedSurface(validated.surface), validated.viewportWidth, validated.viewportHeight)
+    }
+
+    private func validatedSurface(for tab: BrowserTab)
+        -> (frame: BrowserFrame, surface: IOSurfaceRef, viewportWidth: Double, viewportHeight: Double)? {
         guard !tab.holdsLayout,
               let (frame, surface) = environment.latestSurface(tab.id),
               frame.layer == .view,
+              frame.sequence > tab.minimumValidFrameSequence,
+              frame.sequence <= tab.lastViewFrameSequence,
               frame.pixelWidth > 0, frame.pixelHeight > 0,
               IOSurfaceGetWidth(surface) == frame.pixelWidth,
               IOSurfaceGetHeight(surface) == frame.pixelHeight else { return nil }
@@ -624,6 +677,7 @@ final class RemoteTabBridge {
               abs(Double(frame.pixelHeight) - expectedHeight * expectedScale) <= 2 else { return nil }
         return (frame, surface, expectedWidth, expectedHeight)
     }
+    #endif
 
     private func recordCapture(for tab: BrowserTab, taskID: String, isMotion: Bool) {
         let key = tab.key
@@ -637,27 +691,25 @@ final class RemoteTabBridge {
                   self.followed[session]?.watched[key] != nil else { return }
             self.lastCaptureWasMotion[key] = false
             self.settleTasks[key] = nil
-            self.paintTold.remove(key)
-            if self.paintTold.insert(key).inserted {
-                self.changeHandler?(.tabPainted(taskID: taskID, tabID: key.uuidString))
-            }
+            self.paintTold.insert(key)
+            self.changeHandler?(.tabPainted(taskID: taskID, tabID: key.uuidString))
         }
     }
 
+    #if canImport(IOSurface) && canImport(CoreImage) && canImport(ImageIO)
     nonisolated private static let surfaceCIContext = CIContext(options: [.useSoftwareRenderer: false])
 
-    /// Hardware-accelerated off-main-thread JPEG encoding directly from a painted IOSurface, downscaling cleanly to
+    /// Hardware-accelerated off-main-thread JPEG encoding directly from a pinned IOSurface, downscaling cleanly to
     /// fit `maxWidth`×`maxHeight` without upscaling past the surface's own pixels.
-    private nonisolated static func encodeSurfaceJPEG(_ box: SendableSurface, maxWidth: Int, maxHeight: Int,
+    private nonisolated static func encodeSurfaceJPEG(_ pinned: PinnedSurface, maxWidth: Int, maxHeight: Int,
                                                       quality: Int64) async -> (data: Data, width: Int, height: Int)? {
         guard maxWidth >= 1, maxHeight >= 1 else { return nil }
-        let sourceWidth = IOSurfaceGetWidth(box.surface)
-        let sourceHeight = IOSurfaceGetHeight(box.surface)
+        let sourceWidth = IOSurfaceGetWidth(pinned.surface)
+        let sourceHeight = IOSurfaceGetHeight(pinned.surface)
         guard sourceWidth > 0, sourceHeight > 0 else { return nil }
-        IOSurfaceIncrementUseCount(box.surface)
-        return await Task.detached(priority: .userInitiated) {
-            defer { IOSurfaceDecrementUseCount(box.surface) }
-            var image = CIImage(ioSurface: box.surface)
+        let worker = Task.detached(priority: .userInitiated) { () -> (data: Data, width: Int, height: Int)? in
+            guard !Task.isCancelled else { return nil }
+            var image = CIImage(ioSurface: pinned.surface)
             let scale = min(1.0, Double(maxWidth) / Double(sourceWidth), Double(maxHeight) / Double(sourceHeight))
             if scale < 1.0 {
                 if let filter = CIFilter(name: "CILanczosScaleTransform") {
@@ -676,15 +728,21 @@ final class RemoteTabBridge {
                     ))
                 }
             }
-            guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+            guard !Task.isCancelled, let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
             let compression = min(max(Double(quality) / 100.0, 0.1), 1.0)
             guard let data = Self.surfaceCIContext.jpegRepresentation(
                 of: image, colorSpace: colorSpace,
                 options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: compression]
             ), let pixels = Self.jpegSize(data) else { return nil }
             return (data, pixels.width, pixels.height)
-        }.value
+        }
+        return await withTaskCancellationHandler {
+            await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
     }
+    #endif
 
     static let captureTimeout: Duration = .seconds(5)
     static let jpegQuality: Int64 = 72

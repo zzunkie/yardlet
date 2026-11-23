@@ -341,12 +341,17 @@ final class RemoteBrowserPageView: NSView, @preconcurrency NSTextInputClient, NS
     }
 
     nonisolated private static func decodeImage(_ data: Data) async -> CGImage? {
-        await Task.detached(priority: .userInitiated) {
+        let worker = Task.detached(priority: .userInitiated) { () -> CGImage? in
             guard !Task.isCancelled,
                   let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
             let options: [CFString: Any] = [kCGImageSourceShouldCacheImmediately: true]
             return CGImageSourceCreateImageAtIndex(source, 0, options as CFDictionary)
-        }.value
+        }
+        return await withTaskCancellationHandler {
+            await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
     }
 
     override func layout() {

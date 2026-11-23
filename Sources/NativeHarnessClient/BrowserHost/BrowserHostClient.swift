@@ -1487,7 +1487,7 @@ final class BrowserTab {
     private var remoteSize: BrowserViewportEmulation??
     /// The last change of the emulation, which the next waits for (`inEmulationOrder`).
     private var emulationChanges: Task<Void, Never>?
-    private var emulationRevision: UInt64 = 0
+    private(set) var emulationRevision: UInt64 = 0
     /// Chromium may hold other device metrics than `emulation` says: a change of them did not go through (a page that drew
     /// nothing let it time out), or a capture holds the layout for a moment (`holdLayout`). The tab's own metrics are
     /// applied again when it is next shown or used (`settleMetrics`), so no override outlives what set it.
@@ -1502,6 +1502,11 @@ final class BrowserTab {
     fileprivate let openedAt = ContinuousClock.now
     /// When the host last delivered a frame of the page (not of a pop-up), for a screenshot that waited for one.
     private(set) var lastViewFrameAt: ContinuousClock.Instant?
+    /// Highest view-layer frame sequence delivered on the main actor, in order with navigation/dialog events.
+    private(set) var lastViewFrameSequence: UInt64 = 0
+    /// Frames at or below this sequence predate a navigation, subframe change, or emulation change and must not be
+    /// reused by direct IOSurface capture.
+    private(set) var minimumValidFrameSequence: UInt64 = 0
     /// Whether the engine was last told the tab is shown (a new tab starts shown).
     fileprivate(set) var isShown = true {
         didSet { if isShown != oldValue { hiddenSince = isShown ? nil : .now } }
@@ -1960,8 +1965,14 @@ final class BrowserTab {
         try await work.value
     }
 
+    /// Marks every view surface delivered so far as stale so direct IOSurface capture waits for a fresh post-change paint.
+    func invalidateSurfaceSequence() {
+        minimumValidFrameSequence = max(minimumValidFrameSequence, lastViewFrameSequence)
+    }
+
     private func applyEmulation(_ emulation: BrowserViewportEmulation?) async throws {
         let previousEmulation = self.emulation
+        invalidateSurfaceSequence()
         // The size the tab has before its first emulation is its own, which it takes again after the last.
         if self.emulation == nil { ownViewport = viewport }
         self.emulation = emulation
@@ -2007,6 +2018,7 @@ final class BrowserTab {
                 send(.resize(tab: id, viewport: size))
             }
         }
+        invalidateSurfaceSequence()
     }
 
     /// Holds the page's layout at `width`×`height` points while the tab is drawn larger for a capture (the agent's
@@ -2014,6 +2026,7 @@ final class BrowserTab {
     /// length). In the tab's order of emulation changes and on its own DevTools session.
     func holdLayout(width: Double, height: Double) async throws {
         try await inEmulationOrder {
+            self.invalidateSurfaceSequence()
             self.metricsOwed = true
             self.holdsLayout = true
             do {
@@ -2033,7 +2046,11 @@ final class BrowserTab {
     /// through stays owed (`settleMetrics`).
     func releaseLayout() async {
         holdsLayout = false
-        try? await inEmulationOrder { try await self.applyOwnMetrics() }
+        invalidateSurfaceSequence()
+        try? await inEmulationOrder {
+            try await self.applyOwnMetrics()
+            self.invalidateSurfaceSequence()
+        }
     }
 
     /// Applies the tab's own device metrics again when Chromium may hold others (`metricsOwed`): a panel shows the tab,
@@ -2246,6 +2263,7 @@ final class BrowserTab {
         case .address(_, let url):
             currentURL = url
             navigations += 1
+            invalidateSurfaceSequence()
             if !url.isEmpty, url != "about:blank", client?.carriesFilledValue(url) != true { lastPageURL = url }
             // Another site's icon is not this page's; the same site's stays until its own arrives.
             if favicon != nil, URL(string: url)?.host() != faviconHost {
@@ -2273,6 +2291,7 @@ final class BrowserTab {
                 restore = .none
             }
         case .discarded:
+            invalidateSurfaceSequence()
             blockedPopupRequests = []
             openingBlockedPopups = []
             // The page is gone with its renderer, and with it what it asked of the person.
@@ -2298,6 +2317,7 @@ final class BrowserTab {
             waitedUntil = nil
             if isResponsive { unanswered = nil }
         case .pageCrashed(_, let reason, let status, let code):
+            invalidateSurfaceSequence()
             blockedPopupRequests = []
             openingBlockedPopups = []
             hangReported = false
@@ -2337,6 +2357,7 @@ final class BrowserTab {
             popupsAllowed = allowed
         case .newDocument:
             navigations += 1
+            invalidateSurfaceSequence()
             blockedPopupRequests = []
             openingBlockedPopups = []
             popupsAllowed = false
@@ -2370,6 +2391,7 @@ final class BrowserTab {
         case .permissionPromptDismissed(_, let prompt):
             if permissionPrompt?.id == prompt { permissionPrompt = nil }
         case .terminated, .closed:
+            invalidateSurfaceSequence()
             blockedPopupRequests = []
             openingBlockedPopups = []
             popupsAllowed = false
@@ -2381,8 +2403,11 @@ final class BrowserTab {
             javaScriptDialog = nil
             fileDialog = nil
             devTools.failPending()
+        case .hidden:
+            invalidateSurfaceSequence()
         case .frame(_, let frame) where frame.layer == .view:
             lastViewFrameAt = .now
+            lastViewFrameSequence = max(lastViewFrameSequence, frame.sequence)
         default:
             break
         }
