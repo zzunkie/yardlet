@@ -86,7 +86,7 @@ extension AppModel: ScheduleToolHandling {
         case let .failure(error): return error.result("Nothing was created")
         }
         let destination: ScheduleDestination
-        switch scheduleToolDestination(arguments, caller: caller, base: nil) {
+        switch await scheduleToolDestination(arguments, caller: caller, base: nil) {
         case let .success(value): destination = value
         case let .failure(error): return error.result("Nothing was created")
         }
@@ -347,7 +347,7 @@ extension AppModel: ScheduleToolHandling {
         case let .failure(error): return error.result("Nothing was updated")
         }
         if Key.destination.contains(where: { arguments[$0] != nil }) {
-            switch scheduleToolDestination(arguments, caller: caller, base: schedule.destination) {
+            switch await scheduleToolDestination(arguments, caller: caller, base: schedule.destination) {
             case let .success(value):
                 if value != edited.destination { parts.append("where each run goes") }
                 edited.destination = value
@@ -667,16 +667,16 @@ extension AppModel: ScheduleToolHandling {
     /// schedule, over the calling task — its harness, the folder it came from, its project, account and
     /// Auto or Bypass permissions.
     func scheduleToolDestination(_ arguments: JSONValue, caller: SessionToolCaller,
-                                 base: ScheduleDestination?) -> Result<ScheduleDestination, SessionToolError> {
+                                 base: ScheduleDestination?) async -> Result<ScheduleDestination, SessionToolError> {
         typealias Key = ScheduleToolCatalog.Key
         let host = store.sessions.first { $0.id == caller.hostTaskID }
         // Continuing a task: each run is that task's next message, on its own harness and settings.
         if let reference = arguments[Key.continueTaskID]?.stringValue?.trimmingCharacters(in: .whitespaces),
            !reference.isEmpty {
-            let id = reference == SessionToolCatalog.selfReference ? caller.hostTaskID : UUID(uuidString: reference)
-            guard let id, let target = store.sessions.first(where: { $0.id == id }) else {
-                return .failure(SessionToolError(message: "no task \(reference); list_tasks gives the task ids, "
-                    + "and \"self\" names this one."))
+            let target: SessionRecord
+            switch await sessionToolTask(reference, caller: caller) {
+            case let .success(found): target = found
+            case let .failure(error): return .failure(error)
             }
             for key in [Key.harness, Key.project, Key.chat, Key.model, Key.effort, Key.permissionMode, Key.useWorktree,
                         Key.topLevel] where arguments[key] != nil {

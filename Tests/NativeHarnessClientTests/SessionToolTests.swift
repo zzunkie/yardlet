@@ -2182,10 +2182,15 @@ final class SessionToolTests: XCTestCase {
         XCTAssertFalse(afterward.tasks.contains { $0.taskId == fixture.sibling.id.uuidString })
         XCTAssertEqual(report.tasks[2].retry, "later", "A running task can be archived once it stops")
 
-        // An archived task reads as archived, with no turn started, and is not archived twice.
+        // An archived task is readable read-only with no turn started; messaging and archiving again are refused.
         let readArchived = await call(model, "read_task", ["task_id": fixture.sibling.id.uuidString], from: fixture.caller)
-        XCTAssertEqual(readArchived.failure?.kind, .archived, readArchived.text)
-        XCTAssertEqual(readArchived.failure?.retry, .no)
+        XCTAssertFalse(readArchived.isError, readArchived.text)
+        XCTAssertTrue(readArchived.text.contains("\"archived\":true"), readArchived.text)
+        XCTAssertTrue(readArchived.text.contains("\"state\":\"archived\""), readArchived.text)
+        let sendArchived = await call(model, "send_message_to_task",
+                                      ["task_id": fixture.sibling.id.uuidString, "message": "Hello"], from: fixture.caller)
+        XCTAssertEqual(sendArchived.failure?.kind, .archived, sendArchived.text)
+        XCTAssertEqual(sendArchived.failure?.retry, .no)
         let again = try decode(ArchiveReport.self, await call(model, "archive_task", [
             "task_ids": [fixture.sibling.id.uuidString]], from: fixture.caller).text)
         XCTAssertEqual(again.tasks.first?.reason, "it is already archived.")
@@ -2196,6 +2201,273 @@ final class SessionToolTests: XCTestCase {
         // Archiving goes back: unarchived, the sibling returns as it was, still nested under the caller.
         await model.unarchive(try XCTUnwrap(archived.first { $0.id == fixture.sibling.id }))
         XCTAssertEqual(model.store.sessions.first { $0.id == fixture.sibling.id }?.parentTaskID, fixture.caller.id)
+        await model.shutdown()
+    }
+
+    /// Archived tasks stay out of `list_tasks` by default, appear with `include_archived: true`, and can be
+    /// inspected read-only through `read_task` without unarchiving, attaching or starting a turn, while every
+    /// write or execution tool still refuses them with `.archived`.
+    func testReadAndListArchivedTasksReadOnlyWithoutStartingTurns() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "archived-session-tools-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let appRoot = root.appending(path: "app", directoryHint: .isDirectory)
+        let siteRoot = root.appending(path: "site", directoryHint: .isDirectory)
+        let claudeConfig = root.appending(path: "claude-config", directoryHint: .isDirectory)
+        let codexHome = root.appending(path: "codex-home", directoryHint: .isDirectory)
+        for folder in [appRoot, siteRoot, claudeConfig, codexHome] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        let runtime = URL(filePath: "/usr/bin/true")
+        let app = Project(name: "app", primaryRoot: appRoot)
+        let site = Project(name: "site", primaryRoot: siteRoot)
+        let base = Date(timeIntervalSince1970: 1_800_000_000)
+
+        let claudeSessionID = UUID().uuidString.lowercased()
+        let otherSessionID = UUID().uuidString.lowercased()
+        let secret = "gh" + "p_" + String(repeating: "Z9y8", count: 9)
+        func writeClaudeTranscript(workspace: URL, sessionID: String, turns: [(String, String)]) throws {
+            let folder = claudeConfig.appending(path: "projects/\(ClaudeConversationCatalog.projectFolderName(for: workspace))")
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            var data = Data()
+            func append(_ record: [String: JSONValue]) throws {
+                data.append(try JSONEncoder().encode(JSONValue.object(record)))
+                data.append(10)
+            }
+            var parent: String?
+            for (index, (prompt, reply)) in turns.enumerated() {
+                let uID = "u-\(index + 1)"
+                let aID = "a-\(index + 1)"
+                try append([
+                    "type": .string("user"), "uuid": .string(uID), "parentUuid": parent.map(JSONValue.string) ?? .null,
+                    "sessionId": .string(sessionID), "isSidechain": .bool(false),
+                    "message": .object(["role": .string("user"), "content": .string(prompt)])
+                ])
+                try append([
+                    "type": .string("assistant"), "uuid": .string(aID), "parentUuid": .string(uID),
+                    "sessionId": .string(sessionID),
+                    "message": .object(["id": .string("m-\(aID)"), "role": .string("assistant"),
+                                        "content": .array([.object(["type": .string("text"), "text": .string(reply)])])])
+                ])
+                parent = aID
+            }
+            try data.write(to: folder.appending(path: "\(sessionID).jsonl"))
+        }
+        try writeClaudeTranscript(workspace: appRoot, sessionID: claudeSessionID, turns: [
+            ("First archived question", "First archived answer."),
+            ("Second archived question", "Token is \(secret) and done.")
+        ])
+        try writeClaudeTranscript(workspace: siteRoot, sessionID: otherSessionID, turns: [
+            ("Cross-project prompt", "Cross-project archived reply.")
+        ])
+
+        let claudeConnection = ProviderConnection(id: "claude-test", name: "Claude", harness: .claudeCode,
+                                                  providerID: nil, homePath: claudeConfig.path(percentEncoded: false),
+                                                  credentialSelector: nil)
+        let codexConnection = ProviderConnection(id: "codex-test", name: "Codex", harness: .codex,
+                                                 providerID: nil, homePath: codexHome.path(percentEncoded: false),
+                                                 credentialSelector: nil)
+        let caller = SessionRecord(harness: .claudeCode, workspaceURL: appRoot, runtimeExecutableURL: runtime,
+                                   title: "Caller", updatedAt: base, projectID: app.id)
+        let running = SessionRecord(harness: .claudeCode, workspaceURL: appRoot, runtimeExecutableURL: runtime,
+                                    title: "Running", status: .running, updatedAt: base - 60, projectID: app.id)
+        let archivedClaude = SessionRecord(
+            harness: .claudeCode, workspaceURL: appRoot, runtimeExecutableURL: runtime,
+            title: "Archived Claude", status: .running, updatedAt: base - 300,
+            providerSessionID: claudeSessionID, completionState: .completed,
+            connection: claudeConnection, projectID: app.id)
+        let archivedCodex = SessionRecord(
+            harness: .codex, workspaceURL: appRoot, runtimeExecutableURL: runtime,
+            title: "Archived Codex", updatedAt: base - 600,
+            providerSessionID: "codex-archived-thread", completionState: .completed,
+            connection: codexConnection, projectID: app.id)
+        let archivedOther = SessionRecord(
+            harness: .claudeCode, workspaceURL: siteRoot, runtimeExecutableURL: runtime,
+            title: "Archived Other", updatedAt: base - 120,
+            providerSessionID: otherSessionID, completionState: .completed,
+            connection: claudeConnection, projectID: site.id)
+
+        func codexTurn(_ index: Int) -> JSONValue {
+            .object(["id": .string("turn-\(index)"), "status": .string("completed"), "durationMs": .integer(1_000),
+                     "startedAt": .integer(1_700_000_000 + Int64(index)), "itemsView": .string("full"),
+                     "completedAt": .integer(1_700_000_001 + Int64(index)), "error": .null, "items": .array([
+                        .object(["id": .string("user-\(index)"), "type": .string("userMessage"), "content": .array([
+                            .object(["type": .string("text"), "text": .string("Codex prompt \(index)")])])]),
+                        .object(["id": .string("answer-\(index)"), "type": .string("agentMessage"),
+                                 "text": .string("Codex answer \(index)"), "phase": .string("final_answer")])])])
+        }
+        let codexThread = JSONValue.object([
+            "id": .string("codex-archived-thread"), "status": .object(["type": .string("notLoaded")]),
+            "historyMode": .string("paginated"), "cwd": .string(appRoot.path(percentEncoded: false)),
+            "preview": .string("Codex prompt 1"), "turns": .array((1...7).map(codexTurn))])
+        let codexTransport = FakeCodexTransport(responses: [
+            "initialize": [.object(["platformOs": .string("macos")])],
+            "thread/read": [CodexSavedThreadResponses.metadata(codexThread),
+                            CodexSavedThreadResponses.metadata(codexThread)],
+            "thread/turns/list": [
+                CodexSavedThreadResponses.page(codexThread, limit: Int(CodexThreadPaging.newestTurns)),
+                CodexSavedThreadResponses.page(codexThread, limit: Int(CodexThreadPaging.newestTurns)),
+                CodexSavedThreadResponses.page(codexThread, before: "before-2", limit: Int(CodexThreadPaging.earlierTurns))
+            ]
+        ])
+        let codexAdapter = YHPCodexCompatibilityAdapter(
+            adapter: CodexAdapter(executableURL: runtime, transport: codexTransport),
+            manifest: HarnessProtocolCompatibilityManifest.codex())
+        let claudeAdapter = SessionToolAdapter(kind: .claudeCode)
+
+        let repository = InMemorySessionRepository(sessions: [caller, running, archivedClaude, archivedCodex, archivedOther])
+        try await repository.archive(id: archivedClaude.id, providerArchived: false)
+        try await repository.archive(id: archivedCodex.id, providerArchived: true)
+        try await repository.archive(id: archivedOther.id, providerArchived: false)
+
+        let defaults = SuggestionVolatileDefaults()
+        let selections = RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false, loadsPersistedSelections: false)
+        for harness in [HarnessKind.claudeCode, .codex] { selections.select(runtime, for: harness) }
+        let model = AppModel(
+            store: SessionStore(sessions: [caller, running], repository: repository),
+            runtimeSelections: selections,
+            registry: HarnessRegistry { kind, _ in
+                switch kind {
+                case .codex: codexAdapter
+                default: claudeAdapter
+                }
+            },
+            codexQueueRepository: UserDefaultsCodexQueueRepository(defaults: defaults),
+            preferences: defaults,
+            codexPendingRequestRepository: UserDefaultsCodexPendingServerRequestRepository(defaults: defaults),
+            codexTimelineItemRepository: UserDefaultsCodexTimelineItemRepository(defaults: defaults),
+            codexHistorySelectionRepository: UserDefaultsCodexHistorySelectionRepository(defaults: defaults),
+            transcriptRepository: UserDefaultsTranscriptRepository(defaults: defaults),
+            projectRepository: InMemoryProjectRepository(snapshot: ProjectSnapshot(projects: [app, site])),
+            chatWorkspaceHome: root,
+            sessionTitleResolver: { _ in nil },
+            sessionTitleRetryCount: 0,
+            systemNotificationCenter: SessionToolQuietNotifications(),
+            restoresIndexOnLaunch: false
+        )
+        model.sessionTools = SessionToolCenter(defaults: defaults)
+        model.sessionTools.waitCeilingOverride = .seconds(5)
+
+        // Default list_tasks excludes archived tasks and does not load them.
+        XCTAssertNil(model.store.archivedSessions)
+        let defaultList = try decode(Listing.self, await call(model, "list_tasks", [:], from: caller).text)
+        XCTAssertEqual(defaultList.tasks.map(\.taskId), [caller.id.uuidString, running.id.uuidString])
+        XCTAssertTrue(defaultList.tasks.allSatisfy { $0.archived == nil })
+        XCTAssertNil(model.store.archivedSessions, "Default list_tasks does not touch archived sessions")
+        let explicitFalse = try decode(Listing.self, await call(model, "list_tasks", ["include_archived": false], from: caller).text)
+        XCTAssertEqual(explicitFalse.tasks.map(\.taskId), [caller.id.uuidString, running.id.uuidString])
+
+        // list_tasks with include_archived: true loads and includes project's archived tasks.
+        let withArchived = try decode(Listing.self, await call(model, "list_tasks", ["include_archived": true], from: caller).text)
+        XCTAssertEqual(withArchived.tasks.map(\.taskId),
+                       [caller.id.uuidString, running.id.uuidString, archivedClaude.id.uuidString, archivedCodex.id.uuidString])
+        let archivedClaudeEntry = try XCTUnwrap(withArchived.tasks.first { $0.taskId == archivedClaude.id.uuidString })
+        XCTAssertEqual(archivedClaudeEntry.archived, true)
+        XCTAssertEqual(archivedClaudeEntry.state, "archived")
+        XCTAssertEqual(archivedClaudeEntry.isRunning, false, "Even a task archived while running is not running")
+        XCTAssertFalse(withArchived.tasks.contains { $0.taskId == archivedOther.id.uuidString }, "Project scope stays in app")
+
+        // state and older_than filters work with archived tasks.
+        let onlyArchived = try decode(Listing.self, await call(
+            model, "list_tasks", ["include_archived": true, "state": ["archived"]], from: caller).text)
+        XCTAssertEqual(onlyArchived.tasks.map(\.taskId), [archivedClaude.id.uuidString, archivedCodex.id.uuidString])
+        let onlyActive = try decode(Listing.self, await call(
+            model, "list_tasks", ["include_archived": true, "state": ["active"]], from: caller).text)
+        XCTAssertEqual(onlyActive.tasks.map(\.taskId), [running.id.uuidString])
+        let older = try decode(Listing.self, await call(
+            model, "list_tasks", ["include_archived": true, "older_than": SessionToolText.iso(base - 400)], from: caller).text)
+        XCTAssertEqual(older.tasks.map(\.taskId), [archivedCodex.id.uuidString])
+
+        // scope: "all" with include_archived: true asks for cross-project approval for archived tasks in other projects.
+        let decliningList = Task { await self.call(model, "list_tasks", ["scope": "all", "include_archived": true], from: caller) }
+        let listCard = try await waitForApproval(in: caller.id, model: model)
+        XCTAssertEqual(listCard.request.title, L10n.string("List every project's tasks"))
+        await model.respond(to: listCard.id, decision: .deny, in: caller)
+        let declinedList = await decliningList.value
+        XCTAssertEqual(declinedList.failure?.kind, .refused, declinedList.text)
+
+        let allWithArchived = try decode(Listing.self, try await callAllowing(
+            model, "list_tasks", ["scope": "all", "include_archived": true], from: caller).text)
+        XCTAssertTrue(allWithArchived.tasks.contains { $0.taskId == archivedOther.id.uuidString && $0.archived == true })
+
+        // read_task reads an archived Claude task read-only through the broker (scrubbing credentials) with cursor paging.
+        let broker = AgentToolBroker(
+            environment: AgentToolBroker.Environment(
+                executableURL: URL(filePath: "/bin/sh"), endpoint: "/tmp/Yardlet-tools-test/tools.sock",
+                privateDirectory: URL(filePath: "/tmp/Yardlet-tools-test"), isEnabled: { false }),
+            tools: BrowserAgentTools(usesMacEditingCommands: true, pages: { _ in BrowserAgentPage(cdp: ScriptedCDP()) }))
+        broker.sessions = model
+        let launch = try XCTUnwrap(broker.agentToolServer(for: caller.id, workspaceRoots: []))
+        let token = try XCTUnwrap(launch.environment[AgentToolEnvironment.token])
+        let readClaudeLatest = await broker.handle(AgentToolCall(
+            token: token, session: caller.id.uuidString, tool: "read_task",
+            arguments: .object(["task_id": .string(archivedClaude.id.uuidString), "turns": .integer(1)])))
+        XCTAssertFalse(readClaudeLatest.isError, readClaudeLatest.text)
+        XCTAssertTrue(readClaudeLatest.text.contains("\"archived\":true"), readClaudeLatest.text)
+        XCTAssertTrue(readClaudeLatest.text.contains("\"state\":\"archived\""), readClaudeLatest.text)
+        XCTAssertTrue(readClaudeLatest.text.contains("\"archivedAt\":"), readClaudeLatest.text)
+        XCTAssertTrue(readClaudeLatest.text.contains("Second archived question"), readClaudeLatest.text)
+        XCTAssertTrue(readClaudeLatest.text.contains("ghp_" + CredentialText.marker), "Credentials are scrubbed: \(readClaudeLatest.text)")
+        XCTAssertFalse(readClaudeLatest.text.contains(secret), readClaudeLatest.text)
+        let claudeCursor = try XCTUnwrap(readClaudeLatest.text.range(of: #"before:[^"]+"#, options: .regularExpression)
+            .map { String(readClaudeLatest.text[$0]) })
+        let readClaudeEarlier = await call(model, "read_task", [
+            "task_id": archivedClaude.id.uuidString, "turns": 1, "cursor": claudeCursor], from: caller)
+        XCTAssertFalse(readClaudeEarlier.isError, readClaudeEarlier.text)
+        XCTAssertTrue(readClaudeEarlier.text.contains("First archived question"), readClaudeEarlier.text)
+        XCTAssertTrue(readClaudeEarlier.text.contains("First archived answer."), readClaudeEarlier.text)
+        XCTAssertNil(model.transcriptBySessionID[archivedClaude.id], "Reading leaves no transcript cache")
+        XCTAssertFalse(model.isAttached(archivedClaude.id))
+        XCTAssertFalse(model.store.sessions.contains { $0.id == archivedClaude.id }, "Task stays archived")
+
+        // read_task reads an archived Codex task via thread/read + thread/turns/list without unarchiving or resuming,
+        // and loads earlier pages when a cursor asks for turns before the newest page.
+        let readCodexLatest = await call(model, "read_task", ["task_id": archivedCodex.id.uuidString, "turns": 4], from: caller)
+        XCTAssertFalse(readCodexLatest.isError, readCodexLatest.text)
+        XCTAssertTrue(readCodexLatest.text.contains("\"archived\":true"), readCodexLatest.text)
+        XCTAssertTrue(readCodexLatest.text.contains("Codex answer 7"), readCodexLatest.text)
+        XCTAssertTrue(readCodexLatest.text.contains("Pass cursor \"before:turn-4\""), readCodexLatest.text)
+        let readCodexEarlier = await call(model, "read_task", [
+            "task_id": archivedCodex.id.uuidString, "turns": 4, "cursor": "before:turn-4"], from: caller)
+        XCTAssertFalse(readCodexEarlier.isError, readCodexEarlier.text)
+        XCTAssertTrue(readCodexEarlier.text.contains("Codex answer 1"), readCodexEarlier.text)
+        XCTAssertTrue(readCodexEarlier.text.contains("Codex answer 3"), readCodexEarlier.text)
+        let codexMethods = await codexTransport.requests.map(\.method)
+        XCTAssertEqual(codexMethods, ["initialize", "thread/read", "thread/turns/list", "thread/read", "thread/turns/list", "thread/turns/list"],
+                       "Only read-only thread/read and thread/turns/list; no thread/unarchive, thread/resume or turn/start")
+        XCTAssertNil(model.codexPresentationBySessionID[archivedCodex.id], "Reading leaves no Codex state")
+        XCTAssertFalse(model.isAttached(archivedCodex.id))
+
+        // read_task on an archived task in another project respects cross-project approval.
+        let decliningRead = Task { await self.call(model, "read_task", ["task_id": archivedOther.id.uuidString], from: caller) }
+        let readCard = try await waitForApproval(in: caller.id, model: model)
+        XCTAssertEqual(readCard.request.title, L10n.string("Read another project's task"))
+        await model.respond(to: readCard.id, decision: .deny, in: caller)
+        let declinedRead = await decliningRead.value
+        XCTAssertEqual(declinedRead.failure?.kind, .refused, declinedRead.text)
+
+        let allowedRead = try await callAllowing(model, "read_task", ["task_id": archivedOther.id.uuidString], from: caller)
+        XCTAssertFalse(allowedRead.isError, allowedRead.text)
+        XCTAssertTrue(allowedRead.text.contains("\"archived\":true"), allowedRead.text)
+        XCTAssertTrue(allowedRead.text.contains("Cross-project archived reply."), allowedRead.text)
+
+        // All write / execution tools still strictly refuse archived tasks with .archived.
+        let sendRefused = await call(model, "send_message_to_task",
+                                     ["task_id": archivedClaude.id.uuidString, "message": "Wake up"], from: caller)
+        XCTAssertEqual(sendRefused.failure?.kind, .archived, sendRefused.text)
+        let waitRefused = await call(model, "wait_tasks", ["ids": [archivedClaude.id.uuidString]], from: caller)
+        XCTAssertEqual(waitRefused.failure?.kind, .archived, waitRefused.text)
+        let parentRefused = await call(model, "create_task",
+                                       ["prompt": "Child", "parent_task_id": archivedClaude.id.uuidString], from: caller)
+        XCTAssertEqual(parentRefused.failure?.kind, .archived, parentRefused.text)
+        let scheduleRefused = await model.callScheduleTool(
+            named: ScheduleToolCatalog.create,
+            arguments: try suggestionToolJSON(["prompt": "Check", "fireAt": "2026-12-01T09:00:00Z",
+                                               "continueTaskId": archivedClaude.id.uuidString]),
+            callerID: caller.id)
+        XCTAssertEqual(scheduleRefused.failure?.kind, .archived, scheduleRefused.text)
+        let sentPrompts = await claudeAdapter.prompts(for: archivedClaude.id)
+        XCTAssertTrue(sentPrompts.isEmpty, "No turn ever started on the archived task")
+
         await model.shutdown()
     }
 
@@ -3285,6 +3557,7 @@ final class SessionToolTests: XCTestCase {
         var isSelf: Bool?
         var inSameSplit: Bool?
         var onScreen: Bool?
+        var archived: Bool?
     }
 
     /// A Mac whose load the test sets: busy (no room beyond the floor) or idle.
