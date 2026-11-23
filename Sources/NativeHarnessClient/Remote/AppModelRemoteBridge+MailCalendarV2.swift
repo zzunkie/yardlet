@@ -114,22 +114,53 @@ extension AppModelRemoteBridge {
                     cachedFolders: cachedFolders,
                     folder: folder,
                     query: query,
-                    pageToken: request.pageToken
+                    pageToken: Self.nonEmpty(request.pageToken)
                 )
                 let summaries = page.threads.prefix(limit).map(Self.mapThreadSummary)
-                return .success(RemoteMailCalendarV2Response(threads: Array(summaries), nextPageToken: page.nextPageToken))
+                // Never emit a transport pageToken that skips past items truncated by `limit`.
+                let nextToken = page.threads.count > limit ? nil : page.nextPageToken
+                return .success(RemoteMailCalendarV2Response(threads: Array(summaries), nextPageToken: nextToken))
             } catch let error as RemoteError {
                 return .failure(error)
+            } catch is CancellationError {
+                return .failure(RemoteError(.unavailable, "Request cancelled"))
             } catch {
                 return .failure(Self.mapMailError(error))
             }
         }
 
+        if Self.nonEmpty(request.pageToken) != nil {
+            return .failure(RemoteError(.badRequest, "pageToken requires accountId when multiple accounts are connected"))
+        }
+
         // Multiple accounts: fetch in parallel, merge newest-first, and slice to `limit`.
+        let cachedByAccount = center.folders
+        let merged = await Self.fetchMultiAccountMailPages(
+            targets: targets,
+            cachedByAccount: cachedByAccount,
+            folder: folder,
+            query: query,
+            limit: limit
+        )
+        if !merged.anySucceeded, let firstError = merged.firstError {
+            if firstError is CancellationError {
+                return .failure(RemoteError(.unavailable, "Request cancelled"))
+            }
+            return .failure(Self.mapMailError(firstError))
+        }
+        return .success(RemoteMailCalendarV2Response(threads: merged.summaries, nextPageToken: nil))
+    }
+
+    private nonisolated static func fetchMultiAccountMailPages(
+        targets: [(MailAccount, any MailAccountTransport)],
+        cachedByAccount: [UUID: [MailFolder]],
+        folder: RemoteMailV2Folder,
+        query: String?,
+        limit: Int
+    ) async -> (summaries: [RemoteMailV2ThreadSummary], firstError: Error?, anySucceeded: Bool) {
         var allSummaries: [MailThreadSummary] = []
         var firstError: Error?
         var anySucceeded = false
-        let cachedByAccount = center.folders
         await withTaskGroup(of: Result<MailPage, Error>.self) { group in
             for (account, transport) in targets {
                 let cachedFolders = cachedByAccount[account.id]
@@ -157,12 +188,8 @@ extension AppModelRemoteBridge {
                 }
             }
         }
-        if !anySucceeded, let firstError {
-            return .failure(Self.mapMailError(firstError))
-        }
         allSummaries.sort { $0.date > $1.date }
-        let mapped = allSummaries.prefix(limit).map(Self.mapThreadSummary)
-        return .success(RemoteMailCalendarV2Response(threads: Array(mapped), nextPageToken: nil))
+        return (allSummaries.prefix(limit).map(Self.mapThreadSummary), firstError, anySucceeded)
     }
 
     private nonisolated static func fetchMailPage(
@@ -223,6 +250,8 @@ extension AppModelRemoteBridge {
             return .success(RemoteMailCalendarV2Response(thread: Self.mapThread(thread)))
         } catch let error as RemoteError {
             return .failure(error)
+        } catch is CancellationError {
+            return .failure(RemoteError(.unavailable, "Request cancelled"))
         } catch {
             return .failure(Self.mapMailError(error))
         }
@@ -237,17 +266,19 @@ extension AppModelRemoteBridge {
               let transport = center.account(accountID).flatMap({ center.transport(for: $0.id) }) else {
             return .failure(RemoteError(.notFound, "No such mail account"))
         }
-        guard let targetThreadID = request.threadId ?? request.messageId, !targetThreadID.isEmpty else {
+        let requestedThreadID = Self.nonEmpty(request.threadId)
+        let requestedMessageID = Self.nonEmpty(request.messageId)
+        guard let targetThreadID = requestedThreadID ?? requestedMessageID else {
             return .failure(RemoteError(.badRequest, "Missing threadId or messageId"))
         }
         do {
             let thread = try await transport.thread(targetThreadID)
             let mappedThread = Self.mapThread(thread)
             let targetMessage: RemoteMailV2Message?
-            if let messageId = request.messageId, !messageId.isEmpty {
+            if let messageId = requestedMessageID {
                 if let matched = thread.messages.first(where: { $0.id == messageId }) {
                     targetMessage = Self.mapMessage(matched, accountID: accountID, threadID: thread.summary.id.threadID)
-                } else if request.threadId != nil {
+                } else if requestedThreadID != nil {
                     return .failure(RemoteError(.notFound, "No such message in thread"))
                 } else {
                     targetMessage = mappedThread.messages.last(where: { !$0.isDraft }) ?? mappedThread.messages.last
@@ -261,6 +292,8 @@ extension AppModelRemoteBridge {
             return .success(RemoteMailCalendarV2Response(thread: mappedThread, message: targetMessage))
         } catch let error as RemoteError {
             return .failure(error)
+        } catch is CancellationError {
+            return .failure(RemoteError(.unavailable, "Request cancelled"))
         } catch {
             return .failure(Self.mapMailError(error))
         }
@@ -276,7 +309,7 @@ extension AppModelRemoteBridge {
               center.transport(for: accountID) != nil else {
             return .failure(RemoteError(.notFound, "No such mail account"))
         }
-        guard let threadID = request.threadId, !threadID.isEmpty, let action = request.messageAction else {
+        guard let threadID = Self.nonEmpty(request.threadId), let action = request.messageAction else {
             return .failure(RemoteError(.badRequest, "Missing threadId or messageAction"))
         }
         let change: MailThreadChange
@@ -294,6 +327,8 @@ extension AppModelRemoteBridge {
             return .success(RemoteMailCalendarV2Response(updated: true, threadId: threadID))
         } catch let error as RemoteError {
             return .failure(error)
+        } catch is CancellationError {
+            return .failure(RemoteError(.unavailable, "Request cancelled"))
         } catch {
             return .failure(Self.mapMailError(error))
         }
@@ -316,44 +351,54 @@ extension AppModelRemoteBridge {
         let ccList = (request.cc ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         let bccList = (request.bcc ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
 
-        let replyThreadID = request.replyToThreadId ?? request.threadId
+        let replyThreadID = Self.nonEmpty(request.replyToThreadId) ?? Self.nonEmpty(request.threadId)
         var inReplyTo: String?
         var references: String?
-        var replyToMessageID = request.replyToMessageId
-        if let replyThreadID, !replyThreadID.isEmpty, let thread = try? await transport.thread(replyThreadID) {
-            let target = replyToMessageID.flatMap { id in thread.messages.first(where: { $0.id == id }) }
-                ?? thread.messages.last(where: { !$0.isDraft })
-                ?? thread.messages.last
-            if let target {
-                replyToMessageID = replyToMessageID ?? target.id
-                inReplyTo = target.messageID
-                let refs = [target.references, target.messageID].compactMap { $0 }.joined(separator: " ")
-                references = refs.isEmpty ? nil : refs
-            }
-        }
-
-        let isReply = (replyThreadID?.isEmpty == false) || (replyToMessageID?.isEmpty == false)
-        var composition = MailComposition(
-            accountID: accountID,
-            kind: isReply ? .reply : .new,
-            threadID: replyThreadID,
-            to: toList.joined(separator: ", "),
-            cc: ccList.joined(separator: ", "),
-            bcc: bccList.joined(separator: ", "),
-            subject: request.subject ?? "",
-            body: request.body ?? "",
-            inReplyTo: inReplyTo,
-            references: references
-        )
-        composition.replyToMessageID = replyToMessageID
+        var replyToMessageID = Self.nonEmpty(request.replyToMessageId)
 
         do {
+            if let replyThreadID {
+                let thread = try await transport.thread(replyThreadID)
+                let target: MailMessage?
+                if let explicitMessageID = replyToMessageID {
+                    guard let matched = thread.messages.first(where: { $0.id == explicitMessageID }) else {
+                        return .failure(RemoteError(.notFound, "No such message in thread"))
+                    }
+                    target = matched
+                } else {
+                    target = thread.messages.last(where: { !$0.isDraft }) ?? thread.messages.last
+                }
+                if let target {
+                    replyToMessageID = replyToMessageID ?? target.id
+                    inReplyTo = target.messageID
+                    let refs = [target.references, target.messageID].compactMap { $0 }.joined(separator: " ")
+                    references = refs.isEmpty ? nil : refs
+                }
+            }
+
+            let isReply = replyThreadID != nil || replyToMessageID != nil
+            var composition = MailComposition(
+                accountID: accountID,
+                kind: isReply ? .reply : .new,
+                threadID: replyThreadID,
+                to: toList.joined(separator: ", "),
+                cc: ccList.joined(separator: ", "),
+                bcc: bccList.joined(separator: ", "),
+                subject: request.subject ?? "",
+                body: request.body ?? "",
+                inReplyTo: inReplyTo,
+                references: references
+            )
+            composition.replyToMessageID = replyToMessageID
+
             let draftID = try await transport.saveDraft(composition)
             try await transport.sendDraft(draftID)
             await center.afterWriting(composition)
             return .success(RemoteMailCalendarV2Response(sent: true, threadId: replyThreadID))
         } catch let error as RemoteError {
             return .failure(error)
+        } catch is CancellationError {
+            return .failure(RemoteError(.unavailable, "Request cancelled"))
         } catch {
             return .failure(Self.mapMailError(error))
         }
@@ -369,7 +414,7 @@ extension AppModelRemoteBridge {
               let transport = center.transport(for: accountID) else {
             return .failure(RemoteError(.notFound, "No such mail account"))
         }
-        guard let threadID = request.replyToThreadId ?? request.threadId, !threadID.isEmpty else {
+        guard let threadID = Self.nonEmpty(request.replyToThreadId) ?? Self.nonEmpty(request.threadId) else {
             return .failure(RemoteError(.badRequest, "Missing replyToThreadId"))
         }
         guard let body = request.body, !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -378,7 +423,7 @@ extension AppModelRemoteBridge {
         do {
             let thread = try await transport.thread(threadID)
             let target: MailMessage
-            if let messageId = request.replyToMessageId, !messageId.isEmpty {
+            if let messageId = Self.nonEmpty(request.replyToMessageId) {
                 guard let found = thread.messages.first(where: { $0.id == messageId }) else {
                     return .failure(RemoteError(.notFound, "No such message in thread"))
                 }
@@ -402,7 +447,7 @@ extension AppModelRemoteBridge {
                 let cleaned = bcc.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
                 composition.bcc = cleaned.joined(separator: ", ")
             }
-            if let subject = request.subject, !subject.isEmpty {
+            if let subject = request.subject?.trimmingCharacters(in: .whitespacesAndNewlines), !subject.isEmpty {
                 composition.subject = subject
             }
             composition.body = body
@@ -417,6 +462,8 @@ extension AppModelRemoteBridge {
             return .success(RemoteMailCalendarV2Response(sent: true, threadId: threadID))
         } catch let error as RemoteError {
             return .failure(error)
+        } catch is CancellationError {
+            return .failure(RemoteError(.unavailable, "Request cancelled"))
         } catch {
             return .failure(Self.mapMailError(error))
         }
@@ -503,7 +550,7 @@ extension AppModelRemoteBridge {
         }
 
         let copies = CalendarCenter.copies(in: targetAccounts.map(\.0), calendars: calendarsByAccount)
-        let requestedCalendarID = request.calendarId?.isEmpty == false ? request.calendarId : nil
+        let requestedCalendarID = Self.nonEmpty(request.calendarId)
 
         var targetCalendars: [(CalendarAccount, CalendarInfo, any CalendarAccountTransport)] = []
         for (account, transport) in targetAccounts {
@@ -519,25 +566,46 @@ extension AppModelRemoteBridge {
             }
         }
 
-        if let requestedCalendarID, targetCalendars.isEmpty {
-            return .failure(RemoteError(.notFound, "No such calendar: \(requestedCalendarID)"))
+        if requestedCalendarID != nil, targetCalendars.isEmpty {
+            return .failure(RemoteError(.notFound, "No such calendar"))
         }
         if targetCalendars.isEmpty {
             return .success(RemoteMailCalendarV2Response(events: []))
         }
 
+        let result = await Self.fetchCalendarEvents(
+            targetCalendars: targetCalendars,
+            range: range,
+            hostCalendar: Calendar.autoupdatingCurrent
+        )
+        if !result.anySucceeded, let firstEventError = result.firstError {
+            if firstEventError is CancellationError {
+                return .failure(RemoteError(.unavailable, "Request cancelled"))
+            }
+            return .failure(Self.mapCalendarError(firstEventError))
+        }
+        return .success(RemoteMailCalendarV2Response(
+            events: result.events,
+            eventsTruncated: result.truncated ? true : nil
+        ))
+    }
+
+    private nonisolated static func fetchCalendarEvents(
+        targetCalendars: [(CalendarAccount, CalendarInfo, any CalendarAccountTransport)],
+        range: DateInterval,
+        hostCalendar: Calendar
+    ) async -> (events: [RemoteCalendarV2Event], truncated: Bool, firstError: Error?, anySucceeded: Bool) {
         var collected: [RemoteCalendarV2Event] = []
         var firstEventError: Error?
         var anySucceeded = false
-        let calendar = Calendar.autoupdatingCurrent
         await withTaskGroup(of: Result<[RemoteCalendarV2Event], Error>.self) { group in
             for (account, info, transport) in targetCalendars {
                 group.addTask {
                     do {
-                        let events = try await transport.events(in: info, from: startDate, to: endDate)
+                        let events = try await transport.events(in: info, from: range.start, to: range.end)
                         let mapped = events
                             .filter { $0.overlaps(range) }
-                            .map { Self.mapEvent($0, calendar: info, account: account, hostCalendar: calendar) }
+                            .map { Self.mapEvent($0, calendar: info, account: account, hostCalendar: hostCalendar) }
                         return .success(mapped)
                     } catch {
                         return .failure(error)
@@ -554,11 +622,6 @@ extension AppModelRemoteBridge {
                 }
             }
         }
-
-        if !anySucceeded, let firstEventError {
-            return .failure(Self.mapCalendarError(firstEventError))
-        }
-
         collected.sort { lhs, rhs in
             if lhs.startMs != rhs.startMs { return lhs.startMs < rhs.startMs }
             if lhs.allDay != rhs.allDay { return lhs.allDay }
@@ -566,24 +629,21 @@ extension AppModelRemoteBridge {
         }
         let truncated = collected.count > RemoteMailCalendarV2Limits.maxEvents
         let bounded = truncated ? Array(collected.prefix(RemoteMailCalendarV2Limits.maxEvents)) : collected
-        return .success(RemoteMailCalendarV2Response(
-            events: bounded,
-            eventsTruncated: truncated ? true : nil
-        ))
+        return (bounded, truncated, firstEventError, anySucceeded)
     }
 
     private func calendarV2RespondEvent(_ request: RemoteMailCalendarV2Request) async -> Result<RemoteMailCalendarV2Response, RemoteError> {
         guard let center = model?.calendar, center.isEnabled else {
             return .failure(RemoteError(.unavailable, "The calendar is off on this Mac"))
         }
-        guard let calendarID = request.calendarId, !calendarID.isEmpty,
-              let eventID = request.eventId, !eventID.isEmpty,
+        guard let calendarID = Self.nonEmpty(request.calendarId),
+              let eventID = Self.nonEmpty(request.eventId),
               let response = request.response else {
             return .failure(RemoteError(.badRequest, "respondEvent requires calendarId, eventId and response"))
         }
 
         let targetAccount: CalendarAccount
-        if let accountIdString = request.accountId {
+        if let accountIdString = Self.nonEmpty(request.accountId) {
             guard let uuid = UUID(uuidString: accountIdString), let account = center.account(uuid) else {
                 return .failure(RemoteError(.notFound, "No such calendar account"))
             }
@@ -600,7 +660,10 @@ extension AppModelRemoteBridge {
                 (calendarsByAccount[account.id] ?? []).contains(where: { $0.id.calendarID == calendarID })
             }
             if matchingAccounts.isEmpty {
-                if let firstError, calendarsByAccount.isEmpty {
+                if let firstError {
+                    if firstError is CancellationError {
+                        return .failure(RemoteError(.unavailable, "Request cancelled"))
+                    }
                     return .failure(Self.mapCalendarError(firstError))
                 }
                 return .failure(RemoteError(.notFound, "No calendar found with that calendarId"))
@@ -638,12 +701,14 @@ extension AppModelRemoteBridge {
             return .success(RemoteMailCalendarV2Response(responded: true))
         } catch let error as RemoteError {
             return .failure(error)
+        } catch is CancellationError {
+            return .failure(RemoteError(.unavailable, "Request cancelled"))
         } catch {
             return .failure(Self.mapCalendarError(error))
         }
     }
 
-    private static func loadCalendars(
+    private nonisolated static func loadCalendars(
         for accounts: [(CalendarAccount, any CalendarAccountTransport)],
         cached: [UUID: [CalendarInfo]]
     ) async -> (calendars: [UUID: [CalendarInfo]], failed: Set<UUID>, firstError: Error?) {
@@ -870,8 +935,15 @@ extension AppModelRemoteBridge {
         }
     }
 
+    private nonisolated static func nonEmpty(_ value: String?) -> String? {
+        guard let value, !value.isEmpty else { return nil }
+        return value
+    }
+
     private nonisolated static func isoDateString(_ date: Date, calendar: Calendar) -> String {
-        let parts = calendar.dateComponents([.year, .month, .day], from: date)
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.timeZone = calendar.timeZone
+        let parts = gregorian.dateComponents([.year, .month, .day], from: date)
         let year = parts.year ?? 1970
         let month = parts.month ?? 1
         let day = parts.day ?? 1

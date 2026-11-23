@@ -148,8 +148,18 @@ final class RemoteMailCalendarV2Tests: XCTestCase {
             .init(action: .replyMessage, accountId: validAccount, body: "   ", replyToThreadId: "t-1"),
             .init(action: .listEvents, startMs: 2_000, endMs: 1_000),
             .init(action: .listEvents, startMs: 0, endMs: RemoteMailCalendarV2Limits.maxCalendarRangeMs + 1),
+            .init(action: .listEvents, startMs: Int64.min, endMs: Int64.min + 1_000),
+            .init(action: .listEvents, startMs: Int64.max - 1_000, endMs: Int64.max),
+            .init(action: .listEvents, startMs: RemoteMailCalendarV2Limits.minTimestampMs - 1, endMs: RemoteMailCalendarV2Limits.minTimestampMs + 1_000),
+            .init(action: .listEvents, startMs: RemoteMailCalendarV2Limits.maxTimestampMs - 1_000, endMs: RemoteMailCalendarV2Limits.maxTimestampMs + 1),
+            .init(action: .respondEvent, calendarId: "cal-1", eventId: "evt-1", occurrenceMs: Int64.max, response: .accepted),
+            .init(action: .respondEvent, calendarId: "cal-1", eventId: "evt-1", occurrenceMs: Int64.min, response: .accepted),
             .init(action: .respondEvent, calendarId: "cal-1", eventId: "evt-1"),
         ]
+        // Long Outlook/Graph identifiers up to 1,024 bytes are accepted.
+        let longGraphID = String(repeating: "A", count: 512)
+        XCTAssertNil(RemoteMailCalendarV2Request(action: .readThread, accountId: validAccount, threadId: longGraphID).validationError)
+        XCTAssertNil(RemoteMailCalendarV2Request(action: .respondEvent, calendarId: longGraphID, eventId: longGraphID, response: .accepted).validationError)
         for invalid in invalidRequests {
             XCTAssertNotNil(invalid.validationError, "Expected validation error for \(invalid)")
             let data = RemoteRequestEnvelope(id: "bad", request: .mailCalendarV2(invalid)).encoded()
@@ -574,4 +584,317 @@ final class RemoteMailCalendarV2Tests: XCTestCase {
         XCTAssertEqual(mapped.attachments.count, RemoteMailCalendarV2Limits.maxAttachments)
         XCTAssertEqual(mapped.dateMs, 1_795_424_400_000)
     }
+
+    func testAllDayDatesAlwaysUseGregorianISOFormat() throws {
+        var utcGregorian = Calendar(identifier: .gregorian)
+        utcGregorian.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let start = try XCTUnwrap(utcGregorian.date(from: DateComponents(year: 2026, month: 11, day: 24, hour: 0)))
+        let end = try XCTUnwrap(utcGregorian.date(from: DateComponents(year: 2026, month: 11, day: 25, hour: 0)))
+
+        let account = CalendarAccount(id: UUID(), provider: .google, address: "dana@acme.example")
+        let calKey = CalendarKey(accountID: account.id, calendarID: "primary")
+        let calInfo = CalendarInfo(id: calKey, name: "Work", isPrimary: true)
+        let event = CalendarEvent(
+            id: CalendarEventKey(calendar: calKey, eventID: "allday-1"),
+            title: "Holiday",
+            start: start,
+            end: end,
+            isAllDay: true
+        )
+
+        for identifier in [Calendar.Identifier.japanese, .buddhist, .hebrew, .gregorian] {
+            var hostCal = Calendar(identifier: identifier)
+            hostCal.timeZone = utcGregorian.timeZone
+            let mapped = AppModelRemoteBridge.mapEvent(event, calendar: calInfo, account: account, hostCalendar: hostCal)
+            XCTAssertEqual(mapped.startDate, "2026-11-24", "Failed for calendar \(identifier)")
+            XCTAssertEqual(mapped.endDate, "2026-11-25", "Failed for calendar \(identifier)")
+        }
+    }
+
+    func testPaginationSuppressesNextPageTokenWhenTruncatedAndRejectsMultiAccountToken() async throws {
+        let fixture = MailFixture()
+        let transports = fixture.transports()
+        let work = try XCTUnwrap(transports.first)
+        // Work account has 4 inbox threads; pageSize 3 means transport returns 3 threads + nextPageToken "3".
+        await work.setPageSize(3)
+
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteMailCalendarV2Pagination")))
+        let host = AppModel(
+            store: SessionStore(sessions: [], repository: InMemorySessionRepository()),
+            runtimeSelections: RuntimeSelectionStore(defaults: defaults),
+            preferences: defaults,
+            restoresIndexOnLaunch: false
+        )
+        host.mailbox.setEnabled(true)
+        host.mailbox.setAccounts(transports.map { ($0.account, $0) })
+        defer { host.mailbox.setEnabled(false) }
+
+        let bridge = AppModelRemoteBridge(model: host)
+
+        // Single-account limit < page.threads.count (2 < 3): nextPageToken MUST be nil so item #3 is never skipped.
+        let truncated = try await bridge.mailCalendarV2(.init(
+            action: .listThreads,
+            accountId: MailFixture.work.id.uuidString,
+            folder: .inbox,
+            limit: 2
+        )).get()
+        XCTAssertEqual(truncated.threads?.count, 2)
+        XCTAssertNil(truncated.nextPageToken)
+
+        // Single-account limit >= page.threads.count (default 50 >= 3): nextPageToken is preserved and page 2 gets item #4.
+        let page1 = try await bridge.mailCalendarV2(.init(
+            action: .listThreads,
+            accountId: MailFixture.work.id.uuidString,
+            folder: .inbox
+        )).get()
+        XCTAssertEqual(page1.threads?.count, 3)
+        let token = try XCTUnwrap(page1.nextPageToken)
+
+        let page2 = try await bridge.mailCalendarV2(.init(
+            action: .listThreads,
+            accountId: MailFixture.work.id.uuidString,
+            folder: .inbox,
+            pageToken: token
+        )).get()
+        XCTAssertEqual(page2.threads?.count, 1)
+        XCTAssertNil(page2.nextPageToken)
+
+        // Multi-account listThreads with pageToken is rejected with .badRequest.
+        let multiWithToken = await bridge.mailCalendarV2(.init(
+            action: .listThreads,
+            folder: .inbox,
+            pageToken: token
+        ))
+        guard case let .failure(multiError) = multiWithToken else {
+            return XCTFail("Expected .badRequest for multi-account pageToken")
+        }
+        XCTAssertEqual(multiError.code, .badRequest)
+
+        await host.shutdown()
+    }
+
+    func testReplyHeadersEmptyFallbackAndSendThreadErrorPropagation() async throws {
+        let spy = RecordingMailTransport(account: MailFixture.work)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteMailCalendarV2ReplyHeaders")))
+        let host = AppModel(
+            store: SessionStore(sessions: [], repository: InMemorySessionRepository()),
+            runtimeSelections: RuntimeSelectionStore(defaults: defaults),
+            preferences: defaults,
+            restoresIndexOnLaunch: false
+        )
+        host.mailbox.setEnabled(true)
+        host.mailbox.setAccounts([(spy.account, spy)])
+        defer { host.mailbox.setEnabled(false) }
+
+        let bridge = AppModelRemoteBridge(model: host)
+
+        // 1. replyMessage derives to, "Re:" subject (whitespace-only override ignored), inReplyTo, references, replyToMessageID.
+        let replyResult = try await bridge.mailCalendarV2(.init(
+            action: .replyMessage,
+            accountId: MailFixture.work.id.uuidString,
+            subject: "   ",
+            body: "Confirmed for Friday.",
+            replyToThreadId: "thread-headers",
+            replyToMessageId: "msg-2"
+        )).get()
+        XCTAssertEqual(replyResult.sent, true)
+        let sentAfterReply = await spy.sentCompositions
+        let sentReply = try XCTUnwrap(sentAfterReply.last)
+        XCTAssertEqual(sentReply.kind, .reply)
+        XCTAssertEqual(sentReply.threadID, "thread-headers")
+        XCTAssertEqual(sentReply.to, "Alex Kim <alex@vendor.example>")
+        XCTAssertEqual(sentReply.subject, "Re: Contract terms")
+        XCTAssertEqual(sentReply.inReplyTo, "<msg-2@vendor.example>")
+        XCTAssertEqual(sentReply.references, "<msg-1@vendor.example> <msg-2@vendor.example>")
+        XCTAssertEqual(sentReply.replyToMessageID, "msg-2")
+        XCTAssertEqual(sentReply.body, "Confirmed for Friday.")
+
+        // 2. sendMessage with explicit replyToThreadId that does not exist propagates error instead of sending unthreaded.
+        let failedSend = await bridge.mailCalendarV2(.init(
+            action: .sendMessage,
+            accountId: MailFixture.work.id.uuidString,
+            to: ["alex@vendor.example"],
+            subject: "Re: Missing",
+            body: "Should not send unthreaded",
+            replyToThreadId: "nonexistent-thread"
+        ))
+        guard case .failure = failedSend else {
+            return XCTFail("Expected sendMessage to fail when replyToThreadId lookup fails")
+        }
+        let sentCountAfterFailure = await spy.sentCompositions.count
+        XCTAssertEqual(sentCountAfterFailure, 1)
+
+        // 3. readMessage with empty threadId "" falls back cleanly to messageId.
+        let readFallback = try await bridge.mailCalendarV2(.init(
+            action: .readMessage,
+            accountId: MailFixture.work.id.uuidString,
+            threadId: "",
+            messageId: "thread-headers"
+        )).get()
+        XCTAssertEqual(readFallback.message?.id, "msg-2")
+
+        await host.shutdown()
+    }
+
+    func testAuditLogRecordsActionNameOnlyWithoutMessageContent() async throws {
+        let auditDir = FileManager.default.temporaryDirectory.appending(path: "remote-mail-cal-v2-audit-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: auditDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: auditDir) }
+        let auditURL = auditDir.appending(path: "audit.jsonl")
+        let audit = RemoteAuditLog(fileURL: auditURL)
+
+        let spy = RecordingMailTransport(account: MailFixture.work)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteMailCalendarV2Audit")))
+        let host = AppModel(
+            store: SessionStore(sessions: [], repository: InMemorySessionRepository()),
+            runtimeSelections: RuntimeSelectionStore(defaults: defaults),
+            preferences: defaults,
+            restoresIndexOnLaunch: false
+        )
+        host.mailbox.setEnabled(true)
+        host.mailbox.setAccounts([(spy.account, spy)])
+        defer { host.mailbox.setEnabled(false) }
+
+        let identity = try RemoteIdentity(noisePrivateKey: Data(RemoteRandom.bytes(32)), relayPrivateKey: Data(RemoteRandom.bytes(32)))
+        let devices = RemoteDeviceStore(fileURL: nil)
+        let server = RemoteServer(
+            configuration: RemoteServer.Configuration(server: RemoteServerInfo(name: "Mac Studio", appVersion: "test"),
+                                                      macKey: identity.noise.publicKey),
+            bridge: AppModelRemoteBridge(model: host),
+            devices: devices,
+            audit: audit
+        )
+        await server.start()
+        let listener = RemoteSecureListener(server: server, staticKey: identity.noise, port: 0, advertisement: nil, loopbackOnly: true)
+        listener.start()
+        defer { listener.stop() }
+        let port = try await RemoteSecureTests.waitForPort(listener)
+
+        let ticket = await server.openPairing()
+        let link = try XCTUnwrap(RemoteSecurePairingURL(
+            macKey: identity.noise.publicKey,
+            secret: ticket.secret,
+            name: "Mac Studio",
+            hosts: ["127.0.0.1:\(port)"]
+        ).url)
+        let hosts = RemoteHostDirectory(
+            store: RemoteHostStore(fileURL: nil),
+            keys: RemoteMemoryClientKeys(),
+            hello: RemoteHandshakeHello(name: "iPhone", platform: "ios", appVersion: "test")
+        )
+        let paired = try await hosts.pair(link: link.absoluteString)
+        defer { hosts.close(paired.id) }
+        let model = try XCTUnwrap(hosts.model(for: paired.id))
+        try await waitUntil { model.mailCalendarState?.mailbox == true }
+        try await server.setPermission(.mailCalendar, allowed: true, for: try XCTUnwrap(model.host.deviceID))
+
+        let secretSubject = "CONFIDENTIAL-SUBJECT-94821"
+        let secretBody = "CONFIDENTIAL-BODY-77319"
+        let secretRecipient = "secret.person@private.example"
+        let sendResp = await model.response(to: .mailCalendarV2(.init(
+            action: .sendMessage,
+            accountId: MailFixture.work.id.uuidString,
+            to: [secretRecipient],
+            subject: secretSubject,
+            body: secretBody
+        )))
+        XCTAssertTrue(sendResp.ok, "\(String(describing: sendResp.error))")
+
+        let entries = audit.entries()
+        let v2Entries = entries.filter { $0.type == "mailCalendarV2" }
+        XCTAssertEqual(v2Entries.count, 1)
+        XCTAssertEqual(v2Entries[0].input, "sendMessage")
+        XCTAssertEqual(v2Entries[0].result, "ok")
+
+        let rawAudit = try String(contentsOf: auditURL, encoding: .utf8)
+        XCTAssertFalse(rawAudit.contains(secretSubject))
+        XCTAssertFalse(rawAudit.contains(secretBody))
+        XCTAssertFalse(rawAudit.contains(secretRecipient))
+
+        await host.shutdown()
+    }
+}
+
+private actor RecordingMailTransport: MailAccountTransport {
+    nonisolated let account: MailAccount
+    private var draftsByID: [String: MailComposition] = [:]
+    private(set) var sentCompositions: [MailComposition] = []
+    private let threadRecord: MailThread
+
+    init(account: MailAccount) {
+        self.account = account
+        let sender = MailAddress(name: "Alex Kim", address: "alex@vendor.example")
+        let me = MailAddress(name: "Dana Park", address: account.address)
+        let m1 = MailMessage(
+            id: "msg-1",
+            from: sender,
+            to: [me],
+            cc: [],
+            date: Date(timeIntervalSince1970: 1_795_400_000),
+            subject: "Contract terms",
+            snippet: "Initial draft",
+            text: "Initial draft",
+            html: nil,
+            attachments: [],
+            isDraft: false,
+            isUnread: false,
+            messageID: "<msg-1@vendor.example>"
+        )
+        let m2 = MailMessage(
+            id: "msg-2",
+            from: sender,
+            to: [me],
+            cc: [],
+            date: Date(timeIntervalSince1970: 1_795_424_400),
+            subject: "Contract terms",
+            snippet: "Updated draft",
+            text: "Updated draft",
+            html: nil,
+            attachments: [],
+            isDraft: false,
+            isUnread: true,
+            messageID: "<msg-2@vendor.example>",
+            references: "<msg-1@vendor.example>"
+        )
+        let summary = MailThreadSummary(
+            id: MailThreadKey(accountID: account.id, threadID: "thread-headers"),
+            subject: "Contract terms",
+            senders: [sender],
+            snippet: "Updated draft",
+            date: m2.date,
+            messageCount: 2,
+            isUnread: true,
+            isStarred: false,
+            hasAttachments: false,
+            hasDraft: false
+        )
+        self.threadRecord = MailThread(summary: summary, messages: [m1, m2], webURL: nil)
+    }
+
+    func folders() async throws -> [MailFolder] { [] }
+    func inbox(pageToken: String?) async throws -> MailPage { MailPage(threads: [threadRecord.summary], nextPageToken: nil) }
+    func list(_ folder: MailFolder, pageToken: String?) async throws -> MailPage { MailPage(threads: [], nextPageToken: nil) }
+    func search(_ query: String, pageToken: String?) async throws -> MailPage { MailPage(threads: [], nextPageToken: nil) }
+    func thread(_ threadID: String) async throws -> MailThread {
+        guard threadID == "thread-headers" else {
+            throw MailFailure(kind: .unavailable, message: "No such thread")
+        }
+        return threadRecord
+    }
+    func change(_ threadID: String, _ change: MailThreadChange) async throws {}
+    func saveDraft(_ composition: MailComposition) async throws -> String {
+        let id = "draft-\(draftsByID.count + sentCompositions.count + 1)"
+        draftsByID[id] = composition
+        return id
+    }
+    func sendDraft(_ draftID: String) async throws {
+        guard let composition = draftsByID.removeValue(forKey: draftID) else {
+            throw MailFailure(kind: .unavailable, message: "Missing draft")
+        }
+        sentCompositions.append(composition)
+    }
+    func discardDraft(_ draftID: String) async throws { draftsByID[draftID] = nil }
+    func draftID(forMessage messageID: String) async throws -> String { "draft-\(messageID)" }
+    func changeCursor() async throws -> String { "0" }
+    func changes(since cursor: String) async throws -> MailChanges { MailChanges(cursor: cursor, changed: false, arrivedThreadIDs: []) }
 }

@@ -2170,6 +2170,7 @@ public actor RemoteServer {
             if watching {
                 let permittedBefore = permissionError(.mailCalendar, on: id) == nil
                 var state = await bridge.mailCalendarV2State(permitted: permittedBefore)
+                guard connections[id] != nil else { return }
                 let permittedAfter = permissionError(.mailCalendar, on: id) == nil
                 state.permitted = permittedBefore && permittedAfter
                 if !state.permitted {
@@ -2191,6 +2192,7 @@ public actor RemoteServer {
             } else {
                 switch await bridge.mailCalendarV2(v2Request) {
                 case let .success(payload):
+                    guard connections[id] != nil else { return }
                     if let error = permissionError(.mailCalendar, on: id) {
                         respond(.failure(envelope.id, error), to: id)
                         auditPermissionRefusal(device: connections[id]?.deviceID, request: request)

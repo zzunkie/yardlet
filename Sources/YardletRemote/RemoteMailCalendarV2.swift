@@ -6,7 +6,7 @@ import Foundation
 /// `"YYYY-MM-DD"` strings, and every enum uses explicit string raw values so Swift (iOS/macOS) and Kotlin (Android)
 /// decode the exact same JSON without platform-specific `Date` epochs or synthesized associated-value wrappers.
 public enum RemoteMailCalendarV2Limits {
-    public static let defaultListLimit = 25
+    public static let defaultListLimit = 50
     public static let maxListLimit = 50
     public static let maxThreadMessages = 50
     public static let maxTextBodyCharacters = 32_000
@@ -18,10 +18,13 @@ public enum RemoteMailCalendarV2Limits {
     public static let maxEventNotesCharacters = 4_000
     public static let maxEventAttendees = 50
     public static let maxCalendarRangeMs: Int64 = 62 * 86_400 * 1_000
+    /// Supported Unix epoch millisecond bounds: 0001-01-01T00:00:00.000Z through 9999-12-31T23:59:59.999Z.
+    public static let minTimestampMs: Int64 = -62_135_596_800_000
+    public static let maxTimestampMs: Int64 = 253_402_300_799_999
     public static let maxQueryCharacters = 500
     public static let maxSendBodyCharacters = 32_000
     public static let maxSendRecipients = 50
-    public static let maxIdentifierBytes = 256
+    public static let maxIdentifierBytes = 1_024
     public static let maxPageTokenBytes = 4_096
 }
 
@@ -612,6 +615,12 @@ extension RemoteMailCalendarV2Request {
                 }
             }
         }
+        let timestampRange = RemoteMailCalendarV2Limits.minTimestampMs ... RemoteMailCalendarV2Limits.maxTimestampMs
+        for (name, value) in [("startMs", startMs), ("endMs", endMs), ("occurrenceMs", occurrenceMs)] {
+            if let value, !timestampRange.contains(value) {
+                return RemoteError(.badRequest, "\(name) is out of supported range")
+            }
+        }
 
         switch action {
         case .listThreads, .listCalendars:
@@ -639,8 +648,9 @@ extension RemoteMailCalendarV2Request {
             }
             return nil
         case .replyMessage:
-            let targetThread = replyToThreadId ?? threadId
-            guard accountId != nil, let targetThread, !targetThread.isEmpty else {
+            let targetThread = (replyToThreadId?.isEmpty == false ? replyToThreadId : nil)
+                ?? (threadId?.isEmpty == false ? threadId : nil)
+            guard accountId != nil, targetThread != nil else {
                 return RemoteError(.badRequest, "replyMessage requires accountId and replyToThreadId")
             }
             guard let body, !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
