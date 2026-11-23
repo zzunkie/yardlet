@@ -237,7 +237,8 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
         .parityElevatedSurface(
             cornerRadius: ParityTheme.composerCornerRadius,
             isFocused: isFocused.wrappedValue,
-            accentBorder: isBashMode
+            accentBorder: isBashMode,
+            showsFocusRing: true
         )
         .overlay {
             if let receive = externalInput {

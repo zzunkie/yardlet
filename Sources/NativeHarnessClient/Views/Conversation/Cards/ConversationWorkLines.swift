@@ -256,9 +256,8 @@ struct ConversationWorkGroup<Cell: View>: View {
                     }
                 }
                 .padding(.vertical, 4)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(ParityTheme.separator, lineWidth: 1)
-                }
+                .background(ParityTheme.elevated, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .parityElevatedSurface(cornerRadius: 10)
                 .padding(.bottom, 4)
             }
         }

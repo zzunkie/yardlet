@@ -1,54 +1,38 @@
 import SwiftUI
 
-/// The calendar in the sidebar, in the task list's place, under the same Home, Scheduled tasks and section words:
-/// what comes next today and in the coming days, then every account's calendars to show or hide, and Yardlet's
-/// scheduled runs as a layer of their own.
-struct CalendarSidebar: View {
+/// The calendar's inner left rail inside the detail surface: what comes next today and in the coming
+/// days, every account's calendars to show or hide, and Yardlet's scheduled runs as a layer of their own.
+struct CalendarListRail: View {
     let center: CalendarCenter
     let window: CalendarWindowState
     let schedules: [ScheduledTask]
-    let accountMenu: SidebarAccountMenuContext
-    let onHome: () -> Void
-    var onShowSchedules: (() -> Void)?
-    let onSelectSection: (ShellSection) -> Void
     let onSelectEvent: (CalendarEvent) -> Void
     let onOpenConnectors: () -> Void
-    /// What the sidebar ends with in place of the account button: another Mac's window names its host there.
-    var footer: AnyView? = nil
     @Environment(\.yardletInterfaceScale) private var scale
 
     /// Upcoming rows listed at most.
     static let upcomingLimit = 8
 
     var body: some View {
-        VStack(spacing: 0) {
-            SidebarPlacesHeader(onHome: onHome, onShowSchedules: onShowSchedules, section: .calendar,
-                                onSelectSection: onSelectSection)
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: SidebarMetrics.rowSpacing) {
-                    if center.accounts.isEmpty {
-                        noAccounts
-                    } else {
-                        heading(L10n.string("Upcoming"))
-                        upcoming
-                        heading(L10n.string("Calendars")).padding(.top, 14)
-                        calendarList
-                    }
-                    heading("Yardlet").padding(.top, center.accounts.isEmpty ? 0 : 6)
-                    CalendarToggleRow(title: L10n.string("Scheduled runs"), color: .secondary, isOn: center.showsSchedules,
-                                      showsClock: true) { center.setShowsSchedules(!center.showsSchedules) }
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: SidebarMetrics.rowSpacing) {
+                if center.accounts.isEmpty {
+                    noAccounts
+                } else {
+                    heading(L10n.string("Upcoming"))
+                    upcoming
+                    heading(L10n.string("Calendars")).padding(.top, 14)
+                    calendarList
                 }
-                .padding(.horizontal, SidebarMetrics.rowInset)
-                .padding(.top, 10)
-                .padding(.bottom, 12)
+                heading("Yardlet").padding(.top, center.accounts.isEmpty ? 0 : 8)
+                CalendarToggleRow(title: L10n.string("Scheduled runs"), color: .secondary, isOn: center.showsSchedules,
+                                  showsClock: true) { center.setShowsSchedules(!center.showsSchedules) }
             }
-            Rectangle().fill(ParityTheme.separator).frame(height: 1)
-            Group {
-                if let footer { footer } else { SidebarAccountButton(context: accountMenu) }
-            }
-            .padding(.horizontal, 4).padding(.vertical, 5)
+            .padding(.horizontal, SidebarMetrics.rowInset + 2)
+            .padding(.top, 10)
+            .padding(.bottom, 12)
         }
-        .background(ParityTheme.sidebar)
+        .background(ParityTheme.innerRail)
     }
 
     // MARK: - Upcoming
@@ -225,6 +209,7 @@ private struct CalendarUpcomingRow: View {
     let isSelected: Bool
     let action: () -> Void
     @Environment(\.yardletInterfaceScale) private var scale
+    @Environment(\.self) private var environment
     @State private var isHovering = false
 
     var body: some View {
@@ -232,22 +217,32 @@ private struct CalendarUpcomingRow: View {
             HStack(spacing: 0) {
                 SidebarRowLeading {
                     if let color {
-                        RoundedRectangle(cornerRadius: 1.5).fill(color).frame(width: 3, height: 14 * scale)
+                        RoundedRectangle(cornerRadius: 1.5, style: .continuous).fill(color).frame(width: 3, height: 14 * scale)
                     } else {
                         Image(systemName: "clock").font(.system(size: 11 * scale, weight: .medium)).foregroundStyle(.secondary)
                     }
                 }
-                Text(title).font(.system(size: 13 * scale)).lineLimit(1).layoutPriority(1)
+                Text(title)
+                    .font(.system(size: 13 * scale, weight: isSelected ? .medium : .regular))
+                    .foregroundStyle(isSelected ? AnyShapeStyle(ParityTheme.accentText) : AnyShapeStyle(.primary))
+                    .lineLimit(1)
+                    .layoutPriority(1)
                 Spacer(minLength: 6)
                 if let note {
-                    Text(note).font(.system(size: 11.5 * scale)).foregroundStyle(.secondary).lineLimit(1).fixedSize()
+                    Text(note)
+                        .font(.system(size: 11 * scale, weight: .medium))
+                        .foregroundStyle(ThemeContrast.readableTint(.orange,
+                            over: ThemeSurface.canvas.resolve(in: environment), in: environment))
+                        .lineLimit(1)
+                        .fixedSize()
                         .padding(.trailing, 6)
                 }
                 Text(time).font(.system(size: 12 * scale).monospacedDigit()).foregroundStyle(.secondary).lineLimit(1).fixedSize()
             }
             .padding(.trailing, SidebarMetrics.rowTrailingPadding)
             .frame(height: SidebarMetrics.rowHeight * scale)
-            .background(isSelected ? ParityTheme.selectedFill : isHovering ? ParityTheme.hoverFill : .clear,
+            .background(isSelected ? AnyShapeStyle(ParityTheme.accentSoftFill)
+                        : (isHovering ? AnyShapeStyle(ParityTheme.hoverFill) : AnyShapeStyle(.clear)),
                         in: SidebarMetrics.rowShape())
             .contentShape(SidebarMetrics.rowShape())
         }

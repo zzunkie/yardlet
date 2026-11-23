@@ -286,33 +286,47 @@ enum ParityTheme {
     static let canvas = Color(ThemeSurface.canvas)
     static let originalCanvas = Color(nsColor: NSColor(name: "YardletCanvas") { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(srgbRed: 0.098, green: 0.102, blue: 0.118, alpha: 1) // #191A1E
-            : NSColor(srgbRed: 0.980, green: 0.980, blue: 0.984, alpha: 1) // #FAFAFB
+            ? NSColor(srgbRed: 0.092, green: 0.098, blue: 0.118, alpha: 1) // #17191E
+            : NSColor(srgbRed: 0.988, green: 0.988, blue: 0.992, alpha: 1) // #FCFCFD
     })
     static let sidebar = Color(ThemeSurface.sidebar)
     static let originalSidebar = Color(nsColor: NSColor(name: "YardletSidebar") { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(srgbRed: 0.125, green: 0.133, blue: 0.157, alpha: 1) // #202228
-            : NSColor(srgbRed: 0.953, green: 0.957, blue: 0.965, alpha: 1) // #F3F4F6
+            ? NSColor(srgbRed: 0.120, green: 0.129, blue: 0.157, alpha: 1) // #1F2128
+            : NSColor(srgbRed: 0.945, green: 0.953, blue: 0.965, alpha: 1) // #F1F3F6
     })
     static let elevated = Color(ThemeSurface.elevated)
     static let originalElevated = Color(nsColor: NSColor(name: "YardletElevated") { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(srgbRed: 0.149, green: 0.157, blue: 0.188, alpha: 1) // #262830
+            ? NSColor(srgbRed: 0.145, green: 0.157, blue: 0.196, alpha: 1) // #252832
             : .white
     })
     static let input = Color(ThemeSurface.input)
     static let originalInput = Color(nsColor: NSColor(name: "YardletInput") { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(srgbRed: 0.169, green: 0.180, blue: 0.216, alpha: 1) // #2B2E37
+            ? NSColor(srgbRed: 0.165, green: 0.180, blue: 0.224, alpha: 1) // #2A2E39
             : .white
     })
-    static let separator = Color.primary.opacity(0.09)
-    static let strongSeparator = Color.primary.opacity(0.16)
-    static let darkTopHighlight = Color.white.opacity(0.08)
+    /// Subtle stepped fill for inner section rails (Mail, Calendar, Personal agents) inside the detail surface.
+    static let innerRail = Color(InnerRailSurfaceStyle())
+    /// Crisp tinted surface for sent user message bubbles, adapting cleanly with custom themes.
+    static let userBubbleFill = Color(UserBubbleSurfaceStyle())
+    /// Soft accent wash for selected navigation rows, active filter chips, and prominent inline pills.
+    static let accentSoftFill = Color(AccentSoftFillStyle())
+    static let separator = Color(nsColor: NSColor(name: "YardletSeparator") { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor.white.withAlphaComponent(0.105)
+            : NSColor.black.withAlphaComponent(0.095)
+    })
+    static let strongSeparator = Color(nsColor: NSColor(name: "YardletStrongSeparator") { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor.white.withAlphaComponent(0.18)
+            : NSColor.black.withAlphaComponent(0.16)
+    })
+    static let darkTopHighlight = Color.white.opacity(0.10)
     static let subtleFill = Color.primary.opacity(0.035)
     static let selectedFill = Color.primary.opacity(0.095)
-    static let hoverFill = Color.primary.opacity(0.065)
+    static let hoverFill = Color.primary.opacity(0.062)
     /// The shade a waiting request's panel lays over the elevated surface (`ConversationRequestPanel`), so the
     /// panel stands apart from the canvas and the composer in both appearances.
     static let requestPanelFill = Color.primary.opacity(0.045)
@@ -408,9 +422,16 @@ struct ParityComposerControl: View {
             isActive
                 ? ParityTheme.selectedFill
                 : (isInteractive && isHovering ? ParityTheme.hoverFill : .clear),
-            in: RoundedRectangle(cornerRadius: ParityRadius.control)
+            in: RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous)
         )
-        .contentShape(RoundedRectangle(cornerRadius: ParityRadius.control))
+        .overlay {
+            if isActive {
+                RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous)
+                    .strokeBorder(ParityTheme.separator, lineWidth: 0.5)
+                    .allowsHitTesting(false)
+            }
+        }
+        .contentShape(RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous))
         .animation(ParityMotion.easeOut(reduceMotion: reduceMotion, duration: 0.1), value: isHovering)
         .onHover { hovering in
             isHovering = isInteractive && hovering
@@ -718,12 +739,64 @@ struct WindowDragRegion: NSViewRepresentable {
     }
 }
 
+private struct InnerRailSurfaceStyle: ShapeStyle, Hashable {
+    func resolve(in environment: EnvironmentValues) -> Color.Resolved {
+        let isDark = environment.colorScheme == .dark
+        let base = Color(nsColor: isDark
+            ? NSColor(srgbRed: 0.078, green: 0.086, blue: 0.106, alpha: 1) // #14161B
+            : NSColor(srgbRed: 0.969, green: 0.973, blue: 0.980, alpha: 1) // #F7F8FA
+        ).resolve(in: environment)
+        guard let background = environment.yardletColorTheme[ThemeMode(environment.colorScheme)].background else {
+            return base
+        }
+        let canvas = ParityTheme.originalCanvas.resolve(in: environment)
+        let chosen = background.color.resolve(in: environment)
+        func shifted(_ channel: Float, _ surface: Float, _ original: Float) -> Float {
+            max(0, min(1, channel + surface - original))
+        }
+        return Color.Resolved(red: shifted(chosen.red, base.red, canvas.red),
+                              green: shifted(chosen.green, base.green, canvas.green),
+                              blue: shifted(chosen.blue, base.blue, canvas.blue))
+    }
+}
+
+private struct UserBubbleSurfaceStyle: ShapeStyle, Hashable {
+    func resolve(in environment: EnvironmentValues) -> Color.Resolved {
+        let isDark = environment.colorScheme == .dark
+        let base = Color(nsColor: isDark
+            ? NSColor(srgbRed: 0.114, green: 0.133, blue: 0.173, alpha: 1) // #1D222C
+            : NSColor(srgbRed: 0.933, green: 0.949, blue: 0.969, alpha: 1) // #EEF2F7
+        ).resolve(in: environment)
+        guard let background = environment.yardletColorTheme[ThemeMode(environment.colorScheme)].background else {
+            return base
+        }
+        let canvas = ParityTheme.originalCanvas.resolve(in: environment)
+        let chosen = background.color.resolve(in: environment)
+        func shifted(_ channel: Float, _ surface: Float, _ original: Float) -> Float {
+            max(0, min(1, channel + surface - original))
+        }
+        return Color.Resolved(red: shifted(chosen.red, base.red, canvas.red),
+                              green: shifted(chosen.green, base.green, canvas.green),
+                              blue: shifted(chosen.blue, base.blue, canvas.blue))
+    }
+}
+
+private struct AccentSoftFillStyle: ShapeStyle, Hashable {
+    func resolve(in environment: EnvironmentValues) -> Color.Resolved {
+        let accent = ParityTheme.accent.resolve(in: environment)
+        let opacity: Float = environment.colorScheme == .dark ? 0.18 : 0.11
+        return Color.Resolved(red: accent.red, green: accent.green, blue: accent.blue, opacity: opacity)
+    }
+}
+
 /// Crisp elevated surface treatment: dual-layer soft shadow in light mode and a 1 pt top-edge specular
-/// highlight in dark mode, with stronger hairline contrast when macOS Increase Contrast is enabled.
+/// highlight in dark mode, with stronger hairline contrast when macOS Increase Contrast is enabled
+/// and an optional accent focus ring for inputs such as the composer.
 private struct ParitySurfaceElevation: ViewModifier {
     let cornerRadius: CGFloat
     var isFocused: Bool = false
     var accentBorder: Bool = false
+    var showsFocusRing: Bool = false
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var contrast
@@ -738,7 +811,7 @@ private struct ParitySurfaceElevation: ViewModifier {
                             LinearGradient(
                                 colors: [ParityTheme.darkTopHighlight, .clear],
                                 startPoint: .top,
-                                endPoint: UnitPoint(x: 0.5, y: 0.22)
+                                endPoint: UnitPoint(x: 0.5, y: 0.24)
                             ),
                             lineWidth: 1
                         )
@@ -750,21 +823,33 @@ private struct ParitySurfaceElevation: ViewModifier {
                     .strokeBorder(borderColor, lineWidth: contrast == .increased ? 1.25 : 1)
                     .allowsHitTesting(false)
             }
-            .shadow(color: colorScheme == .light ? .black.opacity(0.035) : .clear, radius: 1, y: 1)
-            .shadow(color: colorScheme == .light ? .black.opacity(isFocused ? 0.075 : 0.05) : .clear, radius: 10, y: 4)
+            .overlay {
+                if showsFocusRing, isFocused, !accentBorder {
+                    shape
+                        .stroke(ParityTheme.accent.opacity(colorScheme == .dark ? 0.24 : 0.15), lineWidth: 3)
+                        .padding(-1.5)
+                        .allowsHitTesting(false)
+                }
+            }
+            .shadow(color: colorScheme == .light ? .black.opacity(0.045) : .black.opacity(0.28), radius: 1.5, y: 1)
+            .shadow(color: colorScheme == .light ? .black.opacity(isFocused ? 0.095 : 0.065) : .black.opacity(isFocused ? 0.42 : 0.30),
+                    radius: isFocused ? 14 : 11, y: isFocused ? 5 : 4)
     }
 
     private var borderColor: Color {
         if accentBorder { return ParityTheme.accent }
-        if contrast == .increased { return Color.primary.opacity(isFocused ? 0.42 : 0.28) }
+        if contrast == .increased { return Color.primary.opacity(isFocused ? 0.44 : 0.28) }
+        if showsFocusRing, isFocused { return ParityTheme.accent.opacity(colorScheme == .dark ? 0.72 : 0.62) }
         return isFocused ? ParityTheme.strongSeparator : ParityTheme.separator
     }
 }
 
 extension View {
     func parityElevatedSurface(cornerRadius: CGFloat = ParityRadius.surface,
-                               isFocused: Bool = false, accentBorder: Bool = false) -> some View {
-        modifier(ParitySurfaceElevation(cornerRadius: cornerRadius, isFocused: isFocused, accentBorder: accentBorder))
+                               isFocused: Bool = false, accentBorder: Bool = false,
+                               showsFocusRing: Bool = false) -> some View {
+        modifier(ParitySurfaceElevation(cornerRadius: cornerRadius, isFocused: isFocused,
+                                        accentBorder: accentBorder, showsFocusRing: showsFocusRing))
     }
 }
 

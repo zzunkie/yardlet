@@ -29,6 +29,9 @@ final class MailboxRenderingTests: XCTestCase {
                 XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Mail")))
                 let quoteRow = { host.accessibilityElements().first { $0.label.hasPrefix(MailFixture.haneul.displayName) } }
                 await host.settle(until: { quoteRow() != nil })
+                // Projects and tasks stay visible in the left sidebar while Mail opens its inner list rail.
+                XCTAssertTrue(host.accessibilityElements().contains { $0.label == L10n.string("Search tasks") },
+                              "The task sidebar stays visible when Mail is selected")
                 host.settle(passes: 6)
                 try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "list-\(name)"))
 

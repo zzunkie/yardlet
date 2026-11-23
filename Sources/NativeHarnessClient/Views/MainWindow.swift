@@ -192,7 +192,8 @@ struct MainWindow: View {
     private var sidebarLists: SidebarLists {
         let groups = allVisibleGroups, chats = allChats
         return SidebarLists(groups: groups, chats: chats,
-                            layout: sidebarSection == .tasks ? sidebarLayout(groups: groups, chats: chats) : nil)
+                            layout: !schedulesWindow.isShowing && !isShowingArchivedTasks
+                                ? sidebarLayout(groups: groups, chats: chats) : nil)
     }
 
     /// The sidebar search's words, or nil while there is none.
@@ -1990,46 +1991,7 @@ struct MainWindow: View {
 
     private func windowContent(_ lists: SidebarLists) -> some View {
         HStack(spacing: 0) {
-                if isSidebarVisible, sidebarSection == .personalAgents {
-                    SidebarColumn(state: sidebarWidth, windowWidth: knownWindowWidth) {
-                        VStack(spacing: 0) {
-                            sidebarTitleBar
-                            PersonalAgentsSidebar(center: personalAgents, accounts: personalAccounts,
-                                accountID: $personalAccountID, accountMenu: accountMenu,
-                                onHome: showNewTask, onShowSchedules: showSchedules,
-                                onSelectSection: selectSection,
-                                onAccounts: { presentSettings(.harnesses) },
-                                onRefresh: reconnectPersonalAgents)
-                        }
-                    }
-                } else if isSidebarVisible, sidebarSection == .mail {
-                    SidebarColumn(state: sidebarWidth, windowWidth: knownWindowWidth) {
-                        VStack(spacing: 0) {
-                            sidebarTitleBar
-                            MailSidebar(center: model.mailbox, window: mailWindow, accountMenu: accountMenu,
-                                        onHome: showNewTask, onShowSchedules: showSchedules,
-                                        onSelectSection: selectSection,
-                                        onNewMessage: {
-                                            let mailbox = model.mailbox
-                                            guard let account = mailWindow.mailbox.accountID.flatMap(mailbox.account)
-                                                ?? mailbox.accounts.first else { return }
-                                            mailWindow.write(.new, account: account)
-                                        },
-                                        onRefresh: { Task { await model.mailbox.refresh() } })
-                        }
-                    }
-                } else if isSidebarVisible, sidebarSection == .calendar {
-                    SidebarColumn(state: sidebarWidth, windowWidth: knownWindowWidth) {
-                        VStack(spacing: 0) {
-                            sidebarTitleBar
-                            CalendarSidebar(center: model.calendar, window: calendarWindow, schedules: model.scheduledTasks.schedules,
-                                            accountMenu: accountMenu, onHome: showNewTask, onShowSchedules: showSchedules,
-                                            onSelectSection: selectSection,
-                                            onSelectEvent: showEvent,
-                                            onOpenConnectors: { presentSettings(.connectors) })
-                        }
-                    }
-                } else if isSidebarVisible, schedulesWindow.isShowing {
+                if isSidebarVisible, schedulesWindow.isShowing {
                     SidebarColumn(state: sidebarWidth, windowWidth: knownWindowWidth) {
                         VStack(spacing: 0) {
                             sidebarTitleBar
@@ -2070,6 +2032,8 @@ struct MainWindow: View {
                         grouping: $sidebarGrouping,
                         onNewTask: showNewTask,
                         onShowSchedules: showSchedules,
+                        section: sidebarSection,
+                        isHomeSelected: sidebarSection == .tasks && model.splits.selection == .home,
                         onSelectSection: selectSection,
                         onActivate: activateRow,
                         onNewTaskInProject: { workspaceURL in
@@ -2120,7 +2084,7 @@ struct MainWindow: View {
                         ),
                         accountMenu: accountMenu,
                         disclosure: sidebarDisclosure,
-                        activity: sidebarActivity,
+                        activity: sidebarSection == .tasks ? sidebarActivity : nil,
                         cloudItems: model.cloudItems,
                         onOpenCloudItem: openCloudItem,
                         onListAtTopChange: { atTop in
@@ -2153,21 +2117,39 @@ struct MainWindow: View {
                 Group {
                     if sidebarSection == .personalAgents {
                         VStack(spacing: 0) {
-                            titleBar(for: nil)
-                            PersonalAgentsContent(center: personalAgents,
-                                                  accountTitle: personalAccounts.first { $0.id == personalAccountID }?.title,
-                                                  onRetry: reconnectPersonalAgents,
-                                                  onAccounts: { presentSettings(.harnesses) })
+                            titleBar(for: nil, title: L10n.string("Personal agents"))
+                            Rectangle().fill(ParityTheme.separator).frame(height: 1)
+                            HStack(spacing: 0) {
+                                PersonalAgentsListRail(center: personalAgents, accounts: personalAccounts,
+                                                       accountID: $personalAccountID,
+                                                       onAccounts: { presentSettings(.harnesses) },
+                                                       onRefresh: reconnectPersonalAgents)
+                                    .frame(width: knownWindowWidth.map { $0 < 1040 ? 188 : 208 } ?? 208)
+                                Rectangle().fill(ParityTheme.separator).frame(width: 1)
+                                PersonalAgentsContent(center: personalAgents,
+                                                      accountTitle: personalAccounts.first { $0.id == personalAccountID }?.title,
+                                                      onRetry: reconnectPersonalAgents,
+                                                      onAccounts: { presentSettings(.harnesses) })
+                            }
                         }
                     } else if sidebarSection == .mail {
                         // The thread's browser panel reaches the window's top, its tabs in the title bar's row.
                         MailWorkspace(center: model.mailbox, window: mailWindow, actions: mailActions,
-                                      panel: model.mailbox.isEnabled ? model.taskWorkspaces.mail : nil)
+                                      panel: model.mailbox.isEnabled ? model.taskWorkspaces.mail : nil,
+                                      onNewMessage: {
+                                          let mailbox = model.mailbox
+                                          guard let account = mailWindow.mailbox.accountID.flatMap(mailbox.account)
+                                              ?? mailbox.accounts.first else { return }
+                                          mailWindow.write(.new, account: account)
+                                      },
+                                      onRefresh: { Task { await model.mailbox.refresh() } })
                             .environment(\.taskAreaHeader, TaskAreaHeader(height: ParityTheme.titleBarHeight, isTitleBar: true,
-                                                                          content: AnyView(titleBar(for: nil))))
+                                                                          content: AnyView(titleBar(for: nil, title: L10n.string("Mail")))))
                     } else if sidebarSection == .calendar {
                         CalendarWorkspace(center: model.calendar, window: calendarWindow, schedules: model.scheduledTasks.schedules,
                                           titleBar: { AnyView(titleBar(for: nil, accessory: $0)) }, onOpenSchedule: showSchedule,
+                                          onSelectEvent: showEvent,
+                                          onOpenConnectors: { presentSettings(.connectors) },
                                           onAskAgent: { event, account in
                                               newTaskDraft.takeReference(CalendarText.handoff(event, account: account,
                                                                                               calendar: calendarWindow.calendar))
@@ -2233,7 +2215,7 @@ struct MainWindow: View {
         .focusSection()
         .coordinateSpace(.named(SidebarHoverCardMetrics.space))
         .overlay(alignment: .topLeading) {
-            if isSidebarVisible, sidebarSection == .tasks, !schedulesWindow.isShowing, !isShowingArchivedTasks {
+            if isSidebarVisible, !schedulesWindow.isShowing, !isShowingArchivedTasks {
                 SidebarHoverCardLayer(state: sidebarHoverCard)
             }
         }

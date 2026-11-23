@@ -66,6 +66,8 @@ final class CalendarRenderingTests: XCTestCase {
                 XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Calendar")))
                 let ops = text("운영 회의", "Ops meeting")
                 await host.settle(until: { host.accessibilityElements().contains { $0.label.hasPrefix(ops) } })
+                XCTAssertTrue(host.accessibilityElements().contains { $0.label == L10n.string("Search tasks") },
+                              "The task sidebar stays visible when Calendar is selected")
                 // The Mac's Holidays calendar is hidden by the person.
                 if let holidays = model.calendar.calendars.first(where: { $0.name == text("대한민국 공휴일", "Holidays") }) {
                     model.calendar.setShown(false, for: holidays)
@@ -160,8 +162,8 @@ final class CalendarRenderingTests: XCTestCase {
                 }
                 XCTAssertTrue(elements.contains { $0.label.hasPrefix(onceToday) }, "A one-off run stays at its time too")
 
-                // The window shows its tasks: the calendar stays on and reads nothing more.
-                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Tasks")))
+                // The window returns to tasks via Home: the calendar stays on and reads nothing more.
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Home")))
                 host.settle(passes: 6)
                 try await Task.sleep(for: .milliseconds(200))
                 let hidden = reads()

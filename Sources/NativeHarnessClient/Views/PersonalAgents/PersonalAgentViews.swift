@@ -1,49 +1,35 @@
 import AppKit
 import SwiftUI
 
-struct PersonalAgentsSidebar: View {
+/// The personal agents inner left rail inside the detail surface: account selector, refresh, and
+/// each dot in the account.
+struct PersonalAgentsListRail: View {
     @Environment(\.yardletInterfaceScale) private var interfaceScale
     @Bindable var center: PersonalAgentCenter
     let accounts: [AccountChoice]
     @Binding var accountID: String
-    let accountMenu: SidebarAccountMenuContext
-    /// The sidebar's top, the same as over the tasks: Home, Scheduled tasks and the Tasks word that
-    /// switches the list back.
-    let onHome: () -> Void
-    var onShowSchedules: (() -> Void)?
-    /// Switches the list to the tasks or the mailbox.
-    let onSelectSection: (ShellSection) -> Void
     let onAccounts: () -> Void
     let onRefresh: () -> Void
-    @Environment(\.yardletInterfaceScale) private var scale
 
     var body: some View {
-        VStack(spacing: 0) {
-            SidebarPlacesHeader(onHome: onHome, onShowSchedules: onShowSchedules, section: .personalAgents,
-                                onSelectSection: onSelectSection)
-
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: SidebarMetrics.rowSpacing) {
-                    accountHeading
-                        .padding(.horizontal, 13 - SidebarMetrics.rowInset)
-                        .padding(.bottom, 2)
-                    ForEach(center.agents) { agent in
-                        PersonalAgentRow(center: center, agent: agent)
-                    }
-                    if center.hasLoaded, center.agents.isEmpty, center.failure == nil {
-                        Text(L10n.string("No dots in this account"))
-                            .font(.system(size: 12 * interfaceScale)).foregroundStyle(.secondary).padding(10)
-                    }
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: SidebarMetrics.rowSpacing) {
+                accountHeading
+                    .padding(.horizontal, 13 - SidebarMetrics.rowInset)
+                    .padding(.bottom, 4)
+                ForEach(center.agents) { agent in
+                    PersonalAgentRow(center: center, agent: agent)
                 }
-                .padding(.horizontal, SidebarMetrics.rowInset)
-                // The heading starts where Projects does over the tasks, below their search field.
-                .padding(.top, 16)
-                .padding(.bottom, 12)
+                if center.hasLoaded, center.agents.isEmpty, center.failure == nil {
+                    Text(L10n.string("No dots in this account"))
+                        .font(.system(size: 12 * interfaceScale)).foregroundStyle(.secondary).padding(10)
+                }
             }
-            Rectangle().fill(ParityTheme.separator).frame(height: 1)
-            SidebarAccountButton(context: accountMenu).padding(.horizontal, 4).padding(.vertical, 5)
+            .padding(.horizontal, SidebarMetrics.rowInset + 2)
+            .padding(.top, 12)
+            .padding(.bottom, 12)
         }
-        .background(ParityTheme.sidebar)
+        .background(ParityTheme.innerRail)
     }
 
     /// The account the dots are read from, as a section heading like Projects: a menu of the accounts
@@ -98,16 +84,21 @@ struct PersonalAgentsSidebar: View {
 private struct PersonalAgentRow: View {
     let center: PersonalAgentCenter
     let agent: PersonalAgent
+    @State private var isHovering = false
     @Environment(\.yardletInterfaceScale) private var scale
     @Environment(\.personalAgentWatch) private var watch
 
     var body: some View {
+        let isSelected = center.selectedID == agent.id
         Button { Task { await center.select(agent.id) } } label: {
             HStack(spacing: 8) {
                 PersonalAgentAvatarView(name: agent.name, data: center.avatar(for: agent),
                                         sheet: center.spriteSheet(for: agent),
                                         motion: center.motion(for: agent), size: 22)
-                Text(agent.name).font(.system(size: 13 * scale)).lineLimit(1)
+                Text(agent.name)
+                    .font(.system(size: 13 * scale, weight: isSelected ? .semibold : .regular))
+                    .foregroundStyle(isSelected ? AnyShapeStyle(ParityTheme.accentText) : AnyShapeStyle(.primary))
+                    .lineLimit(1)
                 Spacer(minLength: 4)
                 if center.isPaused(agent) {
                     Text(L10n.string("Paused")).font(.system(size: 11 * scale)).foregroundStyle(.secondary)
@@ -116,19 +107,21 @@ private struct PersonalAgentRow: View {
             }
             .padding(.horizontal, 8)
             .frame(height: 32 * scale)
-            .background(center.selectedID == agent.id ? ParityTheme.selectedFill : .clear,
+            .background(isSelected ? AnyShapeStyle(ParityTheme.accentSoftFill)
+                        : (isHovering ? AnyShapeStyle(ParityTheme.hoverFill) : AnyShapeStyle(.clear)),
                         in: SidebarMetrics.rowShape())
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .parityPointer()
+        .onHover { isHovering = $0 }
         .accessibilityLabel(agent.name)
         // Whether it is paused or at work, not the room's words for the work, which change far more often.
         .accessibilityValue([center.isPaused(agent) ? L10n.string("Paused")
                              : center.motion(for: agent) == .working ? L10n.string("Working") : "",
                              watch?.unread[agent.id]?.accessibilityName ?? ""]
             .filter { !$0.isEmpty }.joined(separator: ", "))
-        .accessibilityAddTraits(center.selectedID == agent.id ? .isSelected : [])
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
@@ -263,9 +256,9 @@ struct PersonalAgentsContent: View {
     /// The person raised the details over a conversation too narrow to keep them beside it.
     @State private var raisesDetails = false
 
-    /// The details sit beside the conversation only where both keep their width, as the session rail does.
+    /// The details sit beside the conversation while both keep comfortable reading width beside the inner rail.
     private var detailsFit: Bool {
-        width >= SessionRailPlacement.minimumAloneWidth + PersonalAgentDetailsPanel.width
+        width >= 500 + PersonalAgentDetailsPanel.width
     }
     private var showsDetailsBeside: Bool { detailsFit && !hidesDetails }
     private var showsDetailsRaised: Bool { !detailsFit && raisesDetails }
@@ -803,8 +796,13 @@ struct PersonalAgentConversationView: View {
                     .font(ParityTheme.conversationFont(scale: scale))
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(ConversationLayout.sentBubblePadding)
-                    .background(ParityTheme.selectedFill,
-                                in: RoundedRectangle(cornerRadius: ConversationLayout.sentBubbleCornerRadius))
+                    .background(ParityTheme.userBubbleFill,
+                                in: RoundedRectangle(cornerRadius: ConversationLayout.sentBubbleCornerRadius, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: ConversationLayout.sentBubbleCornerRadius, style: .continuous)
+                            .strokeBorder(ParityTheme.separator, lineWidth: 1)
+                            .allowsHitTesting(false)
+                    }
                     .frame(maxWidth: ConversationLayout.sentBubbleMaximumWidth, alignment: .trailing)
                 }
             }

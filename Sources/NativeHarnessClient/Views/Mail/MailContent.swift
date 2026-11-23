@@ -128,7 +128,7 @@ struct MailThreadView: View {
             case .trash:
                 textButton(L10n.string("Move out of the Trash"), systemName: "arrow.uturn.backward") { apply(.untrash) }
             default:
-                textButton(L10n.string("Ask an agent"), systemName: "sparkles") { actions.askAgent(thread) }
+                accentButton(L10n.string("Ask an agent"), systemName: "sparkles") { actions.askAgent(thread) }
             }
             if role == .inbox {
                 barButton(L10n.string("Archive"), systemName: "archivebox") { apply(.archived) }
@@ -159,6 +159,31 @@ struct MailThreadView: View {
     private func textButton(_ title: String, systemName: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             ParityComposerControl(title: title, systemName: systemName, tint: .primary).fixedSize()
+        }
+        .buttonStyle(.plain)
+        .parityPointer()
+        .padding(.trailing, 4)
+    }
+
+    private func accentButton(_ title: String, systemName: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: systemName)
+                    .font(.system(size: 11.5 * scale, weight: .semibold))
+                Text(title)
+                    .font(.parity(.control, weight: .medium, scale: scale))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(ParityTheme.accentText)
+            .padding(.horizontal, 9)
+            .frame(height: 26 * scale)
+            .background(ParityTheme.accentSoftFill, in: RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous)
+                    .strokeBorder(ParityTheme.accent.opacity(0.20), lineWidth: 0.5)
+                    .allowsHitTesting(false)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous))
         }
         .buttonStyle(.plain)
         .parityPointer()
@@ -204,11 +229,15 @@ struct MailThreadView: View {
     private func replyButton(_ title: String, systemName: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Label(title, systemImage: systemName)
-                .font(.system(size: 13 * scale))
+                .font(.system(size: 12.5 * scale, weight: .medium))
                 .padding(.horizontal, 12)
-                .frame(height: 30 * scale)
-                .overlay(Capsule().strokeBorder(ParityTheme.strongSeparator))
-                .contentShape(Capsule())
+                .frame(height: 29 * scale)
+                .background(ParityTheme.elevated, in: RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous)
+                        .strokeBorder(ParityTheme.strongSeparator, lineWidth: 1)
+                }
+                .contentShape(RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous))
         }
         .buttonStyle(.plain)
         .parityPointer()
@@ -226,25 +255,29 @@ struct MailMessageView: View {
     /// Folds it back to a line; nil for the message that stays open.
     var fold: (() -> Void)?
     @Environment(\.yardletInterfaceScale) private var scale
+    @Environment(\.self) private var environment
     @State private var htmlHeight: CGFloat = 40
     @State private var showsRemoteContent = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let content = VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 10) {
-                MailSenderInitial(address: message.from)
+                MailSenderInitial(address: message.from, size: 30 * scale)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(MailText.name(message.from, me: me)).font(.system(size: 13 * scale, weight: .semibold))
+                        Text(MailText.name(message.from, me: me)).font(.system(size: 13.5 * scale, weight: .semibold))
                         if message.from.name != nil {
                             Text(message.from.address).font(.system(size: 12 * scale)).foregroundStyle(.secondary)
                         }
                         Spacer(minLength: 8)
                         if message.isDraft {
-                            Text(L10n.string("Draft")).font(.system(size: 12 * scale, weight: .medium)).foregroundStyle(.orange)
+                            Text(L10n.string("Draft"))
+                                .font(.system(size: 12 * scale, weight: .semibold))
+                                .foregroundStyle(ThemeContrast.readableTint(.orange,
+                                    over: ThemeSurface.elevated.resolve(in: environment), in: environment))
                         }
                         Text(MailText.messageTime(message.date))
-                            .font(.system(size: 12 * scale)).foregroundStyle(.secondary)
+                            .font(.system(size: 12 * scale).monospacedDigit()).foregroundStyle(.secondary)
                     }
                     .lineLimit(1)
                     Text(recipients).font(.system(size: 12 * scale)).foregroundStyle(.secondary).lineLimit(2)
@@ -253,7 +286,7 @@ struct MailMessageView: View {
                 .onTapGesture { fold?() }
             }
             body(of: message)
-                .padding(.leading, MailSenderInitial.size + 10)
+                .padding(.leading, 30 * scale + 10)
             if !message.attachments.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(message.attachments) { attachment in
@@ -266,7 +299,7 @@ struct MailMessageView: View {
                         .font(.system(size: 12.5 * scale))
                     }
                 }
-                .padding(.leading, MailSenderInitial.size + 10)
+                .padding(.leading, 30 * scale + 10)
             }
             if message.isDraft {
                 HStack(spacing: 8) {
@@ -281,10 +314,27 @@ struct MailMessageView: View {
                     }
                     .buttonStyle(.plain)
                 }
-                .padding(.leading, MailSenderInitial.size + 10)
+                .padding(.leading, 30 * scale + 10)
             }
         }
-        .padding(.vertical, 16)
+        if message.isDraft {
+            content
+                .padding(.vertical, 14)
+                .padding(.leading, 16)
+                .padding(.trailing, 14)
+                .background(ParityTheme.elevated, in: RoundedRectangle(cornerRadius: ParityRadius.surface, style: .continuous))
+                .overlay(alignment: .leading) {
+                    Rectangle()
+                        .fill(Color.orange)
+                        .frame(width: 3)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: ParityRadius.surface, style: .continuous))
+                .parityElevatedSurface(cornerRadius: ParityRadius.surface)
+                .padding(.vertical, 12)
+        } else {
+            content
+                .padding(.vertical, 16)
+        }
     }
 
     /// The HTML as sent, or the text when the message has no HTML.
@@ -367,11 +417,20 @@ struct MailSenderInitial: View {
             .accessibilityHidden(true)
     }
 
-    private static let tints: [Color] = [.blue, .teal, .indigo, .green, .orange, .pink, .purple, .brown]
+    private static let tints: [Color] = [
+        Color(red: 0.145, green: 0.388, blue: 0.922), // blue #2563EB
+        Color(red: 0.059, green: 0.463, blue: 0.431), // teal #0F766E
+        Color(red: 0.486, green: 0.227, blue: 0.929), // violet #7C3AED
+        Color(red: 0.706, green: 0.325, blue: 0.035), // amber #B45309
+        Color(red: 0.745, green: 0.094, blue: 0.365), // rose #BE185D
+        Color(red: 0.263, green: 0.220, blue: 0.792), // indigo #4338CA
+        Color(red: 0.082, green: 0.502, blue: 0.239), // emerald #15803D
+        Color(red: 0.012, green: 0.412, blue: 0.631), // ocean #0369A1
+    ]
 
     static func tint(for address: String) -> Color {
         let sum = address.lowercased().unicodeScalars.reduce(0) { ($0 &* 31 &+ Int($1.value)) & 0xFFFF }
-        return tints[sum % tints.count].opacity(0.85)
+        return tints[sum % tints.count]
     }
 }
 

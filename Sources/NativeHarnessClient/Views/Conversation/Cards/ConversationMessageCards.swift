@@ -172,8 +172,13 @@ struct ConversationSentMessage: View {
                             clip: isSentByScheduledTask ? .scheduledTaskMessage : .sentMessage
                         )
                         .padding(ConversationLayout.sentBubblePadding)
-                        .background(ParityTheme.selectedFill,
-                                    in: RoundedRectangle(cornerRadius: ConversationLayout.sentBubbleCornerRadius))
+                        .background(ParityTheme.userBubbleFill,
+                                    in: RoundedRectangle(cornerRadius: ConversationLayout.sentBubbleCornerRadius, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: ConversationLayout.sentBubbleCornerRadius, style: .continuous)
+                                .strokeBorder(ParityTheme.separator, lineWidth: 1)
+                                .allowsHitTesting(false)
+                        }
                         .frame(maxWidth: ConversationLayout.sentBubbleMaximumWidth, alignment: .trailing)
                     }
                     if let modes = attachments?.modes, !modes.isEmpty {

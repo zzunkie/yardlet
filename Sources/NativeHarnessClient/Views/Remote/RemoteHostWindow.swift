@@ -230,10 +230,6 @@ struct RemoteHostView: View {
                                                                toggle: toggleActivity))
                         if model.showsSchedules {
                             RemoteScheduleList(model: model)
-                        } else if showsCalendar {
-                            calendarSidebar
-                        } else if showsMail {
-                            mailSidebar
                         } else {
                             sidebar
                         }
@@ -357,6 +353,7 @@ struct RemoteHostView: View {
     private var taskSidebar: some View {
         let mirror = listedSidebar
         let layout = sidebarLayout(mirror)
+        let activeSection: ShellSection = showsMail ? .mail : (showsCalendar ? .calendar : .tasks)
         return TaskSidebar(
             layout: layout,
             allGroups: mirror.groups,
@@ -366,6 +363,8 @@ struct RemoteHostView: View {
             grouping: $grouping,
             onNewTask: showNewTask,
             onShowSchedules: model.offersSchedules ? { showSchedules() } : nil,
+            section: activeSection,
+            isHomeSelected: activeSection == .tasks && model.selection == .newTask,
             onSelectSection: model.offersHostCalendar || model.offersHostMail ? { selectSection($0) } : nil,
             onActivate: activate,
             onNewTaskInProject: { folder in showNewTaskInProject(mirror.projectIDs[folder.standardizedFileURL]) },

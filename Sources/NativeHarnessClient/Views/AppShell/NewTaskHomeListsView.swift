@@ -16,6 +16,7 @@ import SwiftUI
 /// (`TaskPullRequestMonitor.showHome`), as a sidebar row's task is.
 struct NewTaskHomeLists: View {
     @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @Environment(\.self) private var environment
     enum Part: Hashable {
         case projects
         /// The folder's rows that start something, over the composer.
@@ -324,6 +325,11 @@ struct NewTaskHomeLists: View {
             }
             .help(Layout.chooseHelp(summary))
             .accessibilityValue(panel.isChosen ? L10n.string("New tasks start here") : "")
+            Rectangle()
+                .fill(ParityTheme.separator.opacity(0.7))
+                .frame(height: 1)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 3)
             ForEach(panel.tasks) { task in
                 let answers = Layout.answersInPlace(task)
                 NewTaskHomeRow(isHighlighted: isHighlighted(.row(section, task.id.uuidString)),
@@ -413,11 +419,16 @@ struct NewTaskHomeLists: View {
     private func taskLine(_ task: NewTaskProjectTask) -> some View {
         switch task {
         case let .attention(row) where row.waitsOnPerson:
+            let tint: Color = switch row.status {
+            case .awaitingApproval: .green
+            case .failed: .red
+            default: .orange
+            }
             SidebarTaskStatusView(status: row.status)
                 .accessibilityHidden(true)
             Text(row.status.homeName)
-                .font(.system(size: 12 * interfaceScale))
-                .foregroundStyle(.secondary)
+                .font(.system(size: 12 * interfaceScale, weight: .semibold))
+                .foregroundStyle(ThemeContrast.readableTint(tint, over: ThemeSurface.canvas.resolve(in: environment), in: environment))
                 .lineLimit(1)
                 .fixedSize()
             taskName(row.session, weight: .medium)
@@ -772,9 +783,18 @@ struct NewTaskHomeRow<Content: View>: View {
             }
         }
         .background(
-            isHighlighted || isAnswering ? ParityTheme.selectedFill : (isHovering ? ParityTheme.hoverFill : .clear),
-            in: RoundedRectangle(cornerRadius: 8)
+            isAnswering ? AnyShapeStyle(ParityTheme.accentSoftFill)
+                : (isHighlighted ? AnyShapeStyle(ParityTheme.selectedFill)
+                   : (isHovering ? AnyShapeStyle(ParityTheme.hoverFill) : AnyShapeStyle(.clear))),
+            in: RoundedRectangle(cornerRadius: ParityRadius.row, style: .continuous)
         )
+        .overlay {
+            if isAnswering {
+                RoundedRectangle(cornerRadius: ParityRadius.row, style: .continuous)
+                    .strokeBorder(ParityTheme.accent.opacity(0.22), lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
+        }
         .onHover { isHovering = $0 }
     }
 }
