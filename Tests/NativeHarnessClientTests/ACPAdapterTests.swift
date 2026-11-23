@@ -472,6 +472,179 @@ final class ACPAdapterTests: XCTestCase {
         XCTAssertTrue(methods.contains("session/set_config_option"))
     }
 
+    func testConfigOptionAndCurrentModeUpdatesEmitProviderCapabilitiesChanged() async throws {
+        let transport = FakeACPTransport(exposesConfig: true)
+        let adapter = YHPProviderCompatibilityAdapter(
+            adapter: ACPAdapter(
+                kind: .openCode,
+                executableURL: URL(filePath: "/tmp/opencode"),
+                transportFactory: { transport }
+            ),
+            manifest: HarnessProtocolCompatibilityManifest.acp(.openCode)
+        )
+        let handle = try await adapter.createSession(CreateHarnessSessionRequest(
+            localSessionID: UUID(),
+            workspaceURL: URL(filePath: "/tmp/project"),
+            initialPrompt: nil
+        ))
+        let recorder = ACPPayloadRecorder()
+        let collector = Task {
+            for await event in await adapter.events(for: handle) {
+                await recorder.append(event.payload)
+            }
+        }
+        defer { collector.cancel() }
+
+        let updatedConfig = acpUpdate(
+            providerSessionID: handle.providerSessionID,
+            update: .object([
+                "sessionUpdate": .string("config_option_update"),
+                "configOptions": .array([.object([
+                    "id": .string("mode"),
+                    "name": .string("Mode"),
+                    "type": .string("select"),
+                    "currentValue": .string("code"),
+                    "options": .array([
+                        .object(["value": .string("ask"), "name": .string("Ask")]),
+                        .object(["value": .string("code"), "name": .string("Code")]),
+                        .object(["value": .string("architect"), "name": .string("Architect")])
+                    ])
+                ])])
+            ])
+        )
+        await transport.emit(updatedConfig)
+        try await waitUntil {
+            await recorder.payloads.filter { $0 == .providerCapabilitiesChanged }.count == 1
+        }
+        let afterConfig = try await adapter.providerCapabilities(for: handle)
+        XCTAssertEqual(afterConfig.selectors.first(where: { $0.id == "mode" })?.currentValue, "code")
+
+        // A duplicate update that changes nothing does not emit a spurious notification.
+        await transport.emit(updatedConfig)
+        await transport.emit(acpUpdate(
+            providerSessionID: handle.providerSessionID,
+            update: .object([
+                "sessionUpdate": .string("current_mode_update"),
+                "modeId": .string("architect")
+            ])
+        ))
+        try await waitUntil {
+            await recorder.payloads.filter { $0 == .providerCapabilitiesChanged }.count == 2
+        }
+        let afterMode = try await adapter.providerCapabilities(for: handle)
+        XCTAssertEqual(afterMode.selectors.first(where: { $0.id == "mode" })?.currentValue, "architect")
+        let changeCount = await recorder.payloads.filter { $0 == .providerCapabilitiesChanged }.count
+        XCTAssertEqual(changeCount, 2)
+        await adapter.close(handle)
+    }
+
+    func testFinishedAndFailedPromptsPruneCachedActivities() async throws {
+        let transport = FakeACPTransport()
+        let adapter = ACPAdapter(
+            kind: .kimiCode,
+            executableURL: URL(filePath: "/tmp/kimi"),
+            transportFactory: { transport }
+        )
+        let handle = try await adapter.createSession(CreateHarnessSessionRequest(
+            localSessionID: UUID(),
+            workspaceURL: URL(filePath: "/tmp/project"),
+            initialPrompt: nil
+        ))
+        let recorder = ACPPayloadRecorder()
+        let collector = Task {
+            for await event in await adapter.events(for: handle) {
+                await recorder.append(event.payload)
+            }
+        }
+        defer { collector.cancel() }
+
+        // Turn 1: record a tool call, then complete the prompt.
+        try await adapter.send("first", to: handle)
+        try await waitUntil { await transport.pendingPromptCount == 1 }
+        await transport.emit(acpUpdate(
+            providerSessionID: handle.providerSessionID,
+            update: .object([
+                "sessionUpdate": .string("tool_call"),
+                "toolCallId": .string("tool-1"),
+                "kind": .string("read"),
+                "title": .string("Read Cargo.toml"),
+                "rawInput": .object(["path": .string("Cargo.toml")])
+            ])
+        ))
+        try await waitUntil {
+            await recorder.payloads.contains { payload in
+                if case let .activityStarted(activity) = payload { return activity.id == "tool-1" }
+                return false
+            }
+        }
+        await transport.completePrompt()
+        try await waitUntil { await recorder.payloads.contains(.turnCompleted) }
+
+        // Turn 2: an update referencing the previous turn's ID must not inherit stale title/input,
+        // and failing the prompt also prunes turn 2's activities.
+        try await adapter.send("second", to: handle)
+        try await waitUntil { await transport.pendingPromptCount == 1 }
+        await transport.emit(acpUpdate(
+            providerSessionID: handle.providerSessionID,
+            update: .object([
+                "sessionUpdate": .string("tool_call_update"),
+                "toolCallId": .string("tool-1"),
+                "status": .string("in_progress")
+            ])
+        ))
+        await transport.emit(acpUpdate(
+            providerSessionID: handle.providerSessionID,
+            update: .object([
+                "sessionUpdate": .string("tool_call"),
+                "toolCallId": .string("tool-2"),
+                "kind": .string("execute"),
+                "title": .string("Stale failed tool")
+            ])
+        ))
+        try await waitUntil {
+            await recorder.payloads.contains { payload in
+                if case let .activityStarted(activity) = payload { return activity.id == "tool-2" }
+                return false
+            }
+        }
+        let payloadsAfterFinish = await recorder.payloads
+        let reusedAfterFinish = try XCTUnwrap(payloadsAfterFinish.compactMap { payload -> HarnessActivity? in
+            if case let .activityUpdated(activity) = payload, activity.id == "tool-1" { return activity }
+            return nil
+        }.last)
+        XCTAssertNotEqual(reusedAfterFinish.title, "Read Cargo.toml")
+        XCTAssertNil(reusedAfterFinish.input)
+
+        await transport.failPrompt(HarnessAdapterError.invalidProviderEvent("provider failure"))
+        try await waitUntil { await recorder.payloads.contains(.sessionStatusChanged(.failed)) }
+
+        // Turn 3: tool-2 from the failed turn must also have been pruned.
+        try await adapter.send("third", to: handle)
+        try await waitUntil { await transport.pendingPromptCount == 1 }
+        await transport.emit(acpUpdate(
+            providerSessionID: handle.providerSessionID,
+            update: .object([
+                "sessionUpdate": .string("tool_call_update"),
+                "toolCallId": .string("tool-2"),
+                "status": .string("in_progress")
+            ])
+        ))
+        try await waitUntil {
+            await recorder.payloads.contains { payload in
+                if case let .activityUpdated(activity) = payload { return activity.id == "tool-2" }
+                return false
+            }
+        }
+        let payloadsAfterFail = await recorder.payloads
+        let reusedAfterFail = try XCTUnwrap(payloadsAfterFail.compactMap { payload -> HarnessActivity? in
+            if case let .activityUpdated(activity) = payload, activity.id == "tool-2" { return activity }
+            return nil
+        }.last)
+        XCTAssertNotEqual(reusedAfterFail.title, "Stale failed tool")
+        await transport.completePrompt()
+        await adapter.close(handle)
+    }
+
     /// Antigravity over ACP keeps the option names its print mode saved, and its permission mode is the
     /// one menu for approvals: the CLI's own session modes (Default, Accept edits, Auto), set in the
     /// session as they are chosen, and Plan, where Yardlet answers no. Bypass permissions runs the
@@ -1691,5 +1864,10 @@ actor FakeACPTransport: ACPTransport {
         promptContinuations.removeFirst().resume(
             returning: .object(["stopReason": .string("end_turn")])
         )
+    }
+
+    func failPrompt(_ error: Error) {
+        guard !promptContinuations.isEmpty else { return }
+        promptContinuations.removeFirst().resume(throwing: error)
     }
 }

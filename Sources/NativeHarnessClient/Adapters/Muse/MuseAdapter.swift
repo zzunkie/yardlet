@@ -620,7 +620,16 @@ actor MuseAdapter:
     }
 
     func close(_ session: HarnessSessionHandle) async {
-        handles.removeValue(forKey: session.localSessionID)
+        let wasOpen = forget(session)
+        eventChannel.close(session.localSessionID)
+        if wasOpen {
+            await stopTransportIfUnused()
+        }
+    }
+
+    @discardableResult
+    private func forget(_ session: HarnessSessionHandle) -> Bool {
+        let wasOpen = handles.removeValue(forKey: session.localSessionID) != nil
         localSessionIDByProviderID.removeValue(forKey: session.providerSessionID)
         activeTurnIDByLocalSessionID.removeValue(forKey: session.localSessionID)
         itemKindsByLocalSessionID.removeValue(forKey: session.localSessionID)
@@ -634,8 +643,7 @@ actor MuseAdapter:
         selectedModelByLocalSessionID.removeValue(forKey: session.localSessionID)
         approvalModeByLocalSessionID.removeValue(forKey: session.localSessionID)
         reasoningEffortByLocalSessionID.removeValue(forKey: session.localSessionID)
-        eventChannel.close(session.localSessionID)
-        await stopTransportIfUnused()
+        return wasOpen
     }
 
     private func ensureInitialized(workspaceURL: URL) async throws {
@@ -645,41 +653,74 @@ actor MuseAdapter:
             transport = makeTransport()
             transportStopped = false
         }
+        let currentTransport = transport
         do {
-            try await transport.start(
+            try await currentTransport.start(
                 MuseLaunchConfiguration(
                     arguments: launchArguments,
                     workspaceURL: workspaceURL
                 )
             )
-            if messageTask == nil {
-                let stream = await transport.messages()
-                messageTask = Task { [weak self] in
-                    for await frame in stream {
-                        guard !Task.isCancelled else { break }
-                        await self?.accept(frame)
+            if transport === currentTransport, messageTask == nil {
+                let stream = await currentTransport.messages()
+                if transport === currentTransport, messageTask == nil {
+                    messageTask = Task { [weak self] in
+                        for await frame in stream {
+                            guard !Task.isCancelled else { break }
+                            await self?.accept(frame)
+                        }
+                        // Stopping cancels this first; otherwise the host exited on its own.
+                        guard !Task.isCancelled else { return }
+                        await self?.transportEnded(currentTransport)
                     }
                 }
             }
             let id = takeRequestID()
-            let result = try await transport.request(MuseProtocol.initialize(id: id), id: id)
+            let result = try await currentTransport.request(MuseProtocol.initialize(id: id), id: id)
             guard result["schema"]?["version"]?.integerValue == 1 else {
                 throw HarnessAdapterError.unsupportedRuntime(
                     version: "MSP \(result["schema"]?["version"]?.integerValue ?? -1)"
                 )
             }
-            try await transport.send(MuseProtocol.initialized)
+            guard transport === currentTransport else {
+                throw HarnessAdapterError.processExited(code: -1, message: "Muse transport stopped")
+            }
+            try await currentTransport.send(MuseProtocol.initialized)
             initialized = true
             subscriptionUsageUnavailable = false
             refreshSubscriptionUsage()
         } catch {
-            messageTask?.cancel()
-            messageTask = nil
-            initialized = false
-            transportStopped = true
-            await transport.stop()
+            if transport === currentTransport {
+                messageTask?.cancel()
+                messageTask = nil
+                initialized = false
+                transportStopped = true
+                await currentTransport.stop()
+            }
             throw error
         }
+    }
+
+    /// The shared host exited on its own. Every open session ends with it, any active turn with
+    /// an error, and the next session starts a fresh host instead of reaching the dead one.
+    private func transportEnded(_ ended: any MuseTransport) async {
+        guard transport === ended, !transportStopped else { return }
+        let message = L10n.format("Connection to %@ ended.", kind.displayName)
+        for session in Array(handles.values) {
+            let id = session.localSessionID
+            if activeTurnIDByLocalSessionID[id] != nil {
+                emit(.error(message: message, recoverable: true), for: id)
+                emit(.sessionStatusChanged(.failed), for: id)
+            }
+            forget(session)
+            eventChannel.finish(id)
+        }
+        messageTask = nil
+        subscriptionUsageRead?.cancel()
+        subscriptionUsageRead = nil
+        initialized = false
+        transportStopped = true
+        await ended.stop()
     }
 
     private func register(_ handle: HarnessSessionHandle, providerSession: JSONValue?) {
@@ -833,7 +874,11 @@ actor MuseAdapter:
             reasoningPartsByLocalSessionID[localSessionID] = [:]
             activitiesByLocalSessionID[localSessionID] = [:]
             let terminal = params["terminal"]?.stringValue
-            if terminal == "failed" {
+            switch terminal {
+            case "completed", "cancelled":
+                emit(.turnCompleted, for: localSessionID, rawData: frame.data)
+                emit(.sessionStatusChanged(.ready), for: localSessionID, rawData: frame.data)
+            case "failed":
                 emit(
                     .error(
                         message: params["error"]?["message"]?.stringValue
@@ -844,7 +889,8 @@ actor MuseAdapter:
                     for: localSessionID,
                     rawData: frame.data
                 )
-            } else if terminal != "completed" && terminal != "cancelled" {
+                emit(.sessionStatusChanged(.failed), for: localSessionID, rawData: frame.data)
+            default:
                 emit(
                     .error(
                         message: params["reason"]?.stringValue
@@ -854,13 +900,8 @@ actor MuseAdapter:
                     for: localSessionID,
                     rawData: frame.data
                 )
+                emit(.sessionStatusChanged(.failed), for: localSessionID, rawData: frame.data)
             }
-            emit(.turnCompleted, for: localSessionID, rawData: frame.data)
-            emit(
-                .sessionStatusChanged(terminal == "failed" ? .failed : .ready),
-                for: localSessionID,
-                rawData: frame.data
-            )
 
         default:
             break

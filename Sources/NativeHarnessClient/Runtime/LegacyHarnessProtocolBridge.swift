@@ -11,7 +11,7 @@ enum HarnessProtocolCompatibilityManifest {
         precondition(kind == .cursorAgent)
         var capabilities = Array(HarnessAdapterManifestValidator.requiredCapabilities)
         // Cursor's stream-json carries no plan payload, so the headless adapter declares no plans.
-        capabilities += [.sessionResume, .turnInterrupt, .structuredActivities]
+        capabilities += [.sessionResume, .turnInterrupt, .structuredActivities, .reasoning, .usage]
         return HarnessAdapterManifest(
             adapterID: "com.yardlet.compat.structured-headless.\(kind.rawValue)",
             harness: kind,

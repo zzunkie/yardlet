@@ -402,6 +402,9 @@ actor PiRPCAdapter: HarnessAdapter, ProviderCapabilityProviding, HarnessWorkspac
                 guard !Task.isCancelled else { break }
                 await self?.accept(frame, for: localSessionID)
             }
+            // Closing cancels this first; otherwise the process ended on its own.
+            guard !Task.isCancelled else { return }
+            await self?.transportEnded(transport, for: localSessionID)
         }
     }
 
@@ -512,6 +515,21 @@ actor PiRPCAdapter: HarnessAdapter, ProviderCapabilityProviding, HarnessWorkspac
             )
             return
 
+        case "message_end":
+            let payloads = projector.payloads(from: value)
+            var failed = false
+            for payload in payloads {
+                if case .error = payload { failed = true }
+                emit(payload, for: localSessionID, rawData: frame.data)
+            }
+            if failed {
+                runningSessionIDs.remove(localSessionID)
+                promptTasks.removeValue(forKey: localSessionID)
+                activities.removeValue(forKey: localSessionID)
+                emit(.sessionStatusChanged(.failed), for: localSessionID, rawData: frame.data)
+            }
+            return
+
         default:
             break
         }
@@ -577,6 +595,7 @@ actor PiRPCAdapter: HarnessAdapter, ProviderCapabilityProviding, HarnessWorkspac
 
     private func finishTurn(for localSessionID: UUID, rawData: Data? = nil) {
         guard runningSessionIDs.remove(localSessionID) != nil else { return }
+        activities.removeValue(forKey: localSessionID)
         emit(.turnCompleted, for: localSessionID, rawData: rawData)
         emit(.sessionStatusChanged(.ready), for: localSessionID, rawData: rawData)
         requestSessionStats(for: localSessionID)
@@ -614,9 +633,34 @@ actor PiRPCAdapter: HarnessAdapter, ProviderCapabilityProviding, HarnessWorkspac
 
     private func failTurn(_ error: Error, for localSessionID: UUID) {
         promptTasks.removeValue(forKey: localSessionID)
+        activities.removeValue(forKey: localSessionID)
+        guard handles[localSessionID] != nil else { return }
         runningSessionIDs.remove(localSessionID)
         emit(.error(message: error.localizedDescription, recoverable: true), for: localSessionID)
         emit(.sessionStatusChanged(.failed), for: localSessionID)
+    }
+
+    /// The session's Pi RPC process ended on its own. An active turn fails with an error, session
+    /// state is cleared so future sessions spawn a fresh process, and the event stream finishes.
+    private func transportEnded(_ ended: any PiRPCTransport, for localSessionID: UUID) async {
+        guard transports[localSessionID] === ended else { return }
+        transports.removeValue(forKey: localSessionID)
+        messageTasks.removeValue(forKey: localSessionID)
+        promptTasks.removeValue(forKey: localSessionID)?.cancel()
+        statsTasks.removeValue(forKey: localSessionID)?.cancel()
+        if runningSessionIDs.remove(localSessionID) != nil {
+            let message = L10n.format("Connection to %@ ended.", kind.displayName)
+            emit(.error(message: message, recoverable: true), for: localSessionID)
+            emit(.sessionStatusChanged(.failed), for: localSessionID)
+        }
+        handles.removeValue(forKey: localSessionID)
+        permissions = permissions.filter { $0.value.localSessionID != localSessionID }
+        activities.removeValue(forKey: localSessionID)
+        additionalRootsByLocalSessionID.removeValue(forKey: localSessionID)
+        yardletInstructionsByLocalSessionID.removeValue(forKey: localSessionID)
+        historyFreeSessionIDs.remove(localSessionID)
+        eventChannel.finish(localSessionID)
+        await ended.stop()
     }
 
     private func transport(for session: HarnessSessionHandle) throws -> any PiRPCTransport {

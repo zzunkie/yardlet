@@ -163,9 +163,136 @@ final class MuseAdapterTests: XCTestCase {
                 recoverable: true
             )
         ))
-        XCTAssertTrue(payloads.contains(.turnCompleted))
+        XCTAssertFalse(payloads.contains(.turnCompleted))
+        let running = try XCTUnwrap(payloads.firstIndex(of: .sessionStatusChanged(.running)))
+        XCTAssertFalse(payloads[running...].contains(.sessionStatusChanged(.ready)))
         await adapter.close(handle)
         collector.cancel()
+    }
+
+    func testUnknownTerminalStateFailsTurnWithoutCompletingIt() async throws {
+        let transport = FakeMuseTransport()
+        let adapter = MuseAdapter(
+            executableURL: URL(filePath: "/tmp/fake-muse"),
+            transport: transport
+        )
+        let handle = try await adapter.createSession(
+            CreateHarnessSessionRequest(
+                localSessionID: UUID(),
+                workspaceURL: URL(filePath: "/home/me/src/proj"),
+                initialPrompt: nil
+            )
+        )
+        let recorder = MusePayloadRecorder()
+        let collector = Task {
+            for await event in await adapter.events(for: handle) {
+                await recorder.append(event.payload)
+            }
+        }
+        defer { collector.cancel() }
+
+        try await adapter.send("run", to: handle)
+        await transport.emit(Self.notification("turn/completed", [
+            "sessionId": .string(Self.sessionID),
+            "viewCursor": .string("v:\(Self.sessionID):10"),
+            "turnId": .string(Self.turnID),
+            "terminal": .string("timedOut")
+        ]))
+        try await waitUntil { await recorder.payloads.contains(.sessionStatusChanged(.failed)) }
+
+        let payloads = await recorder.payloads
+        XCTAssertTrue(payloads.contains(
+            .error(message: "Muse turn ended with terminal state timedOut", recoverable: true)
+        ))
+        XCTAssertFalse(payloads.contains(.turnCompleted))
+        let running = try XCTUnwrap(payloads.firstIndex(of: .sessionStatusChanged(.running)))
+        XCTAssertFalse(payloads[running...].contains(.sessionStatusChanged(.ready)))
+        await adapter.close(handle)
+    }
+
+    func testEndedTransportFailsActiveTurnFinishesStreamsAndReplacesDeadHost() async throws {
+        let first = FakeMuseTransport()
+        let second = FakeMuseTransport()
+        let third = FakeMuseTransport()
+        let queue = OSAllocatedUnfairLock(initialState: [first, second, third])
+        let adapter = MuseAdapter(
+            executableURL: URL(filePath: "/tmp/fake-muse"),
+            transportFactory: { queue.withLock { $0.removeFirst() } }
+        )
+
+        // Active turn crashes mid-flight: emits error + failed, finishes event stream, detaches handle.
+        let active = try await adapter.createSession(CreateHarnessSessionRequest(
+            localSessionID: UUID(),
+            workspaceURL: URL(filePath: "/home/me/src/proj"),
+            initialPrompt: nil
+        ))
+        let activeRecorder = MusePayloadRecorder()
+        let activeCollector = Task {
+            for await event in await adapter.events(for: active) {
+                await activeRecorder.append(event.payload)
+            }
+            await activeRecorder.end()
+        }
+        defer { activeCollector.cancel() }
+
+        try await adapter.send("crash mid-turn", to: active)
+        await first.exit()
+        try await waitUntil { await activeRecorder.ended }
+
+        let activePayloads = await activeRecorder.payloads
+        XCTAssertEqual(Array(activePayloads.suffix(2)), [
+            .error(message: L10n.format("Connection to %@ ended.", HarnessKind.museCode.displayName), recoverable: true),
+            .sessionStatusChanged(.failed)
+        ])
+        XCTAssertFalse(activePayloads.contains(.turnCompleted))
+        do {
+            try await adapter.send("after crash", to: active)
+            XCTFail("Expected ended session to reject further prompts")
+        } catch let error as HarnessAdapterError {
+            XCTAssertEqual(error, .invalidProviderEvent("Muse session is not attached"))
+        }
+
+        // Next session spawns a fresh host, and closing the dead handle leaves the new host alone.
+        let idle = try await adapter.createSession(CreateHarnessSessionRequest(
+            localSessionID: UUID(),
+            workspaceURL: URL(filePath: "/home/me/src/proj"),
+            initialPrompt: nil
+        ))
+        await adapter.close(active)
+        let firstStops = await first.stopCount
+        let secondStops = await second.stopCount
+        XCTAssertEqual(firstStops, 1)
+        XCTAssertEqual(secondStops, 0)
+
+        // An idle session whose host exits ends cleanly without an error.
+        let idleRecorder = MusePayloadRecorder()
+        let idleCollector = Task {
+            for await event in await adapter.events(for: idle) {
+                await idleRecorder.append(event.payload)
+            }
+            await idleRecorder.end()
+        }
+        defer { idleCollector.cancel() }
+
+        await second.exit()
+        try await waitUntil { await idleRecorder.ended }
+        let idlePayloads = await idleRecorder.payloads
+        XCTAssertFalse(idlePayloads.contains { payload in
+            if case .error = payload { return true }
+            return payload == .sessionStatusChanged(.failed)
+        })
+
+        // Another fresh session starts on the third transport.
+        let recovered = try await adapter.createSession(CreateHarnessSessionRequest(
+            localSessionID: UUID(),
+            workspaceURL: URL(filePath: "/home/me/src/proj"),
+            initialPrompt: nil
+        ))
+        let thirdMethods = await third.requestMethods
+        XCTAssertEqual(thirdMethods.filter { $0 != "usage/read" }, ["initialize", "session/start"])
+        await adapter.close(recovered)
+        let thirdStops = await third.stopCount
+        XCTAssertEqual(thirdStops, 1)
     }
 
     /// The host a failed start stopped is not the next session's: that one starts a new host, as
@@ -1268,7 +1395,9 @@ final class MuseAdapterTests: XCTestCase {
 
 private actor MusePayloadRecorder {
     private(set) var payloads: [HarnessEventPayload] = []
+    private(set) var ended = false
     func append(_ payload: HarnessEventPayload) { payloads.append(payload) }
+    func end() { ended = true }
 }
 
 private actor FakeMuseTransport: MuseTransport {
@@ -1457,6 +1586,10 @@ private actor FakeMuseTransport: MuseTransport {
 
     func stop() async {
         stopCount += 1
+        continuation.finish()
+    }
+
+    func exit() {
         continuation.finish()
     }
 

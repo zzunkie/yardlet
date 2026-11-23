@@ -886,19 +886,27 @@ actor ACPAdapter:
         }
 
         if updateKind == "config_option_update" {
-            var state = capabilityStateByLocalSessionID[localSessionID] ?? .empty
+            let previous = capabilityStateByLocalSessionID[localSessionID] ?? .empty
+            var state = previous
             let selectors = capabilityProjector.configOptions(from: update)
             if !selectors.isEmpty { state.selectors = selectors }
             capabilityStateByLocalSessionID[localSessionID] = state
+            if state != previous {
+                emit(.providerCapabilitiesChanged, for: localSessionID, rawData: frame.data)
+            }
             return
         }
         if updateKind == "current_mode_update",
            let modeID = update["modeId"]?.stringValue {
-            var state = capabilityStateByLocalSessionID[localSessionID] ?? .empty
+            let previous = capabilityStateByLocalSessionID[localSessionID] ?? .empty
+            var state = previous
             if let index = state.selectors.firstIndex(where: { $0.id == "mode" }) {
                 state.selectors[index].currentValue = modeID
             }
             capabilityStateByLocalSessionID[localSessionID] = state
+            if state != previous {
+                emit(.providerCapabilitiesChanged, for: localSessionID, rawData: frame.data)
+            }
             return
         }
 
@@ -1034,6 +1042,7 @@ actor ACPAdapter:
         guard !Task.isCancelled else { return }
         let localSessionID = session.localSessionID
         promptTasks.removeValue(forKey: localSessionID)
+        activities.removeValue(forKey: localSessionID)
         followAgentTurns(of: localSessionID)
         if stopReason == "end_turn", let notice = heldNotices.removeValue(forKey: localSessionID) {
             completeAssistantIfNeeded(for: localSessionID)
@@ -1055,6 +1064,7 @@ actor ACPAdapter:
         guard !Task.isCancelled else { return }
         let localSessionID = session.localSessionID
         promptTasks.removeValue(forKey: localSessionID)
+        activities.removeValue(forKey: localSessionID)
         followAgentTurns(of: localSessionID)
         releaseHeldNotice(of: localSessionID)
         completeAssistantIfNeeded(for: localSessionID)
