@@ -1623,7 +1623,14 @@ final class AppModelRemoteBridge: RemoteBridge {
     /// The task's conversation as the timeline draws it now: through the projection cache of a task a phone
     /// follows, so a phone's command reads a long conversation again only where it changed.
     func presentation(of session: SessionRecord, in model: AppModel) -> ConversationPresentation {
-        let cache = projectionCaches[session.id] ?? ConversationProjectionCache()
+        let cache: ConversationProjectionCache
+        if let existing = projectionCaches[session.id] {
+            cache = existing
+        } else {
+            let created = ConversationProjectionCache()
+            if watched.contains(session.id) { projectionCaches[session.id] = created }
+            cache = created
+        }
         if let state = Self.codexState(of: session, in: model) {
             return cache.codex(state, workspaceURL: session.workspaceURL, historySelection: nil)
         }

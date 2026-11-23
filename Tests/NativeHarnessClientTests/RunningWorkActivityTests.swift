@@ -122,6 +122,81 @@ import YardletLidSleep
         try await waitUntil { helper.status == .off }
         XCTAssertFalse(helper.isKeepingAwake)
     }
+
+    func testDeferredInitialStatusAvoidsSyncReadAtLaunchAndReconcilesWhenLoaded() async throws {
+        // Case 1: preference ON and helper already ready -> zero sync `status()` calls on init or turnOn,
+        // and keeps Mac awake once async `readStatus()` resolves.
+        let defaultsOn = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("LidDeferredOn")))
+        defaultsOn.set(true, forKey: LidClosedWorkPreference.key)
+        let backendOn = FakeLidSleepHelperBackend(status: .ready, deferReadStatus: true)
+        let helperOn = LidSleepHelper(backend: backendOn, readsStatusOnInit: true)
+        XCTAssertEqual(backendOn.syncStatusReads, 0, "Deferred launch init must not call sync status()")
+        XCTAssertFalse(helperOn.hasLoadedStatus)
+
+        let activityOn = RunningWorkActivity(
+            defaults: defaultsOn,
+            conditions: { PowerConditions(onBattery: false, batteryPercent: 100) },
+            lidHelper: helperOn,
+            lidIsClosed: { false }
+        )
+        activityOn.update(isWorking: true)
+        try await waitUntil { backendOn.hasPendingRead }
+        XCTAssertTrue(backendOn.calls.isEmpty, "Waits for initial status before registering or unregistering")
+        XCTAssertTrue(backendOn.sent.isEmpty)
+
+        backendOn.completeReadStatus()
+        try await waitUntil { helperOn.hasLoadedStatus && backendOn.sent == [true] }
+        XCTAssertEqual(backendOn.syncStatusReads, 0, "Already-ready helper needs no sync status() read")
+        XCTAssertTrue(helperOn.isKeepingAwake)
+
+        // Case 2: preference OFF while an earlier run left helper ready -> unregisters once async status loads.
+        let defaultsOff = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("LidDeferredOff")))
+        let backendOff = FakeLidSleepHelperBackend(status: .ready, deferReadStatus: true)
+        let helperOff = LidSleepHelper(backend: backendOff, readsStatusOnInit: true)
+        let activityOff = RunningWorkActivity(
+            defaults: defaultsOff,
+            conditions: { PowerConditions(onBattery: false, batteryPercent: 100) },
+            lidHelper: helperOff,
+            lidIsClosed: { false }
+        )
+        activityOff.update(isWorking: true)
+        try await waitUntil { backendOff.hasPendingRead }
+        XCTAssertTrue(backendOff.calls.isEmpty)
+
+        backendOff.completeReadStatus()
+        try await waitUntil { backendOff.calls == ["disconnect", "unregister"] }
+        try await waitUntil { helperOff.status == .off }
+        XCTAssertEqual(backendOff.syncStatusReads, 0)
+
+        // Case 3: desktop Mac calling turnOff() before initial read completes (without retaining helper)
+        // still unregisters an active helper once async readStatus() completes.
+        let backendDesktop = FakeLidSleepHelperBackend(status: .ready, deferReadStatus: true)
+        do {
+            let helperDesktop = LidSleepHelper(backend: backendDesktop, readsStatusOnInit: true)
+            helperDesktop.turnOff()
+        }
+        try await waitUntil { backendDesktop.hasPendingRead }
+        backendDesktop.completeReadStatus()
+        try await waitUntil { backendDesktop.calls == ["disconnect", "unregister"] }
+        XCTAssertEqual(backendDesktop.syncStatusReads, 0)
+
+        // Case 4: user toggles setting ON before initial status finishes -> still opens System Settings.
+        let defaultsToggled = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("LidDeferredToggle")))
+        let backendToggled = FakeLidSleepHelperBackend(status: .off, deferReadStatus: true)
+        let helperToggled = LidSleepHelper(backend: backendToggled, readsStatusOnInit: true)
+        let activityToggled = RunningWorkActivity(
+            defaults: defaultsToggled,
+            conditions: { PowerConditions(onBattery: false, batteryPercent: 100) },
+            lidHelper: helperToggled,
+            lidIsClosed: { false }
+        )
+        activityToggled.update(isWorking: true)
+        defaultsToggled.set(true, forKey: LidClosedWorkPreference.key)
+        activityToggled.refresh()
+        try await waitUntil { backendToggled.hasPendingRead }
+        backendToggled.completeReadStatus()
+        try await waitUntil { backendToggled.calls.suffix(2) == ["register", "openSystemSettings"] }
+    }
 }
 
 @MainActor final class FakeLidSleepHelperBackend: LidSleepHelperBackend {
@@ -129,10 +204,38 @@ import YardletLidSleep
     var current: LidSleepHelper.Status
     var calls: [String] = []
     var sent: [Bool] = []
+    var syncStatusReads = 0
+    private var deferReadStatus: Bool
+    private var readContinuations: [CheckedContinuation<LidSleepHelper.Status, Never>] = []
+    var hasPendingRead: Bool { !readContinuations.isEmpty }
 
-    init(status: LidSleepHelper.Status) { current = status }
+    init(status: LidSleepHelper.Status, deferReadStatus: Bool = false) {
+        current = status
+        self.deferReadStatus = deferReadStatus
+    }
 
-    func status() -> LidSleepHelper.Status { current }
+    func status() -> LidSleepHelper.Status {
+        syncStatusReads += 1
+        return current
+    }
+
+    func readStatus() async -> LidSleepHelper.Status {
+        if deferReadStatus {
+            return await withCheckedContinuation { continuation in
+                readContinuations.append(continuation)
+            }
+        }
+        return current
+    }
+
+    func completeReadStatus() {
+        deferReadStatus = false
+        let pending = readContinuations
+        readContinuations = []
+        for continuation in pending {
+            continuation.resume(returning: current)
+        }
+    }
     func register() {
         calls.append("register")
         current = .needsApproval
