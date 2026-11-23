@@ -11,10 +11,12 @@ extension AppModelRemoteBridge {
         watchesHostAccounts = watching
         if watching {
             if hostAccountsDefaultsObserver == nil, let model {
+                // Observe off the main queue so a background UserDefaults write cannot deadlock with a
+                // main-thread flush on the same writer queue.
                 hostAccountsDefaultsObserver = NotificationCenter.default.addObserver(
                     forName: UserDefaults.didChangeNotification,
                     object: model.preferences,
-                    queue: .main
+                    queue: nil
                 ) { [weak self] _ in
                     Task { @MainActor in self?.hostAccountsMayHaveChanged() }
                 }

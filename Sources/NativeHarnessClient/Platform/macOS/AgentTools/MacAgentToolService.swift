@@ -124,11 +124,13 @@ final class MacAgentToolService: NativeSurfaceResource {
         broker.vault = vault
         vault.onToolsChanged = { [weak broker = self.broker] in broker?.toolsMayHaveChanged() }
         // Sharing the terminal adds or takes away `read_terminal` in every task's list.
+        // Observe off the main queue so a background UserDefaults write cannot deadlock with a
+        // main-thread flush on the same writer queue.
         sharesTerminal = TerminalSharingPreference.isOn()
         terminalSharingObserver = NotificationCenter.default.addObserver(
-            forName: UserDefaults.didChangeNotification, object: nil, queue: .main
+            forName: UserDefaults.didChangeNotification, object: UserDefaults.yardlet, queue: nil
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.terminalSharingMayHaveChanged() }
+            Task { @MainActor in self?.terminalSharingMayHaveChanged() }
         }
         broker.startEndpoint = { [unowned self] in try self.startListener() }
         NativeSurfaceResourceRegistry.shared.register(self)
