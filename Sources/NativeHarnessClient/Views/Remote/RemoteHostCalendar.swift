@@ -11,6 +11,7 @@ extension RemoteHostView {
     func selectSection(_ section: ShellSection) {
         withAnimation(ParityMotion.easeInOut(reduceMotion: reduceMotion)) {
             model.showsSchedules = false
+            model.showsArchive = false
             shell.isSidebarVisible = true
             shell.section = section
         }

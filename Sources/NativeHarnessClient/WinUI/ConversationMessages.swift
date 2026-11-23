@@ -195,9 +195,10 @@ enum ConversationMessages {
         stack.spacing = 8
         let body = StackPanel()
         body.spacing = 4
-        if isCommentary || item.isSummary {
+        let showsCommentary = isCommentary && !item.hidesCommentaryLabel
+        if showsCommentary || item.isSummary {
             var words: [String] = []
-            if isCommentary { words.append(L10n.string("Commentary")) }
+            if showsCommentary { words.append(L10n.string("Commentary")) }
             if item.isSummary { words.append(L10n.string("Summarized")) }
             body.children.append(ConversationStyle.text(words.joined(separator: " · "), size: ConversationStyle.captionSize,
                                                         tone: .secondary))

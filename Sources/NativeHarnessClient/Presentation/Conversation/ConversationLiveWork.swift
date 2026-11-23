@@ -73,11 +73,25 @@ struct ConversationLiveWork: Equatable {
         case reconnecting
     }
 
+    /// The thought currently streaming in the turn, shown as a compact muted excerpt under the live
+    /// line while the line stays folded.
+    struct ThinkingPreview: Equatable, Sendable {
+        let itemID: String
+        /// The thought's full text as last projected; the live line prefers `ConversationStreamedText`
+        /// so streaming fragments update only the excerpt without redrawing the turn.
+        let text: String
+    }
+
     let activity: Activity
     /// The turn's calls so far.
     let steps: Int
     /// The calls the line stands for and opens into: the turn's last run while one of its calls runs.
     let items: [ConversationItem]
+    /// Summary of completed calls already folded into `items`, kept visible above the live line so
+    /// completed work does not vanish when a multi-step run grows past one call.
+    var completedSummary: String? = nil
+    /// The active streaming thought, when the provider is thinking with words to preview.
+    var thinkingPreview: ThinkingPreview? = nil
 
     /// The live line of a running turn; nil for a turn that is not running.
     /// `stepsBefore` counts the calls of the turn's parts drawn before this one (`ConversationTurnRows`).
@@ -87,8 +101,14 @@ struct ConversationLiveWork: Equatable {
         let runs = ConversationWorkGrouping.runs(turn.work)
         let live = liveRun(runs)
         let steps = stepsBefore + turn.work.filter { ConversationWorkSummary.category(of: $0) != nil }.count
-        return ConversationLiveWork(activity: activity(turn, liveItems: live, harness: harness, workspaceURL: workspaceURL),
-                                    steps: steps, items: live)
+        let currentActivity = activity(turn, liveItems: live, harness: harness, workspaceURL: workspaceURL)
+        return ConversationLiveWork(
+            activity: currentActivity,
+            steps: steps,
+            items: live,
+            completedSummary: completedSummary(for: live, harness: harness),
+            thinkingPreview: thinkingPreview(turn, liveItems: live, activity: currentActivity)
+        )
     }
 
     /// The runs listed above the live line: all of the turn's runs but the one the line stands for.
@@ -137,6 +157,55 @@ struct ConversationLiveWork: Equatable {
     private static func isStreamingThought(_ item: ConversationItem) -> Bool {
         if case let .reasoning(_, _, isStreaming) = item.kind { return isStreaming }
         return false
+    }
+
+    /// Combined non-empty text of a reasoning item (summary before detail).
+    static func thoughtText(of item: ConversationItem) -> String? {
+        guard case let .reasoning(summary, detail, _) = item.kind else { return nil }
+        let parts = [summary, detail]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
+    }
+
+    /// Compact tail excerpt of a streaming thought: the latest non-empty lines, capped so the
+    /// preview tracks live progress without flooding the conversation.
+    static func thinkingExcerpt(from text: String, maxLines: Int = 3, maxCharacters: Int = 260) -> String? {
+        guard maxLines > 0, maxCharacters > 0 else { return nil }
+        let lines = text.split(omittingEmptySubsequences: true, whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard !lines.isEmpty else { return nil }
+        let joined = lines.suffix(maxLines).joined(separator: "\n")
+        guard joined.count > maxCharacters else { return joined }
+        let start = joined.index(joined.endIndex, offsetBy: -maxCharacters)
+        var slice = joined[start...]
+        if let boundary = slice.firstIndex(where: { $0.isWhitespace || $0.isNewline }),
+           slice.distance(from: slice.startIndex, to: boundary) <= 24 {
+            let after = slice.index(after: boundary)
+            if after < slice.endIndex { slice = slice[after...] }
+        }
+        let trimmed = slice.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : "…" + trimmed
+    }
+
+    private static func completedSummary(for liveItems: [ConversationItem], harness: HarnessKind) -> String? {
+        let completedCalls = liveItems.filter {
+            $0.phase != .running && ConversationWorkSummary.category(of: $0) != nil
+        }
+        guard !completedCalls.isEmpty else { return nil }
+        let title = ConversationWorkSummary.title(for: completedCalls, harness: harness)
+        return title.isEmpty ? nil : title
+    }
+
+    private static func thinkingPreview(
+        _ turn: ConversationTurn, liveItems: [ConversationItem], activity: Activity
+    ) -> ThinkingPreview? {
+        guard activity == .thinking else { return nil }
+        let candidate = liveItems.last(where: isStreamingThought)
+            ?? turn.work.last.flatMap { isStreamingThought($0) ? $0 : nil }
+        guard let candidate, let text = thoughtText(of: candidate) else { return nil }
+        return ThinkingPreview(itemID: candidate.id, text: text)
     }
 
     /// The running call's words, as its own line reads them.

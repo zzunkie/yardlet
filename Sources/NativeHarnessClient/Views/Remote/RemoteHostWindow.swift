@@ -386,7 +386,7 @@ struct RemoteHostView: View {
             } : nil,
             canArchiveRemoteProject: model.taskActions,
             remoteProjectMoveOptions: model.projectMoveOptions,
-            footer: AnyView(RemoteHostFooter(model: model, directory: directory)),
+            footer: AnyView(RemoteHostFooter(model: model, directory: directory, onShowArchivedTasks: showArchivedTasks)),
             disclosure: shell.disclosure,
             activity: activeSection == .tasks ? activity(mirror) : nil,
             onPointerOverList: { isOver in
@@ -646,6 +646,14 @@ struct RemoteHostView: View {
         model.schedules.load()
     }
 
+    func showArchivedTasks() {
+        guard model.taskActions else { return }
+        shell.section = .tasks
+        model.showsSchedules = false
+        shell.isSidebarVisible = true
+        model.showsArchive = true
+    }
+
     /// Opens or closes the shown task's side panel or terminal, as its title bar's buttons do.
     private func togglePanel(_ taskID: String, _ targetID: String) {
         shell.panels[taskID] = TaskSurfaceNavigationProjection.toggledPanelState(
@@ -723,7 +731,7 @@ struct RemoteHostView: View {
             }
         }
         commands.markUnread = { id in model.send(.taskAction(taskID: id.uuidString, action: .init(.markUnread))) }
-        commands.showArchivedTasks = model.taskActions ? { model.showsArchive = true } : nil
+        commands.showArchivedTasks = model.taskActions ? { showArchivedTasks() } : nil
         if model.newTask != nil { commands.newTask = { showNewTask() } }
         return commands
     }
@@ -927,6 +935,7 @@ struct RemoteConnectionBanner: View {
 struct RemoteHostFooter: View {
     let model: RemoteHostModel
     let directory: RemoteHostDirectory
+    var onShowArchivedTasks: (() -> Void)? = nil
     @State private var isHovering = false
     @State private var confirmsRemoval = false
     @Environment(\.openWindow) private var openWindow
@@ -941,7 +950,9 @@ struct RemoteHostFooter: View {
                 Button(L10n.string("Settings…")) { model.openSettings() }
             }
             Button(L10n.string("Connect to Mac…")) { openWindow(id: RemoteConnectWindow.sceneID) }
-            Button(L10n.string("Archived tasks")) { model.showsArchive = true }.disabled(!model.taskActions)
+            Button(L10n.string("Archived tasks")) {
+                if let onShowArchivedTasks { onShowArchivedTasks() } else { model.showsArchive = true }
+            }.disabled(!model.taskActions)
             Divider()
             Button(L10n.string("Remove from This Mac"), role: .destructive) { confirmsRemoval = true }
         } label: {

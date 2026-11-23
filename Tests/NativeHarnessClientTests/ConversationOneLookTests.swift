@@ -97,6 +97,18 @@ final class ConversationOneLookTests: XCTestCase {
                 XCTAssertFalse(drawing.elements.contains { $0.role == "AXUnknown" && $0.label == name }, texts)
             }
         }
+
+        // Trailing streaming assistant messages in transcript harnesses suppress "Commentary" to avoid
+        // flickering on a streaming final answer; settled commentary still shows it.
+        let streamingEntries = [
+            TranscriptEntry(createdAt: start, content: .user(text: sentText)),
+            TranscriptEntry(createdAt: start.addingTimeInterval(1),
+                            content: .assistant(text: "The build passes now.", isStreaming: true))
+        ]
+        let streamingClaude = try ConversationDrawing.draw(transcript(.claudeCode, streamingEntries, status: .running),
+                                                           size: size, appearance: .light)
+        XCTAssertFalse(streamingClaude.elements.contains { $0.value == L10n.string("Commentary") },
+                       "A trailing streaming transcript message should not stamp Commentary")
     }
 
     /// A turn's error is what the turn ended on, so its card reads after everything the turn wrote, for
@@ -312,7 +324,7 @@ final class ConversationOneLookTests: XCTestCase {
         var entries = [TranscriptEntry(createdAt: start, content: .user(text: sentText))]
         if writing {
             entries.append(TranscriptEntry(createdAt: start.addingTimeInterval(1),
-                                           content: .assistant(text: "Running the tests first.", isStreaming: true)))
+                                           content: .assistant(text: "Running the tests first.", isStreaming: false)))
         }
         return entries
     }

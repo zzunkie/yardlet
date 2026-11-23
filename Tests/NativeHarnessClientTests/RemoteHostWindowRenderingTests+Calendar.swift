@@ -88,6 +88,23 @@ extension RemoteHostWindowRenderingTests {
         let invitation = try XCTUnwrap(model.calendar.events(in: week).first { $0.title == "Investor call" })
         try await model.calendar.respond(to: invitation, .accepted)
         XCTAssertEqual(work.answers.count, 1)
+
+        // Opening Archived tasks from Calendar resets the section back to tasks, and selecting Calendar clears archive.
+        let remoteView = RemoteHostView(model: model, directory: hosts, shell: shell)
+        shell.section = .calendar
+        shell.isSidebarVisible = false
+        model.showsSchedules = true
+        model.showsArchive = false
+        remoteView.showArchivedTasks()
+        XCTAssertEqual(shell.section, .tasks)
+        XCTAssertFalse(model.showsSchedules)
+        XCTAssertTrue(shell.isSidebarVisible)
+        XCTAssertTrue(model.showsArchive)
+
+        remoteView.selectSection(.calendar)
+        XCTAssertEqual(shell.section, .calendar)
+        XCTAssertFalse(model.showsArchive)
+        XCTAssertFalse(model.showsSchedules)
         await host.shutdown()
     }
 }

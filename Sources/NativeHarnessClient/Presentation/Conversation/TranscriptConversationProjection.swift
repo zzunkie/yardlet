@@ -219,6 +219,19 @@ enum TranscriptConversationProjection {
         // ended with is that turn's answer (a final report shown above a background task's notice).
         let answerID: UUID? = if !input.isHead || !input.isLast, input.isComplete, let last = shown.last,
                                  let words = words(last), !words.isStreaming { last.id } else { nil }
+        // A streaming assistant message at the tail of a running turn (no later non-reasoning items)
+        // may become the turn's final answer; avoid stamping "Commentary" on it until later work
+        // proves it was working notes.
+        let trailingStreamingAssistantID: UUID? = if !input.isComplete {
+            shown.reversed().first(where: { entry in
+                if case .reasoning = entry.content, entry.isProgressUpdate != true { return false }
+                return true
+            }).flatMap { entry in
+                if case .assistant(_, true) = entry.content { entry.id } else { nil }
+            }
+        } else {
+            nil
+        }
         let outcomeID = shown.last(where: isOutcome)?.id
         // What the provider wrote right before a message read into the turn, with no call after it,
         // answered what came before that message, as a Codex final answer the person's next message
@@ -327,6 +340,7 @@ enum TranscriptConversationProjection {
                          words.isStreaming ? .running : .completed)
                 }
                 said.isSummary = entry.isProgressUpdate == true
+                said.hidesCommentaryLabel = entry.id == trailingStreamingAssistantID
                 work.append(said)
             case let .reasoning(text, isStreaming):
                 work.append(item(entry, .reasoning(summary: nil, detail: text, isStreaming: isStreaming),
