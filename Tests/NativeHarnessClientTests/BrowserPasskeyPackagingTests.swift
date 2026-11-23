@@ -22,7 +22,7 @@ final class BrowserPasskeyPackagingTests: XCTestCase {
                 XCTAssertTrue(reason.contains("passkey"), reason)
             }
         }
-        for language in ["en", "ko"] {
+        for language in ["en", "ko", "ja", "zh-Hans"] {
             let strings = try XCTUnwrap(NSDictionary(contentsOf: root.appending(
                 path: "Sources/NativeHarnessClient/Resources/\(language).lproj/InfoPlist.strings")) as? [String: String])
             XCTAssertNotNil(strings["NSBluetoothAlwaysUsageDescription"], language)

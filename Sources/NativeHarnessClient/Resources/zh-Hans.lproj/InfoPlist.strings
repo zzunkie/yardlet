@@ -1,0 +1,13 @@
+/* 手机通行密钥（WebAuthn 混合模式）的系统蓝牙权限提示 */
+"NSBluetoothAlwaysUsageDescription" = "Yardlet 内置浏览器需要使用蓝牙，以通过手机或平板上的通行密钥登录。";
+"NSBluetoothPeripheralUsageDescription" = "Yardlet 内置浏览器需要使用蓝牙，以通过手机或平板上的通行密钥登录。";
+/* Yardlet 运行的命令（引擎、工具、终端）及内置浏览器进程的隐私权限提示 */
+"NSAppleEventsUsageDescription" = "Yardlet 中正在运行的命令（例如引擎工具或终端中的程序）请求控制其他应用。";
+"NSMicrophoneUsageDescription" = "在您允许网站使用麦克风时，Yardlet 内置浏览器需要使用麦克风；或 Yardlet 中正在运行的命令（例如语音听写或终端程序）请求使用麦克风。";
+"NSCameraUsageDescription" = "在您允许网站使用摄像头时，Yardlet 内置浏览器需要使用摄像头；或 Yardlet 中正在运行的命令（例如引擎工具或终端程序）请求使用摄像头。";
+/* Apple 日历、提醒事项和通讯录连接器以及 Yardlet 运行命令的隐私权限提示 */
+"NSCalendarsFullAccessUsageDescription" = "启用 Yardlet 的 Apple 日历连接器后，任务可以读取和修改您的日历；或 Yardlet 中正在运行的命令请求访问日历。";
+"NSRemindersFullAccessUsageDescription" = "启用 Yardlet 的 Apple 提醒事项连接器后，任务可以读取和添加提醒事项；或 Yardlet 中正在运行的命令请求访问提醒事项。";
+"NSContactsUsageDescription" = "启用 Yardlet 的 Apple 通讯录连接器后，任务可以查找您的联系人；或 Yardlet 中正在运行的命令请求访问通讯录。";
+/* 本地网络权限提示（通过 Bonjour 发现手机或其他 Mac） */
+"NSLocalNetworkUsageDescription" = "开启远程连接后，同一网络下的手机或其他 Mac 可以发现此 Mac。此 Mac 连接其他 Mac 时，Yardlet 也会在同一网络下查找该 Mac。";

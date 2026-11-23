@@ -122,11 +122,8 @@ enum L10n {
         }
         guard let found = lists.first(where: { !$0.1.isEmpty }) else { return (languages, nil, [:]) }
         let (folder, available) = found
-        // A language as Windows names it ("ko-KR"), else its language alone ("ko").
-        let chosen = languages.lazy.compactMap { tag in
-            available.first { $0.caseInsensitiveCompare(tag) == .orderedSame }
-                ?? available.first { $0.caseInsensitiveCompare(String(tag.prefix { $0 != "-" })) == .orderedSame }
-        }.first
+        // Match Windows BCP-47 tags (e.g. "ko-KR", "ja-JP", "zh-Hans-CN", "zh-CN") against `.lproj` codes.
+        let chosen = preferredLocalization(from: available, forWindowsLanguages: languages)
         guard let chosen, chosen != activeBundle.developmentLocalization,
               let data = FileManager.default.contents(
                 atPath: folder.appending(path: "\(chosen).lproj/Localizable.strings").path(percentEncoded: false)),
@@ -260,6 +257,54 @@ enum L10n {
         return english[key] ?? key
     }
 
+    /// Maps BCP-47 preferred language tags (such as Windows `GetUserPreferredUILanguages` values
+    /// `"zh-Hans-CN"`, `"zh-CN"`, `"ja-JP"`, `"ko-KR"`) to the best matching bundled `.lproj` code.
+    static func preferredLocalization(from available: [String], forWindowsLanguages languages: [String]) -> String? {
+        func find(_ code: String) -> String? {
+            available.first { $0.caseInsensitiveCompare(code) == .orderedSame }
+        }
+        for rawTag in languages {
+            let tag = rawTag.replacingOccurrences(of: "_", with: "-")
+            if let exact = find(tag) { return exact }
+            let parts = tag.split(separator: "-").map { $0.lowercased() }
+            guard let primary = parts.first else { continue }
+            if primary == "zh" {
+                if parts.contains("hant") || parts.contains("tw") || parts.contains("hk") || parts.contains("mo") {
+                    if let hant = find("zh-Hant") { return hant }
+                } else if parts.contains("hans") || parts.contains("cn") || parts.contains("sg") || parts.count == 1 {
+                    if let hans = find("zh-Hans") { return hans }
+                }
+            }
+            if parts.count >= 2, let withScript = find("\(parts[0])-\(parts[1])") {
+                return withScript
+            }
+            if let base = find(primary) { return base }
+        }
+        return nil
+    }
+
+    /// Maps Yardlet's active localization (or preferred languages when unknown) to Chromium/CEF's
+    /// `--locale` and `--accept-languages` arguments.
+    static func cefBrowserLocale(
+        shownLocalization: String? = L10n.shownLocalization,
+        preferredLanguages: [String] = Locale.preferredLanguages
+    ) -> (locale: String, acceptLanguages: String) {
+        let code = (shownLocalization ?? preferredLanguages.first ?? "en").lowercased()
+        if code.hasPrefix("ko") {
+            return ("ko", "ko-KR,ko,en-US,en")
+        }
+        if code.hasPrefix("ja") {
+            return ("ja", "ja-JP,ja,en-US,en")
+        }
+        if code.hasPrefix("zh-hans") || code == "zh-cn" || code == "zh-sg" || code == "zh" {
+            return ("zh-CN", "zh-CN,zh,en-US,en")
+        }
+        if code.hasPrefix("zh-hant") || code == "zh-tw" || code == "zh-hk" || code == "zh-mo" {
+            return ("zh-TW", "zh-TW,zh,en-US,en")
+        }
+        return ("en-US", "en-US,en")
+    }
+
     static func format(_ key: String, _ arguments: CVarArg...) -> String {
         String(
             format: string(key),
@@ -278,6 +323,8 @@ enum AppLanguagePreference: String, CaseIterable, Identifiable {
     case system
     case english = "en"
     case korean = "ko"
+    case japanese = "ja"
+    case chineseSimplified = "zh-Hans"
 
     static let key = "AppleLanguages"
 
@@ -289,6 +336,8 @@ enum AppLanguagePreference: String, CaseIterable, Identifiable {
         case .system: L10n.string("System")
         case .english: "English"
         case .korean: "한국어"
+        case .japanese: "日本語"
+        case .chineseSimplified: "简体中文"
         }
     }
 

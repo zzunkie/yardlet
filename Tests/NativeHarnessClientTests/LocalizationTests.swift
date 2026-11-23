@@ -536,10 +536,32 @@ final class LocalizationTests: XCTestCase {
         // A region-qualified choice made in System Settings reads as its language.
         defaults.set(["ko-KR"], forKey: AppLanguagePreference.key)
         XCTAssertEqual(AppLanguagePreference.stored(in: defaults, domain: suite), .korean)
+        defaults.set(["ja-JP"], forKey: AppLanguagePreference.key)
+        XCTAssertEqual(AppLanguagePreference.stored(in: defaults, domain: suite), .japanese)
+        defaults.set(["zh-Hans-CN"], forKey: AppLanguagePreference.key)
+        XCTAssertEqual(AppLanguagePreference.stored(in: defaults, domain: suite), .chineseSimplified)
 
         // Settings only lists languages whose `.lproj` catalog is bundled.
         XCTAssertEqual(AppLanguagePreference.availableCases(bundledLocalizations: ["en"]), [.system, .english])
         XCTAssertEqual(AppLanguagePreference.availableCases(bundledLocalizations: ["en", "ko"]), [.system, .english, .korean])
+        XCTAssertEqual(
+            AppLanguagePreference.availableCases(bundledLocalizations: ["en", "ko", "ja", "zh-Hans"]),
+            [.system, .english, .korean, .japanese, .chineseSimplified]
+        )
+
+        // Windows BCP-47 language tag resolution maps Simplified Chinese and Japanese tags cleanly.
+        let shipped = ["en", "ko", "ja", "zh-Hans"]
+        XCTAssertEqual(L10n.preferredLocalization(from: shipped, forWindowsLanguages: ["ja-JP", "en-US"]), "ja")
+        XCTAssertEqual(L10n.preferredLocalization(from: shipped, forWindowsLanguages: ["zh-Hans-CN", "en-US"]), "zh-Hans")
+        XCTAssertEqual(L10n.preferredLocalization(from: shipped, forWindowsLanguages: ["zh-CN", "en-US"]), "zh-Hans")
+        XCTAssertEqual(L10n.preferredLocalization(from: shipped, forWindowsLanguages: ["zh-SG", "en-US"]), "zh-Hans")
+        XCTAssertEqual(L10n.preferredLocalization(from: shipped, forWindowsLanguages: ["fr-FR", "en-US"]), "en")
+
+        // CEF browser locale maps each shipped localization to Chromium's expected locale code.
+        XCTAssertEqual(L10n.cefBrowserLocale(shownLocalization: "ko").locale, "ko")
+        XCTAssertEqual(L10n.cefBrowserLocale(shownLocalization: "ja").locale, "ja")
+        XCTAssertEqual(L10n.cefBrowserLocale(shownLocalization: "zh-Hans").locale, "zh-CN")
+        XCTAssertEqual(L10n.cefBrowserLocale(shownLocalization: "en").locale, "en-US")
 
         // Settings offers Relaunch for a language other than the one the bundle chose as Yardlet opened.
         let shown = try XCTUnwrap(L10n.shownLocalization.flatMap(AppLanguagePreference.init(rawValue:)))

@@ -89,13 +89,13 @@ final class CEFBrowserHostProcess: BrowserHostConnection {
         let events = Pipe()
         input = commands.fileHandleForWriting
         process.executableURL = Self.executableURL
-        let korean = Locale.preferredLanguages.first?.hasPrefix("ko") == true
+        let browserLocale = L10n.cefBrowserLocale()
         process.arguments = [
             "--root-cache", paths.root.path(percentEncoded: false),
             "--profile", paths.profile.path(percentEncoded: false),
             "--downloads", paths.downloads.path(percentEncoded: false),
-            "--locale", korean ? "ko" : "en-US",
-            "--accept-languages", korean ? "ko-KR,ko,en-US,en" : "en-US,en,ko"
+            "--locale", browserLocale.locale,
+            "--accept-languages", browserLocale.acceptLanguages
         ]
 #if DEBUG
         if let argument = CommandLine.arguments.first(where: { $0.hasPrefix("--ui-fixture-browser-check=") }) {
