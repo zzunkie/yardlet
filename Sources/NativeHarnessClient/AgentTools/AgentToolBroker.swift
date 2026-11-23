@@ -110,6 +110,9 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     /// session tools then include `read_terminal`. Read at every list, so a change reaches a running task
     /// once its harness is told the list changed (`toolsMayHaveChanged`).
     var sharesTerminal: @MainActor () -> Bool = { TerminalSharingPreference.isOn() }
+    /// Whether Yardlet's native MCP Code Mode is enabled (`CodeModePreference`): exposes
+    /// `search_yardlet_tools` and `run_yardlet_script` and collapses flat connector schemas.
+    var codeModeEnabled: @MainActor () -> Bool = { CodeModePreference.isOn() }
     /// The app, which answers the scheduled-task tools. Nil, as in tests, offers none.
     weak var schedules: (any ScheduleToolHandling)?
     /// The app, which answers the simulator tools. Nil, as in tests and on other platforms, offers none.
@@ -274,6 +277,10 @@ final class AgentToolBroker: AgentToolLaunchProviding {
 
     func handle(_ call: AgentToolCall) async -> AgentToolResult {
         guard let sessionID = authorizedSession(call) else { return Self.unrecognizedToken }
+        if CodeModeToolCatalog.definition(named: call.tool) != nil, !codeModeEnabled() {
+            return .failure("MCP Code Mode is off in Yardlet's settings. Turn it on in Settings → Connectors.",
+                            .refused, retry: .no)
+        }
         // Yardlet's own tools are checked against the schemas they are listed with before they run; a
         // connector's are checked where its tools are known (`ConnectorCenter.callConnectorTool`).
         if let definition = Self.ownDefinition(named: call.tool),
@@ -328,6 +335,9 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         }
         if ConnectorGatewayToolCatalog.definition(named: call.tool) != nil {
             return await handleConnectorGateway(call, for: sessionID)
+        }
+        if CodeModeToolCatalog.definition(named: call.tool) != nil {
+            return await handleCodeMode(call, for: sessionID)
         }
         if let result = await connectors?.callConnectorTool(named: call.tool, arguments: call.arguments,
                                                              for: connectorContext(sessionID)) {
@@ -420,6 +430,57 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         return await unknownConnectorTool(innerTool, for: sessionID)
     }
 
+    private func handleCodeMode(_ call: AgentToolCall, for sessionID: UUID) async -> AgentToolResult {
+        guard CodeModePreference.isSupported && codeModeEnabled() else {
+            return .failure(
+                "MCP Code Mode is off in Yardlet's settings. Turn it on in Settings → Connectors to use \(call.tool).",
+                .refused, retry: .no
+            )
+        }
+        if call.tool == CodeModeToolCatalog.searchTools {
+            let all = await searchableToolsForCodeMode(for: sessionID)
+            return CodeModeToolCatalog.formatSearch(
+                tools: all,
+                query: call.arguments["query"]?.stringValue,
+                category: call.arguments["category"]?.stringValue,
+                exactTool: call.arguments["tool"]?.stringValue
+            )
+        }
+        let code = call.arguments["code"]?.stringValue ?? ""
+        let timeoutSeconds: Double? = switch call.arguments["timeoutSeconds"] {
+        case let .number(value): value
+        case let .integer(value): Double(value)
+        default: nil
+        }
+        let session = call.session
+        let token = call.token
+        let result = await CodeModeRunner.run(code: code, timeoutSeconds: timeoutSeconds) { [weak self] tool, arguments in
+            guard let self else {
+                return .failure("Yardlet tool broker is no longer available.", .unreachable, retry: .no)
+            }
+            let innerCall = AgentToolCall(token: token, session: session, tool: tool, arguments: arguments)
+            return await self.handle(innerCall)
+        }
+        return await hidingCredentials(result)
+    }
+
+    private func searchableToolsForCodeMode(for sessionID: UUID) async -> [ToolJSON] {
+        let browserOn = browserToolsByTask[sessionID] != false
+        let browserDefinitions = browserOn ? AgentToolCatalog.browserTools : []
+        let vaultDefinitions = browserOn && vault?.offersTool == true ? [VaultToolCatalog.tool] : []
+        let simulatorUsable = simulatorToolsByTask[sessionID] == true && simulators?.simulatorPlatformIsUsable == true
+        let simulatorDefinitions = simulatorUsable ? SimulatorToolCatalog.tools : []
+        let suggestionDefinitions = suggestions == nil ? [] : TaskSuggestionToolCatalog.tools
+        let widgetDefinitions = offersWidget(to: sessionID) ? [WidgetToolCatalog.tool] : []
+        let sessionDefinitions = sessions == nil ? [] : (SessionToolCatalog.tools + SettingsToolCatalog.tools)
+        let terminalDefinitions = sessions != nil && sharesTerminal() ? [TerminalToolCatalog.tool] : []
+        let scheduleDefinitions = schedules == nil ? [] : ScheduleToolCatalog.tools
+        let core = (browserDefinitions + vaultDefinitions + simulatorDefinitions + suggestionDefinitions
+            + widgetDefinitions + sessionDefinitions + terminalDefinitions + scheduleDefinitions).map(\.json)
+        let connectorTools = await filteredConnectorTools(for: sessionID)
+        return core + connectorTools
+    }
+
     /// The result with the keys and tokens in its text hidden (`CredentialText`), unless the person turned that off.
     private func hidingCredentials(_ result: AgentToolResult) async -> AgentToolResult {
         guard vault?.hidesCredentials ?? true else { return result }
@@ -430,10 +491,32 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     @concurrent private static func hidingCredentials(in result: AgentToolResult) async -> AgentToolResult {
         var hidden = result
         hidden.content = result.content.map { content in
-            guard case let .text(text) = content else { return content }
-            return .text(CredentialText.scrub(text))
+            switch content {
+            case let .text(text):
+                return .text(CredentialText.scrub(text))
+            case let .json(value):
+                return .json(scrubJSON(value))
+            case .image:
+                return content
+            }
+        }
+        if let structured = result.structuredContent {
+            hidden.structuredContent = scrubJSON(structured)
         }
         return hidden
+    }
+
+    private nonisolated static func scrubJSON(_ value: ToolJSON) -> ToolJSON {
+        switch value {
+        case let .string(text):
+            return .string(CredentialText.scrub(text))
+        case let .array(items):
+            return .array(items.map(scrubJSON))
+        case let .object(map):
+            return .object(map.mapValues(scrubJSON))
+        case .integer, .number, .bool, .null:
+            return value
+        }
     }
 
     private static let ownDefinitionsByName: [String: AgentToolDefinition] = {
@@ -449,7 +532,8 @@ final class AgentToolBroker: AgentToolLaunchProviding {
             SimulatorToolCatalog.tools,
             SimulatorGatewayToolCatalog.tools,
             [WidgetToolCatalog.tool],
-            ConnectorGatewayToolCatalog.staticTools
+            ConnectorGatewayToolCatalog.staticTools,
+            CodeModeToolCatalog.tools
         ]
         for catalog in catalogs {
             for definition in catalog {
@@ -519,6 +603,7 @@ final class AgentToolBroker: AgentToolLaunchProviding {
             SimulatorToolCatalog.tools,
             SimulatorGatewayToolCatalog.tools,
             ConnectorGatewayToolCatalog.staticTools,
+            CodeModeToolCatalog.tools,
             [VaultToolCatalog.tool, TerminalToolCatalog.tool, WidgetToolCatalog.tool]
         ]
         for catalog in catalogs {
@@ -574,15 +659,22 @@ final class AgentToolBroker: AgentToolLaunchProviding {
             + widgetDefinitions + sessionDefinitions + terminalDefinitions + scheduleDefinitions
         let coreTools = compact ? AntigravityCompactTools.compact(coreDefinitions) : coreDefinitions.map(\.json)
 
+        let codeMode = CodeModePreference.isSupported && codeModeEnabled()
+        let codeModeTools = codeMode ? CodeModeToolCatalog.tools.map(\.json) : []
+
         let connectorTools = await filteredConnectorTools(for: sessionID)
         let exposedConnectorTools: [ToolJSON]
-        if compact, !connectorTools.isEmpty {
+        if codeMode {
+            // In Code Mode, connector tools are discovered via `search_yardlet_tools` and invoked
+            // via `run_yardlet_script` (and remain directly callable by name), keeping upfront schemas small.
+            exposedConnectorTools = []
+        } else if compact, !connectorTools.isEmpty {
             let services = connectors?.serviceNames(for: connectorContext(sessionID)) ?? []
             exposedConnectorTools = ConnectorGatewayToolCatalog.tools(services: services).map(\.json)
         } else {
             exposedConnectorTools = connectorTools
         }
-        return coreTools + exposedConnectorTools
+        return coreTools + codeModeTools + exposedConnectorTools
     }
 
     // MARK: Tool list changes

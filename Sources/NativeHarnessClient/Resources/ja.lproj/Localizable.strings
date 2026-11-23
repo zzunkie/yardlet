@@ -4216,3 +4216,5 @@
 "Use saved sign-in" = "保存済みのサインインを使用";
 "Finish signing in in your browser…" = "ブラウザでサインインを完了してください…";
 "Leave blank to keep the saved token header." = "保存済みのトークンヘッダーを保持するには、空欄のままにしてください。";
+"MCP Code Mode (experimental)" = "MCP コードモード（実験的）";
+"Replaces flat connector tool schemas with search_yardlet_tools and a sandboxed JavaScript run_yardlet_script tool to reduce token usage." = "コネクタのツールスキーマ一覧を search_yardlet_tools とサンドボックス化された JavaScript ツール run_yardlet_script に置き換え、トークン使用量を削減します。";

@@ -18,6 +18,7 @@ struct ConnectorSettingsView: View {
     var onRemoteConnect: ((ConnectorRecord) -> Void)? = nil
     @State private var adding: ConnectorAddSheet.Start?
     @AppStorage(ClaudeAIConnectorPreference.key) private var claudeAIConnectors = false
+    @AppStorage(CodeModePreference.key) private var agentCodeMode = false
     @AppStorage(Self.importDismissedKey) private var importDismissed = false
 
     static let importDismissedKey = "YardletConnectorImportDismissed"
@@ -103,9 +104,15 @@ struct ConnectorSettingsView: View {
                 ConnectorSetupTiles(center: center) { preset in adding = .preset(preset) }
             }
 
-            claudeAIRow
-                .padding(.horizontal, SettingsMetrics.groupHorizontalPadding)
-                .parityCard()
+            VStack(spacing: 0) {
+                claudeAIRow
+                if !isRemote && CodeModePreference.isSupported {
+                    Divider()
+                    codeModeRow
+                }
+            }
+            .padding(.horizontal, SettingsMetrics.groupHorizontalPadding)
+            .parityCard()
         }
         .task {
             guard !isRemote else { return }
@@ -145,6 +152,16 @@ struct ConnectorSettingsView: View {
     private var claudeAIRow: some View {
         SettingsRow(setting: .claudeAIConnectors) {
             Toggle(YardletSetting.claudeAIConnectors.title, isOn: claudeAIConnectorsOverride ?? $claudeAIConnectors)
+                .labelsHidden()
+                .toggleStyle(.paritySwitch)
+                .controlSize(.small)
+                .disabled(!canEditSettings)
+        }
+    }
+
+    private var codeModeRow: some View {
+        SettingsRow(setting: .agentCodeMode) {
+            Toggle(YardletSetting.agentCodeMode.title, isOn: $agentCodeMode)
                 .labelsHidden()
                 .toggleStyle(.paritySwitch)
                 .controlSize(.small)

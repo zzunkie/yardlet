@@ -18,6 +18,7 @@ final class MacAgentToolService: NativeSurfaceResource {
     private let directory: URL
     private var listener: UnixSocketListener?
     private var sharesTerminal = true
+    private var codeModeEnabled = false
     private var terminalSharingObserver: NSObjectProtocol?
 
     /// The connector settings on their way to the service, read off the main thread: the file holds
@@ -123,23 +124,26 @@ final class MacAgentToolService: NativeSurfaceResource {
         vault = MacVault.makeCenter()
         broker.vault = vault
         vault.onToolsChanged = { [weak broker = self.broker] in broker?.toolsMayHaveChanged() }
-        // Sharing the terminal adds or takes away `read_terminal` in every task's list.
+        // Sharing the terminal or toggling Code Mode updates every task's tool list.
         // Observe off the main queue so a background UserDefaults write cannot deadlock with a
         // main-thread flush on the same writer queue.
         sharesTerminal = TerminalSharingPreference.isOn()
+        codeModeEnabled = CodeModePreference.isOn()
         terminalSharingObserver = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification, object: UserDefaults.yardlet, queue: nil
         ) { [weak self] _ in
-            Task { @MainActor in self?.terminalSharingMayHaveChanged() }
+            Task { @MainActor in self?.toolPreferencesMayHaveChanged() }
         }
         broker.startEndpoint = { [unowned self] in try self.startListener() }
         NativeSurfaceResourceRegistry.shared.register(self)
     }
 
-    private func terminalSharingMayHaveChanged() {
+    private func toolPreferencesMayHaveChanged() {
         let shares = TerminalSharingPreference.isOn()
-        guard shares != sharesTerminal else { return }
+        let codeMode = CodeModePreference.isOn()
+        guard shares != sharesTerminal || codeMode != codeModeEnabled else { return }
         sharesTerminal = shares
+        codeModeEnabled = codeMode
         broker.toolsMayHaveChanged()
     }
 

@@ -4415,3 +4415,5 @@
 "Use saved sign-in" = "저장된 로그인 사용";
 "Finish signing in in your browser…" = "브라우저에서 로그인을 완료하세요…";
 "Leave blank to keep the saved token header." = "저장된 토큰 헤더를 유지하려면 비워 두세요.";
+"MCP Code Mode (experimental)" = "MCP 코드 모드(실험)";
+"Replaces flat connector tool schemas with search_yardlet_tools and a sandboxed JavaScript run_yardlet_script tool to reduce token usage." = "커넥터 도구 스키마 목록 대신 search_yardlet_tools와 샌드박스 JavaScript 도구 run_yardlet_script로 묶어 토큰 사용량을 줄입니다.";

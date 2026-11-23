@@ -687,6 +687,14 @@ extension YardletSetting {
         values: .onOff, storage: .flag(key: ClaudeAIConnectorPreference.key, defaultValue: false), asksEveryTime: true,
         offered: { $0.hasConnectors },
         keywords: "claude.ai, MCP, Claude connectors")
+
+    static let agentCodeMode = YardletSetting(
+        id: "agent_code_mode", section: .connectors, symbol: "chevron.left.forwardslash.chevron.right",
+        title: L10n.string("MCP Code Mode (experimental)"),
+        detail: L10n.string("Replaces flat connector tool schemas with search_yardlet_tools and a sandboxed JavaScript run_yardlet_script tool to reduce token usage."),
+        values: .onOff, storage: .flag(key: CodeModePreference.key, defaultValue: false), asksEveryTime: true,
+        offered: { $0.hasConnectors && CodeModePreference.isSupported },
+        keywords: "MCP, code mode, JavaScript, tokens, connectors, script")
 }
 
 // MARK: - Usage
@@ -795,7 +803,7 @@ enum YardletSettingCatalog {
         .personalAgentMessages, .newMail,
         .turnCompletionNotifications, .approvalNotifications, .questionNotifications, .notificationSound,
         .yardletInstructions, .dailyEvaluation,
-        .claudeAIConnectors,
+        .claudeAIConnectors, .agentCodeMode,
         .agentBrowserTools, .keepCookies, .searchSuggestions, .pageSuggestions, .memorySaver, .memorySaverLevel,
         .hideKeysAndTokens,
         .passwordManager, .addressesAndCards,
