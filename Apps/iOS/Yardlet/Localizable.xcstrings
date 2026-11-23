@@ -499,6 +499,38 @@
         }
       }
     },
+    "(No subject)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(No subject)"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(제목 없음)"
+          }
+        }
+      }
+    },
+    "(No title)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(No title)"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(제목 없음)"
+          }
+        }
+      }
+    },
     "+%lld": {
       "localizations": {
         "ko": {
@@ -575,6 +607,38 @@
         }
       }
     },
+    "Accept": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accept"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "수락"
+          }
+        }
+      }
+    },
+    "Accepted": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accepted"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "수락됨"
+          }
+        }
+      }
+    },
     "Access Token (optional)": {
       "localizations": {
         "en": {
@@ -617,6 +681,22 @@
         }
       }
     },
+    "Add Cc": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add Cc"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "참조 추가"
+          }
+        }
+      }
+    },
     "Add Connector": {
       "localizations": {
         "en": {
@@ -653,6 +733,22 @@
         }
       }
     },
+    "Add at least one recipient.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add at least one recipient."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "받는 사람을 한 명 이상 입력하세요."
+          }
+        }
+      }
+    },
     "Added to tasks started or resumed on %@.": {
       "localizations": {
         "en": {
@@ -665,6 +761,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@에서 시작하거나 재개하는 작업에 포함됩니다."
+          }
+        }
+      }
+    },
+    "Additional attendees not shown.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Additional attendees not shown."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "추가 참석자는 표시되지 않습니다."
           }
         }
       }
@@ -685,6 +797,54 @@
           "stringUnit": {
             "state": "translated",
             "value": "에이전트"
+          }
+        }
+      }
+    },
+    "All Accounts": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All Accounts"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "모든 계정"
+          }
+        }
+      }
+    },
+    "All Calendars": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All Calendars"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "모든 캘린더"
+          }
+        }
+      }
+    },
+    "All day": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All day"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "하루 종일"
           }
         }
       }
@@ -1031,6 +1191,22 @@
         }
       }
     },
+    "Attendees": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attendees"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "참석자"
+          }
+        }
+      }
+    },
     "Auto-continue at usage limit": {
       "localizations": {
         "en": {
@@ -1317,6 +1493,38 @@
         }
       }
     },
+    "Cc": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cc"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "참조"
+          }
+        }
+      }
+    },
+    "Cc: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cc: %@"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "참조: %@"
+          }
+        }
+      }
+    },
     "Check Your Mac": {
       "localizations": {
         "ko": {
@@ -1405,6 +1613,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "계정에서 Mac 고르기"
+          }
+        }
+      }
+    },
+    "Choose an account to send from.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose an account to send from."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "보낼 계정을 선택하세요."
           }
         }
       }
@@ -1797,6 +2021,38 @@
         }
       }
     },
+    "Connect to %@ to view your mail.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect to %@ to view your mail."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에 연결하면 메일을 볼 수 있습니다."
+          }
+        }
+      }
+    },
+    "Connect to %@ to view your schedule.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect to %@ to view your schedule."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에 연결하면 일정을 볼 수 있습니다."
+          }
+        }
+      }
+    },
     "Connect to apps running on it": {
       "localizations": {
         "ko": {
@@ -2075,6 +2331,22 @@
         }
       }
     },
+    "Conversation archived": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversation archived"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "대화를 보관했습니다"
+          }
+        }
+      }
+    },
     "Copied": {
       "localizations": {
         "en": {
@@ -2159,6 +2431,54 @@
         }
       }
     },
+    "Couldn't Load Calendar": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't Load Calendar"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "캘린더를 불러오지 못했습니다"
+          }
+        }
+      }
+    },
+    "Couldn't Load Conversation": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't Load Conversation"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "대화를 불러오지 못했습니다"
+          }
+        }
+      }
+    },
+    "Couldn't Load Mail": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't Load Mail"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "메일을 불러오지 못했습니다"
+          }
+        }
+      }
+    },
     "Couldn't Load the Scheduled Tasks": {
       "localizations": {
         "ko": {
@@ -2239,6 +2559,22 @@
         }
       }
     },
+    "Couldn't load this conversation.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't load this conversation."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 대화를 불러오지 못했습니다."
+          }
+        }
+      }
+    },
     "Couldn't sign in": {
       "localizations": {
         "ko": {
@@ -2297,6 +2633,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "거절"
+          }
+        }
+      }
+    },
+    "Declined": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Declined"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "거절됨"
           }
         }
       }
@@ -2413,6 +2765,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "여러 파일 다운로드"
+          }
+        }
+      }
+    },
+    "Draft": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Draft"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "임시저장"
           }
         }
       }
@@ -2579,6 +2947,22 @@
         }
       }
     },
+    "Event Details": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Event Details"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "일정 세부정보"
+          }
+        }
+      }
+    },
     "Expand": {
       "localizations": {
         "ko": {
@@ -2677,6 +3061,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "앞으로"
+          }
+        }
+      }
+    },
+    "From": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "From"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "보낸 사람"
           }
         }
       }
@@ -2845,6 +3245,22 @@
         }
       }
     },
+    "Inbox": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inbox"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "받은편지함"
+          }
+        }
+      }
+    },
     "Input": {
       "localizations": {
         "ko": {
@@ -2881,6 +3297,22 @@
         }
       }
     },
+    "Invited": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invited"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "초대됨"
+          }
+        }
+      }
+    },
     "It is a file outside this task's folders.": {
       "localizations": {
         "ko": {
@@ -2897,6 +3329,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@의 목록에서도 빠집니다. 그곳의 보관된 작업에서 다시 찾을 수 있습니다."
+          }
+        }
+      }
+    },
+    "Join Meeting": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Join Meeting"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "회의 참가"
           }
         }
       }
@@ -3045,6 +3493,22 @@
         }
       }
     },
+    "Load More": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Load More"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "더 불러오기"
+          }
+        }
+      }
+    },
     "Load image": {
       "localizations": {
         "ko": {
@@ -3067,6 +3531,54 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@에서 커넥터 불러오는 중…"
+          }
+        }
+      }
+    },
+    "Loading conversation…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading conversation…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "대화 불러오는 중…"
+          }
+        }
+      }
+    },
+    "Loading events…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading events…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "일정 불러오는 중…"
+          }
+        }
+      }
+    },
+    "Loading mail…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading mail…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "메일 불러오는 중…"
           }
         }
       }
@@ -3199,12 +3711,92 @@
         }
       }
     },
+    "Mark Read": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mark Read"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "읽음으로 표시"
+          }
+        }
+      }
+    },
+    "Mark Unread": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mark Unread"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "읽지 않음으로 표시"
+          }
+        }
+      }
+    },
+    "Maybe": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Maybe"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "미정"
+          }
+        }
+      }
+    },
     "Message": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "메시지"
+          }
+        }
+      }
+    },
+    "Message body must be %lld characters or fewer.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Message body must be %lld characters or fewer."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "메시지 본문은 %lld자 이하로 입력하세요."
+          }
+        }
+      }
+    },
+    "Message sent": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Message sent"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "메일을 보냈습니다"
           }
         }
       }
@@ -3219,12 +3811,44 @@
         }
       }
     },
+    "Message truncated. Open Yardlet on your Mac to read the full text.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Message truncated. Open Yardlet on your Mac to read the full text."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "메시지 일부가 줄여졌습니다. 전체 내용은 Mac의 Yardlet에서 확인하세요."
+          }
+        }
+      }
+    },
     "Messages are waiting in the queue, so this can't be done now.": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "대기 중인 메시지가 있어 지금은 할 수 없습니다."
+          }
+        }
+      }
+    },
+    "Messages in this folder on %@ will appear here.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Messages in this folder on %@ will appear here."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@의 이 폴더에 있는 메시지가 여기에 표시됩니다."
           }
         }
       }
@@ -3347,6 +3971,22 @@
         }
       }
     },
+    "New Message": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New Message"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "새 메일"
+          }
+        }
+      }
+    },
     "New Task": {
       "localizations": {
         "ko": {
@@ -3387,6 +4027,22 @@
         }
       }
     },
+    "Next Week": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Next Week"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다음 주"
+          }
+        }
+      }
+    },
     "No Connectors": {
       "localizations": {
         "en": {
@@ -3403,12 +4059,60 @@
         }
       }
     },
+    "No Events": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No Events"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "일정 없음"
+          }
+        }
+      }
+    },
     "No Mac is on this account yet. On your Mac, sign in with the same account under Yardlet › Settings… › Yardlet Account, and turn on Allow remote connections under Remote.": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "이 계정에 등록된 Mac이 아직 없습니다. Mac의 Yardlet에서 설정… › Yardlet 계정을 열어 같은 계정으로 로그인하고, 원격 연결에서 원격 연결 허용을 켜세요."
+          }
+        }
+      }
+    },
+    "No Matching Messages": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No Matching Messages"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "일치하는 메시지 없음"
+          }
+        }
+      }
+    },
+    "No Messages": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No Messages"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "메시지 없음"
           }
         }
       }
@@ -3577,6 +4281,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "보내지 못했습니다. 눌러서 다시 시도하세요."
+          }
+        }
+      }
+    },
+    "Notes": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notes"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "메모"
           }
         }
       }
@@ -3823,12 +4543,60 @@
         }
       }
     },
+    "Optional": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Optional"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "선택 사항"
+          }
+        }
+      }
+    },
     "Options": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "옵션"
+          }
+        }
+      }
+    },
+    "Organizer": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Organizer"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "주최자"
+          }
+        }
+      }
+    },
+    "Original sender": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Original sender"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "원래 보낸 사람"
           }
         }
       }
@@ -4163,6 +4931,22 @@
         }
       }
     },
+    "Previous Week": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Previous Week"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이전 주"
+          }
+        }
+      }
+    },
     "Privacy Policy": {
       "localizations": {
         "ko": {
@@ -4493,6 +5277,38 @@
         }
       }
     },
+    "Reply sent": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reply sent"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "답장을 보냈습니다"
+          }
+        }
+      }
+    },
+    "Reply to %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reply to %@"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에게 답장"
+          }
+        }
+      }
+    },
     "Requests": {
       "localizations": {
         "en": {
@@ -4515,6 +5331,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@ 초기화"
+          }
+        }
+      }
+    },
+    "Response": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Response"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "응답"
           }
         }
       }
@@ -4649,12 +5481,44 @@
         }
       }
     },
+    "Search mail": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search mail"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "메일 검색"
+          }
+        }
+      }
+    },
     "Search or enter address": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "검색어 또는 주소 입력"
+          }
+        }
+      }
+    },
+    "Search query must be %lld characters or fewer.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search query must be %lld characters or fewer."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "검색어는 %lld자 이하로 입력하세요."
           }
         }
       }
@@ -4709,6 +5573,22 @@
         }
       }
     },
+    "Send Message?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send Message?"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "메일을 보낼까요?"
+          }
+        }
+      }
+    },
     "Send Now": {
       "localizations": {
         "ko": {
@@ -4725,6 +5605,54 @@
           "stringUnit": {
             "state": "translated",
             "value": "지금 보내기(조정)"
+          }
+        }
+      }
+    },
+    "Send Reply": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send Reply"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "답장 보내기"
+          }
+        }
+      }
+    },
+    "Send Reply?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send Reply?"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "답장을 보낼까요?"
+          }
+        }
+      }
+    },
+    "Sent": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sent"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "보낸편지함"
           }
         }
       }
@@ -4897,6 +5825,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "출력의 끝부분입니다."
+          }
+        }
+      }
+    },
+    "Showing the first %lld events in this period.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Showing the first %lld events in this period."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 기간의 처음 %lld개 일정만 표시합니다."
+          }
+        }
+      }
+    },
+    "Showing the latest messages in this conversation.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Showing the latest messages in this conversation."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 대화의 최신 메시지만 표시합니다."
           }
         }
       }
@@ -5175,6 +6135,38 @@
         }
       }
     },
+    "Star": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Star"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "별표 표시"
+          }
+        }
+      }
+    },
+    "Starred": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Starred"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "별표편지함"
+          }
+        }
+      }
+    },
     "Start": {
       "localizations": {
         "ko": {
@@ -5287,6 +6279,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "하위 에이전트"
+          }
+        }
+      }
+    },
+    "Subject": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Subject"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "제목"
+          }
+        }
+      }
+    },
+    "Subject must be %lld characters or fewer.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Subject must be %lld characters or fewer."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "제목은 %lld자 이하로 입력하세요."
           }
         }
       }
@@ -5859,6 +6883,22 @@
         }
       }
     },
+    "To": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "받는 사람"
+          }
+        }
+      }
+    },
     "To add connectors or turn them on or off from here, allow Change settings for this device in Settings › Remote › Paired devices on %@.": {
       "localizations": {
         "en": {
@@ -5931,6 +6971,54 @@
         }
       }
     },
+    "To: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To: %@"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "받는 사람: %@"
+          }
+        }
+      }
+    },
+    "To: %@\nSubject: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To: %@\nSubject: %@"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "받는 사람: %1$@\n제목: %2$@"
+          }
+        }
+      }
+    },
+    "Today": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Today"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "오늘"
+          }
+        }
+      }
+    },
     "Token": {
       "localizations": {
         "en": {
@@ -5989,6 +7077,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Mac 없이 둘러보기"
+          }
+        }
+      }
+    },
+    "Try a different search term or switch folders.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Try a different search term or switch folders."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다른 검색어를 입력하거나 폴더를 바꿔 보세요."
           }
         }
       }
@@ -6073,6 +7177,38 @@
         }
       }
     },
+    "Turn on Calendar in Yardlet on %@ to view your schedule here.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turn on Calendar in Yardlet on %@ to view your schedule here."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@의 Yardlet에서 캘린더를 켜면 여기서 일정을 볼 수 있습니다."
+          }
+        }
+      }
+    },
+    "Turn on Mail in Yardlet on %@ to view your inbox here.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turn on Mail in Yardlet on %@ to view your inbox here."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@의 Yardlet에서 메일을 켜면 여기서 받은편지함을 볼 수 있습니다."
+          }
+        }
+      }
+    },
     "Type into the page": {
       "localizations": {
         "ko": {
@@ -6105,6 +7241,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@에서 사용할 수 없음"
+          }
+        }
+      }
+    },
+    "Unknown": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unknown"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "알 수 없음"
           }
         }
       }
@@ -6145,6 +7297,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "읽지 않음"
+          }
+        }
+      }
+    },
+    "Unstar": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unstar"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "별표 해제"
           }
         }
       }
@@ -6607,6 +7775,38 @@
         }
       }
     },
+    "Write a reply first.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Write a reply first."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "먼저 답장을 입력하세요."
+          }
+        }
+      }
+    },
+    "Write a reply…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Write a reply…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "답장 입력…"
+          }
+        }
+      }
+    },
     "Yardlet Account": {
       "localizations": {
         "ko": {
@@ -6699,12 +7899,60 @@
         }
       }
     },
+    "You can include at most %lld CC recipients.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You can include at most %lld CC recipients."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "참조 받는 사람은 최대 %lld명까지 입력할 수 있습니다."
+          }
+        }
+      }
+    },
+    "You can send to at most %lld recipients.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You can send to at most %lld recipients."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "받는 사람은 최대 %lld명까지 입력할 수 있습니다."
+          }
+        }
+      }
+    },
     "You can't fork from this turn now.": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "이 턴에서는 지금 분기할 수 없습니다."
+          }
+        }
+      }
+    },
+    "You have no scheduled events on %@.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You have no scheduled events on %@."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에는 예정된 일정이 없습니다."
           }
         }
       }
@@ -6835,6 +8083,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "마이크"
+          }
+        }
+      }
+    },
+    "name@example.com": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "name@example.com"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "name@example.com"
           }
         }
       }
