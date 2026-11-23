@@ -359,6 +359,8 @@ public struct RemoteSnapshot: Equatable, Sendable {
     public var hostCalendar: Bool = false
     /// The bridge answers `mail` from the host's own mailbox (§15.38).
     public var hostMail: Bool = false
+    /// The bridge answers cross-platform `mailCalendarV2State` and `mailCalendarV2`.
+    public var mailCalendarV2: Bool = false
     /// The bridge answers `suggestionOptions` and starts a suggestion with the client's choices (§15.9).
     public var suggestionOptions: Bool = false
 
@@ -1232,6 +1234,10 @@ public enum RemoteRequest: Equatable, Sendable {
     /// `files` name finished uploads (§15.20, §15.38).
     case calendar(action: String, data: Data?)
     case mail(action: String, data: Data?, files: [String] = [])
+    /// Cross-platform Mail and Calendar v2 availability and connected accounts (empty when unpermitted).
+    case mailCalendarV2State(watching: Bool = true)
+    /// Cross-platform Mail and Calendar v2 typed JSON request; requires `.mailCalendar` permission.
+    case mailCalendarV2(RemoteMailCalendarV2Request)
 
     public var type: String {
         switch self {
@@ -1243,6 +1249,8 @@ public enum RemoteRequest: Equatable, Sendable {
         case .mailCalendarState: "mailCalendarState"
         case .calendar: "calendar"
         case .mail: "mail"
+        case .mailCalendarV2State: "mailCalendarV2State"
+        case .mailCalendarV2: "mailCalendarV2"
         case .subtask: "subtask"
         case .cancelAccountMove: "cancelAccountMove"
         case .fileRewind: "fileRewind"
@@ -1351,8 +1359,8 @@ public enum RemoteRequest: Equatable, Sendable {
         case .openTab, .closeTab, .answerTabPermission: nil
         case .hostSettings: nil
         case .setHostSetting, .saveHostInstructions, .hostCLIUpdate: .settings
-        case .mailCalendarState: nil
-        case .calendar, .mail: .mailCalendar
+        case .mailCalendarState, .mailCalendarV2State: nil
+        case .calendar, .mail, .mailCalendarV2: .mailCalendar
         case .snapshot, .subscribeTask, .loadOlder, .unsubscribeTask, .ping, .sendMessage,
              .stopTurn, .markRead, .answerQuestion, .reviewPlan, .createTask, .newTaskOptions, .limitAccounts,
              .continueWithAccount, .setAutoContinue, .actOnQueued, .answerHandoff, .chooseAnswer, .uploadFile, .registerPush,
@@ -1391,7 +1399,7 @@ public enum RemoteRequest: Equatable, Sendable {
              .answerLink, .uploadFile, .revealLink, .scheduledTasks, .runScheduledTask, .setScheduledTaskEnabled,
              .presence, .hostSettings, .setHostSetting, .saveHostInstructions, .hostCLIUpdate,
              .hostAccounts, .setHostAccount, .setHostHarnessRuntime, .setHostConnector, .connectorSetup,
-             .mailCalendarState, .calendar, .mail: nil
+             .mailCalendarState, .calendar, .mail, .mailCalendarV2State, .mailCalendarV2: nil
         }
     }
 
@@ -1412,6 +1420,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case let .setHostConnector(id, _): id
         case let .connectorSetup(setup): setup.operationID
         case let .calendar(action, _), let .mail(action, _, _): action
+        case let .mailCalendarV2(v2): v2.action.rawValue
         default: nil
         }
     }
@@ -1444,6 +1453,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case let .connectorSetup(setup): setup.action != .poll
         case let .calendar(action, _): RemoteProtocol.calendarCommands.contains(action)
         case let .mail(action, _, _): RemoteProtocol.mailCommands.contains(action)
+        case let .mailCalendarV2(v2): v2.action.isCommand
         case .nextStep: true
         case .useUsageReset: true
         case let .subtask(_, _, stop): stop
@@ -1575,6 +1585,7 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         var automaticAssignment: Bool?
         var sha256: String?
         var connectorSetup: RemoteConnectorSetupRequest?
+        var mailCalendarV2: RemoteMailCalendarV2Request?
     }
 
     private struct WireImage: Codable {
@@ -2084,6 +2095,12 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             request = .connectorSetup(setup)
         case "mailCalendarState":
             request = .mailCalendarState(watching: wire.watching != false)
+        case "mailCalendarV2State":
+            request = .mailCalendarV2State(watching: wire.watching != false)
+        case "mailCalendarV2":
+            guard let v2 = wire.mailCalendarV2 else { return fail(.badRequest, "Missing mailCalendarV2 payload") }
+            if let error = v2.validationError { return fail(error.code, error.message) }
+            request = .mailCalendarV2(v2)
         case "calendar", "mail":
             let actions = type == "calendar" ? RemoteProtocol.calendarActions : RemoteProtocol.mailActions
             guard let action = required(wire.action), actions.contains(action) else {
@@ -2389,6 +2406,10 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             wire.connectorSetup = setup
         case let .mailCalendarState(watching):
             wire.watching = watching ? nil : false
+        case let .mailCalendarV2State(watching):
+            wire.watching = watching ? nil : false
+        case let .mailCalendarV2(v2):
+            wire.mailCalendarV2 = v2
         case let .calendar(action, data):
             wire.action = action
             wire.data = data?.base64EncodedString()
@@ -2553,6 +2574,10 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     public var hostCalendar: Bool?
     public var hostMail: Bool?
     public var mailCalendarState: RemoteMailCalendarState?
+    /// `snapshot`: the host answers cross-platform `mailCalendarV2State` and `mailCalendarV2`.
+    public var mailCalendarV2: Bool?
+    public var mailCalendarV2State: RemoteMailCalendarV2State?
+    public var mailCalendarV2Result: RemoteMailCalendarV2Response?
 
     public init(re: String, ok: Bool = true, error: RemoteError? = nil) {
         self.re = re

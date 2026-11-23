@@ -255,6 +255,11 @@ public protocol RemoteBridge: AnyObject, Sendable {
     /// One call of the host's mailbox (§15.38); a draft's `files` are this device's finished uploads. A bridge that
     /// answers it says so in its snapshot (`hostMail`).
     func mail(action: String, data: Data?, files: [RemoteFile]) async -> Result<Data, RemoteError>
+    /// Cross-platform Mail and Calendar v2 state snapshot. Account summaries are populated only when `permitted` is true.
+    func mailCalendarV2State(permitted: Bool) async -> RemoteMailCalendarV2State
+    /// Cross-platform Mail and Calendar v2 typed JSON operation. A bridge that answers it says so in its snapshot
+    /// (`mailCalendarV2`).
+    func mailCalendarV2(_ request: RemoteMailCalendarV2Request) async -> Result<RemoteMailCalendarV2Response, RemoteError>
 }
 
 extension RemoteBridge {
@@ -268,6 +273,10 @@ extension RemoteBridge {
     public func setWatchingMailCalendar(_ watching: Bool) async {}
     public func calendar(action: String, data: Data?) async -> Result<Data, RemoteError> { .failure(RemoteError(.unavailable)) }
     public func mail(action: String, data: Data?, files: [RemoteFile]) async -> Result<Data, RemoteError> {
+        .failure(RemoteError(.unavailable))
+    }
+    public func mailCalendarV2State(permitted: Bool) async -> RemoteMailCalendarV2State { RemoteMailCalendarV2State() }
+    public func mailCalendarV2(_ request: RemoteMailCalendarV2Request) async -> Result<RemoteMailCalendarV2Response, RemoteError> {
         .failure(RemoteError(.unavailable))
     }
     public func hostAccounts(refreshHarnesses: [String]) async -> Result<RemoteAccountsState, RemoteError> {
@@ -2154,6 +2163,46 @@ public actor RemoteServer {
                 response.mailCalendarState = state
             }
             respond(response, to: id)
+        case let .mailCalendarV2State(watching):
+            connections[id]?.followsMailCalendar = watching
+            await updateWatched()
+            var response = RemoteResponse(re: envelope.id)
+            if watching {
+                let permittedBefore = permissionError(.mailCalendar, on: id) == nil
+                var state = await bridge.mailCalendarV2State(permitted: permittedBefore)
+                let permittedAfter = permissionError(.mailCalendar, on: id) == nil
+                state.permitted = permittedBefore && permittedAfter
+                if !state.permitted {
+                    state.mailAccounts = []
+                    state.calendarAccounts = []
+                }
+                response.mailCalendarV2State = state
+            }
+            respond(response, to: id)
+        case let .mailCalendarV2(v2Request):
+            if request.isCommand {
+                var resultPayload: RemoteMailCalendarV2Response?
+                await command(envelope.id, request: request, on: id) {
+                    switch await self.bridge.mailCalendarV2(v2Request) {
+                    case let .success(payload): resultPayload = payload; return nil
+                    case let .failure(error): return error
+                    }
+                } answer: { $0.mailCalendarV2Result = resultPayload }
+            } else {
+                switch await bridge.mailCalendarV2(v2Request) {
+                case let .success(payload):
+                    if let error = permissionError(.mailCalendar, on: id) {
+                        respond(.failure(envelope.id, error), to: id)
+                        auditPermissionRefusal(device: connections[id]?.deviceID, request: request)
+                        return
+                    }
+                    var response = RemoteResponse(re: envelope.id)
+                    response.mailCalendarV2Result = payload
+                    respond(response, to: id)
+                case let .failure(error):
+                    respond(.failure(envelope.id, error), to: id)
+                }
+            }
         case let .calendar(action, data):
             if request.isCommand {
                 var answer: Data?
@@ -2258,6 +2307,7 @@ public actor RemoteServer {
             response.hostAccounts = published?.hostAccounts == true ? true : nil
             response.hostCalendar = published?.hostCalendar == true ? true : nil
             response.hostMail = published?.hostMail == true ? true : nil
+            response.mailCalendarV2 = published?.mailCalendarV2 == true ? true : nil
             response.suggestionOptions = published?.suggestionOptions == true ? true : nil
             response.serverTime = RemoteJSON.milliseconds(now())
             respond(response, to: id)
