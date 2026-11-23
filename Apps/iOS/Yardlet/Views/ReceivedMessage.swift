@@ -137,9 +137,9 @@ private struct ReceivedText: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(Color(.secondarySystemBackground).opacity(0.5),
+        .background(YardletPalette.surfaceContainerLow,
                     in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color(.separator)))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.75))
     }
 }
 

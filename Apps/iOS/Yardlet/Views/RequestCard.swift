@@ -31,7 +31,11 @@ struct RequestCard: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .background(YardletPalette.surfaceContainer, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.75)
+        )
     }
 
     private enum Form { case questions, fields, plan, handoff, approval }
@@ -236,7 +240,11 @@ private struct CommandText: View {
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { wholeHeight = $0; measure() }
                 }
                 .padding(10)
-                .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .background(YardletPalette.surfaceContainerLow, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.5)
+                )
             if isCut && (isOpen || wholeHeight > 0) {
                 Button(isOpen ? "Show Less" : "Show Whole Command") { isOpen.toggle() }
                     .font(.footnote)
@@ -273,14 +281,18 @@ struct CardButtonStyle: ButtonStyle {
 
     private var foreground: Color {
         switch role {
-        case "primary": Color(.systemBackground)
-        case "destructive": .red
-        default: .primary
+        case "primary": YardletPalette.onPrimary
+        case "destructive": YardletPalette.error
+        default: YardletPalette.onSurface
         }
     }
 
     private var background: Color {
-        role == "primary" ? Color.primary : Color(.tertiarySystemFill)
+        switch role {
+        case "primary": YardletPalette.primary
+        case "destructive": YardletPalette.errorContainer
+        default: YardletPalette.surfaceContainerHighest
+        }
     }
 }
 
@@ -320,7 +332,11 @@ private struct QuestionForm: View {
                         }
                         .textFieldStyle(.plain)
                         .padding(10)
-                        .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .background(YardletPalette.surfaceContainerLow, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.5)
+                        )
                     }
                     if step.skippable {
                         Toggle("Skip this question", isOn: Binding(
@@ -358,7 +374,7 @@ private struct QuestionForm: View {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Image(systemName: step.multiple ? (isPicked ? "checkmark.square.fill" : "square")
                       : (isPicked ? "largecircle.fill.circle" : "circle"))
-                    .foregroundStyle(isPicked ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(isPicked ? YardletPalette.primary : YardletPalette.onSurfaceVariant)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(option.label).foregroundStyle(.primary)
                     if let description = option.description, !description.isEmpty {

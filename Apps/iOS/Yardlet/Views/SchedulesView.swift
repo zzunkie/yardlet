@@ -37,6 +37,8 @@ struct SchedulesView: View {
             }
         }
         .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(YardletPalette.background)
         .overlay {
             if !list.isLoaded && !list.failedToLoad && session.isConnected { ProgressView() }
         }
@@ -45,6 +47,9 @@ struct SchedulesView: View {
         .refreshable { await list.refresh() }
         .navigationTitle("Scheduled Tasks")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .toolbarBackground(YardletPalette.background, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
         // Read when the screen opens and on every connection; the Mac tells of changes only to a connection that asked.
         .onChange(of: session.isConnected, initial: true) { _, connected in
             if connected { list.read() }
@@ -73,13 +78,24 @@ struct SchedulesView: View {
                 // A one-off that ran or whose time passed is edited on the Mac, not resumed (§15.21).
                 .disabled(!session.isConnected || (!schedule.enabled && schedule.canResume != true))
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(YardletPalette.surfaceContainerLow,
+                    in: RoundedRectangle(cornerRadius: YardletMetrics.radiusRow, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: YardletMetrics.radiusRow, style: .continuous)
+                .strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.6)
+        )
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
+        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
         .swipeActions(edge: .leading) {
             Button {
                 list.runNow(schedule.id)
             } label: {
                 Label("Run Now", systemImage: "play.fill")
             }
-            .tint(.indigo)
+            .tint(YardletPalette.swipePrimary)
             .disabled(!session.isConnected || list.starting.contains(schedule.id))
         }
         .contextMenu {

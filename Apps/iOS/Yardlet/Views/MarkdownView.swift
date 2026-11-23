@@ -49,7 +49,7 @@ struct MarkdownView: View {
                 .padding(.top, 4)
         case let .quote(text):
             HStack(alignment: .top, spacing: 10) {
-                RoundedRectangle(cornerRadius: 1.5).fill(Color(.systemGray4)).frame(width: 3)
+                RoundedRectangle(cornerRadius: 1.5).fill(YardletPalette.outline).frame(width: 3)
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(Array(Self.splitParagraph(text).enumerated()), id: \.offset) { _, subBlock in
                         switch subBlock {
@@ -58,7 +58,7 @@ struct MarkdownView: View {
                         case let .paragraph(part):
                             ConversationText(part, opensFiles: opensFiles)
                                 .font(font)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(YardletPalette.onSurfaceVariant)
                                 .textSelection(.enabled)
                         default:
                             EmptyView()
@@ -72,10 +72,15 @@ struct MarkdownView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(code)
                     .font(.system(.footnote, design: .monospaced))
+                    .foregroundStyle(YardletPalette.onSurface)
                     .textSelection(.enabled)
                     .padding(12)
             }
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(YardletPalette.surfaceContainerLow, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.5)
+            )
         case .rule:
             Divider()
         }

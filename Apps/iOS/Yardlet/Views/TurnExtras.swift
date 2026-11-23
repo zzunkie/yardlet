@@ -16,7 +16,7 @@ struct ErrorView: View {
             Label(item.title ?? (isLimit ? String(localized: "Usage limit reached") : String(localized: "Something went wrong")),
                   systemImage: isLimit ? "gauge.with.dots.needle.100percent" : "exclamationmark.triangle.fill")
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(isLimit ? Color.orange : Color.red)
+                .foregroundStyle(isLimit ? YardletPalette.Status.limit : YardletPalette.error)
             if let message = item.message, !message.isEmpty {
                 Text(message).font(.subheadline).foregroundStyle(.secondary).textSelection(.enabled)
             }
@@ -107,6 +107,8 @@ private struct AccountChooser: View {
                     ProgressView().frame(maxWidth: .infinity)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(YardletPalette.background)
             .navigationTitle("Continue With")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -383,7 +385,11 @@ struct DiffView: View {
             .padding(.vertical, 8)
             .textSelection(.enabled)
         }
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(YardletPalette.surfaceContainerLow, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.5)
+        )
     }
 
     private func color(_ line: String) -> Color {

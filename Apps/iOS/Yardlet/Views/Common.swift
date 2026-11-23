@@ -1,31 +1,32 @@
 import SwiftUI
 import YardletRemote
 
-/// A task's mark, as the Mac's sidebar draws it (`indicator`, docs/REMOTE_PROTOCOL.md §4.1).
+/// A task's mark, as the Mac's sidebar draws it (`indicator`, docs/REMOTE_PROTOCOL.md §4.1),
+/// using Yardlet's restricted status indicator colors.
 struct TaskMark: View {
     let indicator: RemoteIndicator?
 
     var body: some View {
         Group {
             switch indicator {
-            case .awaitingApproval?: dot(.green)
-            case .needsInput?: dot(.orange)
-            case .unread?: dot(.blue)
-            case .running?: dot(Color(.systemGray3))
+            case .awaitingApproval?: StatusDot(color: YardletPalette.Status.approval)
+            case .needsInput?: StatusDot(color: YardletPalette.Status.question)
+            case .unread?: StatusDot(color: YardletPalette.Status.unread)
+            case .running?: StatusDot(color: YardletPalette.Status.running)
             case .failed?:
-                Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 11)).foregroundStyle(.red)
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(YardletPalette.Status.failed)
             case .usageLimit?:
-                Image(systemName: "gauge.with.dots.needle.100percent").font(.system(size: 11)).foregroundStyle(.orange)
+                Image(systemName: "gauge.with.dots.needle.100percent")
+                    .font(.system(size: 11))
+                    .foregroundStyle(YardletPalette.Status.limit)
             case nil:
                 Color.clear
             }
         }
         .frame(width: 12, height: 12)
         .accessibilityLabel(label)
-    }
-
-    private func dot(_ color: Color) -> some View {
-        Circle().fill(color).frame(width: 8, height: 8)
     }
 
     private var label: Text {
@@ -70,18 +71,26 @@ struct ConnectionBanner: View {
                 if case .connecting = session.connection {
                     ProgressView().controlSize(.small)
                 } else {
-                    Image(systemName: "wifi.exclamationmark").foregroundStyle(.secondary)
+                    Image(systemName: "wifi.exclamationmark")
+                        .foregroundStyle(YardletPalette.onSurfaceVariant)
                 }
-                Text(text).font(.footnote).foregroundStyle(.secondary)
+                Text(text)
+                    .font(.footnote)
+                    .foregroundStyle(YardletPalette.onSurfaceVariant)
                 Spacer(minLength: 0)
                 if case .unreachable = session.connection {
-                    Button("Retry") { session.reconnectNow() }.font(.footnote.weight(.semibold))
+                    Button("Retry") { session.reconnectNow() }
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(YardletPalette.onSurface)
                 }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.bar)
+            .background(YardletPalette.surfaceContainerLow)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(YardletPalette.outlineVariant).frame(height: 0.5)
+            }
         }
     }
 
@@ -108,18 +117,28 @@ struct CommandErrorBanner: View {
     var body: some View {
         if let message = session.commandError {
             HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
-                Text(message).font(.footnote)
+                Image(systemName: "exclamationmark.circle.fill")
+                    .foregroundStyle(YardletPalette.Status.limit)
+                Text(message)
+                    .font(.footnote)
+                    .foregroundStyle(YardletPalette.onSurface)
                 Spacer(minLength: 0)
                 Button {
                     session.commandError = nil
                 } label: {
-                    Image(systemName: "xmark").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                    Image(systemName: "xmark")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(YardletPalette.onSurfaceVariant)
                 }
                 .accessibilityLabel("Dismiss")
             }
             .padding(12)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .background(YardletPalette.surfaceContainerHigh,
+                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(YardletPalette.outlineVariant, lineWidth: 0.75)
+            )
             .padding(.horizontal, 12)
             .task(id: message) {
                 // Gone after a while; not when the banner is merely drawn again, which cancels this.
@@ -132,8 +151,10 @@ struct CommandErrorBanner: View {
 
 extension View {
     /// `.borderedProminent` on the app's monochrome accent, which is near white in dark mode, where the system's white
-    /// label would not read: the label takes the background's colour, as a card's primary answer does.
+    /// label would not read: the label takes `onPrimary`, as a card's primary answer does.
     func prominentButton() -> some View {
-        buttonStyle(.borderedProminent).foregroundStyle(Color(.systemBackground))
+        buttonStyle(.borderedProminent)
+            .tint(YardletPalette.primary)
+            .foregroundStyle(YardletPalette.onPrimary)
     }
 }

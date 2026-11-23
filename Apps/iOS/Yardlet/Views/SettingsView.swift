@@ -23,14 +23,19 @@ struct SettingsView: View {
                             model.select(host.id)
                             dismiss()
                         } label: {
-                            HStack {
+                            HStack(spacing: 10) {
+                                if host.id == model.session?.id && !model.isDemo, let session = model.session {
+                                    ConnectionStatusDot(connection: session.connection, size: 8)
+                                } else {
+                                    StatusDot(color: YardletPalette.outline, size: 8)
+                                }
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(host.name).foregroundStyle(.primary)
-                                    Text(status(host)).font(.footnote).foregroundStyle(.secondary)
+                                    Text(host.name).foregroundStyle(YardletPalette.onSurface)
+                                    Text(status(host)).font(.footnote).foregroundStyle(YardletPalette.onSurfaceVariant)
                                 }
                                 Spacer()
                                 if host.id == model.session?.id && !model.isDemo {
-                                    Image(systemName: "checkmark").foregroundStyle(.tint)
+                                    Image(systemName: "checkmark").foregroundStyle(YardletPalette.primary)
                                 }
                             }
                         }
@@ -82,6 +87,7 @@ struct SettingsView: View {
                 } footer: {
                     Text("To pair a Mac, open Yardlet › Settings… › Remote on it and choose Pair… beside Pair a device. Swipe a Mac to remove it; it forgets this phone too.")
                 }
+                .listRowBackground(YardletPalette.surfaceContainerLow)
 
                 if let name = model.account.name {
                     Section {
@@ -92,12 +98,14 @@ struct SettingsView: View {
                     } footer: {
                         Text("Lists the Macs signed in to this account, to pair one without a QR code. Signing out leaves your paired Macs connected.")
                     }
+                    .listRowBackground(YardletPalette.surfaceContainerLow)
                 } else if let error = model.account.error, !showsAccountMacs {
                     Section {
-                        Text(error).foregroundStyle(.red)
+                        Text(error).foregroundStyle(YardletPalette.error)
                     } header: {
                         Text("Yardlet Account")
                     }
+                    .listRowBackground(YardletPalette.surfaceContainerLow)
                 }
 
                 Section {
@@ -107,6 +115,7 @@ struct SettingsView: View {
                 } footer: {
                     Text("Asks for Face ID or your passcode each time you open Yardlet.")
                 }
+                .listRowBackground(YardletPalette.surfaceContainerLow)
 
                 Section {
                     switch notifications {
@@ -126,15 +135,21 @@ struct SettingsView: View {
                 } footer: {
                     Text("Approvals, questions and finished tasks, sent by your Mac while Yardlet is closed. Their content is encrypted for this phone; Apple and the relay can't read it.")
                 }
+                .listRowBackground(YardletPalette.surfaceContainerLow)
 
                 Section {
                     LabeledContent("Version", value: Self.version)
                     Link("Source Code", destination: URL(string: "https://github.com/zzunkie/yardlet")!)
                     Link("Privacy Policy", destination: URL(string: "https://yardlet.app/privacy.html")!)
                 }
+                .listRowBackground(YardletPalette.surfaceContainerLow)
             }
+            .scrollContentBackground(.hidden)
+            .background(YardletPalette.background)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(YardletPalette.background, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }

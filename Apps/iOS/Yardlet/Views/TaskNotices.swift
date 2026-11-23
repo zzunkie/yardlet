@@ -26,21 +26,21 @@ struct TaskNoticesView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     if let error = notices?.error?.nilIfEmpty {
                         Label {
-                            Text(error).lineLimit(6).textSelection(.enabled)
+                            Text(error).foregroundStyle(YardletPalette.onSurface).lineLimit(6).textSelection(.enabled)
                         } icon: {
-                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
+                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(YardletPalette.error)
                         }
                         .font(.subheadline)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 10)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .background(YardletPalette.errorContainer, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
                     if let path = notices?.missingFolder {
                         line(notices?.worktreeBranch.map {
                             String(localized: "This task's worktree \(path) was removed. Its branch \($0) is still there.")
                         } ?? String(localized: "This task's folder \(path) no longer exists."),
-                             symbol: "folder.badge.questionmark", tint: .red)
+                             symbol: "folder.badge.questionmark", tint: YardletPalette.error)
                     }
                     if notices?.resumedAfterRestart == true {
                         line(String(localized: "Yardlet restarted while this task was working, so it picked up where it left off."),
@@ -50,7 +50,7 @@ struct TaskNoticesView: View {
                         line(String(localized: "Reconnecting"), symbol: "wifi")
                     }
                     if let warning {
-                        line(warning, symbol: "gauge.with.dots.needle.67percent", tint: .orange)
+                        line(warning, symbol: "gauge.with.dots.needle.67percent", tint: YardletPalette.Status.limit)
                     }
                     if let account = notices?.accountName {
                         HStack(alignment: .firstTextBaseline) {
