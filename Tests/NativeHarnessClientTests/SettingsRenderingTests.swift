@@ -97,6 +97,11 @@ import XCTest
                 let fill = ParityTheme.accentButtonFill.resolve(in: buttonEnv)
                 let label = ParityTheme.onAccentButton.resolve(in: buttonEnv)
                 XCTAssertGreaterThanOrEqual(Self.contrast(fill, label), 4.49, "\(preset) \(mode) accent button")
+                let textColor = (buttonEnv.yardletColorTheme[mode].text?.color ?? .primary).resolve(in: buttonEnv)
+                let bubble = ParityTheme.userBubbleFill.resolve(in: buttonEnv)
+                let rail = ParityTheme.innerRail.resolve(in: buttonEnv)
+                XCTAssertGreaterThanOrEqual(Self.contrast(textColor, bubble), 4.49, "\(preset) \(mode) user bubble")
+                XCTAssertGreaterThanOrEqual(Self.contrast(textColor, rail), 4.49, "\(preset) \(mode) inner rail")
             }
         }
         XCTAssertEqual(ParityProjectPalette.index(for: "Yardlet"), ParityProjectPalette.index(for: "yardlet"))

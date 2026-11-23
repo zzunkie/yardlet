@@ -1,31 +1,21 @@
 import SwiftUI
 
-/// The mailbox in the sidebar, in the task list's place, under the same Home, Scheduled tasks and
-/// section words. It shows one of two things, as Mail on a narrow screen does: the accounts and their
-/// folders, or the list of the mailbox chosen there, every inbox together to begin with. Typing narrows
-/// the list at once; a pause asks each service's own search, so older mail is found without being
-/// kept here.
-struct MailSidebar: View {
+/// The mailbox's inner left rail inside the detail surface: the search field, and either the accounts
+/// and their folders or the chosen mailbox's message list. Typing narrows the list at once; a pause
+/// asks each service's own search so older mail is found without being kept here.
+struct MailListRail: View {
     let center: MailboxCenter
     @Bindable var window: MailWindowState
-    let accountMenu: SidebarAccountMenuContext
-    let onHome: () -> Void
-    var onShowSchedules: (() -> Void)?
-    let onSelectSection: (ShellSection) -> Void
     let onNewMessage: () -> Void
     let onRefresh: () -> Void
-    /// What the sidebar ends with in place of the account button: another Mac's window names its host there.
-    var footer: AnyView? = nil
     @Environment(\.yardletInterfaceScale) private var scale
 
     var body: some View {
         VStack(spacing: 0) {
-            SidebarPlacesHeader(onHome: onHome, onShowSchedules: onShowSchedules, section: .mail,
-                                onSelectSection: onSelectSection)
-
             SidebarSearchField(placeholder: L10n.string("Search mail"), text: $window.searchText)
-                .padding(.horizontal, SidebarMetrics.rowInset)
-                .padding(.top, 4)
+                .padding(.horizontal, SidebarMetrics.rowInset + 4)
+                .padding(.top, 10)
+                .padding(.bottom, 6)
                 .onSubmit { window.showsFolders = false; window.runSearch(in: center) }
                 .task(id: window.searchText) {
                     guard !window.searchText.trimmingCharacters(in: .whitespaces).isEmpty else {
@@ -39,7 +29,7 @@ struct MailSidebar: View {
                 }
 
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: SidebarMetrics.rowSpacing) {
+                LazyVStack(alignment: .leading, spacing: 2) {
                     if window.showsFolders {
                         MailFolderTree(center: center, window: window)
                     } else {
@@ -65,17 +55,12 @@ struct MailSidebar: View {
                         }
                     }
                 }
-                .padding(.horizontal, SidebarMetrics.rowInset)
-                .padding(.top, 10)
+                .padding(.horizontal, SidebarMetrics.rowInset + 2)
+                .padding(.top, 4)
                 .padding(.bottom, 12)
             }
-            Rectangle().fill(ParityTheme.separator).frame(height: 1)
-            Group {
-                if let footer { footer } else { SidebarAccountButton(context: accountMenu) }
-            }
-            .padding(.horizontal, 4).padding(.vertical, 5)
         }
-        .background(ParityTheme.sidebar)
+        .background(ParityTheme.innerRail)
     }
 
     /// Back to the folders, the mailbox listed and its account, and for spam or the trash what happens
@@ -332,23 +317,24 @@ struct MailThreadRow: View {
     var body: some View {
         let primarySender = thread.senders.first ?? MailAddress(name: MailText.senders(thread, me: me), address: thread.id.threadID)
         Button(action: onSelect) {
-            HStack(alignment: .top, spacing: 8 * scale) {
+            HStack(alignment: .top, spacing: 9 * scale) {
                 ZStack(alignment: .topLeading) {
-                    MailSenderInitial(address: primarySender, size: 24 * scale)
+                    MailSenderInitial(address: primarySender, size: 26 * scale)
                         .padding(.top, 2 * scale)
                     if thread.isUnread {
                         Circle()
                             .fill(ParityTheme.accent)
-                            .frame(width: 7 * scale, height: 7 * scale)
-                            .overlay(Circle().stroke(ParityTheme.sidebar, lineWidth: 1.5))
+                            .frame(width: 7.5 * scale, height: 7.5 * scale)
+                            .overlay(Circle().stroke(ParityTheme.innerRail, lineWidth: 1.5))
                             .offset(x: -2, y: 0)
                     }
                 }
-                .padding(.leading, 6 * scale)
-                VStack(alignment: .leading, spacing: 2 * scale) {
+                .padding(.leading, 8 * scale)
+                VStack(alignment: .leading, spacing: 2.5 * scale) {
                     HStack(spacing: 4) {
                         Text(MailText.senders(thread, me: me))
-                            .font(.system(size: 13 * scale, weight: thread.isUnread ? .semibold : .regular))
+                            .font(.system(size: 13 * scale, weight: thread.isUnread ? .semibold : .medium))
+                            .foregroundStyle(isSelected ? AnyShapeStyle(ParityTheme.accentText) : AnyShapeStyle(.primary))
                             .lineLimit(1)
                         Spacer(minLength: 4)
                         if thread.hasAttachments {
@@ -356,18 +342,19 @@ struct MailThreadRow: View {
                         }
                         Text(MailText.listTime(thread.date))
                             .font(.system(size: 11 * scale))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(thread.isUnread ? AnyShapeStyle(ParityTheme.accentText) : AnyShapeStyle(.secondary))
                             .monospacedDigit()
                     }
                     HStack(spacing: 4) {
                         if thread.hasDraft {
                             Text(L10n.string("Draft"))
+                                .font(.system(size: 12 * scale, weight: .semibold))
                                 .foregroundStyle(ThemeContrast.readableTint(.orange,
-                                    over: ThemeSurface.sidebar.resolve(in: environment), in: environment))
+                                    over: ThemeSurface.canvas.resolve(in: environment), in: environment))
                         }
                         Text(MailText.subject(thread.subject)).lineLimit(1)
                     }
-                    .font(.system(size: 12.5 * scale, weight: thread.isUnread ? .medium : .regular))
+                    .font(.system(size: 12.5 * scale, weight: thread.isUnread ? .semibold : .regular))
                     Text(account.map { "\($0.shortName) · \(thread.snippet)" } ?? thread.snippet)
                         .font(.system(size: 12 * scale))
                         .foregroundStyle(.secondary)
@@ -375,11 +362,22 @@ struct MailThreadRow: View {
                 }
             }
             .opacity(isSetAside ? 0.72 : 1)
-            .padding(.vertical, 7 * scale)
+            .padding(.vertical, 8 * scale)
             .padding(.trailing, SidebarMetrics.rowTrailingPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isSelected ? ParityTheme.selectedFill : (isHovering ? ParityTheme.hoverFill : .clear),
-                        in: SidebarMetrics.rowShape())
+            .background(isSelected ? AnyShapeStyle(ParityTheme.accentSoftFill)
+                        : (isHovering ? AnyShapeStyle(ParityTheme.hoverFill) : AnyShapeStyle(.clear)),
+                        in: RoundedRectangle(cornerRadius: ParityRadius.row, style: .continuous))
+            .overlay(alignment: .leading) {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                        .fill(ParityTheme.accent)
+                        .frame(width: 2.5)
+                        .padding(.vertical, 7 * scale)
+                        .padding(.leading, 1)
+                        .allowsHitTesting(false)
+                }
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

@@ -316,7 +316,8 @@ struct DeskHome<Switch: View, Bottom: View>: View {
     private func waitingZone(_ desk: Desk, detailLines: Int) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             DeskSectionTitle(title: L10n.string("Waiting on you (home)"),
-                             count: desk.waiting.isEmpty ? nil : "\(desk.waiting.count)")
+                             count: desk.waiting.isEmpty ? nil : "\(desk.waiting.count)",
+                             dotColor: desk.waiting.isEmpty ? nil : .orange)
             if desk.waiting.isEmpty {
                 HStack(spacing: 7) {
                     Image(systemName: "checkmark")
@@ -360,7 +361,8 @@ struct DeskHome<Switch: View, Bottom: View>: View {
     private func familiesZone(_ desk: Desk, showsMembers: Bool) -> some View {
         if !desk.families.isEmpty {
             VStack(alignment: .leading, spacing: 2) {
-                DeskSectionTitle(title: L10n.string("Running (home)"), count: "\(desk.running)")
+                DeskSectionTitle(title: L10n.string("Running (home)"), count: "\(desk.running)",
+                                 dotColor: ParityTheme.accent)
                 ForEach(desk.families) { family in
                     let entry = NewTaskHomeListKeyboard.Entry.row(.desk(.running), family.id.uuidString)
                     DeskFamilyView(
@@ -377,7 +379,8 @@ struct DeskHome<Switch: View, Bottom: View>: View {
     private func finishedZone(_ desk: Desk) -> some View {
         if !desk.finished.isEmpty {
             VStack(alignment: .leading, spacing: 2) {
-                DeskSectionTitle(title: L10n.string("Just finished"), count: "\(desk.finished.count)")
+                DeskSectionTitle(title: L10n.string("Just finished"), count: "\(desk.finished.count)",
+                                 dotColor: .green)
                 ForEach(shownFinished(desk)) { session in
                     let entry = NewTaskHomeListKeyboard.Entry.row(.desk(.finished), session.id.uuidString)
                     DeskFinishedRow(
@@ -612,18 +615,25 @@ private struct DeskPlaces: Equatable {
 struct DeskSectionTitle: View {
     let title: String
     var count: String?
+    var dotColor: Color? = nil
     @Environment(\.yardletInterfaceScale) private var interfaceScale
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
+        HStack(alignment: .center, spacing: 7) {
+            if let dotColor {
+                Circle()
+                    .fill(dotColor)
+                    .frame(width: 7 * interfaceScale, height: 7 * interfaceScale)
+                    .accessibilityHidden(true)
+            }
             Text(title).font(.system(size: 14 * interfaceScale, weight: .semibold))
             if let count {
-                Text(count).font(.system(size: 13 * interfaceScale).monospacedDigit()).foregroundStyle(.secondary)
+                Text(count).font(.system(size: 12.5 * interfaceScale, weight: .medium).monospacedDigit()).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 10)
-        .padding(.bottom, 4)
+        .padding(.bottom, 5)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)
     }
@@ -702,14 +712,14 @@ struct DeskWaitingRow: View, @MainActor Equatable {
         HStack(spacing: 7) {
             mark.accessibilityHidden(true)
             Text(label)
-                .font(.system(size: 12 * interfaceScale, weight: .medium))
+                .font(.system(size: 12 * interfaceScale, weight: .semibold))
                 .foregroundStyle(readableLabelColor)
                 .lineLimit(1)
                 .fixedSize()
             HarnessIdentityIcon(harness: item.session.harness, size: 14)
                 .accessibilityLabel(item.session.harness.displayName)
             Text(item.session.title)
-                .font(.system(size: 13 * interfaceScale, weight: .medium))
+                .font(.system(size: 13.5 * interfaceScale, weight: .medium))
                 .lineLimit(1)
                 .layoutPriority(1)
             if showsPlace {
@@ -770,12 +780,21 @@ struct DeskWaitingRow: View, @MainActor Equatable {
     private func detailText(_ detail: (text: String, isCommand: Bool)) -> some View {
         if detail.isCommand {
             Text(detail.text)
-                .font(.system(size: 12.5 * interfaceScale, design: .monospaced)).fontDesign(nil)
+                .font(.system(size: 11.5 * interfaceScale, design: .monospaced)).fontDesign(nil)
                 .lineLimit(1)
                 .truncationMode(.tail)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .strokeBorder(ParityTheme.separator, lineWidth: 1)
+                        .allowsHitTesting(false)
+                }
         } else {
             Text(detail.text)
-                .font(.system(size: 13 * interfaceScale))
+                .font(.system(size: 12.5 * interfaceScale))
+                .foregroundStyle(.secondary)
                 .lineLimit(detailLines)
                 .truncationMode(.tail)
                 .multilineTextAlignment(.leading)
@@ -992,8 +1011,10 @@ struct DeskTodayZone: View {
                              day: day, highlighted: highlightedID, onOpenEvent: onOpenEvent, onOpenSchedule: onOpenSchedule,
                              onShowRan: onToggleRan)
                     .equatable()
-                    .padding(.leading, 10)
-                    .padding(.top, 10)
+                    .padding(10)
+                    .background(ParityTheme.elevated, in: RoundedRectangle(cornerRadius: ParityRadius.surface, style: .continuous))
+                    .parityElevatedSurface(cornerRadius: ParityRadius.surface)
+                    .padding(.top, 8)
                     .padding(.bottom, 16)
             }
         } else if !items.isEmpty || ran > 0 || recurring > 0 || !mail.isEmpty {
@@ -1144,9 +1165,11 @@ struct DeskTodayZone: View {
             .accessibilityElement(children: .combine)
             if !compact {
                 ForEach(mail.prefix(DeskLines.mail)) { thread in
-                    HStack(spacing: 8) {
-                        Text(thread.senders.first.map { $0.name ?? $0.address } ?? "")
-                            .font(.system(size: 12 * interfaceScale, weight: .medium))
+                    let sender = thread.senders.first ?? MailAddress(name: nil, address: thread.id.threadID)
+                    HStack(spacing: 7) {
+                        MailSenderInitial(address: sender, size: 18 * interfaceScale)
+                        Text(sender.name ?? sender.address)
+                            .font(.system(size: 12 * interfaceScale, weight: .semibold))
                             .lineLimit(1)
                             .fixedSize()
                         Text(thread.subject)
@@ -1155,9 +1178,9 @@ struct DeskTodayZone: View {
                             .lineLimit(1)
                         Spacer(minLength: 0)
                     }
-                    .padding(.leading, 30)
+                    .padding(.leading, 22)
                     .padding(.trailing, 10)
-                    .frame(height: 24)
+                    .frame(height: 26)
                     .accessibilityElement(children: .combine)
                 }
             }

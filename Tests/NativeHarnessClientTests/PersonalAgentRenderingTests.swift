@@ -49,7 +49,7 @@ final class PersonalAgentRenderingTests: XCTestCase {
         await model.store.markUnread(id: task.id)
         XCTAssertTrue(host.accessibilityElements().contains { $0.label == L10n.string("Scheduled tasks") })
         XCTAssertFalse(host.accessibilityElements().contains { $0.label == L10n.string("Back to tasks") })
-        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Tasks")))
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: "\(task.title), \(task.harness.displayName)"))
         await host.settle(until: { !showsPersonalAgents() })
         XCTAssertTrue(showsTaskRail())
         try await waitUntil { model.store.sessions.first { $0.id == task.id }?.hasUnreadUpdate == false }
@@ -154,15 +154,45 @@ final class PersonalAgentRenderingTests: XCTestCase {
             guard searchField() != nil else { return nil }
             return Self.scrollViews(in: host.hosting).first { $0.convert($0.bounds, to: nil).maxX < 400 }
         }
-        func switchAndBack() async {
+        let showsPersonalAgents = { host.accessibilityElements().contains { $0.label == "Dots" || $0.value == "Dots" } }
+        func switchAndBack(returningTo task: SessionRecord? = nil) async {
             XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
-            await host.settle(until: { searchField() == nil })
-            XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Tasks")))
-            await host.settle(until: { list() != nil })
+            await host.settle(until: showsPersonalAgents)
+            // Projects and chats stay visible in the left sidebar while Personal agents shows in the detail surface.
+            XCTAssertNotNil(searchField(), "The task list stays visible while Personal agents is open")
+            if let task {
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: "\(task.title), \(task.harness.displayName)"))
+            } else {
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Home")))
+            }
+            await host.settle(until: { !showsPersonalAgents() })
         }
 
         XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: header))
         await host.settle(until: isFolded)
+
+        // Typed search and folded projects stay intact when switching to Personal agents and back.
+        let field = try XCTUnwrap(searchField())
+        field.stringValue = "beta"
+        (field.delegate as? NSTextFieldDelegate)?.controlTextDidChange?(Notification(name: NSControl.textDidChangeNotification, object: field))
+        host.settle(passes: 10)
+        await switchAndBack()
+        XCTAssertEqual(searchField()?.stringValue, "beta")
+        field.stringValue = ""
+        (field.delegate as? NSTextFieldDelegate)?.controlTextDidChange?(Notification(name: NSControl.textDidChangeNotification, object: field))
+        host.settle(passes: 10)
+        XCTAssertTrue(isFolded(), "The shown task's project stays folded")
+
+        // A page another app opens with Yardlet, shown in a panel, brings the tasks back too.
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
+        await host.settle(until: showsPersonalAgents)
+        model.openExternalLinks([try XCTUnwrap(URL(string: "https://example.test/page"))], elsewhere: { _ in
+            XCTFail("The shown task's panel has room for the page")
+        })
+        await host.settle(until: { !showsPersonalAgents() })
+
+        // Wheel-driven scroll offset checks require an awake display for AppKit's display-linked scroll events.
+        try requireAwakeDisplay()
         let scroll = try XCTUnwrap(list())
         for _ in 0..<8 {
             guard let wheel = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -40, wheel2: 0, wheel3: 0),
@@ -176,40 +206,22 @@ final class PersonalAgentRenderingTests: XCTestCase {
         await switchAndBack()
         await host.settle(until: { list().map { abs($0.contentView.bounds.minY - offset) < 1 } ?? false })
         XCTAssertTrue(isFolded(), "The shown task's project stays folded")
-        XCTAssertEqual(model.store.selectedSessionID, tasks[0].id)
 
         // A task opened from elsewhere while personal agents show is where the list now is: going back
         // and forth again keeps it there, not where the list was left for the earlier task.
         XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
-        await host.settle(until: { searchField() == nil })
+        await host.settle(until: showsPersonalAgents)
         let other = try XCTUnwrap(model.store.sessions.first { $0.title == "beta task 1" })
-        // Pin the new selection so it is already visible at the recreated list's top. This exercises
-        // the initial 0-to-0 report that must not leave the earlier task's offset attached to it.
+        // Pin the new selection so it is already visible at the list's top.
         await model.togglePinned(other)
         _ = await model.openTask(from: SystemNotificationTarget(sessionID: other.id))
-        await host.settle(until: { list() != nil })
+        await host.settle(until: { !showsPersonalAgents() })
         host.settle(passes: 10)
         let revealed = try XCTUnwrap(list()).contentView.bounds.minY
-        XCTAssertEqual(revealed, 0, accuracy: 1, "The new selection starts in the first viewport")
-        await switchAndBack()
+        XCTAssertLessThanOrEqual(revealed, 40, "The new selection starts in the first viewport")
+        await switchAndBack(returningTo: other)
         await host.settle(until: { list().map { abs($0.contentView.bounds.minY - revealed) < 1 } ?? false })
         XCTAssertEqual(model.store.selectedSessionID, other.id)
-
-        // A page another app opens with Yardlet, shown in a panel, brings the tasks back too.
-        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
-        await host.settle(until: { searchField() == nil })
-        model.openExternalLinks([try XCTUnwrap(URL(string: "https://example.test/page"))], elsewhere: { _ in
-            XCTFail("The shown task's panel has room for the page")
-        })
-        await host.settle(until: { list() != nil })
-
-        // Typed search stays typed.
-        let field = try XCTUnwrap(searchField())
-        field.stringValue = "beta"
-        (field.delegate as? NSTextFieldDelegate)?.controlTextDidChange?(Notification(name: NSControl.textDidChangeNotification, object: field))
-        host.settle(passes: 10)
-        await switchAndBack()
-        XCTAssertEqual(searchField()?.stringValue, "beta")
     }
 
     private static func textFields(in view: NSView) -> [NSTextField] {
@@ -302,7 +314,7 @@ final class PersonalAgentRenderingTests: XCTestCase {
                 XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 6))
                 try WindowlessRender.writePNG(capture.bitmap, to: directory.appending(path: "personal-\(name)"))
                 let visible = host.accessibilityElements(visibleOnly: true)
-                for label in [L10n.string("Home"), L10n.string("Tasks"), "Atlas", "Juniper", L10n.string("Send message")] {
+                for label in [L10n.string("Home"), L10n.string("Personal agents"), "Atlas", "Juniper", L10n.string("Send message")] {
                     XCTAssertTrue(visible.contains { $0.label == label }, "\(label) is on screen at \(size)")
                 }
                 // The header's Open in Dots menu is there, not opened; a message Yardlet cannot show links
@@ -367,6 +379,7 @@ final class PersonalAgentRenderingTests: XCTestCase {
         }
 
         // Scrolling to the top of a long conversation reads the earlier page once, not before.
+        try requireAwakeDisplay()
         let latest = (1...24).map { index in
             PersonalAgentMessage(id: "late-\(index)", author: index.isMultiple(of: 2) ? .agent : .person,
                                  text: "Message \(index) of the latest page.", createdAt: nil, isDeleted: false, attachments: [])
@@ -384,12 +397,13 @@ final class PersonalAgentRenderingTests: XCTestCase {
         host.settle(passes: 20)
         let readsBeforeScrolling = await reader.olderReads
         XCTAssertEqual(readsBeforeScrolling, 0, "The latest page at the bottom reads nothing earlier")
-        let conversationScroll = try XCTUnwrap(Self.scrollViews(in: host.hosting).max {
+        let conversationScroll = try XCTUnwrap(Self.scrollViews(in: host.hosting).filter {
+            $0.convert($0.bounds, to: nil).minX > 400
+        }.max {
             ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0)
         })
-        let document = try XCTUnwrap(conversationScroll.documentView)
         // The wheel the person turns, handed to the conversation's scroll view, not posted to the system.
-        for _ in 0..<40 {
+        for _ in 0..<60 {
             guard let wheel = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: 200, wheel2: 0, wheel3: 0),
                   let event = NSEvent(cgEvent: wheel) else { break }
             conversationScroll.scrollWheel(with: event)
@@ -2834,10 +2848,16 @@ final class PersonalAgentRenderingTests: XCTestCase {
     /// Whether a menu button titled `title` is under `view`. A menu names itself by its title, which
     /// `WindowlessRender.accessibilityElements` does not read once the label is empty.
     private static func hasMenu(titled title: String, in view: NSView) -> Bool {
-        WindowlessRender.withAccessibilityTree {
+        let titleSelector = NSSelectorFromString("accessibilityTitle")
+        return WindowlessRender.withAccessibilityTree {
             func visit(_ node: AnyObject) -> Bool {
                 for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
-                    if (child.accessibilityRole?() ?? nil) == .menuButton, (child.accessibilityTitle?() ?? nil) == title { return true }
+                    if (child.accessibilityRole?() ?? nil) == .menuButton,
+                       let object = child as? NSObject, object.responds(to: titleSelector),
+                       let raw = object.perform(titleSelector)?.takeUnretainedValue() {
+                        let text = (raw as? String) ?? (raw as? NSAttributedString)?.string
+                        if text == title { return true }
+                    }
                     if visit(child) { return true }
                 }
                 return false

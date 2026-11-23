@@ -6,34 +6,8 @@ import YardletRemote
 /// this Mac's browser, and the host's Settings for a sign-in. A device without the Mail and Calendar permission is told
 /// where to allow it.
 extension RemoteHostView {
-    /// The mailbox shows in place of the tasks while the host's is on and the person chose it.
+    /// The mailbox shows in the detail surface while the host's is on and the person chose it.
     var showsMail: Bool { shell.section == .mail && model.mailbox.isEnabled && !model.showsSchedules }
-
-    @ViewBuilder var mailSidebar: some View {
-        if model.needsMailCalendarPermission {
-            VStack(spacing: 0) {
-                SidebarPlacesHeader(onHome: showHome, onShowSchedules: model.offersSchedules ? { showHostSchedules() } : nil,
-                                    section: .mail, onSelectSection: { selectSection($0) })
-                // The detail says where to allow it.
-                Spacer(minLength: 0)
-                Rectangle().fill(ParityTheme.separator).frame(height: 1)
-                RemoteHostFooter(model: model, directory: directory).padding(.horizontal, 4).padding(.vertical, 5)
-            }
-            .background(ParityTheme.sidebar)
-        } else {
-            MailSidebar(center: model.mailbox, window: shell.mailWindow, accountMenu: SidebarAccountMenuContext(),
-                        onHome: showHome, onShowSchedules: model.offersSchedules ? { showHostSchedules() } : nil,
-                        onSelectSection: { selectSection($0) },
-                        onNewMessage: {
-                            let mailbox = model.mailbox
-                            guard let account = shell.mailWindow.mailbox.accountID.flatMap(mailbox.account)
-                                ?? mailbox.accounts.first else { return }
-                            shell.mailWindow.write(.new, account: account)
-                        },
-                        onRefresh: { Task { await model.mailbox.refresh() } },
-                        footer: AnyView(RemoteHostFooter(model: model, directory: directory)))
-        }
-    }
 
     @ViewBuilder var mailDetail: some View {
         if model.needsMailCalendarPermission {
@@ -44,9 +18,28 @@ extension RemoteHostView {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         } else {
-            MailWorkspace(center: model.mailbox, window: shell.mailWindow, actions: mailActions, panel: nil)
-                .environment(\.taskAreaHeader, TaskAreaHeader(height: ParityTheme.titleBarHeight, isTitleBar: true,
-                    content: AnyView(RemoteTitleBar(context: titleBarContext) { WindowDragRegion().frame(maxWidth: .infinity) })))
+            MailWorkspace(
+                center: model.mailbox, window: shell.mailWindow, actions: mailActions, panel: nil,
+                onNewMessage: {
+                    let mailbox = model.mailbox
+                    guard let account = shell.mailWindow.mailbox.accountID.flatMap(mailbox.account)
+                        ?? mailbox.accounts.first else { return }
+                    shell.mailWindow.write(.new, account: account)
+                },
+                onRefresh: { Task { await model.mailbox.refresh() } }
+            )
+            .environment(\.taskAreaHeader, TaskAreaHeader(height: ParityTheme.titleBarHeight, isTitleBar: true,
+                content: AnyView(VStack(spacing: 0) {
+                    RemoteTitleBar(context: titleBarContext) {
+                        HStack(spacing: 8) {
+                            Text(L10n.string("Mail"))
+                                .font(.system(size: 14, weight: .semibold))
+                                .lineLimit(1)
+                            WindowDragRegion().frame(maxWidth: .infinity)
+                        }
+                    }
+                    RemoteConnectionBanner(model: model, directory: directory)
+                })))
         }
     }
 

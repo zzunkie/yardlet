@@ -11,6 +11,9 @@ struct CalendarWorkspace: View {
     /// The window's title bar with the calendar's own row in it.
     let titleBar: (AnyView) -> AnyView
     let onOpenSchedule: (UUID) -> Void
+    var showsList = true
+    var onSelectEvent: ((CalendarEvent) -> Void)? = nil
+    var onOpenConnectors: (() -> Void)? = nil
     /// "Hand to an agent…": a chat whose draft names the event.
     let onAskAgent: (CalendarEvent, CalendarAccount) -> Void
     @Environment(\.yardletInterfaceScale) private var scale
@@ -23,7 +26,26 @@ struct CalendarWorkspace: View {
             ? CalendarScheduleSlot.slots(of: schedules, in: window.range, calendar: window.calendar) : []
         VStack(spacing: 0) {
             titleBar(AnyView(titleRow))
+            Rectangle().fill(ParityTheme.separator).frame(height: 1)
             HStack(spacing: 0) {
+                if showsList {
+                    CalendarListRail(
+                        center: center,
+                        window: window,
+                        schedules: schedules,
+                        onSelectEvent: { event in
+                            if let onSelectEvent {
+                                onSelectEvent(event)
+                            } else {
+                                if !window.range.contains(event.start) { window.show(event.start, as: window.span) }
+                                window.selection = event.id
+                            }
+                        },
+                        onOpenConnectors: { onOpenConnectors?() }
+                    )
+                    .frame(width: 224)
+                    Rectangle().fill(ParityTheme.separator).frame(width: 1)
+                }
                 CalendarDaysView(days: window.days, today: window.today, events: events, slots: slots,
                                  colors: colors, selection: window.selection, calendar: window.calendar,
                                  onSelect: { window.selection = window.selection == $0.id ? nil : $0.id },

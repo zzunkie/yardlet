@@ -10,12 +10,54 @@ struct MailWorkspace: View {
     let actions: MailActions
     /// The panel's tabs; nil once the mailbox is turned off, while the window leaves it.
     let panel: TaskWorkspaceState?
+    var showsList = true
+    var onNewMessage: (() -> Void)? = nil
+    var onRefresh: (() -> Void)? = nil
+    @Environment(\.taskAreaHeader) private var areaHeader
 
     var body: some View {
         if let panel {
-            MailBrowserLayout(panel: panel) { MailContent(center: center, window: window, actions: actions) }
+            MailBrowserLayout(panel: panel) { mailSplit }
+        } else if let areaHeader {
+            VStack(spacing: 0) {
+                areaHeader.content
+                Rectangle().fill(ParityTheme.separator).frame(height: 1)
+                mailSplit
+            }
         } else {
-            MailContent(center: center, window: window, actions: actions)
+            mailSplit
+        }
+    }
+
+    private var mailSplit: some View {
+        GeometryReader { geometry in
+            let hasTrailingPanel = panel?.panels.trailingSurfaceID != nil
+            let railWidth: CGFloat = {
+                if hasTrailingPanel && geometry.size.width < 740 { return 196 }
+                return geometry.size.width < 760 ? 220 : 264
+            }()
+            HStack(spacing: 0) {
+                if showsList {
+                    MailListRail(
+                        center: center,
+                        window: window,
+                        onNewMessage: {
+                            if let onNewMessage {
+                                onNewMessage()
+                            } else if let account = window.mailbox.accountID.flatMap(center.account) ?? center.accounts.first {
+                                window.write(.new, account: account)
+                            }
+                        },
+                        onRefresh: {
+                            if let onRefresh { onRefresh() } else { Task { await center.refresh() } }
+                        }
+                    )
+                    .frame(width: railWidth)
+                    Rectangle().fill(ParityTheme.separator).frame(width: 1)
+                }
+                MailContent(center: center, window: window, actions: actions)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
     }
 }

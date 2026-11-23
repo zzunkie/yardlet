@@ -181,11 +181,11 @@ private struct ConversationActivityDisclosure<Details: View, Controls: View>: Vi
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 9))
+        .background(ParityTheme.elevated, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay {
-            if isHistoryMatch {
-                RoundedRectangle(cornerRadius: 9).stroke(ParityTheme.accent.opacity(0.35))
-            }
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(isHistoryMatch ? ParityTheme.accent.opacity(0.45) : ParityTheme.separator, lineWidth: 1)
+                .allowsHitTesting(false)
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(title)

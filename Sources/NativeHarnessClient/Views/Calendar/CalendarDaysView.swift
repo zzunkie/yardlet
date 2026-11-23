@@ -17,10 +17,11 @@ struct CalendarDaysView: View {
     /// A day's line of recurring runs was chosen.
     let onShowDay: (Date) -> Void
     @Environment(\.yardletInterfaceScale) private var scale
+    @Environment(\.colorScheme) private var colorScheme
     /// The hour at the top of the hours: the morning's work hours at first, or an earlier event's.
     @State private var topHour: Int?
 
-    static let gutter: CGFloat = 52
+    static let gutter: CGFloat = 60
     /// Room above each hour's line for its name, so the hour scrolled to the top shows it.
     static let hourNameRoom: CGFloat = 10
     static let hourHeight: CGFloat = 46
@@ -47,14 +48,20 @@ struct CalendarDaysView: View {
             ForEach(days, id: \.self) { day in
                 let isToday = calendar.isDate(day, inSameDayAs: today)
                 let isWeekend = calendar.isDateInWeekend(day)
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                HStack(alignment: .center, spacing: 5) {
                     Text(CalendarText.weekday(day, calendar: calendar))
-                        .font(.system(size: 12 * scale))
+                        .font(.system(size: 12 * scale, weight: isToday ? .semibold : .medium))
                         .foregroundStyle(isToday ? AnyShapeStyle(ParityTheme.accentText) : AnyShapeStyle(.secondary))
                     Text(String(calendar.component(.day, from: day)))
-                        .font(.system(size: 17 * scale, weight: isToday ? .semibold : .regular).monospacedDigit())
-                        .foregroundStyle(isToday ? AnyShapeStyle(ParityTheme.accentText)
+                        .font(.system(size: isToday ? 13.5 * scale : 15 * scale, weight: isToday ? .semibold : .medium).monospacedDigit())
+                        .foregroundStyle(isToday ? AnyShapeStyle(ParityTheme.onAccentButton)
                                          : isWeekend ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+                        .frame(minWidth: isToday ? 24 * scale : 0, minHeight: isToday ? 24 * scale : 0)
+                        .background {
+                            if isToday {
+                                Circle().fill(ParityTheme.accentButtonFill)
+                            }
+                        }
                 }
                 .lineLimit(1)
                 .frame(maxWidth: .infinity)
@@ -151,14 +158,31 @@ struct CalendarDaysView: View {
         let perHour = Self.hourHeight * scale
         let columnWidth = max(0, (width - Self.gutter) / CGFloat(max(days.count, 1)))
         return ZStack(alignment: .topLeading) {
+            ForEach(Array(days.enumerated()), id: \.element) { index, day in
+                let isToday = calendar.isDate(day, inSameDayAs: today)
+                let isWeekend = calendar.isDateInWeekend(day)
+                if isToday {
+                    Rectangle()
+                        .fill(ParityTheme.accent.opacity(colorScheme == .dark ? 0.065 : 0.04))
+                        .frame(width: columnWidth, height: perHour * 24)
+                        .offset(x: Self.gutter + CGFloat(index) * columnWidth)
+                        .allowsHitTesting(false)
+                } else if isWeekend {
+                    Rectangle()
+                        .fill(ParityTheme.subtleFill)
+                        .frame(width: columnWidth, height: perHour * 24)
+                        .offset(x: Self.gutter + CGFloat(index) * columnWidth)
+                        .allowsHitTesting(false)
+                }
+            }
             ForEach(0..<24, id: \.self) { hour in
                 Rectangle().fill(ParityTheme.separator).frame(height: 1)
                     .padding(.leading, Self.gutter)
                     .offset(y: CGFloat(hour) * perHour)
                 if hour > 0 {
                     Text(CalendarText.hour(calendar.date(bySettingHour: hour, minute: 0, second: 0, of: today) ?? today, calendar: calendar))
-                        .font(.system(size: 10.5 * scale).monospacedDigit())
-                        .foregroundStyle(.tertiary)
+                        .font(.system(size: 11 * scale).monospacedDigit())
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .frame(width: Self.gutter - 8, alignment: .trailing)
                         .offset(y: CGFloat(hour) * perHour - 7 * scale)
@@ -254,23 +278,24 @@ struct CalendarEventBlock: View {
     let calendar: Calendar
     let action: () -> Void
     @Environment(\.yardletInterfaceScale) private var scale
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 1.5) {
                 Text(CalendarText.title(event))
-                    .font(.system(size: 11.5 * scale, weight: .medium))
+                    .font(.system(size: 12 * scale, weight: .semibold))
                     .lineLimit(showsTimes ? 2 : 1)
                 if showsTimes {
                     Text(CalendarText.time(event.start, calendar: calendar))
-                        .font(.system(size: 10.5 * scale).monospacedDigit())
+                        .font(.system(size: 11 * scale).monospacedDigit())
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
             }
-            .padding(.leading, 7)
-            .padding(.trailing, 3)
-            .padding(.top, 2)
+            .padding(.leading, 8)
+            .padding(.trailing, 4)
+            .padding(.top, 3)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background { background }
             .clipShape(RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous))
@@ -285,12 +310,17 @@ struct CalendarEventBlock: View {
 
     @ViewBuilder private var background: some View {
         let shape = RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous)
+        let isDark = colorScheme == .dark
         if event.awaitsAnswer {
-            shape.fill(color.opacity(isSelected ? 0.24 : 0.08))
-                .overlay(shape.strokeBorder(color, style: StrokeStyle(lineWidth: isSelected ? 2 : 1, dash: isSelected ? [] : [4, 2])))
+            ZStack {
+                shape.fill(color.opacity(isSelected ? (isDark ? 0.30 : 0.22) : (isDark ? 0.14 : 0.08)))
+                CalendarDiagonalStripes(spacing: 8)
+                    .stroke(color.opacity(isDark ? 0.24 : 0.16), lineWidth: 1)
+            }
+            .overlay(shape.strokeBorder(color, style: StrokeStyle(lineWidth: isSelected ? 2 : 1.25, dash: isSelected ? [] : [4, 2])))
         } else {
-            shape.fill(color.opacity(isSelected ? 0.36 : 0.22))
-                .overlay(shape.strokeBorder(color.opacity(isSelected ? 0.55 : 0.28), lineWidth: 0.5))
+            shape.fill(color.opacity(isSelected ? (isDark ? 0.40 : 0.32) : (isDark ? 0.26 : 0.17)))
+                .overlay(shape.strokeBorder(color.opacity(isSelected ? 0.65 : 0.30), lineWidth: 0.5))
                 .overlay(alignment: .leading) { Rectangle().fill(color).frame(width: 3) }
         }
     }
@@ -303,19 +333,21 @@ struct CalendarAllDayBlock: View {
     let isSelected: Bool
     let action: () -> Void
     @Environment(\.yardletInterfaceScale) private var scale
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous)
+        let isDark = colorScheme == .dark
         Button(action: action) {
             Text(CalendarText.title(event))
-                .font(.system(size: 11 * scale, weight: .medium))
+                .font(.system(size: 11.5 * scale, weight: .semibold))
                 .lineLimit(1)
                 .padding(.leading, 8)
                 .padding(.trailing, 6)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .frame(height: 20 * scale)
                 .background {
-                    shape.fill(color.opacity(isSelected ? 0.36 : 0.22))
+                    shape.fill(color.opacity(isSelected ? (isDark ? 0.40 : 0.32) : (isDark ? 0.26 : 0.18)))
                         .overlay(alignment: .leading) { Rectangle().fill(color).frame(width: 3) }
                 }
                 .clipShape(shape)
@@ -334,8 +366,8 @@ struct CalendarAllDayBlock: View {
     }
 }
 
-/// Subtle diagonal hatch pattern distinguishing scheduled agent runs from calendar meetings.
-private struct CalendarDiagonalStripes: Shape {
+/// Subtle diagonal hatch pattern distinguishing scheduled agent runs and pending invitations.
+struct CalendarDiagonalStripes: Shape {
     var spacing: CGFloat = 7
 
     func path(in rect: CGRect) -> Path {

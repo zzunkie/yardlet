@@ -233,8 +233,11 @@ struct TaskSidebar: View {
     let onNewTask: () -> Void
     /// Opens the scheduled tasks in the task list's place.
     var onShowSchedules: (() -> Void)? = nil
-    /// Opens the personal agents in the task list's place.
-    /// Switches the list to personal agents or the mailbox; nil leaves the section words out.
+    /// Which top-level section the window currently shows in its detail area.
+    var section: ShellSection = .tasks
+    /// Whether Home is the active destination in the Tasks section.
+    var isHomeSelected = false
+    /// Switches the detail surface to Mail, Calendar, or Personal agents; nil leaves those rows out.
     var onSelectSection: ((ShellSection) -> Void)? = nil
     let onActivate: (WindowItem) -> Void
     let onNewTaskInProject: (URL) -> Void
@@ -320,8 +323,8 @@ struct TaskSidebar: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            SidebarPlacesHeader(onHome: onNewTask, onShowSchedules: onShowSchedules, section: .tasks,
-                                onSelectSection: onSelectSection)
+            SidebarPlacesHeader(onHome: onNewTask, onShowSchedules: onShowSchedules, section: section,
+                                isHomeSelected: isHomeSelected, onSelectSection: onSelectSection)
 
             HStack(spacing: 4) {
                 SidebarSearchField(placeholder: L10n.string("Search tasks"), text: $searchText)
@@ -332,7 +335,7 @@ struct TaskSidebar: View {
                 }
             }
             .padding(.horizontal, SidebarMetrics.rowInset)
-            .padding(.top, onSelectSection == nil ? 8 : 4)
+            .padding(.top, 8)
             .accessibilitySortPriority(ParityAccessibility.sidebarPrimary - 1)
 
             ScrollViewReader { proxy in
@@ -721,7 +724,7 @@ struct TaskSidebar: View {
                         : listed?.projectName,
                     familyPlace: row.familyPlace,
                     familyToggle: familyToggle(for: row),
-                    isSelected: selection == row.id,
+                    isSelected: section == .tasks && selection == row.id,
                     onSelect: { pick(row.id) },
                     onTogglePinned: onTogglePinned,
                     onArchive: onArchive,
@@ -746,7 +749,7 @@ struct TaskSidebar: View {
                     split: split,
                     members: members,
                     title: title ?? listed?.title ?? group.map { SidebarProjection.rowTitle(for: row, under: $0) } ?? row.title,
-                    isSelected: selection == row.id,
+                    isSelected: section == .tasks && selection == row.id,
                     onSelect: { pick(row.id) },
                     actions: splitActions
                 )
@@ -1072,9 +1075,13 @@ private struct ProjectTaskHeader: View {
     var body: some View {
         ZStack(alignment: .trailing) {
             Button(action: onToggle) {
-                HStack(spacing: 4) {
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(ParityProjectPalette.color(for: displayName))
+                        .frame(width: 6 * interfaceScale, height: 6 * interfaceScale)
+                        .accessibilityHidden(true)
                     Text(displayName)
-                        .font(.system(size: SidebarMetrics.projectHeaderFontSize * interfaceScale))
+                        .font(.system(size: SidebarMetrics.projectHeaderFontSize * interfaceScale, weight: .semibold))
                         .foregroundStyle(isHovering ? .primary : .secondary)
                         .lineLimit(1)
                     // The Claude app's caret after the name: shown while collapsed, and on hover
@@ -1090,6 +1097,7 @@ private struct ProjectTaskHeader: View {
                 .padding(.leading, SidebarMetrics.projectHeaderLeading - SidebarMetrics.rowInset)
                 .padding(.trailing, isHovering ? 58 : SidebarMetrics.rowTrailingPadding)
                 .frame(height: SidebarMetrics.projectHeaderHeight * interfaceScale)
+                .background(isHovering ? ParityTheme.hoverFill : .clear, in: SidebarMetrics.rowShape())
                 .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
@@ -1560,146 +1568,177 @@ struct SidebarRowLeading<Mark: View>: View {
     nonisolated static func guideX(level: Int) -> CGFloat { indent(nestingDepth: level - 1) + SidebarMetrics.gutterWidth / 2 }
 }
 
-/// A row that acts above or below a list of tasks (Home, Scheduled tasks, Back, Import): its
-/// symbol in the rows' gutter and its words where task titles start, in the rows' size, inset from
-/// the sidebar's edges as the rows are, so every row's symbol and words share one column
-/// (2026-10-22 alignment audit). New task keeps its fill.
-struct SidebarActionRow: View {
+/// A row that acts above or below a list of tasks (Home, Scheduled tasks, Mail, Calendar, Personal
+/// agents, Back, Import): its symbol in the rows' gutter and its words where task titles start, in
+/// the rows' size, inset from the sidebar's edges as the rows are, so every row's symbol and words
+/// share one column.
+struct SidebarActionRow<Trailing: View>: View {
     let systemName: String
     let title: String
     var symbolWeight: Font.Weight = .medium
     var titleWeight: Font.Weight = .regular
     var height: CGFloat = SidebarMetrics.rowHeight
     var isFilled = false
+    var isSelected = false
+    let trailing: Trailing
+    @State private var isHovering = false
     @Environment(\.yardletInterfaceScale) private var interfaceScale
+
+    init(systemName: String, title: String, symbolWeight: Font.Weight = .medium,
+         titleWeight: Font.Weight = .regular, height: CGFloat = SidebarMetrics.rowHeight,
+         isFilled: Bool = false, isSelected: Bool = false,
+         @ViewBuilder trailing: () -> Trailing) {
+        self.systemName = systemName
+        self.title = title
+        self.symbolWeight = symbolWeight
+        self.titleWeight = titleWeight
+        self.height = height
+        self.isFilled = isFilled
+        self.isSelected = isSelected
+        self.trailing = trailing()
+    }
 
     var body: some View {
         HStack(spacing: 0) {
             SidebarRowLeading {
                 Image(systemName: systemName)
-                    .font(.system(size: 12 * interfaceScale, weight: symbolWeight))
+                    .font(.system(size: 12 * interfaceScale, weight: isSelected ? .semibold : symbolWeight))
+                    .foregroundStyle(isSelected ? AnyShapeStyle(ParityTheme.accentText) : AnyShapeStyle(.secondary))
             }
             Text(title)
-                .font(.system(size: 13 * interfaceScale, weight: titleWeight))
+                .font(.system(size: 13 * interfaceScale, weight: isSelected ? .semibold : titleWeight))
+                .foregroundStyle(isSelected ? AnyShapeStyle(ParityTheme.accentText) : AnyShapeStyle(.primary))
                 .lineLimit(1)
             Spacer(minLength: SidebarMetrics.rowTrailingPadding)
+            trailing
+                .padding(.trailing, SidebarMetrics.rowTrailingPadding)
         }
         .frame(height: height * interfaceScale)
         .contentShape(Rectangle())
-        .background(isFilled ? ParityTheme.hoverFill : .clear, in: SidebarMetrics.rowShape())
+        .background(backgroundFill, in: SidebarMetrics.rowShape())
+        .overlay {
+            if isSelected {
+                SidebarMetrics.rowShape()
+                    .strokeBorder(ParityTheme.accent.opacity(0.18), lineWidth: 0.5)
+                    .allowsHitTesting(false)
+            }
+        }
+        .onHover { isHovering = $0 }
+    }
+
+    private var backgroundFill: AnyShapeStyle {
+        if isSelected { return AnyShapeStyle(ParityTheme.accentSoftFill) }
+        if isFilled || isHovering { return AnyShapeStyle(ParityTheme.hoverFill) }
+        return AnyShapeStyle(.clear)
     }
 }
 
-/// The top of the sidebar, the same over either list: Home, Scheduled tasks and, when personal agents
-/// are on, two words that switch the list below between the tasks and the personal agents. Only the
-/// list changes; Home, Scheduled tasks and the account button stay where they are.
+extension SidebarActionRow where Trailing == EmptyView {
+    init(systemName: String, title: String, symbolWeight: Font.Weight = .medium,
+         titleWeight: Font.Weight = .regular, height: CGFloat = SidebarMetrics.rowHeight,
+         isFilled: Bool = false, isSelected: Bool = false) {
+        self.init(systemName: systemName, title: title, symbolWeight: symbolWeight,
+                  titleWeight: titleWeight, height: height, isFilled: isFilled,
+                  isSelected: isSelected) { EmptyView() }
+    }
+}
+
+/// The top navigation of the sidebar: Home, Scheduled tasks, and—when enabled or offered—Mail,
+/// Calendar, and Personal agents as compact vertical rows. Projects and Chats stay visible below
+/// regardless of which place is active.
 struct SidebarPlacesHeader: View {
     let onHome: () -> Void
     var onShowSchedules: (() -> Void)?
-    /// The list shown below.
+    /// Which section the detail surface currently shows.
     var section: ShellSection = .tasks
-    /// Switches the list; nil leaves the words out.
+    /// Whether Home itself is active in the Tasks section.
+    var isHomeSelected = false
+    /// Switches the detail surface; nil leaves Mail, Calendar, and Personal agents out.
     var onSelectSection: ((ShellSection) -> Void)?
 
-    var body: some View {
-        // The new task's page is the home: its projects, the tasks that wait and the composer.
-        // ⌘N and the title bar's button keep the name New task.
-        Button(action: onHome) {
-            SidebarActionRow(systemName: "house", title: L10n.string("Home"), symbolWeight: .bold,
-                             titleWeight: .medium, height: 32, isFilled: true)
-        }
-        .buttonStyle(.borderless)
-        .parityPointer()
-        .padding(.horizontal, SidebarMetrics.rowInset)
-        .accessibilitySortPriority(ParityAccessibility.sidebarPrimary)
-
-        if let onShowSchedules {
-            Button(action: onShowSchedules) {
-                SidebarActionRow(systemName: "clock", title: L10n.string("Scheduled tasks"))
-            }
-            .buttonStyle(.borderless)
-            .parityPointer()
-            .padding(.horizontal, SidebarMetrics.rowInset)
-            .padding(.top, 2)
-            .accessibilitySortPriority(ParityAccessibility.sidebarPrimary - 0.5)
-        }
-
-        if let onSelectSection {
-            SidebarSectionTabs(selection: section, onSelect: onSelectSection)
-                .padding(.horizontal, SidebarMetrics.projectHeaderLeading)
-                .padding(.top, 8)
-                .accessibilitySortPriority(ParityAccessibility.sidebarPrimary - 0.75)
-        }
-    }
-}
-
-/// "Tasks | Personal agents | Mail | Calendar": plain words, the shown list's in the primary color over a short
-/// rule. Mail is there only while the mailbox is on, and Calendar while the calendar is.
-struct SidebarSectionTabs: View {
-    let selection: ShellSection
-    let onSelect: (ShellSection) -> Void
-    @Environment(\.yardletInterfaceScale) private var interfaceScale
     @Environment(\.personalAgentWatch) private var personalAgentWatch
     @Environment(\.mailbox) private var mailbox
     @Environment(\.calendarCenter) private var calendar
     @Environment(\.offersPersonalAgents) private var offersPersonalAgents
 
-    private var sections: [ShellSection] {
-        ShellSection.allCases.filter { section in
-            switch section {
-            case .tasks: true
-            case .personalAgents: offersPersonalAgents || selection == .personalAgents
-            case .mail: mailbox?.isEnabled == true || selection == .mail
-            case .calendar: calendar?.isEnabled == true || selection == .calendar
-            }
-        }
-    }
-
-
-    /// The word shown. Personal agents is "Agents" in English, so all four fit the narrowest sidebar; its
-    /// accessibility label keeps the whole name (`accessibilityTitle`).
-    private func title(_ section: ShellSection) -> String {
-        switch section {
-        case .tasks: L10n.string("Tasks")
-        case .personalAgents: L10n.string("Personal agents word")
-        case .mail: L10n.string("Mail")
-        case .calendar: L10n.string("Calendar")
-        }
-    }
+    private var showsMail: Bool { mailbox?.isEnabled == true || section == .mail }
+    private var showsCalendar: Bool { calendar?.isEnabled == true || section == .calendar }
+    private var showsPersonalAgents: Bool { offersPersonalAgents || section == .personalAgents }
 
     var body: some View {
-        HStack(spacing: 14 * interfaceScale) {
-            ForEach(sections) { section in
-                let isSelected = section == selection
-                Button { if !isSelected { onSelect(section) } } label: {
-                    Text(title(section))
-                        .font(.system(size: 12 * interfaceScale, weight: isSelected ? .semibold : .regular))
-                        .foregroundStyle(isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-                        .lineLimit(1)
-                        .padding(.vertical, 5 * interfaceScale)
-                        .overlay(alignment: .bottom) {
-                            if isSelected { Capsule().fill(.primary).frame(height: 1.5) }
-                        }
-                        // A dot has a message not seen yet: a mark after the word, as a task's row has.
-                        .overlay(alignment: .topTrailing) {
-                            if section == .personalAgents, let personalAgentWatch {
-                                PersonalAgentUnreadMark(watch: personalAgentWatch).offset(x: 7 * interfaceScale, y: 4 * interfaceScale)
-                            } else if section == .mail, let mailbox {
-                                MailUnseenMark(mailbox: mailbox).offset(x: 7 * interfaceScale, y: 4 * interfaceScale)
-                            }
-                        }
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .parityPointer()
-                .accessibilityLabel(section == .personalAgents ? L10n.string("Personal agents") : title(section))
-                .accessibilityAddTraits(isSelected ? .isSelected : [])
-                .accessibilityValue((section == .personalAgents && personalAgentWatch?.hasUnread == true)
-                                    || (section == .mail && mailbox?.hasUnseenMail == true)
-                                    ? L10n.string("Unread") : "")
+        VStack(spacing: 1.5) {
+            // The new task's page is the home: its projects, the tasks that wait and the composer.
+            // ⌘N and the title bar's button keep the name New task.
+            Button(action: onHome) {
+                SidebarActionRow(systemName: isHomeSelected ? "house.fill" : "house",
+                                 title: L10n.string("Home"),
+                                 symbolWeight: .semibold, titleWeight: .medium, height: 28,
+                                 isSelected: isHomeSelected)
             }
-            Spacer(minLength: 0)
+            .buttonStyle(.borderless)
+            .parityPointer()
+            .accessibilityLabel(L10n.string("Home"))
+            .accessibilityAddTraits(isHomeSelected ? .isSelected : [])
+            .accessibilitySortPriority(ParityAccessibility.sidebarPrimary)
+
+            if let onShowSchedules {
+                Button(action: onShowSchedules) {
+                    SidebarActionRow(systemName: "clock", title: L10n.string("Scheduled tasks"), height: 27)
+                }
+                .buttonStyle(.borderless)
+                .parityPointer()
+                .accessibilityLabel(L10n.string("Scheduled tasks"))
+                .accessibilitySortPriority(ParityAccessibility.sidebarPrimary - 0.5)
+            }
+
+            if let onSelectSection {
+                if showsMail {
+                    let isSelected = section == .mail
+                    Button { if !isSelected { onSelectSection(.mail) } } label: {
+                        SidebarActionRow(systemName: isSelected ? "envelope.fill" : "envelope",
+                                         title: L10n.string("Mail"), height: 27, isSelected: isSelected) {
+                            if let mailbox { MailUnseenMark(mailbox: mailbox) }
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .parityPointer()
+                    .accessibilityLabel(L10n.string("Mail"))
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
+                    .accessibilityValue(mailbox?.hasUnseenMail == true ? L10n.string("Unread") : "")
+                    .accessibilitySortPriority(ParityAccessibility.sidebarPrimary - 0.65)
+                }
+
+                if showsCalendar {
+                    let isSelected = section == .calendar
+                    Button { if !isSelected { onSelectSection(.calendar) } } label: {
+                        SidebarActionRow(systemName: "calendar",
+                                         title: L10n.string("Calendar"), height: 27, isSelected: isSelected)
+                    }
+                    .buttonStyle(.borderless)
+                    .parityPointer()
+                    .accessibilityLabel(L10n.string("Calendar"))
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
+                    .accessibilitySortPriority(ParityAccessibility.sidebarPrimary - 0.70)
+                }
+
+                if showsPersonalAgents {
+                    let isSelected = section == .personalAgents
+                    Button { if !isSelected { onSelectSection(.personalAgents) } } label: {
+                        SidebarActionRow(systemName: "circle.dotted",
+                                         title: L10n.string("Personal agents"), height: 27, isSelected: isSelected) {
+                            if let personalAgentWatch { PersonalAgentUnreadMark(watch: personalAgentWatch) }
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .parityPointer()
+                    .accessibilityLabel(L10n.string("Personal agents"))
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
+                    .accessibilityValue(personalAgentWatch?.hasUnread == true ? L10n.string("Unread") : "")
+                    .accessibilitySortPriority(ParityAccessibility.sidebarPrimary - 0.75)
+                }
+            }
         }
+        .padding(.horizontal, SidebarMetrics.rowInset)
     }
 }
 
@@ -1714,7 +1753,7 @@ struct SidebarSearchField: View {
             SidebarRowLeading {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 12 * interfaceScale, weight: .medium))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
             }
             TextField(placeholder, text: $text)
                 .textFieldStyle(.plain)
@@ -1733,7 +1772,12 @@ struct SidebarSearchField: View {
         }
         .padding(.trailing, SidebarMetrics.rowTrailingPadding)
         .frame(height: SidebarMetrics.rowHeight * interfaceScale)
-        .background(ParityTheme.subtleFill, in: SidebarMetrics.rowShape())
+        .background(ParityTheme.elevated.opacity(0.65), in: SidebarMetrics.rowShape())
+        .overlay {
+            SidebarMetrics.rowShape()
+                .strokeBorder(ParityTheme.separator, lineWidth: 1)
+                .allowsHitTesting(false)
+        }
     }
 }
 
@@ -2170,6 +2214,13 @@ private struct TaskRow: View {
             isSelected ? ParityTheme.selectedFill : (isHovering ? ParityTheme.hoverFill : .clear),
             in: SidebarMetrics.rowShape()
         )
+        .overlay {
+            if isSelected {
+                SidebarMetrics.rowShape()
+                    .strokeBorder(ParityTheme.separator, lineWidth: 0.5)
+                    .allowsHitTesting(false)
+            }
+        }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(SidebarListOrigin.contentSpace)) } action: { frame in
 #if DEBUG
             ViewBodyCensus.note(.sidebarRowPlaced)

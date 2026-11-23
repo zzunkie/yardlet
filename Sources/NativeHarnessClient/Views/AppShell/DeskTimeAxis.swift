@@ -21,6 +21,7 @@ struct DeskTimeAxis: View, @MainActor Equatable {
     /// A folded block of runs that ran was chosen.
     var onShowRan: () -> Void = {}
     @Environment(\.yardletInterfaceScale) private var scale
+    @Environment(\.colorScheme) private var colorScheme
     /// The hour the axis opened on, which it keeps while it shows.
     @State private var openedOn: Int?
     /// The hour at the axis's top: the one it opened on, then where the person scrolled. A column that grows or
@@ -125,8 +126,8 @@ struct DeskTimeAxis: View, @MainActor Equatable {
                     .offset(x: Self.labelWidth, y: lineY)
                 if hour < hours.upperBound {
                     Text(String(format: "%02d:00", hour))
-                        .font(.system(size: 10.5 * scale).monospacedDigit())
-                        .foregroundStyle(.tertiary)
+                        .font(.system(size: 11 * scale).monospacedDigit())
+                        .foregroundStyle(.secondary)
                         .offset(y: lineY - 6)
                         .accessibilityHidden(true)
                 }
@@ -160,37 +161,50 @@ struct DeskTimeAxis: View, @MainActor Equatable {
         switch item {
         case let .line(.event(event)):
             let color = colors[event.id.calendar] ?? ParityTheme.accent
+            let isDark = colorScheme == .dark
+            let shape = RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous)
             Button { onOpenEvent(event) } label: {
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: 1.5) {
                     Text(CalendarText.title(event))
-                        .font(.system(size: 11 * scale, weight: .medium))
+                        .font(.system(size: 11.5 * scale, weight: .semibold))
                         .lineLimit(height >= 34 ? 2 : 1)
                     if event.awaitsAnswer, height >= 30 {
                         Text(L10n.string("Not replied"))
-                            .font(.system(size: 10 * scale))
+                            .font(.system(size: 10 * scale, weight: .medium))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
                 }
                 .foregroundStyle(isPast ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
-                .padding(.leading, 7)
+                .padding(.leading, 8)
                 .padding(.trailing, 4)
-                .padding(.top, 2)
+                .padding(.top, 3)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .background {
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(color.opacity(isPast ? 0.10 : 0.18))
-                        .overlay(alignment: .leading) { Rectangle().fill(color.opacity(isPast ? 0.5 : 1)).frame(width: 3) }
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                    if event.awaitsAnswer {
+                        ZStack {
+                            shape.fill(color.opacity(isDark ? 0.14 : 0.08))
+                            CalendarDiagonalStripes(spacing: 8)
+                                .stroke(color.opacity(isDark ? 0.24 : 0.16), lineWidth: 1)
+                        }
+                        .clipShape(shape)
+                    } else {
+                        shape
+                            .fill(color.opacity(isPast ? (isDark ? 0.14 : 0.10) : (isDark ? 0.25 : 0.16)))
+                            .overlay(shape.strokeBorder(color.opacity(isPast ? 0.18 : 0.28), lineWidth: 0.5))
+                            .overlay(alignment: .leading) { Rectangle().fill(color.opacity(isPast ? 0.5 : 1)).frame(width: 3) }
+                            .clipShape(shape)
+                    }
                 }
                 .overlay {
                     // Not answered yet: the calendar's color as a dashed outline, as the week draws it.
                     if event.awaitsAnswer {
-                        RoundedRectangle(cornerRadius: 4).strokeBorder(color, style: StrokeStyle(lineWidth: 1, dash: [4, 2]))
+                        shape.strokeBorder(color, style: StrokeStyle(lineWidth: 1.25, dash: [4, 2]))
                     }
                 }
+                .opacity(isPast ? 0.62 : 1)
                 .overlay { highlight(item) }
-                .contentShape(Rectangle())
+                .contentShape(shape)
             }
             .buttonStyle(.plain)
             .parityPointer()
@@ -216,9 +230,10 @@ struct DeskTimeAxis: View, @MainActor Equatable {
         }
     }
 
-    /// A run's block, or a folded hour's: a clock and a name, dashed.
+    /// A run's block, or a folded hour's: a clock and a name with a subtle diagonal hatch.
     private func runLabel(_ name: String, item: DeskAxisItem, style: AnyShapeStyle) -> some View {
-        HStack(spacing: 4) {
+        let shape = RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous)
+        return HStack(spacing: 4) {
             Image(systemName: "clock").font(.system(size: 9 * scale, weight: .semibold))
             Text(name).font(.system(size: 11 * scale, weight: .medium)).lineLimit(1)
             Spacer(minLength: 0)
@@ -228,13 +243,16 @@ struct DeskTimeAxis: View, @MainActor Equatable {
         .padding(.top, 2)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background {
-            RoundedRectangle(cornerRadius: 4)
-                .fill(ParityTheme.subtleFill)
-                .overlay(RoundedRectangle(cornerRadius: 4)
-                    .strokeBorder(ParityTheme.strongSeparator, style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
+            ZStack {
+                shape.fill(ParityTheme.subtleFill)
+                CalendarDiagonalStripes()
+                    .stroke(Color.primary.opacity(0.055), lineWidth: 1)
+            }
+            .clipShape(shape)
+            .overlay(shape.strokeBorder(ParityTheme.separator, lineWidth: 1))
         }
         .overlay { highlight(item) }
-        .contentShape(Rectangle())
+        .contentShape(shape)
     }
 
     @ViewBuilder

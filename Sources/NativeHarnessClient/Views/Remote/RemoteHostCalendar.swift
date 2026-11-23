@@ -18,27 +18,6 @@ extension RemoteHostView {
         if section == .mail { model.mailbox.noteShown() }
     }
 
-    @ViewBuilder var calendarSidebar: some View {
-        if model.needsMailCalendarPermission {
-            VStack(spacing: 0) {
-                SidebarPlacesHeader(onHome: showHome, onShowSchedules: model.offersSchedules ? { showHostSchedules() } : nil,
-                                    section: .calendar, onSelectSection: { selectSection($0) })
-                // The detail says where to allow it.
-                Spacer(minLength: 0)
-                Rectangle().fill(ParityTheme.separator).frame(height: 1)
-                RemoteHostFooter(model: model, directory: directory).padding(.horizontal, 4).padding(.vertical, 5)
-            }
-            .background(ParityTheme.sidebar)
-        } else {
-            CalendarSidebar(center: model.calendar, window: shell.calendarWindow, schedules: model.schedules.definitions,
-                            accountMenu: SidebarAccountMenuContext(), onHome: showHome,
-                            onShowSchedules: model.offersSchedules ? { showHostSchedules() } : nil,
-                            onSelectSection: { selectSection($0) }, onSelectEvent: showEvent,
-                            onOpenConnectors: { model.openSettings(section: SettingsSection.connectors.rawValue) },
-                            footer: AnyView(RemoteHostFooter(model: model, directory: directory)))
-        }
-    }
-
     @ViewBuilder var calendarDetail: some View {
         if model.needsMailCalendarPermission {
             VStack(spacing: 0) {
@@ -57,6 +36,8 @@ extension RemoteHostView {
                     })
                 },
                 onOpenSchedule: openHostSchedule,
+                onSelectEvent: showEvent,
+                onOpenConnectors: { model.openSettings(section: SettingsSection.connectors.rawValue) },
                 onAskAgent: { event, account in
                     askAgent(CalendarText.handoff(event, account: account, calendar: shell.calendarWindow.calendar))
                 })
