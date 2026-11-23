@@ -277,6 +277,8 @@ final class AppModel {
     @ObservationIgnored private var sessionTitleRefreshes: [UUID: UUID] = [:]
     /// Each task's send of its next queued message once its turn ends.
     @ObservationIgnored private var followUpDrainTasks: [UUID: Task<Void, Never>] = [:]
+    /// Turn-by-turn tasks whose running turn is being stopped for a queued message (`stopAndSendAfterTurn`).
+    @ObservationIgnored private var stoppingAfterTurnSessionIDs = Set<UUID>()
     @ObservationIgnored private var codexTurnPageLoads = Set<UUID>()
     /// Claude tasks reading earlier turns of their saved transcript.
     @ObservationIgnored private var claudeEarlierHistoryReads = Set<UUID>()
@@ -1671,9 +1673,16 @@ final class AppModel {
         await sendFollowUpNow(itemID, into: target, in: session)
     }
 
-    /// `stopAndSendQueued` once a turn is running: the provider reads the message now.
+    /// `stopAndSendQueued` once a turn is running: the provider reads the message now, or for a
+    /// turn-by-turn harness (`FollowUpPolicy.afterTurn`), stops the running turn so the chosen
+    /// message starts the next turn as soon as the cancelled turn finishes.
     private func sendFollowUpNow(_ itemID: UUID, into target: FollowUpTarget, in session: SessionRecord) async {
-        guard let item = followUps.item(itemID, in: session.id), followUps.claim(itemID) else { return }
+        guard let item = followUps.item(itemID, in: session.id) else { return }
+        if !target.delivery.policy.steers {
+            await stopAndSendAfterTurn(itemID, in: session, policy: target.delivery.policy)
+            return
+        }
+        guard followUps.claim(itemID) else { return }
         defer { followUps.finish(itemID) }
         if let message = modelRestoreErrors[session.id] {
             markFollowUpFailed(itemID, message: message, in: session.id)
@@ -1700,6 +1709,49 @@ final class AppModel {
             await steerFollowUp(itemID, priority: .now, into: target, in: session.id)
         } else {
             await steerFollowUp(itemID, priority: .next, into: target, in: session.id)
+        }
+    }
+
+    /// Stops a turn-by-turn harness's running turn so a queued message starts the next turn at once.
+    /// Unlike `interrupt(_:)`, the queue stays unpaused and the chosen message moves to the front so
+    /// it starts as soon as the cancelled turn reports ready.
+    private func stopAndSendAfterTurn(_ itemID: UUID, in session: SessionRecord, policy: FollowUpPolicy) async {
+        guard let item = followUps.item(itemID, in: session.id), item.state == .pending,
+              !followUps.isClaimed(itemID),
+              stoppingAfterTurnSessionIDs.insert(session.id).inserted else { return }
+        defer { stoppingAfterTurnSessionIDs.remove(session.id) }
+        if let message = modelRestoreErrors[session.id] {
+            markFollowUpFailed(itemID, message: message, in: session.id)
+            return
+        }
+        followUps.move(itemID, in: session.id, to: 0, policy: policy)
+        _ = followUps.resume(session.id)
+        guard followUps.claim(itemID) else { return }
+        var interruptFailed = false
+        do {
+            await stopSessionToolWork(for: session.id)
+            guard store.sessions.contains(where: { $0.id == session.id }),
+                  let adapter = adaptersBySessionID[session.id],
+                  let handle = handlesBySessionID[session.id] else {
+                followUps.finish(itemID)
+                return
+            }
+            if isRunning(session.id) {
+                continuations.personActed(on: session.id)
+                continuations.stoppedByPerson.insert(session.id)
+                try await adapter.interrupt(handle)
+            }
+        } catch {
+            interruptFailed = true
+            if store.sessions.contains(where: { $0.id == session.id }) {
+                composerDrafts.tasks.draft(for: session.id).notice = error.localizedDescription
+            }
+        }
+        followUps.finish(itemID)
+        if store.sessions.contains(where: { $0.id == session.id }),
+           handlesBySessionID[session.id] != nil,
+           !interruptFailed || !isRunning(session.id) {
+            scheduleFollowUpDrain(for: session.id)
         }
     }
 

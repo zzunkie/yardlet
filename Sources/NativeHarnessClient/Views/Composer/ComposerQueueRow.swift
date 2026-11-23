@@ -77,6 +77,21 @@ struct ComposerQueueRow: View {
                 .accessibilityLabel(send.label)
                 .accessibilityHint(send.help)
                 .help(send.help)
+            } else if chip.showsStopAndSendInline, let stop = chip.stopAndSend, let stopAndSend {
+                // Turn-by-turn harnesses have no non-stopping "Send now"; offer "Stop and send"
+                // directly on the row, named for what it does.
+                Button {
+                    stopAndSend()
+                } label: {
+                    Label(stop, systemImage: "stop.circle")
+                        .labelStyle(.titleAndIcon)
+                        .fontWeight(.medium)
+                        .fixedSize()
+                }
+                .buttonStyle(.borderless)
+                .parityPointer()
+                .accessibilityLabel(stop)
+                .help(stop)
             }
             if let editQueued = edit, !fromTask {
                 Button {

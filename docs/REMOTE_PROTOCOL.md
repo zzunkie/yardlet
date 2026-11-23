@@ -1251,7 +1251,8 @@ that does not know them ignores them.
 - `sendMessage` takes `followUp`: `"steer"` sends the message into the running turn, `"queue"` holds it until
   the turn ends. Absent: the Mac's setting. No turn running: the message starts one either way.
 - Queued `user` items (§6.2) carry `options`, the queue chip's actions on the Mac: `sendNow` (send it into the
-  running turn now, without stopping it), `stopAndSend` (Claude Code: stop the turn for it), `remove`.
+  running turn now, without stopping it), `stopAndSend` (Claude Code and turn-by-turn harnesses: stop the turn for it),
+  `remove`.
 
   ```json
   {"id": "23", "type": "actOnQueued", "taskId": "4C1F…", "itemId": "queued:8A3E…", "action": "sendNow"}
