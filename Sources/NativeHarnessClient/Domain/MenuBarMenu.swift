@@ -360,7 +360,7 @@ enum MenuBarMenuProjection {
         if metric.id.hasPrefix("claude:"), parts.count > 1 { return nil }
         let window = parts.last ?? metric.label
         func named(_ key: String, _ count: Double) -> Bool {
-            [nil, "en", "ko"].contains { (language: String?) in
+            ([nil] + L10n.bundledLocalizations.map(Optional.some)).contains { (language: String?) in
                 let format = language.map { L10n.string(key, languageCode: $0) } ?? L10n.string(key)
                 return window == String(format: format, count)
             }

@@ -93,7 +93,7 @@ final class DeveloperIDSigningTests: XCTestCase {
     func testEachPermissionACommandMayAskForHasTheAppsReason() throws {
         let data = try Data(contentsOf: root.appending(path: "Packaging/Info.plist"))
         let info = try XCTUnwrap(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
-        for language in ["en", "ko"] {
+        for language in ["en", "ko", "ja", "zh-Hans"] {
             let strings = try XCTUnwrap(NSDictionary(contentsOf: root.appending(
                 path: "Sources/NativeHarnessClient/Resources/\(language).lproj/InfoPlist.strings")) as? [String: String])
             for key in Self.commandPermissions.values.joined() {

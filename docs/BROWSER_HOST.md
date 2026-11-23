@@ -38,7 +38,7 @@ Yardlet.app
 └── Contents/Frameworks/Yardlet Browser Host.app          CEF's main bundle, LSUIElement
     ├── Contents/MacOS/Yardlet Browser Host               Swift + CEF C API, NSApplication subclass
     └── Contents/Frameworks/
-        ├── Chromium Embedded Framework.framework         Versions/A layout, locales en and ko only
+        ├── Chromium Embedded Framework.framework         Versions/A layout, shipped app locales only
         └── Yardlet Helper{, (Alerts), (GPU), (Plugin), (Renderer)}.app   LSUIElement, sandbox
 ```
 
