@@ -332,6 +332,22 @@ package struct UnixSocketToolInvoker: AgentToolInvoking {
         appProcess = environment[AgentToolEnvironment.appProcess].flatMap { Int32($0) }.flatMap { $0 > 0 ? $0 : nil }
     }
 
+    /// True when the Yardlet app process that issued this server's token (`YARDLET_TOOLS_APP_PID`)
+    /// has already exited. Its per-run socket and token can never become valid again, so a harness
+    /// that replayed this stale server specification from saved conversation state (such as
+    /// Antigravity CLI on `session/load`) must receive an empty list and see the server exit rather
+    /// than receiving a duplicate 45-tool fallback server alongside the current Yardlet run's server.
+    package var appProcessHasExited: Bool {
+        guard let appProcess else { return false }
+        #if canImport(Darwin) || canImport(Glibc)
+        return kill(appProcess, 0) != 0 && errno == ESRCH
+        #else
+        return false
+        #endif
+    }
+
+    package var serverHasEnded: Bool { appProcessHasExited }
+
     package func call(tool: String, arguments: ToolJSON) async -> AgentToolResult {
         guard let endpoint, let token, let session else {
             return .failure("Yardlet did not start this MCP server, so it has no task to act on. "
@@ -341,9 +357,14 @@ package struct UnixSocketToolInvoker: AgentToolInvoking {
         guard let request = try? JSONEncoder().encode(call) else {
             return .error("The tool arguments could not be encoded.")
         }
-        // A scheduled-task call from a scheduled run may wait for the person too, and a handed-over tab waits for them.
-        let waits = SessionToolCatalog.definition(named: tool) != nil || ScheduleToolCatalog.definition(named: tool) != nil
+        // A scheduled-task call from a scheduled run may wait for the person too, and a handed-over
+        // tab or simulator waits for them.
+        let waits = SessionToolCatalog.definition(named: tool) != nil
+            || ScheduleToolCatalog.definition(named: tool) != nil
             || tool == AgentToolCatalog.handoff
+            || tool == SimulatorToolCatalog.handoff
+            || (tool == SimulatorGatewayToolCatalog.callTool
+                && arguments["tool"]?.stringValue == SimulatorToolCatalog.handoff)
         let timeout = waits ? sessionToolTimeout : timeout
         let appProcess = appProcess
         return await withCheckedContinuation { continuation in
@@ -355,22 +376,35 @@ package struct UnixSocketToolInvoker: AgentToolInvoking {
     }
 
     /// Asks the app for this task's tools. The app may read a connector's list from its server the
-    /// first time, so this waits longer than a local answer needs; any failure leaves the list to
-    /// the MCP server's own browser catalog.
+    /// first time, so this waits longer than a local answer needs. When the Yardlet app run that
+    /// started this server has already exited, returns an empty released list so the server exits
+    /// cleanly instead of advertising stale fallback tools; any other unreachable failure leaves the
+    /// list to the MCP server's own built-in catalog.
     package func listTools() async -> AgentToolList? {
         guard let endpoint, let token, let session else { return nil }
+        if appProcessHasExited {
+            return AgentToolList(tools: [], fingerprint: nil, released: true)
+        }
         let request = AgentToolCall(token: token, session: session, tool: "", arguments: .object([:]),
                                     method: AgentToolCall.listMethod)
         guard let body = try? JSONEncoder().encode(request) else { return nil }
-        return await Self.exchange(endpoint: endpoint, body: body, timeout: 30)
-            .flatMap { try? JSONDecoder().decode(AgentToolList.self, from: $0) }
+        if let reply = await Self.exchange(endpoint: endpoint, body: body, timeout: 30) {
+            return try? JSONDecoder().decode(AgentToolList.self, from: reply)
+        }
+        if appProcessHasExited {
+            return AgentToolList(tools: [], fingerprint: nil, released: true)
+        }
+        return nil
     }
 
     /// Asks the app to wait until this task's list differs from `fingerprint`. The app answers
-    /// within `AgentToolListWatching.hold`; this waits a little longer. A refusal (a token from
-    /// an earlier run of the app) or no app at all is `unavailable`.
+    /// within `AgentToolListWatching.hold`; this waits a little longer. When the app run that
+    /// started this server has already exited, reports `.released` so the server exits cleanly; a
+    /// refusal (an unrecognized token on a live run) or missing socket without a dead app is
+    /// `unavailable`.
     package func waitForToolListChange(from fingerprint: String?) async -> AgentToolListWatch {
         guard let endpoint, let token, let session else { return .unavailable }
+        if appProcessHasExited { return .released }
         let request = AgentToolCall(token: token, session: session, tool: "",
                                     arguments: .object(["fingerprint": fingerprint.map(ToolJSON.string) ?? .null]),
                                     method: AgentToolCall.watchMethod)
@@ -378,7 +412,7 @@ package struct UnixSocketToolInvoker: AgentToolInvoking {
         let timeout = TimeInterval(AgentToolListWatching.hold.components.seconds) + 30
         guard let reply = await Self.exchange(endpoint: endpoint, body: body, timeout: timeout),
               let answer = try? JSONDecoder().decode(AgentToolListWatchReply.self, from: reply)
-        else { return .unavailable }
+        else { return appProcessHasExited ? .released : .unavailable }
         if answer.released { return .released }
         return answer.changed ? .changed : .unchanged
     }

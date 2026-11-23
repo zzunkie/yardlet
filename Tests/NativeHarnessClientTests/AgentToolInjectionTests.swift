@@ -654,5 +654,229 @@ final class AgentToolInjectionTests: XCTestCase {
         let emptyNames = Set(emptyList.tools.compactMap { $0["name"]?.stringValue })
         XCTAssertFalse(emptyNames.contains(ConnectorGatewayToolCatalog.listTools))
         XCTAssertFalse(emptyNames.contains(ConnectorGatewayToolCatalog.callTool))
+
+        // Antigravity's launch environment stays identical when connected services change within
+        // the same Yardlet run, so `agy` does not hash a second `yardlet_<hex>` server on resume.
+        connectors.services = ["Gmail"]
+        let beforeChange = try XCTUnwrap(broker.agentToolServer(
+            for: agyTask, workspaceRoots: [],
+            connectorScope: ConnectorTaskScope(harness: .antigravityCLI, nativeServers: [])
+        ))
+        connectors.services = ["Gmail", "Linear", "Slack"]
+        let afterChange = try XCTUnwrap(broker.agentToolServer(
+            for: agyTask, workspaceRoots: [],
+            connectorScope: ConnectorTaskScope(harness: .antigravityCLI, nativeServers: [])
+        ))
+        XCTAssertEqual(beforeChange.environment, afterChange.environment)
+        XCTAssertNil(afterChange.environment[AgentToolEnvironment.services])
+    }
+
+    /// A released token's `tools/list` request over `respond` receives an empty released list so a
+    /// stale `yardlet-mcp` (such as one restored by `agy` on `session/load`) advertises zero tools
+    /// and exits instead of falling back to the 45-tool built-in catalog.
+    func testReleasedTokenToolsListReturnsEmptyReleasedListOverBrokerRespond() async throws {
+        let broker = broker()
+        let task = UUID()
+        let launch = try XCTUnwrap(broker.agentToolServer(
+            for: task, workspaceRoots: [],
+            connectorScope: ConnectorTaskScope(harness: .antigravityCLI, nativeServers: [])
+        ))
+        let token = try XCTUnwrap(launch.environment[AgentToolEnvironment.token])
+        broker.releaseAgentTools(for: task)
+
+        let call = AgentToolCall(token: token, session: task.uuidString, tool: "",
+                                 arguments: .object([:]), method: AgentToolCall.listMethod)
+        let replyData = await broker.respond(to: try JSONEncoder().encode(call))
+        let decoded = try JSONDecoder().decode(AgentToolList.self, from: replyData)
+        XCTAssertEqual(decoded, AgentToolList(tools: [], fingerprint: nil, released: true))
+    }
+
+    @MainActor
+    private final class StubSuggestionHandler: TaskSuggestionToolHandling {
+        func callTaskSuggestionTool(named name: String, arguments: ToolJSON, sessionID: UUID) async -> AgentToolResult { .text("ok") }
+    }
+
+    @MainActor
+    private final class StubSessionHandler: SessionToolHandling {
+        func callSessionTool(named name: String, arguments: ToolJSON, callerID: UUID) async -> AgentToolResult { .text("ok") }
+        func allowsBrowserFile(_ path: String, callerID: UUID) async -> Bool { false }
+    }
+
+    @MainActor
+    private final class StubScheduleHandler: ScheduleToolHandling {
+        func callScheduleTool(named name: String, arguments: ToolJSON, callerID: UUID) async -> AgentToolResult { .text("ok") }
+    }
+
+    @MainActor
+    private final class StubSimulatorHandler: SimulatorToolHandling {
+        var simulatorSwitchIsOn = true
+        var simulatorPlatformIsUsable = true
+        var calls: [(name: String, arguments: ToolJSON)] = []
+
+        func callSimulatorTool(named name: String, arguments: ToolJSON, callerID: UUID) async -> AgentToolResult {
+            calls.append((name, arguments))
+            return .text("sim \(name)")
+        }
+    }
+
+    /// Antigravity routes simulator tools through a compact 2-tool gateway and compacts core tool
+    /// prose while keeping every structural schema constraint intact and leaving Claude Code and
+    /// Codex untouched. With every Yardlet feature enabled, Antigravity's full serialized
+    /// `tools/list` stays well below `agy`'s ~54 KB eager MCP budget.
+    func testAntigravityCompactToolSurfaceFitsEagerBudgetAndPreservesFullSchemasForOtherHarnesses() async throws {
+        let broker = broker()
+        let suggestions = StubSuggestionHandler()
+        let sessions = StubSessionHandler()
+        let schedules = StubScheduleHandler()
+        let simulators = StubSimulatorHandler()
+        let vault = VaultCenter(environment: VaultCenter.Environment(
+            secrets: InMemoryVaultSecretStore([:]),
+            repository: InMemoryVaultRepository(items: [VaultItem(name: "Example", sites: ["example.com"], username: "ada")]),
+            hmac: MacVault.hmac,
+            isAllowedBuild: true,
+            confirm: { _ in true },
+            defaults: .vaultTests()
+        ))
+        let connectors = FakeConnectorTools(
+            tools: [
+                .object([
+                    "name": .string("gmail_search_messages"),
+                    "description": .string("[Gmail] Search messages."),
+                    "inputSchema": .object(["type": .string("object"), "properties": .object([:])])
+                ])
+            ],
+            services: ["Gmail", "Google Calendar", "Google Drive", "Slack", "Linear", "Notion", "GitHub", "Stripe", "Mail (IMAP)"]
+        )
+        broker.suggestions = suggestions
+        broker.sessions = sessions
+        broker.schedules = schedules
+        broker.simulators = simulators
+        broker.sharesTerminal = { true }
+        broker.vault = vault
+        broker.connectors = connectors
+
+        let agyTask = UUID()
+        let agyLaunch = try XCTUnwrap(broker.agentToolServer(
+            for: agyTask, workspaceRoots: [],
+            connectorScope: ConnectorTaskScope(harness: .antigravityCLI, nativeServers: [])
+        ))
+        let agyToken = try XCTUnwrap(agyLaunch.environment[AgentToolEnvironment.token])
+        let agyList = try XCTUnwrapAsync(await broker.list(AgentToolCall(
+            token: agyToken, session: agyTask.uuidString, tool: "", arguments: .object([:]), method: AgentToolCall.listMethod
+        )))
+
+        // Simulator tools go through the 2-tool gateway on Antigravity.
+        let agyNames = Set(agyList.tools.compactMap { $0["name"]?.stringValue })
+        XCTAssertTrue(agyNames.contains(SimulatorGatewayToolCatalog.listTools))
+        XCTAssertTrue(agyNames.contains(SimulatorGatewayToolCatalog.callTool))
+        XCTAssertTrue(agyNames.contains(VaultToolCatalog.fillCredential))
+        XCTAssertTrue(agyNames.contains(WidgetToolCatalog.showWidget))
+        XCTAssertTrue(agyNames.contains(TerminalToolCatalog.readTerminal))
+        XCTAssertTrue(agyNames.contains(ConnectorGatewayToolCatalog.listTools))
+        XCTAssertFalse(agyNames.contains(SimulatorToolCatalog.list))
+        XCTAssertFalse(agyNames.contains(SimulatorToolCatalog.attach))
+
+        // Gateway discovery returns all 10 simulator schemas; dispatch validates and forwards.
+        let simListed = await broker.handle(AgentToolCall(
+            token: agyToken, session: agyTask.uuidString,
+            tool: SimulatorGatewayToolCatalog.listTools, arguments: .object([:])
+        ))
+        XCTAssertFalse(simListed.isError, simListed.text)
+        for name in SimulatorToolCatalog.tools.map(\.name) {
+            XCTAssertTrue(simListed.text.contains("\"\(name)\""), "Missing \(name) in simulator gateway list")
+        }
+        let invalidSwipe = await broker.handle(AgentToolCall(
+            token: agyToken, session: agyTask.uuidString,
+            tool: SimulatorGatewayToolCatalog.callTool,
+            arguments: .object(["tool": .string(SimulatorToolCatalog.swipe), "arguments": .object(["x": .integer(1)])])
+        ))
+        XCTAssertEqual(invalidSwipe.failure?.kind, .invalidArguments)
+        XCTAssertTrue(simulators.calls.isEmpty)
+
+        let simCalled = await broker.handle(AgentToolCall(
+            token: agyToken, session: agyTask.uuidString,
+            tool: SimulatorGatewayToolCatalog.callTool,
+            arguments: .object(["tool": .string(SimulatorToolCatalog.attach), "arguments": .object(["device": .string("iPhone 17")])])
+        ))
+        XCTAssertFalse(simCalled.isError, simCalled.text)
+        XCTAssertEqual(simCalled.text, "sim simulator_attach")
+        XCTAssertEqual(simulators.calls.count, 1)
+        XCTAssertEqual(simulators.calls[0].name, SimulatorToolCatalog.attach)
+        XCTAssertEqual(simulators.calls[0].arguments["device"], .string("iPhone 17"))
+
+        // Claude Code and Codex keep every full description and all 10 direct simulator tools untouched.
+        for harness in [HarnessKind.claudeCode, .codex] {
+            let task = UUID()
+            let launch = try XCTUnwrap(broker.agentToolServer(
+                for: task, workspaceRoots: [],
+                connectorScope: ConnectorTaskScope(harness: harness, nativeServers: [])
+            ))
+            let token = try XCTUnwrap(launch.environment[AgentToolEnvironment.token])
+            let list = try XCTUnwrapAsync(await broker.list(AgentToolCall(
+                token: token, session: task.uuidString, tool: "", arguments: .object([:]), method: AgentToolCall.listMethod
+            )))
+            let byName = Dictionary(uniqueKeysWithValues: list.tools.compactMap { entry in
+                entry["name"]?.stringValue.map { ($0, entry) }
+            })
+            XCTAssertEqual(byName[SessionToolCatalog.createTask], SessionToolCatalog.definition(named: SessionToolCatalog.createTask)?.json,
+                           "\(harness.rawValue) must keep uncompacted full tool definitions")
+            XCTAssertEqual(byName[AgentToolCatalog.snapshot], AgentToolCatalog.definition(named: AgentToolCatalog.snapshot)?.json)
+            for name in SimulatorToolCatalog.tools.map(\.name) {
+                XCTAssertNotNil(byName[name], "\(harness.rawValue) lists direct \(name)")
+            }
+            XCTAssertNil(byName[SimulatorGatewayToolCatalog.listTools])
+        }
+
+        // Compact projection preserves every structural JSON Schema constraint and annotation.
+        let fullCoreTools = AgentToolCatalog.browserTools + [VaultToolCatalog.tool] + TaskSuggestionToolCatalog.tools
+            + [WidgetToolCatalog.tool] + SessionToolCatalog.tools + SettingsToolCatalog.tools
+            + [TerminalToolCatalog.tool] + ScheduleToolCatalog.tools
+        let agyByName = Dictionary(uniqueKeysWithValues: agyList.tools.compactMap { entry in
+            entry["name"]?.stringValue.map { ($0, entry) }
+        })
+        for full in fullCoreTools {
+            let compacted = try XCTUnwrap(agyByName[full.name], "Missing \(full.name) in Antigravity list")
+            let fullJSON = full.json
+            XCTAssertEqual(compacted["annotations"], fullJSON["annotations"], full.name)
+            XCTAssertEqual(compacted["_meta"], fullJSON["_meta"], full.name)
+            XCTAssertEqual(Self.stripSchemaDescriptions(compacted["inputSchema"] ?? .null),
+                           Self.stripSchemaDescriptions(fullJSON["inputSchema"] ?? .null),
+                           "Compacting \(full.name) must not alter any structural JSON Schema constraint")
+        }
+
+        // Budget pin: full serialized `tools/list` payload and `agy` declaration payload stay
+        // comfortably under `agy`'s ~54 KB eager cap with every feature enabled.
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let fullPayloadBytes = try encoder.encode(ToolJSON.object(["tools": .array(agyList.tools)])).count
+        let agyDeclarations: [ToolJSON] = agyList.tools.map { entry in
+            .object([
+                "name": entry["name"] ?? .null,
+                "description": entry["description"] ?? .null,
+                "parameters": entry["inputSchema"] ?? .object([:])
+            ])
+        }
+        let agyDeclarationBytes = try agyDeclarations.reduce(0) { total, item in
+            total + (try encoder.encode(item)).count
+        }
+        XCTAssertLessThan(fullPayloadBytes, 44_000,
+                          "Antigravity full tools/list payload (\(fullPayloadBytes) B) must stay below 44,000 B")
+        XCTAssertLessThan(agyDeclarationBytes, 38_000,
+                          "Antigravity declaration payload (\(agyDeclarationBytes) B) must stay well below agy's ~54 KB eager cap")
+    }
+
+    private static func stripSchemaDescriptions(_ value: ToolJSON) -> ToolJSON {
+        switch value {
+        case .object(let fields):
+            var cleaned: [String: ToolJSON] = [:]
+            for (key, child) in fields where key != "description" {
+                cleaned[key] = stripSchemaDescriptions(child)
+            }
+            return .object(cleaned)
+        case .array(let items):
+            return .array(items.map(stripSchemaDescriptions))
+        default:
+            return value
+        }
     }
 }
