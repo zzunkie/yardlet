@@ -15,7 +15,7 @@ enum SessionToolText {
         var link: String
         var harness: String
         var project: String?
-        /// `waiting`, `unread`, `active` or `idle` (`TaskAttentionProjection`).
+        /// `waiting`, `unread`, `active`, `idle` (`TaskAttentionProjection`), or `archived`.
         var state: String
         /// What a waiting task waits for: `approval` or `input`.
         var waitingFor: String?
@@ -25,6 +25,7 @@ enum SessionToolText {
         var isSelf: Bool?
         var inSameSplit: Bool?
         var onScreen: Bool?
+        var archived: Bool?
     }
 
     struct Listing: Encodable, Equatable {
@@ -50,24 +51,37 @@ enum SessionToolText {
         isSelf: Bool,
         inSameSplit: Bool,
         onScreen: Bool,
-        lastActivity: Date? = nil
+        lastActivity: Date? = nil,
+        archived: Bool = false
     ) -> TaskEntry {
-        let state = TaskAttentionProjection.state(of: session, detail: detail, isShellBusy: isShellBusy)
-        let waiting = TaskAttentionProjection.waitingRequest(of: session, detail: detail)
+        let state: String
+        let waitingFor: String?
+        let isRunning: Bool
+        if archived {
+            state = "archived"
+            waitingFor = nil
+            isRunning = false
+        } else {
+            state = stateWord(TaskAttentionProjection.state(of: session, detail: detail, isShellBusy: isShellBusy))
+            waitingFor = TaskAttentionProjection.waitingRequest(of: session, detail: detail)
+                .map { $0 == .input ? "input" : "approval" }
+            isRunning = session.status == .running || session.status == .waitingForApproval || isShellBusy
+        }
         return TaskEntry(
             taskId: session.id.uuidString,
             title: session.title,
             link: link(title: session.title, taskID: session.id),
             harness: session.harness.rawValue,
             project: projectName,
-            state: stateWord(state),
-            waitingFor: waiting.map { $0 == .input ? "input" : "approval" },
-            isRunning: session.status == .running || session.status == .waitingForApproval || isShellBusy,
+            state: state,
+            waitingFor: waitingFor,
+            isRunning: isRunning,
             lastActivityAt: iso(max(session.updatedAt, lastActivity ?? session.updatedAt)),
             parentTaskId: session.parentTaskID?.uuidString,
-            isSelf: isSelf ? true : nil,
-            inSameSplit: inSameSplit ? true : nil,
-            onScreen: onScreen ? true : nil
+            isSelf: !archived && isSelf ? true : nil,
+            inSameSplit: !archived && inSameSplit ? true : nil,
+            onScreen: !archived && onScreen ? true : nil,
+            archived: archived ? true : nil
         )
     }
 

@@ -170,6 +170,7 @@ extension AppModel: SessionToolHandling {
     private func listTasks(_ arguments: JSONValue, caller: SessionToolCaller) async -> AgentToolResult {
         let scope = arguments["scope"]?.stringValue ?? "project"
         guard scope == "project" || scope == "all" else { return .error("scope must be \"project\" or \"all\".") }
+        let includeArchived = Self.bool(arguments["include_archived"]) == true
         let limit = Self.integer(arguments["limit"]).map { min(max($0, 1), SessionToolPolicy.listMaximumLimit) }
             ?? SessionToolPolicy.listDefaultLimit
         var states: Set<String>?
@@ -178,9 +179,9 @@ extension AppModel: SessionToolHandling {
             case let .array(values): values.map(\.stringValue)
             default: [value.stringValue]
             }
-            let known: Set<String> = ["waiting", "unread", "active", "idle"]
+            let known: Set<String> = ["waiting", "unread", "active", "idle", "archived"]
             guard !words.isEmpty, words.allSatisfy({ $0.map(known.contains) == true }) else {
-                return .error("state must be waiting, unread, active or idle, or a list of them.")
+                return .error("state must be waiting, unread, active, idle or archived, or a list of them.")
             }
             states = Set(words.compactMap { $0 })
         }
@@ -191,24 +192,45 @@ extension AppModel: SessionToolHandling {
             }
             olderThan = date
         }
+        if includeArchived, store.archivedSessions == nil {
+            try? await store.loadArchivedSessions()
+        }
         func matches() -> [(session: SessionRecord, entry: SessionToolText.TaskEntry)] {
             let neighbors = Set(splits.split(containing: caller.hostTaskID)?.sessionIDs ?? [])
             let onScreen = sessionToolOnScreenIDs()
-            var listed = sidebarSessions
+            var listed: [(session: SessionRecord, archived: Bool)] = sidebarSessions.map { ($0, false) }
             if let host = store.sessions.first(where: { $0.id == caller.hostTaskID }),
-               !listed.contains(where: { $0.id == host.id }) {
-                listed.append(host)
+               !listed.contains(where: { $0.session.id == host.id }) {
+                listed.append((host, false))
             }
-            return listed.filter { session in
-                (scope == "all" || session.id == caller.hostTaskID || neighbors.contains(session.id)
+            if includeArchived {
+                let activeIDs = Set(listed.map(\.session.id))
+                for record in store.archivedSessions ?? [] where !activeIDs.contains(record.id) {
+                    let taskProject = project(for: record.session)
+                    if taskProject?.isHidden == true,
+                       !(caller.projectID != nil && taskProject?.id == caller.projectID) { continue }
+                    listed.append((record.session, true))
+                }
+            }
+            return listed.filter { item in
+                let session = item.session
+                let lastActivity = item.archived
+                    ? session.updatedAt
+                    : max(session.updatedAt, providerActivityBySessionID[session.id] ?? .distantPast)
+                return (scope == "all" || (!item.archived && (session.id == caller.hostTaskID || neighbors.contains(session.id)))
                     || (caller.projectID != nil && project(for: session)?.id == caller.projectID))
-                    && olderThan.map { max(session.updatedAt, providerActivityBySessionID[session.id] ?? .distantPast) < $0 } != false
-            }.map { session in
-                (session, SessionToolText.entry(
-                    session, projectName: project(for: session)?.name, detail: taskAttentionDetails[session.id],
-                    isShellBusy: shellBusySessionIDs.contains(session.id), isSelf: session.id == caller.hostTaskID,
-                    inSameSplit: session.id != caller.hostTaskID && neighbors.contains(session.id),
-                    onScreen: onScreen.contains(session.id), lastActivity: providerActivityBySessionID[session.id]))
+                    && olderThan.map { lastActivity < $0 } != false
+            }.map { item in
+                let session = item.session
+                return (session, SessionToolText.entry(
+                    session, projectName: project(for: session)?.name,
+                    detail: item.archived ? nil : taskAttentionDetails[session.id],
+                    isShellBusy: !item.archived && shellBusySessionIDs.contains(session.id),
+                    isSelf: !item.archived && session.id == caller.hostTaskID,
+                    inSameSplit: !item.archived && session.id != caller.hostTaskID && neighbors.contains(session.id),
+                    onScreen: !item.archived && onScreen.contains(session.id),
+                    lastActivity: item.archived ? nil : providerActivityBySessionID[session.id],
+                    archived: item.archived))
             }.filter { states?.contains($0.entry.state) != false }
         }
         // Another project's tasks are listed once the person allows it, as a message into one is sent.
@@ -266,51 +288,80 @@ extension AppModel: SessionToolHandling {
     private func readTask(_ arguments: JSONValue, caller: SessionToolCaller) async -> AgentToolResult {
         guard let reference = arguments["task_id"]?.stringValue?.trimmingCharacters(in: .whitespaces),
               !reference.isEmpty else { return .error("task_id is required.") }
-        var session: SessionRecord
-        switch await sessionToolTask(reference, caller: caller) {
-        case let .success(found): session = found
+        let resolved: ResolvedReadTask
+        switch await sessionToolTaskForRead(reference, caller: caller) {
+        case let .success(found): resolved = found
         case let .failure(error): return error.result("Not read")
         }
+        var session = resolved.session
         if let reason = await sessionToolReadApproval(of: [session], caller: caller) {
             return .failure("Not read: \(reason)", .refused, retry: .no)
         }
         let id = session.id
-        // A task nothing has opened since Yardlet started reads its saved history first; no turn starts.
-        if transcriptBySessionID[session.id]?.isEmpty != false, codexPresentationBySessionID[session.id] == nil {
-            await refreshConversationStatus(for: session)
-            session = store.sessions.first(where: { $0.id == id }) ?? session
-        }
         let turns = Self.integer(arguments["turns"]) ?? SessionToolPolicy.readDefaultTurns
         let cursor = arguments["cursor"]?.stringValue
-        guard let conversation = sessionToolConversation(of: session, turns: turns, cursor: cursor) else {
+        let conversationResult: SessionToolText.Conversation?
+        let emptyBody: String
+        let archivedRecord: ArchivedSessionRecord?
+        switch resolved {
+        case .active:
+            archivedRecord = nil
+            // A task nothing has opened since Yardlet started reads its saved history first; no turn starts.
+            if transcriptBySessionID[session.id]?.isEmpty != false, codexPresentationBySessionID[session.id] == nil {
+                await refreshConversationStatus(for: session)
+                session = store.sessions.first(where: { $0.id == id }) ?? session
+            }
+            conversationResult = sessionToolConversation(of: session, turns: turns, cursor: cursor)
+            emptyBody = "(No conversation yet.)"
+        case let .archived(record):
+            archivedRecord = record
+            let reading = await readArchivedTaskForSessionTool(record, turns: turns, cursor: cursor)
+            conversationResult = sessionToolConversation(of: reading, turns: turns, cursor: cursor)
+            emptyBody = switch reading.outcome {
+            case .unsupported:
+                "(Archived \(session.harness.displayName) conversations cannot be read without unarchiving.)"
+            case .unavailable:
+                "(No saved conversation could be read from \(session.harness.displayName)'s history.)"
+            case .reading, .shown:
+                "(No conversation yet.)"
+            }
+        }
+        guard let conversation = conversationResult else {
             let what = cursor?.hasPrefix(SessionToolText.listCursorPrefix) == true ? "is list_tasks' cursor, not read_task's"
                 : "names no turn of this task: it is another task's, or its turn is no longer loaded"
             return .failure("Not read: that cursor \(what). Read task \(session.id.uuidString) again without cursor.",
                             .invalidArguments, retry: .withChanges)
         }
+        let isArchived = archivedRecord != nil
         let neighbors = Set(splits.split(containing: caller.hostTaskID)?.sessionIDs ?? [])
         var details = SessionToolText.entry(
-            session, projectName: project(for: session)?.name, detail: taskAttentionDetails[session.id],
-            isShellBusy: shellBusySessionIDs.contains(session.id), isSelf: session.id == caller.hostTaskID,
-            inSameSplit: session.id != caller.hostTaskID && neighbors.contains(session.id),
-            onScreen: sessionToolOnScreenIDs().contains(session.id),
-            lastActivity: providerActivityBySessionID[session.id])
+            session, projectName: project(for: session)?.name,
+            detail: isArchived ? nil : taskAttentionDetails[session.id],
+            isShellBusy: !isArchived && shellBusySessionIDs.contains(session.id),
+            isSelf: !isArchived && session.id == caller.hostTaskID,
+            inSameSplit: !isArchived && session.id != caller.hostTaskID && neighbors.contains(session.id),
+            onScreen: !isArchived && sessionToolOnScreenIDs().contains(session.id),
+            lastActivity: isArchived ? nil : providerActivityBySessionID[session.id],
+            archived: isArchived)
         if details.title.isEmpty { details.title = session.title }
         let children = store.sessions.filter { $0.parentTaskID == session.id }.map(\.id.uuidString)
-        let servers = resourceMonitor.servers(of: session.id).map {
+        let servers = isArchived ? [] : resourceMonitor.servers(of: session.id).map {
             ReadTaskDetails.Server(url: $0.url.absoluteString, process: $0.processName)
         }
         var head = SessionToolText.json(ReadTaskDetails(
             task: details, folder: session.workspaceURL.path(percentEncoded: false),
-            createdAt: SessionToolText.iso(session.createdAt), childTaskIds: children.isEmpty ? nil : children,
-            queuedMessages: followUps.queue(for: session.id).count, servers: servers.isEmpty ? nil : servers,
+            createdAt: SessionToolText.iso(session.createdAt),
+            archivedAt: archivedRecord?.archivedAt.map(SessionToolText.iso),
+            childTaskIds: children.isEmpty ? nil : children,
+            queuedMessages: isArchived ? 0 : followUps.queue(for: session.id).count,
+            servers: servers.isEmpty ? nil : servers,
             account: accountAssignments.assignment(for: session.id)?.toolLine))
         head += "\n\nShowing \(conversation.shownTurns) of \(conversation.totalTurns) loaded turns."
         if let next = conversation.cursor { head += " Pass cursor \"\(next)\" for earlier turns." }
         head += " " + SessionToolText.untrustedNote
-        let body = conversation.text.isEmpty ? "(No conversation yet.)" : conversation.text
+        let body = conversation.text.isEmpty ? emptyBody : conversation.text
         // The latest page holds the latest turn's result.
-        if cursor == nil, conversation.shownTurns > 0 { await sessionToolNoteParentRead(of: id, by: caller) }
+        if !isArchived, cursor == nil, conversation.shownTurns > 0 { await sessionToolNoteParentRead(of: id, by: caller) }
         return .text(head + "\n\n" + body)
     }
 
@@ -318,6 +369,7 @@ extension AppModel: SessionToolHandling {
         var task: SessionToolText.TaskEntry
         var folder: String
         var createdAt: String
+        var archivedAt: String?
         var childTaskIds: [String]?
         var queuedMessages: Int
         /// The servers the task's processes listen on now, as its header shows them.
@@ -329,6 +381,54 @@ extension AppModel: SessionToolHandling {
             var url: String
             var process: String
         }
+    }
+
+    /// Reads an archived task's saved conversation through `ArchivedTaskReading` without unarchiving,
+    /// attaching, starting a turn or mutating any per-task state; loads earlier history pages only when
+    /// needed to satisfy `turns` or `cursor`.
+    private func readArchivedTaskForSessionTool(_ record: ArchivedSessionRecord, turns: Int,
+                                                cursor: String?) async -> ArchivedTaskReading {
+        let reading = ArchivedTaskReading(record: record)
+        await readArchivedConversation(reading)
+        let wanted = max(1, min(turns, SessionToolPolicy.readMaximumTurns))
+        let maxEarlierPages = 8
+        var pages = 0
+        while reading.hasEarlierHistory, pages < maxEarlierPages {
+            let ids = sessionToolTurnIDs(of: reading)
+            let needsMore: Bool
+            if let cursor {
+                guard cursor.hasPrefix(SessionToolText.cursorPrefix) else { break }
+                if let shown = SessionToolText.shownTurns(ids: ids, turns: wanted, cursor: cursor) {
+                    needsMore = shown.lowerBound == 0
+                } else {
+                    needsMore = true
+                }
+            } else {
+                needsMore = ids.count <= wanted
+            }
+            guard needsMore else { break }
+            await readEarlierArchivedHistory(reading)
+            pages += 1
+            if sessionToolTurnIDs(of: reading).count <= ids.count { break }
+        }
+        return reading
+    }
+
+    private func sessionToolTurnIDs(of reading: ArchivedTaskReading) -> [String] {
+        sessionToolPresentation(
+            for: reading.session, codexState: reading.codexState, transcript: reading.transcript,
+            status: .ready, reading: { _ in 0..<0 }
+        ).turns.map(\.id)
+    }
+
+    /// The page of an archived task's read-only conversation `read_task` reads, with only the turns on it projected.
+    private func sessionToolConversation(of reading: ArchivedTaskReading, turns: Int, cursor: String?) -> SessionToolText.Conversation? {
+        let presentation = sessionToolPresentation(
+            for: reading.session, codexState: reading.codexState, transcript: reading.transcript, status: .ready
+        ) { ids in
+            SessionToolText.shownTurns(ids: ids, turns: turns, cursor: cursor) ?? 0..<0
+        }
+        return SessionToolText.conversation(presentation, workspaceURL: reading.session.workspaceURL, turns: turns, cursor: cursor)
     }
 
     /// The page of the task's conversation `read_task` reads (`SessionToolText.conversation`), with
@@ -347,6 +447,19 @@ extension AppModel: SessionToolHandling {
     /// diff.
     func sessionToolPresentation(of session: SessionRecord,
                                  reading: ([String]) -> Range<Int> = { $0.indices }) -> ConversationPresentation {
+        sessionToolPresentation(
+            for: session, codexState: codexPresentationBySessionID[session.id],
+            transcript: TranscriptTurns(transcriptBySessionID[session.id] ?? []), status: session.status,
+            reading: reading)
+    }
+
+    private func sessionToolPresentation(
+        for session: SessionRecord,
+        codexState: CodexTaskState?,
+        transcript: TranscriptTurns,
+        status: SessionStatus,
+        reading: ([String]) -> Range<Int>
+    ) -> ConversationPresentation {
         func project(ids: [String], _ turn: (Int) -> ConversationTurn) -> [ConversationTurn] {
             let read = reading(ids).clamped(to: ids.indices)
             return ids.indices.map { index in
@@ -355,7 +468,7 @@ extension AppModel: SessionToolHandling {
             }
         }
         if HarnessPresentationPolicy(harness: session.harness).usesCodexTimeline,
-           let state = codexPresentationBySessionID[session.id], state.thread?.turns.isEmpty == false {
+           let state = codexState, state.thread?.turns.isEmpty == false {
             return CodexConversationProjection.presentation(state, workspaceURL: session.workspaceURL,
                                                             historySelection: nil) { inputs in
                 project(ids: (0..<inputs.count).map(inputs.id(at:))) { CodexConversationProjection.turn(inputs.input(at: $0)) }
@@ -363,8 +476,8 @@ extension AppModel: SessionToolHandling {
         }
         var requests = TranscriptRequestIndex()
         return TranscriptConversationProjection.presentation(
-            from: TranscriptTurns(transcriptBySessionID[session.id] ?? []), harness: session.harness,
-            status: session.status, latestTurnIsComplete: session.completionState == .completed,
+            from: transcript, harness: session.harness,
+            status: status, latestTurnIsComplete: session.completionState == .completed,
             latestTurnWasCutOff: session.completionState == .interrupted, requests: &requests) { inputs in
             project(ids: (0..<inputs.count).map { inputs.id(at: $0).uuidString }) {
                 TranscriptConversationProjection.turn(inputs.input(at: $0))
@@ -1397,6 +1510,42 @@ extension AppModel: SessionToolHandling {
         }
     }
 
+    private enum ResolvedReadTask {
+        case active(SessionRecord)
+        case archived(ArchivedSessionRecord)
+
+        var session: SessionRecord {
+            switch self {
+            case let .active(session): session
+            case let .archived(record): record.session
+            }
+        }
+    }
+
+    /// Resolves `task_id` for read-only `read_task`: returns either an open task or an archived task
+    /// (loaded from the index without starting any turn), and reports every other kind of reference
+    /// the same way `sessionToolTask` does.
+    private func sessionToolTaskForRead(_ reference: String, caller: SessionToolCaller) async -> Result<ResolvedReadTask, SessionToolError> {
+        let reference = reference.trimmingCharacters(in: .whitespaces)
+        let id = reference == SessionToolCatalog.selfReference ? caller.hostTaskID : UUID(uuidString: reference)
+        guard let id else {
+            return .failure(await sessionToolUnreadTaskReference(reference, caller: caller, allowsArchived: true))
+        }
+        if let task = store.sessions.first(where: { $0.id == id }) { return .success(.active(task)) }
+        if store.archivedSessions == nil { try? await store.loadArchivedSessions() }
+        if let archived = store.archivedSessions?.first(where: { $0.id == id }) {
+            return .success(.archived(archived))
+        }
+        if sessionTools.run(id) != nil {
+            return .failure(SessionToolError(
+                message: "\(id.uuidString) is a subagent's id from run_agent, not a task's. wait_tasks gives its state "
+                    + "and answer.", failure: AgentToolFailure(.invalidArguments, retry: .withChanges)))
+        }
+        return .failure(SessionToolError(
+            message: "no task \(id.uuidString); list_tasks gives the task ids.",
+            failure: AgentToolFailure(.notFound, retry: .withChanges, details: ["taskId": .string(id.uuidString)])))
+    }
+
     /// The open task a session tool's `task_id` names, or why it names none, read the same way for every
     /// tool: "self" is the calling task, and a reference that is no task id, an archived task, a subagent's
     /// id and an id Yardlet has no task for are told apart. Yardlet takes a task id only whole; a shortened
@@ -1426,7 +1575,8 @@ extension AppModel: SessionToolHandling {
 
     /// Why a reference that is no task id names no task: a task suggestion's id from spawn_task, a task id
     /// cut short (as an agent may write one in prose), or anything else.
-    private func sessionToolUnreadTaskReference(_ reference: String, caller: SessionToolCaller) async -> SessionToolError {
+    private func sessionToolUnreadTaskReference(_ reference: String, caller: SessionToolCaller,
+                                                allowsArchived: Bool = false) async -> SessionToolError {
         if TaskSuggestionToolCatalog.isTaskID(reference) {
             if let started = taskSuggestions.resolution(of: reference, in: caller.hostTaskID)?.startedTaskID {
                 return SessionToolError(
@@ -1450,7 +1600,8 @@ extension AppModel: SessionToolHandling {
                 return SessionToolError(
                     message: "\(reference) is not a whole task id, and Yardlet takes task ids whole. It begins the id of "
                         + "task \(task.id.uuidString) (\(task.title))\(state).",
-                    failure: AgentToolFailure(.invalidArguments, retry: archived.isEmpty ? .withChanges : .no,
+                    failure: AgentToolFailure(.invalidArguments,
+                                              retry: (archived.isEmpty || allowsArchived) ? .withChanges : .no,
                                               details: ["taskId": .string(task.id.uuidString)]))
             }
             if open.count + archived.count > 1 {
