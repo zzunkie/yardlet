@@ -111,6 +111,7 @@ final class MailCalendarStore {
     @ObservationIgnored private var openThreadTask: Task<Void, Never>?
     @ObservationIgnored private var calendarTask: Task<Void, Never>?
 
+    @ObservationIgnored private var stateGeneration = 0
     @ObservationIgnored private var mailGeneration = 0
     @ObservationIgnored private var openThreadGeneration = 0
     @ObservationIgnored private var calendarGeneration = 0
@@ -172,6 +173,15 @@ final class MailCalendarStore {
         openThreadTask = nil
         calendarTask?.cancel()
         calendarTask = nil
+        stateGeneration += 1
+        mailGeneration += 1
+        openThreadGeneration += 1
+        calendarGeneration += 1
+        stateLoading = false
+        mailLoading = false
+        mailLoadingMore = false
+        openThreadLoading = false
+        calendarLoading = false
     }
 
     func handleConnectionChanged(isConnected: Bool) {
@@ -216,18 +226,23 @@ final class MailCalendarStore {
     func refreshState() async {
         guard session.isConnected, session.capabilities.mailCalendarV2 else { return }
         stateTask?.cancel()
+        stateGeneration += 1
+        let generation = stateGeneration
         stateLoading = true
         stateError = nil
         let task = Task { [weak self] in
             guard let self else { return }
+            defer {
+                if self.stateGeneration == generation {
+                    self.stateLoading = false
+                }
+            }
             do {
-                let state = try await session.fetchMailCalendarV2State(watching: true)
-                guard !Task.isCancelled else { return }
-                self.stateLoading = false
+                let state = try await session.fetchMailCalendarV2State()
+                guard !Task.isCancelled, self.stateGeneration == generation else { return }
                 self.applyV2State(state)
             } catch {
-                guard !Task.isCancelled else { return }
-                self.stateLoading = false
+                guard !Task.isCancelled, self.stateGeneration == generation else { return }
                 self.stateError = self.handleError(error)
             }
         }
@@ -289,6 +304,8 @@ final class MailCalendarStore {
         openThreadTask = nil
         mailGeneration += 1
         openThreadGeneration += 1
+        selectedMailAccountId = nil
+        mailQuery = ""
         threads = []
         nextPageToken = nil
         openThread = nil
@@ -411,6 +428,11 @@ final class MailCalendarStore {
         mailError = nil
         mailLoading = true
         mailLoadingMore = false
+        defer {
+            if mailGeneration == generation {
+                mailLoading = false
+            }
+        }
 
         let request = RemoteMailCalendarV2Request(
             action: .listThreads,
@@ -427,11 +449,9 @@ final class MailCalendarStore {
             threads = incoming
             // Only keep nextPageToken when pagination targets a single account.
             nextPageToken = effectivePaginationAccountId != nil ? Self.nonEmpty(response.nextPageToken) : nil
-            mailLoading = false
             hasLoadedMailOnce = true
         } catch {
             guard !Task.isCancelled, mailGeneration == generation else { return }
-            mailLoading = false
             mailError = handleError(error)
         }
     }
@@ -462,16 +482,19 @@ final class MailCalendarStore {
 
         mailTask = Task { [weak self] in
             guard let self else { return }
+            defer {
+                if self.mailGeneration == generation {
+                    self.mailLoadingMore = false
+                }
+            }
             do {
                 let response = try await session.sendMailCalendarV2(request)
                 guard !Task.isCancelled, self.mailGeneration == generation else { return }
                 let merged = Self.deduplicateThreads(self.threads + (response.threads ?? []))
                 self.threads = merged
                 self.nextPageToken = Self.nonEmpty(response.nextPageToken)
-                self.mailLoadingMore = false
             } catch {
                 guard !Task.isCancelled, self.mailGeneration == generation else { return }
-                self.mailLoadingMore = false
                 self.mailError = self.handleError(error)
             }
         }
@@ -505,10 +528,14 @@ final class MailCalendarStore {
 
         openThreadTask = Task { [weak self] in
             guard let self else { return }
+            defer {
+                if self.openThreadGeneration == generation {
+                    self.openThreadLoading = false
+                }
+            }
             do {
                 let response = try await session.sendMailCalendarV2(request)
                 guard !Task.isCancelled, self.openThreadGeneration == generation else { return }
-                self.openThreadLoading = false
                 if let thread = response.thread {
                     self.openThread = thread
                 } else {
@@ -516,7 +543,6 @@ final class MailCalendarStore {
                 }
             } catch {
                 guard !Task.isCancelled, self.openThreadGeneration == generation else { return }
-                self.openThreadLoading = false
                 self.openThreadError = self.handleError(error)
             }
         }
@@ -623,10 +649,9 @@ final class MailCalendarStore {
         if let target {
             if isMe(target.from.email) {
                 var seen: Set<String> = []
-                let nonSelfTo = target.to.filter { addr in
+                recipients = target.to.filter { addr in
                     !isMe(addr.email) && seen.insert(addr.email.lowercased()).inserted
                 }
-                recipients = nonSelfTo.isEmpty ? target.to : nonSelfTo
             } else {
                 recipients = [target.from]
             }
@@ -644,8 +669,8 @@ final class MailCalendarStore {
     }
 
     @discardableResult
-    func sendReply(body: String) async -> Bool {
-        guard mailReady, !mailBusy, let thread = openThread else { return false }
+    func sendReply(accountId: String, threadId: String, replyToMessageId: String?, body: String) async -> Bool {
+        guard mailReady, !mailBusy else { return false }
         let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             mailActionError = String(localized: "Write a reply first.")
@@ -656,13 +681,12 @@ final class MailCalendarStore {
             return false
         }
 
-        let target = Self.replyTargetMessage(in: thread)
         let request = RemoteMailCalendarV2Request(
             action: .replyMessage,
-            accountId: thread.accountId,
+            accountId: accountId,
             body: body,
-            replyToThreadId: thread.threadId,
-            replyToMessageId: target?.id
+            replyToThreadId: threadId,
+            replyToMessageId: replyToMessageId
         )
         if let validationError = request.validationError {
             mailActionError = handleError(validationError)
@@ -676,7 +700,9 @@ final class MailCalendarStore {
         do {
             _ = try await session.sendMailCalendarV2(request)
             mailBanner = String(localized: "Reply sent")
-            reloadOpenThread(accountId: thread.accountId, threadId: thread.threadId, clearExisting: false)
+            if openThreadKey == "\(accountId):\(threadId)" {
+                reloadOpenThread(accountId: accountId, threadId: threadId, clearExisting: false)
+            }
             loadThreads(clearExisting: false)
             return true
         } catch {
@@ -839,6 +865,11 @@ final class MailCalendarStore {
         }
         calendarError = nil
         calendarLoading = true
+        defer {
+            if calendarGeneration == generation {
+                calendarLoading = false
+            }
+        }
 
         // 1. Load calendars (needed for filter chips and resolving selectedCalendarKey -> accountId/calendarId).
         var currentCalendars = calendars
@@ -854,7 +885,6 @@ final class MailCalendarStore {
             }
         } catch {
             guard !Task.isCancelled, calendarGeneration == generation else { return }
-            calendarLoading = false
             calendarError = handleError(error)
             return
         }
@@ -884,11 +914,9 @@ final class MailCalendarStore {
             guard !Task.isCancelled, calendarGeneration == generation else { return }
             events = Self.deduplicateEvents(response.events ?? [])
             eventsTruncated = response.eventsTruncated == true
-            calendarLoading = false
             hasLoadedCalendarOnce = true
         } catch {
             guard !Task.isCancelled, calendarGeneration == generation else { return }
-            calendarLoading = false
             calendarError = handleError(error)
         }
     }
@@ -1105,10 +1133,17 @@ final class MailCalendarStore {
         return value
     }
 
-    private func handleError(_ error: Error) -> String {
+    private func handleError(_ error: Error) -> String? {
         if let remoteError = error as? RemoteError {
             if remoteError.code == .notAllowed {
                 revokePermissionAndClearAll()
+                return nil
+            }
+            if remoteError.code == .unavailable, remoteError.reason == .signIn {
+                return String(localized: "Sign in to your Mail or Calendar account in Connectors on \(session.name).")
+            }
+            if remoteError.code == .notFound, remoteError.reason == nil {
+                return String(localized: "This item is no longer available on \(session.name).")
             }
             return HostSession.message(for: remoteError, host: session.name)
         }

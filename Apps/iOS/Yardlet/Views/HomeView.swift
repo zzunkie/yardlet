@@ -202,32 +202,45 @@ struct HomeView: View {
                     isSearchFocused = false
                 }
             }
-            .onChange(of: wantsMailCalendarV2Watch, initial: true) { _, shouldWatch in
-                if shouldWatch && !isWatchingMailCalendarV2 {
-                    isWatchingMailCalendarV2 = true
-                    session.beginWatchingMailCalendarV2()
-                } else if !shouldWatch && isWatchingMailCalendarV2 {
-                    isWatchingMailCalendarV2 = false
-                    session.endWatchingMailCalendarV2()
+        }
+        .onChange(of: wantsMailCalendarV2Watch, initial: true) { _, shouldWatch in
+            if shouldWatch && !isWatchingMailCalendarV2 {
+                isWatchingMailCalendarV2 = true
+                session.beginWatchingMailCalendarV2()
+            } else if !shouldWatch && isWatchingMailCalendarV2 {
+                isWatchingMailCalendarV2 = false
+                session.endWatchingMailCalendarV2()
+            }
+        }
+        .onChange(of: session.mailCalendarV2State) { _, next in
+            mailCalendarStore.syncHostState(next)
+        }
+        .onChange(of: session.isConnected) { _, connected in
+            mailCalendarStore.handleConnectionChanged(isConnected: connected)
+            if connected && usesMailCalendarV2 {
+                switch selectedTab {
+                case .mail: mailCalendarStore.activateMailTab()
+                case .calendar: mailCalendarStore.activateCalendarTab()
+                case .tasks: break
                 }
             }
-            .onChange(of: session.mailCalendarV2State) { _, next in
-                mailCalendarStore.syncHostState(next)
+        }
+        .onChange(of: session.mailCalendarV2Changes) { _, _ in
+            if wantsMailCalendarV2Watch {
+                mailCalendarStore.handleHostDataChanged(activeTab: selectedTab)
             }
-            .onChange(of: session.isConnected) { _, connected in
-                mailCalendarStore.handleConnectionChanged(isConnected: connected)
+        }
+        .onAppear {
+            if wantsMailCalendarV2Watch && !isWatchingMailCalendarV2 {
+                isWatchingMailCalendarV2 = true
+                session.beginWatchingMailCalendarV2()
             }
-            .onChange(of: session.mailCalendarV2Changes) { _, _ in
-                if wantsMailCalendarV2Watch {
-                    mailCalendarStore.handleHostDataChanged(activeTab: selectedTab)
-                }
-            }
-            .onDisappear {
-                mailCalendarStore.cancelAllTasks()
-                if isWatchingMailCalendarV2 {
-                    isWatchingMailCalendarV2 = false
-                    session.endWatchingMailCalendarV2()
-                }
+        }
+        .onDisappear {
+            mailCalendarStore.cancelAllTasks()
+            if isWatchingMailCalendarV2 {
+                isWatchingMailCalendarV2 = false
+                session.endWatchingMailCalendarV2()
             }
         }
         // A task a conversation's link or a schedule's run names opens as the list opens it.

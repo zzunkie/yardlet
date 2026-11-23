@@ -473,10 +473,12 @@ struct CalendarTabView: View {
             } else {
                 pillBadge(color: YardletPalette.Status.running, title: "Not Set Up")
             }
+        } else if store.stateLoading {
+            ProgressView().controlSize(.mini)
         } else if store.stateError != nil {
             pillBadge(color: YardletPalette.Status.failed, title: "Unavailable")
         } else {
-            ProgressView().controlSize(.mini)
+            pillBadge(color: YardletPalette.Status.running, title: "Unavailable")
         }
     }
 
@@ -509,7 +511,10 @@ struct CalendarTabView: View {
         if let error = store.stateError {
             return error
         }
-        return String(localized: "Checking Mail and Calendar access on \(session.name)…")
+        if store.stateLoading {
+            return String(localized: "Checking Mail and Calendar access on \(session.name)…")
+        }
+        return String(localized: "Couldn't check Mail and Calendar status on \(session.name).")
     }
 
     @ViewBuilder
@@ -517,7 +522,7 @@ struct CalendarTabView: View {
         if !session.isConnected {
             Button("Retry") { session.reconnectNow() }
                 .prominentButton()
-        } else if store.v2State == nil && store.stateError != nil {
+        } else if store.v2State == nil && !store.stateLoading {
             Button("Retry") {
                 Task { await store.refreshState() }
             }

@@ -270,6 +270,7 @@ final class HostSession: Identifiable {
         case .closing:
             closingReason = event.reason
         case .revoked:
+            mailCalendarV2State = nil
             connection = .removed
         case .linkRequest:
             guard let requestID = event.requestId, let code = event.code else { return }
@@ -287,7 +288,7 @@ final class HostSession: Identifiable {
             if capabilities.mailCalendarV2 {
                 mailCalendarV2Changes += 1
                 if watchingMailCalendarV2Count > 0 {
-                    Task { _ = try? await fetchMailCalendarV2State(watching: true) }
+                    Task { _ = try? await fetchMailCalendarV2State() }
                 }
             } else {
                 Task { await refreshMailCalendarState() }
@@ -383,7 +384,7 @@ final class HostSession: Identifiable {
         if capabilities.mailCalendarV2 {
             mailCalendarState = nil
             if watchingMailCalendarV2Count > 0 {
-                Task { _ = try? await fetchMailCalendarV2State(watching: true) }
+                Task { _ = try? await fetchMailCalendarV2State() }
             }
         } else if capabilities.hostCalendar || capabilities.hostMail {
             mailCalendarV2State = nil
@@ -422,7 +423,7 @@ final class HostSession: Identifiable {
     func beginWatchingMailCalendarV2() {
         watchingMailCalendarV2Count += 1
         if isConnected, capabilities.mailCalendarV2 {
-            Task { _ = try? await fetchMailCalendarV2State(watching: true) }
+            Task { _ = try? await fetchMailCalendarV2State() }
         }
     }
 
@@ -435,14 +436,14 @@ final class HostSession: Identifiable {
     }
 
     @discardableResult
-    func fetchMailCalendarV2State(watching: Bool = true) async throws -> RemoteMailCalendarV2State {
+    func fetchMailCalendarV2State() async throws -> RemoteMailCalendarV2State {
         guard isConnected, capabilities.mailCalendarV2 else {
             throw RemoteError(.unavailable, "Not connected")
         }
         mailCalendarV2StateSeq += 1
         let seq = mailCalendarV2StateSeq
         let conn = connectionNumber
-        let answer = await response(to: .mailCalendarV2State(watching: watching))
+        let answer = await response(to: .mailCalendarV2State(watching: true))
         guard connectionNumber == conn, capabilities.mailCalendarV2 else {
             throw RemoteError(.unavailable, "Not connected")
         }
@@ -484,11 +485,15 @@ final class HostSession: Identifiable {
 
     /// Immediately clears cached in-memory Mail and Calendar V2 account lists and marks permission off.
     func revokeMailCalendarV2PermissionLocally() {
+        mailCalendarV2StateSeq += 1
+        appliedMailCalendarV2StateSeq = mailCalendarV2StateSeq
         if var state = mailCalendarV2State {
             state.permitted = false
             state.mailAccounts = []
             state.calendarAccounts = []
             mailCalendarV2State = state
+        } else {
+            mailCalendarV2State = RemoteMailCalendarV2State(permitted: false)
         }
     }
 

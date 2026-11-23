@@ -54,6 +54,7 @@ struct MailTabView: View {
         .onChange(of: store.mailReady) { _, ready in
             if !ready {
                 activeSheet = nil
+                searchInput = ""
             } else if isActive {
                 store.activateMailTab()
             }
@@ -524,10 +525,12 @@ struct MailTabView: View {
             } else {
                 pillBadge(color: YardletPalette.Status.running, title: "Not Set Up")
             }
+        } else if store.stateLoading {
+            ProgressView().controlSize(.mini)
         } else if store.stateError != nil {
             pillBadge(color: YardletPalette.Status.failed, title: "Unavailable")
         } else {
-            ProgressView().controlSize(.mini)
+            pillBadge(color: YardletPalette.Status.running, title: "Unavailable")
         }
     }
 
@@ -560,7 +563,10 @@ struct MailTabView: View {
         if let error = store.stateError {
             return error
         }
-        return String(localized: "Checking Mail and Calendar access on \(session.name)…")
+        if store.stateLoading {
+            return String(localized: "Checking Mail and Calendar access on \(session.name)…")
+        }
+        return String(localized: "Couldn't check Mail and Calendar status on \(session.name).")
     }
 
     @ViewBuilder
@@ -568,7 +574,7 @@ struct MailTabView: View {
         if !session.isConnected {
             Button("Retry") { session.reconnectNow() }
                 .prominentButton()
-        } else if store.v2State == nil && store.stateError != nil {
+        } else if store.v2State == nil && !store.stateLoading {
             Button("Retry") {
                 Task { await store.refreshState() }
             }
@@ -609,7 +615,16 @@ private struct MailThreadDetailSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var replyBody = ""
-    @State private var pendingReplyConfirmation: MailCalendarStore.ReplyPreview?
+    @State private var pendingReplyConfirmation: PendingReplyConfirmation?
+
+    private struct PendingReplyConfirmation {
+        let accountId: String
+        let threadId: String
+        let replyToMessageId: String?
+        let recipientsDisplay: String
+        let subjectDisplay: String
+        let body: String
+    }
 
     private var thread: RemoteMailV2Thread? {
         guard let current = store.openThread,
@@ -717,21 +732,26 @@ private struct MailThreadDetailSheet: View {
                 set: { if !$0 { pendingReplyConfirmation = nil } }
             ),
             presenting: pendingReplyConfirmation
-        ) { _ in
+        ) { confirmation in
             Button("Send Reply") {
-                let textToSend = replyBody
                 Task {
-                    if await store.sendReply(body: textToSend) {
+                    let ok = await store.sendReply(
+                        accountId: confirmation.accountId,
+                        threadId: confirmation.threadId,
+                        replyToMessageId: confirmation.replyToMessageId,
+                        body: confirmation.body
+                    )
+                    if ok && replyBody == confirmation.body {
                         replyBody = ""
                     }
                 }
             }
             Button("Cancel", role: .cancel) {}
-        } message: { preview in
-            let recipientLine = preview.recipientsDisplay.isEmpty
-                ? String(localized: "Original sender")
-                : preview.recipientsDisplay
-            Text("To: \(recipientLine)\nSubject: \(preview.subjectDisplay)")
+        } message: { confirmation in
+            let recipientLine = confirmation.recipientsDisplay.isEmpty
+                ? String(localized: "No recipients")
+                : confirmation.recipientsDisplay
+            Text("To: \(recipientLine)\nSubject: \(confirmation.subjectDisplay)")
         }
         .onAppear {
             store.loadThread(accountId: accountId, threadId: threadId)
@@ -918,7 +938,14 @@ private struct MailThreadDetailSheet: View {
 
                 Button {
                     guard canSend else { return }
-                    pendingReplyConfirmation = preview
+                    pendingReplyConfirmation = PendingReplyConfirmation(
+                        accountId: thread.accountId,
+                        threadId: thread.threadId,
+                        replyToMessageId: preview.replyToMessageId,
+                        recipientsDisplay: preview.recipientsDisplay,
+                        subjectDisplay: preview.subjectDisplay,
+                        body: replyBody
+                    )
                 } label: {
                     Group {
                         if store.mailBusy {
@@ -967,8 +994,13 @@ private struct MailComposeSheet: View {
     @State private var pendingConfirmation: ComposeConfirmation?
 
     private struct ComposeConfirmation {
-        let recipients: String
+        let accountId: String
+        let toRaw: String
+        let ccRaw: String
         let subject: String
+        let body: String
+        let recipientsDisplay: String
+        let subjectDisplay: String
     }
 
     private var canAttemptSend: Bool {
@@ -1106,15 +1138,15 @@ private struct MailComposeSheet: View {
                 set: { if !$0 { pendingConfirmation = nil } }
             ),
             presenting: pendingConfirmation
-        ) { _ in
+        ) { confirmation in
             Button("Send") {
                 Task {
                     let ok = await store.sendNewMessage(
-                        accountId: selectedAccountId,
-                        toRaw: toField,
-                        ccRaw: ccField,
-                        subject: subject,
-                        body: bodyText
+                        accountId: confirmation.accountId,
+                        toRaw: confirmation.toRaw,
+                        ccRaw: confirmation.ccRaw,
+                        subject: confirmation.subject,
+                        body: confirmation.body
                     )
                     if ok {
                         dismiss()
@@ -1123,7 +1155,7 @@ private struct MailComposeSheet: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: { confirmation in
-            Text("To: \(confirmation.recipients)\nSubject: \(confirmation.subject)")
+            Text("To: \(confirmation.recipientsDisplay)\nSubject: \(confirmation.subjectDisplay)")
         }
         .onAppear {
             store.mailActionError = nil
@@ -1165,8 +1197,13 @@ private struct MailComposeSheet: View {
         }
         let trimmedSubject = subject.trimmingCharacters(in: .whitespacesAndNewlines)
         pendingConfirmation = ComposeConfirmation(
-            recipients: summaryRecipients,
-            subject: trimmedSubject.isEmpty ? String(localized: "(No subject)") : trimmedSubject
+            accountId: selectedAccountId,
+            toRaw: toField,
+            ccRaw: ccField,
+            subject: subject,
+            body: bodyText,
+            recipientsDisplay: summaryRecipients,
+            subjectDisplay: trimmedSubject.isEmpty ? String(localized: "(No subject)") : trimmedSubject
         )
     }
 }

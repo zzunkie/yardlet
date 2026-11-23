@@ -2489,6 +2489,22 @@
         }
       }
     },
+    "Couldn't check Mail and Calendar status on %@.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't check Mail and Calendar status on %@."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 메일 및 캘린더 상태를 확인하지 못했습니다."
+          }
+        }
+      }
+    },
     "Couldn't connect": {
       "localizations": {
         "ko": {
@@ -4193,6 +4209,22 @@
         }
       }
     },
+    "No recipients": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No recipients"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "받는 사람 없음"
+          }
+        }
+      }
+    },
     "No services connected yet": {
       "localizations": {
         "en": {
@@ -4581,22 +4613,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "주최자"
-          }
-        }
-      }
-    },
-    "Original sender": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Original sender"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "원래 보낸 사람"
           }
         }
       }
@@ -5933,6 +5949,22 @@
         }
       }
     },
+    "Sign in to your Mail or Calendar account in Connectors on %@.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign in to your Mail or Calendar account in Connectors on %@."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@의 커넥터에서 메일 또는 캘린더 계정에 로그인하세요."
+          }
+        }
+      }
+    },
     "Sign in with %@": {
       "localizations": {
         "ko": {
@@ -6679,6 +6711,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Yardlet 연결 링크가 아닙니다."
+          }
+        }
+      }
+    },
+    "This item is no longer available on %@.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item is no longer available on %@."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 항목은 %@에서 더 이상 사용할 수 없습니다."
           }
         }
       }
