@@ -489,7 +489,10 @@ actor MuseAdapter:
     }
 
     func events(for session: HarnessSessionHandle) async -> AsyncStream<HarnessEventEnvelope> {
-        eventChannel.subscribe(to: session.localSessionID)
+        let stream = eventChannel.subscribe(to: session.localSessionID)
+        // A session that ended with its host before anyone listened ends at once, after its events.
+        if handles[session.localSessionID] != session { eventChannel.finish(session.localSessionID) }
+        return stream
     }
 
     func providerCapabilities(
@@ -661,9 +664,9 @@ actor MuseAdapter:
                     workspaceURL: workspaceURL
                 )
             )
-            if transport === currentTransport, messageTask == nil {
+            if transport === currentTransport, !transportStopped, messageTask == nil {
                 let stream = await currentTransport.messages()
-                if transport === currentTransport, messageTask == nil {
+                if transport === currentTransport, !transportStopped, messageTask == nil {
                     messageTask = Task { [weak self] in
                         for await frame in stream {
                             guard !Task.isCancelled else { break }
@@ -682,15 +685,18 @@ actor MuseAdapter:
                     version: "MSP \(result["schema"]?["version"]?.integerValue ?? -1)"
                 )
             }
-            guard transport === currentTransport else {
+            guard transport === currentTransport, !transportStopped else {
                 throw HarnessAdapterError.processExited(code: -1, message: "Muse transport stopped")
             }
             try await currentTransport.send(MuseProtocol.initialized)
+            guard transport === currentTransport, !transportStopped else {
+                throw HarnessAdapterError.processExited(code: -1, message: "Muse transport stopped")
+            }
             initialized = true
             subscriptionUsageUnavailable = false
             refreshSubscriptionUsage()
         } catch {
-            if transport === currentTransport {
+            if transport === currentTransport, !transportStopped {
                 messageTask?.cancel()
                 messageTask = nil
                 initialized = false

@@ -299,7 +299,10 @@ actor PiRPCAdapter: HarnessAdapter, ProviderCapabilityProviding, HarnessWorkspac
     }
 
     func events(for session: HarnessSessionHandle) async -> AsyncStream<HarnessEventEnvelope> {
-        eventChannel.subscribe(to: session.localSessionID)
+        let stream = eventChannel.subscribe(to: session.localSessionID)
+        // A session that ended with its process before anyone listened ends at once, after its events.
+        if handles[session.localSessionID] != session { eventChannel.finish(session.localSessionID) }
+        return stream
     }
 
     func providerCapabilities(for session: HarnessSessionHandle) async throws
@@ -524,7 +527,7 @@ actor PiRPCAdapter: HarnessAdapter, ProviderCapabilityProviding, HarnessWorkspac
             }
             if failed {
                 runningSessionIDs.remove(localSessionID)
-                promptTasks.removeValue(forKey: localSessionID)
+                promptTasks.removeValue(forKey: localSessionID)?.cancel()
                 activities.removeValue(forKey: localSessionID)
                 emit(.sessionStatusChanged(.failed), for: localSessionID, rawData: frame.data)
             }

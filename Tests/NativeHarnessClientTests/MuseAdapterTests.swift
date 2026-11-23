@@ -295,6 +295,61 @@ final class MuseAdapterTests: XCTestCase {
         XCTAssertEqual(thirdStops, 1)
     }
 
+    func testLateEventsSubscriptionAfterTransportExitFinishesImmediately() async throws {
+        let transport = FakeMuseTransport()
+        let adapter = MuseAdapter(
+            executableURL: URL(filePath: "/tmp/fake-muse"),
+            transport: transport
+        )
+        let handle = try await adapter.createSession(CreateHarnessSessionRequest(
+            localSessionID: UUID(),
+            workspaceURL: URL(filePath: "/home/me/src/proj"),
+            initialPrompt: nil
+        ))
+        try await adapter.send("crash before subscribe", to: handle)
+        await transport.exit()
+        try await waitUntil { await transport.stopCount == 1 }
+
+        var replayed: [HarnessEventPayload] = []
+        for await event in await adapter.events(for: handle) {
+            replayed.append(event.payload)
+        }
+        XCTAssertEqual(Array(replayed.suffix(2)), [
+            .error(message: L10n.format("Connection to %@ ended.", HarnessKind.museCode.displayName), recoverable: true),
+            .sessionStatusChanged(.failed)
+        ])
+    }
+
+    func testTransportExitDuringInitializedHandshakeDoesNotLeaveDeadHostInitialized() async throws {
+        let dying = FakeMuseTransport(exitOnInitialized: true)
+        let fresh = FakeMuseTransport()
+        let queue = OSAllocatedUnfairLock(initialState: [dying, fresh])
+        let adapter = MuseAdapter(
+            executableURL: URL(filePath: "/tmp/fake-muse"),
+            transportFactory: { queue.withLock { $0.removeFirst() } }
+        )
+
+        do {
+            _ = try await adapter.createSession(CreateHarnessSessionRequest(
+                localSessionID: UUID(),
+                workspaceURL: URL(filePath: "/home/me/src/proj"),
+                initialPrompt: nil
+            ))
+            XCTFail("Expected handshake to fail when host exits during initialized")
+        } catch let error as HarnessAdapterError {
+            XCTAssertEqual(error, .processExited(code: -1, message: "Muse transport stopped"))
+        }
+
+        let handle = try await adapter.createSession(CreateHarnessSessionRequest(
+            localSessionID: UUID(),
+            workspaceURL: URL(filePath: "/home/me/src/proj"),
+            initialPrompt: nil
+        ))
+        let freshMethods = await fresh.requestMethods
+        XCTAssertEqual(freshMethods.filter { $0 != "usage/read" }, ["initialize", "session/start"])
+        await adapter.close(handle)
+    }
+
     /// The host a failed start stopped is not the next session's: that one starts a new host, as
     /// the session after the last closed one does.
     func testUnsupportedSchemaStopsTransportWithoutCreatingSession() async throws {
@@ -1406,6 +1461,7 @@ private actor FakeMuseTransport: MuseTransport {
     private let schemaVersion: Int64
     private let resumeRunning: Bool
     private let failTurnStart: Bool
+    private let exitOnInitialized: Bool
     /// `model/list` `variants` by display label; a row with no entry sends none.
     private let modelVariants: [String: JSONValue]
     /// The row `model/list` marks active, which `session/setModel` moves as the host does.
@@ -1426,6 +1482,7 @@ private actor FakeMuseTransport: MuseTransport {
         schemaVersion: Int64 = 1,
         resumeRunning: Bool = false,
         failTurnStart: Bool = false,
+        exitOnInitialized: Bool = false,
         modelVariants: [String: JSONValue] = [:]
     ) {
         let pair = AsyncStream<MuseRawFrame>.makeStream()
@@ -1434,6 +1491,7 @@ private actor FakeMuseTransport: MuseTransport {
         self.schemaVersion = schemaVersion
         self.resumeRunning = resumeRunning
         self.failTurnStart = failTurnStart
+        self.exitOnInitialized = exitOnInitialized
         self.modelVariants = modelVariants
     }
 
@@ -1580,6 +1638,11 @@ private actor FakeMuseTransport: MuseTransport {
 
     func send(_ value: JSONValue) async throws {
         sentMessages.append(value)
+        if exitOnInitialized, value["method"]?.stringValue == "initialized" {
+            continuation.finish()
+            // Allow the adapter's message reader task to run `transportEnded` before returning.
+            try? await Task.sleep(for: .milliseconds(50))
+        }
     }
 
     func messages() async -> AsyncStream<MuseRawFrame> { stream }

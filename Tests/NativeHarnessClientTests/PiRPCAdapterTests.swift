@@ -539,6 +539,76 @@ final class PiRPCAdapterTests: XCTestCase {
         await adapter.close(handle)
     }
 
+    func testLateEventsSubscriptionAfterTransportExitFinishesImmediately() async throws {
+        let transport = FakePiRPCTransport(sessionFile: "/tmp/pi-late-sub.jsonl")
+        let adapter = PiRPCAdapter(
+            kind: .pi,
+            executableURL: URL(filePath: "/tmp/fake-pi"),
+            transportFactory: { _ in transport }
+        )
+        let handle = try await adapter.createSession(CreateHarnessSessionRequest(
+            localSessionID: UUID(),
+            workspaceURL: URL(filePath: "/tmp/pi-late-sub"),
+            initialPrompt: nil
+        ))
+        try await adapter.send("crash before subscribe", to: handle)
+        await transport.exit()
+        try await waitUntil { await transport.stopCount == 1 }
+
+        var replayed: [HarnessEventPayload] = []
+        for await event in await adapter.events(for: handle) {
+            replayed.append(event.payload)
+        }
+        XCTAssertEqual(Array(replayed.suffix(2)), [
+            .error(message: L10n.format("Connection to %@ ended.", HarnessKind.pi.displayName), recoverable: true),
+            .sessionStatusChanged(.failed)
+        ])
+    }
+
+    func testMessageEndErrorCancelsPendingPromptTaskSoLateRPCErrorDoesNotDuplicateFailure() async throws {
+        let transport = FakePiRPCTransport(sessionFile: "/tmp/pi-cancel-prompt.jsonl", deferPromptResponses: true)
+        let adapter = PiRPCAdapter(
+            kind: .pi,
+            executableURL: URL(filePath: "/tmp/fake-pi"),
+            transportFactory: { _ in transport }
+        )
+        let handle = try await adapter.createSession(CreateHarnessSessionRequest(
+            localSessionID: UUID(),
+            workspaceURL: URL(filePath: "/tmp/pi-cancel-prompt"),
+            initialPrompt: nil
+        ))
+        let recorder = PiPayloadRecorder()
+        let collector = Task {
+            for await event in await adapter.events(for: handle) {
+                await recorder.append(event.payload)
+            }
+        }
+        defer { collector.cancel() }
+
+        try await adapter.send("trigger error while prompt RPC pending", to: handle)
+        try await waitUntil { await transport.pendingPromptCount == 1 }
+        await transport.emit(.object([
+            "type": .string("message_end"),
+            "message": .object([
+                "role": .string("assistant"),
+                "content": .array([]),
+                "errorMessage": .string("upstream 503")
+            ])
+        ]))
+        try await waitUntil { await recorder.payloads.contains(.sessionStatusChanged(.failed)) }
+
+        await transport.failPendingPrompt(HarnessAdapterError.invalidProviderEvent("late prompt RPC error"))
+        try await Task.sleep(for: .milliseconds(30))
+
+        let payloads = await recorder.payloads
+        XCTAssertEqual(payloads.filter {
+            if case .error = $0 { return true }
+            return false
+        }.count, 1)
+        XCTAssertEqual(payloads.filter { $0 == .sessionStatusChanged(.failed) }.count, 1)
+        await adapter.close(handle)
+    }
+
     private func textDelta(_ text: String) -> JSONValue {
         .object([
             "type": .string("message_update"),
@@ -575,13 +645,17 @@ actor FakePiRPCTransport: PiRPCTransport {
     private(set) var requestValues: [JSONValue] = []
     private(set) var sentMessages: [JSONValue] = []
     private(set) var stopCount = 0
+    private let deferPromptResponses: Bool
+    private var promptContinuations: [CheckedContinuation<JSONValue, Error>] = []
+    var pendingPromptCount: Int { promptContinuations.count }
     /// `get_state` names no session file, as a session kept in memory may.
     private var omitsSessionFile = false
 
     func forgetSessionFile() { omitsSessionFile = true }
 
-    init(sessionFile: String) {
+    init(sessionFile: String, deferPromptResponses: Bool = false) {
         self.sessionFile = sessionFile
+        self.deferPromptResponses = deferPromptResponses
         let pair = AsyncStream<PiRPCRawFrame>.makeStream()
         stream = pair.stream
         continuation = pair.continuation
@@ -622,6 +696,11 @@ actor FakePiRPCTransport: PiRPCTransport {
             return response(id: id, command: type, data: .object(["levels": .array([.string("off"), .string("medium"), .string("high")])]))
         }
         if type == "prompt" {
+            if deferPromptResponses {
+                return try await withCheckedThrowingContinuation { continuation in
+                    promptContinuations.append(continuation)
+                }
+            }
             return response(
                 id: id,
                 command: type,
@@ -663,7 +742,17 @@ actor FakePiRPCTransport: PiRPCTransport {
     }
 
     func exit() {
+        let pending = promptContinuations
+        promptContinuations.removeAll()
+        for continuation in pending {
+            continuation.resume(throwing: HarnessAdapterError.processExited(code: SIGKILL, message: ""))
+        }
         continuation.finish()
+    }
+
+    func failPendingPrompt(_ error: Error) {
+        guard !promptContinuations.isEmpty else { return }
+        promptContinuations.removeFirst().resume(throwing: error)
     }
 
     func emit(_ value: JSONValue) {
