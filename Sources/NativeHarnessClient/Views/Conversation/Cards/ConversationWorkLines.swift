@@ -528,7 +528,7 @@ struct ConversationWorkLine: View, Equatable {
             hasDetail: !texts.isEmpty || tool.mcpResult?.isEmpty == false || tool.diff != nil || !tool.diffs.isEmpty
                 || !tool.images.isEmpty || tool.loadsDetailOnOpen || tool.drawsView,
             startsOpen: startsOpen,
-            accessibilityLabel: tool.name.isEmpty ? tool.kind.label : tool.name,
+            accessibilityLabel: ConversationLineWording.toolAccessibilityLabel(tool),
             // A worded line holding a change's diff opens for a review render, as a file change's line does; a
             // call's output stays folded there, as a local call's does.
             opensForReview: !tool.diffs.isEmpty, isHistoryMatch: item.isHistoryMatch,

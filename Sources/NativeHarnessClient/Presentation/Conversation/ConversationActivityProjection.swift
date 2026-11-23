@@ -53,8 +53,10 @@ enum ConversationActivityProjection {
             return .subagent(run)
         }
         // Claude Code names a connector's tool in the call's kind, Antigravity in its kind or title.
+        let allowsBarePrefix = activity.kind.isEmpty || activity.kind.lowercased() == "other"
         let connector = ConnectorToolLabels.shared.label(forHarnessTool: activity.kind)
-            ?? ConnectorToolLabels.shared.label(forHarnessTool: activity.title)
+            ?? ConnectorToolLabels.shared.label(forHarnessTool: activity.title,
+                                                allowsBareServerPrefix: allowsBarePrefix)
         return .tool(ConversationTool(
             kind: .activity(activity.kind), name: activity.title, input: activity.input,
             output: activity.output, isBackground: activity.isBackground == true, isApproved: isApproved,

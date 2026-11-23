@@ -489,6 +489,52 @@ final class ToolRowWordingTests: XCTestCase {
         ConversationItem(id: id, kind: .tool(ConversationTool(kind: kind, name: "")), phase: .completed,
                          source: .transcript(TranscriptEntry(content: .plan(""))))
     }
+
+    func testAntigravityYardletMCPToolNamesStripHashPrefixAndMatchClaudeWording() {
+        XCTAssertEqual(ConversationLineWording.mcpLabel("mcp_yardlet_e76971ce_browser_navigate"),
+                       "yardlet: browser navigate")
+        XCTAssertEqual(ConversationLineWording.mcpLabel("mcp_yardlet_read_task"),
+                       "yardlet: read task")
+        XCTAssertEqual(ConversationLineWording.mcpLabel("yardlet_e0c6a9e0_show_widget", allowsBareServerPrefix: true),
+                       "yardlet: show widget")
+        XCTAssertEqual(ConversationLineWording.mcpLabel("yardlet_spawn_task", allowsBareServerPrefix: true),
+                       "yardlet: spawn task")
+        XCTAssertNil(ConversationLineWording.mcpLabel("yardlet_spawn_task"))
+        XCTAssertNil(ConversationLineWording.mcpLabel("mcp__yardlet___"))
+        XCTAssertEqual(ConversationLineWording.mcpLabel("mcp__yardlet__foo_"), "yardlet: foo")
+        XCTAssertNil(ConversationLineWording.mcpLabel("Read README.md"))
+        XCTAssertNil(ConversationLineWording.mcpLabel("yardlet_config.json", allowsBareServerPrefix: true))
+        XCTAssertNil(ConversationLineWording.mcpLabel("yardlet_docs/README.md", allowsBareServerPrefix: true))
+
+        let nav = ConversationTool(kind: .activity("other"), name: "mcp_yardlet_e76971ce_browser_navigate")
+        XCTAssertEqual(ConversationLineWording.tool(nav, phase: .completed, harness: .antigravityCLI,
+                                                    workspaceURL: nil, localize: en).text,
+                       "Used yardlet: browser navigate")
+        XCTAssertEqual(ConversationLineWording.tool(nav, phase: .running, harness: .antigravityCLI,
+                                                    workspaceURL: nil, localize: en).text,
+                       "Using yardlet: browser navigate")
+        XCTAssertEqual(ConversationLineWording.tool(nav, phase: .completed, harness: .antigravityCLI,
+                                                    workspaceURL: nil, localize: ko).text,
+                       "yardlet: browser navigate 사용함")
+        XCTAssertEqual(ConversationLineWording.toolAccessibilityLabel(nav), "yardlet: browser navigate")
+
+        // Non-MCP read/search/image rows starting with `yardlet_` stay untouched.
+        let readFile = ConversationTool(kind: .activity("read"), name: "yardlet_config.json")
+        XCTAssertEqual(ConversationLineWording.tool(readFile, phase: .completed, harness: .antigravityCLI,
+                                                    workspaceURL: nil, localize: en).text,
+                       "read yardlet_config.json")
+        let readDir = ConversationTool(kind: .activity("read"), name: "yardlet_tests")
+        XCTAssertEqual(ConversationLineWording.tool(readDir, phase: .completed, harness: .antigravityCLI,
+                                                    workspaceURL: nil, localize: en).text,
+                       "read yardlet_tests")
+        let imageRow = ConversationTool(kind: .imageView, name: "yardlet_screenshot.png")
+        XCTAssertEqual(ConversationLineWording.toolAccessibilityLabel(imageRow), "yardlet_screenshot.png")
+
+        let regular = ConversationTool(kind: .activity("read"), name: "Read README.md")
+        XCTAssertEqual(ConversationLineWording.tool(regular, phase: .completed, harness: .antigravityCLI,
+                                                    workspaceURL: nil, localize: en).text,
+                       "Read README.md")
+    }
 }
 
 private extension ConversationItem {
