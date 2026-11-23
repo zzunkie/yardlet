@@ -21,6 +21,22 @@
         }
       }
     },
+    "%@ (%@) wants to open %@ to sign in.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (%@) wants to open %@ to sign in."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@(%2$@)이(가) 로그인을 위해 %3$@ 페이지를 열려고 합니다."
+          }
+        }
+      }
+    },
     "%@ asks for a passkey": {
       "localizations": {
         "ko": {
@@ -291,6 +307,38 @@
         }
       }
     },
+    "%lld configured": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld configured"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld개 구성됨"
+          }
+        }
+      }
+    },
+    "%lld connected": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld connected"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld개 연결됨"
+          }
+        }
+      }
+    },
     "%lld images": {
       "localizations": {
         "en": {
@@ -403,12 +451,76 @@
         }
       }
     },
+    "%lld tasks are currently running on %@. Checking and updating %@ now may affect active work.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld tasks are currently running on %@. Checking and updating %@ now may affect active work."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "현재 %2$@에서 작업 %1$lld개가 실행 중입니다. 지금 %3$@ 업데이트를 확인하고 적용하면 실행 중인 작업에 영향을 줄 수 있습니다."
+          }
+        }
+      }
+    },
+    "%lld tasks are currently running on %@. Updating %@ to %@ may affect active work.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld tasks are currently running on %@. Updating %@ to %@ may affect active work."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "현재 %2$@에서 작업 %1$lld개가 실행 중입니다. %3$@을(를) %4$@ 버전으로 업데이트하면 실행 중인 작업에 영향을 줄 수 있습니다."
+          }
+        }
+      }
+    },
+    "%lld tools": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld tools"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "도구 %lld개"
+          }
+        }
+      }
+    },
     "+%lld": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "+%lld"
+          }
+        }
+      }
+    },
+    "30-day tokens": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "30-day tokens"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "30일 토큰"
           }
         }
       }
@@ -463,12 +575,60 @@
         }
       }
     },
+    "Access Token (optional)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Access Token (optional)"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "액세스 토큰 (선택)"
+          }
+        }
+      }
+    },
+    "Account Connectors": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account Connectors"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "계정 커넥터"
+          }
+        }
+      }
+    },
     "Account and App": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "계정 및 앱"
+          }
+        }
+      }
+    },
+    "Add Connector": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add Connector"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "커넥터 추가"
           }
         }
       }
@@ -489,6 +649,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "사진 추가"
+          }
+        }
+      }
+    },
+    "Added to tasks started or resumed on %@.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Added to tasks started or resumed on %@."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 시작하거나 재개하는 작업에 포함됩니다."
           }
         }
       }
@@ -519,6 +695,102 @@
           "stringUnit": {
             "state": "translated",
             "value": "허용"
+          }
+        }
+      }
+    },
+    "Allow %@'s display to sleep normally while tasks run?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow %@'s display to sleep normally while tasks run?"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "작업 중에도 %@의 디스플레이가 정상적으로 잠들도록 허용할까요?"
+          }
+        }
+      }
+    },
+    "Allow Change settings for this device on %@ to change accounts.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow Change settings for this device on %@ to change accounts."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 이 기기의 설정 변경 권한을 허용해야 계정을 변경할 수 있습니다."
+          }
+        }
+      }
+    },
+    "Allow Change settings for this device on %@ to change connectors.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow Change settings for this device on %@ to change connectors."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 이 기기의 설정 변경 권한을 허용해야 커넥터를 변경할 수 있습니다."
+          }
+        }
+      }
+    },
+    "Allow Change settings for this device on %@ to edit instructions.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow Change settings for this device on %@ to edit instructions."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 이 기기의 설정 변경 권한을 허용해야 지침을 편집할 수 있습니다."
+          }
+        }
+      }
+    },
+    "Allow Change settings for this device on %@ to edit settings.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow Change settings for this device on %@ to edit settings."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 이 기기의 설정 변경 권한을 허용해야 설정을 바꿀 수 있습니다."
+          }
+        }
+      }
+    },
+    "Allow Change settings for this device on %@ to update CLIs.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow Change settings for this device on %@ to update CLIs."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 이 기기의 설정 변경 권한을 허용해야 CLI를 업데이트할 수 있습니다."
           }
         }
       }
@@ -713,6 +985,22 @@
         }
       }
     },
+    "Ask whether to send failing checks to a task when it opens a pull request.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ask whether to send failing checks to a task when it opens a pull request."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "작업에 풀 리퀘스트가 생기면 실패한 검사를 자동으로 전달할지 묻습니다."
+          }
+        }
+      }
+    },
     "Asking %@…": {
       "localizations": {
         "ko": {
@@ -739,6 +1027,70 @@
           "stringUnit": {
             "state": "translated",
             "value": "첨부"
+          }
+        }
+      }
+    },
+    "Auto-continue at usage limit": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Auto-continue at usage limit"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "사용량 한도 도달 시 자동 재개"
+          }
+        }
+      }
+    },
+    "Auto-fix failing CI": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Auto-fix failing CI"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "실패한 CI 자동 수정"
+          }
+        }
+      }
+    },
+    "Auto-pick account": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Auto-pick account"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "계정 자동 선택"
+          }
+        }
+      }
+    },
+    "Auto-switch to account with room": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Auto-switch to account with room"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "여유 있는 계정으로 자동 전환"
           }
         }
       }
@@ -833,12 +1185,44 @@
         }
       }
     },
+    "Browser sign-in": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Browser sign-in"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "브라우저 로그인"
+          }
+        }
+      }
+    },
     "Browser tab waiting": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "브라우저 탭에서 기다리는 중"
+          }
+        }
+      }
+    },
+    "CLI Updates": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CLI Updates"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CLI 업데이트"
           }
         }
       }
@@ -943,6 +1327,38 @@
         }
       }
     },
+    "Check for Updates": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check for Updates"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "업데이트 확인"
+          }
+        }
+      }
+    },
+    "Check for and apply available %@ CLI updates on %@?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check for and apply available %@ CLI updates on %@?"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%2$@에서 %1$@ CLI 업데이트를 확인하고 적용할까요?"
+          }
+        }
+      }
+    },
     "Check that %@ shows the same number, then choose Allow there.": {
       "localizations": {
         "ko": {
@@ -993,6 +1409,22 @@
         }
       }
     },
+    "Choose whether messages sent during a running turn steer it or wait in the queue.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose whether messages sent during a running turn steer it or wait in the queue."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "턴 실행 중에 보낸 메시지를 바로 반영할지 대기열에 넣을지 선택합니다."
+          }
+        }
+      }
+    },
     "Choose your Mac. It shows a number; allow this phone there when it matches the one here.": {
       "localizations": {
         "ko": {
@@ -1003,12 +1435,92 @@
         }
       }
     },
+    "Claude tasks also load connectors enabled on each claude.ai account.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude tasks also load connectors enabled on each claude.ai account."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude 작업에서 각 claude.ai 계정에 켜진 커넥터도 함께 불러옵니다."
+          }
+        }
+      }
+    },
     "Clear": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "지우기"
+          }
+        }
+      }
+    },
+    "Client ID": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Client ID"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "클라이언트 ID"
+          }
+        }
+      }
+    },
+    "Client ID (optional)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Client ID (optional)"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "클라이언트 ID (선택)"
+          }
+        }
+      }
+    },
+    "Client Secret": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Client Secret"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "클라이언트 시크릿"
+          }
+        }
+      }
+    },
+    "Client Secret (optional)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Client Secret (optional)"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "클라이언트 시크릿 (선택)"
           }
         }
       }
@@ -1049,6 +1561,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "명령어"
+          }
+        }
+      }
+    },
+    "Compact long idle Claude Code conversations before prompt cache expires.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compact long idle Claude Code conversations before prompt cache expires."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "프롬프트 캐시가 만료되기 전에 오래 멈춰 있던 Claude Code 대화를 압축합니다."
           }
         }
       }
@@ -1123,6 +1651,22 @@
         }
       }
     },
+    "Confirm": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirm"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "확인"
+          }
+        }
+      }
+    },
     "Confirm this choice on %@.": {
       "localizations": {
         "ko": {
@@ -1139,6 +1683,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "연결"
+          }
+        }
+      }
+    },
+    "Connect %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect %@"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 연결"
+          }
+        }
+      }
+    },
+    "Connect Gmail, Calendar, Linear, Notion, Slack, or custom MCP servers on %@.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect Gmail, Calendar, Linear, Notion, Slack, or custom MCP servers on %@."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에 Gmail, 캘린더, Linear, Notion, Slack 또는 사용자 지정 MCP 서버를 연결하세요."
           }
         }
       }
@@ -1163,12 +1739,60 @@
         }
       }
     },
+    "Connect any remote MCP server by HTTPS URL": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect any remote MCP server by HTTPS URL"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HTTPS 주소로 원격 MCP 서버 연결"
+          }
+        }
+      }
+    },
     "Connect to %@ to check Mail and Calendar availability.": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "메일과 캘린더 사용 가능 여부를 확인하려면 %@에 연결하세요."
+          }
+        }
+      }
+    },
+    "Connect to %@ to view and manage connectors.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect to %@ to view and manage connectors."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에 연결해야 커넥터를 보고 관리할 수 있습니다."
+          }
+        }
+      }
+    },
+    "Connect to %@ to view and manage its settings.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect to %@ to view and manage its settings."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에 연결해야 설정을 보고 관리할 수 있습니다."
           }
         }
       }
@@ -1223,12 +1847,44 @@
         }
       }
     },
+    "Connected Services": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connected Services"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "연결된 서비스"
+          }
+        }
+      }
+    },
     "Connected directly": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "직접 연결됨"
+          }
+        }
+      }
+    },
+    "Connected on %@.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connected on %@."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에 연결되었습니다."
           }
         }
       }
@@ -1253,6 +1909,22 @@
         }
       }
     },
+    "Connecting on %@…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connecting on %@…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 연결 중…"
+          }
+        }
+      }
+    },
     "Connecting to %@…": {
       "localizations": {
         "ko": {
@@ -1273,12 +1945,92 @@
         }
       }
     },
+    "Connector name": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connector name"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "커넥터 이름"
+          }
+        }
+      }
+    },
+    "Connectors": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connectors"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "커넥터"
+          }
+        }
+      }
+    },
+    "Continue": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continue"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "계속"
+          }
+        }
+      }
+    },
     "Continue With": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "이어서 쓸 계정"
+          }
+        }
+      }
+    },
+    "Continue running work after a restart": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continue running work after a restart"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "재시작 후 실행 중이던 작업 이어가기"
+          }
+        }
+      }
+    },
+    "Continue tasks stopped at a usage limit once the limit resets.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continue tasks stopped at a usage limit once the limit resets."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "사용량 한도로 멈춘 작업을 한도 초기화 후 자동으로 이어갑니다."
           }
         }
       }
@@ -1323,6 +2075,22 @@
         }
       }
     },
+    "Copied": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copied"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "복사됨"
+          }
+        }
+      }
+    },
     "Copy": {
       "localizations": {
         "ko": {
@@ -1333,12 +2101,60 @@
         }
       }
     },
+    "Copy Code": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy Code"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "코드 복사"
+          }
+        }
+      }
+    },
     "Copy Image": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "이미지 복사"
+          }
+        }
+      }
+    },
+    "Could not complete sign-in on this phone. Try connecting again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not complete sign-in on this phone. Try connecting again."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 휴대폰에서 로그인을 완료하지 못했습니다. 다시 연결해 보세요."
+          }
+        }
+      }
+    },
+    "Could not connect.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not connect."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "연결할 수 없습니다."
           }
         }
       }
@@ -1443,6 +2259,38 @@
         }
       }
     },
+    "Custom MCP": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Custom MCP"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "사용자 지정 MCP"
+          }
+        }
+      }
+    },
+    "Custom MCP Server": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Custom MCP Server"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "사용자 지정 MCP 서버"
+          }
+        }
+      }
+    },
     "Decline": {
       "localizations": {
         "ko": {
@@ -1479,6 +2327,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "거부하고 대신 할 일 알리기…"
+          }
+        }
+      }
+    },
+    "Disable Yardlet instructions on %@?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disable Yardlet instructions on %@?"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 Yardlet 지침 사용을 끌까요?"
           }
         }
       }
@@ -1563,6 +2427,22 @@
         }
       }
     },
+    "Edit Instructions": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edit Instructions"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "지침 편집"
+          }
+        }
+      }
+    },
     "Edit Message": {
       "localizations": {
         "ko": {
@@ -1583,6 +2463,22 @@
         }
       }
     },
+    "Editable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Editable"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "편집 가능"
+          }
+        }
+      }
+    },
     "Editing message": {
       "localizations": {
         "ko": {
@@ -1593,12 +2489,92 @@
         }
       }
     },
+    "Enable Yardlet instructions for tasks on %@?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enable Yardlet instructions for tasks on %@?"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@의 작업에 Yardlet 지침을 적용할까요?"
+          }
+        }
+      }
+    },
+    "Enter a valid https:// server URL.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter a valid https:// server URL."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "올바른 https:// 서버 주소를 입력하세요."
+          }
+        }
+      }
+    },
+    "Enter the Client ID from your %@ OAuth app.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter the Client ID from your %@ OAuth app."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ OAuth 앱의 클라이언트 ID를 입력하세요."
+          }
+        }
+      }
+    },
+    "Enter this verification code when prompted:": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter this verification code when prompted:"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "요청이 표시되면 이 인증 코드를 입력하세요."
+          }
+        }
+      }
+    },
     "Error": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "오류"
+          }
+        }
+      }
+    },
+    "Estimated cost": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Estimated cost"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "예상 비용"
           }
         }
       }
@@ -1653,6 +2629,38 @@
         }
       }
     },
+    "Finish signing in in the browser sheet…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finish signing in in the browser sheet…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "브라우저 화면에서 로그인을 완료하세요…"
+          }
+        }
+      }
+    },
+    "Follow-up behavior": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Follow-up behavior"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "추가 메시지 동작"
+          }
+        }
+      }
+    },
     "Fork from Here": {
       "localizations": {
         "ko": {
@@ -1669,6 +2677,54 @@
           "stringUnit": {
             "state": "translated",
             "value": "앞으로"
+          }
+        }
+      }
+    },
+    "General Settings": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "General Settings"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "일반 설정"
+          }
+        }
+      }
+    },
+    "Google account sign-in": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Google account sign-in"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Google 계정 로그인"
+          }
+        }
+      }
+    },
+    "Harness Accounts": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Harness Accounts"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "하네스 계정"
           }
         }
       }
@@ -1743,6 +2799,22 @@
         }
       }
     },
+    "Idle compaction": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Idle compaction"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "유휴 압축"
+          }
+        }
+      }
+    },
     "Image": {
       "localizations": {
         "ko": {
@@ -1789,6 +2861,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "입력 요청"
+          }
+        }
+      }
+    },
+    "Instructions are saved on %@ and applied to tasks started or resumed there.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Instructions are saved on %@ and applied to tasks started or resumed there."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "지침은 %@에 저장되며 그곳에서 시작하거나 재개되는 작업에 적용됩니다."
           }
         }
       }
@@ -1843,6 +2931,22 @@
         }
       }
     },
+    "Keep screen unlocked while tasks work": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keep screen unlocked while tasks work"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "작업 중 화면 잠금 방지"
+          }
+        }
+      }
+    },
     "Know when it is in use": {
       "localizations": {
         "ko": {
@@ -1859,6 +2963,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "내 위치 정보 알기"
+          }
+        }
+      }
+    },
+    "Last checked %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Last checked %@"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "마지막 확인 %@"
           }
         }
       }
@@ -1883,6 +3003,38 @@
         }
       }
     },
+    "Leave blank for OAuth sign-in": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Leave blank for OAuth sign-in"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OAuth 로그인을 쓰려면 비워 두세요"
+          }
+        }
+      }
+    },
+    "Leave the fields below blank to use the OAuth app already configured on %@.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Leave the fields below blank to use the OAuth app already configured on %@."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에 이미 설정된 OAuth 앱을 쓰려면 아래 항목을 비워 두세요."
+          }
+        }
+      }
+    },
     "Lists the Macs signed in to this account, to pair one without a QR code. Signing out leaves your paired Macs connected.": {
       "localizations": {
         "ko": {
@@ -1899,6 +3051,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "이미지 불러오기"
+          }
+        }
+      }
+    },
+    "Loading connectors from %@…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading connectors from %@…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 커넥터 불러오는 중…"
+          }
+        }
+      }
+    },
+    "Loading settings from %@…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading settings from %@…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 설정 불러오는 중…"
           }
         }
       }
@@ -1963,6 +3147,38 @@
         }
       }
     },
+    "Manage Connectors": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Manage Connectors"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "커넥터 관리"
+          }
+        }
+      }
+    },
+    "Manage connected services": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Manage connected services"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "연결된 서비스 관리"
+          }
+        }
+      }
+    },
     "Manage settings and connectors": {
       "localizations": {
         "ko": {
@@ -2013,6 +3229,22 @@
         }
       }
     },
+    "Microsoft account sign-in": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microsoft account sign-in"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microsoft 계정 로그인"
+          }
+        }
+      }
+    },
     "Model and Permissions": {
       "localizations": {
         "ko": {
@@ -2039,6 +3271,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "다른 답은 Mac에서 할 수 있습니다."
+          }
+        }
+      }
+    },
+    "Move Claude Code tasks from an account near its limit to one with room.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move Claude Code tasks from an account near its limit to one with room."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "한도에 가까워진 계정의 Claude Code 작업을 여유 있는 계정으로 옮깁니다."
           }
         }
       }
@@ -2083,6 +3331,22 @@
         }
       }
     },
+    "Name": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Name"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이름"
+          }
+        }
+      }
+    },
     "New Task": {
       "localizations": {
         "ko": {
@@ -2119,6 +3383,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "다음"
+          }
+        }
+      }
+    },
+    "No Connectors": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No Connectors"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "커넥터 없음"
           }
         }
       }
@@ -2163,6 +3443,22 @@
         }
       }
     },
+    "No instructions set.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No instructions set."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "설정된 지침이 없습니다."
+          }
+        }
+      }
+    },
     "No matching tasks": {
       "localizations": {
         "ko": {
@@ -2193,12 +3489,44 @@
         }
       }
     },
+    "No services connected yet": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No services connected yet"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "아직 연결된 서비스가 없습니다"
+          }
+        }
+      }
+    },
     "Nobody allowed the request within 2 minutes. Try again.": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "2분 안에 허용하지 않아 요청이 끝났습니다. 다시 시도하세요."
+          }
+        }
+      }
+    },
+    "Not Connected": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not Connected"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "연결되지 않음"
           }
         }
       }
@@ -2299,6 +3627,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "확인"
+          }
+        }
+      }
+    },
+    "Off": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "꺼짐"
           }
         }
       }
@@ -2429,6 +3773,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "작업 열기"
+          }
+        }
+      }
+    },
+    "Opening sign-in…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opening sign-in…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "로그인 화면 여는 중…"
           }
         }
       }
@@ -2607,6 +3967,22 @@
         }
       }
     },
+    "Paste a personal access token, or leave blank to use the GitHub OAuth app configured on %@.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paste a personal access token, or leave blank to use the GitHub OAuth app configured on %@."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "개인 액세스 토큰을 붙여 넣거나, %@에 설정된 GitHub OAuth 앱을 쓰려면 비워 두세요."
+          }
+        }
+      }
+    },
     "Pause": {
       "localizations": {
         "ko": {
@@ -2623,6 +3999,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "권한 꺼짐"
+          }
+        }
+      }
+    },
+    "Personal Access Token (optional)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Personal Access Token (optional)"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "개인 액세스 토큰 (선택)"
+          }
+        }
+      }
+    },
+    "Personal access token or OAuth app": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Personal access token or OAuth app"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "개인 액세스 토큰 또는 OAuth 앱"
           }
         }
       }
@@ -2693,6 +4101,54 @@
           "stringUnit": {
             "state": "translated",
             "value": "카메라를 Mac 화면의 코드에 맞추세요."
+          }
+        }
+      }
+    },
+    "Preparing sign-in…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preparing sign-in…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "로그인 준비 중…"
+          }
+        }
+      }
+    },
+    "Prevent %@'s display from sleeping and locking while tasks are running?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prevent %@'s display from sleeping and locking while tasks are running?"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "작업이 실행되는 동안 %@의 디스플레이가 잠들거나 잠기지 않도록 할까요?"
+          }
+        }
+      }
+    },
+    "Prevents display sleep while a task is running.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prevents display sleep while a task is running."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "작업이 실행되는 동안 디스플레이가 잠기지 않도록 유지합니다."
           }
         }
       }
@@ -2797,6 +4253,38 @@
         }
       }
     },
+    "Read-only": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read-only"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "읽기 전용"
+          }
+        }
+      }
+    },
+    "Read-only access": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read-only access"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "읽기 전용 권한"
+          }
+        }
+      }
+    },
     "Reading what %@ offers…": {
       "localizations": {
         "ko": {
@@ -2837,6 +4325,22 @@
         }
       }
     },
+    "Reconnect": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reconnect"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다시 연결"
+          }
+        }
+      }
+    },
     "Reconnecting": {
       "localizations": {
         "ko": {
@@ -2853,6 +4357,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "다시 연결하는 중…"
+          }
+        }
+      }
+    },
+    "Refresh": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Refresh"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "새로고침"
           }
         }
       }
@@ -2883,6 +4403,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "새로고침"
+          }
+        }
+      }
+    },
+    "Remote Mac": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remote Mac"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "원격 Mac"
           }
         }
       }
@@ -2953,6 +4489,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "이 휴대폰을 지움"
+          }
+        }
+      }
+    },
+    "Requests": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Requests"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "요청 수"
           }
         }
       }
@@ -3207,6 +4759,38 @@
         }
       }
     },
+    "Server URL": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Server URL"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "서버 주소"
+          }
+        }
+      }
+    },
+    "Services": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Services"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "서비스"
+          }
+        }
+      }
+    },
     "Session": {
       "localizations": {
         "ko": {
@@ -3317,12 +4901,44 @@
         }
       }
     },
+    "Sign In": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign In"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "로그인"
+          }
+        }
+      }
+    },
     "Sign Out": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "로그아웃"
+          }
+        }
+      }
+    },
+    "Sign in on another site?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign in on another site?"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다른 사이트에서 로그인할까요?"
           }
         }
       }
@@ -3363,6 +4979,118 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@로 로그인"
+          }
+        }
+      }
+    },
+    "Sign in with Slack OAuth app": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign in with Slack OAuth app"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Slack OAuth 앱으로 로그인"
+          }
+        }
+      }
+    },
+    "Sign-in complete": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign-in complete"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "로그인 완료"
+          }
+        }
+      }
+    },
+    "Sign-in complete. You can close this sheet and return to Yardlet.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign-in complete. You can close this sheet and return to Yardlet."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "로그인이 완료되었습니다. 이 화면을 닫고 Yardlet으로 돌아가세요."
+          }
+        }
+      }
+    },
+    "Sign-in did not finish in time.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign-in did not finish in time."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "로그인 시간이 초과되었습니다."
+          }
+        }
+      }
+    },
+    "Sign-in opens on this phone, and credentials are stored securely on %@.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign-in opens on this phone, and credentials are stored securely on %@."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "로그인은 이 휴대폰에서 열리며, 인증 정보는 %@에 안전하게 저장됩니다."
+          }
+        }
+      }
+    },
+    "Sign-in required": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign-in required"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "로그인 필요"
+          }
+        }
+      }
+    },
+    "Sign-in was not completed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign-in was not completed"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "로그인이 완료되지 않았습니다"
           }
         }
       }
@@ -3457,6 +5185,22 @@
         }
       }
     },
+    "Start new tasks on the account with the most limit room left.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Start new tasks on the account with the most limit room left."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "새 작업을 한도 여유가 가장 많은 계정에서 시작합니다."
+          }
+        }
+      }
+    },
     "Started": {
       "localizations": {
         "ko": {
@@ -3547,6 +5291,22 @@
         }
       }
     },
+    "Switch %@ to %@ on %@?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Switch %@ to %@ on %@?"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%3$@에서 %1$@을(를) %2$@ 버전으로 전환할까요?"
+          }
+        }
+      }
+    },
     "Switch Mac or open menu": {
       "localizations": {
         "ko": {
@@ -3583,6 +5343,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "작업"
+          }
+        }
+      }
+    },
+    "Tasks resume where they left off after Yardlet quits or updates.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tasks resume where they left off after Yardlet quits or updates."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yardlet이 종료되거나 업데이트된 뒤에도 작업이 이어서 실행됩니다."
           }
         }
       }
@@ -3633,6 +5409,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "에이전트가 이 탭을 넘겼습니다"
+          }
+        }
+      }
+    },
+    "The connection or permission to change settings is no longer available.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The connection or permission to change settings is no longer available."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "연결이 끊겼거나 설정 변경 권한이 해제되었습니다."
           }
         }
       }
@@ -4067,12 +5859,44 @@
         }
       }
     },
+    "To add connectors or turn them on or off from here, allow Change settings for this device in Settings › Remote › Paired devices on %@.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To add connectors or turn them on or off from here, allow Change settings for this device in Settings › Remote › Paired devices on %@."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "여기에서 커넥터를 추가하거나 켜고 끄려면 %@의 설정 › 원격 › 페어링된 기기에서 이 기기의 설정 변경을 허용하세요."
+          }
+        }
+      }
+    },
     "To change files from here, allow Write files for this device in Settings › Remote › Paired devices on %@.": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "여기서 파일을 바꾸려면 %@의 설정 › 원격 연결 › 연결된 기기에서 이 기기에 “파일 쓰기”를 허용하세요."
+          }
+        }
+      }
+    },
+    "To change settings from here, allow Change settings for this device in Settings › Remote › Paired devices on %@.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To change settings from here, allow Change settings for this device in Settings › Remote › Paired devices on %@."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "여기에서 설정을 바꾸려면 %@의 설정 › 원격 › 페어링된 기기에서 이 기기의 설정 변경을 허용하세요."
           }
         }
       }
@@ -4103,6 +5927,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "여기서 쓰려면 %@의 설정 › 원격 연결 › 연결된 기기에서 이 기기에 “터미널”을 허용하세요."
+          }
+        }
+      }
+    },
+    "Token": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Token"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "토큰"
+          }
+        }
+      }
+    },
+    "Token usage counting is turned off on %@.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Token usage counting is turned off on %@."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 토큰 사용량 집계가 꺼져 있습니다."
           }
         }
       }
@@ -4237,6 +6093,22 @@
         }
       }
     },
+    "Unavailable on %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unavailable on %@"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 사용할 수 없음"
+          }
+        }
+      }
+    },
     "Unlock": {
       "localizations": {
         "ko": {
@@ -4297,12 +6169,92 @@
         }
       }
     },
+    "Update": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Update"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "업데이트"
+          }
+        }
+      }
+    },
+    "Update %@?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Update %@?"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@을(를) 업데이트할까요?"
+          }
+        }
+      }
+    },
+    "Update Yardlet on %@ to manage": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Update Yardlet on %@ to manage"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "관리하려면 %@의 Yardlet을 업데이트하세요"
+          }
+        }
+      }
+    },
+    "Update Yardlet on %@ to manage connectors from your phone.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Update Yardlet on %@ to manage connectors from your phone."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "휴대폰에서 커넥터를 관리하려면 %@의 Yardlet을 업데이트하세요."
+          }
+        }
+      }
+    },
     "Update Yardlet on %@ to manage host settings and connectors from your phone.": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "휴대폰에서 호스트 설정과 커넥터를 관리하려면 %@의 Yardlet을 업데이트하세요."
+          }
+        }
+      }
+    },
+    "Update Yardlet on %@ to view and manage host settings from your phone.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Update Yardlet on %@ to view and manage host settings from your phone."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "휴대폰에서 호스트 설정을 보고 관리하려면 %@의 Yardlet을 업데이트하세요."
           }
         }
       }
@@ -4317,12 +6269,76 @@
         }
       }
     },
+    "Usage and Plan Limits": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Usage and Plan Limits"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "사용량 및 요금제 한도"
+          }
+        }
+      }
+    },
     "Usage limit reached": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "사용 한도에 도달했습니다"
+          }
+        }
+      }
+    },
+    "Usage, accounts, instructions and CLI updates": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Usage, accounts, instructions and CLI updates"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "사용량, 계정, 지침 및 CLI 업데이트"
+          }
+        }
+      }
+    },
+    "Use Yardlet instructions": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use Yardlet instructions"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yardlet 지침 사용"
+          }
+        }
+      }
+    },
+    "Use claude.ai account connectors": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use claude.ai account connectors"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "claude.ai 계정 커넥터 사용"
           }
         }
       }
@@ -4367,6 +6383,22 @@
         }
       }
     },
+    "Verification code": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verification code"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "인증 코드"
+          }
+        }
+      }
+    },
     "Version": {
       "localizations": {
         "ko": {
@@ -4407,12 +6439,60 @@
         }
       }
     },
+    "View Instructions": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "View Instructions"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "지침 보기"
+          }
+        }
+      }
+    },
     "Waiting for You": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "기다리는 작업"
+          }
+        }
+      }
+    },
+    "Waiting for confirmation…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for confirmation…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "확인 대기 중…"
+          }
+        }
+      }
+    },
+    "Waiting for sign-in…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for sign-in…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "로그인 대기 중…"
           }
         }
       }
@@ -4537,6 +6617,22 @@
         }
       }
     },
+    "Yardlet Instructions": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yardlet Instructions"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yardlet 지침"
+          }
+        }
+      }
+    },
     "Yardlet can't use the camera.": {
       "localizations": {
         "ko": {
@@ -4583,6 +6679,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "네, 이 계획을 구현합니다"
+          }
+        }
+      }
+    },
+    "You can close this sheet and return to Yardlet.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You can close this sheet and return to Yardlet."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 화면을 닫고 Yardlet으로 돌아가세요."
           }
         }
       }
