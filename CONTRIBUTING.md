@@ -41,10 +41,26 @@ changes land on `main` through pull requests.
    artifact keeps the images the tests drew.
 4. Keep one change per pull request. Say what changed, why, and how you checked it; for a change you
    can see, add light and dark screenshots or a short recording.
-5. Write code comments, documentation, commit messages and the pull request in English. Add user-visible
-   strings to every supported `.lproj` localization catalog.
+5. Write code comments, documentation, commit messages and the pull request in English. Add or
+   update user-visible strings in `Sources/NativeHarnessClient/Resources/en.lproj/Localizable.strings`
+   only (see [Localization](#localization)).
 
 [AGENTS.md](AGENTS.md) has the same rules for coding agents working in this repository.
+
+## Localization
+
+English (`Sources/NativeHarnessClient/Resources/en.lproj/Localizable.strings`) is the single source
+of truth for user-visible strings:
+
+- **Feature PRs:** Only add or update keys in `en.lproj/Localizable.strings`. Missing keys in other
+  `.lproj` catalogs fall back to the English catalog value safely at runtime, so feature PRs do not
+  need to touch non-English translations.
+- **Translation syncs:** Non-English catalogs are maintained on their own sync path with
+  `scripts/l10n.py` (`status`, `extract`, `merge`, `prune`, `check --strict`) and the shared
+  terminology in `l10n/glossary.json`.
+- **CI checks:** Every PR verifies that all `L10n` string literals exist in `en.lproj` and that
+  bundled translations parse cleanly with exact format-specifier parity. Full parity and orphan
+  checks run via `python3 -B scripts/l10n.py check --strict`.
 
 ## What fits Yardlet
 

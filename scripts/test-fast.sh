@@ -44,6 +44,7 @@ source scripts/heavy-lock.sh && take_heavy_lock "${0:A}" "${arguments[@]}"
 
 python3 -B scripts/perf-bench/test_report.py
 python3 -B scripts/test_xctest_batches.py
+python3 -B scripts/l10n_test.py
 
 if (( ! skip_build )); then
   build_jobs=()

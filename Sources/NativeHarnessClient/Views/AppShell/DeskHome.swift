@@ -902,7 +902,7 @@ struct DeskFamilyView: View, @MainActor Equatable {
     /// What the family's tasks do, by state; a task alone, its state's name. Then its agents.
     static func facts(_ family: DeskFamily) -> [String] {
         var facts: [String] = []
-        func count(_ value: Int, _ key: String.LocalizationValue) { if value > 0 { facts.append(L10n.format(key, value)) } }
+        func count(_ value: Int, _ key: String) { if value > 0 { facts.append(L10n.format(key, value)) } }
         if family.members.isEmpty {
             if let status = family.status { facts.append(status.homeName) }
         } else {

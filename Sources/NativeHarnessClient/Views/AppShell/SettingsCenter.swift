@@ -808,7 +808,7 @@ struct SettingsCenterView: View {
                 Picker(setting.title, selection: Binding(
                     get: { language },
                     set: { language = $0; AppLanguagePreference.store($0) })) {
-                    ForEach(AppLanguagePreference.allCases) { preference in
+                    ForEach(AppLanguagePreference.availableCases) { preference in
                         Text(preference.title).tag(preference)
                     }
                 }
