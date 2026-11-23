@@ -335,10 +335,11 @@ extension YardletSetting {
     static let language = YardletSetting(
         id: "language", section: .general, generalGroup: .app, symbol: "character.bubble", title: L10n.string("Language"),
         detail: L10n.string("Applies the next time you open Yardlet"),
-        values: choices(AppLanguagePreference.self, title: \.title),
+        values: .choices(AppLanguagePreference.availableCases.map { Choice(value: $0.rawValue, title: $0.title) }),
         storage: .app(read: { AppLanguagePreference.stored(in: $0.defaults).rawValue },
                       write: { context, value in
-                          if let language = AppLanguagePreference(rawValue: value) {
+                          if let language = AppLanguagePreference(rawValue: value),
+                             AppLanguagePreference.availableCases.contains(language) {
                               AppLanguagePreference.store(language, in: context.defaults)
                           }
                           return nil

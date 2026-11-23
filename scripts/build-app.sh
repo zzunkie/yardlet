@@ -357,11 +357,24 @@ if [[ -n "$CEF_DIR" ]]; then
     mkdir -p "$CEF_FRAMEWORK/Versions"
     /usr/bin/ditto "$CEF_FRAMEWORK_SOURCE" "$CEF_FRAMEWORK/Versions/A"
     # Chromium's UI strings only for Yardlet's own languages (about 49 MB less).
-    for localization in "$CEF_FRAMEWORK/Versions/A/Resources"/*.lproj(N); do
-        case ${localization:t} in
-            en.lproj|ko.lproj) ;;
-            *) rm -rf "$localization" ;;
+    typeset -A cef_keep_lprojs=()
+    for app_lproj in "$PROJECT_ROOT/Sources/NativeHarnessClient/Resources"/*.lproj(N); do
+        lproj_code=${${app_lproj:t}%.lproj}
+        case "$lproj_code" in
+            Base) continue ;;
+            zh-Hans|zh-Hans-*) cef_lproj="zh_CN.lproj" ;;
+            zh-Hant|zh-Hant-*) cef_lproj="zh_TW.lproj" ;;
+            pt-BR) cef_lproj="pt_BR.lproj" ;;
+            pt-PT) cef_lproj="pt_PT.lproj" ;;
+            *) cef_lproj="${lproj_code//-/_}.lproj" ;;
         esac
+        cef_keep_lprojs[$cef_lproj]=1
+    done
+    cef_keep_lprojs[en.lproj]=1
+    for localization in "$CEF_FRAMEWORK/Versions/A/Resources"/*.lproj(N); do
+        if [[ -z "${cef_keep_lprojs[${localization:t}]:-}" ]]; then
+            rm -rf "$localization"
+        fi
     done
     ln -s A "$CEF_FRAMEWORK/Versions/Current"
     for entry in "Chromium Embedded Framework" Libraries Resources; do

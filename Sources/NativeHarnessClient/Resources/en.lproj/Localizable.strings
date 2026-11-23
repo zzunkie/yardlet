@@ -83,7 +83,6 @@
 "Optional" = "Optional";
 "Yes" = "Yes";
 "No" = "No";
-"Not answered" = "Not answered";
 "Number" = "Number";
 "Whole number" = "Whole number";
 "YYYY-MM-DD" = "YYYY-MM-DD";
@@ -152,7 +151,6 @@
 "Approve tool call" = "Approve tool call";
 "Ask this harness…" = "Ask this harness…";
 "Assistant" = "Assistant";
-"Available" = "Available";
 "Cancel" = "Cancel";
 "Changes" = "Changes";
 "Review changes" = "Review changes";
@@ -172,7 +170,6 @@
 "Diff preview truncated at 2 MiB" = "Diff preview truncated at 2 MiB";
 "Diff loading timed out. Try Refresh again." = "Diff loading timed out. Try Refresh again.";
 "Diff unavailable" = "Diff unavailable";
-"Done" = "Done";
 "Finish or cancel the sign-in first" = "Finish or cancel the sign-in first";
 "Failed" = "Failed";
 "Failed to start terminal: %@\n" = "Failed to start terminal: %@\n";
@@ -186,8 +183,6 @@
 "Loading diff…" = "Loading diff…";
 "Local AI workbench" = "Local AI workbench";
 "Messages from either harness appear in this native transcript." = "Messages from any harness appear in this native transcript.";
-"Move down" = "Move down";
-"Move up" = "Move up";
 "Native terminal · %@\n" = "Native terminal · %@\n";
 "Needs approval" = "Needs approval";
 "New session" = "New session";
@@ -195,7 +190,6 @@
 "Home" = "Home";
 "Command palette" = "Command palette";
 "Codex runtime" = "Codex runtime";
-"Search commands" = "Search commands";
 "Search tasks and commands" = "Search tasks and commands";
 "Use the arrow keys to select a command, then press Return." = "Use the arrow keys to select a command, then press Return.";
 "Use the arrow keys to select a history result, then press Return." = "Use the arrow keys to select a history result, then press Return.";
@@ -361,9 +355,7 @@
 "Runtime unavailable" = "Runtime unavailable";
 "Unknown" = "Unknown";
 "Provider quota" = "Provider quota";
-"Account usage" = "Account usage";
 "Provider-reported account history" = "Provider-reported account history";
-"Local session usage" = "Local session usage";
 "Usage not exposed by CLI" = "Usage not exposed by CLI";
 "Choose or install a runtime first." = "Choose or install a runtime first.";
 "Checking account status…" = "Checking account status…";
@@ -399,7 +391,6 @@
 "Enter" = "Enter";
 "Use arrow keys and Enter for CLI-owned choices." = "Use arrow keys and Enter for CLI-owned choices.";
 "Stored by" = "Stored by";
-"Usage" = "Usage";
 "Codex weekly" = "Codex weekly";
 "Lifetime tokens" = "Lifetime tokens";
 "Peak daily tokens" = "Peak daily tokens";
@@ -530,8 +521,6 @@
 "Searches Codex history when submitted." = "Searches Codex history when submitted.";
 "Open Codex task: %@" = "Open Codex task: %@";
 "Resume this task and show its timeline." = "Resume this task and show its timeline.";
-"Enabled" = "Enabled";
-"Disabled" = "Disabled";
 "Installed" = "Installed";
 "Available" = "Available";
 "Untitled task" = "Untitled task";
@@ -1848,7 +1837,6 @@
 "Turn off activity view" = "Turn off activity view";
 "See chats that are unread, active, or awaiting a response" = "See chats that are unread, active, or awaiting a response";
 /* The task list grouped by state: the Claude app's "Group by" menu and state groups. */
-"Group by" = "Group by";
 "Turn off the activity view to group tasks" = "Turn off the activity view to group tasks";
 "State" = "State";
 "Idle" = "Idle";
@@ -2036,7 +2024,6 @@
 /* The menu bar item and the activity view shortcut. Codex app wording (tray menu, Settings › General › Show in menu bar, togglePriorityFilter). */
 "Recent" = "Recent";
 "More" = "More";
-"Open %@" = "Open %@";
 "Quit %@" = "Quit %@";
 "Language" = "Language";
 "Applies the next time you open Yardlet" = "Applies the next time you open Yardlet";

@@ -4,6 +4,10 @@ import WinSDK
 #endif
 
 enum L10n {
+    /// Sentinel value passed to `Bundle.localizedString` so a missing key in a non-English
+    /// `.lproj` catalog can be distinguished from a key whose translation matches the key itself.
+    private static let missingSentinel = "\u{0000}__YARDLET_L10N_MISSING__"
+
     /// Any packaged app owns these resources, including separately identified QA builds.
     /// SwiftPM tests and previews keep using Bundle.module when they have no app resources.
     /// Decided once: every string a view shows asks for it, and looking the resource up searched
@@ -16,6 +20,51 @@ enum L10n {
         }
         return .module
     }()
+
+    /// The English catalog (`en.lproj/Localizable.strings`), loaded once as the single source of
+    /// truth and runtime fallback whenever another localization omits a key.
+    private static let englishTable: [String: String] = stringsTable(for: "en", in: activeBundle)
+
+    /// Reads `<languageCode>.lproj/Localizable.strings` from `bundle`, checking both standard
+    /// bundle resource lookup and flat `.lproj` directories (as SwiftPM packages resources on
+    /// Windows).
+    static func stringsTable(for languageCode: String, in bundle: Bundle) -> [String: String] {
+        var candidates: [URL] = []
+        if let url = bundle.url(
+            forResource: "Localizable", withExtension: "strings", subdirectory: nil, localization: languageCode
+        ) {
+            candidates.append(url)
+        }
+        for folder in [bundle.resourceURL, bundle.bundleURL].compactMap({ $0 }) {
+            candidates.append(folder.appending(path: "\(languageCode).lproj/Localizable.strings"))
+        }
+        for url in candidates {
+            if let data = try? Data(contentsOf: url),
+               let table = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: String] {
+                return table
+            }
+        }
+        return [:]
+    }
+
+    /// The `.lproj` localization codes bundled in `bundle`, excluding `Base`.
+    static func bundledLocalizations(in bundle: Bundle) -> [String] {
+        let reported = bundle.localizations.filter { $0 != "Base" }
+        if !reported.isEmpty { return reported }
+        for folder in [bundle.resourceURL, bundle.bundleURL].compactMap({ $0 }) {
+            let found = ((try? FileManager.default.contentsOfDirectory(atPath: folder.path(percentEncoded: false))) ?? [])
+                .filter { $0.hasSuffix(".lproj") }
+                .map { String($0.dropLast(".lproj".count)) }
+                .filter { $0 != "Base" }
+            if !found.isEmpty { return found.sorted() }
+        }
+        return []
+    }
+
+    /// The `.lproj` localization codes bundled in the active app/module bundle.
+    static var bundledLocalizations: [String] {
+        bundledLocalizations(in: activeBundle)
+    }
 
     #if os(Windows)
     /// Windows' display languages and the localization they prefer, with its words read from its strings file.
@@ -67,9 +116,27 @@ enum L10n {
     }
     #endif
 
+    /// Resolves `key` in `bundle`, falling back to `englishFallback[key]` when the bundle's active
+    /// localization omits the key, and finally to `defaultValue`.
+    static func resolve(
+        _ key: String,
+        in bundle: Bundle,
+        englishFallback: [String: String],
+        defaultValue: String
+    ) -> String {
+        let resolved = bundle.localizedString(forKey: key, value: missingSentinel, table: nil)
+        if resolved != missingSentinel { return resolved }
+        return englishFallback[key] ?? defaultValue
+    }
+
     #if canImport(Darwin)
     static func string(_ key: String.LocalizationValue) -> String {
-        String(localized: key, bundle: activeBundle)
+        let resolved = String(localized: key, bundle: activeBundle)
+        if let englishFallback = englishTable[resolved], englishFallback != resolved,
+           activeBundle.localizedString(forKey: resolved, value: missingSentinel, table: nil) == missingSentinel {
+            return englishFallback
+        }
+        return resolved
     }
     #endif
 
@@ -77,15 +144,16 @@ enum L10n {
         #if os(Windows)
         if let words = windowsLocalization.words[key] { return words }
         #endif
-        return activeBundle.localizedString(forKey: key, value: key, table: nil)
+        return resolve(key, in: activeBundle, englishFallback: englishTable, defaultValue: key)
     }
 
-    /// The key's words, or `fallback` when the catalog does not have the key.
+    /// The key's words, falling back to English when the active localization omits the key,
+    /// or `fallback` when no catalog has the key.
     static func string(_ key: String, fallback: String) -> String {
         #if os(Windows)
         if let words = windowsLocalization.words[key] { return words }
         #endif
-        return activeBundle.localizedString(forKey: key, value: fallback, table: nil)
+        return resolve(key, in: activeBundle, englishFallback: englishTable, defaultValue: fallback)
     }
 
     /// The English keys of words the app shows in its language (more than one where keys share a translation), or the
@@ -98,8 +166,9 @@ enum L10n {
     /// The key's words in each localization the app has, English first, without repeats: what Settings search finds
     /// a name or a synonym by, whatever language the app shows.
     static func translations(of key: String) -> [String] {
-        var words = [key]
-        for language in activeBundle.localizations where language != "Base" && language != "en" {
+        var words = [englishTable[key] ?? key]
+        if !words.contains(key) { words.append(key) }
+        for language in bundledLocalizations where language != "en" {
             let translated = string(key, languageCode: language)
             if !words.contains(translated) { words.append(translated) }
         }
@@ -118,7 +187,14 @@ enum L10n {
         let table: [String: String] = [:]
         #endif
         var keys: [String: [String]] = [:]
-        for (key, words) in table.sorted(by: { $0.key < $1.key }) where words != key { keys[words, default: []].append(key) }
+        for (key, words) in englishTable.sorted(by: { $0.key < $1.key }) where words != key {
+            keys[words, default: []].append(key)
+        }
+        for (key, words) in table.sorted(by: { $0.key < $1.key }) where words != key {
+            if !(keys[words]?.contains(key) ?? false) {
+                keys[words, default: []].append(key)
+            }
+        }
         return keys
     }()
 
@@ -132,25 +208,37 @@ enum L10n {
     }
 
     static func string(_ key: String, languageCode: String) -> String {
-        guard let path = activeBundle.path(forResource: languageCode, ofType: "lproj"),
-              let localizedBundle = Bundle(path: path) else {
-            return key
-        }
-        return localizedBundle.localizedString(forKey: key, value: key, table: nil)
+        string(key, languageCode: languageCode, in: activeBundle, englishFallback: englishTable)
     }
 
-    // Foundation outside Apple's platforms has no `String.LocalizationValue`; there a key is the
-    // English text itself, looked up in the same Localizable.strings.
-    #if canImport(Darwin)
-    static func format(_ key: String.LocalizationValue, _ arguments: CVarArg...) -> String {
+    /// Looks up `key` in `<languageCode>.lproj` inside `bundle`, falling back to `en.lproj`
+    /// (not merely the raw key) when the target catalog omits the key or does not exist.
+    static func string(
+        _ key: String,
+        languageCode: String,
+        in bundle: Bundle,
+        englishFallback: [String: String]? = nil
+    ) -> String {
+        let english = englishFallback ?? stringsTable(for: "en", in: bundle)
+        if let path = bundle.path(forResource: languageCode, ofType: "lproj"),
+           let localizedBundle = Bundle(path: path) {
+            return resolve(key, in: localizedBundle, englishFallback: english, defaultValue: key)
+        }
+        let table = stringsTable(for: languageCode, in: bundle)
+        if let words = table[key] { return words }
+        return english[key] ?? key
+    }
+
+    static func format(_ key: String, _ arguments: CVarArg...) -> String {
         String(
             format: string(key),
             locale: Locale.current,
             arguments: arguments
         )
     }
-    #else
-    static func format(_ key: String, _ arguments: CVarArg...) -> String {
+
+    #if canImport(Darwin)
+    static func format(_ key: String.LocalizationValue, _ arguments: CVarArg...) -> String {
         String(
             format: string(key),
             locale: Locale.current,
@@ -183,13 +271,24 @@ enum AppLanguagePreference: String, CaseIterable, Identifiable {
         }
     }
 
+    /// Languages whose `.lproj` catalog is bundled in this build, with System first.
+    /// Adding a new shipped language only requires dropping its `.lproj` catalog and adding a case above.
+    static var availableCases: [Self] {
+        availableCases(bundledLocalizations: L10n.bundledLocalizations)
+    }
+
+    static func availableCases(bundledLocalizations: [String]) -> [Self] {
+        let bundled = Set(bundledLocalizations.map { $0.lowercased() })
+        return allCases.filter { $0 == .system || bundled.contains($0.rawValue.lowercased()) }
+    }
+
     /// The language this app's own defaults ask for, or System when they ask for none. The list
     /// every app inherits from macOS is not a choice made for Yardlet.
     static func stored(in defaults: UserDefaults = .standard,
                        domain: String = Bundle.main.bundleIdentifier ?? ProcessInfo.processInfo.processName) -> Self {
         guard let languages = defaults.persistentDomain(forName: domain)?[key] as? [String], !languages.isEmpty
         else { return .system }
-        let codes = allCases.filter { $0 != .system }.map(\.rawValue)
+        let codes = availableCases.filter { $0 != .system }.map(\.rawValue)
         return Bundle.preferredLocalizations(from: codes, forPreferences: languages).first
             .flatMap(Self.init(rawValue:)) ?? .system
     }

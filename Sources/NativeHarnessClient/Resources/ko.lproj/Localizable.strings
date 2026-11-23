@@ -83,7 +83,6 @@
 "Optional" = "선택";
 "Yes" = "예";
 "No" = "아니요";
-"Not answered" = "답하지 않음";
 "Number" = "숫자";
 "Whole number" = "정수";
 "YYYY-MM-DD" = "YYYY-MM-DD";
@@ -152,7 +151,6 @@
 "Approve tool call" = "도구 실행 승인";
 "Ask this harness…" = "이 하네스에 요청하세요…";
 "Assistant" = "어시스턴트";
-"Available" = "사용 가능";
 "Cancel" = "취소";
 "Changes" = "변경 사항";
 "Review changes" = "변경 사항 검토";
@@ -172,7 +170,6 @@
 "Diff preview truncated at 2 MiB" = "변경 사항 미리보기가 2 MiB에서 잘렸습니다";
 "Diff loading timed out. Try Refresh again." = "변경 사항을 불러오는 시간이 초과되었습니다. 다시 새로고침하세요.";
 "Diff unavailable" = "변경 사항을 볼 수 없음";
-"Done" = "완료";
 "Finish or cancel the sign-in first" = "먼저 로그인을 마치거나 취소하세요";
 "Failed" = "실패";
 "Failed to start terminal: %@\n" = "터미널을 시작할 수 없습니다: %@\n";
@@ -186,8 +183,6 @@
 "Loading diff…" = "변경 사항 불러오는 중…";
 "Local AI workbench" = "로컬 AI 워크벤치";
 "Messages from either harness appear in this native transcript." = "모든 하네스의 메시지가 이 네이티브 대화 화면에 표시됩니다.";
-"Move down" = "아래로 이동";
-"Move up" = "위로 이동";
 "Native terminal · %@\n" = "네이티브 터미널 · %@\n";
 "Needs approval" = "승인 필요";
 "New session" = "새 세션";
@@ -195,7 +190,6 @@
 "Home" = "홈";
 "Command palette" = "명령어 팔레트";
 "Codex runtime" = "Codex 런타임";
-"Search commands" = "명령 검색";
 "Search tasks and commands" = "작업과 명령 검색";
 "Use the arrow keys to select a command, then press Return." = "화살표 키로 명령을 선택한 다음 Return을 누르세요.";
 "Use the arrow keys to select a history result, then press Return." = "화살표 키로 기록을 선택한 다음 Return을 누르세요.";
@@ -361,9 +355,7 @@
 "Runtime unavailable" = "런타임 없음";
 "Unknown" = "알 수 없음";
 "Provider quota" = "제공자 할당량";
-"Account usage" = "계정 사용량";
 "Provider-reported account history" = "제공자가 알려 준 계정 사용 기록";
-"Local session usage" = "로컬 세션 사용량";
 "Usage not exposed by CLI" = "CLI에서 사용량을 제공하지 않음";
 "Choose or install a runtime first." = "먼저 런타임을 설치하거나 선택하세요.";
 "Checking account status…" = "계정 상태 확인 중…";
@@ -399,7 +391,6 @@
 "Enter" = "확인";
 "Use arrow keys and Enter for CLI-owned choices." = "CLI 선택 화면에서는 화살표와 확인 버튼을 사용하세요.";
 "Stored by" = "저장 주체";
-"Usage" = "사용량";
 "Codex weekly" = "Codex 주간";
 "Lifetime tokens" = "전체 토큰";
 "Peak daily tokens" = "일일 최대 토큰";
@@ -530,8 +521,6 @@
 "Searches Codex history when submitted." = "제출하면 Codex 기록을 검색합니다.";
 "Open Codex task: %@" = "Codex 작업 열기: %@";
 "Resume this task and show its timeline." = "이 작업을 재개하고 타임라인을 표시합니다.";
-"Enabled" = "활성화됨";
-"Disabled" = "비활성화됨";
 "Installed" = "설치됨";
 "Available" = "사용 가능";
 "Untitled task" = "제목 없는 작업";
@@ -1846,7 +1835,6 @@
 "Turn off activity view" = "활동 보기 끄기";
 "See chats that are unread, active, or awaiting a response" = "읽지 않았거나 활성 상태이거나 응답해야 하는 채팅을 확인합니다";
 /* 상태별로 묶은 작업 목록. Claude 앱(ion-dist i18n ko-KR)의 "그룹화 기준" 메뉴와 상태 그룹 이름. */
-"Group by" = "그룹화 기준";
 "Turn off the activity view to group tasks" = "작업을 묶으려면 활동 보기를 끄세요";
 "State" = "상태";
 "Idle" = "유휴";
@@ -2036,7 +2024,6 @@
 /* The menu bar item and the activity view shortcut. Codex app wording (tray menu, Settings › General › Show in menu bar, togglePriorityFilter). */
 "Recent" = "최근";
 "More" = "더 보기";
-"Open %@" = "%@ 열기";
 "Quit %@" = "%@ 종료";
 "Language" = "언어";
 "Applies the next time you open Yardlet" = "다음에 Yardlet을 열 때부터 적용됩니다.";

@@ -309,21 +309,24 @@ final class LocalizationTests: XCTestCase {
         )
     }
 
-    func testEnglishAndKoreanCatalogsHaveTheSameNonEmptyKeys() throws {
-        let english = try catalog(languageCode: "en")
-        let korean = try catalog(languageCode: "ko")
+    /// Tier 1 (enforced on every PR): English is the single source of truth.
+    /// Every `L10n.string/format("...")` literal in `Sources/NativeHarnessClient` must exist in
+    /// `en.lproj/Localizable.strings`, with no empty or duplicate keys.
+    func testEnglishCatalogCoversAllSourceLiteralsWithoutEmptyOrDuplicateKeys() throws {
+        let englishURL = resourcesDirectory.appending(path: "en.lproj/Localizable.strings")
+        let parsed = try parseStringsFile(at: englishURL)
+        let plist = try loadPropertyListStrings(at: englishURL)
 
-        XCTAssertEqual(Set(english.keys), Set(korean.keys))
-        XCTAssertFalse(english.isEmpty)
-        XCTAssertTrue(english.allSatisfy { !$0.key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
-        XCTAssertTrue(english.allSatisfy { !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
-        XCTAssertTrue(korean.allSatisfy { !$0.key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
-        XCTAssertTrue(korean.allSatisfy { !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+        XCTAssertEqual(parsed.duplicates, [], "en.lproj/Localizable.strings must not contain duplicate keys")
+        XCTAssertFalse(parsed.entries.isEmpty)
+        XCTAssertEqual(parsed.entries.count, plist.count, "Strict parser and Foundation plist parser agree")
 
-        // A key missing from the catalogs shows its English on every other language's screen.
-        let sources = URL(filePath: #filePath).deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .appending(path: "Sources/NativeHarnessClient")
+        for (key, value) in parsed.entries {
+            XCTAssertFalse(key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "Empty key in en.lproj")
+            XCTAssertFalse(value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "Empty value for \(key) in en.lproj")
+        }
+
+        let sources = repositoryRoot.appending(path: "Sources/NativeHarnessClient")
         let literal = try NSRegularExpression(pattern: #"L10n\.(?:string|format)\(\s*"((?:[^"\\]|\\.)*)""#)
         var missing: [String] = []
         var checked = 0
@@ -337,11 +340,136 @@ final class LocalizationTests: XCTestCase {
                 let key = written.replacingOccurrences(of: "\\n", with: "\n")
                     .replacingOccurrences(of: "\\\"", with: "\"").replacingOccurrences(of: "\\\\", with: "\\")
                 checked += 1
-                if english[key] == nil { missing.append("\(file.lastPathComponent): \(written)") }
+                if parsed.entries[key] == nil { missing.append("\(file.lastPathComponent): \(written)") }
             }
         }
         XCTAssertGreaterThan(checked, 1_000, "the scan found the sources")
         XCTAssertEqual(missing, [])
+    }
+
+    /// Tier 1 (enforced on every PR): every bundled non-English `.lproj/Localizable.strings`
+    /// must parse cleanly, have no duplicate keys or empty values, and preserve exact format-specifier
+    /// parity with `en.lproj` (allowing positional reordering like `%2$@ ... %1$@`).
+    /// Full 100% key parity and orphan cleanup are checked separately by `scripts/l10n.py check --strict`.
+    func testNonEnglishCatalogsAreValidWithExactFormatSpecifierParity() throws {
+        let englishURL = resourcesDirectory.appending(path: "en.lproj/Localizable.strings")
+        let english = try parseStringsFile(at: englishURL).entries
+
+        let lprojFolders = try FileManager.default
+            .contentsOfDirectory(at: resourcesDirectory, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "lproj" }
+            .filter {
+                let code = $0.deletingPathExtension().lastPathComponent
+                return code != "en" && code != "Base"
+            }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+
+        XCTAssertFalse(lprojFolders.isEmpty, "Expected at least one non-English .lproj catalog")
+
+        for folder in lprojFolders {
+            let locale = folder.deletingPathExtension().lastPathComponent
+            let stringsURL = folder.appending(path: "Localizable.strings")
+            guard FileManager.default.fileExists(atPath: stringsURL.path(percentEncoded: false)) else { continue }
+
+            let parsed = try parseStringsFile(at: stringsURL)
+            let plist = try loadPropertyListStrings(at: stringsURL)
+            XCTAssertEqual(parsed.duplicates, [], "\(locale).lproj/Localizable.strings must not contain duplicate keys")
+            XCTAssertEqual(parsed.entries.count, plist.count, "\(locale).lproj agrees with Foundation plist parser")
+
+            var formatErrors: [String] = []
+            for (key, value) in parsed.entries {
+                XCTAssertFalse(key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "Empty key in \(locale).lproj")
+                XCTAssertFalse(value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "Empty value for \(key) in \(locale).lproj")
+                if let englishValue = english[key],
+                   let error = formatSpecifierParityError(english: englishValue, translated: value) {
+                    formatErrors.append("[\(locale)] \(key): \(error)")
+                }
+            }
+            XCTAssertEqual(formatErrors, [], "Format specifier mismatch in \(locale).lproj")
+        }
+    }
+
+    func testFormatSpecifierParityRules() {
+        XCTAssertNil(formatSpecifierParityError(english: "Hello %@", translated: "こんにちは %@"))
+        XCTAssertNil(formatSpecifierParityError(english: "%1$@ to %2$lld", translated: "%2$lld から %1$@"))
+        XCTAssertNil(formatSpecifierParityError(english: "%@ %lld", translated: "%2$lld %1$@"))
+        XCTAssertNil(formatSpecifierParityError(english: "%.1f%% of input", translated: "입력의 %.1f%%"))
+        XCTAssertNil(formatSpecifierParityError(english: "CPU %", translated: "CPU %"))
+        XCTAssertNil(formatSpecifierParityError(english: "Battery under 20%", translated: "배터리 20% 미만"))
+
+        XCTAssertNotNil(formatSpecifierParityError(english: "Hello %@", translated: "Hello"))
+        XCTAssertNotNil(formatSpecifierParityError(english: "Hello %@", translated: "Hello %@ %@"))
+        XCTAssertNotNil(formatSpecifierParityError(english: "Count %lld", translated: "Count %d"))
+        XCTAssertNotNil(formatSpecifierParityError(english: "Count %lld", translated: "Count %@"))
+        XCTAssertNotNil(formatSpecifierParityError(english: "%1$@ and %2$@", translated: "%1$@ and %@"))
+        XCTAssertNotNil(formatSpecifierParityError(english: "%lld%% left", translated: "%lld% left"))
+        XCTAssertNotNil(formatSpecifierParityError(english: "Plain text", translated: "Plain %@"))
+    }
+
+    /// Proves that a key present in `en.lproj` but missing in a non-English `.lproj` falls back to
+    /// the English catalog's value (not merely the raw key string) and formats safely without crashing.
+    func testMissingKeysFallBackToEnglishCatalogValue() throws {
+        let bundleURL = FileManager.default.temporaryDirectory
+            .appending(path: "YardletL10nFallback-\(UUID().uuidString).bundle")
+        defer { try? FileManager.default.removeItem(at: bundleURL) }
+
+        let resources = bundleURL.appending(path: "Contents/Resources")
+        try FileManager.default.createDirectory(at: resources.appending(path: "en.lproj"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: resources.appending(path: "ja.lproj"), withIntermediateDirectories: true)
+
+        let infoPlist = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0"><dict>
+        <key>CFBundleIdentifier</key><string>test.yardlet.l10n.fallback</string>
+        <key>CFBundleDevelopmentRegion</key><string>en</string>
+        </dict></plist>
+        """
+        try infoPlist.write(to: bundleURL.appending(path: "Contents/Info.plist"), atomically: true, encoding: .utf8)
+
+        let enStrings = """
+        "New task" = "New task";
+        "Only in English" = "Only in English";
+        "Archive split view confirmation" = "Archives all %lld tasks in this split view.";
+        """
+        let jaStrings = """
+        "New task" = "新しいタスク";
+        """
+        try enStrings.write(to: resources.appending(path: "en.lproj/Localizable.strings"), atomically: true, encoding: .utf8)
+        try jaStrings.write(to: resources.appending(path: "ja.lproj/Localizable.strings"), atomically: true, encoding: .utf8)
+
+        let bundle = try XCTUnwrap(Bundle(url: bundleURL))
+        let enTable = L10n.stringsTable(for: "en", in: bundle)
+        let jaBundle = try XCTUnwrap(bundle.path(forResource: "ja", ofType: "lproj").flatMap(Bundle.init(path:)))
+
+        // Translated key uses the target localization.
+        XCTAssertEqual(L10n.string("New task", languageCode: "ja", in: bundle), "新しいタスク")
+
+        // Missing identity key falls back to English.
+        XCTAssertEqual(L10n.string("Only in English", languageCode: "ja", in: bundle), "Only in English")
+
+        // Missing semantic key whose English value differs from its key falls back to the English
+        // catalog VALUE (with its format specifier intact), not the raw key.
+        let fallbackFormat = L10n.string("Archive split view confirmation", languageCode: "ja", in: bundle)
+        XCTAssertEqual(fallbackFormat, "Archives all %lld tasks in this split view.")
+        XCTAssertEqual(String(format: fallbackFormat, Int64(3)), "Archives all 3 tasks in this split view.")
+
+        // Direct `L10n.resolve` against the partial localization bundle matches the same contract.
+        XCTAssertEqual(
+            L10n.resolve("Archive split view confirmation", in: jaBundle, englishFallback: enTable, defaultValue: "fallback"),
+            "Archives all %lld tasks in this split view."
+        )
+        XCTAssertEqual(
+            L10n.resolve("Unknown key", in: jaBundle, englishFallback: enTable, defaultValue: "Custom fallback"),
+            "Custom fallback"
+        )
+
+        // Unbundled language code also falls back to the English catalog value.
+        XCTAssertEqual(
+            L10n.string("Archive split view confirmation", languageCode: "fr", in: bundle),
+            "Archives all %lld tasks in this split view."
+        )
+        XCTAssertEqual(L10n.string("Completely unknown key", languageCode: "ja", in: bundle), "Completely unknown key")
     }
 
     /// The app's own `AppleLanguages`, as System Settings writes it per app: a language puts that one
@@ -365,20 +493,240 @@ final class LocalizationTests: XCTestCase {
         defaults.set(["ko-KR"], forKey: AppLanguagePreference.key)
         XCTAssertEqual(AppLanguagePreference.stored(in: defaults, domain: suite), .korean)
 
+        // Settings only lists languages whose `.lproj` catalog is bundled.
+        XCTAssertEqual(AppLanguagePreference.availableCases(bundledLocalizations: ["en"]), [.system, .english])
+        XCTAssertEqual(AppLanguagePreference.availableCases(bundledLocalizations: ["en", "ko"]), [.system, .english, .korean])
+
         // Settings offers Relaunch for a language other than the one the bundle chose as Yardlet opened.
         let shown = try XCTUnwrap(L10n.shownLocalization.flatMap(AppLanguagePreference.init(rawValue:)))
         XCTAssertFalse(shown.changesShownLanguage(in: defaults))
         XCTAssertTrue((shown == .english ? AppLanguagePreference.korean : .english).changesShownLanguage(in: defaults))
     }
 
-    private func catalog(languageCode: String) throws -> [String: String] {
-        let path = try XCTUnwrap(
-            Bundle.module.path(
-                forResource: "Localizable",
-                ofType: "strings",
-                inDirectory: "\(languageCode).lproj"
-            )
-        )
-        return try XCTUnwrap(NSDictionary(contentsOfFile: path) as? [String: String])
+    // MARK: - Helpers
+
+    private var repositoryRoot: URL {
+        URL(filePath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
+    private var resourcesDirectory: URL {
+        repositoryRoot.appending(path: "Sources/NativeHarnessClient/Resources")
+    }
+
+    private func loadPropertyListStrings(at url: URL) throws -> [String: String] {
+        let data = try Data(contentsOf: url)
+        let plist = try PropertyListSerialization.propertyList(from: data, format: nil)
+        return try XCTUnwrap(plist as? [String: String], "Failed to parse \(url.path) as strings dictionary")
+    }
+
+    private struct ParsedStrings {
+        let entries: [String: String]
+        let duplicates: [String]
+    }
+
+    private enum StringsParseError: Error, CustomStringConvertible {
+        case syntax(String)
+        var description: String {
+            switch self { case let .syntax(message): message }
+        }
+    }
+
+    /// Strict `.strings` parser that preserves duplicate detection (which `PropertyListSerialization`
+    /// overwrites silently).
+    private func parseStringsFile(at url: URL) throws -> ParsedStrings {
+        var text = try String(contentsOf: url, encoding: .utf8)
+        if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
+        let scalars = Array(text.unicodeScalars)
+        var index = 0
+        var line = 1
+
+        func advance() {
+            if scalars[index] == "\n" { line += 1 }
+            index += 1
+        }
+
+        func skipWhitespaceAndComments() throws {
+            while index < scalars.count {
+                let ch = scalars[index]
+                if ch == " " || ch == "\t" || ch == "\r" || ch == "\n" {
+                    advance()
+                } else if ch == "/" && index + 1 < scalars.count && scalars[index + 1] == "/" {
+                    while index < scalars.count && scalars[index] != "\n" { advance() }
+                } else if ch == "/" && index + 1 < scalars.count && scalars[index + 1] == "*" {
+                    let startLine = line
+                    advance(); advance()
+                    var closed = false
+                    while index + 1 < scalars.count {
+                        if scalars[index] == "*" && scalars[index + 1] == "/" {
+                            advance(); advance()
+                            closed = true
+                            break
+                        }
+                        advance()
+                    }
+                    if !closed { throw StringsParseError.syntax("\(url.lastPathComponent):\(startLine): unterminated block comment") }
+                } else {
+                    break
+                }
+            }
+        }
+
+        func readQuotedString() throws -> String {
+            let startLine = line
+            guard index < scalars.count, scalars[index] == "\"" else {
+                throw StringsParseError.syntax("\(url.lastPathComponent):\(line): expected '\"'")
+            }
+            advance()
+            var result = ""
+            while index < scalars.count {
+                let ch = scalars[index]
+                if ch == "\"" {
+                    advance()
+                    return result
+                }
+                if ch == "\\" {
+                    advance()
+                    guard index < scalars.count else {
+                        throw StringsParseError.syntax("\(url.lastPathComponent):\(startLine): unterminated escape")
+                    }
+                    let esc = scalars[index]
+                    advance()
+                    switch esc {
+                    case "\"": result.append("\"")
+                    case "\\": result.append("\\")
+                    case "n": result.append("\n")
+                    case "r": result.append("\r")
+                    case "t": result.append("\t")
+                    case "U", "u":
+                        guard index + 4 <= scalars.count else {
+                            throw StringsParseError.syntax("\(url.lastPathComponent):\(line): truncated \\U escape")
+                        }
+                        let hex = String(String.UnicodeScalarView(scalars[index ..< index + 4]))
+                        guard let code = UInt32(hex, radix: 16), let scalar = UnicodeScalar(code) else {
+                            throw StringsParseError.syntax("\(url.lastPathComponent):\(line): invalid \\U escape \\U\(hex)")
+                        }
+                        for _ in 0 ..< 4 { advance() }
+                        result.unicodeScalars.append(scalar)
+                    default:
+                        result.unicodeScalars.append(esc)
+                    }
+                } else {
+                    result.unicodeScalars.append(ch)
+                    advance()
+                }
+            }
+            throw StringsParseError.syntax("\(url.lastPathComponent):\(startLine): unterminated string literal")
+        }
+
+        var entries: [String: String] = [:]
+        var duplicates: [String] = []
+        while true {
+            try skipWhitespaceAndComments()
+            if index >= scalars.count { break }
+            let key = try readQuotedString()
+            try skipWhitespaceAndComments()
+            guard index < scalars.count, scalars[index] == "=" else {
+                throw StringsParseError.syntax("\(url.lastPathComponent):\(line): expected '=' after key \(key)")
+            }
+            advance()
+            try skipWhitespaceAndComments()
+            let value = try readQuotedString()
+            try skipWhitespaceAndComments()
+            guard index < scalars.count, scalars[index] == ";" else {
+                throw StringsParseError.syntax("\(url.lastPathComponent):\(line): expected ';' after value for \(key)")
+            }
+            advance()
+            if entries[key] != nil {
+                duplicates.append(key)
+            }
+            entries[key] = value
+        }
+        return ParsedStrings(entries: entries, duplicates: duplicates)
+    }
+
+    private struct FormatSpecifierSignature: Equatable {
+        let placeholders: [Int: String]
+        let hasStrayPercent: Bool
+    }
+
+    private static let formatSpecifierRegex = try! NSRegularExpression(
+        pattern: #"%(?:([1-9][0-9]*)\$)?([-+ #0]*)(?:([0-9]+|\*))?(?:\.([0-9]+|\*))?(hh|h|ll|l|q|L|z|t|j)?([@dDiIuUxXoOfeEfFgGcCsSpAa%])"#
+    )
+
+    private func extractFormatSpecifiers(from text: String) -> Result<FormatSpecifierSignature, StringsParseError> {
+        let fullRange = NSRange(text.startIndex..., in: text)
+        let matches = Self.formatSpecifierRegex.matches(in: text, range: fullRange)
+        var placeholders: [Int: String] = [:]
+        var nextImplicitIndex = 1
+        var sawPositional = false
+        var sawImplicit = false
+        var stripped = text
+        var matchedRanges: [Range<String.Index>] = []
+
+        for match in matches {
+            guard let wholeRange = Range(match.range, in: text),
+                  let convRange = Range(match.range(at: 6), in: text) else { continue }
+            matchedRanges.append(wholeRange)
+            let conversion = String(text[convRange])
+            if conversion == "%" { continue }
+
+            let length = Range(match.range(at: 5), in: text).map { String(text[$0]) } ?? ""
+            let canonicalConv: String = switch conversion {
+            case "i", "D": "d"
+            case "U": "u"
+            case "O": "o"
+            case "F": "f"
+            default: conversion
+            }
+            let typeSignature = length + canonicalConv
+
+            let argIndex: Int
+            if let posRange = Range(match.range(at: 1), in: text), let parsed = Int(text[posRange]) {
+                sawPositional = true
+                argIndex = parsed
+            } else {
+                sawImplicit = true
+                argIndex = nextImplicitIndex
+                nextImplicitIndex += 1
+            }
+
+            if let existing = placeholders[argIndex], existing != typeSignature {
+                return .failure(.syntax("conflicting types for argument \(argIndex): \(existing) vs \(typeSignature)"))
+            }
+            placeholders[argIndex] = typeSignature
+        }
+
+        if sawPositional && sawImplicit {
+            return .failure(.syntax("mixes positional and non-positional format specifiers"))
+        }
+
+        for range in matchedRanges.reversed() {
+            stripped.removeSubrange(range)
+        }
+        return .success(FormatSpecifierSignature(placeholders: placeholders, hasStrayPercent: stripped.contains("%")))
+    }
+
+    private func formatSpecifierParityError(english: String, translated: String) -> String? {
+        let enSig: FormatSpecifierSignature
+        switch extractFormatSpecifiers(from: english) {
+        case let .success(sig): enSig = sig
+        case let .failure(error): return "invalid English format string: \(error)"
+        }
+        let trSig: FormatSpecifierSignature
+        switch extractFormatSpecifiers(from: translated) {
+        case let .success(sig): trSig = sig
+        case let .failure(error): return "invalid translated format string: \(error)"
+        }
+
+        if enSig.placeholders != trSig.placeholders {
+            return "expected \(enSig.placeholders), got \(trSig.placeholders)"
+        }
+        if !enSig.placeholders.isEmpty && trSig.hasStrayPercent {
+            return "unescaped '%' in format string (use '%%' for a literal percent)"
+        }
+        return nil
     }
 }

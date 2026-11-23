@@ -1,0 +1,198 @@
+{
+  "version": 1,
+  "sourceLocale": "en",
+  "guidance": [
+    "Keep product, brand, protocol, and CLI names listed in doNotTranslate in English.",
+    "Preserve every printf/NSString format specifier (%@, %lld, %d, %u, %.1f, %1$@, %2$lld) and escaped literal percent (%%). Positional reordering (%2$@ ... %1$@) is encouraged when natural for the target language, provided every index and conversion type matches English.",
+    "Preserve keyboard shortcut symbols (⌘, ⇧, ⌥, ⌃, ⏎), file paths, environment variables, slash commands, and code snippets verbatim.",
+    "Keep button labels, menu items, and sidebar titles concise so native controls do not clip or wrap awkwardly.",
+    "Match native macOS and Windows platform conventions for the target language rather than translating English idioms word for word."
+  ],
+  "doNotTranslate": [
+    "Yardlet",
+    "Claude",
+    "Claude Code",
+    "Codex",
+    "Antigravity",
+    "OpenCode",
+    "Kimi Code",
+    "Grok",
+    "Grok Build",
+    "Muse",
+    "Hermes",
+    "Pi",
+    "MCP",
+    "ACP",
+    "Git",
+    "GitHub",
+    "macOS",
+    "Windows",
+    "Linux",
+    "iOS",
+    "Android",
+    "Finder",
+    "Sparkle",
+    "Keychain",
+    "OAuth",
+    "SSH",
+    "URL",
+    "HTTPS",
+    "JSON",
+    "API",
+    "CLI",
+    "PR",
+    "CI"
+  ],
+  "terms": {
+    "Task": {
+      "context": "A single coding-agent conversation/work unit in Yardlet's sidebar.",
+      "translations": {
+        "ko": "작업"
+      }
+    },
+    "Project": {
+      "context": "A sidebar group backed by one or more local repository folders.",
+      "translations": {
+        "ko": "프로젝트"
+      }
+    },
+    "Worktree": {
+      "context": "An isolated Git worktree created for a task.",
+      "translations": {
+        "ko": "워크트리"
+      }
+    },
+    "Harness": {
+      "context": "A local coding-agent CLI backend (Claude Code, Codex, Antigravity, etc.).",
+      "translations": {
+        "ko": "하네스"
+      }
+    },
+    "Terminal": {
+      "context": "The integrated terminal surface inside a task.",
+      "translations": {
+        "ko": "터미널"
+      }
+    },
+    "Browser": {
+      "context": "Yardlet's built-in Chromium browser panel inside a task.",
+      "translations": {
+        "ko": "브라우저"
+      }
+    },
+    "Relay": {
+      "context": "The end-to-end encrypted Yardlet server used to reach a host from outside the local network (often shown as 'Yardlet server' in UI copy).",
+      "translations": {
+        "ko": "Yardlet 서버"
+      }
+    },
+    "Connectors": {
+      "context": "External service integrations (MCP servers, Gmail, Calendar, Slack, etc.).",
+      "translations": {
+        "ko": "커넥터"
+      }
+    },
+    "Split View": {
+      "context": "Multiple tasks displayed side by side in panes within one view.",
+      "translations": {
+        "ko": "분할 화면"
+      }
+    },
+    "Pane": {
+      "context": "One individual slot inside a Split View.",
+      "translations": {
+        "ko": "구획"
+      }
+    },
+    "Session": {
+      "context": "An underlying agent CLI session.",
+      "translations": {
+        "ko": "세션"
+      }
+    },
+    "Turn": {
+      "context": "One user prompt and agent response cycle.",
+      "translations": {
+        "ko": "턴"
+      }
+    },
+    "Permission mode": {
+      "context": "Controls whether an agent asks before editing files or running commands.",
+      "translations": {
+        "ko": "권한 모드"
+      }
+    },
+    "Thinking level": {
+      "context": "Controls reasoning effort for a model turn.",
+      "translations": {
+        "ko": "사고 수준"
+      }
+    },
+    "Subagent": {
+      "context": "A background helper agent launched by a task.",
+      "translations": {
+        "ko": "서브에이전트"
+      }
+    },
+    "Review": {
+      "context": "Diff / working-tree inspection surface.",
+      "translations": {
+        "ko": "검토"
+      }
+    },
+    "Archive": {
+      "context": "Hide a completed task from the sidebar without deleting its history.",
+      "translations": {
+        "ko": "보관"
+      }
+    },
+    "Pin": {
+      "context": "Keep a task or project anchored near the top of the sidebar.",
+      "translations": {
+        "ko": "고정"
+      }
+    },
+    "Settings": {
+      "context": "Application preferences window.",
+      "translations": {
+        "ko": "설정"
+      }
+    },
+    "Remote": {
+      "context": "Remote control and pairing between devices (Mac, Windows, Linux, phone).",
+      "translations": {
+        "ko": "원격 연결"
+      }
+    },
+    "Paired devices": {
+      "context": "Devices authorized to connect to this host over Remote.",
+      "translations": {
+        "ko": "연결된 기기"
+      }
+    },
+    "Scheduled tasks": {
+      "context": "Recurring or one-off prompts run automatically on a schedule.",
+      "translations": {
+        "ko": "예약된 작업"
+      }
+    },
+    "Passwords": {
+      "context": "Yardlet's built-in credential vault for the browser panel.",
+      "translations": {
+        "ko": "비밀번호"
+      }
+    },
+    "Workspace": {
+      "context": "The working directory / Codex sandbox scope.",
+      "translations": {
+        "ko": "작업 공간"
+      }
+    },
+    "Chats": {
+      "context": "Tasks started without a project folder.",
+      "translations": {
+        "ko": "채팅"
+      }
+    }
+  }
+}
