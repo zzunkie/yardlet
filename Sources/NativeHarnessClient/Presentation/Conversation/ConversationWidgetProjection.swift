@@ -32,13 +32,34 @@ struct ConversationWidget: Equatable, Sendable {
     private static func isYardletShowWidget(_ activity: HarnessActivity) -> Bool {
         for raw in [activity.kind, activity.title] {
             for token in raw.split(whereSeparator: \.isWhitespace) {
-                let lower = token.lowercased()
-                if lower == "mcp__yardlet__show_widget" { return true }
-                if lower.hasPrefix("mcp_yardlet_"), lower.hasSuffix("_show_widget") {
-                    let middle = lower.dropFirst("mcp_yardlet_".count).dropLast("_show_widget".count)
-                    if !middle.isEmpty, middle.allSatisfy(\.isHexDigit) { return true }
-                }
+                if isYardletShowWidgetToken(token) { return true }
             }
+        }
+        return false
+    }
+
+    /// Recognizes Yardlet's namespaced `show_widget` tool names across MCP/ACP naming conventions
+    /// (`mcp__yardlet__show_widget`, `mcp_yardlet_<hex>_show_widget`, `yardlet/show_widget`,
+    /// `yardlet:show_widget`, `yardlet__show_widget`, `yardlet.show_widget`, `yardlet_show_widget`)
+    /// without matching bare or non-Yardlet `show_widget` tools.
+    private static func isYardletShowWidgetToken(_ raw: Substring) -> Bool {
+        let lower = raw.trimmingCharacters(in: CharacterSet(charactersIn: "`\"'()[]")).lowercased()
+        guard lower.hasSuffix("show_widget"), lower.count > "show_widget".count else { return false }
+        let beforeTool = lower.dropLast("show_widget".count)
+        guard let separator = beforeTool.last, "/:._".contains(separator) else { return false }
+        let serverPart = beforeTool.dropLast().trimmingCharacters(in: CharacterSet(charactersIn: "/:._"))
+        let strippedMCP: Substring
+        if serverPart.hasPrefix("mcp") {
+            let afterMCP = serverPart.dropFirst(3)
+            guard let first = afterMCP.first, "/:._".contains(first) else { return false }
+            strippedMCP = afterMCP.drop(while: { "/:._".contains($0) })
+        } else {
+            strippedMCP = Substring(serverPart)
+        }
+        if strippedMCP == "yardlet" { return true }
+        if strippedMCP.hasPrefix("yardlet_") {
+            let suffix = strippedMCP.dropFirst("yardlet_".count)
+            return !suffix.isEmpty && suffix.allSatisfy(\.isHexDigit)
         }
         return false
     }

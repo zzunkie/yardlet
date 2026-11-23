@@ -31,9 +31,12 @@ final class StructuredHeadlessAdapterTests: XCTestCase {
             ).probeRuntime()
 
             XCTAssertFalse(runtime.capabilities.hasSubagents, kind.rawValue)
+            let manifest = HarnessProtocolCompatibilityManifest.structuredHeadless(kind)
+            XCTAssertTrue(manifest.supports(.reasoning), kind.rawValue)
+            XCTAssertTrue(manifest.supports(.usage), kind.rawValue)
             XCTAssertEqual(
                 Set(runtime.capabilities.protocolCapabilities()),
-                Set(HarnessProtocolCompatibilityManifest.structuredHeadless(kind).capabilities),
+                Set(manifest.capabilities).subtracting([.reasoning, .usage]),
                 kind.rawValue
             )
         }
@@ -534,12 +537,110 @@ final class StructuredHeadlessAdapterTests: XCTestCase {
         await adapter.close(handle)
     }
 
+    func testCursorCreateChatAppliesRuntimeProcessEnvironment() async throws {
+        let fixture = try makeFixtureExecutable(
+            flavor: .cursor,
+            cursorCreateChat: """
+            if [ "$NO_COLOR" != "1" ] || [ "$PAGER" != "cat" ] || [ "$GIT_PAGER" != "cat" ]; then
+              printf '%s\\n' "missing env: NO_COLOR=$NO_COLOR PAGER=$PAGER GIT_PAGER=$GIT_PAGER" >&2
+              exit 2
+            fi
+            dir=$(dirname "$0")
+            case ":$PATH:" in
+              *":$dir:"*) ;;
+              *)
+                printf '%s\\n' "executable dir missing from PATH: $PATH" >&2
+                exit 3
+                ;;
+            esac
+            printf '%s\\n' '00000000-0000-0000-0000-000000000601'
+            exit 0
+            """
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let adapter = StructuredHeadlessAdapter(kind: .cursorAgent, executableURL: fixture.executable)
+        let handle = try await adapter.createSession(CreateHarnessSessionRequest(
+            localSessionID: UUID(),
+            workspaceURL: fixture.root,
+            initialPrompt: nil
+        ))
+        XCTAssertEqual(handle.providerSessionID, "00000000-0000-0000-0000-000000000601")
+        await adapter.close(handle)
+    }
+
+    func testCursorThinkingAndUsageCrossDirectAndYHPRoutes() async throws {
+        let fixture = try makeFixtureExecutable(flavor: .cursor)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let adapters: [any HarnessAdapter] = [
+            StructuredHeadlessAdapter(kind: .cursorAgent, executableURL: fixture.executable),
+            await HarnessRegistry().adapter(for: .cursorAgent, executableURL: fixture.executable)
+        ]
+        for adapter in adapters {
+            let handle = try await adapter.createSession(CreateHarnessSessionRequest(
+                localSessionID: UUID(),
+                workspaceURL: fixture.root,
+                initialPrompt: nil
+            ))
+            let recorder = HeadlessPayloadRecorder()
+            let collector = Task {
+                for await event in await adapter.events(for: handle) {
+                    await recorder.append(event.payload)
+                }
+            }
+            defer { collector.cancel() }
+
+            try await adapter.send("thinking-usage", to: handle)
+            try await waitUntil { await recorder.payloads.contains(.turnCompleted) }
+            let payloads = await recorder.payloads
+            XCTAssertTrue(payloads.contains(.reasoningDelta("Thinking...")))
+            XCTAssertTrue(payloads.contains(.reasoningCompleted("Thinking... done")))
+            XCTAssertTrue(payloads.contains(.assistantDelta("final")))
+            XCTAssertTrue(payloads.contains { payload in
+                guard case let .usageUpdated(usage) = payload else { return false }
+                return usage.inputTokens == 120 && usage.outputTokens == 35
+            })
+            await adapter.close(handle)
+        }
+    }
+
+    func testProviderCapabilitiesRunsCatalogCommandOffActor() async throws {
+        let fixture = try makeFixtureExecutable(
+            flavor: .cursor,
+            listModelsBody: """
+            sleep 0.35
+            printf '%s\\t%s\\n' 'cursor-model' 'Cursor Model'
+            exit 0
+            """
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let adapter = StructuredHeadlessAdapter(kind: .cursorAgent, executableURL: fixture.executable)
+        let handle = try await adapter.createSession(CreateHarnessSessionRequest(
+            localSessionID: UUID(),
+            workspaceURL: fixture.root,
+            initialPrompt: nil
+        ))
+
+        let capabilitiesTask = Task { try await adapter.providerCapabilities(for: handle) }
+        try await Task.sleep(for: .milliseconds(50))
+        let probeStart = ContinuousClock.now
+        _ = await adapter.events(for: handle)
+        let actorWait = ContinuousClock.now - probeStart
+        let capabilities = try await capabilitiesTask.value
+        XCTAssertLessThan(actorWait, .milliseconds(200), "Listing models must not block the adapter actor")
+        XCTAssertTrue(capabilities.selectors.contains { $0.id == StructuredHeadlessOptionID.model })
+        await adapter.close(handle)
+    }
+
     /// A Cursor Agent stand-in: `create-chat`, `--list-models`, and a turn whose prompt (the last
     /// argument) picks what the run does.
     private func makeFixtureExecutable(
         flavor: StructuredHeadlessFlavor,
         cursorCreateChat: String = """
         printf '%s\\n' '00000000-0000-0000-0000-000000000601'
+        exit 0
+        """,
+        listModelsBody: String = """
+        printf '%s\\t%s\\n' 'cursor-model' 'Cursor Model'
         exit 0
         """
     ) throws -> (root: URL, executable: URL) {
@@ -561,14 +662,21 @@ final class StructuredHeadlessAdapterTests: XCTestCase {
             \(cursorCreateChat)
             fi
             if [ "$1" = "--list-models" ]; then
-              printf '%s\\t%s\\n' 'cursor-model' 'Cursor Model'
-              exit 0
+            \(listModelsBody)
             fi
             for prompt; do :; done
             case "$prompt" in
               *error-result*)
                 printf '%s\\n' '\(initLine)'
                 printf '%s\\n' '{"type":"result","subtype":"error","is_error":true,"result":"fixture cursor failure","session_id":"00000000-0000-0000-0000-000000000601"}'
+                exit 0
+                ;;
+              thinking-usage)
+                printf '%s\\n' '\(initLine)'
+                printf '%s\\n' '{"type":"thinking","subtype":"delta","text":"Thinking...","session_id":"00000000-0000-0000-0000-000000000601"}'
+                printf '%s\\n' '{"type":"thinking","subtype":"completed","text":"Thinking... done","session_id":"00000000-0000-0000-0000-000000000601"}'
+                printf '%s\\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"final"}]}}'
+                printf '%s\\n' '{"type":"result","subtype":"success","result":"final","usage":{"inputTokens":120,"outputTokens":35},"session_id":"00000000-0000-0000-0000-000000000601"}'
                 exit 0
                 ;;
               slow-result)

@@ -472,6 +472,259 @@ final class ACPAdapterTests: XCTestCase {
         XCTAssertTrue(methods.contains("session/set_config_option"))
     }
 
+    func testConfigOptionAndCurrentModeUpdatesEmitProviderCapabilitiesChanged() async throws {
+        let transport = FakeACPTransport(exposesConfig: true)
+        let adapter = YHPProviderCompatibilityAdapter(
+            adapter: ACPAdapter(
+                kind: .openCode,
+                executableURL: URL(filePath: "/tmp/opencode"),
+                transportFactory: { transport }
+            ),
+            manifest: HarnessProtocolCompatibilityManifest.acp(.openCode)
+        )
+        let handle = try await adapter.createSession(CreateHarnessSessionRequest(
+            localSessionID: UUID(),
+            workspaceURL: URL(filePath: "/tmp/project"),
+            initialPrompt: nil
+        ))
+        let recorder = ACPPayloadRecorder()
+        let collector = Task {
+            for await event in await adapter.events(for: handle) {
+                await recorder.append(event.payload)
+            }
+        }
+        defer { collector.cancel() }
+
+        let updatedConfig = acpUpdate(
+            providerSessionID: handle.providerSessionID,
+            update: .object([
+                "sessionUpdate": .string("config_option_update"),
+                "configOptions": .array([.object([
+                    "id": .string("mode"),
+                    "name": .string("Mode"),
+                    "type": .string("select"),
+                    "currentValue": .string("code"),
+                    "options": .array([
+                        .object(["value": .string("ask"), "name": .string("Ask")]),
+                        .object(["value": .string("code"), "name": .string("Code")]),
+                        .object(["value": .string("architect"), "name": .string("Architect")])
+                    ])
+                ])])
+            ])
+        )
+        await transport.emit(updatedConfig)
+        try await waitUntil {
+            await recorder.payloads.filter { $0 == .providerCapabilitiesChanged }.count == 1
+        }
+        let afterConfig = try await adapter.providerCapabilities(for: handle)
+        XCTAssertEqual(afterConfig.selectors.first(where: { $0.id == "mode" })?.currentValue, "code")
+
+        // A duplicate update that changes nothing does not emit a spurious notification.
+        await transport.emit(updatedConfig)
+        await transport.emit(acpUpdate(
+            providerSessionID: handle.providerSessionID,
+            update: .object([
+                "sessionUpdate": .string("current_mode_update"),
+                "modeId": .string("architect")
+            ])
+        ))
+        try await waitUntil {
+            await recorder.payloads.filter { $0 == .providerCapabilitiesChanged }.count == 2
+        }
+        let afterMode = try await adapter.providerCapabilities(for: handle)
+        XCTAssertEqual(afterMode.selectors.first(where: { $0.id == "mode" })?.currentValue, "architect")
+        let changeCount = await recorder.payloads.filter { $0 == .providerCapabilitiesChanged }.count
+        XCTAssertEqual(changeCount, 2)
+        await adapter.close(handle)
+    }
+
+    func testPromptCompletionPreservesLateToolPatchSemanticsAndBoundsTerminalActivities() async throws {
+        let transport = FakeACPTransport()
+        let adapter = ACPAdapter(
+            kind: .kimiCode,
+            executableURL: URL(filePath: "/tmp/kimi"),
+            transportFactory: { transport }
+        )
+        let handle = try await adapter.createSession(CreateHarnessSessionRequest(
+            localSessionID: UUID(),
+            workspaceURL: URL(filePath: "/tmp/project"),
+            initialPrompt: nil
+        ))
+        let recorder = ACPPayloadRecorder()
+        let collector = Task {
+            for await event in await adapter.events(for: handle) {
+                await recorder.append(event.payload)
+            }
+        }
+        defer { collector.cancel() }
+
+        // Turn 1: one completed tool and one still-running tool, then finishPrompt.
+        try await adapter.send("turn 1", to: handle)
+        try await waitUntil { await transport.pendingPromptCount == 1 }
+        await transport.emit(acpUpdate(
+            providerSessionID: handle.providerSessionID,
+            update: .object([
+                "sessionUpdate": .string("tool_call"),
+                "toolCallId": .string("completed-recent"),
+                "kind": .string("execute"),
+                "title": .string("Run tests"),
+                "status": .string("in_progress"),
+                "rawInput": .object(["command": .string("swift test")])
+            ])
+        ))
+        await transport.emit(acpUpdate(
+            providerSessionID: handle.providerSessionID,
+            update: .object([
+                "sessionUpdate": .string("tool_call_update"),
+                "toolCallId": .string("completed-recent"),
+                "status": .string("completed"),
+                "rawOutput": .string("ok")
+            ])
+        ))
+        await transport.emit(acpUpdate(
+            providerSessionID: handle.providerSessionID,
+            update: .object([
+                "sessionUpdate": .string("tool_call"),
+                "toolCallId": .string("still-running"),
+                "kind": .string("execute"),
+                "title": .string("Background watcher"),
+                "status": .string("in_progress")
+            ])
+        ))
+        try await waitUntil {
+            await recorder.payloads.contains { payload in
+                if case let .activityStarted(activity) = payload { return activity.id == "still-running" }
+                return false
+            }
+        }
+        await transport.completePrompt()
+        try await waitUntil { await recorder.payloads.contains(.turnCompleted) }
+
+        // Late tool_call_update with omitted status after finishPrompt must keep the completed
+        // tool completed (never reopen it) and preserve its title and kind.
+        await transport.emit(acpUpdate(
+            providerSessionID: handle.providerSessionID,
+            update: .object([
+                "sessionUpdate": .string("tool_call_update"),
+                "toolCallId": .string("completed-recent"),
+                "rawOutput": .string("late background output")
+            ])
+        ))
+        try await waitUntil {
+            await recorder.payloads.contains { payload in
+                if case let .activityCompleted(activity) = payload {
+                    return activity.id == "completed-recent" && activity.output == "late background output"
+                }
+                return false
+            }
+        }
+        let afterLatePatch = await recorder.payloads
+        XCTAssertFalse(afterLatePatch.contains { payload in
+            if case let .activityUpdated(activity) = payload { return activity.id == "completed-recent" }
+            return false
+        }, "A late patch with omitted status must not reopen a completed tool")
+        let patchedCompleted = try XCTUnwrap(afterLatePatch.compactMap { payload -> HarnessActivity? in
+            if case let .activityCompleted(activity) = payload,
+               activity.id == "completed-recent",
+               activity.output == "late background output" {
+                return activity
+            }
+            return nil
+        }.last)
+        XCTAssertEqual(patchedCompleted.title, "Run tests")
+        XCTAssertEqual(patchedCompleted.kind, "execute")
+
+        // Turn 2: emit 135 completed tools so total terminal count exceeds the 128 cap, then failPrompt.
+        try await adapter.send("turn 2", to: handle)
+        try await waitUntil { await transport.pendingPromptCount == 1 }
+        for index in 0..<135 {
+            await transport.emit(acpUpdate(
+                providerSessionID: handle.providerSessionID,
+                update: .object([
+                    "sessionUpdate": .string("tool_call"),
+                    "toolCallId": .string("batch-\(index)"),
+                    "kind": .string("read"),
+                    "title": .string("Batch \(index)"),
+                    "status": .string("completed")
+                ])
+            ))
+        }
+        try await waitUntil {
+            await recorder.payloads.contains { payload in
+                if case let .activityCompleted(activity) = payload { return activity.id == "batch-134" }
+                return false
+            }
+        }
+        await transport.failPrompt(HarnessAdapterError.invalidProviderEvent("provider failure"))
+        try await waitUntil { await recorder.payloads.contains(.sessionStatusChanged(.failed)) }
+
+        // Oldest terminal entry ("batch-0") was evicted beyond the 128 cap, while the newest
+        // terminal entry ("batch-134") and the non-terminal entry ("still-running") remain retained.
+        try await adapter.send("turn 3", to: handle)
+        try await waitUntil { await transport.pendingPromptCount == 1 }
+        await transport.emit(acpUpdate(
+            providerSessionID: handle.providerSessionID,
+            update: .object([
+                "sessionUpdate": .string("tool_call_update"),
+                "toolCallId": .string("batch-0"),
+                "status": .string("in_progress")
+            ])
+        ))
+        await transport.emit(acpUpdate(
+            providerSessionID: handle.providerSessionID,
+            update: .object([
+                "sessionUpdate": .string("tool_call_update"),
+                "toolCallId": .string("batch-134"),
+                "rawOutput": .string("recent patch")
+            ])
+        ))
+        await transport.emit(acpUpdate(
+            providerSessionID: handle.providerSessionID,
+            update: .object([
+                "sessionUpdate": .string("tool_call_update"),
+                "toolCallId": .string("still-running"),
+                "rawOutput": .string("still ticking")
+            ])
+        ))
+        try await waitUntil {
+            await recorder.payloads.contains { payload in
+                if case let .activityUpdated(activity) = payload {
+                    return activity.id == "still-running" && activity.output == "still ticking"
+                }
+                return false
+            }
+        }
+        let finalPayloads = await recorder.payloads
+        let evicted = try XCTUnwrap(finalPayloads.compactMap { payload -> HarnessActivity? in
+            if case let .activityUpdated(activity) = payload, activity.id == "batch-0" { return activity }
+            return nil
+        }.last)
+        XCTAssertNotEqual(evicted.title, "Batch 0")
+
+        let retainedTerminal = try XCTUnwrap(finalPayloads.compactMap { payload -> HarnessActivity? in
+            if case let .activityCompleted(activity) = payload,
+               activity.id == "batch-134",
+               activity.output == "recent patch" {
+                return activity
+            }
+            return nil
+        }.last)
+        XCTAssertEqual(retainedTerminal.title, "Batch 134")
+
+        let retainedRunning = try XCTUnwrap(finalPayloads.compactMap { payload -> HarnessActivity? in
+            if case let .activityUpdated(activity) = payload,
+               activity.id == "still-running",
+               activity.output == "still ticking" {
+                return activity
+            }
+            return nil
+        }.last)
+        XCTAssertEqual(retainedRunning.title, "Background watcher")
+
+        await transport.completePrompt()
+        await adapter.close(handle)
+    }
+
     /// Antigravity over ACP keeps the option names its print mode saved, and its permission mode is the
     /// one menu for approvals: the CLI's own session modes (Default, Accept edits, Auto), set in the
     /// session as they are chosen, and Plan, where Yardlet answers no. Bypass permissions runs the
@@ -1691,5 +1944,10 @@ actor FakeACPTransport: ACPTransport {
         promptContinuations.removeFirst().resume(
             returning: .object(["stopReason": .string("end_turn")])
         )
+    }
+
+    func failPrompt(_ error: Error) {
+        guard !promptContinuations.isEmpty else { return }
+        promptContinuations.removeFirst().resume(throwing: error)
     }
 }

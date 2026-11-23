@@ -86,11 +86,34 @@ struct StructuredHeadlessEventProjector: Sendable {
                 payloads: [],
                 isTerminal: false
             )
-        case "assistant":
-            let text = textContent(in: value["message"]?["content"])
+        case "thinking":
+            let subtype = value["subtype"]?.stringValue
+            if subtype == "completed" {
+                let text = value["text"]?.stringValue ?? value["thinking"]?.stringValue ?? ""
+                return StructuredHeadlessProjection(
+                    providerSessionID: sessionID,
+                    payloads: text.isEmpty ? [] : [.reasoningCompleted(text)],
+                    isTerminal: false
+                )
+            }
+            let delta = value["text"]?.stringValue
+                ?? value["delta"]?.stringValue
+                ?? value["thinking"]?.stringValue
+                ?? ""
             return StructuredHeadlessProjection(
                 providerSessionID: sessionID,
-                payloads: text.isEmpty ? [] : [.assistantDelta(text)],
+                payloads: delta.isEmpty ? [] : [.reasoningDelta(delta)],
+                isTerminal: false
+            )
+        case "assistant":
+            var payloads: [HarnessEventPayload] = []
+            let thinking = thinkingContent(in: value["message"]?["content"])
+            if !thinking.isEmpty { payloads.append(.reasoningDelta(thinking)) }
+            let text = textContent(in: value["message"]?["content"])
+            if !text.isEmpty { payloads.append(.assistantDelta(text)) }
+            return StructuredHeadlessProjection(
+                providerSessionID: sessionID,
+                payloads: payloads,
                 isTerminal: false
             )
         case "tool_call":
@@ -118,6 +141,9 @@ struct StructuredHeadlessEventProjector: Sendable {
             )
         case "result":
             var payloads: [HarnessEventPayload] = []
+            if let usage = usage(from: value) {
+                payloads.append(.usageUpdated(usage))
+            }
             let failed = value["is_error"]?.boolValue == true
             if failed {
                 payloads.append(.error(
@@ -148,6 +174,63 @@ struct StructuredHeadlessEventProjector: Sendable {
             guard block["type"]?.stringValue == "text" else { return nil }
             return block["text"]?.stringValue
         }.joined() ?? ""
+    }
+
+    private func thinkingContent(in value: JSONValue?) -> String {
+        value?.arrayValue?.compactMap { block in
+            guard block["type"]?.stringValue == "thinking" else { return nil }
+            return block["thinking"]?.stringValue ?? block["text"]?.stringValue
+        }.joined() ?? ""
+    }
+
+    private func usage(from value: JSONValue) -> HarnessProtocolUsage? {
+        let usage = value["usage"]
+        let inputTokens = unsigned(
+            usage?["inputTokens"] ?? usage?["input_tokens"] ?? usage?["input"]
+        )
+        let cachedInputTokens = unsigned(
+            usage?["cacheReadTokens"] ?? usage?["cache_read_tokens"]
+                ?? usage?["cache_read_input_tokens"] ?? usage?["cacheReadInputTokens"]
+                ?? usage?["cachedInputTokens"] ?? usage?["cached_input_tokens"]
+        )
+        let outputTokens = unsigned(
+            usage?["outputTokens"] ?? usage?["output_tokens"] ?? usage?["output"]
+        )
+        let reasoningTokens = unsigned(
+            usage?["reasoningTokens"] ?? usage?["reasoning_tokens"]
+                ?? usage?["thinkingTokens"] ?? usage?["thinking_tokens"]
+        )
+        let totalCostUSD = (
+            value["total_cost_usd"] ?? value["totalCostUSD"] ?? value["totalCostUsd"]
+                ?? value["cost_usd"] ?? value["costUsd"] ?? usage?["cost"]
+        )?.doubleValue
+        let contextWindowTokens = unsigned(
+            usage?["contextWindowTokens"] ?? usage?["contextWindow"] ?? usage?["context_window"]
+        )
+        let contextUsedTokens = unsigned(
+            usage?["contextUsedTokens"] ?? usage?["contextUsed"] ?? usage?["context_used"]
+        )
+        guard inputTokens != nil || cachedInputTokens != nil || outputTokens != nil
+                || reasoningTokens != nil || totalCostUSD != nil
+                || contextWindowTokens != nil || contextUsedTokens != nil else { return nil }
+        return HarnessProtocolUsage(
+            inputTokens: inputTokens,
+            cachedInputTokens: cachedInputTokens,
+            outputTokens: outputTokens,
+            reasoningTokens: reasoningTokens,
+            totalCostUSD: totalCostUSD,
+            contextWindowTokens: contextWindowTokens,
+            contextUsedTokens: contextUsedTokens,
+            extensionValues: [:]
+        )
+    }
+
+    private func unsigned(_ value: JSONValue?) -> UInt64? {
+        guard let number = value?.doubleValue,
+              number.isFinite,
+              number >= 0,
+              number <= Double(UInt64.max) else { return nil }
+        return UInt64(number)
     }
 
     private func humanize(_ value: String) -> String {

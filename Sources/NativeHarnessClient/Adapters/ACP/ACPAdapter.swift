@@ -57,6 +57,9 @@ actor ACPAdapter:
     private var localSessionIDByProviderID: [String: UUID] = [:]
     private var permissions: [String: PermissionContext] = [:]
     private var activities: [UUID: [String: ACPToolCallState]] = [:]
+    /// Order of terminal (`.completed` / `.failed`) tool call IDs per session for bounded pruning.
+    private var terminalActivityOrder: [UUID: [String]] = [:]
+    private static let maxRetainedTerminalActivities = 128
     private var eventChannel = HarnessEventChannel()
     private var capabilityStateByLocalSessionID: [UUID: ProviderCapabilityState] = [:]
     private var capabilitySourceByLocalSessionID: [UUID: JSONValue] = [:]
@@ -629,6 +632,7 @@ actor ACPAdapter:
         heldNotices.removeValue(forKey: session.localSessionID)
         permissions = permissions.filter { $0.value.localSessionID != session.localSessionID }
         activities.removeValue(forKey: session.localSessionID)
+        terminalActivityOrder.removeValue(forKey: session.localSessionID)
         capabilityStateByLocalSessionID.removeValue(forKey: session.localSessionID)
         capabilitySourceByLocalSessionID.removeValue(forKey: session.localSessionID)
         usesLegacyModeByLocalSessionID.remove(session.localSessionID)
@@ -886,19 +890,27 @@ actor ACPAdapter:
         }
 
         if updateKind == "config_option_update" {
-            var state = capabilityStateByLocalSessionID[localSessionID] ?? .empty
+            let previous = capabilityStateByLocalSessionID[localSessionID] ?? .empty
+            var state = previous
             let selectors = capabilityProjector.configOptions(from: update)
             if !selectors.isEmpty { state.selectors = selectors }
             capabilityStateByLocalSessionID[localSessionID] = state
+            if state != previous {
+                emit(.providerCapabilitiesChanged, for: localSessionID, rawData: frame.data)
+            }
             return
         }
         if updateKind == "current_mode_update",
            let modeID = update["modeId"]?.stringValue {
-            var state = capabilityStateByLocalSessionID[localSessionID] ?? .empty
+            let previous = capabilityStateByLocalSessionID[localSessionID] ?? .empty
+            var state = previous
             if let index = state.selectors.firstIndex(where: { $0.id == "mode" }) {
                 state.selectors[index].currentValue = modeID
             }
             capabilityStateByLocalSessionID[localSessionID] = state
+            if state != previous {
+                emit(.providerCapabilitiesChanged, for: localSessionID, rawData: frame.data)
+            }
             return
         }
 
@@ -907,6 +919,7 @@ actor ACPAdapter:
             let previous = updateKind == "tool_call" ? nil : activities[localSessionID]?[toolCallID]
             if let state = projector.toolCall(from: update, previous: previous) {
                 activities[localSessionID, default: [:]][toolCallID] = state
+                recordActivityLifecycle(toolCallID, status: state.status, for: localSessionID)
                 emit(state.payload(isStart: updateKind == "tool_call"), for: localSessionID, rawData: frame.data)
             }
             return
@@ -1034,6 +1047,7 @@ actor ACPAdapter:
         guard !Task.isCancelled else { return }
         let localSessionID = session.localSessionID
         promptTasks.removeValue(forKey: localSessionID)
+        pruneTerminalActivities(for: localSessionID)
         followAgentTurns(of: localSessionID)
         if stopReason == "end_turn", let notice = heldNotices.removeValue(forKey: localSessionID) {
             completeAssistantIfNeeded(for: localSessionID)
@@ -1055,11 +1069,43 @@ actor ACPAdapter:
         guard !Task.isCancelled else { return }
         let localSessionID = session.localSessionID
         promptTasks.removeValue(forKey: localSessionID)
+        pruneTerminalActivities(for: localSessionID)
         followAgentTurns(of: localSessionID)
         releaseHeldNotice(of: localSessionID)
         completeAssistantIfNeeded(for: localSessionID)
         emit(.error(message: error.localizedDescription, recoverable: true), for: localSessionID)
         emit(.sessionStatusChanged(.failed), for: localSessionID)
+    }
+
+    private func recordActivityLifecycle(
+        _ toolCallID: String,
+        status: ACPToolCallState.Status,
+        for localSessionID: UUID
+    ) {
+        var order = terminalActivityOrder[localSessionID] ?? []
+        order.removeAll { $0 == toolCallID }
+        if status == .completed || status == .failed {
+            order.append(toolCallID)
+        }
+        terminalActivityOrder[localSessionID] = order
+    }
+
+    /// Keeps every non-terminal tool call and the most recent terminal ones so late ACP
+    /// `tool_call_update` patches with omitted `status` do not reopen a completed tool while long
+    /// sessions cannot accumulate unbounded activity state.
+    private func pruneTerminalActivities(for localSessionID: UUID) {
+        guard var order = terminalActivityOrder[localSessionID],
+              order.count > Self.maxRetainedTerminalActivities else { return }
+        let excess = order.count - Self.maxRetainedTerminalActivities
+        let evicted = order.prefix(excess)
+        order.removeFirst(excess)
+        for toolCallID in evicted {
+            if let status = activities[localSessionID]?[toolCallID]?.status,
+               status == .completed || status == .failed {
+                activities[localSessionID]?.removeValue(forKey: toolCallID)
+            }
+        }
+        terminalActivityOrder[localSessionID] = order
     }
 
     /// From the end of a prompt until the next, reads what the agent does on its own, which `agy acp`

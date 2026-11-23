@@ -209,17 +209,23 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding {
         for session: HarnessSessionHandle
     ) async throws -> ProviderCapabilityState {
         try requireRegistered(session)
+        let localSessionID = session.localSessionID
         var errors: [String] = []
         do {
-            modelChoicesByLocalSessionID[session.localSessionID] = try catalogChoices(
+            let choices = try await catalogChoices(
                 arguments: ["--list-models"],
                 workspaceURL: session.workspaceURL
             )
+            if handles[localSessionID] == session {
+                modelChoicesByLocalSessionID[localSessionID] = choices
+            }
         } catch {
-            modelChoicesByLocalSessionID.removeValue(forKey: session.localSessionID)
+            if handles[localSessionID] == session {
+                modelChoicesByLocalSessionID.removeValue(forKey: localSessionID)
+            }
             errors.append(L10n.format("Model catalog unavailable: %@", error.localizedDescription))
         }
-        return capabilityState(for: session.localSessionID, errors: errors)
+        return capabilityState(for: localSessionID, errors: errors)
     }
 
     func setProviderOption(
@@ -442,6 +448,7 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding {
     /// several writes, so the whole output is read until the process closes it and exits.
     /// The wait is bounded so a stalled runtime cannot hold session creation open.
     private func createCursorChat(in workspaceURL: URL) async throws -> String {
+        await LoginShellPath.ready()
         let process = Process()
         let pipe = Pipe()
         process.executableURL = executableURL
@@ -449,6 +456,14 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding {
         process.arguments = ["create-chat"]
         process.standardOutput = pipe
         process.standardError = pipe
+        process.environment = RuntimeProcessEnvironment.values(
+            executableURL: executableURL,
+            overrides: [
+                "NO_COLOR": "1",
+                "PAGER": "cat",
+                "GIT_PAGER": "cat"
+            ]
+        )
 
         let chunks = AsyncStream<Data>.makeStream()
         let exitStatus = AsyncStream<Int32>.makeStream()
@@ -591,8 +606,13 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding {
     private func catalogChoices(
         arguments: [String],
         workspaceURL: URL
-    ) throws -> [ProviderCapabilityChoice] {
-        let output = try Self.runCatalogCommandSync(executableURL, arguments, workspaceURL: workspaceURL)
+    ) async throws -> [ProviderCapabilityChoice] {
+        await LoginShellPath.ready()
+        let output = try await Self.runCatalogCommand(
+            executableURL,
+            arguments,
+            workspaceURL: workspaceURL
+        ).get()
         return Self.catalogChoices(in: output.stdout)
     }
 
