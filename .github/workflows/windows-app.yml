@@ -18,14 +18,24 @@ on:
       - '!Sources/NativeHarnessClient/Development/**'
       - '!Sources/NativeHarnessClient/Platform/macOS/**'
       - '!Sources/NativeHarnessClient/Platform/Linux/**'
+      - '!Sources/NativeHarnessClient/Platform/POSIX/**'
       - '!Sources/NativeHarnessClient/NativeHarnessClientApp.swift'
+      - '!Sources/NativeHarnessClient/Resources/Mermaid/**'
+      - '!Sources/NativeHarnessClient/Platform/Portable/PortableProcesses.swift'
+      - '!Sources/NativeHarnessClient/Platform/Portable/PortableRemoteHost.swift'
+      - '!Sources/NativeHarnessClient/Platform/Portable/PortableNotifications.swift'
+      - '!Sources/NativeHarnessClient/Platform/Portable/PortableAccounts.swift'
+      - '!Sources/NativeHarnessClient/Platform/Portable/PortableScopedFiles.swift'
+      - '!Sources/NativeHarnessClient/Platform/Portable/PortableWorkspaceFileReplacement.swift'
       - 'Sources/CSQLiteWindows/**'
       - 'Sources/YardletAgentTools/**'
       - 'Sources/YardletRemote/**'
+      - '!Sources/YardletRemote/RemoteSecureListener.swift'
       - 'Sources/YardletRemoteFixture/**'
       - 'Sources/YardletRemoteFixtureSupport/**'
       - 'Package.swift'
       - 'Package.resolved'
+      - 'Packaging/YardletIcon-master.png'
       - 'Windows/**'
       - 'relay/**'
       - 'scripts/source-times.py'
@@ -43,9 +53,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # As in ci.yml: a commit a pull request's run already built and opened is not opened again when it
+  # fast-forwards onto main; build-cache still runs on main to keep the release cache current.
+  tested-in-pull-request:
+    name: Look for a passing pull request run
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      passed: ${{ steps.find.outputs.passed }}
+    steps:
+      - id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Verify that `Open the Windows app` itself succeeded (a windows-* PR skips `open` while
+          # still concluding the workflow run as success).
+          run_ids=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/windows-app.yml/runs?event=pull_request&status=success&head_sha=$GITHUB_SHA&per_page=10" --jq '.workflow_runs[].id') || run_ids=""
+          for run_id in $run_ids; do
+            opened=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" --jq '[.jobs[] | select(.name == "Open the Windows app" and .conclusion == "success")] | length') || opened=0
+            if [[ $opened -gt 0 ]]; then
+              echo "passed=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+
   open:
     name: Open the Windows app
-    if: github.event_name != 'pull_request' || !startsWith(github.head_ref, 'windows-')
+    needs: tested-in-pull-request
+    if: ${{ !cancelled() && needs.tested-in-pull-request.outputs.passed != 'true' && (github.event_name != 'pull_request' || !startsWith(github.head_ref, 'windows-')) }}
     runs-on: windows-latest
     timeout-minutes: 120
     steps:

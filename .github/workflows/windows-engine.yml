@@ -1,21 +1,38 @@
 name: Windows engine
 
 # The engine built on its own on Windows (docs/PLATFORM_PORTABILITY.md, "Building the engine on its
-# own"), and the Windows app built on it ("The Windows app"), for every pull request that changes more
-# than documents, main and the branches that port it. They inform and are not required checks: a pull
+# own"), and the Windows app built on it ("The Windows app"), for pull requests, main and the branches
+# that port it when what they build or test changes. They inform and are not required checks: a pull
 # request that breaks them can still be merged.
 on:
   push:
     branches: [main, 'windows-*']
-    paths-ignore:
-      - docs/**
-      - '**/*.md'
-      - LICENSE
+    paths: &windows-engine
+      - 'Sources/NativeHarnessClient/**'
+      - '!Sources/NativeHarnessClient/Views/**'
+      - '!Sources/NativeHarnessClient/Browser/**'
+      - '!Sources/NativeHarnessClient/Development/**'
+      - '!Sources/NativeHarnessClient/Platform/macOS/**'
+      - '!Sources/NativeHarnessClient/Platform/Linux/**'
+      - '!Sources/NativeHarnessClient/Platform/POSIX/**'
+      - '!Sources/NativeHarnessClient/NativeHarnessClientApp.swift'
+      - '!Sources/NativeHarnessClient/Resources/Mermaid/**'
+      - 'Sources/CSQLiteWindows/**'
+      - 'Sources/YardletAgentTools/**'
+      - 'Sources/YardletMCP/**'
+      - 'Sources/YardletRemote/**'
+      - '!Sources/YardletRemote/RemoteSecureListener.swift'
+      - 'Sources/YardletRemoteFixture/**'
+      - 'Sources/YardletRemoteFixtureSupport/**'
+      - 'Tests/YardletWindowsTests/**'
+      - 'Package.swift'
+      - 'Package.resolved'
+      - 'Windows/**'
+      - 'scripts/source-times.py'
+      - '.github/workflows/windows-engine.yml'
+      - '!**/*.md'
   pull_request:
-    paths-ignore:
-      - docs/**
-      - '**/*.md'
-      - LICENSE
+    paths: *windows-engine
   workflow_dispatch:
 
 permissions:

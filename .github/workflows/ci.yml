@@ -1,19 +1,32 @@
 name: CI
 
-# Documents alone run nothing: no test reads them, and `main` requires no check for a pull request to
-# wait on.
+# Documents and other platforms' own folders run nothing: no macOS build or test reads them, and
+# `main` requires no check for a pull request to wait on.
 on:
   push:
     branches: [main]
-    paths-ignore:
+    paths-ignore: &ci-ignore
       - docs/**
       - '**/*.md'
       - LICENSE
+      - Apps/iOS/**
+      - Windows/**
+      - relay/**
+      - scripts/linux/**
+      - Sources/CSQLiteWindows/**
+      - Tests/YardletHostTests/**
+      - Tests/YardletWindowsTests/**
+      - .github/workflows/ios.yml
+      - .github/workflows/relay.yml
+      - .github/workflows/linux-host.yml
+      - .github/workflows/linux-engine.yml
+      - .github/workflows/windows-engine.yml
+      - .github/workflows/windows-app.yml
+      - .github/workflows/swift-winrt-tests.yml
+      - .github/workflows/launch.yml
+      - .github/workflows/full-tests.yml
   pull_request:
-    paths-ignore:
-      - docs/**
-      - '**/*.md'
-      - LICENSE
+    paths-ignore: *ci-ignore
   workflow_dispatch:
 
 permissions:
@@ -58,6 +71,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # Pull requests check out a merge commit whose first parent is the base branch, which
+          # lets stack-scope inspect the PR diff without an extra fetch.
+          fetch-depth: 2
       - name: Show the toolchain
         id: toolchain
         run: |
@@ -75,6 +91,14 @@ jobs:
           path: .build
           key: macos-debug-${{ steps.toolchain.outputs.id }}-${{ github.sha }}
           restore-keys: macos-debug-${{ steps.toolchain.outputs.id }}-
+      - name: Restore test timing hints
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .build/xctest-times.tsv
+            .build/xctest-stack-times.tsv
+          key: xctest-times-${{ github.sha }}
+          restore-keys: xctest-times-
       - name: Date the sources by their content
         run: python3 -I scripts/source-times.py
       # A compiler warning in a product target fails the run. This build compiles the product files
@@ -96,14 +120,43 @@ jobs:
           ./scripts/test-fast.sh -v 2>&1 | python3 -I scripts/test-report.py --log .build/ci/test-output.log \
             --times .build/ci/test-times.tsv --summary "$GITHUB_STEP_SUMMARY"
       # While the eager stack can still be turned back on in place of the conversation's row list
-      # (ConversationRowListSwitch), the conversation's tests run again with the stack, so a change that
-      # breaks only the stack shows here. It goes away with the stack.
+      # (ConversationRowListSwitch), the conversation's tests run again with the stack on pushes to main,
+      # manual runs, and pull requests that change conversation views, projections, transcripts, or the
+      # stack test scripts. Unrelated pull requests skip this extra ~4-minute pass. It goes away with the stack.
+      - name: Check whether the conversation's stack changed
+        id: stack-scope
+        run: |
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! git rev-parse --verify -q HEAD^2 >/dev/null; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only HEAD^1 HEAD)
+          pattern='^(Sources/NativeHarnessClient/(Views/Conversation/|Views/Conversation[^/]*\.swift$|Views/Transcript[^/]*\.swift$|Views/SentUserMessage\.swift$|Views/AppShell/TaskSurface\.swift$|Views/HarnessSubtaskPane\.swift$|Presentation/Conversation/|Presentation/Codex/|Presentation/ConversationFind\.swift$|Transcript/)|Tests/NativeHarnessClientTests/(Conversation|Transcript|CodexTimeline|StreamingWindowRedraw|TaskWorkspaceRestoration)|scripts/(test-conversation-stack\.sh|xctest-batches\.py)$|\.github/workflows/ci\.yml$|Package\.(swift|resolved)$)'
+          if grep -Eq "$pattern" <<< "$changed"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping eager conversation stack tests: no conversation view, projection, or stack-test files changed."
+          fi
       - name: Test the conversation's stack
+        if: steps.stack-scope.outputs.run == 'true'
         run: |
           set -o pipefail
-          ./scripts/test-conversation-stack.sh -v 2>&1 | python3 -I scripts/test-report.py \
+          ./scripts/test-conversation-stack.sh --skip-build -v 2>&1 | python3 -I scripts/test-report.py \
             --log .build/ci/conversation-stack-output.log --times .build/ci/conversation-stack-times.tsv \
             --summary "$GITHUB_STEP_SUMMARY"
+      - name: Save test timing hints
+        if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .build/xctest-times.tsv
+            .build/xctest-stack-times.tsv
+          key: xctest-times-${{ github.sha }}
       - name: Keep the test output and times
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

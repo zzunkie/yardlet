@@ -2,20 +2,45 @@ name: Linux host
 
 # The headless Linux host, `yardlet` (docs/LINUX_HOST.md): built for x86_64 and aarch64 in swift.org's Ubuntu 22.04
 # image, its Linux layer's tests run, the host started, asked for its status and stopped as a person would, and a phone
-# paired over the direct path that chats with a stand-in harness through it, for every pull request that changes more
-# than documents and for main. It informs and is not a required check.
+# paired over the direct path that chats with a stand-in harness through it, for pull requests and pushes to main that
+# change what the Linux host builds or checks. Pull requests pack x86_64 and check a representative distribution matrix
+# (Debian 12, Ubuntu 24.04, Fedora 42); pushes to main and manual runs pack both architectures and check all eight
+# distributions. It informs and is not a required check.
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - docs/**
-      - '**/*.md'
-      - LICENSE
+    paths: &linux-host
+      - 'Sources/NativeHarnessClient/**'
+      - '!Sources/NativeHarnessClient/Views/**'
+      - '!Sources/NativeHarnessClient/Browser/**'
+      - '!Sources/NativeHarnessClient/Development/**'
+      - '!Sources/NativeHarnessClient/Platform/macOS/**'
+      - '!Sources/NativeHarnessClient/Platform/Windows/**'
+      - '!Sources/NativeHarnessClient/WinUI/**'
+      - '!Sources/NativeHarnessClient/NativeHarnessClientApp.swift'
+      - '!Sources/NativeHarnessClient/Resources/Mermaid/**'
+      - '!Sources/NativeHarnessClient/Platform/Portable/PortableProcesses.swift'
+      - '!Sources/NativeHarnessClient/Platform/Portable/PortableRemoteHost.swift'
+      - '!Sources/NativeHarnessClient/Platform/Portable/PortableScopedFiles.swift'
+      - '!Sources/NativeHarnessClient/Platform/Portable/PortableWorkspaceFileReplacement.swift'
+      - 'Sources/CSQLite/**'
+      - 'Sources/YardletAgentTools/**'
+      - 'Sources/YardletMCP/**'
+      - 'Sources/YardletRemote/**'
+      - '!Sources/YardletRemote/RemoteSecureListener.swift'
+      - 'Sources/YardletRemoteFixture/**'
+      - 'Sources/YardletRemoteFixtureSupport/**'
+      - 'Tests/YardletHostTests/**'
+      - 'scripts/linux/**'
+      - 'Windows/scripts/fake-harness/**'
+      - 'Packaging/Info.plist'
+      - 'relay/**'
+      - 'Package.swift'
+      - 'Package.resolved'
+      - '.github/workflows/linux-host.yml'
+      - '!**/*.md'
   pull_request:
-    paths-ignore:
-      - docs/**
-      - '**/*.md'
-      - LICENSE
+    paths: *linux-host
   workflow_dispatch:
 
 permissions:
@@ -106,19 +131,15 @@ jobs:
 
   # The release package (scripts/linux/package-host.sh): the host with the Swift runtime linked in, its resources,
   # version and built-in relay, and the installer as a release carries it, with the fixture built the same way for the
-  # checks below. Uploaded as a run artifact; a release is made by hand and is never made here.
+  # checks below. Pull requests pack x86_64 alone (the architecture install and distributions download; host already
+  # builds and tests aarch64 on pull requests). Pushes to main and manual runs pack both architectures so main always
+  # checks the full release matrix. Uploaded as a run artifact; a release is made by hand and is never made here.
   package:
     name: Pack the Linux host (${{ matrix.arch }})
-    needs: tested-in-pull-request
-    if: ${{ !cancelled() && needs.tested-in-pull-request.outputs.passed != 'true' }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - arch: x86_64
-            runner: ubuntu-24.04
-          - arch: aarch64
-            runner: ubuntu-24.04-arm
+        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"arch":"x86_64","runner":"ubuntu-24.04"}]' || '[{"arch":"x86_64","runner":"ubuntu-24.04"},{"arch":"aarch64","runner":"ubuntu-24.04-arm"}]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     container: swift:6.4.2-jammy@sha256:18a1cdd3e55ee32b0b3e1a15f12a4e1320b67544e542ed96c907629e5e434144
@@ -162,7 +183,8 @@ jobs:
           scripts/linux/check-install.sh linux-host-package
 
   # The package on the distributions a server runs, and the relay with each one's libcurl, over ws and through TLS
-  # (scripts/linux/check-distribution.sh).
+  # (scripts/linux/check-distribution.sh). Pull requests run a representative subset (Debian 12, Ubuntu 24.04,
+  # Fedora 42); pushes to main and manual runs check all eight distributions.
   distributions:
     name: Run the Linux host on ${{ matrix.name }}
     needs: package
@@ -170,31 +192,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: Debian 12
-            image: debian:12@sha256:268fb24c39bca92d326dd83ea3abebe4a3f7751c804ffef23bb6d857dd343ff8
-            expect: runs
-          - name: Debian 13
-            image: debian:13@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6
-            expect: runs
-          - name: Ubuntu 22.04
-            image: ubuntu:22.04@sha256:74b12b11ffa550fba1929ad4d8d16533c34f6612728469671afba1b03b66881c
-            expect: runs
-          - name: Ubuntu 24.04
-            image: ubuntu:24.04@sha256:2198e4c65076e9cb0b3d695219df667c0e3b0072da64ca3c2648aca17dcecaf5
-            expect: runs
-          - name: Ubuntu 25.10
-            image: ubuntu:25.10@sha256:7cc5e35f6567ee8c66d2abb4aab0fd866669e6207c237c3a8f0947a5c7f17092
-            expect: runs
-          - name: Fedora 42
-            image: fedora:42@sha256:99e203b80b1c3d8f7e161ec10a68fd02b081ef83a3963553e513c82846b97814
-            expect: runs
-          - name: Arch Linux
-            image: archlinux:latest@sha256:d4594bb2300cba11f41c2f27923eb56f63d9988909c402f9c95517d1e362c899
-            expect: runs
-          - name: Rocky Linux 9
-            image: rockylinux:9@sha256:d7be1c094cc5845ee815d4632fe377514ee6ebcf8efaed6892889657e5ddaaa6
-            expect: refuses
+        include: >-
+          ${{ fromJSON(github.event_name == 'pull_request' && '[
+          {"name":"Debian 12","image":"debian:12@sha256:268fb24c39bca92d326dd83ea3abebe4a3f7751c804ffef23bb6d857dd343ff8","expect":"runs"},
+          {"name":"Ubuntu 24.04","image":"ubuntu:24.04@sha256:2198e4c65076e9cb0b3d695219df667c0e3b0072da64ca3c2648aca17dcecaf5","expect":"runs"},
+          {"name":"Fedora 42","image":"fedora:42@sha256:99e203b80b1c3d8f7e161ec10a68fd02b081ef83a3963553e513c82846b97814","expect":"runs"}
+          ]' || '[
+          {"name":"Debian 12","image":"debian:12@sha256:268fb24c39bca92d326dd83ea3abebe4a3f7751c804ffef23bb6d857dd343ff8","expect":"runs"},
+          {"name":"Debian 13","image":"debian:13@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6","expect":"runs"},
+          {"name":"Ubuntu 22.04","image":"ubuntu:22.04@sha256:74b12b11ffa550fba1929ad4d8d16533c34f6612728469671afba1b03b66881c","expect":"runs"},
+          {"name":"Ubuntu 24.04","image":"ubuntu:24.04@sha256:2198e4c65076e9cb0b3d695219df667c0e3b0072da64ca3c2648aca17dcecaf5","expect":"runs"},
+          {"name":"Ubuntu 25.10","image":"ubuntu:25.10@sha256:7cc5e35f6567ee8c66d2abb4aab0fd866669e6207c237c3a8f0947a5c7f17092","expect":"runs"},
+          {"name":"Fedora 42","image":"fedora:42@sha256:99e203b80b1c3d8f7e161ec10a68fd02b081ef83a3963553e513c82846b97814","expect":"runs"},
+          {"name":"Arch Linux","image":"archlinux:latest@sha256:d4594bb2300cba11f41c2f27923eb56f63d9988909c402f9c95517d1e362c899","expect":"runs"},
+          {"name":"Rocky Linux 9","image":"rockylinux:9@sha256:d7be1c094cc5845ee815d4632fe377514ee6ebcf8efaed6892889657e5ddaaa6","expect":"refuses"}
+          ]') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
