@@ -1,4 +1,5 @@
 import Foundation
+import YardletAgentTools
 
 /// The words of one status line: what was done (`verb`, drawn muted) and what it was done to, before
 /// and after it. The provider apps word a line as a sentence with the verb marked — Codex's
@@ -351,7 +352,15 @@ enum ConversationLineWording {
         // Already worded where it came from: shown as it is.
         if case let .worded(lines) = tool.kind { return lines.first ?? ConversationLineWords(verb: "") }
         let verb = tool.kind.label
-        if case let .activity(kind) = tool.kind, let words = titleSaying(kind, tool.name) { return words }
+        if case let .activity(kind) = tool.kind {
+            if let label = activityMCPLabel(kind: kind, name: tool.name, input: tool.input) {
+                return markingStop(
+                    ConversationLineWords.filling(localize(phase == .running ? "claude.using" : "claude.used"), [label]),
+                    phase: phase, localize: localize
+                )
+            }
+            if let words = titleSaying(kind, tool.name) { return words }
+        }
         let subject = tool.name.isEmpty || tool.name == verb ? "" : relative(tool.name, to: workspaceURL)
         switch tool.kind {
         // The image itself shows at the line's end; the words say what Codex did with it, as the Codex
@@ -463,17 +472,37 @@ enum ConversationLineWording {
         }
     }
 
-    /// Claude Code's name for an MCP tool, `server: tool name` (`mcp__github__create_issue` reads
-    /// "github: create issue"). A server named by an ID alone, as the Claude app names its claude.ai
-    /// connectors, says nothing, so the tool's own name stands alone ("slack read channel").
-    /// `account` is the account a Yardlet connector's call names, for a tool its service's accounts share.
-    static func mcpLabel(_ name: String, account: String? = nil) -> String? {
-        guard name.hasPrefix("mcp__") else { return nil }
-        // A Yardlet connector's tool reads as the connector's, with the account it acts in:
-        // "Linear: create issue", "Gmail · person@example.com: send message".
-        if let label = ConnectorToolLabels.shared.label(forClaudeTool: name) {
-            return "\(label.connectorName(account: account)): \(ConnectorToolLabels.spaced(label.tool))"
+    /// Accessible name for a tool row: formats Yardlet/harness MCP activity names (preserving any
+    /// shared-account label) without touching non-MCP activities or file/image rows.
+    static func toolAccessibilityLabel(_ tool: ConversationTool) -> String {
+        if case let .activity(kind) = tool.kind,
+           let label = activityMCPLabel(kind: kind, name: tool.name, input: tool.input) {
+            return label
         }
+        return tool.name.isEmpty ? tool.kind.label : tool.name
+    }
+
+    private static func activityMCPLabel(kind: String, name: String, input: String?) -> String? {
+        let account = ClaudeToolArguments(tool: "", input: input)[ConnectorToolNaming.accountArgument]
+        let allowsBarePrefix = kind.isEmpty || kind.lowercased() == "other"
+        return mcpLabel(name, account: account, allowsBareServerPrefix: allowsBarePrefix)
+            ?? mcpLabel(kind, account: account)
+    }
+
+    /// An MCP tool's display name, `server: tool name` (`mcp__github__create_issue` reads
+    /// "github: create issue"; Antigravity's `mcp_yardlet_<8 hex>_browser_navigate` reads
+    /// "yardlet: browser navigate"). A server named by an ID alone, as the Claude app names its
+    /// claude.ai connectors, says nothing, so the tool's own name stands alone ("slack read channel").
+    /// `account` is the account a Yardlet connector's call names, for a tool its service's accounts share.
+    static func mcpLabel(_ name: String, account: String? = nil, allowsBareServerPrefix: Bool = false) -> String? {
+        if let toolName = ConnectorToolLabels.yardletToolName(fromHarnessTool: name,
+                                                              allowsBareServerPrefix: allowsBareServerPrefix) {
+            if let label = ConnectorToolLabels.shared.label(forTool: toolName) {
+                return "\(label.connectorName(account: account)): \(ConnectorToolLabels.spaced(label.tool))"
+            }
+            return "\(AgentToolEnvironment.serverName): \(ConnectorToolLabels.spaced(toolName))"
+        }
+        guard name.hasPrefix("mcp__") else { return nil }
         var rest = String(name.dropFirst(5))
         while rest.hasSuffix("_") { rest.removeLast() }
         guard let split = rest.range(of: "__", options: .backwards), split.lowerBound > rest.startIndex else {

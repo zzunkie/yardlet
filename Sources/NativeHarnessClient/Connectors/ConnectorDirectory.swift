@@ -701,25 +701,52 @@ final class ConnectorToolLabels: @unchecked Sendable {
         return label(forTool: String(name.dropFirst(prefix.count)))
     }
 
-    /// The label and Yardlet's name for a tool as a harness names it in its conversation: Claude Code
-    /// `mcp__yardlet__<name>`, Antigravity `mcp_yardlet_<name>`, or `mcp_yardlet_<8 hex>_<name>` for a session after
-    /// the first in one process (`ConnectorToolNaming`).
-    func label(forHarnessTool name: String) -> (name: String, label: Label)? {
+    /// Strips Yardlet's MCP prefix across harnesses (`mcp__yardlet__<tool>`, `mcp_yardlet_<tool>`,
+    /// `mcp_yardlet_<8|16|64 hex>_<tool>`, and — only when `allowsBareServerPrefix` is true —
+    /// `yardlet_<8|16|64 hex>_<tool>` or `yardlet_<tool>`). Requires valid MCP identifier characters
+    /// (`[A-Za-z0-9_-]`) and trims trailing underscores to match `ConversationLineWording.mcpLabel`.
+    static func yardletToolName(fromHarnessTool name: String, allowsBareServerPrefix: Bool = false) -> String? {
         let server = AgentToolEnvironment.serverName
-        var candidates: [String] = []
-        for prefix in ["mcp__\(server)__", "mcp_\(server)_"] where name.hasPrefix(prefix) {
-            let rest = String(name.dropFirst(prefix.count))
-            candidates.append(rest)
-            // The 8 hex digits Antigravity puts before the name of each server after its first.
-            if prefix.hasSuffix("_"), rest.count > 9, rest.dropFirst(8).first == "_",
-               rest.prefix(8).allSatisfy(\.isHexDigit) {
-                candidates.append(String(rest.dropFirst(9)))
+        let rest: String
+        let allowsHashSuffix: Bool
+        if name.hasPrefix("mcp__\(server)__") {
+            rest = String(name.dropFirst("mcp__\(server)__".count))
+            allowsHashSuffix = false
+        } else if name.hasPrefix("mcp_\(server)_") {
+            rest = String(name.dropFirst("mcp_\(server)_".count))
+            allowsHashSuffix = true
+        } else if allowsBareServerPrefix, name.hasPrefix("\(server)_") {
+            rest = String(name.dropFirst("\(server)_".count))
+            allowsHashSuffix = true
+        } else {
+            return nil
+        }
+        var candidate = rest
+        if allowsHashSuffix, let underscore = rest.firstIndex(of: "_") {
+            let prefix = rest[..<underscore]
+            let tail = rest[rest.index(after: underscore)...]
+            if [8, 16, 64].contains(prefix.count),
+               prefix.allSatisfy({ ("0"..."9").contains($0) || ("a"..."f").contains($0) }),
+               !tail.isEmpty {
+                candidate = String(tail)
             }
         }
-        for candidate in candidates {
-            if let label = label(forTool: candidate) { return (candidate, label) }
-        }
-        return nil
+        while candidate.hasSuffix("_") { candidate.removeLast() }
+        guard !candidate.isEmpty,
+              candidate.unicodeScalars.allSatisfy({ scalar in
+                  scalar.isASCII && (CharacterSet.alphanumerics.contains(scalar) || scalar == "_" || scalar == "-")
+              }) else { return nil }
+        return candidate
+    }
+
+    /// The label and Yardlet's name for a tool as a harness names it in its conversation: Claude Code
+    /// `mcp__yardlet__<name>`, Antigravity `mcp_yardlet_<name>`, `mcp_yardlet_<hex>_<name>`, or (when
+    /// `allowsBareServerPrefix` is true) `yardlet_<hex>_<name>` / `yardlet_<name>` (`ConnectorToolNaming`).
+    func label(forHarnessTool name: String, allowsBareServerPrefix: Bool = false) -> (name: String, label: Label)? {
+        guard let candidate = Self.yardletToolName(fromHarnessTool: name,
+                                                   allowsBareServerPrefix: allowsBareServerPrefix),
+              let label = label(forTool: candidate) else { return nil }
+        return (candidate, label)
     }
 
     /// The tool's words: "create issue" for `create_issue`.
