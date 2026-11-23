@@ -135,7 +135,7 @@ jobs:
             exit 0
           fi
           changed=$(git diff --name-only HEAD^1 HEAD)
-          pattern='^(Sources/NativeHarnessClient/(Views/Conversation/|Views/ConversationFindBar\.swift$|Views/TranscriptReadingPosition\.swift$|Views/SentUserMessage\.swift$|Views/AppShell/TaskSurface\.swift$|Views/HarnessSubtaskPane\.swift$|Presentation/Conversation/|Presentation/Codex/|Presentation/ConversationFind\.swift$|Transcript/)|Tests/NativeHarnessClientTests/(Conversation|Transcript|CodexTimeline|StreamingWindowRedraw|TaskWorkspaceRestoration)|scripts/(test-conversation-stack\.sh|xctest-batches\.py)$|\.github/workflows/ci\.yml$|Package\.(swift|resolved)$)'
+          pattern='^(Sources/NativeHarnessClient/(Views/Conversation/|Views/Conversation[^/]*\.swift$|Views/Transcript[^/]*\.swift$|Views/SentUserMessage\.swift$|Views/AppShell/TaskSurface\.swift$|Views/HarnessSubtaskPane\.swift$|Presentation/Conversation/|Presentation/Codex/|Presentation/ConversationFind\.swift$|Transcript/)|Tests/NativeHarnessClientTests/(Conversation|Transcript|CodexTimeline|StreamingWindowRedraw|TaskWorkspaceRestoration)|scripts/(test-conversation-stack\.sh|xctest-batches\.py)$|\.github/workflows/ci\.yml$|Package\.(swift|resolved)$)'
           if grep -Eq "$pattern" <<< "$changed"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else

@@ -91,6 +91,30 @@ class XCTestBatchesTests(unittest.TestCase):
             self.assertAlmostEqual(loaded[("SecondTests", "testB")], 0.750, places=3)
             self.assertAlmostEqual(loaded[("ThirdTests", "testC")], 3.250, places=3)
 
+    def test_times_file_ignores_non_finite_and_negative_durations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "xctest-times.tsv")
+            with open(path, "w", encoding="utf-8") as file:
+                file.write("class\ttest\tresult\tseconds\n")
+                file.write("BadTests\ttestNaN\tpassed\tnan\n")
+                file.write("BadTests\ttestInf\tpassed\tinf\n")
+                file.write("BadTests\ttestNeg\tpassed\t-1.500\n")
+                file.write("GoodTests\ttestOk\tpassed\t2.500\n")
+            loaded = xctest_batches.read_times(path)
+            self.assertEqual(loaded, {("GoodTests", "testOk"): 2.5})
+
+            xctest_batches.write_times(path, {
+                "NativeHarnessClientTests.BadTests/testWriteNaN": ("passed", float("nan")),
+                "NativeHarnessClientTests.BadTests/testWriteInf": ("passed", float("inf")),
+                "NativeHarnessClientTests.BadTests/testWriteNeg": ("passed", -0.5),
+                "NativeHarnessClientTests.GoodTests/testNew": ("passed", 1.25),
+            })
+            reloaded = xctest_batches.read_times(path)
+            self.assertEqual(reloaded, {
+                ("GoodTests", "testOk"): 2.5,
+                ("GoodTests", "testNew"): 1.25,
+            })
+
     def test_selector_collapses_whole_classes_even_when_non_adjacent(self):
         run = object.__new__(xctest_batches.Run)
         run.class_sizes = collections.Counter({

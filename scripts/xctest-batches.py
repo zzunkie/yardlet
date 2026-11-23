@@ -71,7 +71,7 @@ def read_times(path):
                     seconds = float(parts[3])
                 except ValueError:
                     continue
-                if seconds >= 0.0:
+                if math.isfinite(seconds) and seconds >= 0.0:
                     times[(parts[0], parts[1])] = seconds
     except OSError:
         return {}
@@ -91,13 +91,15 @@ def write_times(path, results):
                     if len(parts) < 4 or parts[0] == "class":
                         continue
                     try:
-                        merged[(parts[0], parts[1])] = (parts[2], float(parts[3]))
+                        seconds = float(parts[3])
                     except ValueError:
                         continue
+                    if math.isfinite(seconds) and seconds >= 0.0:
+                        merged[(parts[0], parts[1])] = (parts[2], seconds)
         except OSError:
             pass
     for test_id, (result, seconds) in results.items():
-        if "/" not in test_id:
+        if "/" not in test_id or not (math.isfinite(seconds) and seconds >= 0.0):
             continue
         key = test_key(test_id)
         # Keep an earlier valid duration if this run crashed before completing the test.
