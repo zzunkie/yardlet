@@ -238,7 +238,7 @@ final class FollowUpQueueStoreTests: XCTestCase {
         XCTAssertNil(FollowUpPolicy.afterTurn.sendHelp)
         XCTAssertEqual(FollowUpPolicy.claudeCode.stopAndSendLabel, L10n.string("Stop and send"))
         XCTAssertNil(FollowUpPolicy.codex.stopAndSendLabel)
-        XCTAssertNil(FollowUpPolicy.afterTurn.stopAndSendLabel)
+        XCTAssertEqual(FollowUpPolicy.afterTurn.stopAndSendLabel, L10n.string("Stop and send"))
         XCTAssertEqual(FollowUpPolicy.codex.removeLabel, L10n.string("Delete queued message"))
         XCTAssertEqual(FollowUpPolicy.claudeCode.removeLabel, L10n.string("Remove from queue"))
 

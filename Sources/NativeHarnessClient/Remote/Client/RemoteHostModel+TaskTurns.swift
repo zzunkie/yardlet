@@ -84,9 +84,11 @@ struct RemoteQueuedRow: Equatable {
         let send = sendsNow ? policy.sendLabel.map {
             ComposerQueueChip.Send(label: $0, icon: "arrow.turn.up.right", help: policy.sendHelp ?? $0)
         } : nil
+        let stopAndSendLabel = stopsAndSends ? policy.stopAndSendLabel : nil
         chip = ComposerQueueChip(icon: failed ? "exclamationmark.circle" : "clock",
             status: failed ? L10n.string("Failed") : policy.pendingHelp, help: policy.pendingHelp,
-            send: send, stopAndSend: stopsAndSends ? policy.stopAndSendLabel : nil,
+            send: send, stopAndSend: stopAndSendLabel,
+            showsStopAndSendInline: !failed && !policy.steers && stopAndSendLabel != nil,
             removeLabel: policy.removeLabel, canMoveUp: extended && offered.contains("moveUp") && index > 0,
             canMoveDown: extended && offered.contains("moveDown") && index + 1 < count)
     }

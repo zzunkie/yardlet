@@ -8,12 +8,16 @@ import XCTest
 /// the runtime while its turn runs, so nothing can stop or cut it short. The runtime is a fake;
 /// no model is asked anything.
 @MainActor final class TurnByTurnFollowUpTests: XCTestCase {
-    func testAntigravityHoldsAMessageSentWhileItsTurnRunsAndSendsItWhenTheTurnEnds() async throws {
-        let adapter = TurnRecordingAdapter()
-        let root = FileManager.default.temporaryDirectory.appending(path: "turn-by-turn-\(UUID().uuidString)")
+    private func makeFixture(
+        _ name: String,
+        emitReadyOnInterrupt: Bool = false,
+        suspendInterrupt: Bool = false
+    ) async throws -> (adapter: TurnRecordingAdapter, defaults: UserDefaults, model: AppModel, task: SessionRecord) {
+        let adapter = TurnRecordingAdapter(emitReadyOnInterrupt: emitReadyOnInterrupt, suspendInterrupt: suspendInterrupt)
+        let root = FileManager.default.temporaryDirectory.appending(path: "turn-by-turn-\(name)-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("TurnByTurnFollowUps")))
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("TurnByTurn\(name)")))
         let model = AppModel(
             store: SessionStore(repository: InMemorySessionRepository()),
             runtimeSelections: RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false),
@@ -24,8 +28,13 @@ import XCTest
         )
         addTeardownBlock { await model.shutdown() }
         let created = await model.createSession(harness: .antigravityCLI, workspaceURL: root,
-                                                runtimeExecutableURL: URL(filePath: "/usr/bin/true"), title: "Turns")
+                                                runtimeExecutableURL: URL(filePath: "/usr/bin/true"), title: name)
         let task = try XCTUnwrap(created, model.errorBySessionID.values.first ?? "Missing task")
+        return (adapter, defaults, model, task)
+    }
+
+    func testAntigravityHoldsAMessageSentWhileItsTurnRunsAndSendsItWhenTheTurnEnds() async throws {
+        let (adapter, defaults, model, task) = try await makeFixture("FollowUps")
 
         await model.send(HarnessUserInput(text: "Build the site"), to: task)
         await adapter.emit(.sessionStatusChanged(.running))
@@ -67,6 +76,99 @@ import XCTest
         XCTAssertEqual(userLines(model, task), ["Build the site", "Then deploy it", "And post the link"])
     }
 
+    func testStopAndSendInterruptsTurnMovesChosenItemFirstAndStartsItWhenReady() async throws {
+        let (adapter, _, model, task) = try await makeFixture("StopAndSend")
+
+        await model.send(HarnessUserInput(text: "Build the site"), to: task)
+        await adapter.emit(.sessionStatusChanged(.running))
+        try await waitUntil { model.store.sessions.first?.status == .running }
+
+        await model.send(HarnessUserInput(text: "Then deploy it"), to: task)
+        await model.send(HarnessUserInput(text: "Fix the broken test first"), to: task)
+        let held = model.followUps.queue(for: task.id)
+        XCTAssertEqual(held.map(\.draft.text), ["Then deploy it", "Fix the broken test first"])
+
+        // Stop and send on the second item interrupts the running turn, moves it first, and leaves the queue running.
+        await model.stopAndSendQueued(held[1].id, for: task)
+        let interruptCount = await adapter.interrupts
+        XCTAssertEqual(interruptCount, 1)
+        XCTAssertFalse(model.followUps.isPaused(task.id))
+        XCTAssertEqual(model.followUps.queue(for: task.id).map(\.draft.text),
+                       ["Fix the broken test first", "Then deploy it"])
+        // Even if the other queued item is moved up while waiting for the cancelled turn to settle,
+        // the item chosen for Stop and send still starts next.
+        model.moveQueued(held[0].id, in: task, to: 0)
+        XCTAssertEqual(model.followUps.queue(for: task.id).map(\.draft.text),
+                       ["Then deploy it", "Fix the broken test first"])
+        let sentBeforeReady = await adapter.sent
+        XCTAssertEqual(sentBeforeReady, ["Build the site"], "Waits until the cancelled turn finishes")
+
+        await adapter.emit(.turnCompleted)
+        await adapter.emit(.sessionStatusChanged(.ready))
+        try await waitUntil { await adapter.sent.count == 2 }
+        let sentAfterReady = await adapter.sent
+        XCTAssertEqual(sentAfterReady, ["Build the site", "Fix the broken test first"])
+        XCTAssertEqual(model.followUps.queue(for: task.id).map(\.draft.text), ["Then deploy it"])
+
+        await adapter.emit(.sessionStatusChanged(.running))
+        await adapter.emit(.turnCompleted)
+        await adapter.emit(.sessionStatusChanged(.ready))
+        try await waitUntil { await adapter.sent.count == 3 }
+        try await waitUntil { model.followUps.queue(for: task.id).isEmpty }
+        XCTAssertEqual(userLines(model, task), ["Build the site", "Fix the broken test first", "Then deploy it"])
+    }
+
+    func testStopAndSendDrainsEvenWhenTurnReportsReadyBeforeInterruptReturns() async throws {
+        let (adapter, _, model, task) = try await makeFixture("StopAndSendSync", emitReadyOnInterrupt: true)
+
+        await model.send(HarnessUserInput(text: "First"), to: task)
+        await adapter.emit(.sessionStatusChanged(.running))
+        try await waitUntil { model.store.sessions.first?.status == .running }
+
+        await model.send(HarnessUserInput(text: "Urgent"), to: task)
+        let item = try XCTUnwrap(model.followUps.queue(for: task.id).first)
+
+        await model.stopAndSendQueued(item.id, for: task)
+        try await waitUntil { await adapter.sent.count == 2 }
+        let sent = await adapter.sent
+        XCTAssertEqual(sent, ["First", "Urgent"])
+        XCTAssertTrue(model.followUps.queue(for: task.id).isEmpty)
+    }
+
+    func testConcurrentStopAndSendDoesNotFireDuplicateInterrupts() async throws {
+        let (adapter, _, model, task) = try await makeFixture("StopAndSendConcurrent", suspendInterrupt: true)
+
+        await model.send(HarnessUserInput(text: "Initial"), to: task)
+        await adapter.emit(.sessionStatusChanged(.running))
+        try await waitUntil { model.store.sessions.first?.status == .running }
+
+        await model.send(HarnessUserInput(text: "First queued"), to: task)
+        await model.send(HarnessUserInput(text: "Second queued"), to: task)
+        let held = model.followUps.queue(for: task.id)
+
+        let firstCall = Task { await model.stopAndSendQueued(held[0].id, for: task) }
+        try await waitUntil { await adapter.interrupts == 1 }
+        // A second Stop and send while the first interrupt is in flight is ignored instead of firing a second interrupt.
+        await model.stopAndSendQueued(held[1].id, for: task)
+        // Even if ready arrives before the first interrupt call returns, a second Stop and send cannot
+        // bypass the in-flight guard and start the other item ahead of the first.
+        await adapter.emit(.turnCompleted)
+        await adapter.emit(.sessionStatusChanged(.ready))
+        try await waitUntil { model.store.sessions.first?.status == .ready }
+        await model.stopAndSendQueued(held[1].id, for: task)
+        let interruptsDuringFlight = await adapter.interrupts
+        XCTAssertEqual(interruptsDuringFlight, 1)
+        let sentBeforeResume = await adapter.sent
+        XCTAssertEqual(sentBeforeResume, ["Initial"])
+        XCTAssertEqual(model.followUps.queue(for: task.id).map(\.draft.text), ["First queued", "Second queued"])
+
+        await adapter.resumeInterrupt()
+        await firstCall.value
+        try await waitUntil { await adapter.sent.count == 2 }
+        let sent = await adapter.sent
+        XCTAssertEqual(sent, ["Initial", "First queued"])
+    }
+
     private func userLines(_ model: AppModel, _ task: SessionRecord) -> [String] {
         (model.transcriptBySessionID[task.id] ?? []).compactMap { entry in
             if case let .user(text, _) = entry.content { return text }
@@ -78,11 +180,24 @@ import XCTest
 /// An Antigravity runtime that records what it is sent and reports what the test tells it to.
 private actor TurnRecordingAdapter: HarnessAdapter {
     nonisolated let kind = HarnessKind.antigravityCLI
+    private let emitReadyOnInterrupt: Bool
+    private let suspendInterrupt: Bool
+    private var interruptGate: CheckedContinuation<Void, Never>?
     private(set) var sent: [String] = []
     private(set) var interrupts = 0
     private var session: HarnessSessionHandle?
     private var continuation: AsyncStream<HarnessEventEnvelope>.Continuation?
     private var sequence: UInt64 = 0
+
+    init(emitReadyOnInterrupt: Bool = false, suspendInterrupt: Bool = false) {
+        self.emitReadyOnInterrupt = emitReadyOnInterrupt
+        self.suspendInterrupt = suspendInterrupt
+    }
+
+    func resumeInterrupt() {
+        interruptGate?.resume()
+        interruptGate = nil
+    }
 
     func probeRuntime() async throws -> HarnessRuntimeDescriptor {
         HarnessRuntimeDescriptor(harness: kind, executableURL: URL(filePath: "/usr/bin/true"), version: "stub",
@@ -104,7 +219,16 @@ private actor TurnRecordingAdapter: HarnessAdapter {
     }
 
     func send(_ prompt: String, to session: HarnessSessionHandle) async throws { sent.append(prompt) }
-    func interrupt(_ session: HarnessSessionHandle) async throws { interrupts += 1 }
+    func interrupt(_ session: HarnessSessionHandle) async throws {
+        interrupts += 1
+        if suspendInterrupt {
+            await withCheckedContinuation { interruptGate = $0 }
+        }
+        if emitReadyOnInterrupt {
+            emit(.turnCompleted)
+            emit(.sessionStatusChanged(.ready))
+        }
+    }
     func respond(to permissionRequestID: String, decision: PermissionDecision,
                  in session: HarnessSessionHandle) async throws {}
 

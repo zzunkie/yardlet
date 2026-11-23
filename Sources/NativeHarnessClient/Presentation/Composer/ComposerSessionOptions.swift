@@ -185,11 +185,36 @@ struct ComposerQueueChip: Equatable, Sendable {
     /// "Send now", which leaves the turn running (Codex's Steer, Claude Code's next step).
     let send: Send?
     /// The one action that stops the running turn for the message, in its own words (Claude
-    /// Code's Send now), offered in the chip's menu only.
+    /// Code's Send now, or interrupting a turn-by-turn harness).
     let stopAndSend: String?
+    /// True when the harness has no non-stopping "Send now" so "Stop and send" is also shown on
+    /// the chip row itself rather than only in its context menu.
+    let showsStopAndSendInline: Bool
     let removeLabel: String
     let canMoveUp: Bool
     let canMoveDown: Bool
+
+    init(
+        icon: String,
+        status: String,
+        help: String?,
+        send: Send?,
+        stopAndSend: String?,
+        showsStopAndSendInline: Bool = false,
+        removeLabel: String,
+        canMoveUp: Bool,
+        canMoveDown: Bool
+    ) {
+        self.icon = icon
+        self.status = status
+        self.help = help
+        self.send = send
+        self.stopAndSend = stopAndSend
+        self.showsStopAndSendInline = showsStopAndSendInline
+        self.removeLabel = removeLabel
+        self.canMoveUp = canMoveUp
+        self.canMoveDown = canMoveDown
+    }
 
     struct Send: Equatable, Sendable {
         let label: String
@@ -226,6 +251,7 @@ struct ComposerQueueChip: Equatable, Sendable {
                 Send(label: $0, icon: "arrow.turn.up.right", help: policy.sendHelp ?? $0)
             } : nil,
             stopAndSend: stopAndSend,
+            showsStopAndSendInline: !policy.steers && stopAndSend != nil,
             removeLabel: policy.removeLabel, canMoveUp: movable(index - 1), canMoveDown: movable(index + 1))
     }
 }

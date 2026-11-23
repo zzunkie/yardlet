@@ -80,6 +80,12 @@ enum ComposerFollowUps {
             control.click.addHandler { _, _ in sendNow() }
             buttons.children.append(control)
             menuItem(send.label, sendNow)
+        } else if chip.showsStopAndSendInline, let stop = chip.stopAndSend, let stopAndSend = actions.stopAndSend {
+            // Turn-by-turn harnesses have no non-stopping "Send now"; offer "Stop and send" directly on the row.
+            let control = ComposerParts.control(title: stop, glyph: ComposerParts.Glyph.stop, tint: WindowsTheme.text)
+            try? ToolTipService.setToolTip(control, stop)
+            control.click.addHandler { _, _ in stopAndSend() }
+            buttons.children.append(control)
         }
         if let stop = chip.stopAndSend, let stopAndSend = actions.stopAndSend {
             menuItem(stop, stopAndSend)

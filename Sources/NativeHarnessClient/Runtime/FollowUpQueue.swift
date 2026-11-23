@@ -294,10 +294,14 @@ enum FollowUpPolicy: Equatable, Sendable {
         }
     }
 
-    /// The action that stops the running turn for a message: Claude Code's Send now, named for what
-    /// it does. Nil where the provider has none.
+    /// The action that stops the running turn for a message: Claude Code's Send now, or cancelling
+    /// a turn-by-turn harness's running turn so the message starts the next turn at once. Nil for
+    /// Codex, whose Steer never stops the turn.
     var stopAndSendLabel: String? {
-        self == .claudeCode ? L10n.string("Stop and send") : nil
+        switch self {
+        case .claudeCode, .afterTurn: L10n.string("Stop and send")
+        case .codex: nil
+        }
     }
 
     /// What a message the provider holds says about itself: it is delivered now, and Claude Code
