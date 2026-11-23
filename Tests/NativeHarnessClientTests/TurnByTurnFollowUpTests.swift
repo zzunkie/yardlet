@@ -8,12 +8,16 @@ import XCTest
 /// the runtime while its turn runs, so nothing can stop or cut it short. The runtime is a fake;
 /// no model is asked anything.
 @MainActor final class TurnByTurnFollowUpTests: XCTestCase {
-    func testAntigravityHoldsAMessageSentWhileItsTurnRunsAndSendsItWhenTheTurnEnds() async throws {
-        let adapter = TurnRecordingAdapter()
-        let root = FileManager.default.temporaryDirectory.appending(path: "turn-by-turn-\(UUID().uuidString)")
+    private func makeFixture(
+        _ name: String,
+        emitReadyOnInterrupt: Bool = false,
+        suspendInterrupt: Bool = false
+    ) async throws -> (adapter: TurnRecordingAdapter, defaults: UserDefaults, model: AppModel, task: SessionRecord) {
+        let adapter = TurnRecordingAdapter(emitReadyOnInterrupt: emitReadyOnInterrupt, suspendInterrupt: suspendInterrupt)
+        let root = FileManager.default.temporaryDirectory.appending(path: "turn-by-turn-\(name)-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("TurnByTurnFollowUps")))
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("TurnByTurn\(name)")))
         let model = AppModel(
             store: SessionStore(repository: InMemorySessionRepository()),
             runtimeSelections: RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false),
@@ -24,8 +28,13 @@ import XCTest
         )
         addTeardownBlock { await model.shutdown() }
         let created = await model.createSession(harness: .antigravityCLI, workspaceURL: root,
-                                                runtimeExecutableURL: URL(filePath: "/usr/bin/true"), title: "Turns")
+                                                runtimeExecutableURL: URL(filePath: "/usr/bin/true"), title: name)
         let task = try XCTUnwrap(created, model.errorBySessionID.values.first ?? "Missing task")
+        return (adapter, defaults, model, task)
+    }
+
+    func testAntigravityHoldsAMessageSentWhileItsTurnRunsAndSendsItWhenTheTurnEnds() async throws {
+        let (adapter, defaults, model, task) = try await makeFixture("FollowUps")
 
         await model.send(HarnessUserInput(text: "Build the site"), to: task)
         await adapter.emit(.sessionStatusChanged(.running))
@@ -68,23 +77,7 @@ import XCTest
     }
 
     func testStopAndSendInterruptsTurnMovesChosenItemFirstAndStartsItWhenReady() async throws {
-        let adapter = TurnRecordingAdapter()
-        let root = FileManager.default.temporaryDirectory.appending(path: "turn-by-turn-stop-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("TurnByTurnStopAndSend")))
-        let model = AppModel(
-            store: SessionStore(repository: InMemorySessionRepository()),
-            runtimeSelections: RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false),
-            registry: HarnessRegistry { _, _ in adapter },
-            codexQueueRepository: UserDefaultsCodexQueueRepository(defaults: defaults, keyPrefix: "queue."),
-            preferences: defaults,
-            restoresIndexOnLaunch: false
-        )
-        addTeardownBlock { await model.shutdown() }
-        let created = await model.createSession(harness: .antigravityCLI, workspaceURL: root,
-                                                runtimeExecutableURL: URL(filePath: "/usr/bin/true"), title: "StopAndSend")
-        let task = try XCTUnwrap(created, model.errorBySessionID.values.first ?? "Missing task")
+        let (adapter, _, model, task) = try await makeFixture("StopAndSend")
 
         await model.send(HarnessUserInput(text: "Build the site"), to: task)
         await adapter.emit(.sessionStatusChanged(.running))
@@ -126,23 +119,7 @@ import XCTest
     }
 
     func testStopAndSendDrainsEvenWhenTurnReportsReadyBeforeInterruptReturns() async throws {
-        let adapter = TurnRecordingAdapter(emitReadyOnInterrupt: true)
-        let root = FileManager.default.temporaryDirectory.appending(path: "turn-by-turn-sync-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("TurnByTurnStopAndSendSync")))
-        let model = AppModel(
-            store: SessionStore(repository: InMemorySessionRepository()),
-            runtimeSelections: RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false),
-            registry: HarnessRegistry { _, _ in adapter },
-            codexQueueRepository: UserDefaultsCodexQueueRepository(defaults: defaults, keyPrefix: "queue."),
-            preferences: defaults,
-            restoresIndexOnLaunch: false
-        )
-        addTeardownBlock { await model.shutdown() }
-        let created = await model.createSession(harness: .antigravityCLI, workspaceURL: root,
-                                                runtimeExecutableURL: URL(filePath: "/usr/bin/true"), title: "StopSync")
-        let task = try XCTUnwrap(created, model.errorBySessionID.values.first ?? "Missing task")
+        let (adapter, _, model, task) = try await makeFixture("StopAndSendSync", emitReadyOnInterrupt: true)
 
         await model.send(HarnessUserInput(text: "First"), to: task)
         await adapter.emit(.sessionStatusChanged(.running))
@@ -159,23 +136,7 @@ import XCTest
     }
 
     func testConcurrentStopAndSendDoesNotFireDuplicateInterrupts() async throws {
-        let adapter = TurnRecordingAdapter(suspendInterrupt: true)
-        let root = FileManager.default.temporaryDirectory.appending(path: "turn-by-turn-conc-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("TurnByTurnStopAndSendConcurrent")))
-        let model = AppModel(
-            store: SessionStore(repository: InMemorySessionRepository()),
-            runtimeSelections: RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false),
-            registry: HarnessRegistry { _, _ in adapter },
-            codexQueueRepository: UserDefaultsCodexQueueRepository(defaults: defaults, keyPrefix: "queue."),
-            preferences: defaults,
-            restoresIndexOnLaunch: false
-        )
-        addTeardownBlock { await model.shutdown() }
-        let created = await model.createSession(harness: .antigravityCLI, workspaceURL: root,
-                                                runtimeExecutableURL: URL(filePath: "/usr/bin/true"), title: "StopConc")
-        let task = try XCTUnwrap(created, model.errorBySessionID.values.first ?? "Missing task")
+        let (adapter, _, model, task) = try await makeFixture("StopAndSendConcurrent", suspendInterrupt: true)
 
         await model.send(HarnessUserInput(text: "Initial"), to: task)
         await adapter.emit(.sessionStatusChanged(.running))
