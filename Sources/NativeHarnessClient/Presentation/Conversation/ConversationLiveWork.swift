@@ -168,25 +168,121 @@ struct ConversationLiveWork: Equatable {
         return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
     }
 
-    /// Compact tail excerpt of a streaming thought: the latest non-empty lines, capped so the
-    /// preview tracks live progress without flooding the conversation.
-    static func thinkingExcerpt(from text: String, maxLines: Int = 3, maxCharacters: Int = 260) -> String? {
-        guard maxLines > 0, maxCharacters > 0 else { return nil }
-        let lines = text.split(omittingEmptySubsequences: true, whereSeparator: \.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-        guard !lines.isEmpty else { return nil }
-        let joined = lines.suffix(maxLines).joined(separator: "\n")
-        guard joined.count > maxCharacters else { return joined }
-        let start = joined.index(joined.endIndex, offsetBy: -maxCharacters)
-        var slice = joined[start...]
-        if let boundary = slice.firstIndex(where: { $0.isWhitespace || $0.isNewline }),
-           slice.distance(from: slice.startIndex, to: boundary) <= 24 {
-            let after = slice.index(after: boundary)
-            if after < slice.endIndex { slice = slice[after...] }
+    /// Compact tail excerpt of a streaming thought: scans backwards from the end so work per
+    /// streaming chunk stays O(1) regardless of total thought length. Wide CJK/Hangul characters
+    /// count as two display units so Korean thoughts stay within the preview's three-line cap.
+    static func thinkingExcerpt(from text: String, maxLines: Int = 3, maxCharacters: Int = 180) -> String? {
+        guard maxLines > 0, maxCharacters > 0, !text.isEmpty else { return nil }
+        var collectedLines: [Substring] = []
+        var usedUnits = 0
+        var clippedWithinLine = false
+        var cursor = text.endIndex
+
+        while cursor > text.startIndex, collectedLines.count < maxLines {
+            // Skip trailing newlines.
+            while cursor > text.startIndex {
+                let prev = text.index(before: cursor)
+                if text[prev].isNewline { cursor = prev } else { break }
+            }
+            guard cursor > text.startIndex else { break }
+
+            let remainingUnits = maxCharacters - usedUnits - (collectedLines.isEmpty ? 0 : 1)
+            guard remainingUnits > 0 else { break }
+
+            // Walk backwards through this line, stopping at a newline or once the display-unit budget is exceeded.
+            let lineEnd = cursor
+            var trimmedEnd = lineEnd
+            var foundNonWhitespace = false
+            var lineUnits = 0
+            var lineStart = lineEnd
+            var hitBudget = false
+
+            while lineStart > text.startIndex {
+                let prev = text.index(before: lineStart)
+                let character = text[prev]
+                if character.isNewline { break }
+                if !foundNonWhitespace {
+                    if character.isWhitespace {
+                        trimmedEnd = prev
+                        lineStart = prev
+                        continue
+                    }
+                    foundNonWhitespace = true
+                }
+                let weight = displayUnitWeight(of: character)
+                if lineUnits + weight > remainingUnits {
+                    hitBudget = hasEarlierContentOnLine(in: text, before: lineStart)
+                    break
+                }
+                lineUnits += weight
+                lineStart = prev
+            }
+
+            if !foundNonWhitespace {
+                // Whitespace-only line; continue scanning earlier lines.
+                cursor = lineStart
+                continue
+            }
+
+            var slice = text[lineStart..<trimmedEnd]
+            if hitBudget {
+                if let boundary = slice.firstIndex(where: { $0.isWhitespace }),
+                   slice.distance(from: slice.startIndex, to: boundary) <= 24 {
+                    let after = slice.index(after: boundary)
+                    if after < slice.endIndex { slice = slice[after...] }
+                }
+                slice = trimLeadingSpaces(slice)
+                if !slice.isEmpty {
+                    collectedLines.append(slice)
+                    clippedWithinLine = true
+                }
+                break
+            } else {
+                slice = trimLeadingSpaces(slice)
+                if !slice.isEmpty {
+                    collectedLines.append(slice)
+                    usedUnits += lineUnits + (collectedLines.count > 1 ? 1 : 0)
+                }
+                cursor = lineStart
+            }
         }
-        let trimmed = slice.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : "…" + trimmed
+
+        guard !collectedLines.isEmpty else { return nil }
+        let joined = collectedLines.reversed().joined(separator: "\n")
+        return clippedWithinLine ? "…" + joined : joined
+    }
+
+    private static func hasEarlierContentOnLine(in text: String, before index: String.Index) -> Bool {
+        var cursor = index
+        var inspected = 0
+        while cursor > text.startIndex, inspected < 64 {
+            let prev = text.index(before: cursor)
+            let character = text[prev]
+            if character.isNewline { return false }
+            if !character.isWhitespace { return true }
+            cursor = prev
+            inspected += 1
+        }
+        return cursor > text.startIndex && inspected >= 64
+    }
+
+    private static func trimLeadingSpaces(_ substring: Substring) -> Substring {
+        var start = substring.startIndex
+        while start < substring.endIndex, substring[start].isWhitespace {
+            start = substring.index(after: start)
+        }
+        return substring[start...]
+    }
+
+    private static func displayUnitWeight(of character: Character) -> Int {
+        guard let scalar = character.unicodeScalars.first else { return 1 }
+        switch scalar.value {
+        case 0x1100...0x11FF, 0x2E80...0x9FFF, 0xAC00...0xD7AF,
+             0xF900...0xFAFF, 0xFE10...0xFE6F, 0xFF00...0xFF60, 0x20000...0x2FA1F:
+            return 2
+        default:
+            return 1
+        }
     }
 
     private static func completedSummary(for liveItems: [ConversationItem], harness: HarnessKind) -> String? {

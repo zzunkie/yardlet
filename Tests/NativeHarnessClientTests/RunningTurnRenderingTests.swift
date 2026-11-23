@@ -133,6 +133,19 @@ final class RunningTurnRenderingTests: XCTestCase {
         XCTAssertTrue(clipped.hasSuffix("token60"), clipped)
         XCTAssertLessThanOrEqual(clipped.count, 81)
 
+        // Wide Korean single-line thought stays tightly bounded so 3-line wrapping keeps the tail visible.
+        let koreanLong = String(repeating: "파서 상태를 확인하면서 스트리밍 출력을 검토하고 있습니다. ", count: 8) + "마지막 단계입니다."
+        let koreanExcerpt = try XCTUnwrap(ConversationLiveWork.thinkingExcerpt(from: koreanLong))
+        XCTAssertTrue(koreanExcerpt.hasPrefix("…"), koreanExcerpt)
+        XCTAssertTrue(koreanExcerpt.hasSuffix("마지막 단계입니다."), koreanExcerpt)
+        XCTAssertLessThanOrEqual(koreanExcerpt.count, 105)
+
+        // Bounded O(1) tail scan on a very large thought string.
+        let hugeThought = String(repeating: "Earlier reasoning paragraph that must not be scanned.\n", count: 4_000)
+            + "Final line A\nFinal line B\nFinal line C"
+        XCTAssertEqual(ConversationLiveWork.thinkingExcerpt(from: hugeThought),
+                       "Final line A\nFinal line B\nFinal line C")
+
         // Antigravity-style multi-step run with no intermediate commentary: completed calls stay
         // summarized above the live line while a new thought streams with a compact preview below it.
         let entries: [TranscriptEntry] = [

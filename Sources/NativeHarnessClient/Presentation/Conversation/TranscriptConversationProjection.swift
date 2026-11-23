@@ -219,10 +219,10 @@ enum TranscriptConversationProjection {
         // ended with is that turn's answer (a final report shown above a background task's notice).
         let answerID: UUID? = if !input.isHead || !input.isLast, input.isComplete, let last = shown.last,
                                  let words = words(last), !words.isStreaming { last.id } else { nil }
-        // A streaming assistant message at the tail of a running turn (no later non-reasoning items)
-        // may become the turn's final answer; avoid stamping "Commentary" on it until later work
-        // proves it was working notes.
-        let trailingStreamingAssistantID: UUID? = if !input.isComplete {
+        // A streaming assistant message at the tail of an actively running turn (no later
+        // non-reasoning items) may become the turn's final answer; avoid stamping "Commentary" on
+        // it until later work proves it was working notes.
+        let trailingStreamingAssistantID: UUID? = if input.isLast, isBusy, !input.isComplete {
             shown.reversed().first(where: { entry in
                 if case .reasoning = entry.content, entry.isProgressUpdate != true { return false }
                 return true

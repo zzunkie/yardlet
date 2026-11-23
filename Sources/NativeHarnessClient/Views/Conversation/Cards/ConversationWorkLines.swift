@@ -370,7 +370,11 @@ struct ConversationWorkLine: View, Equatable {
             ) {
                 EmptyView()
             } actions: {
-                ConversationCopyDetailsButton(details: item.copyDetails)
+                if isStreaming {
+                    StreamingCopyDetailsButton(itemID: item.id, fallbackDetails: item.copyDetails)
+                } else {
+                    ConversationCopyDetailsButton(details: item.copyDetails)
+                }
             } detail: {
                 if isStreaming {
                     StreamingThoughtDetail(itemID: item.id, fallbackTexts: texts)
@@ -611,6 +615,19 @@ struct ConversationWorkLine: View, Equatable {
                         .accessibilityLabel(L10n.string("Loading"))
                 }
             }
+    }
+}
+
+/// Copy-details button for a streaming thought line, reading `ConversationStreamedText` so
+/// streamed Codex item details stay current without making non-streaming rows observe the stream.
+private struct StreamingCopyDetailsButton: View {
+    let itemID: String
+    let fallbackDetails: String?
+
+    @Environment(\.conversationStreamedText) private var streamedText
+
+    var body: some View {
+        ConversationCopyDetailsButton(details: streamedText?.message(for: itemID)?.copyDetails ?? fallbackDetails)
     }
 }
 

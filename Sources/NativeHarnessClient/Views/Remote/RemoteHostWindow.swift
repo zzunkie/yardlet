@@ -642,6 +642,7 @@ struct RemoteHostView: View {
 
     private func showSchedules() {
         shell.section = .tasks
+        model.showsArchive = false
         model.showsSchedules = true
         model.schedules.load()
     }
@@ -664,16 +665,17 @@ struct RemoteHostView: View {
         withAnimation(ParityMotion.easeInOut(reduceMotion: reduceMotion)) { shell.isSidebarVisible.toggle() }
     }
 
-    /// Whether the sidebar shows the activity view: the scheduled tasks, Mail and Calendar show in its place while it stays on.
+    /// Whether the sidebar shows the activity view: the scheduled tasks, archive, Mail and Calendar show in its place while it stays on.
     private var isActivityShown: Bool {
-        shell.isSidebarVisible && shell.isShowingActivity && !model.showsSchedules && !showsMail && !showsCalendar
+        shell.isSidebarVisible && shell.isShowingActivity && !model.showsSchedules && !model.showsArchive && !showsMail && !showsCalendar
     }
 
     /// Turns the activity view on, keeping where its tasks are listed while it stays on, or off while it shows.
-    /// Over the scheduled tasks, Mail, Calendar, or with the sidebar hidden, it shows it.
+    /// Over the scheduled tasks, archive, Mail, Calendar, or with the sidebar hidden, it shows it.
     private func toggleActivity() {
         let wasShown = isActivityShown
         model.showsSchedules = false
+        model.showsArchive = false
         withAnimation(ParityMotion.easeInOut(reduceMotion: reduceMotion)) {
             if wasShown {
                 shell.isShowingActivity = false

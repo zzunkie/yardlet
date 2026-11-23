@@ -142,6 +142,13 @@ final class TranscriptConversationProjectionTests: XCTestCase {
         let afterCall = project([request, earlier, read, settled, followUp], status: .running).turns[0]
         XCTAssertFalse(afterCall.work[2].hidesCommentaryLabel)
 
+        // A stopped or cut-off turn does not treat a leftover streaming entry as actively streaming.
+        let cutOff = TranscriptConversationProjection.presentation(
+            from: [request, earlier, read, streaming], harness: .claudeCode, status: .ready,
+            latestTurnIsComplete: false, latestTurnWasCutOff: true
+        ).turns[0]
+        XCTAssertFalse(cutOff.work[2].hidesCommentaryLabel)
+
         // Once the turn finishes with the streaming message, it becomes the closing answer.
         let done = project([request, earlier, read, settled], status: .ready, latestTurnIsComplete: true).turns[0]
         XCTAssertEqual(done.answers.map(\.id), [settled.id.uuidString])

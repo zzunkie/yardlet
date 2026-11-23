@@ -105,6 +105,18 @@ extension RemoteHostWindowRenderingTests {
         XCTAssertEqual(shell.section, .calendar)
         XCTAssertFalse(model.showsArchive)
         XCTAssertFalse(model.showsSchedules)
+
+        remoteView.showArchivedTasks()
+        XCTAssertTrue(model.showsArchive)
+        remoteView.showHostSchedules()
+        XCTAssertFalse(model.showsArchive)
+        XCTAssertTrue(model.showsSchedules)
+
+        remoteView.showArchivedTasks()
+        XCTAssertTrue(model.showsArchive)
+        remoteView.openHostSchedule(UUID())
+        XCTAssertFalse(model.showsArchive)
+        XCTAssertTrue(model.showsSchedules)
         await host.shutdown()
     }
 }

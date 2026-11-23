@@ -48,6 +48,7 @@ extension RemoteHostView {
     /// One of the host's schedules, among the scheduled tasks.
     func openHostSchedule(_ id: UUID) {
         shell.section = .tasks
+        model.showsArchive = false
         model.showsSchedules = true
         model.schedules.load()
         model.select(.schedule(id.uuidString))
