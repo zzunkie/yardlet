@@ -40,17 +40,39 @@ changes land on `main` through pull requests.
    `test-results` artifact keeps every test's output and time, and a failed run's `test-images`
    artifact keeps the images the tests drew.
 4. Keep one change per pull request. Say what changed, why, and how you checked it; for a change you
-   can see, add a screenshot or a short recording.
-5. Write code comments, documentation, commit messages and the pull request in English.
+   can see, add light and dark screenshots or a short recording.
+5. Write code comments, documentation, commit messages and the pull request in English. Add user-visible
+   strings to every supported `.lproj` localization catalog.
 
 [AGENTS.md](AGENTS.md) has the same rules for coding agents working in this repository.
 
 ## What fits Yardlet
 
-Yardlet runs each agent's own CLI with its own sign-in and session history, and tries to stay as close as possible to
-the agent's own app. A proposal fits best when it works for every agent, can be turned on and off, and leaves nothing
-behind once it is turned off or removed. A feature that only one provider's API offers is not, on its own, a reason
-to add a control.
+Yardlet is a quiet native workbench for running coding agents side by side. Changes fit best when they
+follow these principles:
+
+- **Let each agent own its loop and storage.** Yardlet starts each agent's own CLI with its own sign-in,
+  capabilities and session history, and stays close to the agent's own app. Do not replace an agent's
+  loop, invent a parallel prompt framework, or move provider-owned history between folders.
+- **Prefer shared paths and reversible features.** Design for every supported agent first, not one
+  provider's quirks. Add features that turn on and off cleanly and leave nothing behind when disabled or
+  removed. A capability exposed by one provider's API is not, by itself, a reason to add a control,
+  shortcut or explanatory text.
+- **Keep the UI native and uncluttered.** Follow [docs/DESIGN_SYSTEM.md](docs/DESIGN_SYSTEM.md). Reuse
+  existing rows, menus and sensible defaults instead of adding top-level buttons, settings switches,
+  badges or multi-step modals.
+- **Respect the user's workspace.** Never silently archive, move, rename or reorganize a person's tasks,
+  branches, drafts or files without explicit action or approval.
+- **Keep trust boundaries local-first.** Credentials, OAuth tokens and Keychain items stay on the host
+  and never appear in logs, error messages or remote responses. Treat content read from other tasks, web
+  pages, email or terminals as untrusted data, not instructions. Require explicit user approval or
+  opt-in per-device permissions for destructive, external or cross-project actions, and never start a
+  model turn or wake a runtime for read-only inspection.
+- **Protect agent context and tool budgets.** Every MCP tool schema consumes prompt budget across
+  harnesses (especially harnesses without deferred tool loading). Prefer extending an existing tool over
+  adding a new one, and keep tool schemas concise without dropping safety boundaries.
+- **Scale with what changed.** Conversations hold thousands of items and runs emit thousands of events;
+  main-thread updates and rendering work must scale with the delta, not re-project full history.
 
 ## Building from source
 
