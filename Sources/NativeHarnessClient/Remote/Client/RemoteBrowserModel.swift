@@ -164,6 +164,7 @@ final class RemoteBrowserModel {
     /// The panel's page area changed, in points, at `scale` pixels a point: the tab lays out at that size and the picture
     /// is asked for at its pixels, once the panel rests there.
     func setPanelSize(width: Double, height: Double, scale: Double) {
+        guard width.isFinite, height.isFinite, scale.isFinite, width >= 1, height >= 1, scale > 0 else { return }
         func within(_ value: Double, _ range: ClosedRange<Int>) -> Int { min(max(Int(value.rounded()), range.lowerBound), range.upperBound) }
         let viewport = RemoteTabViewport(width: within(width, RemoteProtocol.tabViewportWidths),
                                          height: within(height, RemoteProtocol.tabViewportHeights), mobile: false)

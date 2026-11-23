@@ -1487,12 +1487,13 @@ final class BrowserTab {
     private var remoteSize: BrowserViewportEmulation??
     /// The last change of the emulation, which the next waits for (`inEmulationOrder`).
     private var emulationChanges: Task<Void, Never>?
+    private var emulationRevision: UInt64 = 0
     /// Chromium may hold other device metrics than `emulation` says: a change of them did not go through (a page that drew
     /// nothing let it time out), or a capture holds the layout for a moment (`holdLayout`). The tab's own metrics are
     /// applied again when it is next shown or used (`settleMetrics`), so no override outlives what set it.
     private var metricsOwed = false
     /// A capture holds the page's layout now (`holdLayout`), which its own end releases.
-    private var holdsLayout = false
+    private(set) var holdsLayout = false
     /// How many times the person brought the tab in front of its task (`BrowserHostClient.show`).
     fileprivate(set) var revisits = 0
     fileprivate(set) var lastAgentActivity: ContinuousClock.Instant? {
@@ -1836,21 +1837,36 @@ final class BrowserTab {
         let queued = remoteSize != nil
         remoteSize = .some(emulation)
         guard !queued else { return }
-        Task { [weak self] in
-            try? await self?.inEmulationOrder { [weak self] in
-                guard let self, let asked = self.remoteSize else { return }
-                self.remoteSize = nil
-                self.heldForRemote = asked
-                if let asked {
-                    if self.emulation?.owner != .remote { self.emulationBeforeRemote = .some(self.emulation) }
-                    try await self.applyEmulation(asked)
-                } else {
-                    guard let before = self.emulationBeforeRemote else { return }
-                    self.emulationBeforeRemote = nil
-                    guard self.emulation?.owner == .remote else { return }
-                    try await self.applyEmulation(before?.owner == .agent && !self.isInAgentTurn ? nil : before)
-                }
+        let earlier = emulationChanges
+        emulationRevision &+= 1
+        let revision = emulationRevision
+        emulationChanges = Task { @MainActor [weak self] in
+            await earlier?.value
+            defer {
+                if let self, self.emulationRevision == revision { self.emulationChanges = nil }
             }
+            guard let self, let asked = self.remoteSize else { return }
+            self.remoteSize = nil
+            self.heldForRemote = asked
+            if let asked {
+                if self.emulation?.owner != .remote { self.emulationBeforeRemote = .some(self.emulation) }
+                try? await self.applyEmulation(asked)
+            } else {
+                guard let before = self.emulationBeforeRemote else { return }
+                self.emulationBeforeRemote = nil
+                guard self.emulation?.owner == .remote else { return }
+                try? await self.applyEmulation(before?.owner == .agent && !self.isInAgentTurn ? nil : before)
+            }
+        }
+    }
+
+    /// Waits for any queued viewport emulation change (including a remote device's resize) to finish applying.
+    func waitForEmulation() async {
+        while true {
+            let revision = emulationRevision
+            guard let pending = emulationChanges else { return }
+            await pending.value
+            if emulationRevision == revision && remoteSize == nil { return }
         }
     }
 
@@ -1935,11 +1951,17 @@ final class BrowserTab {
             await earlier?.value
             try await change()
         }
-        emulationChanges = Task { @MainActor in _ = try? await work.value }
+        emulationRevision &+= 1
+        let revision = emulationRevision
+        emulationChanges = Task { @MainActor [weak self] in
+            _ = try? await work.value
+            if let self, self.emulationRevision == revision { self.emulationChanges = nil }
+        }
         try await work.value
     }
 
     private func applyEmulation(_ emulation: BrowserViewportEmulation?) async throws {
+        let previousEmulation = self.emulation
         // The size the tab has before its first emulation is its own, which it takes again after the last.
         if self.emulation == nil { ownViewport = viewport }
         self.emulation = emulation
@@ -1967,13 +1989,24 @@ final class BrowserTab {
             _ = try await devTools.send("Emulation.setTouchEmulationEnabled", ["enabled": .bool(false)], timeout: timeout)
             _ = try await devTools.send("Emulation.setUserAgentOverride", ["userAgent": .string("")], timeout: timeout)
         }
-        // A panel showing the tab draws it at the size itself (`onEmulationChange`); without one the tab does.
-        guard !isPanelAttached, var size = emulation == nil ? ownViewport ?? viewport : viewport else { return }
+        // Align CEF's backing viewport and scale even when an attached panel has empty bounds, no window, or a 1x display.
         if let emulation {
+            var size = viewport ?? ownViewport ?? .offscreenDefault
             size.width = Double(emulation.width)
             size.height = Double(emulation.height)
+            size.scale = emulation.mobile ? 2 : (ownViewport?.scale ?? size.scale)
+            if viewport?.width != size.width || viewport?.height != size.height || viewport?.scale != size.scale {
+                send(.resize(tab: id, viewport: size))
+            }
+        } else if let size = ownViewport {
+            let panelSkippedResize = isPanelAttached && previousEmulation.map {
+                viewport?.width == Double($0.width) && viewport?.height == Double($0.height)
+            } == true
+            if !isPanelAttached || panelSkippedResize,
+               viewport?.width != size.width || viewport?.height != size.height || viewport?.scale != size.scale {
+                send(.resize(tab: id, viewport: size))
+            }
         }
-        send(.resize(tab: id, viewport: size))
     }
 
     /// Holds the page's layout at `width`×`height` points while the tab is drawn larger for a capture (the agent's

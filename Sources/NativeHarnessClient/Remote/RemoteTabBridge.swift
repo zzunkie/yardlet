@@ -1,4 +1,7 @@
+import CoreImage
 import Foundation
+import ImageIO
+import IOSurface
 import Observation
 import YardletRemote
 
@@ -35,6 +38,38 @@ final class RemoteTabBridge {
         /// A password typed into a page keeps the agent's scripts and pictures off it, as the panel's vault watch does
         /// (the vault or the wallet is on).
         var marksTypedSecrets: @MainActor () -> Bool = { false }
+        /// The tab's latest painted view frame (`BrowserFrame` and its `IOSurfaceRef`), when the host shares frames as
+        /// IOSurfaces (macOS CEF). Nil falls back to `Page.captureScreenshot`.
+        var latestSurface: @MainActor (BrowserTabID) -> (frame: BrowserFrame, surface: IOSurfaceRef)? = { _ in nil }
+    }
+
+    /// Persistent per-tab CDP frame-navigation state so repeated captures on an unchanged non-`file:` document can
+    /// skip redundant `Page.enable` and `Page.getFrameTree` round-trips while preserving all `file:` security checks.
+    @MainActor
+    private final class FrameGuard {
+        weak var tab: BrowserTab?
+        var token: UUID?
+        var pageEnabled = false
+        var frameGeneration: UInt64 = 0
+        var navigatedFiles: Set<String> = []
+        var verifiedNavigations: Int?
+        var verifiedGeneration: UInt64?
+        var verifiedTaskID: String?
+        var verifiedAgentFile: String?
+        var verifiedHasFileFrame = true
+
+        init(tab: BrowserTab) {
+            self.tab = tab
+        }
+
+        func detach() {
+            if let token { tab?.devTools.stopObservingEvents(token) }
+            token = nil
+        }
+    }
+
+    private struct SendableSurface: @unchecked Sendable {
+        let surface: IOSurfaceRef
     }
 
     private struct Followed {
@@ -59,6 +94,15 @@ final class RemoteTabBridge {
     private var observesWaits = false
     /// The phone size each tab is drawn at now.
     private var sized: [BrowserTabID: (tab: BrowserTab, viewport: RemoteTabViewport)] = [:]
+    /// Recency order of viewports watching each tab key, so a newly active watcher wins over a stale smaller one.
+    private var watchSequence: UInt64 = 0
+    private var watchOrder: [UUID: [RemoteTabViewport: UInt64]] = [:]
+    /// Persistent per-tab frame observers for `Page.frameNavigated` and `Page.enable` tracking.
+    private var frameGuards: [BrowserTabID: FrameGuard] = [:]
+    /// Adaptive JPEG quality state per watched tab key.
+    private var lastCaptureAt: [UUID: ContinuousClock.Instant] = [:]
+    private var lastCaptureWasMotion: [UUID: Bool] = [:]
+    private var settleTasks: [UUID: Task<Void, Never>] = [:]
     /// What the watched tabs' pages copy for the devices whose input led to it.
     let copies = RemoteTabCopies()
 
@@ -183,13 +227,43 @@ final class RemoteTabBridge {
         if followedClient !== client { unfollowAll() }
         followedClient = client
         var next: [UUID: [UUID: RemoteTabViewport?]] = [:]
+        var requestedViewports: [UUID: Set<RemoteTabViewport>] = [:]
         for watch in watches {
             guard let session = UUID(uuidString: watch.taskID) else { continue }
             var keys = next[session] ?? [:]
             if let key = watch.tabID.flatMap(UUID.init(uuidString:)) {
-                // Two phones at two sizes: the smaller, which both can show.
-                let asked = [keys[key] ?? nil, watch.viewport].compactMap { $0 }
-                keys[key] = asked.min { ($0.width, $0.height) < ($1.width, $1.height) }
+                if let viewport = watch.viewport {
+                    requestedViewports[key, default: []].insert(viewport)
+                }
+                if keys[key] == nil { keys[key] = .some(nil) }
+            }
+            next[session] = keys
+        }
+        // When multiple watchers share a tab, prefer the most recently added/active watcher's viewport instead of
+        // clamping to the smallest screen, breaking simultaneous ties in favor of the wider viewport.
+        let activeKeys = Set(next.values.flatMap(\.keys))
+        for key in Array(watchOrder.keys) where !activeKeys.contains(key) {
+            watchOrder[key] = nil
+        }
+        for (session, var keys) in next {
+            for key in keys.keys {
+                let current = requestedViewports[key] ?? []
+                if current.isEmpty {
+                    watchOrder[key] = nil
+                    keys[key] = .some(nil)
+                } else {
+                    var order = (watchOrder[key] ?? [:]).filter { current.contains($0.key) }
+                    for viewport in current where order[viewport] == nil {
+                        watchSequence &+= 1
+                        order[viewport] = watchSequence
+                    }
+                    watchOrder[key] = order
+                    let chosen = order.max { lhs, rhs in
+                        if lhs.value != rhs.value { return lhs.value < rhs.value }
+                        return (lhs.key.width, lhs.key.height) < (rhs.key.width, rhs.key.height)
+                    }?.key
+                    keys[key] = chosen
+                }
             }
             next[session] = keys
         }
@@ -203,7 +277,16 @@ final class RemoteTabBridge {
             observeTabs(of: session, in: client)
         }
         paintTold = paintTold.filter { key in followed.values.contains { $0.watched[key] != nil } }
+        for key in Array(settleTasks.keys) where !activeKeys.contains(key) {
+            clearCaptureCadence(for: key)
+        }
         if !followed.isEmpty { observeWaits() }
+    }
+
+    private func clearCaptureCadence(for key: UUID) {
+        settleTasks.removeValue(forKey: key)?.cancel()
+        lastCaptureAt[key] = nil
+        lastCaptureWasMotion[key] = nil
     }
 
     private func unfollowAll() {
@@ -222,6 +305,9 @@ final class RemoteTabBridge {
             client.setRemotelyWatched(false, tab: tab)
             copies.setWatched(false, tab: tab)
             size(tab, to: nil)
+            frameGuards.removeValue(forKey: tab.id)?.detach()
+            clearCaptureCadence(for: tab.key)
+            watchOrder[tab.key] = nil
         }
         listTold.remove(session)
     }
@@ -236,6 +322,8 @@ final class RemoteTabBridge {
             observed.tab.removeEventObserver(observed.token)
             entry.tabTokens[id] = nil
             sized[id] = nil
+            frameGuards.removeValue(forKey: id)?.detach()
+            clearCaptureCadence(for: observed.tab.key)
             copies.forget(observed.tab)
         }
         for tab in open {
@@ -312,9 +400,10 @@ final class RemoteTabBridge {
 
     // MARK: - Pictures
 
-    /// The visible page as JPEG, scaled to fit `maxWidth` by `maxHeight` and never past the page's own pixels, through
-    /// the agent's screenshot call; the page's size is a phone's while one is drawn at it. A page under a dialog or a
-    /// Chromium window, whose renderer ended, or a `file:` page outside the task's files, is not pictured.
+    /// The visible page as JPEG, scaled to fit `maxWidth` by `maxHeight` and never past the page's own pixels, encoding
+    /// directly from the host's latest painted IOSurface when it matches the tab's viewport or falling back to
+    /// `Page.captureScreenshot`. A page under a dialog or a Chromium window, whose renderer ended, or a `file:` page
+    /// outside the task's files, is not pictured.
     func capture(taskID: String, tabID: String, maxWidth: Int, maxHeight: Int) async -> Result<RemoteTabFrame, RemoteError> {
         let tab: BrowserTab
         switch watchedTab(taskID: taskID, tabID: tabID) {
@@ -322,6 +411,9 @@ final class RemoteTabBridge {
         case let .failure(error): return .failure(error)
         }
         paintTold.remove(tab.key)
+        // Wait for any queued remote viewport resize before capturing so the first frame uses the requested width.
+        await tab.waitForEmulation()
+        guard !tab.isClosed else { return .failure(RemoteError(.notFound, "The task has no such tab")) }
         if let refusal = blocked(tab) { return .failure(refusal) }
         guard tab.crash == nil, tab.openFailure == nil else {
             return .failure(RemoteError(.unavailable, "The page cannot be pictured now"))
@@ -330,9 +422,83 @@ final class RemoteTabBridge {
         // address (`BrowserTab.navigations`), nor one any of whose frames moved (`frameMark`).
         let page = tab.navigations
         if let refusal = await outsideFiles(tab.currentURL, taskID: taskID, in: tab) { return .failure(refusal) }
-        // A frame that comes and goes between the two reads of the tree is heard as it navigates (the Page domain's
-        // events, as the agent's tools follow a page's frames): a file outside the task's among them keeps the picture.
-        _ = try? await tab.devTools.send("Page.enable", timeout: Self.captureTimeout)
+        let frameGuard = ensureFrameGuard(for: tab)
+        if !frameGuard.pageEnabled {
+            if (try? await tab.devTools.send("Page.enable", timeout: Self.captureTimeout)) != nil {
+                frameGuard.pageEnabled = true
+            }
+        }
+        guard !tab.isClosed else { return .failure(RemoteError(.notFound, "The task has no such tab")) }
+        guard tab.navigations == page else { return .failure(RemoteError(.unavailable, "The page moved")) }
+
+        let now = ContinuousClock.now
+        let isMotion = lastCaptureAt[tab.key].map { now - $0 < Self.motionWindow } ?? false
+        let quality = isMotion ? Self.motionJPEGQuality : Self.jpegQuality
+
+        // Fast path: encode directly from the host's latest matching IOSurface off the main thread.
+        if let candidate = matchingSurface(for: tab) {
+            let isFilePage = tab.currentURL?.lowercased().hasPrefix("file:") == true
+            let alreadyVerified = frameGuard.pageEnabled
+                && !isFilePage
+                && !frameGuard.verifiedHasFileFrame
+                && frameGuard.verifiedNavigations == page
+                && frameGuard.verifiedGeneration == frameGuard.frameGeneration
+                && frameGuard.verifiedTaskID == taskID
+                && frameGuard.verifiedAgentFile == tab.agentOpenedFile
+                && frameGuard.navigatedFiles.isEmpty
+            var verifiedMark: String?
+            if !alreadyVerified {
+                let genBeforeCheck = frameGuard.frameGeneration
+                let priorFiles = frameGuard.navigatedFiles
+                frameGuard.navigatedFiles.removeAll()
+                for file in priorFiles {
+                    if let refusal = await outsideFiles(file, taskID: taskID, in: tab) { return .failure(refusal) }
+                }
+                switch await checkFrames(tab, taskID: taskID) {
+                case let .success(checked):
+                    verifiedMark = checked.mark
+                    if frameGuard.frameGeneration == genBeforeCheck, tab.navigations == page {
+                        frameGuard.verifiedNavigations = page
+                        frameGuard.verifiedGeneration = genBeforeCheck
+                        frameGuard.verifiedTaskID = taskID
+                        frameGuard.verifiedAgentFile = tab.agentOpenedFile
+                        frameGuard.verifiedHasFileFrame = checked.hasFiles
+                    }
+                case let .failure(refusal):
+                    return .failure(refusal)
+                }
+                guard tab.navigations == page else { return .failure(RemoteError(.unavailable, "The page moved")) }
+            }
+            let genBeforeEncode = frameGuard.frameGeneration
+            let filesBeforeEncode = frameGuard.navigatedFiles
+            frameGuard.navigatedFiles.removeAll()
+            for file in filesBeforeEncode {
+                if let refusal = await outsideFiles(file, taskID: taskID, in: tab) { return .failure(refusal) }
+            }
+            if let encoded = await Self.encodeSurfaceJPEG(SendableSurface(surface: candidate.surface),
+                                                          maxWidth: maxWidth, maxHeight: maxHeight, quality: quality) {
+                if let refusal = blocked(tab) { return .failure(refusal) }
+                let duringEncodeFiles = frameGuard.navigatedFiles
+                frameGuard.navigatedFiles.removeAll()
+                for file in duringEncodeFiles {
+                    if let refusal = await outsideFiles(file, taskID: taskID, in: tab) { return .failure(refusal) }
+                }
+                guard tab.navigations == page, frameGuard.frameGeneration == genBeforeEncode else {
+                    return .failure(RemoteError(.unavailable, "The page moved"))
+                }
+                if isFilePage || frameGuard.verifiedHasFileFrame, let verifiedMark {
+                    guard (try? await frameMark(tab).mark) == verifiedMark else {
+                        return .failure(RemoteError(.unavailable, "The page moved"))
+                    }
+                }
+                recordCapture(for: tab, taskID: taskID, isMotion: isMotion)
+                return .success(RemoteTabFrame(image: encoded.data, mediaType: "image/jpeg",
+                                               width: encoded.width, height: encoded.height,
+                                               viewportWidth: candidate.viewportWidth, viewportHeight: candidate.viewportHeight))
+            }
+        }
+
+        // Fallback path: CDP `Page.captureScreenshot` (headless/non-Mac hosts or before the first matching IOSurface).
         var navigatedFiles: Set<String> = []
         let listening = tab.devTools.observeEvents { method, params in
             guard method == "Page.frameNavigated", let address = params["frame"]?["url"]?.stringValue,
@@ -342,7 +508,7 @@ final class RemoteTabBridge {
         defer { tab.devTools.stopObservingEvents(listening) }
         let frames: String
         switch await checkFrames(tab, taskID: taskID) {
-        case let .success(mark): frames = mark
+        case let .success(checked): frames = checked.mark
         case let .failure(refusal): return .failure(refusal)
         }
         guard tab.navigations == page else { return .failure(RemoteError(.unavailable, "The page moved")) }
@@ -359,7 +525,7 @@ final class RemoteTabBridge {
             // Image pixels per CSS pixel: as many as fit, at most the page's own.
             let fit = min(Double(maxWidth) / width, Double(maxHeight) / height, pixelRatio)
             func shoot(clipped: Bool) async throws -> Data? {
-                var parameters: [String: JSONValue] = ["format": .string("jpeg"), "quality": .integer(Self.jpegQuality)]
+                var parameters: [String: JSONValue] = ["format": .string("jpeg"), "quality": .integer(quality)]
                 if clipped {
                     parameters["clip"] = .object([
                         "x": .number(visual?["pageX"]?.doubleValue ?? 0), "y": .number(visual?["pageY"]?.doubleValue ?? 0),
@@ -369,18 +535,27 @@ final class RemoteTabBridge {
                 let shot = try await tab.devTools.send("Page.captureScreenshot", parameters, timeout: Self.captureTimeout)
                 return shot["data"]?.stringValue.flatMap { Data(base64Encoded: $0) }
             }
-            // At the page's own pixels the picture is the view as drawn now. A clip names where the page was when it
-            // was measured, so a page scrolled since showed a band of nothing where the clip left the view. A smaller
-            // picture, a pinch-zoomed page, or a view wider than the picture allows (its scrollbars) is clipped.
-            var size = (width: Int((width * fit).rounded()), height: Int((height * fit).rounded()),
-                        viewportWidth: width, viewportHeight: height)
+            // At the page's own pixels the picture is the view as drawn now. Only accept an unclipped shot when its
+            // actual pixel dimensions fit the requested budget and match the measured visual viewport; never overwrite
+            // `viewportWidth`/`viewportHeight` with mismatched backing pixels.
+            var imageSize = (width: Int((width * fit).rounded()), height: Int((height * fit).rounded()))
             var picture: Data?
+            let expectedWidth = width * pixelRatio
+            let expectedHeight = height * pixelRatio
+            let tolerance = max(2.0, pixelRatio * 2.0)
             if fit >= pixelRatio, (visual?["scale"]?.doubleValue ?? 1) == 1, let whole = try await shoot(clipped: false),
-               let pixels = Self.jpegSize(whole), pixels.width <= maxWidth, pixels.height <= maxHeight {
+               let pixels = Self.jpegSize(whole), pixels.width <= maxWidth, pixels.height <= maxHeight,
+               abs(Double(pixels.width) - expectedWidth) <= tolerance,
+               abs(Double(pixels.height) - expectedHeight) <= tolerance {
                 picture = whole
-                size = (pixels.width, pixels.height, Double(pixels.width) / pixelRatio, Double(pixels.height) / pixelRatio)
+                imageSize = (pixels.width, pixels.height)
             }
-            if picture == nil { picture = try await shoot(clipped: true) }
+            if picture == nil {
+                picture = try await shoot(clipped: true)
+                if let picture, let pixels = Self.jpegSize(picture) {
+                    imageSize = (pixels.width, pixels.height)
+                }
+            }
             guard let data = picture else {
                 return .failure(RemoteError(.internal, "The browser returned no image"))
             }
@@ -392,18 +567,133 @@ final class RemoteTabBridge {
             for file in navigatedFiles {
                 if let refusal = await outsideFiles(file, taskID: taskID, in: tab) { return .failure(refusal) }
             }
-            return .success(RemoteTabFrame(image: data, mediaType: "image/jpeg", width: size.width, height: size.height,
-                                           viewportWidth: size.viewportWidth, viewportHeight: size.viewportHeight))
+            recordCapture(for: tab, taskID: taskID, isMotion: isMotion)
+            return .success(RemoteTabFrame(image: data, mediaType: "image/jpeg", width: imageSize.width, height: imageSize.height,
+                                           viewportWidth: width, viewportHeight: height))
         } catch {
             return .failure(RemoteError(.unavailable, error.localizedDescription))
         }
     }
 
+    private func ensureFrameGuard(for tab: BrowserTab) -> FrameGuard {
+        if let existing = frameGuards[tab.id], existing.tab === tab { return existing }
+        frameGuards[tab.id]?.detach()
+        let frameGuard = FrameGuard(tab: tab)
+        frameGuard.token = tab.devTools.observeEvents { [weak frameGuard] method, params in
+            guard let frameGuard else { return }
+            switch method {
+            case "Page.frameNavigated":
+                frameGuard.frameGeneration &+= 1
+                if let address = params["frame"]?["url"]?.stringValue,
+                   address.lowercased().hasPrefix("file:") {
+                    frameGuard.navigatedFiles.insert(address)
+                }
+            case "Page.frameAttached", "Page.frameDetached":
+                frameGuard.frameGeneration &+= 1
+            default:
+                break
+            }
+        }
+        frameGuards[tab.id] = frameGuard
+        return frameGuard
+    }
+
+    /// Returns the host's latest painted IOSurface when it matches the tab's expected CSS viewport and backing scale.
+    private func matchingSurface(for tab: BrowserTab) -> (frame: BrowserFrame, surface: IOSurfaceRef, viewportWidth: Double, viewportHeight: Double)? {
+        guard !tab.holdsLayout,
+              let (frame, surface) = environment.latestSurface(tab.id),
+              frame.layer == .view,
+              frame.pixelWidth > 0, frame.pixelHeight > 0,
+              IOSurfaceGetWidth(surface) == frame.pixelWidth,
+              IOSurfaceGetHeight(surface) == frame.pixelHeight else { return nil }
+        let expectedWidth: Double
+        let expectedHeight: Double
+        let expectedScale: Double
+        if let emulation = tab.emulation {
+            expectedWidth = Double(emulation.width)
+            expectedHeight = Double(emulation.height)
+            expectedScale = emulation.mobile ? 2 : (tab.viewport?.scale ?? 2)
+        } else if let viewport = tab.viewport, viewport.width >= 1, viewport.height >= 1, viewport.scale > 0 {
+            expectedWidth = viewport.width
+            expectedHeight = viewport.height
+            expectedScale = viewport.scale
+        } else {
+            return nil
+        }
+        guard abs(Double(frame.pixelWidth) - expectedWidth * expectedScale) <= 2,
+              abs(Double(frame.pixelHeight) - expectedHeight * expectedScale) <= 2 else { return nil }
+        return (frame, surface, expectedWidth, expectedHeight)
+    }
+
+    private func recordCapture(for tab: BrowserTab, taskID: String, isMotion: Bool) {
+        let key = tab.key
+        lastCaptureAt[key] = .now
+        lastCaptureWasMotion[key] = isMotion
+        settleTasks.removeValue(forKey: key)?.cancel()
+        guard isMotion, let session = UUID(uuidString: taskID) else { return }
+        settleTasks[key] = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.settleDelay)
+            guard !Task.isCancelled, let self, self.lastCaptureWasMotion[key] == true,
+                  self.followed[session]?.watched[key] != nil else { return }
+            self.lastCaptureWasMotion[key] = false
+            self.settleTasks[key] = nil
+            self.paintTold.remove(key)
+            if self.paintTold.insert(key).inserted {
+                self.changeHandler?(.tabPainted(taskID: taskID, tabID: key.uuidString))
+            }
+        }
+    }
+
+    nonisolated private static let surfaceCIContext = CIContext(options: [.useSoftwareRenderer: false])
+
+    /// Hardware-accelerated off-main-thread JPEG encoding directly from a painted IOSurface, downscaling cleanly to
+    /// fit `maxWidth`×`maxHeight` without upscaling past the surface's own pixels.
+    private nonisolated static func encodeSurfaceJPEG(_ box: SendableSurface, maxWidth: Int, maxHeight: Int,
+                                                      quality: Int64) async -> (data: Data, width: Int, height: Int)? {
+        guard maxWidth >= 1, maxHeight >= 1 else { return nil }
+        let sourceWidth = IOSurfaceGetWidth(box.surface)
+        let sourceHeight = IOSurfaceGetHeight(box.surface)
+        guard sourceWidth > 0, sourceHeight > 0 else { return nil }
+        IOSurfaceIncrementUseCount(box.surface)
+        return await Task.detached(priority: .userInitiated) {
+            defer { IOSurfaceDecrementUseCount(box.surface) }
+            var image = CIImage(ioSurface: box.surface)
+            let scale = min(1.0, Double(maxWidth) / Double(sourceWidth), Double(maxHeight) / Double(sourceHeight))
+            if scale < 1.0 {
+                if let filter = CIFilter(name: "CILanczosScaleTransform") {
+                    filter.setValue(image, forKey: kCIInputImageKey)
+                    filter.setValue(scale, forKey: kCIInputScaleKey)
+                    filter.setValue(1.0, forKey: kCIInputAspectRatioKey)
+                    if let scaled = filter.outputImage { image = scaled }
+                } else {
+                    image = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+                }
+                if image.extent.width > Double(maxWidth) || image.extent.height > Double(maxHeight) {
+                    image = image.cropped(to: CGRect(
+                        origin: image.extent.origin,
+                        size: CGSize(width: min(image.extent.width, Double(maxWidth)),
+                                     height: min(image.extent.height, Double(maxHeight)))
+                    ))
+                }
+            }
+            guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+            let compression = min(max(Double(quality) / 100.0, 0.1), 1.0)
+            guard let data = Self.surfaceCIContext.jpegRepresentation(
+                of: image, colorSpace: colorSpace,
+                options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: compression]
+            ), let pixels = Self.jpegSize(data) else { return nil }
+            return (data, pixels.width, pixels.height)
+        }.value
+    }
+
     static let captureTimeout: Duration = .seconds(5)
-    static let jpegQuality: Int64 = 60
+    static let jpegQuality: Int64 = 72
+    static let motionJPEGQuality: Int64 = 48
+    static let motionWindow: Duration = .milliseconds(180)
+    static let settleDelay: Duration = .milliseconds(180)
 
     /// A JPEG's size in pixels, from its frame header (the first start-of-frame segment); nil for anything else.
-    static func jpegSize(_ data: Data) -> (width: Int, height: Int)? {
+    nonisolated static func jpegSize(_ data: Data) -> (width: Int, height: Int)? {
         data.withUnsafeBytes { bytes -> (width: Int, height: Int)? in
             guard bytes.count > 4, bytes[0] == 0xFF, bytes[1] == 0xD8 else { return nil }
             var index = 2
@@ -636,7 +926,7 @@ final class RemoteTabBridge {
             if let refusal = await bridge.outsideFiles(tab.currentURL, taskID: taskID, in: tab) { return refusal }
             let frames: String
             switch await bridge.checkFrames(tab, taskID: taskID) {
-            case let .success(mark): frames = mark
+            case let .success(checked): frames = checked.mark
             case let .failure(refusal): return refusal
             }
             guard tab.navigations == navigations else { return RemoteError(.notAllowed, "The page moved") }
@@ -665,14 +955,14 @@ final class RemoteTabBridge {
 
     /// The page's frames when none shows a `file:` page outside the task's files (an iframe or an embed of one, or a
     /// frame a link moved there), as the agent's tools hold them (`BrowserAgentPage.shownFiles`); their mark.
-    fileprivate func checkFrames(_ tab: BrowserTab, taskID: String) async -> Result<String, RemoteError> {
+    fileprivate func checkFrames(_ tab: BrowserTab, taskID: String) async -> Result<(mark: String, hasFiles: Bool), RemoteError> {
         guard let frames = try? await frameMark(tab) else {
             return .failure(RemoteError(.unavailable, "The page cannot be read now"))
         }
         for file in Set(frames.files) {
             if let refusal = await outsideFiles(file, taskID: taskID, in: tab) { return .failure(refusal) }
         }
-        return .success(frames.mark)
+        return .success((frames.mark, !frames.files.isEmpty))
     }
 
     /// What keeps the tab from a remote device now: it closed, a page's dialog waits, or one of Chromium's windows is up

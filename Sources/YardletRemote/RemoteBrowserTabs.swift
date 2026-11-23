@@ -51,6 +51,21 @@ public struct RemoteTabViewport: Codable, Hashable, Sendable {
     public var isAllowed: Bool {
         RemoteProtocol.tabViewportWidths.contains(width) && RemoteProtocol.tabViewportHeights.contains(height)
     }
+
+    /// Fits a view's dimensions in points and display scale into a valid viewport and frame pixel budget.
+    /// Returns nil for transient empty or non-finite geometry so clients never send bogus minimum-size resizes.
+    public static func fitted(width: Double, height: Double, scale: Double, mobile: Bool? = nil)
+        -> (viewport: RemoteTabViewport, maxWidth: Int, maxHeight: Int)? {
+        guard width.isFinite, height.isFinite, scale.isFinite, width >= 1, height >= 1, scale > 0 else { return nil }
+        func within(_ value: Double, _ range: ClosedRange<Int>) -> Int {
+            min(max(Int(value.rounded()), range.lowerBound), range.upperBound)
+        }
+        let viewportWidth = within(width, RemoteProtocol.tabViewportWidths)
+        let viewportHeight = within(height, RemoteProtocol.tabViewportHeights)
+        let viewport = RemoteTabViewport(width: viewportWidth, height: viewportHeight, mobile: mobile ?? (viewportWidth < 768))
+        return (viewport, within(width * scale, 1...RemoteProtocol.maxTabFrameSide),
+                within(height * scale, 1...RemoteProtocol.maxTabFrameSide))
+    }
 }
 
 /// Whether a connection's input to a tab may still go on: the server ends it when the watch ends, the connection

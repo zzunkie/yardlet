@@ -479,6 +479,10 @@ final class MacBrowserHost: NativeSurfaceResource {
         process?.surface(for: token)
     }
 
+    func latestFrame(of tab: BrowserTabID) -> (frame: BrowserFrame, surface: IOSurfaceRef)? {
+        process?.frameRouter.latestFrame(of: tab)
+    }
+
     /// Sends the tab's page frames straight to the display, off the main thread, until
     /// `stopShowingFrames(of:in:)`.
     func showFrames(of tab: BrowserTabID, in display: BrowserFrameDisplay) {

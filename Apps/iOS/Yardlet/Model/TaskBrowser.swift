@@ -28,14 +28,11 @@ final class TaskBrowser {
         var maxWidth: Int
         var maxHeight: Int
 
-        init(width: Double, height: Double, scale: Double) {
-            func within(_ value: Double, _ range: ClosedRange<Int>) -> Int {
-                min(max(Int(value.rounded()), range.lowerBound), range.upperBound)
-            }
-            viewport = RemoteTabViewport(width: within(width, RemoteProtocol.tabViewportWidths),
-                                         height: within(height, RemoteProtocol.tabViewportHeights), mobile: true)
-            maxWidth = within(width * scale, 1...RemoteProtocol.maxTabFrameSide)
-            maxHeight = within(height * scale, 1...RemoteProtocol.maxTabFrameSide)
+        init?(width: Double, height: Double, scale: Double) {
+            guard let fitted = RemoteTabViewport.fitted(width: width, height: height, scale: scale) else { return nil }
+            viewport = fitted.viewport
+            maxWidth = fitted.maxWidth
+            maxHeight = fitted.maxHeight
         }
     }
 

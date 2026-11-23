@@ -14,6 +14,8 @@ struct RemoteServerTabs {
         var listed: [RemoteBrowserTab]
         /// A new watch on the same connection starts over: a capture of an older one that ends late is dropped.
         var generation: Int
+        /// Monotonic activity counter bumped on watch and input so the most recently active watcher sets the viewport.
+        var activity: Int
         /// The tab drew since the last capture began; the first frame needs no drawing.
         var painted = true
         /// The last picture sent: the same picture again is not sent.
@@ -56,6 +58,7 @@ struct RemoteServerTabs {
     var watches: [UUID: Watch] = [:]
     var flows: [UUID: Flow] = [:]
     var generation = 0
+    var activity = 0
     /// What the bridge was last told is watched.
     var reported: Set<RemoteTabWatch> = []
     /// A task's list is read again at most this often, its changes batched.
@@ -105,12 +108,15 @@ extension RemoteServer {
         let previous = tabs.watches[id]
         let sameTab = previous.map { $0.taskID == taskID && $0.tabID == chosen && chosen != nil } ?? false
         if !sameTab { previous?.permit.revoke() }
-        tabs.generation += 1
+        let generation = tabs.generation + 1
+        let activity = tabs.activity + 1
+        tabs.generation = generation
+        tabs.activity = activity
         tabs.watches[id] = RemoteServerTabs.Watch(
             taskID: taskID, tabID: chosen,
             maxWidth: min(maxWidth ?? RemoteProtocol.defaultTabFrameWidth, RemoteProtocol.maxTabFrameSide),
             maxHeight: min(maxHeight ?? RemoteProtocol.defaultTabFrameHeight, RemoteProtocol.maxTabFrameSide),
-            viewport: viewport, listed: listed, generation: tabs.generation,
+            viewport: viewport, listed: listed, generation: generation, activity: activity,
             lastImage: sameTab ? previous?.lastImage : nil, permit: sameTab ? previous?.permit ?? RemoteTabPermit() : RemoteTabPermit(),
             listOnly: listOnly, framesInFlight: framesInFlight)
         // The pace stays the connection's; only a look scheduled for the last watch is redone for this one.
@@ -164,6 +170,11 @@ extension RemoteServer {
             return
         }
         guard let permit = tabs.watches[id]?.permit else { return }
+        // Promote this watcher's viewport priority when it actively drives the tab.
+        let activity = tabs.activity + 1
+        tabs.activity = activity
+        tabs.watches[id]?.activity = activity
+        Task { await self.reportWatchedTabs() }
         // Input waiting behind a slow page is bounded too, beside the messages the connection may hold (§7).
         guard tabs.pendingInputs[id, default: 0] < RemoteProtocol.maxPendingTabInputs else {
             respond(.failure(requestID, RemoteError(.rateLimited, "Too much input waits for the page")), to: id)
@@ -378,9 +389,23 @@ extension RemoteServer {
     }
 
     func reportWatchedTabs() async {
-        let watched = Set(tabs.watches.values.map {
-            RemoteTabWatch(taskID: $0.taskID, tabID: $0.tabID, viewport: $0.tabID == nil ? nil : $0.viewport)
-        })
+        struct Key: Hashable {
+            var taskID: String
+            var tabID: String?
+        }
+        var active: [Key: (activity: Int, viewport: RemoteTabViewport?)] = [:]
+        for watch in tabs.watches.values {
+            let key = Key(taskID: watch.taskID, tabID: watch.tabID)
+            let viewport = watch.tabID == nil ? nil : watch.viewport
+            if let existing = active[key] {
+                if viewport != nil && (existing.viewport == nil || watch.activity > existing.activity) {
+                    active[key] = (watch.activity, viewport)
+                }
+            } else {
+                active[key] = (watch.activity, viewport)
+            }
+        }
+        let watched = Set(active.map { RemoteTabWatch(taskID: $0.key.taskID, tabID: $0.key.tabID, viewport: $0.value.viewport) })
         guard watched != tabs.reported else { return }
         tabs.reported = watched
         await bridge.setWatchedTabs(watched)

@@ -92,7 +92,8 @@ final class BrowserHostRemoteTabPerf {
     /// the JSON the server writes for one frame.
     private func timeSteps(_ tab: BrowserTab, model: AppModel) async {
         let hostClient = client
-        let bridge = RemoteTabBridge(model: model, environment: RemoteTabBridge.Environment(client: { hostClient }))
+        let bridge = RemoteTabBridge(model: model, environment: RemoteTabBridge.Environment(
+            client: { hostClient }, latestSurface: { MacBrowserHost.shared.latestFrame(of: $0) }))
         let task = session.uuidString
         let tabID = tab.key.uuidString
         bridge.setWatched([RemoteTabWatch(taskID: task, tabID: tabID, viewport: Self.phone)])
@@ -245,7 +246,8 @@ final class BrowserHostRemoteTabPerf {
             record["tabFrameInterval"] = .number(configuration.tabFrameInterval)
             let server = RemoteServer(
                 configuration: configuration,
-                bridge: AppModelRemoteBridge(model: model, browser: RemoteTabBridge.Environment(client: { hostClient })),
+                bridge: AppModelRemoteBridge(model: model, browser: RemoteTabBridge.Environment(
+                    client: { hostClient }, latestSurface: { MacBrowserHost.shared.latestFrame(of: $0) })),
                 devices: RemoteDeviceStore(fileURL: nil))
             await server.start()
             let listener = RemoteSecureListener(server: server, staticKey: identity.noise, port: 0, advertisement: nil, loopbackOnly: true)
