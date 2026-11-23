@@ -1,20 +1,33 @@
 name: Linux engine
 
 # The engine built on its own on Linux (docs/PLATFORM_PORTABILITY.md, "Building the engine on its own"),
-# for every pull request that changes more than documents and for main, as windows-engine.yml builds it
+# for pull requests and pushes to main that change the engine targets, as windows-engine.yml builds it
 # on Windows. It informs and is not a required check: a pull request that breaks it can still be merged.
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - docs/**
-      - '**/*.md'
-      - LICENSE
+    paths: &linux-engine
+      - 'Sources/NativeHarnessClient/**'
+      - '!Sources/NativeHarnessClient/Views/**'
+      - '!Sources/NativeHarnessClient/Browser/**'
+      - '!Sources/NativeHarnessClient/Development/**'
+      - '!Sources/NativeHarnessClient/Platform/macOS/**'
+      - '!Sources/NativeHarnessClient/Platform/Windows/**'
+      - '!Sources/NativeHarnessClient/Platform/Linux/**'
+      - '!Sources/NativeHarnessClient/Platform/POSIX/**'
+      - '!Sources/NativeHarnessClient/WinUI/**'
+      - '!Sources/NativeHarnessClient/NativeHarnessClientApp.swift'
+      - '!Sources/NativeHarnessClient/Resources/Mermaid/**'
+      - 'Sources/CSQLite/**'
+      - 'Sources/YardletAgentTools/**'
+      - 'Sources/YardletRemote/**'
+      - '!Sources/YardletRemote/RemoteSecureListener.swift'
+      - 'Package.swift'
+      - 'Package.resolved'
+      - '.github/workflows/linux-engine.yml'
+      - '!**/*.md'
   pull_request:
-    paths-ignore:
-      - docs/**
-      - '**/*.md'
-      - LICENSE
+    paths: *linux-engine
   workflow_dispatch:
 
 permissions:

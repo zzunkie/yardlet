@@ -4,9 +4,11 @@
 `swift test --parallel` starts one xctest process for every test: some 3,000 for this package, each
 loading the whole test bundle, and each one that uses AppKit checking in with the window server,
 which works out focus again as it exits. This runs the same tests in batches, each batch in one
-xctest process, `--workers` processes at a time. Batches follow the list's order and get smaller
-toward the end of the run, so the last ones are short and the workers finish together; a run of
-about 3,000 tests takes some 90 processes.
+xctest process, `--workers` processes at a time. When `--times-file` names a TSV of previous test
+durations (`class\\ttest\\tresult\\tseconds`), batches are packed by estimated duration and scheduled
+longest-first (LPT) so slow tests never pile into one mega-batch or strand a worker at the tail;
+otherwise batches follow the sorted list and shrink from 32 down to 4 tests toward the end. Measured
+durations are merged back into `--times-file` when the run finishes.
 
 A batch whose process crashes or ends before its last test reports the test it was in as failed and
 runs the rest of its tests again in a new process, so every test still gets a result of its own, as
@@ -19,7 +21,7 @@ environment `swift test` gives xctest. Prints a line as each batch ends, the out
 test, and a summary; with `-v`, each batch's whole XCTest output in one piece as the batch ends
 (scripts/test-report.py reads it). Exits 1 when a test failed, or a process ended badly.
 
-usage: xctest-batches.py --bundle PATH.xctest --tests FILE [--workers N] [--filter RE]... [--skip RE]... [-v]
+usage: xctest-batches.py --bundle PATH.xctest --tests FILE [--workers N] [--times-file FILE] [--filter RE]... [--skip RE]... [-v]
 """
 import argparse
 import collections
@@ -29,18 +31,157 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
 CASE_START = re.compile(r"^Test Case '-\[(\S+) (\S+)\]' started\.")
 CASE_END = re.compile(r"^Test Case '-\[(\S+) (\S+)\]' (passed|failed|skipped) \((\d+(?:\.\d+)?) seconds\)\.")
 RUN_END = re.compile(r"^Test Suite 'Selected tests' (passed|failed) at ")
-# Batches start at a quarter of a worker's share of the tests and shrink as the run goes on, from
-# LARGEST_BATCH tests down to SMALLEST_BATCH. A process keeps some of what each test that draws a
-# window leaves behind, so the largest is kept small enough that one process's memory stays near what
-# one such test takes alone.
-LARGEST_BATCH = 64
+# Without prior timing data, batches start at a quarter of a worker's share and shrink from
+# COLD_LARGEST_BATCH down to SMALLEST_BATCH. Capping cold batches at 32 prevents adjacent slow
+# classes (such as Conversation*) from piling into a multi-minute batch that starves workers.
+COLD_LARGEST_BATCH = 32
+# With timing data (LPT mode), fast tests can pack up to LPT_LARGEST_BATCH per process because
+# each batch is also bounded by target duration.
+LPT_LARGEST_BATCH = 64
 SMALLEST_BATCH = 4
+LPT_BATCHES_PER_WORKER = 12
+LPT_MIN_TARGET_SECONDS = 10.0
+
+
+def test_key(test_id):
+    """Maps `Target.Class/method` (or `Class/method`) to `(Class, method)`."""
+    cls_part, method = test_id.split("/", 1)
+    return cls_part.split(".")[-1], method
+
+
+def read_times(path):
+    """Reads prior `(class, test) -> seconds` timings from a TSV file if present."""
+    times = {}
+    if not path or not os.path.exists(path):
+        return times
+    try:
+        with open(path, encoding="utf-8", errors="replace") as file:
+            for line in file:
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) < 4 or parts[0] == "class":
+                    continue
+                try:
+                    seconds = float(parts[3])
+                except ValueError:
+                    continue
+                if seconds >= 0.0:
+                    times[(parts[0], parts[1])] = seconds
+    except OSError:
+        return {}
+    return times
+
+
+def write_times(path, results):
+    """Atomically merges measured test durations into `path` in `test-report.py` TSV format."""
+    if not path or not results:
+        return
+    merged = {}
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8", errors="replace") as file:
+                for line in file:
+                    parts = line.rstrip("\n").split("\t")
+                    if len(parts) < 4 or parts[0] == "class":
+                        continue
+                    try:
+                        merged[(parts[0], parts[1])] = (parts[2], float(parts[3]))
+                    except ValueError:
+                        continue
+        except OSError:
+            pass
+    for test_id, (result, seconds) in results.items():
+        if "/" not in test_id:
+            continue
+        key = test_key(test_id)
+        # Keep an earlier valid duration if this run crashed before completing the test.
+        if result != "passed" and seconds == 0.0 and key in merged:
+            continue
+        merged[key] = (result, seconds)
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=".xctest-times-", suffix=".tsv", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            file.write("class\ttest\tresult\tseconds\n")
+            for (cls, method), (result, seconds) in sorted(merged.items(), key=lambda item: (-item[1][1], item[0])):
+                file.write(f"{cls}\t{method}\t{result}\t{seconds:.3f}\n")
+        os.replace(tmp_path, path)
+    except OSError:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+def plan_batches(selected, workers, times=None):
+    """Plans ordered test batches for `workers` concurrent xctest processes."""
+    workers = max(1, workers)
+    if not selected:
+        return []
+    known = [times[test_key(test)] for test in selected if times and test_key(test) in times]
+    if not known:
+        batches = []
+        position = 0
+        while position < len(selected):
+            share = math.ceil((len(selected) - position) / (4 * workers))
+            size = min(COLD_LARGEST_BATCH, max(SMALLEST_BATCH, share))
+            batches.append(selected[position:position + size])
+            position += size
+        return batches
+
+    fallback = sum(known) / len(known)
+
+    def estimate(test):
+        return times.get(test_key(test), fallback)
+
+    total_estimate = sum(estimate(test) for test in selected)
+    target = max(LPT_MIN_TARGET_SECONDS, total_estimate / (workers * LPT_BATCHES_PER_WORKER))
+
+    by_class = collections.defaultdict(list)
+    for test in selected:
+        by_class[test.split("/")[0]].append(test)
+
+    chunks = []
+    for cls in sorted(by_class):
+        current = []
+        current_duration = 0.0
+        for test in by_class[cls]:
+            duration = estimate(test)
+            if current and (len(current) >= LPT_LARGEST_BATCH or current_duration + duration > target):
+                chunks.append((current_duration, current))
+                current = []
+                current_duration = 0.0
+            current.append(test)
+            current_duration += duration
+        if current:
+            chunks.append((current_duration, current))
+
+    chunks.sort(key=lambda item: (-item[0], item[1][0]))
+    packed = []
+    small = []
+    small_duration = 0.0
+    for duration, tests in chunks:
+        if duration >= target * 0.5 or len(tests) >= LPT_LARGEST_BATCH:
+            packed.append((duration, tests))
+        else:
+            if small and (len(small) + len(tests) > LPT_LARGEST_BATCH or small_duration + duration > target):
+                packed.append((small_duration, small))
+                small = []
+                small_duration = 0.0
+            small.extend(tests)
+            small_duration += duration
+    if small:
+        packed.append((small_duration, small))
+
+    packed.sort(key=lambda item: (-item[0], item[1][0]))
+    return [tests for _, tests in packed]
 
 
 def main():
@@ -48,6 +189,7 @@ def main():
     parser.add_argument("--bundle", required=True)
     parser.add_argument("--tests", required=True)
     parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--times-file", default="")
     parser.add_argument("--filter", action="append", default=[])
     parser.add_argument("--skip", action="append", default=[])
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -72,15 +214,11 @@ class Run:
         self.verbose = arguments.verbose
         self.bundle = os.path.abspath(arguments.bundle)
         self.workers = max(1, arguments.workers)
+        self.times_file = arguments.times_file
         self.total = len(selected)
         self.class_sizes = class_sizes
-        self.queue = collections.deque()
-        position = 0
-        while position < len(selected):
-            share = math.ceil((len(selected) - position) / (4 * self.workers))
-            size = min(LARGEST_BATCH, max(SMALLEST_BATCH, share))
-            self.queue.append(selected[position:position + size])
-            position += size
+        times = read_times(self.times_file)
+        self.queue = collections.deque(plan_batches(selected, self.workers, times))
         self.planned = len(self.queue)
         self.condition = threading.Condition()
         self.active = 0
@@ -113,6 +251,8 @@ class Run:
                 thread.join(0.5)
         if self.stopping:
             return 130
+        if self.times_file:
+            write_times(self.times_file, self.results)
         counts = collections.Counter(result for result, _ in self.results.values())
         minutes, seconds = divmod(round(time.monotonic() - began), 60)
         print(f"Executed {len(self.results)} of {self.total} tests in {self.processes} xctest processes, "
@@ -244,10 +384,12 @@ class Run:
         # A whole class goes by its name, keeping the command line short; part of one, test by test.
         counts = collections.Counter(test.split("/")[0] for test in batch)
         named = []
+        seen_classes = set()
         for test in batch:
             cls = test.split("/")[0]
             if counts[cls] == self.class_sizes[cls]:
-                if not named or named[-1] != cls:
+                if cls not in seen_classes:
+                    seen_classes.add(cls)
                     named.append(cls)
             else:
                 named.append(test)
