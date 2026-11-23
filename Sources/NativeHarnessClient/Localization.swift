@@ -269,9 +269,13 @@ enum L10n {
             let parts = tag.split(separator: "-").map { $0.lowercased() }
             guard let primary = parts.first else { continue }
             if primary == "zh" {
-                if parts.contains("hant") || parts.contains("tw") || parts.contains("hk") || parts.contains("mo") {
+                if parts.contains("hans") {
+                    if let hans = find("zh-Hans") { return hans }
+                } else if parts.contains("hant") {
                     if let hant = find("zh-Hant") { return hant }
-                } else if parts.contains("hans") || parts.contains("cn") || parts.contains("sg") || parts.count == 1 {
+                } else if parts.contains("tw") || parts.contains("hk") || parts.contains("mo") {
+                    if let hant = find("zh-Hant") { return hant }
+                } else if parts.contains("cn") || parts.contains("sg") || parts.count == 1 {
                     if let hans = find("zh-Hans") { return hans }
                 }
             }
@@ -287,9 +291,11 @@ enum L10n {
     /// `--locale` and `--accept-languages` arguments.
     static func cefBrowserLocale(
         shownLocalization: String? = L10n.shownLocalization,
-        preferredLanguages: [String] = Locale.preferredLanguages
+        preferredLanguages: [String] = Locale.preferredLanguages,
+        bundledLocalizations: [String] = L10n.bundledLocalizations
     ) -> (locale: String, acceptLanguages: String) {
         let code = (shownLocalization ?? preferredLanguages.first ?? "en").lowercased()
+        let bundled = Set(bundledLocalizations.map { $0.lowercased() })
         if code.hasPrefix("ko") {
             return ("ko", "ko-KR,ko,en-US,en")
         }
@@ -299,7 +305,8 @@ enum L10n {
         if code.hasPrefix("zh-hans") || code == "zh-cn" || code == "zh-sg" || code == "zh" {
             return ("zh-CN", "zh-CN,zh,en-US,en")
         }
-        if code.hasPrefix("zh-hant") || code == "zh-tw" || code == "zh-hk" || code == "zh-mo" {
+        if (code.hasPrefix("zh-hant") || code == "zh-tw" || code == "zh-hk" || code == "zh-mo"),
+           bundled.contains("zh-hant") {
             return ("zh-TW", "zh-TW,zh,en-US,en")
         }
         return ("en-US", "en-US,en")

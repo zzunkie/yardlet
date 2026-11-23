@@ -2258,8 +2258,8 @@
 "%@ free on disk" = "磁盘可用空间 %@";
 "Memory is low" = "内存不足";
 "The Mac is slowing down to cool" = "Mac 正在降速散热";
-"Quitting pauses these tasks. They continue where they left off when Yardlet opens again:\n%@" = "退出将暂停以下任务。重新打开 Yardlet 时，它们会从中断处继续：\\n%@";
-"These continue where they left off when Yardlet opens again:\n%@" = "重新打开 Yardlet 时，以下任务会从中断处继续：\\n%@";
+"Quitting pauses these tasks. They continue where they left off when Yardlet opens again:\n%@" = "退出将暂停以下任务。重新打开 Yardlet 时，它们会从中断处继续：\n%@";
+"These continue where they left off when Yardlet opens again:\n%@" = "重新打开 Yardlet 时，以下任务会从中断处继续：\n%@";
 "Quit and continue later" = "退出并稍后继续";
 "Restart When Tasks Finish" = "任务完成后重启";
 "Tasks are still running. Yardlet can wait until they finish, then install and restart on its own." = "仍有任务正在运行。Yardlet 可以等待任务完成后自动安装更新并重启。";

@@ -555,6 +555,10 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(L10n.preferredLocalization(from: shipped, forWindowsLanguages: ["zh-Hans-CN", "en-US"]), "zh-Hans")
         XCTAssertEqual(L10n.preferredLocalization(from: shipped, forWindowsLanguages: ["zh-CN", "en-US"]), "zh-Hans")
         XCTAssertEqual(L10n.preferredLocalization(from: shipped, forWindowsLanguages: ["zh-SG", "en-US"]), "zh-Hans")
+        XCTAssertEqual(
+            L10n.preferredLocalization(from: shipped + ["zh-Hant"], forWindowsLanguages: ["zh-Hans-HK", "en-US"]),
+            "zh-Hans"
+        )
         XCTAssertEqual(L10n.preferredLocalization(from: shipped, forWindowsLanguages: ["fr-FR", "en-US"]), "en")
 
         // CEF browser locale maps each shipped localization to Chromium's expected locale code.
