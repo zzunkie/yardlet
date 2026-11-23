@@ -4216,3 +4216,5 @@
 "Use saved sign-in" = "使用已保存的登录信息";
 "Finish signing in in your browser…" = "请在浏览器中完成登录…";
 "Leave blank to keep the saved token header." = "留空以保留已保存的令牌请求头。";
+"MCP Code Mode (experimental)" = "MCP 代码模式（实验性）";
+"Replaces flat connector tool schemas with search_yardlet_tools and a sandboxed JavaScript run_yardlet_script tool to reduce token usage." = "用 search_yardlet_tools 和沙盒 JavaScript 工具 run_yardlet_script 替代平铺的连接器工具模式，以减少令牌消耗。";

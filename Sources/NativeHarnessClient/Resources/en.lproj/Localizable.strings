@@ -4415,3 +4415,5 @@
 "Use saved sign-in" = "Use saved sign-in";
 "Finish signing in in your browser…" = "Finish signing in in your browser…";
 "Leave blank to keep the saved token header." = "Leave blank to keep the saved token header.";
+"MCP Code Mode (experimental)" = "MCP Code Mode (experimental)";
+"Replaces flat connector tool schemas with search_yardlet_tools and a sandboxed JavaScript run_yardlet_script tool to reduce token usage." = "Replaces flat connector tool schemas with search_yardlet_tools and a sandboxed JavaScript run_yardlet_script tool to reduce token usage.";
