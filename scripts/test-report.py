@@ -70,6 +70,7 @@ def main():
         if not block:
             if not MANIFEST.match(line):
                 sys.stdout.write(line)
+                sys.stdout.flush()
             continue
         start = CASE_START.match(line)
         if start:
