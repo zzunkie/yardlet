@@ -32,6 +32,24 @@ struct ConversationLiveWorkLine<Cell: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            if !isOpen, let completedSummary = live.completedSummary, !live.items.isEmpty {
+                Button {
+                    isOpen = true
+                    onToggle(true)
+                } label: {
+                    Text(completedSummary)
+                        .font(.system(size: ConversationStatusLineFont.size * interfaceScale))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: .infinity, minHeight: 24 * interfaceScale, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .parityPointer()
+                .accessibilityLabel(completedSummary)
+                .accessibilityValue(L10n.string("Collapsed"))
+            }
             if live.items.isEmpty {
                 label(isOpen: false)
             } else {
@@ -50,6 +68,9 @@ struct ConversationLiveWorkLine<Cell: View>: View {
                         ConversationToolImageThumbnails(images: live.items.flatMap(\.toolPreviewImages))
                     }
                 }
+            }
+            if !isOpen, let preview = live.thinkingPreview {
+                LiveThinkingPreview(preview: preview)
             }
             if isOpen, !live.items.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {
@@ -130,6 +151,42 @@ struct ConversationLiveWorkLine<Cell: View>: View {
                 .font(.system(size: 11 * interfaceScale))
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
+        }
+    }
+}
+
+/// Compact muted preview of the active streaming thought under the folded live line. Reads
+/// `ConversationStreamedText` directly so streaming thought chunks update only this excerpt
+/// without redrawing the rest of the turn.
+private struct LiveThinkingPreview: View {
+    let preview: ConversationLiveWork.ThinkingPreview
+
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @Environment(\.conversationStreamedText) private var streamedText
+
+    private var excerpt: String? {
+        let text = streamedText?.message(for: preview.itemID)?.text ?? preview.text
+        return ConversationLiveWork.thinkingExcerpt(from: text)
+    }
+
+    var body: some View {
+        if let excerpt {
+            HStack(alignment: .top, spacing: ParitySpace.s8) {
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(ParityTheme.separator)
+                    .frame(width: 2)
+                Text(verbatim: excerpt)
+                    .font(.parity(.caption, scale: interfaceScale))
+                    .foregroundStyle(.secondary)
+                    .lineSpacing(ParityTheme.proseLineSpacing * interfaceScale)
+                    .lineLimit(3)
+                    .truncationMode(.head)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.leading, 6 * interfaceScale)
+            .accessibilityElement(children: .combine)
         }
     }
 }

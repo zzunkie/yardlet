@@ -447,8 +447,8 @@ final class ConversationSelectionTests: XCTestCase {
         host.settle(passes: 6)
         XCTAssertTrue(ConversationSelection.spans(answer))
         XCTAssertEqual(Self.painted(answer), NSRange(location: 0, length: 13))
-        // The streaming text reads as the turn's working notes until it ends.
-        XCTAssertEqual(try copied(from: answer), "Question one\n\n\(L10n.string("Commentary"))\n\nAnswer one is")
+        // A trailing streaming assistant message omits the "Commentary" label so a final answer does not flicker.
+        XCTAssertEqual(try copied(from: answer), "Question one\n\nAnswer one is")
 
         let scroll = try XCTUnwrap(answer.enclosingScrollView)
         scroll.contentView.scroll(to: NSPoint(x: 0, y: 40))

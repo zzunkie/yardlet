@@ -120,4 +120,61 @@ final class RunningTurnRenderingTests: XCTestCase {
         XCTAssertNil(ConversationLiveWork.make(turn, harness: .codex, workspaceURL: nil), "No live line after the turn")
         XCTAssertEqual(ConversationLiveWork.detail(steps: 1, elapsed: "12s"), L10n.string("1 step") + " · 12s")
     }
+
+    func testLiveThinkingPreviewAndCompletedSummaryAcrossMultiStepRun() throws {
+        // Excerpt extraction: short text, tail tracking past maxLines, and long single-line tail clipping.
+        XCTAssertNil(ConversationLiveWork.thinkingExcerpt(from: "   \n\n  "))
+        XCTAssertEqual(ConversationLiveWork.thinkingExcerpt(from: "Checking Parser.swift"), "Checking Parser.swift")
+        let multiLine = "Line 1\n\nLine 2\nLine 3\nLine 4\nLine 5"
+        XCTAssertEqual(ConversationLiveWork.thinkingExcerpt(from: multiLine), "Line 3\nLine 4\nLine 5")
+        let longLine = (1...60).map { "token\($0)" }.joined(separator: " ")
+        let clipped = try XCTUnwrap(ConversationLiveWork.thinkingExcerpt(from: longLine, maxLines: 3, maxCharacters: 80))
+        XCTAssertTrue(clipped.hasPrefix("…"), clipped)
+        XCTAssertTrue(clipped.hasSuffix("token60"), clipped)
+        XCTAssertLessThanOrEqual(clipped.count, 81)
+
+        // Wide Korean single-line thought stays tightly bounded so 3-line wrapping keeps the tail visible.
+        let koreanLong = String(repeating: "파서 상태를 확인하면서 스트리밍 출력을 검토하고 있습니다. ", count: 8) + "마지막 단계입니다."
+        let koreanExcerpt = try XCTUnwrap(ConversationLiveWork.thinkingExcerpt(from: koreanLong))
+        XCTAssertTrue(koreanExcerpt.hasPrefix("…"), koreanExcerpt)
+        XCTAssertTrue(koreanExcerpt.hasSuffix("마지막 단계입니다."), koreanExcerpt)
+        XCTAssertLessThanOrEqual(koreanExcerpt.count, 105)
+
+        // Bounded O(1) tail scan on a very large thought string.
+        let hugeThought = String(repeating: "Earlier reasoning paragraph that must not be scanned.\n", count: 4_000)
+            + "Final line A\nFinal line B\nFinal line C"
+        XCTAssertEqual(ConversationLiveWork.thinkingExcerpt(from: hugeThought),
+                       "Final line A\nFinal line B\nFinal line C")
+
+        // Antigravity-style multi-step run with no intermediate commentary: completed calls stay
+        // summarized above the live line while a new thought streams with a compact preview below it.
+        let entries: [TranscriptEntry] = [
+            TranscriptEntry(createdAt: Self.start, content: .user(text: "Fix the parser")),
+            TranscriptEntry(createdAt: Self.start.addingTimeInterval(1),
+                            content: .reasoning(text: "First inspect the parser.", isStreaming: false)),
+            TranscriptEntry(createdAt: Self.start.addingTimeInterval(2),
+                            content: .activity(Self.tool("r1", "Read", "Read", detail: "Parser.swift"), state: .completed)),
+            TranscriptEntry(createdAt: Self.start.addingTimeInterval(4),
+                            content: .activity(Self.tool("e1", "Edit", "Edit", detail: "Parser.swift"), state: .completed)),
+            TranscriptEntry(createdAt: Self.start.addingTimeInterval(6),
+                            content: .reasoning(text: "Line 1\nLine 2\nLine 3\nNow checking the test suite.", isStreaming: true))
+        ]
+        let turn = try XCTUnwrap(TranscriptConversationProjection.presentation(
+            from: entries, harness: .claudeCode, status: .running, latestTurnIsComplete: false
+        ).turns.first)
+        let live = try XCTUnwrap(ConversationLiveWork.make(turn, harness: .claudeCode, workspaceURL: nil))
+        XCTAssertEqual(live.activity, .thinking)
+        XCTAssertEqual(live.steps, 2)
+        XCTAssertEqual(live.completedSummary,
+                       ConversationWorkSummary.title(for: Array(turn.work[1...2]), harness: .claudeCode))
+        XCTAssertEqual(live.thinkingPreview?.itemID, entries.last?.id.uuidString)
+        XCTAssertEqual(live.thinkingPreview.flatMap { ConversationLiveWork.thinkingExcerpt(from: $0.text) },
+                       "Line 2\nLine 3\nNow checking the test suite.")
+
+        let drawing = try ConversationDrawing.draw(timeline(entries), size: Self.size, appearance: .light)
+        let texts = drawing.elements.map { [$0.label, $0.value].joined(separator: " ") }.joined(separator: "\n")
+        XCTAssertTrue(texts.contains(try XCTUnwrap(live.completedSummary)), texts)
+        XCTAssertTrue(texts.contains("Now checking the test suite."), texts)
+        XCTAssertFalse(texts.contains("Line 1"), "Only the tail excerpt shows in the compact preview:\n\(texts)")
+    }
 }

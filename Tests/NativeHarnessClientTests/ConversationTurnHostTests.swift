@@ -79,6 +79,30 @@ final class ConversationTurnHostTests: XCTestCase {
         XCTAssertTrue(texts.contains { $0.string == text }, "The running message reads its latest words")
     }
 
+    func testAReasoningFragmentUpdatesTheLiveThinkingPreviewWithoutRedrawingTheTurn() {
+        var entries = LongConversationFixture.claude(turns: 4)
+        entries.append(TranscriptEntry(content: .user(text: "Trace the parser")))
+        entries.append(TranscriptEntry(content: .activity(
+            HarnessActivity(id: "r1", kind: "Read", title: "Read", detail: "Parser.swift"), state: .completed)))
+        entries.append(TranscriptEntry(content: .activity(
+            HarnessActivity(id: "r2", kind: "Read", title: "Read", detail: "Lexer.swift"), state: .completed)))
+        let thought = TranscriptEntry(content: .reasoning(text: "Step 0", isStreaming: true))
+        entries.append(thought)
+        let feed = Feed(entries)
+        let host = mount(feed)
+        var text = "Step 0"
+        for fragment in 1...20 {
+            text += "\nStep \(fragment)"
+            feed.entries[feed.entries.count - 1] = TranscriptEntry(
+                id: thought.id, createdAt: thought.createdAt, content: .reasoning(text: text, isStreaming: true))
+            host.settle(passes: 1, interval: 0.005)
+        }
+        XCTAssertEqual(ViewBodyCensus[.conversationTurn], 0, "A streaming thought chunk drew a turn whole")
+        XCTAssertEqual(ViewBodyCensus[.conversationTurnHosting], 0)
+        let elements = host.accessibilityElements().map { [$0.label, $0.value].joined(separator: " ") }.joined(separator: "\n")
+        XCTAssertTrue(elements.contains("Step 20"), "The live thinking preview shows the latest chunk:\n\(elements)")
+    }
+
     @Observable
     final class CodexFeed {
         var state: CodexTaskState

@@ -111,6 +111,50 @@ final class TranscriptConversationProjectionTests: XCTestCase {
         XCTAssertFalse(turn.foldsWork)
     }
 
+    func testTrailingStreamingAssistantSuppressesCommentaryLabelUntilFollowedByWork() {
+        let request = entry(0, .user(text: "Explain the fix"))
+        let earlier = entry(1, .assistant(text: "Checking the files.", isStreaming: false))
+        let read = entry(2, .activity(HarnessActivity(id: "r1", kind: "Read", title: "Read", detail: "Parser.swift"),
+                                      state: .completed))
+        let streaming = entry(3, .assistant(text: "The parser now handles", isStreaming: true))
+
+        let running = project([request, earlier, read, streaming], status: .running).turns[0]
+        XCTAssertFalse(running.foldsWork)
+        XCTAssertEqual(running.answers, [])
+        XCTAssertFalse(running.work[0].hidesCommentaryLabel, "Earlier commentary before a call keeps its label")
+        XCTAssertTrue(running.work[2].hidesCommentaryLabel, "Trailing streaming assistant suppresses Commentary flicker")
+
+        // Trailing reasoning after the streaming assistant still leaves it the tail message.
+        let trailingThought = entry(4, .reasoning(text: "Double checking", isStreaming: false))
+        let withThought = project([request, earlier, read, streaming, trailingThought], status: .running).turns[0]
+        XCTAssertTrue(withThought.work[2].hidesCommentaryLabel)
+
+        // A progress update sent as thinking stays labeled as summarized commentary.
+        var summary = entry(3, .reasoning(text: "Summarizing progress", isStreaming: true))
+        summary.isProgressUpdate = true
+        let withSummary = project([request, summary], status: .running).turns[0]
+        XCTAssertFalse(withSummary.work[0].hidesCommentaryLabel)
+        XCTAssertTrue(withSummary.work[0].isSummary)
+
+        // Once a subsequent tool call arrives after the message, it becomes normal commentary again.
+        let settled = entry(3, .assistant(text: "The parser now handles", isStreaming: false))
+        let followUp = entry(4, .activity(HarnessActivity(id: "c2", kind: "Bash", title: "swift test"), state: .running))
+        let afterCall = project([request, earlier, read, settled, followUp], status: .running).turns[0]
+        XCTAssertFalse(afterCall.work[2].hidesCommentaryLabel)
+
+        // A stopped or cut-off turn does not treat a leftover streaming entry as actively streaming.
+        let cutOff = TranscriptConversationProjection.presentation(
+            from: [request, earlier, read, streaming], harness: .claudeCode, status: .ready,
+            latestTurnIsComplete: false, latestTurnWasCutOff: true
+        ).turns[0]
+        XCTAssertFalse(cutOff.work[2].hidesCommentaryLabel)
+
+        // Once the turn finishes with the streaming message, it becomes the closing answer.
+        let done = project([request, earlier, read, settled], status: .ready, latestTurnIsComplete: true).turns[0]
+        XCTAssertEqual(done.answers.map(\.id), [settled.id.uuidString])
+        XCTAssertTrue(done.foldsWork)
+    }
+
     func testAllowedRequestBecomesTheMarkOnItsToolOrSubtask() {
         let request = entry(0, .user(text: "Go"))
         let call = entry(1, .activity(HarnessActivity(

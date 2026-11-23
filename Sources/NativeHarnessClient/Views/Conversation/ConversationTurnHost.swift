@@ -234,44 +234,73 @@ extension ConversationTurn {
         return (new.id, ConversationStreamedText.Message(text: text, copyDetails: new.copyDetails))
     }
 
-    /// The text of a message being written: a transcript entry's, or a Codex agent message's as the
-    /// conversation shows it.
+    /// The text of a message or thought being written: a transcript entry's, or a Codex agent
+    /// message or reasoning item's as the conversation shows it.
     private static func streamingText(of item: ConversationItem) -> String? {
-        let text: String
         switch item.kind {
-        case let .answer(words, true), let .commentary(words, true): text = words
-        default: return nil
+        case let .answer(words, true), let .commentary(words, true):
+            switch item.source {
+            case let .transcript(entry):
+                guard case let .assistant(entryText, true) = entry.content, entryText == words else { return nil }
+            case let .codex(codexItem, _):
+                guard case .agentMessage = codexItem.content else { return nil }
+            }
+            return words
+        case let .reasoning(summary, detail, true):
+            switch item.source {
+            case let .transcript(entry):
+                guard case let .reasoning(entryText, true) = entry.content,
+                      summary == nil, detail == entryText else { return nil }
+            case let .codex(codexItem, _):
+                guard case .reasoning = codexItem.content else { return nil }
+            }
+            return ConversationLiveWork.thoughtText(of: item) ?? ""
+        default:
+            return nil
         }
-        switch item.source {
-        case let .transcript(entry):
-            guard case let .assistant(entryText, true) = entry.content, entryText == text else { return nil }
-        case let .codex(codexItem, _):
-            guard case .agentMessage = codexItem.content else { return nil }
-        }
-        return text
     }
 
-    /// `item` with the text `earlier`, the same message before, had: the text shown, its record's,
-    /// and for Codex what its details copy, which are made from the record.
+    /// `item` with the text `earlier`, the same message or thought before, had: the text shown,
+    /// its record's, and for Codex what its details copy, which are made from the record.
     private static func item(_ item: ConversationItem, withTextOf earlier: ConversationItem) -> ConversationItem {
         guard let text = streamingText(of: earlier) else { return item }
         var item = item
-        switch item.kind {
-        case .answer: item.kind = .answer(text: text, isStreaming: true)
-        case .commentary: item.kind = .commentary(text: text, isStreaming: true)
-        default: break
+        switch (item.kind, earlier.kind) {
+        case (.answer, .answer):
+            item.kind = .answer(text: text, isStreaming: true)
+        case (.commentary, .commentary):
+            item.kind = .commentary(text: text, isStreaming: true)
+        case (.reasoning, let .reasoning(summary, detail, true)):
+            item.kind = .reasoning(summary: summary, detail: detail, isStreaming: true)
+        default:
+            break
         }
         switch (item.source, earlier.source) {
-        case (.transcript(var entry), .transcript):
-            entry.content = .assistant(text: text, isStreaming: true)
-            item.source = .transcript(entry)
+        case (.transcript(var entry), .transcript(let earlierEntry)):
+            switch (entry.content, earlierEntry.content) {
+            case (.assistant(_, true), .assistant(let earlierText, true)):
+                entry.content = .assistant(text: earlierText, isStreaming: true)
+                item.source = .transcript(entry)
+            case (.reasoning(_, true), .reasoning(let earlierText, true)):
+                entry.content = .reasoning(text: earlierText, isStreaming: true)
+                item.source = .transcript(entry)
+            default:
+                break
+            }
         case (.codex(var codexItem, let turnID), .codex(let earlierItem, _)):
-            guard case var .agentMessage(message) = codexItem.content,
-                  case let .agentMessage(earlierMessage) = earlierItem.content else { break }
-            message.text = earlierMessage.text
-            codexItem.content = .agentMessage(message)
-            item.source = .codex(codexItem, turnID: turnID)
-            item.copyDetails = earlier.copyDetails
+            switch (codexItem.content, earlierItem.content) {
+            case (var .agentMessage(message), let .agentMessage(earlierMessage)):
+                message.text = earlierMessage.text
+                codexItem.content = .agentMessage(message)
+                item.source = .codex(codexItem, turnID: turnID)
+                item.copyDetails = earlier.copyDetails
+            case (.reasoning, let .reasoning(earlierSummary, earlierContent)):
+                codexItem.content = .reasoning(summary: earlierSummary, content: earlierContent)
+                item.source = .codex(codexItem, turnID: turnID)
+                item.copyDetails = earlier.copyDetails
+            default:
+                break
+            }
         default:
             break
         }

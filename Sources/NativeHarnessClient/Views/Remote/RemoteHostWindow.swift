@@ -386,7 +386,7 @@ struct RemoteHostView: View {
             } : nil,
             canArchiveRemoteProject: model.taskActions,
             remoteProjectMoveOptions: model.projectMoveOptions,
-            footer: AnyView(RemoteHostFooter(model: model, directory: directory)),
+            footer: AnyView(RemoteHostFooter(model: model, directory: directory, onShowArchivedTasks: showArchivedTasks)),
             disclosure: shell.disclosure,
             activity: activeSection == .tasks ? activity(mirror) : nil,
             onPointerOverList: { isOver in
@@ -642,8 +642,17 @@ struct RemoteHostView: View {
 
     private func showSchedules() {
         shell.section = .tasks
+        model.showsArchive = false
         model.showsSchedules = true
         model.schedules.load()
+    }
+
+    func showArchivedTasks() {
+        guard model.taskActions else { return }
+        shell.section = .tasks
+        model.showsSchedules = false
+        shell.isSidebarVisible = true
+        model.showsArchive = true
     }
 
     /// Opens or closes the shown task's side panel or terminal, as its title bar's buttons do.
@@ -656,16 +665,17 @@ struct RemoteHostView: View {
         withAnimation(ParityMotion.easeInOut(reduceMotion: reduceMotion)) { shell.isSidebarVisible.toggle() }
     }
 
-    /// Whether the sidebar shows the activity view: the scheduled tasks, Mail and Calendar show in its place while it stays on.
+    /// Whether the sidebar shows the activity view: the scheduled tasks, archive, Mail and Calendar show in its place while it stays on.
     private var isActivityShown: Bool {
-        shell.isSidebarVisible && shell.isShowingActivity && !model.showsSchedules && !showsMail && !showsCalendar
+        shell.isSidebarVisible && shell.isShowingActivity && !model.showsSchedules && !model.showsArchive && !showsMail && !showsCalendar
     }
 
     /// Turns the activity view on, keeping where its tasks are listed while it stays on, or off while it shows.
-    /// Over the scheduled tasks, Mail, Calendar, or with the sidebar hidden, it shows it.
+    /// Over the scheduled tasks, archive, Mail, Calendar, or with the sidebar hidden, it shows it.
     private func toggleActivity() {
         let wasShown = isActivityShown
         model.showsSchedules = false
+        model.showsArchive = false
         withAnimation(ParityMotion.easeInOut(reduceMotion: reduceMotion)) {
             if wasShown {
                 shell.isShowingActivity = false
@@ -723,7 +733,7 @@ struct RemoteHostView: View {
             }
         }
         commands.markUnread = { id in model.send(.taskAction(taskID: id.uuidString, action: .init(.markUnread))) }
-        commands.showArchivedTasks = model.taskActions ? { model.showsArchive = true } : nil
+        commands.showArchivedTasks = model.taskActions ? { showArchivedTasks() } : nil
         if model.newTask != nil { commands.newTask = { showNewTask() } }
         return commands
     }
@@ -927,6 +937,7 @@ struct RemoteConnectionBanner: View {
 struct RemoteHostFooter: View {
     let model: RemoteHostModel
     let directory: RemoteHostDirectory
+    var onShowArchivedTasks: (() -> Void)? = nil
     @State private var isHovering = false
     @State private var confirmsRemoval = false
     @Environment(\.openWindow) private var openWindow
@@ -941,7 +952,9 @@ struct RemoteHostFooter: View {
                 Button(L10n.string("Settings…")) { model.openSettings() }
             }
             Button(L10n.string("Connect to Mac…")) { openWindow(id: RemoteConnectWindow.sceneID) }
-            Button(L10n.string("Archived tasks")) { model.showsArchive = true }.disabled(!model.taskActions)
+            Button(L10n.string("Archived tasks")) {
+                if let onShowArchivedTasks { onShowArchivedTasks() } else { model.showsArchive = true }
+            }.disabled(!model.taskActions)
             Divider()
             Button(L10n.string("Remove from This Mac"), role: .destructive) { confirmsRemoval = true }
         } label: {

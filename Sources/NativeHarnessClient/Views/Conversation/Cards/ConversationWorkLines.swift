@@ -370,15 +370,23 @@ struct ConversationWorkLine: View, Equatable {
             ) {
                 EmptyView()
             } actions: {
-                ConversationCopyDetailsButton(details: item.copyDetails)
+                if isStreaming {
+                    StreamingCopyDetailsButton(itemID: item.id, fallbackDetails: item.copyDetails)
+                } else {
+                    ConversationCopyDetailsButton(details: item.copyDetails)
+                }
             } detail: {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(Array(texts.enumerated()), id: \.offset) { _, text in
-                        Text(text)
-                            .font(.system(size: 12 * interfaceScale))
-                            .foregroundStyle(.secondary)
-                            .lineSpacing(ParityTheme.proseLineSpacing * interfaceScale)
-                            .textSelection(.enabled)
+                if isStreaming {
+                    StreamingThoughtDetail(itemID: item.id, fallbackTexts: texts)
+                } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(Array(texts.enumerated()), id: \.offset) { _, text in
+                            Text(text)
+                                .font(.system(size: 12 * interfaceScale))
+                                .foregroundStyle(.secondary)
+                                .lineSpacing(ParityTheme.proseLineSpacing * interfaceScale)
+                                .textSelection(.enabled)
+                        }
                     }
                 }
             }
@@ -607,6 +615,48 @@ struct ConversationWorkLine: View, Equatable {
                         .accessibilityLabel(L10n.string("Loading"))
                 }
             }
+    }
+}
+
+/// Copy-details button for a streaming thought line, reading `ConversationStreamedText` so
+/// streamed Codex item details stay current without making non-streaming rows observe the stream.
+private struct StreamingCopyDetailsButton: View {
+    let itemID: String
+    let fallbackDetails: String?
+
+    @Environment(\.conversationStreamedText) private var streamedText
+
+    var body: some View {
+        ConversationCopyDetailsButton(details: streamedText?.message(for: itemID)?.copyDetails ?? fallbackDetails)
+    }
+}
+
+/// Streaming detail of an expanded `Thought process` line, reading `ConversationStreamedText` so
+/// incremental thought chunks update in place without redrawing the turn.
+private struct StreamingThoughtDetail: View {
+    let itemID: String
+    let fallbackTexts: [String]
+
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @Environment(\.conversationStreamedText) private var streamedText
+
+    private var shownTexts: [String] {
+        if let streamed = streamedText?.message(for: itemID)?.text, !streamed.isEmpty {
+            return [streamed]
+        }
+        return fallbackTexts
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(Array(shownTexts.enumerated()), id: \.offset) { _, text in
+                Text(text)
+                    .font(.system(size: 12 * interfaceScale))
+                    .foregroundStyle(.secondary)
+                    .lineSpacing(ParityTheme.proseLineSpacing * interfaceScale)
+                    .textSelection(.enabled)
+            }
+        }
     }
 }
 
