@@ -392,17 +392,27 @@ final class HostSession: Identifiable {
 
     // MARK: - Host Settings & Accounts (§15.36, §15.37)
 
-    func watchHostSettings() async {
+    func beginWatchingHostSettings() {
         watchingHostSettingsCount += 1
-        _ = await fetchHostSettings(watching: true)
+        if isConnected, capabilities.hostSettings {
+            Task { _ = await fetchHostSettings(watching: true) }
+        }
     }
 
-    func unwatchHostSettings() {
+    func endWatchingHostSettings() {
         guard watchingHostSettingsCount > 0 else { return }
         watchingHostSettingsCount -= 1
         if watchingHostSettingsCount == 0, capabilities.hostSettings, isConnected {
             request(.hostSettings(watching: false))
         }
+    }
+
+    func watchHostSettings() async {
+        beginWatchingHostSettings()
+    }
+
+    func unwatchHostSettings() {
+        endWatchingHostSettings()
     }
 
     @discardableResult
@@ -469,17 +479,27 @@ final class HostSession: Identifiable {
         return false
     }
 
-    func watchHostAccounts() async {
+    func beginWatchingHostAccounts() {
         watchingHostAccountsCount += 1
-        _ = await fetchHostAccounts(watching: true)
+        if isConnected, capabilities.hostAccounts {
+            Task { _ = await fetchHostAccounts(watching: true) }
+        }
     }
 
-    func unwatchHostAccounts() {
+    func endWatchingHostAccounts() {
         guard watchingHostAccountsCount > 0 else { return }
         watchingHostAccountsCount -= 1
         if watchingHostAccountsCount == 0, capabilities.hostAccounts, isConnected {
             request(.hostAccounts(watching: false))
         }
+    }
+
+    func watchHostAccounts() async {
+        beginWatchingHostAccounts()
+    }
+
+    func unwatchHostAccounts() {
+        endWatchingHostAccounts()
     }
 
     @discardableResult

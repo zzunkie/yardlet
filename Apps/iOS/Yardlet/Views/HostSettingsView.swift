@@ -8,9 +8,35 @@ struct HostSettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var isRefreshing = false
+    @State private var isWatching = false
     @State private var showsInstructionsEditor = false
-    @State private var pendingSettingConfirmation: SettingConfirmation?
-    @State private var pendingCLIAction: CLIActionConfirmation?
+    @State private var activeAlert: ActiveAlert?
+
+    private enum ActiveAlert: Identifiable {
+        case setting(SettingConfirmation)
+        case cliUpdate(CLIActionConfirmation)
+
+        var id: String {
+            switch self {
+            case let .setting(confirmation): "setting:\(confirmation.id)"
+            case let .cliUpdate(action): "cli:\(action.id.uuidString)"
+            }
+        }
+
+        var title: String {
+            switch self {
+            case let .setting(confirmation): confirmation.title
+            case let .cliUpdate(action): action.title
+            }
+        }
+
+        var message: String {
+            switch self {
+            case let .setting(confirmation): confirmation.message
+            case let .cliUpdate(action): action.message
+            }
+        }
+    }
 
     private struct SettingConfirmation: Identifiable {
         let id: String
@@ -123,59 +149,48 @@ struct HostSettingsView: View {
                 }
             }
             .alert(
-                pendingSettingConfirmation?.title ?? "",
+                activeAlert?.title ?? "",
                 isPresented: Binding(
-                    get: { pendingSettingConfirmation != nil },
-                    set: { if !$0 { pendingSettingConfirmation = nil } }
+                    get: { activeAlert != nil },
+                    set: { if !$0 { activeAlert = nil } }
                 ),
-                presenting: pendingSettingConfirmation
-            ) { confirmation in
-                Button("Confirm") {
-                    Task {
-                        _ = await session.setHostSetting(
-                            id: confirmation.id,
-                            value: confirmation.targetValue,
-                            confirmed: true
-                        )
+                presenting: activeAlert
+            ) { alert in
+                switch alert {
+                case let .setting(confirmation):
+                    Button("Confirm") {
+                        Task {
+                            _ = await session.setHostSetting(
+                                id: confirmation.id,
+                                value: confirmation.targetValue,
+                                confirmed: true
+                            )
+                        }
                     }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: { confirmation in
-                Text(confirmation.message)
-            }
-            .alert(
-                pendingCLIAction?.title ?? "",
-                isPresented: Binding(
-                    get: { pendingCLIAction != nil },
-                    set: { if !$0 { pendingCLIAction = nil } }
-                ),
-                presenting: pendingCLIAction
-            ) { action in
-                Button(action.confirmLabel) {
-                    Task {
-                        _ = await session.runHostCLIUpdate(action: action.action, harness: action.harness)
+                    Button("Cancel", role: .cancel) {}
+                case let .cliUpdate(action):
+                    Button(action.confirmLabel) {
+                        Task {
+                            _ = await session.runHostCLIUpdate(action: action.action, harness: action.harness)
+                        }
                     }
+                    Button("Cancel", role: .cancel) {}
                 }
-                Button("Cancel", role: .cancel) {}
-            } message: { action in
-                Text(action.message)
+            } message: { alert in
+                Text(alert.message)
             }
         }
-        .task {
-            if session.capabilities.hostSettings {
-                await session.watchHostSettings()
-            }
-            if session.capabilities.hostAccounts {
-                await session.watchHostAccounts()
-            }
-        }
-        .onChange(of: session.isConnected) { _, connected in
-            guard connected else { return }
-            Task { await refreshAll() }
+        .onAppear {
+            guard !isWatching else { return }
+            isWatching = true
+            session.beginWatchingHostSettings()
+            session.beginWatchingHostAccounts()
         }
         .onDisappear {
-            session.unwatchHostSettings()
-            session.unwatchHostAccounts()
+            guard isWatching else { return }
+            isWatching = false
+            session.endWatchingHostSettings()
+            session.endWatchingHostAccounts()
         }
     }
 
@@ -634,14 +649,14 @@ struct HostSettingsView: View {
                 isOn: Binding(
                     get: { value == "on" },
                     set: { isOn in
-                        pendingSettingConfirmation = SettingConfirmation(
+                        activeAlert = .setting(SettingConfirmation(
                             id: "keep_screen_unlocked",
                             title: String(localized: "Keep screen unlocked while tasks work"),
                             message: isOn
                                 ? String(localized: "Prevent \(session.name)'s display from sleeping and locking while tasks are running?")
                                 : String(localized: "Allow \(session.name)'s display to sleep normally while tasks run?"),
                             targetValue: isOn ? "on" : "off"
-                        )
+                        ))
                     }
                 ),
                 disabled: !isWritable
@@ -733,14 +748,14 @@ struct HostSettingsView: View {
                         isOn: Binding(
                             get: { enabledValue == "on" },
                             set: { isOn in
-                                pendingSettingConfirmation = SettingConfirmation(
+                                activeAlert = .setting(SettingConfirmation(
                                     id: "yardlet_instructions",
                                     title: String(localized: "Use Yardlet instructions"),
                                     message: isOn
                                         ? String(localized: "Enable Yardlet instructions for tasks on \(session.name)?")
                                         : String(localized: "Disable Yardlet instructions on \(session.name)?"),
                                     targetValue: isOn ? "on" : "off"
-                                )
+                                ))
                             }
                         ),
                         disabled: !isWritable
@@ -924,13 +939,13 @@ struct HostSettingsView: View {
             message = String(localized: "Check for and apply available \(row.title) CLI updates on \(session.name)?")
         }
 
-        pendingCLIAction = CLIActionConfirmation(
+        activeAlert = .cliUpdate(CLIActionConfirmation(
             action: action,
             harness: row.harness,
             title: String(localized: "Update \(row.title)?"),
             message: message,
             confirmLabel: String(localized: "Update")
-        )
+        ))
     }
 
     // MARK: - Helpers

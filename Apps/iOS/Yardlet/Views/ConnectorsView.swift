@@ -10,9 +10,13 @@ struct ConnectorsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var setupController: ConnectorSetupController
     @State private var isRefreshing = false
+    @State private var isWatchingAccounts = false
     @State private var activeSheet: ActiveSheet?
+    @State private var pendingDraft: RemoteConnectorDraft?
     @State private var pendingSafari: ConnectorSetupController.SignInSession?
+    @State private var presentedSafariID: String?
     @State private var copiedDeviceCode = false
+    @State private var copiedSafariDeviceCode = false
 
     private enum ActiveSheet: Identifiable, Equatable {
         case addConnector
@@ -111,14 +115,15 @@ struct ConnectorsView: View {
             switch sheet {
             case .addConnector:
                 AddConnectorSheet(hostName: session.name) { draft in
+                    pendingDraft = draft
                     activeSheet = nil
-                    setupController.start(draft: draft)
                 }
             case let .safari(signIn):
-                SafariSignInSheet(url: signIn.url) {
-                    setupController.userCancelledSafari()
-                }
-                .ignoresSafeArea()
+                safariSignInContainer(signIn)
+                    .onAppear {
+                        presentedSafariID = signIn.id
+                        copiedSafariDeviceCode = false
+                    }
             }
         }
         .alert(
@@ -149,31 +154,93 @@ struct ConnectorsView: View {
                     activeSheet = nil
                 }
             } else if case .safari = activeSheet {
+                presentedSafariID = nil
                 activeSheet = nil
             }
         }
-        .task {
-            if session.capabilities.hostAccounts {
-                await session.watchHostAccounts()
-            }
-        }
-        .onChange(of: session.isConnected) { _, connected in
-            guard connected, session.capabilities.hostAccounts else { return }
-            Task { _ = await session.fetchHostAccounts(watching: true) }
+        .onAppear {
+            guard !isWatchingAccounts else { return }
+            isWatchingAccounts = true
+            session.beginWatchingHostAccounts()
         }
         .onDisappear {
             setupController.cancel()
-            session.unwatchHostAccounts()
+            if isWatchingAccounts {
+                isWatchingAccounts = false
+                session.endWatchingHostAccounts()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func safariSignInContainer(_ signIn: ConnectorSetupController.SignInSession) -> some View {
+        if let code = signIn.deviceCode, !code.isEmpty {
+            VStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Verification code")
+                            .font(.caption)
+                            .foregroundStyle(YardletPalette.onSurfaceVariant)
+                        Text(verbatim: code)
+                            .font(.headline.monospaced().weight(.semibold))
+                            .foregroundStyle(YardletPalette.onSurface)
+                            .textSelection(.enabled)
+                    }
+                    Spacer(minLength: 8)
+                    Button(copiedSafariDeviceCode ? "Copied" : "Copy Code") {
+                        UIPasteboard.general.string = code
+                        copiedSafariDeviceCode = true
+                        Task {
+                            try? await Task.sleep(for: .seconds(2))
+                            copiedSafariDeviceCode = false
+                        }
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(YardletPalette.onPrimary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(YardletPalette.primary, in: Capsule())
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(YardletPalette.surfaceContainer)
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(YardletPalette.outlineVariant)
+                        .frame(height: 0.5)
+                }
+
+                SafariSignInSheet(url: signIn.url) {
+                    presentedSafariID = nil
+                    setupController.userCancelledSafari()
+                }
+                .ignoresSafeArea(edges: .bottom)
+            }
+            .background(YardletPalette.background)
+        } else {
+            SafariSignInSheet(url: signIn.url) {
+                presentedSafariID = nil
+                setupController.userCancelledSafari()
+            }
+            .ignoresSafeArea()
         }
     }
 
     private func handleSheetDismiss() {
+        let dismissedSafariID = presentedSafariID
+        presentedSafariID = nil
+
+        if let draft = pendingDraft {
+            pendingDraft = nil
+            setupController.start(draft: draft)
+            return
+        }
         if let next = pendingSafari {
             pendingSafari = nil
             activeSheet = .safari(next)
             return
         }
-        if setupController.activeSignIn != nil {
+        if let dismissedSafariID, setupController.activeSignIn?.id == dismissedSafariID {
             setupController.userCancelledSafari()
         }
     }
@@ -394,7 +461,7 @@ struct ConnectorsView: View {
     private func connectorRow(_ connector: RemoteConnectorInfo) -> some View {
         let isConnected = connector.status == "connected"
         let isOn = connector.enabled ?? true
-        let canToggle = isEditable && (isConnected || isOn)
+        let canToggle = isEditable && (isConnected || !isOn)
         let supportsRemoteReconnect = canSetUp && Self.supportsRemoteSignIn(connector)
 
         return VStack(alignment: .leading, spacing: 8) {
@@ -849,7 +916,7 @@ private struct AddConnectorSheet: View {
             Button {
                 let draft = RemoteConnectorDraft(
                     name: trimmed(customName),
-                    serverURL: trimmed(customURL),
+                    serverURL: normalizedCustomURL,
                     token: trimmed(customToken)
                 )
                 clearCredentials()
@@ -891,16 +958,20 @@ private struct AddConnectorSheet: View {
         return true
     }
 
-    private var isValidCustomURL: Bool {
+    private var normalizedCustomURL: String? {
         guard let raw = trimmed(customURL),
-              let components = URLComponents(string: raw),
+              var components = URLComponents(string: raw),
               let host = components.host, !host.isEmpty,
               components.user == nil, components.password == nil, components.fragment == nil,
-              components.scheme?.lowercased() == "https",
-              components.url != nil else {
-            return false
+              components.scheme?.lowercased() == "https" else {
+            return nil
         }
-        return true
+        components.scheme = "https"
+        return components.url?.absoluteString
+    }
+
+    private var isValidCustomURL: Bool {
+        normalizedCustomURL != nil
     }
 
     private func trimmed(_ text: String) -> String? {

@@ -755,7 +755,7 @@ struct NewTaskBar: View {
 // MARK: - Mac Sheet
 
 /// Bottom sheet opened from `MacHeaderBar`: Mac switcher + Add Mac, Scheduled Tasks,
-/// Host Settings / Connectors entry (Track B ready), Yardlet Account, and App Settings.
+/// Host Settings, Connectors, Yardlet Account, and App Settings.
 struct MacSheet: View {
     @Environment(PhoneModel.self) private var model
     @Environment(\.dismiss) private var dismiss

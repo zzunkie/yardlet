@@ -18,7 +18,13 @@ final class LoopbackOAuthServer: @unchecked Sendable {
         case backgroundExpired
     }
 
+    private struct TrackedConnection {
+        let connection: NWConnection
+        var timeout: DispatchWorkItem?
+    }
+
     static let callbackPath = "/callback"
+    private static let connectionTimeoutSeconds = 10
 
     let redirectURI: URL
     private let port: UInt16
@@ -28,6 +34,7 @@ final class LoopbackOAuthServer: @unchecked Sendable {
     private let lock = NSLock()
     private var outcome: Result<URL, Error>?
     private var waiters: [UUID: CheckedContinuation<URL, Error>] = [:]
+    private var activeConnections: [UUID: TrackedConnection] = [:]
     private var stopped = false
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
 
@@ -53,30 +60,45 @@ final class LoopbackOAuthServer: @unchecked Sendable {
         let listener = try NWListener(using: parameters)
         let queue = DispatchQueue(label: "app.yardlet.ios.connector-oauth")
 
-        let boundPort: UInt16 = try await withCheckedThrowingContinuation { continuation in
-            let once = OnceContinuation(continuation)
-            listener.stateUpdateHandler = { listenerState in
-                switch listenerState {
-                case .ready:
-                    if let actualPort = listener.port?.rawValue {
-                        once.resume(with: .success(actualPort))
-                    } else {
-                        once.resume(with: .failure(Failure.cannotBind))
+        let boundPort: UInt16 = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let once = OnceContinuation(continuation)
+                listener.stateUpdateHandler = { listenerState in
+                    switch listenerState {
+                    case .ready:
+                        if let actualPort = listener.port?.rawValue {
+                            once.resume(with: .success(actualPort))
+                        } else {
+                            listener.cancel()
+                            once.resume(with: .failure(Failure.cannotBind))
+                        }
+                    case let .failed(error):
+                        listener.cancel()
+                        once.resume(with: .failure(error))
+                    case .cancelled:
+                        once.resume(with: .failure(CancellationError()))
+                    default:
+                        break
                     }
-                case let .failed(error):
-                    once.resume(with: .failure(error))
-                case .cancelled:
-                    once.resume(with: .failure(CancellationError()))
-                default:
-                    break
                 }
+                listener.newConnectionHandler = { $0.cancel() }
+                listener.start(queue: queue)
             }
-            listener.newConnectionHandler = { $0.cancel() }
-            listener.start(queue: queue)
+        } onCancel: {
+            listener.cancel()
         }
 
         let server = LoopbackOAuthServer(listener: listener, port: boundPort, state: state, queue: queue)
-        listener.stateUpdateHandler = nil
+        listener.stateUpdateHandler = { [weak server] listenerState in
+            switch listenerState {
+            case let .failed(error):
+                server?.handleListenerEnded(error: error)
+            case .cancelled:
+                server?.handleListenerEnded(error: CancellationError())
+            default:
+                break
+            }
+        }
         listener.newConnectionHandler = { [weak server] connection in
             server?.accept(connection)
         }
@@ -117,18 +139,43 @@ final class LoopbackOAuthServer: @unchecked Sendable {
         }
     }
 
-    /// Stops the listener, releases any background task, and cancels any pending waiters.
+    /// Stops the listener, cancels active connections, releases any background task, and cancels pending waiters.
     func stop() {
-        let shouldCancelListener = lock.withLock { () -> Bool in
-            guard !stopped else { return false }
+        let (shouldCancelListener, trackedConnections) = lock.withLock { () -> (Bool, [NWConnection]) in
+            let cancelListener = !stopped
             stopped = true
-            return true
+            let connections = drainConnectionsLocked()
+            return (cancelListener, connections)
         }
         if shouldCancelListener {
             listener.cancel()
         }
+        for connection in trackedConnections {
+            connection.cancel()
+        }
         finish(.failure(CancellationError()))
         endBackgroundProtection()
+    }
+
+    private func handleListenerEnded(error: Error) {
+        let trackedConnections = lock.withLock { () -> [NWConnection] in
+            stopped = true
+            return drainConnectionsLocked()
+        }
+        for connection in trackedConnections {
+            connection.cancel()
+        }
+        finish(.failure(error))
+        endBackgroundProtection()
+    }
+
+    private func drainConnectionsLocked() -> [NWConnection] {
+        let connections = Array(activeConnections.values.map(\.connection))
+        for entry in activeConnections.values {
+            entry.timeout?.cancel()
+        }
+        activeConnections.removeAll()
+        return connections
     }
 
     // MARK: - Background Task Protection
@@ -138,21 +185,45 @@ final class LoopbackOAuthServer: @unchecked Sendable {
         let taskID = UIApplication.shared.beginBackgroundTask(withName: "YardletConnectorOAuth") { [weak self] in
             self?.handleBackgroundExpiration()
         }
-        lock.withLock {
-            if stopped {
-                if taskID != .invalid {
-                    UIApplication.shared.endBackgroundTask(taskID)
-                }
-            } else {
-                backgroundTaskID = taskID
-            }
+        let shouldEndImmediately = lock.withLock { () -> Bool in
+            if stopped { return true }
+            backgroundTaskID = taskID
+            return false
+        }
+        if shouldEndImmediately, taskID != .invalid {
+            UIApplication.shared.endBackgroundTask(taskID)
         }
     }
 
     private func handleBackgroundExpiration() {
+        let (shouldCancelListener, taskID, trackedConnections) = lock.withLock {
+            () -> (Bool, UIBackgroundTaskIdentifier, [NWConnection]) in
+            let cancelListener = !stopped
+            stopped = true
+            let current = backgroundTaskID
+            backgroundTaskID = .invalid
+            let connections = drainConnectionsLocked()
+            return (cancelListener, current, connections)
+        }
+        if shouldCancelListener {
+            listener.cancel()
+        }
+        for connection in trackedConnections {
+            connection.cancel()
+        }
         finish(.failure(Failure.backgroundExpired))
-        listener.cancel()
-        endBackgroundProtection()
+        guard taskID != .invalid else { return }
+        if Thread.isMainThread {
+            MainActor.assumeIsolated {
+                UIApplication.shared.endBackgroundTask(taskID)
+            }
+        } else {
+            DispatchQueue.main.sync {
+                MainActor.assumeIsolated {
+                    UIApplication.shared.endBackgroundTask(taskID)
+                }
+            }
+        }
     }
 
     private func endBackgroundProtection() {
@@ -162,19 +233,59 @@ final class LoopbackOAuthServer: @unchecked Sendable {
             return current
         }
         guard taskID != .invalid else { return }
-        Task { @MainActor in
-            UIApplication.shared.endBackgroundTask(taskID)
+        if Thread.isMainThread {
+            MainActor.assumeIsolated {
+                UIApplication.shared.endBackgroundTask(taskID)
+            }
+        } else {
+            Task { @MainActor in
+                UIApplication.shared.endBackgroundTask(taskID)
+            }
         }
     }
 
     // MARK: - HTTP Connection Handling
 
     private func accept(_ connection: NWConnection) {
+        let connectionID = UUID()
+        let timeoutItem = DispatchWorkItem { [weak self] in
+            self?.closeConnection(id: connectionID)
+        }
+        let accepted = lock.withLock { () -> Bool in
+            guard !stopped else { return false }
+            activeConnections[connectionID] = TrackedConnection(connection: connection, timeout: timeoutItem)
+            return true
+        }
+        guard accepted else {
+            timeoutItem.cancel()
+            connection.cancel()
+            return
+        }
+        connection.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .failed, .cancelled:
+                self?.removeConnection(id: connectionID)
+            default:
+                break
+            }
+        }
+        queue.asyncAfter(deadline: .now() + .seconds(Self.connectionTimeoutSeconds), execute: timeoutItem)
         connection.start(queue: queue)
-        receive(on: connection, buffer: Data())
+        receive(id: connectionID, on: connection, buffer: Data())
     }
 
-    private func receive(on connection: NWConnection, buffer: Data) {
+    private func removeConnection(id: UUID) {
+        let removed = lock.withLock { activeConnections.removeValue(forKey: id) }
+        removed?.timeout?.cancel()
+    }
+
+    private func closeConnection(id: UUID) {
+        let removed = lock.withLock { activeConnections.removeValue(forKey: id) }
+        removed?.timeout?.cancel()
+        removed?.connection.cancel()
+    }
+
+    private func receive(id: UUID, on connection: NWConnection, buffer: Data) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 16 * 1024) { [weak self] data, _, isComplete, error in
             guard let self else {
                 connection.cancel()
@@ -184,20 +295,20 @@ final class LoopbackOAuthServer: @unchecked Sendable {
             if let data { next.append(data) }
             if let headerEnd = next.range(of: Data("\r\n\r\n".utf8)) {
                 let headerText = String(decoding: next[..<headerEnd.lowerBound], as: UTF8.self)
-                self.handleHTTPHead(headerText, on: connection)
+                self.handleHTTPHead(headerText, id: id, on: connection)
             } else if isComplete || error != nil || next.count > 64 * 1024 {
-                connection.cancel()
+                self.closeConnection(id: id)
             } else {
-                self.receive(on: connection, buffer: next)
+                self.receive(id: id, on: connection, buffer: next)
             }
         }
     }
 
-    private func handleHTTPHead(_ head: String, on connection: NWConnection) {
+    private func handleHTTPHead(_ head: String, id: UUID, on connection: NWConnection) {
         let requestLine = head.split(separator: "\r\n", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""
         let parts = requestLine.split(separator: " ")
         guard parts.count >= 2, parts[0] == "GET" else {
-            respond(on: connection, status: "404 Not Found", body: "")
+            respond(id: id, on: connection, status: "404 Not Found", body: "")
             return
         }
         let target = String(parts[1])
@@ -211,14 +322,14 @@ final class LoopbackOAuthServer: @unchecked Sendable {
               received.user == nil,
               received.password == nil,
               received.fragment == nil else {
-            respond(on: connection, status: "404 Not Found", body: "")
+            respond(id: id, on: connection, status: "404 Not Found", body: "")
             return
         }
 
         // Exact single `state` query match: reject missing, mismatched, or duplicate state parameters.
         let states = received.queryItems?.filter { $0.name == "state" } ?? []
         guard states.count == 1, states.first?.value == expectedState else {
-            respond(on: connection, status: "404 Not Found", body: "")
+            respond(id: id, on: connection, status: "404 Not Found", body: "")
             return
         }
 
@@ -229,12 +340,12 @@ final class LoopbackOAuthServer: @unchecked Sendable {
         canonical.path = Self.callbackPath
         canonical.percentEncodedQuery = received.percentEncodedQuery
         guard let callbackURL = canonical.url else {
-            respond(on: connection, status: "404 Not Found", body: "")
+            respond(id: id, on: connection, status: "404 Not Found", body: "")
             return
         }
 
         let failed = received.queryItems?.contains { $0.name == "error" } == true
-        respond(on: connection, status: "200 OK", body: Self.htmlPage(failed: failed))
+        respond(id: id, on: connection, status: "200 OK", body: Self.htmlPage(failed: failed))
         finish(.success(callbackURL))
     }
 
@@ -250,15 +361,19 @@ final class LoopbackOAuthServer: @unchecked Sendable {
         }
     }
 
-    private func respond(on connection: NWConnection, status: String, body: String) {
+    private func respond(id: UUID, on connection: NWConnection, status: String, body: String) {
         let bodyData = Data(body.utf8)
         let header = "HTTP/1.1 \(status)\r\n"
             + "Content-Type: text/html; charset=utf-8\r\n"
             + "Content-Length: \(bodyData.count)\r\n"
             + "Cache-Control: no-store\r\n"
             + "Connection: close\r\n\r\n"
-        connection.send(content: Data(header.utf8) + bodyData, completion: .contentProcessed { _ in
-            connection.cancel()
+        connection.send(content: Data(header.utf8) + bodyData, completion: .contentProcessed { [weak self] _ in
+            if let self {
+                self.closeConnection(id: id)
+            } else {
+                connection.cancel()
+            }
         })
     }
 
@@ -266,7 +381,7 @@ final class LoopbackOAuthServer: @unchecked Sendable {
         let title = failed
             ? String(localized: "Sign-in was not completed")
             : String(localized: "Sign-in complete")
-        let detail = String(localized: "Sign-in complete — you can close this sheet and return to Yardlet.")
+        let detail = String(localized: "Sign-in complete. You can close this sheet and return to Yardlet.")
         let bodyText = failed
             ? String(localized: "You can close this sheet and return to Yardlet.")
             : detail
@@ -343,6 +458,7 @@ final class ConnectorSetupController {
     struct SignInSession: Identifiable, Equatable {
         let id: String
         let url: URL
+        let deviceCode: String?
     }
 
     struct PendingConfirmation: Identifiable, Equatable {
@@ -594,8 +710,13 @@ final class ConnectorSetupController {
                   let signInHost = step.signInHost else {
                 throw LoopbackOAuthServer.Failure.stateMismatch
             }
+            try Task.checkCancellation()
             let accepted = try await withTaskCancellationHandler {
                 try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Bool, Error>) in
+                    if Task.isCancelled {
+                        continuation.resume(throwing: CancellationError())
+                        return
+                    }
                     confirmationContinuation = continuation
                     pendingConfirmation = PendingConfirmation(
                         id: step.id,
@@ -622,7 +743,7 @@ final class ConnectorSetupController {
                 throw LoopbackOAuthServer.Failure.stateMismatch
             }
             deviceCode = step.deviceCode
-            activeSignIn = SignInSession(id: step.id, url: url)
+            activeSignIn = SignInSession(id: step.id, url: url, deviceCode: step.deviceCode)
             return RemoteConnectorSetupReply(stepID: step.id, accepted: true)
 
         case .callback:
