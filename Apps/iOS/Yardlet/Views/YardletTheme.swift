@@ -25,6 +25,10 @@ enum YardletPalette {
     static let error = adaptive(light: 0xD70015, dark: 0xFF6961)
     static let errorContainer = adaptive(light: 0xFDECEC, dark: 0x3A1A1A)
 
+    /// Dark-safe neutral swipe action fills preserving >=4.5:1 contrast for white labels/icons in Light and Dark modes.
+    static let swipePrimary = adaptive(light: 0x3A3A3C, dark: 0x3A3A3E)
+    static let swipeSecondary = adaptive(light: 0x636366, dark: 0x48484A)
+
     /// Status indicator colors only: approvals, questions, usage limits, unread, failures, running and connection.
     enum Status {
         static let approval = adaptive(light: 0x28A745, dark: 0x30D158)
@@ -244,7 +248,7 @@ struct MacHeaderBar: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(Text("Switch Mac or open menu"))
-            .accessibilityValue(Text(macName))
+            .accessibilityValue(Text(verbatim: "\(macName), \(connectionLabel)"))
 
             Spacer(minLength: 8)
 
@@ -259,12 +263,21 @@ struct MacHeaderBar: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.vertical, 6)
         .background(YardletPalette.surface)
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(YardletPalette.outlineVariant)
                 .frame(height: 0.5)
+        }
+    }
+
+    private var connectionLabel: String {
+        switch connection {
+        case .connected: String(localized: "Connected")
+        case .connecting: String(localized: "Connecting")
+        case .removed: String(localized: "Removed")
+        case .unreachable, .stopped: String(localized: "Offline")
         }
     }
 
@@ -279,6 +292,8 @@ struct MacHeaderBar: View {
                 .overlay(
                     Circle().strokeBorder(isActive ? Color.clear : YardletPalette.outlineVariant, lineWidth: 0.75)
                 )
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
@@ -374,6 +389,7 @@ enum MobileTab: String, CaseIterable, Hashable {
 struct BottomTabBar: View {
     @Binding var selection: MobileTab
     var tasksBadgeColor: Color?
+    var tasksBadgeLabel: String?
 
     var body: some View {
         HStack(spacing: 6) {
@@ -411,6 +427,7 @@ struct BottomTabBar: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
+                .accessibilityValue(tab == .tasks ? (tasksBadgeLabel ?? "") : "")
             }
         }
         .padding(.horizontal, 12)

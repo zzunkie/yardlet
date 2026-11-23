@@ -95,7 +95,7 @@ struct SchedulesView: View {
             } label: {
                 Label("Run Now", systemImage: "play.fill")
             }
-            .tint(YardletPalette.primary)
+            .tint(YardletPalette.swipePrimary)
             .disabled(!session.isConnected || list.starting.contains(schedule.id))
         }
         .contextMenu {

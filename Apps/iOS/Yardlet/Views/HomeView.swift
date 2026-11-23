@@ -17,30 +17,41 @@ struct HomeView: View {
     @State private var search = ""
     @FocusState private var isSearchFocused: Bool
     @State private var expanded: Set<String> = []
-    @State private var isShowingMacSheet = false
-    @State private var isShowingSettings = false
-    @State private var isShowingHostSettingsPlaceholder = false
-    @State private var isStartingTask = false
-    @State private var isScanning = false
-    @State private var isPasting = false
-    @State private var showsAccountMacs = false
+    @State private var activeSheet: ActiveSheet?
+    @State private var pendingSheet: ActiveSheet?
+    @State private var pendingSchedules = false
+
+    private enum ActiveSheet: String, Identifiable {
+        case macSheet
+        case settings
+        case hostSettings
+        case newTask
+        case scanQR
+        case pasteLink
+        case accountMacs
+
+        var id: String { rawValue }
+    }
 
     private var defaultNewTaskProject: RemoteProject? {
         session.projects.first { $0.canCreateTask == true }
     }
 
-    private var tasksBadgeColor: Color? {
+    private var tasksBadge: (color: Color, label: String)? {
         if session.tasks.contains(where: { $0.indicator == .awaitingApproval }) {
-            return YardletPalette.Status.approval
+            return (YardletPalette.Status.approval, String(localized: "Awaiting approval"))
         }
-        if session.tasks.contains(where: { $0.indicator == .needsInput || $0.indicator == .usageLimit }) {
-            return YardletPalette.Status.question
+        if session.tasks.contains(where: { $0.indicator == .needsInput }) {
+            return (YardletPalette.Status.question, String(localized: "Awaiting an answer"))
+        }
+        if session.tasks.contains(where: { $0.indicator == .usageLimit }) {
+            return (YardletPalette.Status.limit, String(localized: "Stopped at a usage limit"))
         }
         if session.tasks.contains(where: { $0.indicator == .failed }) {
-            return YardletPalette.Status.failed
+            return (YardletPalette.Status.failed, String(localized: "Failed"))
         }
         if session.tasks.contains(where: { $0.attention == .waiting || $0.unread }) {
-            return YardletPalette.Status.unread
+            return (YardletPalette.Status.unread, String(localized: "Unread"))
         }
         return nil
     }
@@ -54,20 +65,24 @@ struct HomeView: View {
                     showsSchedules: session.scheduledTasks,
                     showsSearch: selectedTab == .tasks,
                     isSearchActive: isSearching,
-                    onTapMac: { isShowingMacSheet = true },
+                    onTapMac: { activeSheet = .macSheet },
                     onTapSchedules: { path.append(SchedulesRoute()) },
                     onToggleSearch: toggleSearch
                 )
                 ConnectionBanner(session: session)
-                Group {
-                    switch selectedTab {
-                    case .tasks:
-                        tasksTab
-                    case .mail:
-                        MailTabPlaceholderView(session: session)
-                    case .calendar:
-                        CalendarTabPlaceholderView(session: session)
-                    }
+                ZStack {
+                    tasksTab
+                        .opacity(selectedTab == .tasks ? 1 : 0)
+                        .allowsHitTesting(selectedTab == .tasks)
+                        .accessibilityHidden(selectedTab != .tasks)
+                    MailTabPlaceholderView(session: session)
+                        .opacity(selectedTab == .mail ? 1 : 0)
+                        .allowsHitTesting(selectedTab == .mail)
+                        .accessibilityHidden(selectedTab != .mail)
+                    CalendarTabPlaceholderView(session: session)
+                        .opacity(selectedTab == .calendar ? 1 : 0)
+                        .allowsHitTesting(selectedTab == .calendar)
+                        .accessibilityHidden(selectedTab != .calendar)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -83,70 +98,53 @@ struct HomeView: View {
             .navigationDestination(for: SchedulesRoute.self) { _ in
                 SchedulesView(session: session)
             }
-            .sheet(isPresented: $isShowingMacSheet) {
-                MacSheet(
-                    session: session,
-                    onOpenSchedules: {
-                        isShowingMacSheet = false
-                        path.append(SchedulesRoute())
-                    },
-                    onOpenHostSettings: {
-                        isShowingMacSheet = false
-                        isShowingHostSettingsPlaceholder = true
-                    },
-                    onOpenAppSettings: {
-                        isShowingMacSheet = false
-                        isShowingSettings = true
-                    },
-                    onScanQR: {
-                        isShowingMacSheet = false
-                        isScanning = true
-                    },
-                    onPasteLink: {
-                        isShowingMacSheet = false
-                        isPasting = true
-                    },
-                    onOpenAccountMacs: {
-                        isShowingMacSheet = false
-                        showsAccountMacs = true
+            .sheet(item: $activeSheet, onDismiss: handleSheetDismiss) { sheet in
+                switch sheet {
+                case .macSheet:
+                    MacSheet(
+                        session: session,
+                        onOpenSchedules: {
+                            pendingSchedules = true
+                            activeSheet = nil
+                        },
+                        onOpenHostSettings: { transitionSheet(to: .hostSettings) },
+                        onOpenAppSettings: { transitionSheet(to: .settings) },
+                        onScanQR: { transitionSheet(to: .scanQR) },
+                        onPasteLink: { transitionSheet(to: .pasteLink) },
+                        onOpenAccountMacs: { transitionSheet(to: .accountMacs) }
+                    )
+                case .settings:
+                    SettingsView()
+                case .hostSettings:
+                    HostSettingsPlaceholderSheet(session: session)
+                case .newTask:
+                    NewTaskView(session: session, initialProjectID: defaultNewTaskProject?.id) { taskID in
+                        activeSheet = nil
+                        selectedTab = .tasks
+                        path.append(taskID)
                     }
-                )
-            }
-            .sheet(isPresented: $isShowingSettings) {
-                SettingsView()
-            }
-            .sheet(isPresented: $isShowingHostSettingsPlaceholder) {
-                HostSettingsPlaceholderSheet(session: session)
-            }
-            .sheet(isPresented: $isStartingTask) {
-                NewTaskView(session: session, initialProjectID: defaultNewTaskProject?.id) { taskID in
-                    isStartingTask = false
-                    selectedTab = .tasks
-                    path.append(taskID)
+                case .scanQR:
+                    PairingScanner { link in
+                        activeSheet = nil
+                        Task { await model.pair(link) }
+                    }
+                case .pasteLink:
+                    PasteLinkView { link in
+                        activeSheet = nil
+                        Task { await model.pair(link) }
+                    }
+                case .accountMacs:
+                    AccountMacsView { activeSheet = nil }
+                        .onDisappear { model.account.error = nil }
                 }
-            }
-            .sheet(isPresented: $isScanning) {
-                PairingScanner { link in
-                    isScanning = false
-                    Task { await model.pair(link) }
-                }
-            }
-            .sheet(isPresented: $isPasting) {
-                PasteLinkView { link in
-                    isPasting = false
-                    Task { await model.pair(link) }
-                }
-            }
-            .sheet(isPresented: $showsAccountMacs, onDismiss: { model.account.error = nil }) {
-                AccountMacsView { showsAccountMacs = false }
             }
             #if DEBUG
             // Screenshots without touching the screen: `-sheet newTask`, `-sheet settings` or `-sheet schedules` at launch.
             .task {
                 guard let sheet = UserDefaults.standard.string(forKey: "sheet") else { return }
                 try? await Task.sleep(for: .seconds(1.5))
-                if sheet == "newTask" { isStartingTask = true }
-                if sheet == "settings" { isShowingSettings = true }
+                if sheet == "newTask" { activeSheet = .newTask }
+                if sheet == "settings" { activeSheet = .settings }
                 if sheet == "schedules" { path.append(SchedulesRoute()) }
             }
             #endif
@@ -260,15 +258,31 @@ struct HomeView: View {
         .padding(.horizontal, 16)
         .padding(.top, 10)
         .padding(.bottom, 6)
+        .onAppear { isSearchFocused = true }
+    }
+
+    private func transitionSheet(to next: ActiveSheet) {
+        pendingSheet = next
+        activeSheet = nil
+    }
+
+    private func handleSheetDismiss() {
+        if pendingSchedules {
+            pendingSchedules = false
+            path.append(SchedulesRoute())
+            return
+        }
+        if let next = pendingSheet {
+            pendingSheet = nil
+            activeSheet = next
+        }
     }
 
     private func toggleSearch() {
         withAnimation(.easeInOut(duration: 0.16)) {
             isSearching.toggle()
         }
-        if isSearching {
-            isSearchFocused = true
-        } else {
+        if !isSearching {
             search = ""
             isSearchFocused = false
         }
@@ -278,20 +292,28 @@ struct HomeView: View {
 
     private var bottomChrome: some View {
         VStack(spacing: 0) {
-            CommandErrorBanner(session: session)
-                .padding(.bottom, 8)
-            if session.isDemo {
-                demoBar
+            if session.commandError != nil {
+                CommandErrorBanner(session: session)
+                    .padding(.bottom, 8)
             }
-            if selectedTab == .tasks {
-                NewTaskBar(
-                    projectName: defaultNewTaskProject?.name,
-                    isEnabled: session.newTask != nil && session.isConnected
-                ) {
-                    isStartingTask = true
+            if !isSearching {
+                if session.isDemo {
+                    demoBar
                 }
+                if selectedTab == .tasks {
+                    NewTaskBar(
+                        projectName: defaultNewTaskProject?.name,
+                        isEnabled: session.newTask != nil && session.isConnected
+                    ) {
+                        activeSheet = .newTask
+                    }
+                }
+                BottomTabBar(
+                    selection: $selectedTab,
+                    tasksBadgeColor: tasksBadge?.color,
+                    tasksBadgeLabel: tasksBadge?.label
+                )
             }
-            BottomTabBar(selection: $selectedTab, tasksBadgeColor: tasksBadgeColor)
         }
     }
 
@@ -459,15 +481,12 @@ struct HomeView: View {
 
     private func taskRow(_ task: RemoteTask, depth: Int, showsProject: Bool, children: Int = 0,
                          activityAt: Int64? = nil, isAttention: Bool) -> some View {
-        Button {
-            path.append(task.id)
-        } label: {
-            TaskRow(task: task, session: session, depth: depth, showsProject: showsProject, children: children,
-                    isExpanded: expanded.contains(task.id), activityAt: activityAt, isAttention: isAttention) {
-                if expanded.contains(task.id) { expanded.remove(task.id) } else { expanded.insert(task.id) }
-            }
-        }
-        .buttonStyle(.plain)
+        TaskRow(task: task, session: session, depth: depth, showsProject: showsProject, children: children,
+                isExpanded: expanded.contains(task.id), activityAt: activityAt, isAttention: isAttention,
+                open: { path.append(task.id) },
+                toggle: {
+                    if expanded.contains(task.id) { expanded.remove(task.id) } else { expanded.insert(task.id) }
+                })
         .listRowSeparator(.hidden)
         .listRowBackground(Color.clear)
         .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
@@ -477,7 +496,7 @@ struct HomeView: View {
             } label: {
                 Label(task.pinned ? "Unpin" : "Pin", systemImage: task.pinned ? "pin.slash" : "pin")
             }
-            .tint(YardletPalette.primary)
+            .tint(YardletPalette.swipePrimary)
         }
         .swipeActions(edge: .trailing) {
             Button {
@@ -485,7 +504,7 @@ struct HomeView: View {
             } label: {
                 Label("Archive", systemImage: "archivebox")
             }
-            .tint(YardletPalette.onSurfaceVariant)
+            .tint(YardletPalette.swipeSecondary)
         }
         .contextMenu {
             Button {
@@ -523,7 +542,7 @@ struct HomeView: View {
                     .font(.subheadline)
                     .foregroundStyle(YardletPalette.onSurfaceVariant)
                 if session.newTask != nil {
-                    Button("New Task") { isStartingTask = true }
+                    Button("New Task") { activeSheet = .newTask }
                         .prominentButton()
                         .padding(.top, 4)
                 }
@@ -581,54 +600,69 @@ struct TaskRow: View {
     /// When the row says it last moved: a folded parent shows its latest subtask's time.
     var activityAt: Int64?
     var isAttention = false
+    var open: () -> Void = {}
     var toggle: () -> Void = {}
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            TaskMark(indicator: task.indicator)
-                .padding(.top, 5)
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(task.title.isEmpty ? String(localized: "Untitled task") : task.title)
-                        .font(.body.weight(task.unread || task.attention == .waiting ? .semibold : .regular))
-                        .foregroundStyle(YardletPalette.onSurface)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                    Spacer(minLength: 8)
-                    Text(Formatting.shortAge(session.date(activityAt ?? task.lastActivityAt)))
-                        .font(.footnote)
-                        .foregroundStyle(YardletPalette.onSurfaceVariant)
-                        .monospacedDigit()
-                }
-                if task.attention == .waiting, let summary = task.pendingSummary, !summary.isEmpty {
-                    Text(summary)
-                        .font(.subheadline)
-                        .foregroundStyle(YardletPalette.onSurfaceVariant)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                }
-                HStack(spacing: 6) {
-                    HarnessMark(harness: task.harness, harnessName: task.harnessName, size: 17)
-                    Text(subtitle)
-                        .font(.footnote)
-                        .foregroundStyle(YardletPalette.onSurfaceVariant)
-                        .lineLimit(1)
-                    Spacer(minLength: 4)
-                    if children > 0 {
-                        Button(action: toggle) {
-                            HStack(spacing: 3) {
-                                Text("\(children) subtasks")
-                                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                                    .font(.caption2.weight(.semibold))
-                            }
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(YardletPalette.onSurfaceVariant)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(YardletPalette.surfaceContainerHigh, in: Capsule())
+        VStack(alignment: .leading, spacing: 5) {
+            Button(action: open) {
+                HStack(alignment: .top, spacing: 10) {
+                    TaskMark(indicator: task.indicator)
+                        .padding(.top, 5)
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(task.title.isEmpty ? String(localized: "Untitled task") : task.title)
+                                .font(.body.weight(task.unread || task.attention == .waiting ? .semibold : .regular))
+                                .foregroundStyle(YardletPalette.onSurface)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                            Spacer(minLength: 8)
+                            Text(Formatting.shortAge(session.date(activityAt ?? task.lastActivityAt)))
+                                .font(.footnote)
+                                .foregroundStyle(YardletPalette.onSurfaceVariant)
+                                .monospacedDigit()
                         }
-                        .buttonStyle(.plain)
+                        if task.attention == .waiting, let summary = task.pendingSummary, !summary.isEmpty {
+                            Text(summary)
+                                .font(.subheadline)
+                                .foregroundStyle(YardletPalette.onSurfaceVariant)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                        }
+                        if children == 0 {
+                            metadataRow
+                        }
                     }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(children > 0 ? Text(subtitle) : Text(verbatim: ""))
+
+            if children > 0 {
+                HStack(spacing: 6) {
+                    metadataRow
+                        .padding(.leading, 22)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .onTapGesture(perform: open)
+                        .accessibilityHidden(true)
+
+                    Button(action: toggle) {
+                        HStack(spacing: 3) {
+                            Text("\(children) subtasks")
+                            Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                                .font(.caption2.weight(.semibold))
+                        }
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(YardletPalette.onSurfaceVariant)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(YardletPalette.surfaceContainerHigh, in: Capsule())
+                        .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }
@@ -644,7 +678,16 @@ struct TaskRow: View {
                 .strokeBorder(YardletPalette.outlineVariant, lineWidth: isAttention ? 1 : 0.6)
         )
         .padding(.leading, CGFloat(depth) * 16)
-        .contentShape(Rectangle())
+    }
+
+    private var metadataRow: some View {
+        HStack(spacing: 6) {
+            HarnessMark(harness: task.harness, harnessName: task.harnessName, size: 17)
+            Text(subtitle)
+                .font(.footnote)
+                .foregroundStyle(YardletPalette.onSurfaceVariant)
+                .lineLimit(1)
+        }
     }
 
     /// What it runs on, after its project or Chats where the list mixes them.
@@ -1165,8 +1208,11 @@ private struct MailCalendarPlaceholderView: View {
         }
         .background(YardletPalette.background)
         .refreshable {
-            await session.refresh()
-            await session.refreshMailCalendarState()
+            if session.isConnected && hostSupportsKind {
+                await session.refreshMailCalendarState()
+            } else {
+                await session.refresh()
+            }
         }
         .task(id: session.isConnected) {
             if session.isConnected && hostSupportsKind && session.mailCalendarState == nil {
