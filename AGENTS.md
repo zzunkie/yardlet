@@ -10,11 +10,19 @@ Maintainers keep working notes outside this repository, in the ignored folder `d
 ## Product rules
 
 - Yardlet must not be harder to use than the agent's own app, and should feel close to it.
-- Add only features that turn on and off easily and leave nothing behind once turned off or removed.
+- Prefer shared paths across agents; add only features that turn on and off easily and leave nothing
+  behind once turned off or removed.
 - A feature that one provider's API offers is not, on its own, a reason to add a control, a shortcut
-  or explanatory text.
+  or explanatory text. Follow [docs/DESIGN_SYSTEM.md](docs/DESIGN_SYSTEM.md) and keep the UI native and
+  uncluttered.
+- Respect the user's workspace: never silently archive, move or reorganize a person's tasks, drafts or
+  files without explicit request or approval, and keep credentials and trust boundaries host-local.
+- Protect MCP tool budgets across harnesses: prefer extending an existing tool over adding a new one,
+  and keep schemas concise without weakening safety rules.
+- Keep user-visible strings updated across every supported `.lproj` localization catalog.
 - For session storage, import, resume, titles or the Account Center, read
-  [native session storage](docs/NATIVE_SESSION_STORAGE.md).
+  [native session storage](docs/NATIVE_SESSION_STORAGE.md). See [CONTRIBUTING.md](CONTRIBUTING.md#what-fits-yardlet)
+  for the full contributor principles.
 
 ## Code and verification
 
