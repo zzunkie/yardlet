@@ -26,14 +26,16 @@ DEFAULT_RESOURCES_DIR = REPO_ROOT / "Sources" / "NativeHarnessClient" / "Resourc
 STRINGS_FILENAME = "Localizable.strings"
 SOURCE_LOCALE = "en"
 
-# Matches Apple NSString / printf format specifiers (and literal `%%`).
+# Matches either exact literal `%%` or an Apple NSString / printf format specifier.
+# Excludes the space flag so English/localized prose like "50% done" or "10% off" never
+# false-positives as `% d` / `% o` / `% f` / `% s`.
 FORMAT_SPECIFIER_RE = re.compile(
-    r"%(?:([1-9][0-9]*)\$)?"
-    r"([-+ #0]*)"
+    r"%%|%(?:([1-9][0-9]*)\$)?"
+    r"([-+#0]*)"
     r"(?:([0-9]+|\*))?"
     r"(?:\.([0-9]+|\*))?"
     r"(hh|h|ll|l|q|L|z|t|j)?"
-    r"([@dDiIuUxXoOfeEfFgGcCsSpAa%])"
+    r"([@dDiIuUxXoOfeEfFgGcCsSpAa])"
 )
 
 CANONICAL_CONVERSION = {
@@ -97,15 +99,31 @@ def unescape_strings_literal(raw: str) -> str:
             out.append("\f")
         elif esc == "v":
             out.append("\v")
-        elif esc in ("U", "u"):
+        elif esc == "U":
             if i + 4 > n:
-                raise StringsParseError(f"truncated \\{esc} escape sequence")
+                raise StringsParseError("truncated \\U escape sequence")
             hex_digits = raw[i : i + 4]
             try:
-                out.append(chr(int(hex_digits, 16)))
+                code = int(hex_digits, 16)
             except ValueError as exc:
-                raise StringsParseError(f"invalid \\{esc} escape sequence: \\{esc}{hex_digits}") from exc
+                raise StringsParseError(f"invalid \\U escape sequence: \\U{hex_digits}") from exc
             i += 4
+            if 0xD800 <= code <= 0xDBFF:
+                if i + 6 <= n and raw[i : i + 2] == "\\U":
+                    low_hex = raw[i + 2 : i + 6]
+                    try:
+                        low = int(low_hex, 16)
+                    except ValueError as exc:
+                        raise StringsParseError(f"invalid \\U escape sequence: \\U{low_hex}") from exc
+                    if 0xDC00 <= low <= 0xDFFF:
+                        code_point = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00)
+                        out.append(chr(code_point))
+                        i += 6
+                        continue
+                raise StringsParseError(f"unpaired UTF-16 high surrogate: \\U{hex_digits}")
+            if 0xDC00 <= code <= 0xDFFF:
+                raise StringsParseError(f"unpaired UTF-16 low surrogate: \\U{hex_digits}")
+            out.append(chr(code))
         else:
             out.append(esc)
     return "".join(out)
@@ -246,12 +264,17 @@ def extract_format_specifiers(text: str) -> Tuple[Dict[int, str], bool]:
 
     for match in FORMAT_SPECIFIER_RE.finditer(text):
         spans.append(match.span())
-        conv = match.group(6)
-        if conv == "%":
+        if match.group(0) == "%%":
             continue
+
+        width = match.group(3)
+        precision = match.group(4)
+        if width == "*" or precision == "*":
+            raise ValueError(f"unsupported dynamic '*' width/precision specifier: {match.group(0)!r}")
 
         pos_group = match.group(1)
         length = match.group(5) or ""
+        conv = match.group(6)
         canonical = length + CANONICAL_CONVERSION.get(conv, conv)
 
         if pos_group is not None:
@@ -286,9 +309,11 @@ def extract_format_specifiers(text: str) -> Tuple[Dict[int, str], bool]:
 def check_format_parity(english: str, translated: str) -> Optional[str]:
     """Return an error description if `translated` is not format-specifier compatible with `english`."""
     try:
-        en_specs, _ = extract_format_specifiers(english)
+        en_specs, en_stray_percent = extract_format_specifiers(english)
     except ValueError as exc:
         return f"invalid English format string: {exc}"
+    if en_specs and en_stray_percent:
+        return "unescaped '%' in English format string (use '%%' for a literal percent)"
     try:
         tr_specs, tr_stray_percent = extract_format_specifiers(translated)
     except ValueError as exc:
@@ -573,9 +598,15 @@ def cmd_check(args: argparse.Namespace) -> int:
         if not entry.value.strip():
             errors.append(f"[{SOURCE_LOCALE}:{entry.line}] empty value for key {entry.key!r}")
         try:
-            extract_format_specifiers(entry.value)
+            en_specs, en_stray_percent = extract_format_specifiers(entry.value)
         except ValueError as exc:
             errors.append(f"[{SOURCE_LOCALE}:{entry.line}] invalid format string for {entry.key!r}: {exc}")
+        else:
+            if en_specs and en_stray_percent:
+                errors.append(
+                    f"[{SOURCE_LOCALE}:{entry.line}] unescaped '%' in format string for {entry.key!r} "
+                    "(use '%%' for a literal percent)"
+                )
 
     en_keys = set(en_catalog.mapping.keys())
     locales = discover_locales(resources_dir)

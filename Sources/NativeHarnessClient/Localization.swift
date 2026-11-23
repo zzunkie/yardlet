@@ -48,23 +48,59 @@ enum L10n {
     }
 
     /// The `.lproj` localization codes bundled in `bundle`, excluding `Base`.
+    /// Unions `bundle.localizations` with a directory scan of `resourceURL` and `bundleURL` so
+    /// flat `.lproj` bundles (such as Windows resource bundles where `bundle.localizations` can
+    /// report only `["en"]`) still discover every sibling localization.
     static func bundledLocalizations(in bundle: Bundle) -> [String] {
-        let reported = bundle.localizations.filter { $0 != "Base" }
-        if !reported.isEmpty { return reported }
-        for folder in [bundle.resourceURL, bundle.bundleURL].compactMap({ $0 }) {
-            let found = ((try? FileManager.default.contentsOfDirectory(atPath: folder.path(percentEncoded: false))) ?? [])
-                .filter { $0.hasSuffix(".lproj") }
-                .map { String($0.dropLast(".lproj".count)) }
-                .filter { $0 != "Base" }
-            if !found.isEmpty { return found.sorted() }
+        var seen: Set<String> = []
+        var result: [String] = []
+        func record(_ code: String) {
+            guard code != "Base", seen.insert(code.lowercased()).inserted else { return }
+            result.append(code)
         }
-        return []
+        for code in bundle.localizations {
+            record(code)
+        }
+        for folder in [bundle.resourceURL, bundle.bundleURL].compactMap({ $0 }) {
+            let entries = (try? FileManager.default.contentsOfDirectory(atPath: folder.path(percentEncoded: false))) ?? []
+            for name in entries.sorted() where name.hasSuffix(".lproj") {
+                record(String(name.dropLast(".lproj".count)))
+            }
+        }
+        return result
     }
 
-    /// The `.lproj` localization codes bundled in the active app/module bundle.
-    static var bundledLocalizations: [String] {
-        bundledLocalizations(in: activeBundle)
+    /// The `.lproj` localization codes bundled in the active app/module bundle, computed once.
+    static let bundledLocalizations: [String] = bundledLocalizations(in: activeBundle)
+
+    private final class LanguageTableCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var tables: [String: [String: String]] = [:]
+
+        func table(for languageCode: String, load: () -> [String: String]) -> [String: String] {
+            let key = languageCode.lowercased()
+            lock.lock()
+            if let cached = tables[key] {
+                lock.unlock()
+                return cached
+            }
+            lock.unlock()
+
+            let loaded = load()
+            lock.lock()
+            if let existing = tables[key] {
+                lock.unlock()
+                return existing
+            }
+            tables[key] = loaded
+            lock.unlock()
+            return loaded
+        }
     }
+
+    /// Lazily cached `.strings` tables for `activeBundle`, keyed by lowercased language code, so
+    /// repeated `L10n.string(_:languageCode:)` lookups never re-read or re-parse `.strings` files.
+    private static let activeTableCache = LanguageTableCache()
 
     #if os(Windows)
     /// Windows' display languages and the localization they prefer, with its words read from its strings file.
@@ -128,17 +164,6 @@ enum L10n {
         if resolved != missingSentinel { return resolved }
         return englishFallback[key] ?? defaultValue
     }
-
-    #if canImport(Darwin)
-    static func string(_ key: String.LocalizationValue) -> String {
-        let resolved = String(localized: key, bundle: activeBundle)
-        if let englishFallback = englishTable[resolved], englishFallback != resolved,
-           activeBundle.localizedString(forKey: resolved, value: missingSentinel, table: nil) == missingSentinel {
-            return englishFallback
-        }
-        return resolved
-    }
-    #endif
 
     static func string(_ key: String) -> String {
         #if os(Windows)
@@ -208,7 +233,13 @@ enum L10n {
     }
 
     static func string(_ key: String, languageCode: String) -> String {
-        string(key, languageCode: languageCode, in: activeBundle, englishFallback: englishTable)
+        if languageCode.caseInsensitiveCompare("en") == .orderedSame {
+            return englishTable[key] ?? key
+        }
+        let table = activeTableCache.table(for: languageCode) {
+            stringsTable(for: languageCode, in: activeBundle)
+        }
+        return table[key] ?? englishTable[key] ?? key
     }
 
     /// Looks up `key` in `<languageCode>.lproj` inside `bundle`, falling back to `en.lproj`
@@ -236,16 +267,6 @@ enum L10n {
             arguments: arguments
         )
     }
-
-    #if canImport(Darwin)
-    static func format(_ key: String.LocalizationValue, _ arguments: CVarArg...) -> String {
-        String(
-            format: string(key),
-            locale: Locale.current,
-            arguments: arguments
-        )
-    }
-    #endif
 }
 
 /// Yardlet's language, kept where macOS keeps each app's own: `AppleLanguages` in the app's

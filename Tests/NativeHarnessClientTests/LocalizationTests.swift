@@ -321,10 +321,20 @@ final class LocalizationTests: XCTestCase {
         XCTAssertFalse(parsed.entries.isEmpty)
         XCTAssertEqual(parsed.entries.count, plist.count, "Strict parser and Foundation plist parser agree")
 
+        var englishFormatErrors: [String] = []
         for (key, value) in parsed.entries {
             XCTAssertFalse(key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "Empty key in en.lproj")
             XCTAssertFalse(value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "Empty value for \(key) in en.lproj")
+            switch extractFormatSpecifiers(from: value) {
+            case let .success(sig):
+                if !sig.placeholders.isEmpty && sig.hasStrayPercent {
+                    englishFormatErrors.append("\(key): unescaped '%' in format string")
+                }
+            case let .failure(error):
+                englishFormatErrors.append("\(key): \(error)")
+            }
         }
+        XCTAssertEqual(englishFormatErrors, [], "en.lproj/Localizable.strings must not contain invalid format strings")
 
         let sources = repositoryRoot.appending(path: "Sources/NativeHarnessClient")
         let literal = try NSRegularExpression(pattern: #"L10n\.(?:string|format)\(\s*"((?:[^"\\]|\\.)*)""#)
@@ -389,21 +399,47 @@ final class LocalizationTests: XCTestCase {
         }
     }
 
-    func testFormatSpecifierParityRules() {
+    func testFormatSpecifierParityRules() throws {
         XCTAssertNil(formatSpecifierParityError(english: "Hello %@", translated: "こんにちは %@"))
         XCTAssertNil(formatSpecifierParityError(english: "%1$@ to %2$lld", translated: "%2$lld から %1$@"))
         XCTAssertNil(formatSpecifierParityError(english: "%@ %lld", translated: "%2$lld %1$@"))
         XCTAssertNil(formatSpecifierParityError(english: "%.1f%% of input", translated: "입력의 %.1f%%"))
         XCTAssertNil(formatSpecifierParityError(english: "CPU %", translated: "CPU %"))
         XCTAssertNil(formatSpecifierParityError(english: "Battery under 20%", translated: "배터리 20% 미만"))
+        // Prose percentages must not false-positive as printf space-flagged specifiers (% d, % o, % f, % s).
+        XCTAssertNil(formatSpecifierParityError(english: "50% done", translated: "50% 완료"))
+        XCTAssertNil(formatSpecifierParityError(english: "10% off", translated: "10% 할인"))
+        XCTAssertNil(formatSpecifierParityError(english: "20% faster", translated: "20% 더 빠름"))
+        XCTAssertNil(formatSpecifierParityError(english: "100% safe", translated: "100% 안전"))
 
         XCTAssertNotNil(formatSpecifierParityError(english: "Hello %@", translated: "Hello"))
         XCTAssertNotNil(formatSpecifierParityError(english: "Hello %@", translated: "Hello %@ %@"))
         XCTAssertNotNil(formatSpecifierParityError(english: "Count %lld", translated: "Count %d"))
         XCTAssertNotNil(formatSpecifierParityError(english: "Count %lld", translated: "Count %@"))
         XCTAssertNotNil(formatSpecifierParityError(english: "%1$@ and %2$@", translated: "%1$@ and %@"))
-        XCTAssertNotNil(formatSpecifierParityError(english: "%lld%% left", translated: "%lld% left"))
         XCTAssertNotNil(formatSpecifierParityError(english: "Plain text", translated: "Plain %@"))
+
+        // Unescaped '%' in a format string fails specifically with stray-percent detection.
+        let straySig = try extractFormatSpecifiers(from: "%lld% left").get()
+        XCTAssertEqual(straySig.placeholders, [1: "lld"])
+        XCTAssertTrue(straySig.hasStrayPercent)
+        let strayError = try XCTUnwrap(formatSpecifierParityError(english: "%lld%% left", translated: "%lld% left"))
+        XCTAssertTrue(strayError.contains("unescaped '%'"), strayError)
+
+        // English format strings with unescaped '%' are also rejected.
+        let englishStrayError = try XCTUnwrap(formatSpecifierParityError(english: "%lld% left", translated: "%lld%% left"))
+        XCTAssertTrue(englishStrayError.contains("unescaped '%'"), englishStrayError)
+
+        // Malformed percent sequences like %50%, %1$%, %ll% are not accepted as literal %%.
+        for bad in ["%lld %50%", "%lld %1$%", "%lld %ll%"] {
+            let badSig = try extractFormatSpecifiers(from: bad).get()
+            XCTAssertTrue(badSig.hasStrayPercent, "Expected stray percent for \(bad)")
+            XCTAssertNotNil(formatSpecifierParityError(english: "%lld%% done", translated: bad))
+        }
+
+        // Dynamic '*' width/precision specifiers are rejected rather than silently equating %*d with %d.
+        XCTAssertNotNil(formatSpecifierParityError(english: "Count %d", translated: "Count %*d"))
+        XCTAssertNotNil(formatSpecifierParityError(english: "Value %f", translated: "Value %.*f"))
     }
 
     /// Proves that a key present in `en.lproj` but missing in a non-English `.lproj` falls back to
@@ -470,6 +506,14 @@ final class LocalizationTests: XCTestCase {
             "Archives all %lld tasks in this split view."
         )
         XCTAssertEqual(L10n.string("Completely unknown key", languageCode: "ja", in: bundle), "Completely unknown key")
+
+        // `bundledLocalizations(in:)` unions `bundle.localizations` with a directory scan so flat
+        // `.lproj` directories at the bundle root are discovered even if `bundle.localizations` omits them.
+        try FileManager.default.createDirectory(at: bundleURL.appending(path: "zh-Hans.lproj"), withIntermediateDirectories: true)
+        let discovered = L10n.bundledLocalizations(in: bundle)
+        XCTAssertTrue(discovered.contains("en"))
+        XCTAssertTrue(discovered.contains("ja"))
+        XCTAssertTrue(discovered.contains("zh-Hans"))
     }
 
     /// The app's own `AppleLanguages`, as System Settings writes it per app: a language puts that one
@@ -600,16 +644,38 @@ final class LocalizationTests: XCTestCase {
                     case "n": result.append("\n")
                     case "r": result.append("\r")
                     case "t": result.append("\t")
-                    case "U", "u":
+                    case "U":
                         guard index + 4 <= scalars.count else {
                             throw StringsParseError.syntax("\(url.lastPathComponent):\(line): truncated \\U escape")
                         }
                         let hex = String(String.UnicodeScalarView(scalars[index ..< index + 4]))
-                        guard let code = UInt32(hex, radix: 16), let scalar = UnicodeScalar(code) else {
+                        guard let code = UInt32(hex, radix: 16) else {
                             throw StringsParseError.syntax("\(url.lastPathComponent):\(line): invalid \\U escape \\U\(hex)")
                         }
                         for _ in 0 ..< 4 { advance() }
-                        result.unicodeScalars.append(scalar)
+                        if (0xD800 ... 0xDBFF).contains(code) {
+                            guard index + 6 <= scalars.count,
+                                  scalars[index] == "\\", scalars[index + 1] == "U" else {
+                                throw StringsParseError.syntax("\(url.lastPathComponent):\(line): unpaired UTF-16 high surrogate \\U\(hex)")
+                            }
+                            let lowHex = String(String.UnicodeScalarView(scalars[index + 2 ..< index + 6]))
+                            guard let low = UInt32(lowHex, radix: 16), (0xDC00 ... 0xDFFF).contains(low) else {
+                                throw StringsParseError.syntax("\(url.lastPathComponent):\(line): invalid UTF-16 low surrogate \\U\(lowHex)")
+                            }
+                            for _ in 0 ..< 6 { advance() }
+                            let combined = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00)
+                            guard let scalar = UnicodeScalar(combined) else {
+                                throw StringsParseError.syntax("\(url.lastPathComponent):\(line): invalid surrogate pair \\U\(hex)\\U\(lowHex)")
+                            }
+                            result.unicodeScalars.append(scalar)
+                        } else if (0xDC00 ... 0xDFFF).contains(code) {
+                            throw StringsParseError.syntax("\(url.lastPathComponent):\(line): unpaired UTF-16 low surrogate \\U\(hex)")
+                        } else {
+                            guard let scalar = UnicodeScalar(code) else {
+                                throw StringsParseError.syntax("\(url.lastPathComponent):\(line): invalid Unicode scalar \\U\(hex)")
+                            }
+                            result.unicodeScalars.append(scalar)
+                        }
                     default:
                         result.unicodeScalars.append(esc)
                     }
@@ -653,7 +719,7 @@ final class LocalizationTests: XCTestCase {
     }
 
     private static let formatSpecifierRegex = try! NSRegularExpression(
-        pattern: #"%(?:([1-9][0-9]*)\$)?([-+ #0]*)(?:([0-9]+|\*))?(?:\.([0-9]+|\*))?(hh|h|ll|l|q|L|z|t|j)?([@dDiIuUxXoOfeEfFgGcCsSpAa%])"#
+        pattern: #"%%|%(?:([1-9][0-9]*)\$)?([-+#0]*)(?:([0-9]+|\*))?(?:\.([0-9]+|\*))?(hh|h|ll|l|q|L|z|t|j)?([@dDiIuUxXoOfeEfFgGcCsSpAa])"#
     )
 
     private func extractFormatSpecifiers(from text: String) -> Result<FormatSpecifierSignature, StringsParseError> {
@@ -667,12 +733,19 @@ final class LocalizationTests: XCTestCase {
         var matchedRanges: [Range<String.Index>] = []
 
         for match in matches {
-            guard let wholeRange = Range(match.range, in: text),
-                  let convRange = Range(match.range(at: 6), in: text) else { continue }
+            guard let wholeRange = Range(match.range, in: text) else { continue }
             matchedRanges.append(wholeRange)
-            let conversion = String(text[convRange])
-            if conversion == "%" { continue }
+            let token = String(text[wholeRange])
+            if token == "%%" { continue }
 
+            let width = Range(match.range(at: 3), in: text).map { String(text[$0]) }
+            let precision = Range(match.range(at: 4), in: text).map { String(text[$0]) }
+            if width == "*" || precision == "*" {
+                return .failure(.syntax("unsupported dynamic '*' width/precision specifier: \(token)"))
+            }
+
+            guard let convRange = Range(match.range(at: 6), in: text) else { continue }
+            let conversion = String(text[convRange])
             let length = Range(match.range(at: 5), in: text).map { String(text[$0]) } ?? ""
             let canonicalConv: String = switch conversion {
             case "i", "D": "d"
@@ -714,6 +787,9 @@ final class LocalizationTests: XCTestCase {
         switch extractFormatSpecifiers(from: english) {
         case let .success(sig): enSig = sig
         case let .failure(error): return "invalid English format string: \(error)"
+        }
+        if !enSig.placeholders.isEmpty && enSig.hasStrayPercent {
+            return "unescaped '%' in English format string (use '%%' for a literal percent)"
         }
         let trSig: FormatSpecifierSignature
         switch extractFormatSpecifiers(from: translated) {

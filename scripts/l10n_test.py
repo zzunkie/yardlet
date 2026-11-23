@@ -23,16 +23,23 @@ class StringsParserTests(unittest.TestCase):
             "   spanning lines */\n"
             "// Line comment\n"
             '"Hello \\"world\\"" = "Line 1\\nLine 2\\t\\\\end";\n'
-            '"Unicode" = "Snowman \\U2603";\n'
+            '"Unicode" = "Snowman \\U2603 Emoji \\UD83D\\UDE00 Lower \\u2603";\n'
         )
         cat = l10n.parse_strings(raw, "test.strings")
         self.assertEqual(cat.duplicates, [])
         self.assertEqual(cat.mapping['Hello "world"'], "Line 1\nLine 2\t\\end")
-        self.assertEqual(cat.mapping["Unicode"], "Snowman ☃")
+        # Apple .strings decodes uppercase \UXXXX (including UTF-16 surrogate pairs), not lowercase \u.
+        self.assertEqual(cat.mapping["Unicode"], "Snowman ☃ Emoji 😀 Lower u2603")
 
         serialized = l10n.format_strings([(e.key, e.value) for e in cat.entries])
         reparsed = l10n.parse_strings(serialized, "roundtrip.strings")
         self.assertEqual(reparsed.mapping, cat.mapping)
+
+    def test_rejects_unpaired_surrogates(self) -> None:
+        with self.assertRaises(l10n.StringsParseError):
+            l10n.parse_strings('"BadHigh" = "\\UD83D";\n')
+        with self.assertRaises(l10n.StringsParseError):
+            l10n.parse_strings('"BadLow" = "\\UDE00";\n')
 
     def test_detects_duplicates_and_syntax_errors(self) -> None:
         dup = l10n.parse_strings('"A" = "1";\n"B" = "2";\n"A" = "3";\n')
@@ -57,6 +64,11 @@ class FormatSpecifierParityTests(unittest.TestCase):
         self.assertIsNone(l10n.check_format_parity("%.1f%% of input", "入力の %.1f%%"))
         self.assertIsNone(l10n.check_format_parity("CPU %", "CPU %"))
         self.assertIsNone(l10n.check_format_parity("Battery under 20%", "バッテリー残量 20% 未満"))
+        # Prose percentages must not false-positive as space-flagged printf specifiers.
+        self.assertIsNone(l10n.check_format_parity("50% done", "50% 完了"))
+        self.assertIsNone(l10n.check_format_parity("10% off", "10% オフ"))
+        self.assertIsNone(l10n.check_format_parity("20% faster", "20% 高速"))
+        self.assertIsNone(l10n.check_format_parity("100% safe", "100% 安全"))
         self.assertIsNone(l10n.check_format_parity("Count %u", "件数 %u"))
         self.assertIsNone(l10n.check_format_parity("Value %d", "値 %i"))
 
@@ -66,9 +78,31 @@ class FormatSpecifierParityTests(unittest.TestCase):
         self.assertIsNotNone(l10n.check_format_parity("Count %lld", "Count %d"))
         self.assertIsNotNone(l10n.check_format_parity("Count %lld", "Count %@"))
         self.assertIsNotNone(l10n.check_format_parity("%1$@ %2$@", "%1$@ %@"))
-        self.assertIsNotNone(l10n.check_format_parity("%lld%% left", "%lld% left"))
         self.assertIsNotNone(l10n.check_format_parity("Plain text", "Plain %@"))
         self.assertIsNotNone(l10n.check_format_parity("%1$@ %1$@", "%1$@ %1$lld"))
+
+        # "%lld% left" fails specifically due to stray unescaped '%'.
+        specs, has_stray = l10n.extract_format_specifiers("%lld% left")
+        self.assertEqual(specs, {1: "lld"})
+        self.assertTrue(has_stray)
+        err = l10n.check_format_parity("%lld%% left", "%lld% left")
+        self.assertIsNotNone(err)
+        self.assertIn("unescaped '%'", err or "")
+
+        # English format string with unescaped '%' is also flagged.
+        en_err = l10n.check_format_parity("%lld% left", "%lld%% left")
+        self.assertIsNotNone(en_err)
+        self.assertIn("unescaped '%'", en_err or "")
+
+        # Malformed percent sequences like %50%, %1$%, %ll% are not accepted as %%.
+        for bad in ("%lld %50%", "%lld %1$%", "%lld %ll%"):
+            _, bad_stray = l10n.extract_format_specifiers(bad)
+            self.assertTrue(bad_stray, f"expected stray percent for {bad!r}")
+            self.assertIsNotNone(l10n.check_format_parity("%lld%% done", bad))
+
+        # Dynamic '*' width/precision specifiers are rejected.
+        self.assertIsNotNone(l10n.check_format_parity("Count %d", "Count %*d"))
+        self.assertIsNotNone(l10n.check_format_parity("Value %f", "Value %.*f"))
 
 
 class CLICommandTests(unittest.TestCase):
@@ -183,6 +217,16 @@ class CLICommandTests(unittest.TestCase):
         self.assertIn("pruned 1 orphan", stdout)
         code, _, _ = self.run_cli("check", "--strict")
         self.assertEqual(code, 0)
+
+        # Stray unescaped '%' in an English format string fails `check`.
+        en_path = self.resources / "en.lproj" / "Localizable.strings"
+        en_path.write_text(
+            en_path.read_text(encoding="utf-8") + '"BadEn" = "%lld% left";\n',
+            encoding="utf-8",
+        )
+        code, _, stderr = self.run_cli("check")
+        self.assertEqual(code, 1)
+        self.assertIn("unescaped '%'", stderr)
 
 
 if __name__ == "__main__":
