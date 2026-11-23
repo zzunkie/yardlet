@@ -323,13 +323,15 @@ final class BrowserHostPaneController {
         tab.onVaultSetupAskChange = nil
         emulation = nil
         handoff = nil
-        view?.emulatedSize = nil
         releaseVault(tab)
         isPanelOccluded = false
         isPanelParked = false
         self.tab = nil
+        // Disconnect the view from this tab before clearing emulation so `emulatedSize`'s
+        // `didSet` cannot send a host-panel resize that overwrites an active remote viewport.
         view?.tabID = nil
         view?.sendCommand = nil
+        view?.setEmulation(size: nil, scale: nil)
         view?.setPopup(nil)
         title = ""
         isLoading = false
@@ -421,7 +423,8 @@ final class BrowserHostPaneController {
     /// The view draws the tab at its emulated size, or at the view's own.
     private func showEmulation(of tab: BrowserTab) {
         emulation = tab.emulation
-        view?.emulatedSize = tab.emulation.map { CGSize(width: $0.width, height: $0.height) }
+        view?.setEmulation(size: tab.emulation.map { CGSize(width: $0.width, height: $0.height) },
+                           scale: tab.emulation?.mobile == true ? 2 : nil)
     }
 
     /// The person's Viewport menu: a size the page is shown at until they or the agent change it, or the panel's own

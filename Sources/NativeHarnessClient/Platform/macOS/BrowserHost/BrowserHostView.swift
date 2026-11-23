@@ -163,8 +163,25 @@ final class BrowserHostView: NSView, @preconcurrency NSTextInputClient, MouseHis
         }
     }
 
+    /// Backing scale forced by emulation (2 for mobile emulation, even on 1x displays); nil follows the window's scale.
+    private(set) var emulatedScale: CGFloat?
+
+    /// Updates both emulated size and scale together so at most one viewport resize is reported.
+    func setEmulation(size: CGSize?, scale: CGFloat? = nil) {
+        let sizeChanged = emulatedSize != size
+        let scaleChanged = emulatedScale != scale
+        guard sizeChanged || scaleChanged else { return }
+        emulatedScale = scale
+        if scaleChanged { applyScale() }
+        if sizeChanged {
+            emulatedSize = size
+        } else {
+            reportViewportIfChanged()
+        }
+    }
+
     var viewport: BrowserViewport {
-        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        let scale = emulatedScale ?? window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
         var screenX = 0.0, screenY = 0.0
         let page = pageFrame
         if let window, let screen = window.screen ?? NSScreen.main {
@@ -311,7 +328,7 @@ final class BrowserHostView: NSView, @preconcurrency NSTextInputClient, MouseHis
     }
 
     private func applyScale() {
-        let scale = window?.backingScaleFactor ?? 2
+        let scale = emulatedScale ?? window?.backingScaleFactor ?? 2
         frameDisplay.setScale(scale)
         popupLayer.contentsScale = scale
     }

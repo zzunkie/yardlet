@@ -536,6 +536,38 @@ final class BrowserPanelTabsTests: XCTestCase {
         XCTAssertFalse(tab.isPanelAttached)
     }
 
+    func testReleasingAnEmulatedPanelDoesNotOverwriteRemoteViewport() async throws {
+        let answering = AnsweringHostConnection()
+        let client = BrowserHostClient(idleGrace: .seconds(60)) { answering }
+        let task = UUID()
+        let workspace = TaskWorkspaceStore(browserClient: { client }).state(for: task)
+        let key = try XCTUnwrap(workspace.openBrowserTab(address: "https://a.test/"))
+        let controller = BrowserHostPaneController(session: task, key: key, workspace: workspace, client: client)
+        let view = BrowserHostView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        let window = NSWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = view
+        defer { withExtendedLifetime(window) {} }
+        controller.attach(view)
+        let tab = try XCTUnwrap(client.tab(key: key, forSession: task))
+
+        // Remote phone emulates the tab while the host panel is attached.
+        tab.sizeForRemote(BrowserViewportEmulation(width: 390, height: 844, mobile: true, owner: .remote))
+        await tab.waitForEmulation()
+        XCTAssertEqual(tab.viewport?.width, 390)
+        XCTAssertEqual(tab.viewport?.height, 844)
+        XCTAssertEqual(tab.viewport?.scale, 2)
+
+        // Detaching the host panel must not emit a host-bounds resize that clobbers the active remote width.
+        let sentBefore = answering.sent.count
+        controller.detach()
+        let resizesAfterRelease = answering.sent.dropFirst(sentBefore).compactMap { command -> BrowserViewport? in
+            if case let .resize(id, viewport) = command, id == tab.id { return viewport }
+            return nil
+        }
+        XCTAssertTrue(resizesAfterRelease.isEmpty, "Releasing an emulated tab must not send host-bounds resize: \(resizesAfterRelease)")
+        XCTAssertEqual(tab.viewport?.width, 390)
+    }
+
     func testTheStripShowsEachBrowserTabWithItsTitleAndIcon() throws {
         let directory = try WindowlessRender.directory("browser-panel-tabs-render")
         let tabs = TaskBrowserTabs()

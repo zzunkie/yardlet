@@ -1,4 +1,7 @@
+import AppKit
 import Foundation
+import ImageIO
+import IOSurface
 @preconcurrency import SwiftTerm
 import XCTest
 @testable import NativeHarnessClient
@@ -1785,7 +1788,7 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertEqual([frame.viewportWidth, frame.viewportHeight], [1280, 800])
         let shot = try XCTUnwrap(connection.calls.last { $0.method == "Page.captureScreenshot" }?.params)
         XCTAssertEqual(shot["format"]?.stringValue, "jpeg")
-        XCTAssertEqual(shot["quality"]?.integerValue, 60)
+        XCTAssertEqual(shot["quality"]?.integerValue, RemoteTabBridge.jpegQuality)
         XCTAssertEqual(shot["clip"]?["y"]?.doubleValue, 120)
         XCTAssertEqual(shot["clip"]?["scale"]?.doubleValue, 0.25, "half the page's CSS pixels, at a device scale of 2")
         connection.eventHandler?(.frame(tab: signIn.id, frame: Self.frame))
@@ -2538,6 +2541,263 @@ final class RemoteBridgeTests: XCTestCase {
         await model.shutdown()
     }
 
+    func testRemoteTabCaptureAwaitsResizeKeepsViewportTruthAndUsesFastIOSurfacePath() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "remote-tab-surface-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let task = SessionRecord(harness: .claudeCode, workspaceURL: folder, runtimeExecutableURL: URL(filePath: "/tmp/claude"),
+                                 title: "Surface perf")
+        let model = try Self.model(sessions: [task], transcripts: [:])
+        let connection = AnsweringHostConnection()
+        let client = BrowserHostClient(idleGrace: .seconds(60), agentVisibleWindow: .milliseconds(20)) { connection }
+        var currentSurface: (frame: BrowserFrame, surface: IOSurfaceRef)?
+        let bridge = AppModelRemoteBridge(model: model, browser: RemoteTabBridge.Environment(
+            client: { client }, usesMacEditingCommands: true, marksTypedSecrets: { true },
+            latestSurface: { _ in currentSurface }))
+        let signals = SignalRecorder()
+        bridge.setChangeHandler { signals.record($0) }
+
+        // Open tab on a 1x display viewport to verify mobile emulation bumps CEF scale to 2x.
+        let oneX = BrowserViewport(width: 1280, height: 800, scale: 1)
+        let tab = try client.openTab(forSession: task.id, url: "https://example.com/app", viewport: oneX)
+        connection.eventHandler?(.address(tab: tab.id, url: "https://example.com/app"))
+        let taskID = task.id.uuidString, tabID = tab.key.uuidString
+
+        // Multi-watcher priority: a newer desktop watcher wins over an earlier phone watcher instead of clamping to 390px.
+        let phone = RemoteTabViewport(width: 390, height: 844, mobile: true)
+        let desktop = RemoteTabViewport(width: 1200, height: 800, mobile: false)
+        await bridge.setWatchedTabs([RemoteTabWatch(taskID: taskID, tabID: tabID, viewport: phone)])
+        await tab.waitForEmulation()
+        XCTAssertEqual(tab.viewport?.width, 390)
+        XCTAssertEqual(tab.viewport?.height, 844)
+        XCTAssertEqual(tab.viewport?.scale, 2, "mobile emulation must scale CEF backing buffer to 2x on 1x hosts")
+
+        await bridge.setWatchedTabs([
+            RemoteTabWatch(taskID: taskID, tabID: tabID, viewport: phone),
+            RemoteTabWatch(taskID: taskID, tabID: tabID, viewport: desktop)
+        ])
+        await tab.waitForEmulation()
+        XCTAssertEqual(tab.viewport?.width, 1200, "newer desktop watcher must not be clamped to stale phone width")
+        XCTAssertEqual(tab.viewport?.height, 800)
+        XCTAssertEqual(tab.viewport?.scale, 1, "desktop emulation restores host scale")
+
+        // Emulation resize must still reach CEF even if an attached panel skipped reporting (e.g. empty bounds).
+        client.attachPanel(to: tab)
+        await bridge.setWatchedTabs([RemoteTabWatch(taskID: taskID, tabID: tabID, viewport: phone)])
+        // captureTab awaits the in-flight sizeForRemote before capturing.
+        connection.layout = (width: 390, height: 844, pageY: 0, ratio: 2)
+        // Return a real JPEG whose pixel width disagrees with 390*2 (simulating a mismatched backing buffer on unclipped shot).
+        let mismatchJPEG = try XCTUnwrap(Self.makeSolidJPEG(width: 400, height: 600))
+        connection.screenshotData = mismatchJPEG
+        let cdpFrame = try await bridge.captureTab(taskID: taskID, tabID: tabID, maxWidth: 1170, maxHeight: 2532).get()
+        XCTAssertEqual(tab.viewport?.width, 390, "captureTab awaited sizeForRemote and applied CEF resize despite attached panel")
+        XCTAssertEqual(tab.viewport?.scale, 2)
+        XCTAssertEqual(cdpFrame.viewportWidth, 390, "never overwrite viewportWidth with mismatched JPEG pixel widths")
+        XCTAssertEqual(cdpFrame.viewportHeight, 844)
+        XCTAssertEqual(cdpFrame.width, 400, "actual JPEG pixel dimensions are read on clipped fallback too")
+        XCTAssertEqual(cdpFrame.height, 600)
+        client.detachPanel(from: tab)
+
+        // Fast IOSurface capture path: 780x1688 (390x844 @ 2x) with red top half and blue bottom half.
+        let surface = try XCTUnwrap(Self.makeTestIOSurface(width: 780, height: 1688))
+        let surfaceFrame = BrowserFrame(layer: .view, surface: 42, pixelWidth: 780, pixelHeight: 1688,
+                                        sequence: 10, paintedAt: 0, source: "accelerated")
+        currentSurface = (surfaceFrame, surface)
+
+        // Pipe-ahead guard: before MainActor receives `.frame(sequence: 10)`, latestSurface is ahead of MainActor
+        // event order and must be rejected (falling back to CDP).
+        let callsBeforeAhead = connection.calls.count
+        let aheadFallback = try await bridge.captureTab(taskID: taskID, tabID: tabID, maxWidth: 390, maxHeight: 844).get()
+        XCTAssertTrue(connection.calls.dropFirst(callsBeforeAhead).contains { $0.method == "Page.captureScreenshot" },
+                      "a surface whose sequence has not yet reached MainActor must not bypass event ordering")
+        XCTAssertEqual(aheadFallback.viewportWidth, 390)
+
+        // Deliver the frame event on MainActor: now sequence 10 is in order and > minimumValidFrameSequence.
+        connection.eventHandler?(.frame(tab: tab.id, frame: surfaceFrame))
+        // First IOSurface capture verifies frame tree once (Page.enable was already sent, so only 1 Page.getFrameTree).
+        let callsBeforeFirst = connection.calls.count
+        let firstSurface = try await bridge.captureTab(taskID: taskID, tabID: tabID, maxWidth: 390, maxHeight: 844).get()
+        let firstMethods = connection.calls.dropFirst(callsBeforeFirst).map(\.method)
+        XCTAssertFalse(firstMethods.contains("Page.captureScreenshot"), "IOSurface fast path must skip CDP screenshot")
+        XCTAssertFalse(firstMethods.contains("Page.getLayoutMetrics"))
+        XCTAssertFalse(firstMethods.contains("Runtime.evaluate"))
+        XCTAssertEqual(firstMethods, ["Page.getFrameTree"])
+        XCTAssertEqual(firstSurface.width, 390)
+        XCTAssertEqual(firstSurface.height, 844)
+        XCTAssertEqual(firstSurface.viewportWidth, 390)
+        XCTAssertEqual(firstSurface.viewportHeight, 844)
+        XCTAssertFalse(IOSurfaceIsInUse(surface), "PinnedSurface must release IOSurface use count after encoding")
+
+        // Verify orientation and channel order (top half red, bottom half blue).
+        let source = try XCTUnwrap(CGImageSourceCreateWithData(firstSurface.image as CFData, nil))
+        let cgImage = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        let bitmap = NSBitmapImageRep(cgImage: cgImage)
+        let topColor = try XCTUnwrap(bitmap.colorAt(x: bitmap.pixelsWide / 2, y: 20)?.usingColorSpace(.sRGB))
+        let bottomColor = try XCTUnwrap(bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh - 20)?.usingColorSpace(.sRGB))
+        XCTAssertGreaterThan(topColor.redComponent, 0.7)
+        XCTAssertLessThan(topColor.blueComponent, 0.3)
+        XCTAssertGreaterThan(bottomColor.blueComponent, 0.7)
+        XCTAssertLessThan(bottomColor.redComponent, 0.3)
+
+        // Second consecutive capture on the unchanged https: document makes ZERO CDP calls and schedules a crisp settle paint.
+        let callsBeforeSecond = connection.calls.count
+        let paintedBefore = signals.changes.filter { if case .tabPainted = $0 { true } else { false } }.count
+        let secondSurface = try await bridge.captureTab(taskID: taskID, tabID: tabID, maxWidth: 390, maxHeight: 844).get()
+        XCTAssertEqual(connection.calls.count, callsBeforeSecond, "steady-state IOSurface capture should make 0 CDP calls")
+        XCTAssertEqual(secondSurface.width, 390)
+        try await waitUntilAsync {
+            signals.changes.filter { if case .tabPainted = $0 { true } else { false } }.count > paintedBefore
+        }
+
+        // Security — stale IOSurface after navigation: navigating from an outside file: page to https: invalidates
+        // sequence 10 so the old surface cannot be encoded until a fresh post-navigation frame arrives on MainActor.
+        connection.eventHandler?(.address(tab: tab.id, url: "file:///etc/hosts"))
+        let fileSurfaceFrame = BrowserFrame(layer: .view, surface: 42, pixelWidth: 780, pixelHeight: 1688,
+                                            sequence: 11, paintedAt: 0, source: "accelerated")
+        currentSurface = (fileSurfaceFrame, surface)
+        connection.eventHandler?(.frame(tab: tab.id, frame: fileSurfaceFrame))
+        connection.eventHandler?(.address(tab: tab.id, url: "https://example.com/after-file"))
+        connection.eventHandler?(.newDocument(tab: tab.id, url: "https://example.com/after-file"))
+        let callsAfterNav = connection.calls.count
+        _ = try await bridge.captureTab(taskID: taskID, tabID: tabID, maxWidth: 390, maxHeight: 844).get()
+        XCTAssertTrue(connection.calls.dropFirst(callsAfterNav).contains { $0.method == "Page.captureScreenshot" },
+                      "stale surface from before navigation must fall back to CDP instead of leaking prior page pixels")
+
+        // Security — stale IOSurface after emulation change (mobile toggled at identical pixel dimensions):
+        // Use a 2x tab so both mobile=true and mobile=false have exact 780x1688 backing pixels; toggling mobile
+        // must still invalidate earlier surface sequences via `minimumValidFrameSequence`.
+        let retinaTab = try client.newTab(forSession: task.id, url: "https://example.com/toggle",
+                                          viewport: BrowserViewport(width: 390, height: 844, scale: 2), select: true)
+        connection.eventHandler?(.address(tab: retinaTab.id, url: "https://example.com/toggle"))
+        let retinaTabID = retinaTab.key.uuidString
+        await bridge.setWatchedTabs([RemoteTabWatch(taskID: taskID, tabID: retinaTabID, viewport: phone)])
+        await retinaTab.waitForEmulation()
+        let preToggleFrame = BrowserFrame(layer: .view, surface: 42, pixelWidth: 780, pixelHeight: 1688,
+                                          sequence: 12, paintedAt: 0, source: "accelerated")
+        currentSurface = (preToggleFrame, surface)
+        connection.eventHandler?(.frame(tab: retinaTab.id, frame: preToggleFrame))
+        // Confirm sequence 12 takes the IOSurface fast path before the toggle.
+        let callsBeforeToggle = connection.calls.count
+        _ = try await bridge.captureTab(taskID: taskID, tabID: retinaTabID, maxWidth: 390, maxHeight: 844).get()
+        XCTAssertFalse(connection.calls.dropFirst(callsBeforeToggle).contains { $0.method == "Page.captureScreenshot" })
+        // Toggle mobile: true -> false at the exact same 390x844 @ 2x (780x1688 pixels).
+        let desktopSameSize = RemoteTabViewport(width: 390, height: 844, mobile: false)
+        await bridge.setWatchedTabs([RemoteTabWatch(taskID: taskID, tabID: retinaTabID, viewport: desktopSameSize)])
+        await retinaTab.waitForEmulation()
+        XCTAssertEqual(retinaTab.viewport?.scale, 2)
+        let callsAfterToggle = connection.calls.count
+        _ = try await bridge.captureTab(taskID: taskID, tabID: retinaTabID, maxWidth: 390, maxHeight: 844).get()
+        XCTAssertTrue(connection.calls.dropFirst(callsAfterToggle).contains { $0.method == "Page.captureScreenshot" },
+                      "emulation toggle at identical 780x1688 pixel size must invalidate earlier surface sequence")
+        retinaTab.close()
+
+        // Switch back to the original phone-emulated tab and deliver fresh sequence 13 for subframe navigation check.
+        await bridge.setWatchedTabs([RemoteTabWatch(taskID: taskID, tabID: tabID, viewport: phone)])
+        await tab.waitForEmulation()
+        let freshFrame = BrowserFrame(layer: .view, surface: 42, pixelWidth: 780, pixelHeight: 1688,
+                                      sequence: 13, paintedAt: 0, source: "accelerated")
+        currentSurface = (freshFrame, surface)
+        connection.eventHandler?(.frame(tab: tab.id, frame: freshFrame))
+        let callsBeforeFresh = connection.calls.count
+        _ = try await bridge.captureTab(taskID: taskID, tabID: tabID, maxWidth: 390, maxHeight: 844).get()
+        XCTAssertFalse(connection.calls.dropFirst(callsBeforeFresh).contains { $0.method == "Page.captureScreenshot" })
+
+        // Security preserved on IOSurface fast path: a transient file: frame navigation (even if a newer frame paints)
+        // refuses capture with `.notAllowed`.
+        connection.eventHandler?(.devTools(tab: tab.id, message:
+            #"{"method":"Page.frameNavigated","params":{"frame":{"id":"child","parentId":"main","loaderId":"F1","url":"file:///etc/hosts"}}}"#))
+        let transientFileFrame = BrowserFrame(layer: .view, surface: 42, pixelWidth: 780, pixelHeight: 1688,
+                                              sequence: 14, paintedAt: 0, source: "accelerated")
+        currentSurface = (transientFileFrame, surface)
+        connection.eventHandler?(.frame(tab: tab.id, frame: transientFileFrame))
+        let blockedFile = await bridge.captureTab(taskID: taskID, tabID: tabID, maxWidth: 390, maxHeight: 844)
+        guard case let .failure(fileError) = blockedFile else {
+            return XCTFail("IOSurface fast path must block frames navigating to outside file: URLs")
+        }
+        XCTAssertEqual(fileError.code, .notAllowed)
+
+        // Mismatched stale IOSurface dimensions fall back cleanly to CDP instead of sending a wrong-width frame.
+        let staleSurface = try XCTUnwrap(Self.makeTestIOSurface(width: 1200, height: 800))
+        let staleFrame = BrowserFrame(layer: .view, surface: 43, pixelWidth: 1200, pixelHeight: 800,
+                                      sequence: 15, paintedAt: 0, source: "accelerated")
+        currentSurface = (staleFrame, staleSurface)
+        connection.eventHandler?(.frame(tab: tab.id, frame: staleFrame))
+        let callsBeforeStale = connection.calls.count
+        let fallback = try await bridge.captureTab(taskID: taskID, tabID: tabID, maxWidth: 390, maxHeight: 844).get()
+        XCTAssertTrue(connection.calls.dropFirst(callsBeforeStale).contains { $0.method == "Page.captureScreenshot" },
+                      "stale IOSurface size must fall back to CDP")
+        XCTAssertEqual(fallback.viewportWidth, 390)
+
+        // Security — when Page.enable fails, IOSurface fast path must NEVER be used.
+        let noEnableTab = try client.newTab(forSession: task.id, url: "https://example.com/no-page-enable",
+                                            viewport: BrowserViewport(width: 390, height: 844, scale: 2), select: true)
+        connection.eventHandler?(.address(tab: noEnableTab.id, url: "https://example.com/no-page-enable"))
+        let noEnableFrame = BrowserFrame(layer: .view, surface: 44, pixelWidth: 780, pixelHeight: 1688,
+                                         sequence: 1, paintedAt: 0, source: "accelerated")
+        currentSurface = (noEnableFrame, surface)
+        connection.eventHandler?(.frame(tab: noEnableTab.id, frame: noEnableFrame))
+        connection.refuses = ["Page.enable"]
+        let callsBeforeNoEnable = connection.calls.count
+        _ = try await bridge.captureTab(taskID: taskID, tabID: noEnableTab.key.uuidString, maxWidth: 390, maxHeight: 844).get()
+        XCTAssertTrue(connection.calls.dropFirst(callsBeforeNoEnable).contains { $0.method == "Page.captureScreenshot" },
+                      "IOSurface fast path must be disabled when Page.enable failed")
+        connection.refuses = []
+
+        // Deterministic multi-watcher tie-breaker: simultaneous viewports in a single setWatchedTabs call share the
+        // same watchSequence and deterministically choose the wider viewport regardless of Set iteration order.
+        for _ in 0..<8 {
+            let tieBridge = AppModelRemoteBridge(model: model, browser: RemoteTabBridge.Environment(client: { client }))
+            let tieTab = try client.newTab(forSession: task.id, url: "https://example.com/tie",
+                                           viewport: .offscreenDefault, select: true)
+            await tieBridge.setWatchedTabs([
+                RemoteTabWatch(taskID: taskID, tabID: tieTab.key.uuidString, viewport: phone),
+                RemoteTabWatch(taskID: taskID, tabID: tieTab.key.uuidString, viewport: desktop)
+            ])
+            await tieTab.waitForEmulation()
+            XCTAssertEqual(tieTab.viewport?.width, 1200, "simultaneous watchers must deterministically tie-break to wider viewport")
+            XCTAssertEqual(tieTab.viewport?.height, 800)
+            await tieBridge.setWatchedTabs([])
+            tieTab.close()
+        }
+
+        await bridge.setWatchedTabs([])
+        await model.shutdown()
+    }
+
+    private static func makeTestIOSurface(width: Int, height: Int) -> IOSurfaceRef? {
+        let properties: [CFString: Any] = [
+            kIOSurfaceWidth: width,
+            kIOSurfaceHeight: height,
+            kIOSurfaceBytesPerElement: 4,
+            kIOSurfacePixelFormat: OSType(0x4247_5241) // 'BGRA'
+        ]
+        guard let surface = IOSurfaceCreate(properties as CFDictionary) else { return nil }
+        IOSurfaceLock(surface, [], nil)
+        defer { IOSurfaceUnlock(surface, [], nil) }
+        let base = IOSurfaceGetBaseAddress(surface).assumingMemoryBound(to: UInt8.self)
+        let stride = IOSurfaceGetBytesPerRow(surface)
+        for y in 0..<height {
+            let row = base + y * stride
+            let isTop = y < height / 2
+            for x in 0..<width {
+                let offset = x * 4
+                row[offset + 0] = isTop ? 0 : 255   // B
+                row[offset + 1] = 0                 // G
+                row[offset + 2] = isTop ? 255 : 0   // R
+                row[offset + 3] = 255               // A
+            }
+        }
+        return surface
+    }
+
+    private static func makeSolidJPEG(width: Int, height: Int) -> Data? {
+        guard let bitmap = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height, bitsPerSample: 8, samplesPerPixel: 4,
+            hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ) else { return nil }
+        return bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.7])
+    }
+
     private static let frame = BrowserFrame(layer: .view, surface: 1, pixelWidth: 2560, pixelHeight: 1600, sequence: 1,
                                             paintedAt: 0, source: "accelerated")
 
@@ -3085,6 +3345,8 @@ final class AnsweringHostConnection: BrowserHostConnection {
     var refuses: Set<String> = []
     /// What the page's copy of its selection gives (`RemoteTabCopies.copyFunction`): nil copies nothing.
     var copiedText: String?
+    /// Custom screenshot payload returned by `Page.captureScreenshot`, defaulting to `"JPEG"`.
+    var screenshotData: Data?
 
     func send(_ command: BrowserHostCommand) {
         sent.append(command)
@@ -3103,7 +3365,7 @@ final class AnsweringHostConnection: BrowserHostConnection {
         case "Runtime.evaluate" where object["params"]?["expression"]?.stringValue?.contains("navigator.userAgent") == true:
             #"{"result":{"type":"object","value":["Mozilla/5.0 (Macintosh) Chrome/154.0.0.0 Safari/537.36",[]]}}"#
         case "Runtime.evaluate": #"{"result":{"type":"number","value":\#(layout.ratio)}}"#
-        case "Page.captureScreenshot": #"{"data":"\#(Data("JPEG".utf8).base64EncodedString())"}"#
+        case "Page.captureScreenshot": #"{"data":"\#((screenshotData ?? Data("JPEG".utf8)).base64EncodedString())"}"#
         case "Runtime.callFunctionOn" where object["params"]?["functionDeclaration"]?.stringValue?.contains("ClipboardEvent") == true:
             #"{"result":{"type":"object","value":\#(copiedText.map { RemoteJSON.string(["text": $0]) } ?? "null")}}"#
         case "Page.addScriptToEvaluateOnNewDocument": #"{"identifier":"9"}"#

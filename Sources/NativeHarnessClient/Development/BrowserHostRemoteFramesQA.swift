@@ -48,7 +48,8 @@ final class BrowserHostRemoteFramesQA {
         }
         token = launch.environment[AgentToolEnvironment.token] ?? ""
         let hostClient = client
-        bridge = RemoteTabBridge(model: model, environment: RemoteTabBridge.Environment(client: { hostClient }))
+        bridge = RemoteTabBridge(model: model, environment: RemoteTabBridge.Environment(
+            client: { hostClient }, latestSurface: { MacBrowserHost.shared.latestFrame(of: $0) }))
 
         let opened = await call(AgentToolCatalog.navigate, ["url": .string(base + "remote-frames")])
         check("the agent's tab loads", !opened.isError, opened.text)
@@ -157,7 +158,8 @@ final class BrowserHostRemoteFramesQA {
             let server = RemoteServer(
                 configuration: RemoteServer.Configuration(server: RemoteServerInfo(name: "Mac Studio", appVersion: "qa"),
                                                           macKey: identity.noise.publicKey),
-                bridge: AppModelRemoteBridge(model: model, browser: RemoteTabBridge.Environment(client: { hostClient })),
+                bridge: AppModelRemoteBridge(model: model, browser: RemoteTabBridge.Environment(
+                    client: { hostClient }, latestSurface: { MacBrowserHost.shared.latestFrame(of: $0) })),
                 devices: RemoteDeviceStore(fileURL: nil))
             await server.start()
             let listener = RemoteSecureListener(server: server, staticKey: identity.noise, port: 0, advertisement: nil, loopbackOnly: true)

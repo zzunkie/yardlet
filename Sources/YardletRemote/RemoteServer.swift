@@ -450,9 +450,9 @@ public actor RemoteServer {
         public var macKey: Data?
         /// Where files a phone sends are kept (§15.20).
         public var uploadDirectory = RemoteUploadStore.defaultDirectory
-        /// How soon a watched tab's next look may follow the last one's start (ten a second, as often as a phone sends
-        /// scrolling), and how long a tab that drew the same picture again waits at most before the next look (§15.25).
-        public var tabFrameInterval: TimeInterval = 0.1
+        /// How soon a watched tab's next look may follow the last one's start (up to 25 fps while the page changes),
+        /// and how long a tab that drew the same picture again waits at most before the next look (§15.25).
+        public var tabFrameInterval: TimeInterval = 0.04
         public var tabFrameIdleInterval: TimeInterval = 2
         public var tabFrameAckTimeout: TimeInterval = RemoteProtocol.tabFrameAckTimeout
 

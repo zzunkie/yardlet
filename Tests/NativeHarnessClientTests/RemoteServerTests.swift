@@ -1901,6 +1901,45 @@ final class RemoteServerTests: XCTestCase {
         XCTAssertEqual(third.image, Data("three".utf8))
     }
 
+    /// Multiple watchers on the same tab give viewport priority to the most recently active watcher (watch or input),
+    /// so an idle phone does not shrink a desktop Mac watcher to 390px.
+    func testMultipleWatchersPromoteMostRecentlyActiveViewport() async throws {
+        let harness = try await ServerHarness()
+        let phone = try await harness.authenticatedPhone()
+        let mac = try await harness.authenticatedPhone()
+        await harness.send(#"{"id":"w1","type":"watchTab","taskId":"A","tabId":"T1","viewport":{"width":390,"height":844,"mobile":true}}"#, on: phone)
+        _ = try await phone.response("w1")
+        let phoneViewport = RemoteTabViewport(width: 390, height: 844, mobile: true)
+        try await waitUntilAsync { await harness.bridge.watchedTabs == [RemoteTabWatch(taskID: "A", tabID: "T1", viewport: phoneViewport)] }
+
+        // A desktop Mac starts watching the same tab: its viewport takes precedence over the earlier phone watch.
+        await harness.send(#"{"id":"w2","type":"watchTab","taskId":"A","tabId":"T1","viewport":{"width":1200,"height":800,"mobile":false}}"#, on: mac)
+        _ = try await mac.response("w2")
+        let macViewport = RemoteTabViewport(width: 1200, height: 800, mobile: false)
+        try await waitUntilAsync { await harness.bridge.watchedTabs == [RemoteTabWatch(taskID: "A", tabID: "T1", viewport: macViewport)] }
+
+        // Input from the phone promotes the phone's viewport; input from the Mac promotes the Mac's viewport again.
+        await harness.send(#"{"id":"i1","type":"tabInput","taskId":"A","tabId":"T1","input":{"kind":"click","x":10,"y":10}}"#, on: phone)
+        _ = try await phone.response("i1")
+        try await waitUntilAsync { await harness.bridge.watchedTabs == [RemoteTabWatch(taskID: "A", tabID: "T1", viewport: phoneViewport)] }
+
+        await harness.send(#"{"id":"i2","type":"tabInput","taskId":"A","tabId":"T1","input":{"kind":"click","x":10,"y":10}}"#, on: mac)
+        _ = try await mac.response("i2")
+        try await waitUntilAsync { await harness.bridge.watchedTabs == [RemoteTabWatch(taskID: "A", tabID: "T1", viewport: macViewport)] }
+
+        // Viewport fitting guards against zero/non-finite geometry and disables mobile emulation at tablet/desktop widths.
+        XCTAssertNil(RemoteTabViewport.fitted(width: 0, height: 0, scale: 3))
+        XCTAssertNil(RemoteTabViewport.fitted(width: 390, height: 0, scale: 3))
+        XCTAssertNil(RemoteTabViewport.fitted(width: .nan, height: 844, scale: 3))
+        XCTAssertNil(RemoteTabViewport.fitted(width: 390, height: 844, scale: 0))
+        let narrow = try XCTUnwrap(RemoteTabViewport.fitted(width: 390, height: 844, scale: 3))
+        XCTAssertEqual(narrow.viewport, RemoteTabViewport(width: 390, height: 844, mobile: true))
+        XCTAssertEqual(narrow.maxWidth, 1_170)
+        XCTAssertEqual(narrow.maxHeight, 2_532)
+        let tablet = try XCTUnwrap(RemoteTabViewport.fitted(width: 768, height: 1_024, scale: 2))
+        XCTAssertEqual(tablet.viewport, RemoteTabViewport(width: 768, height: 1_024, mobile: false))
+    }
+
     /// Watching again while a look runs does not let the next look come sooner than the connection's pace (§15.25).
     func testWatchingAgainDoesNotSpeedUpTheLooks() async throws {
         let harness = try await ServerHarness { $0.tabFrameInterval = 0.5; $0.tabFrameIdleInterval = 1 }

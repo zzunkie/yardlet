@@ -143,6 +143,9 @@ final class CEFBrowserHostProcess: BrowserHostConnection {
                         // The host released the tab's rings; the frames written before this are in.
                         surfaces.evict(tab: tab)
                         router.forgetLatestFrame(of: tab)
+                    case .address(let tab, _), .newDocument(let tab, _):
+                        // Drop cached frames from the previous page so a navigation never exposes a stale surface.
+                        router.forgetLatestFrame(of: tab)
                     case .popup(let tab, nil):
                         surfaces.evict(tab: tab, layer: .popup)
                     default:
@@ -477,6 +480,10 @@ final class MacBrowserHost: NativeSurfaceResource {
 
     func surface(for token: UInt64) -> IOSurfaceRef? {
         process?.surface(for: token)
+    }
+
+    func latestFrame(of tab: BrowserTabID) -> (frame: BrowserFrame, surface: IOSurfaceRef)? {
+        process?.frameRouter.latestFrame(of: tab)
     }
 
     /// Sends the tab's page frames straight to the display, off the main thread, until

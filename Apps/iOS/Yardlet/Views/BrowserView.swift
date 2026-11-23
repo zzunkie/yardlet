@@ -354,7 +354,9 @@ struct BrowserView: View {
         .overlay(alignment: .top) { CommandErrorBanner(session: session).padding(.top, 8) }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
             pageBottom = frame.maxY
-            browser.setSize(TaskBrowser.Size(width: frame.width, height: frame.height, scale: displayScale))
+            if let size = TaskBrowser.Size(width: frame.width, height: frame.height, scale: displayScale) {
+                browser.setSize(size)
+            }
         }
     }
 

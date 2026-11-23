@@ -238,6 +238,7 @@ private struct RemoteBrowserPage: NSViewRepresentable {
 
     static func dismantleNSView(_ view: RemoteBrowserPageView, coordinator: ()) {
         view.passwordField = false
+        view.show(nil)
     }
 }
 
@@ -250,7 +251,9 @@ private struct RemoteBrowserPage: NSViewRepresentable {
 /// as in the Mac's own browser panel.
 @MainActor
 final class RemoteBrowserPageView: NSView, @preconcurrency NSTextInputClient, NSMenuItemValidation {
-    weak var browser: RemoteBrowserModel?
+    weak var browser: RemoteBrowserModel? {
+        didSet { if browser !== oldValue { reportPanelSize() } }
+    }
     var hostName = ""
     var passwordField = false {
         didSet { if passwordField != oldValue { updateSecureInput() } }
@@ -259,7 +262,10 @@ final class RemoteBrowserPageView: NSView, @preconcurrency NSTextInputClient, NS
 
     private let pageLayer = CALayer()
     private let composing = NSTextField(labelWithString: "")
-    private var shownFrame: Int?
+    private var requestedFrame: Int?
+    private var decodeOrder: UInt64 = 0
+    private var appliedDecodeOrder: UInt64 = 0
+    private var decodeTask: Task<Void, Never>?
     private var pictureSize: CGSize = .zero
     private var marked = NSAttributedString()
     private var lastPoint: NSPoint?
@@ -300,20 +306,52 @@ final class RemoteBrowserPageView: NSView, @preconcurrency NSTextInputClient, NS
     // MARK: Picture
 
     func show(_ frame: RemoteBrowserModel.Frame?) {
-        guard frame?.number != shownFrame || frame == nil else { return }
-        shownFrame = frame?.number
-        guard let frame, let source = CGImageSourceCreateWithData(frame.image as CFData, nil),
-              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+        guard let frame else {
+            decodeTask?.cancel()
+            decodeTask = nil
+            decodeOrder &+= 1
+            appliedDecodeOrder = decodeOrder
+            requestedFrame = nil
             pageLayer.contents = nil
             pictureSize = .zero
             return
         }
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        pageLayer.contents = image
-        pictureSize = CGSize(width: frame.viewportWidth, height: frame.viewportHeight)
-        layoutPicture()
-        CATransaction.commit()
+        guard frame.number != requestedFrame else { return }
+        requestedFrame = frame.number
+        decodeTask?.cancel()
+        decodeOrder &+= 1
+        let order = decodeOrder
+        let data = frame.image
+        let viewportSize = CGSize(width: frame.viewportWidth, height: frame.viewportHeight)
+        let frameNumber = frame.number
+        decodeTask = Task { [weak self] in
+            let image = await Self.decodeImage(data)
+            guard !Task.isCancelled, let self, order > self.appliedDecodeOrder,
+                  self.requestedFrame == frameNumber else { return }
+            self.appliedDecodeOrder = order
+            // Keep the last valid picture on screen if a frame fails to decode.
+            guard let image else { return }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            self.pageLayer.contents = image
+            self.pictureSize = viewportSize
+            self.layoutPicture()
+            CATransaction.commit()
+        }
+    }
+
+    nonisolated private static func decodeImage(_ data: Data) async -> CGImage? {
+        let worker = Task.detached(priority: .userInitiated) { () -> CGImage? in
+            guard !Task.isCancelled,
+                  let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+            let options: [CFString: Any] = [kCGImageSourceShouldCacheImmediately: true]
+            return CGImageSourceCreateImageAtIndex(source, 0, options as CFDictionary)
+        }
+        return await withTaskCancellationHandler {
+            await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
     }
 
     override func layout() {
@@ -322,6 +360,15 @@ final class RemoteBrowserPageView: NSView, @preconcurrency NSTextInputClient, NS
         CATransaction.setDisableActions(true)
         layoutPicture()
         CATransaction.commit()
+        reportPanelSize()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        reportPanelSize()
+    }
+
+    private func reportPanelSize() {
         guard let window, !bounds.isEmpty else { return }
         browser?.setPanelSize(width: bounds.width, height: bounds.height, scale: window.backingScaleFactor)
     }
@@ -548,6 +595,7 @@ final class RemoteBrowserPageView: NSView, @preconcurrency NSTextInputClient, NS
                 })
             }
         }
+        reportPanelSize()
         updateSecureInput()
     }
 

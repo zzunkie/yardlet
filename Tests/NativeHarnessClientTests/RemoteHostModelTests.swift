@@ -1446,6 +1446,8 @@ final class RemoteHostModelTests: XCTestCase {
         browser.send = { request, _ in
             if case let .watchTab(_, _, _, _, viewport, _, _) = request { viewports.append(viewport) }
         }
+        browser.setPanelSize(width: 0, height: 0, scale: 2)
+        XCTAssertNil(browser.viewport, "empty transient layout must not produce a minimum-size viewport")
         browser.setPanelSize(width: 687, height: 827, scale: 2)
         browser.show(taskID: "task", tabID: "tab")
         let panel = RemoteTabViewport(width: 687, height: 827, mobile: false)

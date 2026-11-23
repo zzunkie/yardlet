@@ -46,7 +46,8 @@ extension RemoteControlService {
                 marksTypedSecrets: {
                     let vault = MacAgentToolService.shared.vault
                     return vault.isAllowedBuild && (vault.isEnabled || vault.isWalletEnabled)
-                })),
+                },
+                latestSurface: { MacBrowserHost.shared.latestFrame(of: $0) })),
             deviceStore: RemoteDeviceStore(fileURL: folder.appending(path: "devices.json")),
             audit: RemoteAuditLog(fileURL: folder.appending(path: "audit.log")),
             identityStore: KeychainRemoteIdentityStore.live(),
