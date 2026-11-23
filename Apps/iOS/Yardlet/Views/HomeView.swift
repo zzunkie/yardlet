@@ -20,6 +20,21 @@ struct HomeView: View {
     @State private var activeSheet: ActiveSheet?
     @State private var pendingSheet: ActiveSheet?
     @State private var pendingSchedules = false
+    @State private var mailCalendarStore: MailCalendarStore
+    @State private var isWatchingMailCalendarV2 = false
+
+    init(session: HostSession) {
+        self.session = session
+        _mailCalendarStore = State(initialValue: MailCalendarStore(session: session))
+    }
+
+    private var usesMailCalendarV2: Bool {
+        session.capabilities.mailCalendarV2 && !session.isDemo
+    }
+
+    private var wantsMailCalendarV2Watch: Bool {
+        usesMailCalendarV2 && (selectedTab == .mail || selectedTab == .calendar)
+    }
 
     private enum ActiveSheet: String, Identifiable {
         case macSheet
@@ -76,14 +91,36 @@ struct HomeView: View {
                         .opacity(selectedTab == .tasks ? 1 : 0)
                         .allowsHitTesting(selectedTab == .tasks)
                         .accessibilityHidden(selectedTab != .tasks)
-                    MailTabPlaceholderView(session: session, onOpenConnectors: { activeSheet = .connectors })
+                    if usesMailCalendarV2 {
+                        MailTabView(
+                            session: session,
+                            store: mailCalendarStore,
+                            isActive: selectedTab == .mail,
+                            onOpenConnectors: { activeSheet = .connectors }
+                        )
                         .opacity(selectedTab == .mail ? 1 : 0)
                         .allowsHitTesting(selectedTab == .mail)
                         .accessibilityHidden(selectedTab != .mail)
-                    CalendarTabPlaceholderView(session: session, onOpenConnectors: { activeSheet = .connectors })
+
+                        CalendarTabView(
+                            session: session,
+                            store: mailCalendarStore,
+                            isActive: selectedTab == .calendar,
+                            onOpenConnectors: { activeSheet = .connectors }
+                        )
                         .opacity(selectedTab == .calendar ? 1 : 0)
                         .allowsHitTesting(selectedTab == .calendar)
                         .accessibilityHidden(selectedTab != .calendar)
+                    } else {
+                        MailTabPlaceholderView(session: session, onOpenConnectors: { activeSheet = .connectors })
+                            .opacity(selectedTab == .mail ? 1 : 0)
+                            .allowsHitTesting(selectedTab == .mail)
+                            .accessibilityHidden(selectedTab != .mail)
+                        CalendarTabPlaceholderView(session: session, onOpenConnectors: { activeSheet = .connectors })
+                            .opacity(selectedTab == .calendar ? 1 : 0)
+                            .allowsHitTesting(selectedTab == .calendar)
+                            .accessibilityHidden(selectedTab != .calendar)
+                    }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -164,6 +201,46 @@ struct HomeView: View {
                     search = ""
                     isSearchFocused = false
                 }
+            }
+        }
+        .onChange(of: wantsMailCalendarV2Watch, initial: true) { _, shouldWatch in
+            if shouldWatch && !isWatchingMailCalendarV2 {
+                isWatchingMailCalendarV2 = true
+                session.beginWatchingMailCalendarV2()
+            } else if !shouldWatch && isWatchingMailCalendarV2 {
+                isWatchingMailCalendarV2 = false
+                session.endWatchingMailCalendarV2()
+            }
+        }
+        .onChange(of: session.mailCalendarV2State) { _, next in
+            mailCalendarStore.syncHostState(next)
+        }
+        .onChange(of: session.isConnected) { _, connected in
+            mailCalendarStore.handleConnectionChanged(isConnected: connected)
+            if connected && usesMailCalendarV2 {
+                switch selectedTab {
+                case .mail: mailCalendarStore.activateMailTab()
+                case .calendar: mailCalendarStore.activateCalendarTab()
+                case .tasks: break
+                }
+            }
+        }
+        .onChange(of: session.mailCalendarV2Changes) { _, _ in
+            if wantsMailCalendarV2Watch {
+                mailCalendarStore.handleHostDataChanged(activeTab: selectedTab)
+            }
+        }
+        .onAppear {
+            if wantsMailCalendarV2Watch && !isWatchingMailCalendarV2 {
+                isWatchingMailCalendarV2 = true
+                session.beginWatchingMailCalendarV2()
+            }
+        }
+        .onDisappear {
+            mailCalendarStore.cancelAllTasks()
+            if isWatchingMailCalendarV2 {
+                isWatchingMailCalendarV2 = false
+                session.endWatchingMailCalendarV2()
             }
         }
         // A task a conversation's link or a schedule's run names opens as the list opens it.
@@ -1208,7 +1285,7 @@ private struct MailCalendarPlaceholderView: View {
             }
         }
         .task(id: session.isConnected) {
-            if session.isConnected && hostSupportsKind && session.mailCalendarState == nil {
+            if session.isConnected && !session.capabilities.mailCalendarV2 && hostSupportsKind && session.mailCalendarState == nil {
                 await session.refreshMailCalendarState()
             }
         }
