@@ -102,6 +102,11 @@ import XCTest
         XCTAssertFalse(model.followUps.isPaused(task.id))
         XCTAssertEqual(model.followUps.queue(for: task.id).map(\.draft.text),
                        ["Fix the broken test first", "Then deploy it"])
+        // Even if the other queued item is moved up while waiting for the cancelled turn to settle,
+        // the item chosen for Stop and send still starts next.
+        model.moveQueued(held[0].id, in: task, to: 0)
+        XCTAssertEqual(model.followUps.queue(for: task.id).map(\.draft.text),
+                       ["Then deploy it", "Fix the broken test first"])
         let sentBeforeReady = await adapter.sent
         XCTAssertEqual(sentBeforeReady, ["Build the site"], "Waits until the cancelled turn finishes")
 
@@ -184,14 +189,20 @@ import XCTest
         try await waitUntil { await adapter.interrupts == 1 }
         // A second Stop and send while the first interrupt is in flight is ignored instead of firing a second interrupt.
         await model.stopAndSendQueued(held[1].id, for: task)
+        // Even if ready arrives before the first interrupt call returns, a second Stop and send cannot
+        // bypass the in-flight guard and start the other item ahead of the first.
+        await adapter.emit(.turnCompleted)
+        await adapter.emit(.sessionStatusChanged(.ready))
+        try await waitUntil { model.store.sessions.first?.status == .ready }
+        await model.stopAndSendQueued(held[1].id, for: task)
         let interruptsDuringFlight = await adapter.interrupts
         XCTAssertEqual(interruptsDuringFlight, 1)
+        let sentBeforeResume = await adapter.sent
+        XCTAssertEqual(sentBeforeResume, ["Initial"])
         XCTAssertEqual(model.followUps.queue(for: task.id).map(\.draft.text), ["First queued", "Second queued"])
 
         await adapter.resumeInterrupt()
         await firstCall.value
-        await adapter.emit(.turnCompleted)
-        await adapter.emit(.sessionStatusChanged(.ready))
         try await waitUntil { await adapter.sent.count == 2 }
         let sent = await adapter.sent
         XCTAssertEqual(sent, ["Initial", "First queued"])

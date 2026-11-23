@@ -279,6 +279,9 @@ final class AppModel {
     @ObservationIgnored private var followUpDrainTasks: [UUID: Task<Void, Never>] = [:]
     /// Turn-by-turn tasks whose running turn is being stopped for a queued message (`stopAndSendAfterTurn`).
     @ObservationIgnored private var stoppingAfterTurnSessionIDs = Set<UUID>()
+    /// Queued item pinned to start next after a turn-by-turn `Stop and send`, even if another item
+    /// is reordered ahead of it while waiting for the cancelled turn to settle.
+    @ObservationIgnored private var pendingStopAndSendItemBySessionID: [UUID: UUID] = [:]
     @ObservationIgnored private var codexTurnPageLoads = Set<UUID>()
     /// Claude tasks reading earlier turns of their saved transcript.
     @ObservationIgnored private var claudeEarlierHistoryReads = Set<UUID>()
@@ -1664,6 +1667,7 @@ final class AppModel {
     func stopAndSendQueued(_ itemID: UUID, for source: SessionRecord) async {
         guard let session = matchingSession(source, allowingInitialAttachment: true),
               followUps.item(itemID, in: session.id) != nil,
+              !stoppingAfterTurnSessionIDs.contains(session.id),
               !isHeld(session, by: TaskBlocker.holdingOffActions) else { return }
         guard let target = await runningFollowUpTarget(for: session) else {
             await startQueuedTurn(with: itemID, in: session, attaching: true)
@@ -1726,13 +1730,22 @@ final class AppModel {
         }
         followUps.move(itemID, in: session.id, to: 0, policy: policy)
         _ = followUps.resume(session.id)
-        guard followUps.claim(itemID) else { return }
+        pendingStopAndSendItemBySessionID[session.id] = itemID
+        guard followUps.claim(itemID) else {
+            if pendingStopAndSendItemBySessionID[session.id] == itemID {
+                pendingStopAndSendItemBySessionID.removeValue(forKey: session.id)
+            }
+            return
+        }
         var interruptFailed = false
         do {
             await stopSessionToolWork(for: session.id)
             guard store.sessions.contains(where: { $0.id == session.id }),
                   let adapter = adaptersBySessionID[session.id],
                   let handle = handlesBySessionID[session.id] else {
+                if pendingStopAndSendItemBySessionID[session.id] == itemID {
+                    pendingStopAndSendItemBySessionID.removeValue(forKey: session.id)
+                }
                 followUps.finish(itemID)
                 return
             }
@@ -1743,6 +1756,9 @@ final class AppModel {
             }
         } catch {
             interruptFailed = true
+            if pendingStopAndSendItemBySessionID[session.id] == itemID, isRunning(session.id) {
+                pendingStopAndSendItemBySessionID.removeValue(forKey: session.id)
+            }
             if store.sessions.contains(where: { $0.id == session.id }) {
                 composerDrafts.tasks.draft(for: session.id).notice = error.localizedDescription
             }
@@ -1764,6 +1780,9 @@ final class AppModel {
         if item.state == .sent {
             guard await withdrawFollowUp(item, in: session) else { return }
         }
+        if pendingStopAndSendItemBySessionID[session.id] == itemID {
+            pendingStopAndSendItemBySessionID.removeValue(forKey: session.id)
+        }
         followUps.remove(itemID, from: session.id)
     }
 
@@ -1783,6 +1802,9 @@ final class AppModel {
         guard item.state != .sent else {
             Task { await editHeldFollowUp(itemID, for: session) }
             return nil
+        }
+        if pendingStopAndSendItemBySessionID[session.id] == itemID {
+            pendingStopAndSendItemBySessionID.removeValue(forKey: session.id)
         }
         followUps.remove(itemID, from: session.id)
         composer.restoreUnsent(item.draft)
@@ -1894,6 +1916,9 @@ final class AppModel {
             await markSubmissionStarted(for: session.id)
             try await delivery.start(item.draft) { try contextualDraft($0, for: session.id) }
             guard store.sessions.contains(where: { $0.id == session.id }) else { return }
+            if pendingStopAndSendItemBySessionID[session.id] == itemID {
+                pendingStopAndSendItemBySessionID.removeValue(forKey: session.id)
+            }
             followUps.remove(itemID, from: session.id)
             if !delivery.policy.recordsMessagesWhenQueued {
                 let input = HarnessUserInput.projecting(item.draft).input
@@ -1908,6 +1933,9 @@ final class AppModel {
             }
         } catch {
             guard store.sessions.contains(where: { $0.id == session.id }) else { return }
+            if pendingStopAndSendItemBySessionID[session.id] == itemID {
+                pendingStopAndSendItemBySessionID.removeValue(forKey: session.id)
+            }
             await turnEnded(session.id, as: .failed, cause: .notStarted, notificationDetail: error.localizedDescription)
             markFollowUpFailed(itemID, message: error.localizedDescription, in: session.id)
         }
@@ -1929,23 +1957,34 @@ final class AppModel {
     private func drainFollowUps(for sessionID: UUID) async {
         guard let session = store.sessions.first(where: { $0.id == sessionID }), sendsQueueNext(sessionID),
               firstBlocker(of: session, among: TaskBlocker.holdingOffSends) == nil,
-              let first = followUps.queue(for: sessionID).first else { return }
+              let next = nextFollowUpToDrain(in: sessionID) else { return }
         guard handlesBySessionID[sessionID] != nil else {
             guard !isRunning(sessionID), !store.isTemporary(sessionID), sendRefusal(for: session) == nil else { return }
-            await startQueuedTurn(with: first.id, in: session, attaching: true)
+            await startQueuedTurn(with: next.id, in: session, attaching: true)
             return
         }
         guard let delivery = followUpDelivery(for: session),
               await delivery.runningTurn(reportedRunning: isRunning(sessionID)) == nil else { return }
-        await startQueuedTurn(with: first.id, in: session, attaching: false)
+        await startQueuedTurn(with: next.id, in: session, attaching: false)
     }
 
     /// Whether the task's queue sends its first message as the next turn once no turn runs: Yardlet
     /// holds that message, and no pause or wait holds it back (a move to another account, a limit's
     /// reset).
     func sendsQueueNext(_ id: UUID) -> Bool {
-        followUps.queue(for: id).first?.state == .pending && !followUps.isPaused(id)
+        nextFollowUpToDrain(in: id)?.state == .pending && !followUps.isPaused(id)
             && continuations.accountSwitchesAfterTurn[id] == nil && continuations.usageLimitHold(of: id) == nil
+    }
+
+    /// The queued item that drains next: an item pinned by a turn-by-turn `Stop and send` while its
+    /// cancelled turn winds down, or otherwise the front of the queue.
+    private func nextFollowUpToDrain(in sessionID: UUID) -> QueuedFollowUp? {
+        let queue = followUps.queue(for: sessionID)
+        if let pinnedID = pendingStopAndSendItemBySessionID[sessionID] {
+            if let pinned = queue.first(where: { $0.id == pinnedID }) { return pinned }
+            pendingStopAndSendItemBySessionID.removeValue(forKey: sessionID)
+        }
+        return queue.first
     }
 
     // MARK: Messages the provider holds
@@ -2635,6 +2674,7 @@ final class AppModel {
 
     func markSubmissionStarted(for sessionID: UUID) async {
         guard store.sessions.contains(where: { $0.id == sessionID }) else { return }
+        pendingStopAndSendItemBySessionID.removeValue(forKey: sessionID)
         continuations.stoppedByPerson.remove(sessionID)
         continuations.unseenRestartResumes.removeValue(forKey: sessionID)
         idleCompactionTurnStarted(sessionID)
@@ -2659,6 +2699,7 @@ final class AppModel {
         // The pause is in place before the interrupt so the turn's end cannot send the next one.
         let isRunning = current.status == .running || current.status == .waitingForApproval
         if isRunning { continuations.stoppedByPerson.insert(session.id) }
+        pendingStopAndSendItemBySessionID.removeValue(forKey: session.id)
         let pausesQueue = isRunning && followUps.pause(session.id)
         // Claude Code keeps what it holds through an interrupt and runs it next, so those messages
         // come back first and wait with the rest.
@@ -5757,6 +5798,7 @@ final class AppModel {
         transcriptPublicationTasks.removeAll()
         codexPresentationTasks.removeAll()
         followUpDrainTasks.removeAll()
+        pendingStopAndSendItemBySessionID.removeAll()
         sessionTitleResolutionTasks.removeAll()
         sessionTitleRefreshes.removeAll()
         codexTurnPageLoads.removeAll()
@@ -5898,6 +5940,7 @@ final class AppModel {
         if reason != .streamEnded { events?.cancel() }
         codexPresentationTasks.removeValue(forKey: id)?.cancel()
         followUpDrainTasks.removeValue(forKey: id)?.cancel()
+        pendingStopAndSendItemBySessionID.removeValue(forKey: id)
         if reason.keepsConversation {
             followUps.holdAllSent(in: id)
             if var state = finalCodexState ?? codexPresentationBySessionID[id] {
