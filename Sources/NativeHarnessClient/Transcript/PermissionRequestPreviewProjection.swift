@@ -62,45 +62,77 @@ enum PermissionRequestPreviewProjection {
         )
     }
 
+    /// Upper bound on differing middle lines passed to `Array.difference(from:)` so a massive
+    /// un-hunked rewrite cannot stall the main thread with O((N+M)*D) Myers work.
+    static let maxDiffLines = 4_000
+
     /// Old lines a change removes come before the new lines it adds, as in a unified diff.
     static func changedLines(from old: [String], to new: [String]) -> [(kind: Line.Kind, text: String)] {
-        var removed: Set<Int> = []
-        var inserted: Set<Int> = []
-        for change in new.difference(from: old) {
-            switch change {
-            case let .remove(offset, _, _): removed.insert(offset)
-            case let .insert(offset, _, _): inserted.insert(offset)
-            }
+        let minCount = min(old.count, new.count)
+        var prefix = 0
+        while prefix < minCount, old[prefix] == new[prefix] {
+            prefix += 1
         }
-        var rows: [(kind: Line.Kind, text: String)] = []
-        var oldIndex = 0
-        var newIndex = 0
-        while oldIndex < old.count || newIndex < new.count {
-            if oldIndex < old.count, removed.contains(oldIndex) {
-                rows.append((.deletion, old[oldIndex]))
-                oldIndex += 1
-            } else if newIndex < new.count, inserted.contains(newIndex) {
-                rows.append((.addition, new[newIndex]))
-                newIndex += 1
-            } else if oldIndex < old.count, newIndex < new.count {
-                rows.append((.context, new[newIndex]))
-                oldIndex += 1
-                newIndex += 1
-            } else {
-                break
+        var suffix = 0
+        while prefix + suffix < minCount, old[old.count - 1 - suffix] == new[new.count - 1 - suffix] {
+            suffix += 1
+        }
+        let oldEnd = old.count - suffix
+        let newEnd = new.count - suffix
+        guard prefix < oldEnd || prefix < newEnd else { return [] }
+
+        let oldMid = Array(old[prefix..<oldEnd])
+        let newMid = Array(new[prefix..<newEnd])
+
+        var midRows: [(kind: Line.Kind, text: String)] = []
+        if oldMid.count + newMid.count > maxDiffLines {
+            midRows.reserveCapacity(oldMid.count + newMid.count)
+            for line in oldMid { midRows.append((.deletion, line)) }
+            for line in newMid { midRows.append((.addition, line)) }
+        } else {
+            var removed: Set<Int> = []
+            var inserted: Set<Int> = []
+            for change in newMid.difference(from: oldMid) {
+                switch change {
+                case let .remove(offset, _, _): removed.insert(offset)
+                case let .insert(offset, _, _): inserted.insert(offset)
+                }
+            }
+            var oldIndex = 0
+            var newIndex = 0
+            while oldIndex < oldMid.count || newIndex < newMid.count {
+                if oldIndex < oldMid.count, removed.contains(oldIndex) {
+                    midRows.append((.deletion, oldMid[oldIndex]))
+                    oldIndex += 1
+                } else if newIndex < newMid.count, inserted.contains(newIndex) {
+                    midRows.append((.addition, newMid[newIndex]))
+                    newIndex += 1
+                } else if oldIndex < oldMid.count, newIndex < newMid.count {
+                    midRows.append((.context, newMid[newIndex]))
+                    oldIndex += 1
+                    newIndex += 1
+                } else {
+                    break
+                }
             }
         }
 
-        let changes = rows.indices.filter { rows[$0].kind != .context }
-        var kept = Array(repeating: false, count: rows.count)
+        let changes = midRows.indices.filter { midRows[$0].kind != .context }
+        var kept = Array(repeating: false, count: midRows.count)
         for index in changes {
-            for near in max(0, index - contextRadius)...min(rows.count - 1, index + contextRadius) {
+            for near in max(0, index - contextRadius)...min(midRows.count - 1, index + contextRadius) {
                 kept[near] = true
             }
         }
         var trimmed: [(kind: Line.Kind, text: String)] = []
+        let leadStart = max(0, prefix - contextRadius)
+        if leadStart < prefix {
+            for index in leadStart..<prefix {
+                trimmed.append((.context, old[index]))
+            }
+        }
         var skipped = false
-        for (index, row) in rows.enumerated() {
+        for (index, row) in midRows.enumerated() {
             guard kept[index] else {
                 skipped = true
                 continue
@@ -109,13 +141,116 @@ enum PermissionRequestPreviewProjection {
             skipped = false
             trimmed.append(row)
         }
+        let trailEnd = min(old.count, oldEnd + contextRadius)
+        if oldEnd < trailEnd {
+            for index in oldEnd..<trailEnd {
+                trimmed.append((.context, old[index]))
+            }
+        }
         return trimmed
     }
 
-    private static func lines(_ text: String) -> [String] {
+    /// Splits text on LF, CRLF, or CR using UTF-8 bytes to avoid per-character grapheme validation
+    /// on large file contents (`Swift._StringGuts.validateScalarIndex`).
+    static func lines(_ text: String) -> [String] {
         guard !text.isEmpty else { return [] }
-        var lines = text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init)
-        if lines.last == "" { lines.removeLast() }
+        var result: [String] = []
+        let handled = text.utf8.withContiguousStorageIfAvailable { buf -> Bool in
+            let count = buf.count
+            var start = 0
+            var i = 0
+            while i < count {
+                let byte = buf[i]
+                if byte == 0x0A || byte == 0x0D {
+                    result.append(String(decoding: buf[start..<i], as: UTF8.self))
+                    if byte == 0x0D, i + 1 < count, buf[i + 1] == 0x0A {
+                        i += 2
+                    } else {
+                        i += 1
+                    }
+                    start = i
+                } else {
+                    i += 1
+                }
+            }
+            if start < count {
+                result.append(String(decoding: buf[start..<count], as: UTF8.self))
+            }
+            return true
+        } ?? false
+        if handled { return result }
+
+        let utf8 = text.utf8
+        var start = utf8.startIndex
+        var i = start
+        while i < utf8.endIndex {
+            let byte = utf8[i]
+            if byte == 0x0A || byte == 0x0D {
+                result.append(String(decoding: utf8[start..<i], as: UTF8.self))
+                let next = utf8.index(after: i)
+                if byte == 0x0D, next < utf8.endIndex, utf8[next] == 0x0A {
+                    i = utf8.index(after: next)
+                } else {
+                    i = next
+                }
+                start = i
+            } else {
+                i = utf8.index(after: i)
+            }
+        }
+        if start < utf8.endIndex {
+            result.append(String(decoding: utf8[start..<utf8.endIndex], as: UTF8.self))
+        }
+        return result
+    }
+
+    /// Counts logical lines in `text` without allocating per-line Strings.
+    static func lineCount(_ text: String) -> Int {
+        guard !text.isEmpty else { return 0 }
+        if let counted = text.utf8.withContiguousStorageIfAvailable({ buf -> Int in
+            let count = buf.count
+            var lines = 0
+            var start = 0
+            var i = 0
+            while i < count {
+                let byte = buf[i]
+                if byte == 0x0A || byte == 0x0D {
+                    lines += 1
+                    if byte == 0x0D, i + 1 < count, buf[i + 1] == 0x0A {
+                        i += 2
+                    } else {
+                        i += 1
+                    }
+                    start = i
+                } else {
+                    i += 1
+                }
+            }
+            if start < count { lines += 1 }
+            return lines
+        }) {
+            return counted
+        }
+        let utf8 = text.utf8
+        var lines = 0
+        var start = utf8.startIndex
+        var i = start
+        while i < utf8.endIndex {
+            let byte = utf8[i]
+            if byte == 0x0A || byte == 0x0D {
+                lines += 1
+                let next = utf8.index(after: i)
+                if byte == 0x0D, next < utf8.endIndex, utf8[next] == 0x0A {
+                    i = utf8.index(after: next)
+                } else {
+                    i = next
+                }
+                start = i
+            } else {
+                i = utf8.index(after: i)
+            }
+        }
+        if start < utf8.endIndex { lines += 1 }
         return lines
     }
 }

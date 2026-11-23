@@ -35,37 +35,37 @@ enum ConversationFileChangeProjection {
         }
 
         let kind: CodexFileChangeCardProjection.Kind
-        let lines: PermissionRequestPreviewProjection.Diff?
+        let counts: CodexFileChangeCardProjection.LineCounts?
+        let availability: CodexFileChangeCardProjection.PreviewAvailability
         let size = (diff.oldText?.utf8.count ?? 0) + (diff.newText?.utf8.count ?? 0)
+        let withinLimit = size <= CodexFileChangeCardProjection.fileByteLimit
         switch (diff.oldText, diff.newText) {
         case let (old?, new?):
             kind = .update
-            lines = size > CodexFileChangeCardProjection.fileByteLimit ? nil : PermissionRequestPreviewProjection.diff(
-                edits: [PermissionEditPreview(oldText: whole(old), newText: whole(new), replacesAll: false)]
-            )
+            availability = withinLimit ? .available : .tooLarge
+            counts = withinLimit ? updateLineCounts(old: old, new: new) : nil
         case let (nil, new?):
             kind = .add
-            lines = size > CodexFileChangeCardProjection.fileByteLimit
-                ? nil : PermissionRequestPreviewProjection.content(whole(new))
+            availability = withinLimit ? .available : .tooLarge
+            if withinLimit {
+                let additions = PermissionRequestPreviewProjection.lineCount(new)
+                counts = additions == 0 ? nil : CodexFileChangeCardProjection.LineCounts(additions: additions, deletions: 0)
+            } else {
+                counts = nil
+            }
         case let (old?, nil):
             kind = .delete
-            lines = size > CodexFileChangeCardProjection.fileByteLimit ? nil : PermissionRequestPreviewProjection.diff(
-                edits: [PermissionEditPreview(oldText: whole(old), newText: whole(""), replacesAll: false)]
-            )
+            availability = withinLimit ? .available : .tooLarge
+            if withinLimit {
+                let deletions = PermissionRequestPreviewProjection.lineCount(old)
+                counts = deletions == 0 ? nil : CodexFileChangeCardProjection.LineCounts(additions: 0, deletions: deletions)
+            } else {
+                counts = nil
+            }
         case (nil, nil):
             kind = .update
-            lines = nil
-        }
-        let availability: CodexFileChangeCardProjection.PreviewAvailability = if lines != nil {
-            .available
-        } else if diff.oldText != nil || diff.newText != nil {
-            .tooLarge
-        } else {
-            .missing
-        }
-        let counts = lines.flatMap { lines in
-            lines.additions == 0 && lines.deletions == 0
-                ? nil : CodexFileChangeCardProjection.LineCounts(additions: lines.additions, deletions: lines.deletions)
+            availability = .missing
+            counts = nil
         }
         let displayPath = CodexFileChangeDiff.displayPath(diff.path, workspaceURL: workspaceURL)
         return CodexFileChangeCardProjection.Row(
@@ -78,12 +78,127 @@ enum ConversationFileChangeProjection {
             lineCounts: counts,
             preview: availability,
             fileURL: workspaceURL.flatMap { CodexFileChangeCardProjection.openableURL(for: diff.path, workspaceURL: $0) },
-            precomputedPreview: lines.map { lines in
-                CodexFileChangeCardProjection.Preview(
-                    lines: lines.lines, hiddenLineCount: lines.hiddenLineCount, firstChangedLine: nil
-                )
-            }
+            deferredTextDiff: availability == .available ? diff : nil
         )
+    }
+
+    /// Computes the preview lines for a deferred non-hunk file change on demand (when a card expands
+    /// or a remote client asks for its `itemDetail`).
+    static func preview(for diff: HarnessActivityDiff) -> CodexFileChangeCardProjection.Preview {
+        let size = (diff.oldText?.utf8.count ?? 0) + (diff.newText?.utf8.count ?? 0)
+        guard size <= CodexFileChangeCardProjection.fileByteLimit else { return .empty }
+        let lines: PermissionRequestPreviewProjection.Diff?
+        switch (diff.oldText, diff.newText) {
+        case let (old?, new?):
+            lines = PermissionRequestPreviewProjection.diff(
+                edits: [PermissionEditPreview(oldText: whole(old), newText: whole(new), replacesAll: false)]
+            )
+        case let (nil, new?):
+            lines = PermissionRequestPreviewProjection.content(whole(new))
+        case let (old?, nil):
+            lines = PermissionRequestPreviewProjection.diff(
+                edits: [PermissionEditPreview(oldText: whole(old), newText: whole(""), replacesAll: false)]
+            )
+        case (nil, nil):
+            lines = nil
+        }
+        guard let lines else { return .empty }
+        return CodexFileChangeCardProjection.Preview(
+            lines: lines.lines, hiddenLineCount: lines.hiddenLineCount, firstChangedLine: nil
+        )
+    }
+
+    /// Fast `+n −m` line counts for an un-hunked text replacement without allocating preview lines
+    /// or diffing unchanged prefix/suffix regions.
+    private static func updateLineCounts(old: String, new: String) -> CodexFileChangeCardProjection.LineCounts? {
+        guard old != new else { return nil }
+        let (oldMiddle, newMiddle) = trimmedChangedMiddle(old: old, new: new)
+        let oldLines = PermissionRequestPreviewProjection.lines(oldMiddle)
+        let newLines = PermissionRequestPreviewProjection.lines(newMiddle)
+        let minCount = min(oldLines.count, newLines.count)
+        var prefix = 0
+        while prefix < minCount, oldLines[prefix] == newLines[prefix] {
+            prefix += 1
+        }
+        var suffix = 0
+        while prefix + suffix < minCount, oldLines[oldLines.count - 1 - suffix] == newLines[newLines.count - 1 - suffix] {
+            suffix += 1
+        }
+        let oldTrimmed = Array(oldLines[prefix..<(oldLines.count - suffix)])
+        let newTrimmed = Array(newLines[prefix..<(newLines.count - suffix)])
+        guard !oldTrimmed.isEmpty || !newTrimmed.isEmpty else { return nil }
+        let additions: Int
+        let deletions: Int
+        if oldTrimmed.count + newTrimmed.count > PermissionRequestPreviewProjection.maxDiffLines {
+            additions = newTrimmed.count
+            deletions = oldTrimmed.count
+        } else {
+            var adds = 0
+            var dels = 0
+            for change in newTrimmed.difference(from: oldTrimmed) {
+                switch change {
+                case .insert: adds += 1
+                case .remove: dels += 1
+                }
+            }
+            additions = adds
+            deletions = dels
+        }
+        guard additions > 0 || deletions > 0 else { return nil }
+        return CodexFileChangeCardProjection.LineCounts(additions: additions, deletions: deletions)
+    }
+
+    /// Strips matching leading and trailing whole lines in raw UTF-8 bytes so large whole-file
+    /// replacements only allocate Strings for the changed middle section.
+    private static func trimmedChangedMiddle(old: String, new: String) -> (String, String) {
+        let oldBytes = Array(old.utf8)
+        let newBytes = Array(new.utf8)
+        let minLen = min(oldBytes.count, newBytes.count)
+
+        var prefixMatch = 0
+        var prefixLineStart = 0
+        while prefixMatch < minLen, oldBytes[prefixMatch] == newBytes[prefixMatch] {
+            let byte = oldBytes[prefixMatch]
+            if byte == 0x0A {
+                prefixLineStart = prefixMatch + 1
+            } else if byte == 0x0D {
+                let oldHasLF = prefixMatch + 1 < oldBytes.count && oldBytes[prefixMatch + 1] == 0x0A
+                let newHasLF = prefixMatch + 1 < newBytes.count && newBytes[prefixMatch + 1] == 0x0A
+                if !oldHasLF && !newHasLF {
+                    prefixLineStart = prefixMatch + 1
+                }
+            }
+            prefixMatch += 1
+        }
+
+        var oldEnd = oldBytes.count
+        var newEnd = newBytes.count
+        var oldSuffixLineEnd = oldEnd
+        var newSuffixLineEnd = newEnd
+        while oldEnd > prefixLineStart, newEnd > prefixLineStart, oldBytes[oldEnd - 1] == newBytes[newEnd - 1] {
+            oldEnd -= 1
+            newEnd -= 1
+            let byte = oldBytes[oldEnd]
+            if byte == 0x0A {
+                // Byte right after this LF begins a matching trailing line (unless the preceding byte differs).
+                oldSuffixLineEnd = oldEnd + 1
+                newSuffixLineEnd = newEnd + 1
+            } else if byte == 0x0D {
+                let oldHasLF = oldEnd + 1 < oldBytes.count && oldBytes[oldEnd + 1] == 0x0A
+                let newHasLF = newEnd + 1 < newBytes.count && newBytes[newEnd + 1] == 0x0A
+                if !oldHasLF && !newHasLF {
+                    oldSuffixLineEnd = oldEnd + 1
+                    newSuffixLineEnd = newEnd + 1
+                }
+            }
+        }
+        // Only treat the suffix start as a safe whole-line boundary when the byte immediately before
+        // it is also a line break (or start of buffer), avoiding mid-line splits on shared suffixes.
+        let safeOldEnd = max(prefixLineStart, oldSuffixLineEnd)
+        let safeNewEnd = max(prefixLineStart, newSuffixLineEnd)
+        let oldMid = String(decoding: oldBytes[prefixLineStart..<safeOldEnd], as: UTF8.self)
+        let newMid = String(decoding: newBytes[prefixLineStart..<safeNewEnd], as: UTF8.self)
+        return (oldMid, newMid)
     }
 
     // MARK: - Last turn
@@ -233,10 +348,7 @@ enum ConversationFileChangeProjection {
 
     /// Lines as an editor numbers them: a final newline ends the last line.
     private static func lines(_ text: String) -> [String] {
-        guard !text.isEmpty else { return [] }
-        var lines = text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init)
-        if lines.last == "" { lines.removeLast() }
-        return lines
+        PermissionRequestPreviewProjection.lines(text)
     }
 }
 
@@ -250,7 +362,8 @@ extension CodexFileChangeCardProjection.Row {
             id: id, change: change, displayPath: displayPath, fileName: URL(filePath: displayPath).lastPathComponent,
             kind: kind, state: state, lineCounts: lineCounts, preview: preview,
             fileURL: workspaceURL.flatMap { CodexFileChangeCardProjection.openableURL(for: target, workspaceURL: $0) },
-            precomputedPreview: precomputedPreview
+            precomputedPreview: precomputedPreview,
+            deferredTextDiff: deferredTextDiff
         )
     }
 }

@@ -19,34 +19,56 @@ import YardletLidSleep
     }
 
     private(set) var status: Status
+    /// False until the initial asynchronous status read finishes (so launch does not block the main
+    /// thread on `SMAppService.status`, and `RunningWorkActivity` waits before reconciling).
+    private(set) var hasLoadedStatus: Bool
     /// The helper answered that the Mac stays awake with the lid closed.
     private(set) var isKeepingAwake = false
     /// Called when `isKeepingAwake` changes.
     @ObservationIgnored var keepingAwakeChanged: (@MainActor () -> Void)?
+    /// Called when `status` first loads or changes on a background refresh.
+    @ObservationIgnored var statusChanged: (@MainActor () -> Void)?
     @ObservationIgnored private let backend: any LidSleepHelperBackend
     @ObservationIgnored private var wanted = false
     /// Counts the status reads, so a read that ends off the main thread after a later one leaves the later one's.
     @ObservationIgnored private var statusReads = 0
 
-    init(backend: any LidSleepHelperBackend) {
+    init(backend: any LidSleepHelperBackend, readsStatusOnInit: Bool = false) {
         self.backend = backend
-        status = backend.status()
+        if readsStatusOnInit {
+            status = .off
+            hasLoadedStatus = false
+        } else {
+            status = backend.status()
+            hasLoadedStatus = true
+        }
         backend.answered = { [weak self] holding in self?.helperAnswered(holding) }
+        if readsStatusOnInit {
+            refreshStatus()
+        }
     }
 
-    static func live() -> LidSleepHelper { LidSleepHelper(backend: ServiceManagementLidSleepHelper()) }
+    static func live() -> LidSleepHelper {
+        let backend = ServiceManagementLidSleepHelper()
+        return LidSleepHelper(backend: backend, readsStatusOnInit: backend.isInstalled)
+    }
 
     /// Reads the registration again off the main thread and calls `changed` when it changed:
     /// `SMAppService.status` waits for macOS's service manager to answer, a quarter of a second at times,
-    /// and Yardlet asks each time it comes to the front.
+    /// and Yardlet asks at launch and each time it comes to the front.
     func refreshStatus(changed: (@MainActor () -> Void)? = nil) {
         statusReads += 1
         let read = statusReads
         Task {
             let status = await backend.readStatus()
-            guard read == statusReads, status != self.status else { return }
+            guard read == statusReads else { return }
+            let wasLoaded = self.hasLoadedStatus
+            let didChange = status != self.status
             self.status = status
+            self.hasLoadedStatus = true
+            guard !wasLoaded || didChange else { return }
             changed?()
+            statusChanged?()
         }
     }
 
@@ -54,10 +76,13 @@ import YardletLidSleep
     /// they allow it; Yardlet opening with the setting on registers it quietly again.
     func turnOn(opensSettings: Bool) {
         guard status != .unavailable else { return }
-        if status == .off { backend.register() }
-        // Read here, since what follows depends on it.
-        statusReads += 1
-        status = backend.status()
+        hasLoadedStatus = true
+        if status == .off {
+            backend.register()
+            // Read here, since what follows depends on it.
+            statusReads += 1
+            status = backend.status()
+        }
         if opensSettings, status == .needsApproval { backend.openSystemSettings() }
     }
 
@@ -66,7 +91,24 @@ import YardletLidSleep
         wanted = false
         backend.disconnect()
         helperAnswered(false)
-        guard status != .unavailable, status != .off else { return }
+        guard status != .unavailable else { return }
+        if !hasLoadedStatus {
+            // The initial async read has not finished yet (for example a desktop Mac tidying up
+            // at launch without retaining `self`): read off the main thread and unregister if active.
+            statusReads += 1
+            let read = statusReads
+            let backend = self.backend
+            Task { [self] in
+                let loaded = await backend.readStatus()
+                guard read == self.statusReads else { return }
+                self.status = loaded
+                self.hasLoadedStatus = true
+                guard loaded == .ready || loaded == .needsApproval else { return }
+                backend.unregister { self.refreshStatus() }
+            }
+            return
+        }
+        guard status != .off else { return }
         backend.unregister { [weak self] in self?.refreshStatus() }
     }
 
@@ -128,6 +170,9 @@ extension LidSleepHelperBackend {
     private let plistName: String?
     private var connection: NSXPCConnection?
     private var wanted = false
+
+    /// Whether this bundle carries a LaunchDaemon plist to register (checked locally without XPC).
+    var isInstalled: Bool { plistName != nil }
 
     init(bundle: Bundle = .main) {
         let identifier = bundle.bundleIdentifier

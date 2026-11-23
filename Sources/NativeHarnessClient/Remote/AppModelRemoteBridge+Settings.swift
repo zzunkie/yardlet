@@ -162,12 +162,13 @@ extension AppModelRemoteBridge {
             values[YardletSetting.memorySaverLevel.id] = valid ?? BrowserMemorySaver.Level.balanced.rawValue
         }
 
-        let lidStatus: String? = context.lidHelper.map { helper in
+        let lidStatus: String? = context.lidHelper.flatMap { helper in
+            guard helper.hasLoadedStatus else { return nil }
             switch helper.status {
-            case .unavailable: "unavailable"
-            case .off: "off"
-            case .needsApproval: "needsApproval"
-            case .ready: "ready"
+            case .unavailable: return "unavailable"
+            case .off: return "off"
+            case .needsApproval: return "needsApproval"
+            case .ready: return "ready"
             }
         }
 
@@ -347,6 +348,7 @@ extension AppModelRemoteBridge {
             _ = model.cliUpdates?.notice
             _ = model.runtimeSelections.newerInstalls
             _ = model.lidSleepHelper?.status
+            _ = model.lidSleepHelper?.hasLoadedStatus
             _ = model.tokenUsage.isEnabled
             _ = model.tokenUsage.summary
             _ = model.connections.connections

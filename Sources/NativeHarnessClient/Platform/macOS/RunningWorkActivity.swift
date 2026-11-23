@@ -32,12 +32,19 @@ import YardletLidSleep
     /// The app sets it before following its model; nil in tests and fixtures, which then never
     /// register or remove the helper.
     var lidHelper: LidSleepHelper? {
-        didSet { lidHelper?.keepingAwakeChanged = { [weak self] in self?.showLidState() } }
+        didSet {
+            lidHelper?.keepingAwakeChanged = { [weak self] in self?.showLidState() }
+            lidHelper?.statusChanged = { [weak self] in self?.refresh() }
+        }
     }
     private let lidIsClosed: @MainActor () -> Bool
     /// The lid setting as last read; nil until the first read, which only tidies up after an
     /// earlier run, never opens System Settings.
     private var lidPreferenceWasOn: Bool?
+    /// The lid setting observed while `lidHelper.hasLoadedStatus` was still false, so an explicit
+    /// user toggle during launch still opens System Settings once the status arrives.
+    private var initialLidPreference: Bool?
+    private var lidChangedBeforeLoad = false
     /// The person was told the Mac is hot with its lid closed; again only after it cooled down.
     private var toldHot = false
     /// Posts a notification (title, body, identifier); the followed model's notification center
@@ -54,6 +61,7 @@ import YardletLidSleep
         self.lidHelper = lidHelper
         // Observers do not run for a value set in the initializer.
         lidHelper?.keepingAwakeChanged = { [weak self] in self?.showLidState() }
+        lidHelper?.statusChanged = { [weak self] in self?.refresh() }
     }
 
     var isHolding: Bool { token != nil }
@@ -85,7 +93,7 @@ import YardletLidSleep
             // The person may have allowed the helper in System Settings.
             center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    self?.lidHelper?.refreshStatus { self?.refresh() }
+                    self?.lidHelper?.refreshStatus()
                     self?.refresh()
                 }
             }
@@ -181,7 +189,7 @@ import YardletLidSleep
 
     /// The minute's check: the battery and the heat, and the helper's "working", said again.
     func checkAgain() {
-        if lidHelper?.status == .needsApproval { lidHelper?.refreshStatus { [weak self] in self?.refresh() } }
+        if lidHelper?.status == .needsApproval { lidHelper?.refreshStatus() }
         lidHelper?.renew()
         refresh()
     }
@@ -191,11 +199,20 @@ import YardletLidSleep
     private func refreshLidHelper() -> Bool {
         guard let lidHelper else { return false }
         let isOn = LidClosedWorkPreference.isOn(in: defaults)
+        if !lidHelper.hasLoadedStatus {
+            if let initial = initialLidPreference {
+                if isOn != initial { lidChangedBeforeLoad = true }
+            } else {
+                initialLidPreference = isOn
+            }
+            return false
+        }
         if isOn != lidPreferenceWasOn {
             let firstRead = lidPreferenceWasOn == nil
+            let toggledBeforeLoad = firstRead && lidChangedBeforeLoad
             lidPreferenceWasOn = isOn
             if isOn {
-                lidHelper.turnOn(opensSettings: !firstRead)
+                lidHelper.turnOn(opensSettings: !firstRead || toggledBeforeLoad)
             } else if !firstRead || lidHelper.status == .ready || lidHelper.status == .needsApproval {
                 // Turned off now, or off since a run that ended before it removed the helper.
                 lidHelper.turnOff()

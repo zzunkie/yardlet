@@ -955,14 +955,15 @@ struct SettingsCenterView: View {
     /// "Keep tasks working with the lid closed", with one line while it is on and macOS has not let
     /// the helper run yet.
     private func lidClosedWorkRow(_ helper: LidSleepHelper, setting: YardletSetting) -> some View {
-        let note: String? = switch (keepsWorkingWithLidClosed, helper.status) {
-        case (true, .needsApproval): L10n.string("Allow Yardlet in the background in System Settings")
-        case (true, .off): L10n.string("macOS did not add Yardlet's helper")
-        case (true, .unavailable): L10n.string("Not available in this copy of Yardlet")
+        let note: String? = switch (helper.hasLoadedStatus, keepsWorkingWithLidClosed, helper.status) {
+        case (true, true, .needsApproval): L10n.string("Allow Yardlet in the background in System Settings")
+        case (true, true, .off): L10n.string("macOS did not add Yardlet's helper")
+        case (true, true, .unavailable): L10n.string("Not available in this copy of Yardlet")
         default: nil
         }
         return SettingsRow(title: setting.title, detail: note, anchor: setting.id) {
-            if keepsWorkingWithLidClosed, helper.status == .needsApproval || helper.status == .off {
+            if helper.hasLoadedStatus, keepsWorkingWithLidClosed,
+               helper.status == .needsApproval || helper.status == .off {
                 Button(L10n.string("Open System Settings")) { helper.openSystemSettings() }
                     .controlSize(.small)
             }

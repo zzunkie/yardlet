@@ -64,6 +64,7 @@ final class LidSleepHelper {
     }
 
     let status: Status = .unavailable
+    let hasLoadedStatus = true
 }
 
 /// No login items here; Settings leaves "Launch at login" out.

@@ -145,6 +145,59 @@ final class ConversationActivityProjectionTests: XCTestCase {
         XCTAssertNil(row.lineCounts)
     }
 
+    func testTextFileChangeDefersPreviewLinesUntilRequestedAndPreservesExactCountsAndLines() {
+        let prefix = (1...600).map { "let line\($0) = \"unchanged payload \($0)\"" }.joined(separator: "\n")
+        let suffix = (602...1200).map { "let tail\($0) = \"unchanged tail \($0)\"" }.joined(separator: "\n")
+        let oldText = prefix + "\nlet changed = 1\n" + suffix + "\n"
+        let newText = prefix + "\nlet changed = 2\nlet added = 3\n" + suffix + "\n"
+
+        let diff = HarnessActivityDiff(path: "/tmp/Big.swift", oldText: oldText, newText: newText)
+        let row = ConversationFileChangeProjection.row(for: diff, phase: .completed, workspaceURL: nil)
+        XCTAssertNil(row.precomputedPreview, "Folded row should defer preview line construction until opened")
+        XCTAssertEqual(row.preview, .available)
+        XCTAssertEqual(row.lineCounts, .init(additions: 2, deletions: 1))
+
+        let placed = row.placed(in: workspace)
+        XCTAssertNil(placed.precomputedPreview)
+        let preview = placed.previewLines
+        XCTAssertEqual(preview.lines.filter { $0.kind == .deletion }.map(\.text), ["let changed = 1"])
+        XCTAssertEqual(preview.lines.filter { $0.kind == .addition }.map(\.text), ["let changed = 2", "let added = 3"])
+        XCTAssertEqual(preview.lines.filter { $0.kind == .context }.count, 6)
+
+        // CRLF, trailing newline, add-only, delete-only, and identical edge cases match exact line counts.
+        let crlf = ConversationFileChangeProjection.row(
+            for: HarnessActivityDiff(path: "/tmp/win.txt", oldText: "a\r\nb\r\n", newText: "a\r\nc\r\nd\r\n"),
+            phase: .completed, workspaceURL: nil
+        )
+        XCTAssertEqual(crlf.lineCounts, .init(additions: 2, deletions: 1))
+        let addOnly = ConversationFileChangeProjection.row(
+            for: HarnessActivityDiff(path: "/tmp/new.txt", newText: "one\ntwo\n"),
+            phase: .completed, workspaceURL: nil
+        )
+        XCTAssertEqual(addOnly.lineCounts, .init(additions: 2, deletions: 0))
+        XCTAssertEqual(addOnly.previewLines.lines.map(\.text), ["one", "two"])
+        let deleteOnly = ConversationFileChangeProjection.row(
+            for: HarnessActivityDiff(path: "/tmp/old.txt", oldText: "one\ntwo"),
+            phase: .completed, workspaceURL: nil
+        )
+        XCTAssertEqual(deleteOnly.lineCounts, .init(additions: 0, deletions: 2))
+        let unchanged = ConversationFileChangeProjection.row(
+            for: HarnessActivityDiff(path: "/tmp/same.txt", oldText: "same\n", newText: "same"),
+            phase: .completed, workspaceURL: nil
+        )
+        XCTAssertNil(unchanged.lineCounts)
+
+        // Large LF <-> CRLF file over maxDiffLines agrees with changedLines (0 changes, not +2500 -2500).
+        let manyLF = (1...2500).map { "line \($0)" }.joined(separator: "\n") + "\n"
+        let manyCRLF = (1...2500).map { "line \($0)" }.joined(separator: "\r\n") + "\r\n"
+        let eolOnly = ConversationFileChangeProjection.row(
+            for: HarnessActivityDiff(path: "/tmp/eol.txt", oldText: manyLF, newText: manyCRLF),
+            phase: .completed, workspaceURL: nil
+        )
+        XCTAssertNil(eolOnly.lineCounts)
+        XCTAssertTrue(eolOnly.previewLines.lines.isEmpty)
+    }
+
     // MARK: - Codex
 
     func testCodexToolsAndSubagentsCarryWhatTheirCardsShow() throws {

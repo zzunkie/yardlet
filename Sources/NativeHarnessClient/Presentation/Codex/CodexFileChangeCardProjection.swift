@@ -59,14 +59,20 @@ enum CodexFileChangeCardProjection {
         /// The file the name opens (`openableURL`): inside the task's folder, or elsewhere by its absolute path.
         let fileURL: URL?
         /// The lines a harness activity's edit draws, worked out from the text it replaced
-        /// (`PermissionRequestPreviewProjection`); nil where `change` carries a diff to read.
+        /// (`PermissionRequestPreviewProjection`); nil where `change` carries a diff to read or
+        /// `deferredTextDiff` builds the preview lazily on demand.
         var precomputedPreview: Preview? = nil
+        /// Source text diff for non-hunk harness file changes, computed lazily when a row expands
+        /// or a remote client asks for `itemDetail` (`previewLines`).
+        var deferredTextDiff: HarnessActivityDiff? = nil
 
         var canExpand: Bool { preview != .missing }
 
         /// The lines the row's diff box draws.
         var previewLines: Preview {
-            precomputedPreview ?? CodexFileChangeCardProjection.preview(for: change)
+            if let precomputedPreview { return precomputedPreview }
+            if let deferredTextDiff { return ConversationFileChangeProjection.preview(for: deferredTextDiff) }
+            return CodexFileChangeCardProjection.preview(for: change)
         }
 
         var verb: String {
