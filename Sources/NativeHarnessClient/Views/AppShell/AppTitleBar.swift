@@ -153,7 +153,7 @@ struct IntegratedTitleBar: View {
                         .id(session.id)
                         .layoutPriority(1)
                     if isDropTarget { TabInsertionMark() }
-                    WindowDragRegion().frame(minWidth: 8, maxWidth: .infinity)
+                    dragRegion.frame(minWidth: 8, maxWidth: .infinity)
                     controls
                 } else if let accessory {
                     accessory
@@ -165,7 +165,7 @@ struct IntegratedTitleBar: View {
                             .truncationMode(.tail)
                             .allowsHitTesting(false)
                     }
-                    WindowDragRegion().frame(maxWidth: .infinity)
+                    dragRegion.frame(maxWidth: .infinity)
                     controls
                 }
             }
@@ -189,6 +189,12 @@ struct IntegratedTitleBar: View {
             return drag?.removeWindowTabs(token: token) ?? ()
         }
         drag?.setWindowTabs(WindowDropGeometry.Strip(frame: frame, tabs: []), token: token)
+    }
+
+    /// The header's empty part: it moves the window from the window's top, not from under the tab bar.
+    @ViewBuilder
+    private var dragRegion: some View {
+        if isBelowTabBar { Color.clear } else { WindowDragRegion() }
     }
 
     private var isDropTarget: Bool {

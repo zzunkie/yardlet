@@ -791,10 +791,11 @@ struct MainWindow: View {
     /// The window has two tabs or more, so its tab bar stands at its top over what the tab shows.
     private var hasTabBar: Bool { model.splits.tabs.count > 1 }
 
-    /// The tab bar shows over the window's item: the tasks are shown, with no screen in their place.
+    /// The tab bar shows over the window's item: the tasks are shown, with no screen in their place. The archived
+    /// list in the sidebar leaves the item shown until an archived task is chosen to read in its place.
     private var showsWindowTabBar: Bool {
-        hasTabBar && sidebarSection == .tasks && !model.isRestoringIndex && !isShowingArchivedTasks
-            && !schedulesWindow.isShowing
+        hasTabBar && sidebarSection == .tasks && !model.isRestoringIndex
+            && !(isShowingArchivedTasks && archivedReading != nil) && !schedulesWindow.isShowing
     }
 
     /// The window's top row, which the sidebar's top part and the window's buttons line up with.
@@ -825,10 +826,13 @@ struct MainWindow: View {
                 onToggleSidebar: toggleSidebar, onNewTask: showNewTask, height: ParityTheme.windowTabBarHeight))
         ) {
             // A split view has no header of its own, so its tab's name opens its actions.
-            if case .split = model.splits.selection, let titleBarSplitTitle {
-                titleBarSplitTitle
-            } else {
-                WindowTabTitle(title: sessionRecord(model.store.selectedSessionID).map(\.title) ?? L10n.string("New task"))
+            switch model.splits.selection {
+            case .split:
+                if let titleBarSplitTitle { titleBarSplitTitle }
+            case let .session(id):
+                WindowTabTitle(title: sessionRecord(id)?.title ?? L10n.string("New task"))
+            case .home:
+                WindowTabTitle(title: L10n.string("New task"))
             }
         }
     }
@@ -843,7 +847,7 @@ struct MainWindow: View {
         let order = split.panes.firstIndex { $0.id == pane.id } ?? 0
         let frame = split.root.frames()[pane.id]
         let isMaximized = model.splits.maximizedPane?.id == pane.id
-        let isAtWindowTop = !hasTabBar && (isMaximized || frame?.y == 0)
+        let isAtWindowTop = !showsWindowTabBar && (isMaximized || frame?.y == 0)
         let leadsWindow = isAtWindowTop && (isMaximized || frame?.x == 0) && !isSidebarVisible
         return Group {
             if let session {
@@ -872,9 +876,14 @@ struct MainWindow: View {
         // an approval says so in its own progress line and the request docked above its composer, the one place
         // the task view marks it in orange.
         .environment(\.splitPaneEmphasis, isFocused ? .focused : .unfocused)
+        // The composer taking the keyboard, by a click or Tab, brings its pane the focus.
+        .environment(\.activateSplitPane, isFocused ? nil : SplitPaneActivation { focusPane(pane) })
         .overlay {
             if !isFocused { ParityTheme.paneWash.allowsHitTesting(false).accessibilityHidden(true) }
         }
+        // A press on what AppKit draws in the pane (its composer's or conversation's text, a terminal, a browser
+        // page) never reaches the tap below.
+        .background { PanePressMonitor(isActive: !isFocused) { focusPane(pane) } }
         .contentShape(Rectangle())
         // A simultaneous tap keeps the pane's own controls working while a click also claims focus.
         .simultaneousGesture(TapGesture().onEnded { focusPane(pane) })
@@ -1158,7 +1167,7 @@ struct MainWindow: View {
         // Below the header, which heads one task's content; a split view's panes have their own. The tab bar
         // stands outside the content.
         let headerHeight = model.splits.activeSplit != nil ? 0
-            : hasTabBar ? ParityTheme.areaHeaderHeight : ParityTheme.titleBarHeight
+            : showsWindowTabBar ? ParityTheme.areaHeaderHeight : ParityTheme.titleBarHeight
         let area = CGSize(width: contentSize.width, height: max(0, contentSize.height - headerHeight))
         guard let split = model.splits.activeSplit else { return area }
         // A pane shown alone has the whole area.

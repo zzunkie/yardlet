@@ -192,6 +192,23 @@ final class SplitLayoutTests: XCTestCase {
         store.moveFocus(.up)
         XCTAssertNil(store.maximizedPane, "moving the focus shows every pane again")
         XCTAssertEqual(store.activeSplit?.root, tree)
+        // Coming back to the pane does not maximize it again.
+        store.focusPane(focused)
+        XCTAssertNil(store.maximizedPane, "the pane comes back in the split view, not alone")
+
+        // A pane without the focus maximized from its own header: it takes the focus, then shows alone.
+        let other = try XCTUnwrap(store.activeSplit?.panes.first { $0.id != focused }?.id)
+        store.toggleMaximizedPane()
+        store.focusPane(other)
+        store.toggleMaximizedPane()
+        XCTAssertEqual(store.maximizedPane?.id, other, "the other pane's button maximizes that pane")
+
+        // Another tab and back: the split view shows all its panes.
+        let split = try XCTUnwrap(store.activeSplit?.id)
+        store.newTab()
+        store.selectTab(.split(split))
+        XCTAssertNil(store.maximizedPane, "returning to the tab shows every pane")
+        store.focusPane(focused)
 
         store.toggleMaximizedPane()
         store.closePane()

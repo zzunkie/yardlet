@@ -731,6 +731,11 @@ final class SplitStore {
     }
 
     private func changed() {
+        // A pane is shown alone only while it keeps the focus in the shown split view: once the focus, the tab or the
+        // panes move on, the split view shows all its panes, and coming back does not maximize the pane again.
+        if let maximizedPaneID, activeSplit?.focusedPaneID != maximizedPaneID || (activeSplit?.panes.count ?? 0) <= 1 {
+            self.maximizedPaneID = nil
+        }
         recordVisit()
         reconcileTabs()
         schedulePersist()

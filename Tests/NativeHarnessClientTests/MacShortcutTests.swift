@@ -10,13 +10,13 @@ final class MacShortcutTests: XCTestCase {
             .nextTaskNeedingAttention, .toggleActivityView, .togglePinned, .markUnread, .archive, .toggleSessionRail,
             .toggleSidePanel, .toggleTerminal, .terminalAlternate, .openModelMenu, .back, .forward,
             .newTab, .closeTab, .closeWindow, .reopenClosedTab, .nextTab, .previousTab, .splitRight, .splitDown,
-            .closePane, .focusLeft, .focusRight, .focusUp, .focusDown, .conversationFind, .nextResult, .previousResult,
+            .closePane, .maximizePane, .focusLeft, .focusRight, .focusUp, .focusDown, .conversationFind, .nextResult, .previousResult,
             .surfaceChat, .surfaceReview, .surfaceTerminal, .surfaceBrowser, .actualSize, .zoomIn, .zoomOut,
             .attachSelection]
         XCTAssertEqual(commands.map { $0.defaultBinding().displayText }, [
             "⌘,", "⌘K", "⌘?", "⌘N", "⇧⌘S", "⇧⌘[", "⇧⌘]", "⌥⌘A", "⌥⌘U", "⌥⌘P", "⇧⌘U", "⇧⌘A", "⌃⌘I",
             "⌥⌘B", "⌘J", "⌃\u{60}", "⌃⇧M", "⌘[", "⌘]", "⌘T", "⌘W", "⇧⌘W", "⇧⌘T", "⌃⇥", "⌃⇧⇥", "⇧⌘D",
-            "⌥⇧⌘D", "⌃⌘W", "⌥⌘←", "⌥⌘→", "⌥⌘↑", "⌥⌘↓", "⌘F", "⌘G", "⇧⌘G", "⌘1", "⌘2", "⌘3", "⌘4", "⌘0", "⌘+", "⌘-",
+            "⌥⇧⌘D", "⌃⌘W", "⌃⌘↩", "⌥⌘←", "⌥⌘→", "⌥⌘↑", "⌥⌘↓", "⌘F", "⌘G", "⇧⌘G", "⌘1", "⌘2", "⌘3", "⌘4", "⌘0", "⌘+", "⌘-",
             "⇧⌘L"
         ])
         for number in 1...9 {

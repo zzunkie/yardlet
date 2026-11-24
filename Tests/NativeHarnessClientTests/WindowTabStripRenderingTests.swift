@@ -209,6 +209,45 @@ final class WindowTabStripRenderingTests: XCTestCase {
         XCTAssertEqual(splits.activeSplit?.panes.count, 3, "restoring keeps the split view's panes")
     }
 
+    /// A press on what AppKit draws in a pane without the focus (a conversation's text, a terminal), which takes the
+    /// press for itself and never lets the pane's tap see it, still gives the pane the focus (`PanePressMonitor`); a
+    /// press in the other pane does not, and nothing watches once the pane has the focus.
+    func testAPressOnAppKitTextInAnUnfocusedPaneFocusesThePane() throws {
+        let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 400, height: 200),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        window.contentView = content
+        // The pane on the left, all of it text that takes the press.
+        let text = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 200))
+        content.addSubview(text)
+        let monitor = PanePressMonitorView(frame: text.frame)
+        content.addSubview(monitor)
+        var presses = 0
+        monitor.onPress = { presses += 1 }
+        monitor.isActive = true
+        window.alphaValue = 0
+        window.orderFrontRegardless()
+
+        func press(at point: NSPoint) throws {
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                NSApp.sendEvent(try XCTUnwrap(NSEvent.mouseEvent(
+                    with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
+                    pressure: type == .leftMouseDown ? 1 : 0)))
+            }
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        try press(at: NSPoint(x: 100, y: 100))
+        XCTAssertEqual(presses, 1, "a press on the pane's text focuses the pane")
+        try press(at: NSPoint(x: 300, y: 100))
+        XCTAssertEqual(presses, 1, "a press in the other pane does not")
+        monitor.isActive = false
+        try press(at: NSPoint(x: 100, y: 100))
+        XCTAssertEqual(presses, 1, "a focused pane is not watched")
+    }
+
     func testTabsShareTheWidthAndTheShownTabKeepsItsTitleWhenNarrow() {
         XCTAssertEqual(WindowTabMetrics.widths(count: 2, available: 1000).shown, WindowTabMetrics.tabMaxWidth)
         XCTAssertEqual(WindowTabMetrics.widths(count: 5, available: 900).other,

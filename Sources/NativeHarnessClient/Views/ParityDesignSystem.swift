@@ -1017,9 +1017,17 @@ enum SplitPaneEmphasis {
     }
 }
 
+/// Gives a split pane without the focus the focus.
+struct SplitPaneActivation {
+    let activate: () -> Void
+    func callAsFunction() { activate() }
+}
+
 extension EnvironmentValues {
     /// Set on a split pane's content: whether its pane has the window's focus.
     @Entry var splitPaneEmphasis: SplitPaneEmphasis = .alone
+    /// Set on a split pane's content while the pane does not have the focus.
+    @Entry var activateSplitPane: SplitPaneActivation? = nil
 }
 
 extension View {

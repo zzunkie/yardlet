@@ -409,8 +409,10 @@ struct SplitPaneHeader<Identity: View, Controls: View>: View {
     }
 
     private var header: some View {
-        // The close button's room comes out of what the title and the buttons share.
-        let isFolded = TaskHeaderFold.folds(headerWidth: width - 24, interfaceScale: interfaceScale)
+        // The room of the close button, and of Maximize pane with its spacing, comes out of what the title and the
+        // buttons share.
+        let trailingRoom: CGFloat = onToggleMaximized != nil ? 60 : 24
+        let isFolded = TaskHeaderFold.folds(headerWidth: width - trailingRoom * interfaceScale, interfaceScale: interfaceScale)
         return HStack(spacing: ParitySpace.s8) {
             identity(isFolded)
                 .frame(minWidth: 60, maxWidth: isAtWindowTop ? nil : .infinity, alignment: .leading)

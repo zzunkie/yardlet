@@ -250,3 +250,65 @@ private struct PaneDropDelegate: DropDelegate {
         PaneDropEdge.edge(for: location, in: size)
     }
 }
+
+/// Gives a split pane the focus when a press lands anywhere in it, also on the parts AppKit draws and takes
+/// the press for itself: the composer's text, the conversation's text, a terminal, a browser page (whose child
+/// window counts as the pane's). It watches only while its pane does not have the focus, and lets every press
+/// through to what is under it.
+struct PanePressMonitor: NSViewRepresentable {
+    let isActive: Bool
+    let onPress: () -> Void
+
+    func makeNSView(context: Context) -> PanePressMonitorView {
+        let view = PanePressMonitorView()
+        updateNSView(view, context: context)
+        return view
+    }
+
+    func updateNSView(_ view: PanePressMonitorView, context: Context) {
+        view.onPress = onPress
+        view.isActive = isActive
+    }
+
+    static func dismantleNSView(_ view: PanePressMonitorView, coordinator: ()) {
+        view.isActive = false
+    }
+}
+
+final class PanePressMonitorView: NSView {
+    var onPress: () -> Void = {}
+    var isActive = false {
+        didSet { if isActive != oldValue { updateMonitor() } }
+    }
+    private var monitor: Any?
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateMonitor()
+    }
+
+    private func updateMonitor() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+        guard isActive, window != nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            MainActor.assumeIsolated {
+                guard let self, self.contains(event) else { return }
+                // After the press reaches its view, so a control pressed there still acts on it.
+                DispatchQueue.main.async { self.onPress() }
+            }
+            return event
+        }
+    }
+
+    /// The press is in this pane: in its window, or in a window over it such as a browser page's.
+    private func contains(_ event: NSEvent) -> Bool {
+        guard let window, let pressed = event.window,
+              pressed === window || pressed.parent === window else { return false }
+        let onScreen = pressed.convertPoint(toScreen: event.locationInWindow)
+        let point = convert(window.convertPoint(fromScreen: onScreen), from: nil)
+        return bounds.contains(point)
+    }
+}

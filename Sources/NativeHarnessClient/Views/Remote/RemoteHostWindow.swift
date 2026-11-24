@@ -558,7 +558,8 @@ struct RemoteHostView: View {
 
     /// The window's tabs once there are two or more, drawn by the local window's tab bar.
     private var tabStrip: TitleBarTabs? {
-        guard shell.tabs.count > 1 else { return nil }
+        // Over the host's tasks only, as the local window's: the mailbox, the calendar and the schedules take their place.
+        guard shell.tabs.count > 1, !showsMail, !showsCalendar, !model.showsSchedules else { return nil }
         let mirror = model.sidebar
         return TitleBarTabs(
             tabs: WindowTabProjection.tabs(shell.tabs, sessions: mirror.sessions, splits: [], details: mirror.details),
@@ -608,7 +609,7 @@ struct RemoteHostView: View {
             return PinnedRowMenuItem(id: row.id, title: session.title)
         }
         commands.activate = activate
-        commands.tabs.canCloseTab = shell.tabs.count > 1
+        commands.tabs.canCloseTab = tabStrip != nil
         commands.tabs.canReopenClosedTab = !shell.closedTabs.isEmpty
         commands.tabs.newTab = newTab
         commands.tabs.closeTab = { closeTab(windowSelection) }
@@ -1429,7 +1430,12 @@ struct RemoteTaskView: View {
         if let session = model.sidebar.sessions.first(where: { $0.id.uuidString == conversation.taskID }) {
             TaskHeaderIdentity(session: session, actions: headerActions)
         }
-        WindowDragRegion().frame(minWidth: 8, maxWidth: .infinity)
+        // The window moves from its top row, not from a header under the tab bar.
+        if titleBar.tabs == nil {
+            WindowDragRegion().frame(minWidth: 8, maxWidth: .infinity)
+        } else {
+            Color.clear.frame(minWidth: 8, maxWidth: .infinity)
+        }
         TaskSurfaceControls(showsSessionRail: showsRail, onToggleSessionRail: { showsRail.toggle() }, panelState: $panels,
                             unavailableSurfaces: unavailableSurfaces, find: find)
     }

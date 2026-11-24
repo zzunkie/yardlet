@@ -14,7 +14,12 @@ struct WindowTabBar<SelectedTitle: View>: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            if let windowLead { windowLead }
+            if let windowLead {
+                // The part draws its own ground, so the bar's bottom line runs on over it.
+                windowLead.overlay(alignment: .bottom) {
+                    Rectangle().fill(ParityTheme.separator).frame(height: 1)
+                }
+            }
             HStack(spacing: 0) {
                 WindowTabStrip(tabs: tabs.tabs, selection: tabs.selection, onSelect: tabs.onSelect,
                                onClose: tabs.onClose, onCloseOthers: tabs.onCloseOthers, onNewTab: tabs.onNewTab,

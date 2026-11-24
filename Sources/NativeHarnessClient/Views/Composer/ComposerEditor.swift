@@ -147,6 +147,7 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
     @Environment(\.yardletInterfaceScale) private var interfaceScale
     @Environment(\.taskKeyboardFocus) private var keyboardFocus
     @Environment(\.splitPaneEmphasis) private var paneEmphasis
+    @Environment(\.activateSplitPane) private var activatePane
     /// Which Return sends (`ComposerReturnKey`).
     @AppStorage(SendShortcut.preferenceKey) private var sendShortcut = SendShortcut.return
     @State private var commandHighlight = 0
@@ -265,6 +266,11 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
         .background { ComposerWindowProbe(context: fieldContext).accessibilityHidden(true) }
         .onChange(of: typedMention?.query, initial: true) { _, query in
             fileMentions.update(query: query, roots: mentionRoots, search: mentionSearch)
+        }
+        // In a split pane without the focus, the composer taking the keyboard brings its pane the focus, so the
+        // raised composer and the clear title stay where typing goes.
+        .onChange(of: isFocused.wrappedValue) { _, focused in
+            if focused { activatePane?() }
         }
         .onChange(of: typedCommandQuery) { old, query in
             commandHighlight = 0
