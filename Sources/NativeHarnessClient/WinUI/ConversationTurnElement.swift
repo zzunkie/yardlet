@@ -101,7 +101,8 @@ final class ConversationTurnElement {
             make(turn, answered.questions, answered.answers, nil).place(in: view)
         } else if turn.status.isTerminal, !turn.actions.questionsToAnswer.isEmpty, let make = context.questionCard {
             let turnID = turn.id
-            let send: (@MainActor (String) -> Void)? = context.answerQuestion.map { answer in { answer(turnID, $0) } }
+            var send: (@MainActor (String) -> Void)?
+            if let answer = context.answerQuestion { send = { text in answer(turnID, text) } }
             make(turn, turn.actions.questionsToAnswer, nil, send).place(in: view)
         }
         if let live {
@@ -112,9 +113,8 @@ final class ConversationTurnElement {
         if let outcome = turn.outcome { view.children.append(outcomeCard(outcome, isTurnOutcome: true)) }
         if !turn.status.isTerminal, !turn.actions.questionsToAnswer.isEmpty, let make = context.questionCard {
             let turnID = turn.id
-            let send: (@MainActor (String) -> Void)? = context.answerQuestionWhileWorking.map { answer in
-                { answer(turnID, $0) }
-            }
+            var send: (@MainActor (String) -> Void)?
+            if let answer = context.answerQuestionWhileWorking { send = { text in answer(turnID, text) } }
             make(turn, turn.actions.questionsToAnswer, nil, send).place(in: view)
         }
         followTime()
