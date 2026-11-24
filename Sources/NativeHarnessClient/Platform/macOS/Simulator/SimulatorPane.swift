@@ -227,7 +227,7 @@ struct SimulatorPane: View {
     private var deviceMenu: some View {
         let menu = SimulatorDeviceMenu.make(for: task, tab: tab, in: center, taskTitle: services.taskTitle,
                                             approvals: services.approvals)
-        return Menu {
+        return ParityHeaderMenu(systemName: "ellipsis", help: L10n.string("Device")) {
             Menu(L10n.string("Switch Device")) {
                 Picker(L10n.string("Switch Device"), selection: Binding(
                     get: { attached },
@@ -243,19 +243,7 @@ struct SimulatorPane: View {
             ForEach(Array(menu.items.enumerated()), id: \.offset) { _, item in
                 menuItem(item)
             }
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 13, weight: .semibold))
-                .frame(width: 30, height: 30)
-                .contentShape(Rectangle())
-                .accessibilityLabel(L10n.string("Device"))
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .parityPointer()
-        .accessibilityLabel(L10n.string("Device"))
-        .help(L10n.string("Device"))
     }
 
     @ViewBuilder

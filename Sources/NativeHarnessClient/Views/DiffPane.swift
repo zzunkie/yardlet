@@ -55,19 +55,12 @@ struct DiffPane: View {
                 statusTint: statusTint,
                 onClose: onClose
             ) {
-                Button {
+                ParityHeaderButton(systemName: "arrow.clockwise", help: L10n.string("Refresh")) {
                     reloadTask?.cancel()
                     reloadTask = Task { await reload() }
-                } label: {
-                    Label(L10n.string("Refresh"), systemImage: "arrow.clockwise")
-                        .labelStyle(.iconOnly)
-                        .frame(width: 28, height: 28)
                 }
-                .buttonStyle(.borderless)
-                .help(L10n.string("Refresh"))
                 .focused($isRefreshFocused)
                 .disabled(isLoading)
-                .parityPointer()
             }
 
             if !isNotRepository || effectiveLastTurn.isOffered { scopeBar }

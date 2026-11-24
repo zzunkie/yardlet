@@ -102,6 +102,13 @@ import XCTest
                 let rail = ParityTheme.innerRail.resolve(in: buttonEnv)
                 XCTAssertGreaterThanOrEqual(Self.contrast(textColor, bubble), 4.49, "\(preset) \(mode) user bubble")
                 XCTAssertGreaterThanOrEqual(Self.contrast(textColor, rail), 4.49, "\(preset) \(mode) inner rail")
+                // An unfocused split pane's faded title (`TaskTitleMenu`) on the canvas.
+                let canvas = ThemeSurface.canvas.resolve(in: buttonEnv)
+                let alpha = textColor.opacity * Float(ThemeContrast.fadedTextOpacity(0.7, in: buttonEnv))
+                let faded = Color.Resolved(red: textColor.red * alpha + canvas.red * (1 - alpha),
+                                           green: textColor.green * alpha + canvas.green * (1 - alpha),
+                                           blue: textColor.blue * alpha + canvas.blue * (1 - alpha))
+                XCTAssertGreaterThanOrEqual(Self.contrast(faded, canvas), 4.49, "\(preset) \(mode) faded pane title")
             }
         }
     }

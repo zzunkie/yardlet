@@ -5,7 +5,8 @@ import XCTest
 
 /// The window's tab strip drawn in the whole main window, light and dark, into
 /// `.build/window-tabs-render/`: three tabs (a running task, a split view with an unread task, and
-/// the new-task screen), the split view's tab shown, and one tab, which draws no strip.
+/// the new-task screen), the split view's tab shown, and one tab, which draws no strip; and the title bar's
+/// row shared with a side panel's tabs (also under the Nord and Ember presets) and a split view alone in its window.
 @MainActor
 final class WindowTabStripRenderingTests: XCTestCase {
     private static let folder = "window-tabs-render"
@@ -101,6 +102,51 @@ final class WindowTabStripRenderingTests: XCTestCase {
                                           to: directory.appending(path: "one-tab-\(appearance.suffix).png"))
             XCTAssertFalse(host.accessibilityElements().map(\.label).contains(L10n.string("New Tab")),
                            "one tab draws no strip")
+            host.close()
+        }
+    }
+
+    /// The window's tabs beside a side panel's tabs in the title bar's row, and a split view alone in its
+    /// window, whose top panes stand in for the title bar: the headers the person sees as one bar.
+    func testTitleBarRowWithTheSidePanelAndASplitViewAlone() throws {
+        let directory = try WindowlessRender.directory(Self.folder)
+        let fixture = try makeFixture()
+        let splits = fixture.model.splits
+        splits.activate(.session(fixture.running.id))
+        splits.openInNewTab(.session(fixture.left.id))
+        splits.combine(fixture.right.id, with: fixture.left.id)
+        let split = try XCTUnwrap(splits.activeSplit)
+        splits.selectTab(.session(fixture.running.id))
+        let workspace = fixture.model.taskWorkspaces.state(for: fixture.running.id)
+        for id in ["files", TaskSurfaceNavigationProjection.browserTabID(UUID()), "diff"] {
+            workspace.setPanels(TaskSurfaceNavigationProjection.showing(id, in: workspace.panels))
+        }
+
+        for appearance in WindowlessRender.Appearance.allCases {
+            let host = WindowlessRender.Host(window(fixture.model, appearance), size: Self.size, appearance: appearance)
+            host.settle(passes: 30, interval: 0.03)
+            try WindowlessRender.writePNG(host.capture().bitmap,
+                                          to: directory.appending(path: "tabs-and-panel-\(appearance.suffix).png"))
+            host.close()
+        }
+        // A preset moves every surface together; the shown tabs keep their edge on its canvas.
+        for (preset, appearance) in [(YardletAccentPreference.nord, WindowlessRender.Appearance.dark), (.ember, .light)] {
+            let themed = window(fixture.model, appearance)
+                .environment(\.yardletColorTheme, MacColorTheme(preset: preset))
+            let host = WindowlessRender.Host(themed, size: Self.size, appearance: appearance)
+            host.settle(passes: 30, interval: 0.03)
+            try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(
+                path: "tabs-and-panel-\(preset.rawValue)-\(appearance.suffix).png"))
+            host.close()
+        }
+
+        splits.selectTab(.split(split.id))
+        splits.closeOtherTabs()
+        for appearance in WindowlessRender.Appearance.allCases {
+            let host = WindowlessRender.Host(window(fixture.model, appearance), size: Self.size, appearance: appearance)
+            host.settle(passes: 20, interval: 0.03)
+            try WindowlessRender.writePNG(host.capture().bitmap,
+                                          to: directory.appending(path: "split-alone-\(appearance.suffix).png"))
             host.close()
         }
     }

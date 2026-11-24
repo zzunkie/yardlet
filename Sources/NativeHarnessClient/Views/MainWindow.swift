@@ -769,7 +769,11 @@ struct MainWindow: View {
         case .split:
             VStack(spacing: 0) {
                 if let split = model.splits.activeSplit {
-                    if hasTabBar { titleBar(for: item) }
+                    if hasTabBar {
+                        titleBar(for: item)
+                        // The window's tabs stand over the panes' own headers, a hairline between the two rows.
+                        Rectangle().fill(ParityTheme.separator).frame(height: 1)
+                    }
                     SplitNodeView(
                         node: split.root,
                         path: [],
@@ -818,13 +822,9 @@ struct MainWindow: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ParityTheme.canvas)
-        // Only the focused pane is outlined. A pane waiting on an approval says so in its own progress
-        // line and the request docked above its composer, the one place the task view marks it in orange.
-        .overlay {
-            Rectangle()
-                .strokeBorder(isFocused ? ParityTheme.strongSeparator : .clear, lineWidth: 1)
-                .allowsHitTesting(false)
-        }
+        // The focused pane shows by its header (`SplitPaneHeader`), the others' titles faded; no outline doubles
+        // the dividers between panes. A pane waiting on an approval says so in its own progress line and the
+        // request docked above its composer, the one place the task view marks it in orange.
         .contentShape(Rectangle())
         // A simultaneous tap keeps the pane's own controls working while a click also claims focus.
         .simultaneousGesture(TapGesture().onEnded { focusPane(pane) })

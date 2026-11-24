@@ -65,11 +65,19 @@ struct TaskHeaderIdentity: View {
 /// The task's title, which opens its actions: in its header, and in the window tab that shows it. The
 /// title takes its own width, so the header's empty part beside it stays free (the window's title bar
 /// moves the window there; a split pane's header moves the pane, or the window at the window's top).
+extension EnvironmentValues {
+    /// Set on a split pane's header whose pane is not focused: its task's title shows faded (`TaskTitleMenu`).
+    @Entry var taskTitleFaded = false
+}
+
 struct TaskTitleMenu: View {
     let session: SessionRecord
     let actions: TaskHeaderActions
     var type: ParityType = .control
     @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @Environment(\.taskTitleFaded) private var isFaded
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.yardletColorTheme) private var theme
 
     @FocusState private var taskInfoFocused: Bool
 
@@ -84,6 +92,7 @@ struct TaskTitleMenu: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.visible)
         .foregroundStyle(.primary)
+        .opacity(isFaded ? fadedOpacity : 1)
         .parityPointer()
         .focused($taskInfoFocused)
         .taskFocus(.taskActions, isFocused: $taskInfoFocused)
@@ -91,6 +100,14 @@ struct TaskTitleMenu: View {
         .accessibilityValue([session.title, actions.projectName(session),
                              session.status.displayName].joined(separator: ", "))
         .help(actions.managesWorkspace ? "\(session.title)\n\(session.workspaceURL.path(percentEncoded: false))" : session.title)
+    }
+
+    /// A faded title still reads at 4.5:1 on the theme's canvas (`ThemeContrast.fadedTextOpacity`).
+    private var fadedOpacity: Double {
+        var environment = EnvironmentValues()
+        environment.colorScheme = colorScheme
+        environment.yardletColorTheme = theme
+        return ThemeContrast.fadedTextOpacity(0.7, in: environment)
     }
 
     @ViewBuilder var menuContents: some View {
@@ -394,26 +411,21 @@ struct SplitPaneHeader<Identity: View, Controls: View>: View {
             identity(isFolded)
                 .frame(minWidth: 60, maxWidth: isAtWindowTop ? nil : .infinity, alignment: .leading)
                 .layoutPriority(1)
+                // The header stands on the pane's canvas, as one task's title bar does; the panes other than the
+                // focused one show their titles faded, as a window behind others does. The harness and the rest
+                // of the line, already secondary, stay as they are.
+                .environment(\.taskTitleFaded, !isFocused)
             if isAtWindowTop {
                 WindowDragRegion(onPress: onFocus).frame(minWidth: ParitySpace.s8, maxWidth: .infinity)
             }
             controls(isFolded)
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9 * interfaceScale, weight: .semibold))
-                    .frame(width: 22, height: 22)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.borderless)
-            .parityPointer()
-            .foregroundStyle(.secondary)
             // ⌃⌘W closes the focused pane only.
-            .help(ShortcutHelp.text(L10n.string("Close pane"), isFocused ? MacShortcut.closePane.binding : nil))
-            .accessibilityLabel(L10n.string("Close pane"))
+            ParityTabCloseButton(help: ShortcutHelp.text(L10n.string("Close pane"),
+                                                         isFocused ? MacShortcut.closePane.binding : nil),
+                                 accessibilityLabel: L10n.string("Close pane"), action: onClose)
         }
         .padding(.horizontal, ParitySpace.s8)
         .frame(maxHeight: .infinity)
-        .background(isFocused ? ParityTheme.selectedFill : ParityTheme.subtleFill)
         .contentShape(Rectangle())
         .onTapGesture(perform: onFocus)
         .windowDraggable(dragged.map { .pane(sessionID: $0.task) }, preview: dragged?.preview)
