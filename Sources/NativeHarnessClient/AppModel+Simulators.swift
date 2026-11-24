@@ -1,7 +1,7 @@
 import Foundation
 import YardletAgentTools
 
-/// The tasks' attached devices, kept in their workspace snapshots (`TaskWorkspaceSnapshot.simulator`).
+/// The tasks' attached devices, kept in their workspace snapshots (`TaskWorkspaceSnapshot.simulators`).
 @MainActor
 final class TaskWorkspaceSimulatorAttachments: SimulatorAttachmentStore {
     private weak var workspaces: TaskWorkspaceStore?
@@ -13,18 +13,18 @@ final class TaskWorkspaceSimulatorAttachments: SimulatorAttachmentStore {
         self.taskIDs = taskIDs
     }
 
-    func simulatorAttachment(of task: UUID) -> SimulatorDeviceIdentity? {
-        workspaces?.simulatorAttachment(of: task)
+    func simulatorAttachments(of task: UUID) -> [UUID: SimulatorDeviceIdentity] {
+        workspaces?.simulatorAttachments(of: task) ?? [:]
     }
 
-    func setSimulatorAttachment(_ device: SimulatorDeviceIdentity?, of task: UUID) {
-        guard let workspaces, workspaces.simulatorAttachment(of: task) != device else { return }
-        workspaces.state(for: task).simulator = device
+    func setSimulatorAttachment(_ device: SimulatorDeviceIdentity?, of task: UUID, tab: UUID) {
+        guard let workspaces, workspaces.simulatorAttachments(of: task)[tab] != device else { return }
+        workspaces.state(for: task).simulators[tab] = device
     }
 
     func tasksAttaching(_ device: SimulatorDeviceIdentity) -> Set<UUID> {
         guard let workspaces else { return [] }
-        return Set(taskIDs().filter { workspaces.simulatorAttachment(of: $0) == device })
+        return Set(taskIDs().filter { workspaces.simulatorAttachments(of: $0).values.contains(device) })
     }
 }
 
@@ -35,6 +35,11 @@ extension AppModel {
         simulators.attachmentStore = TaskWorkspaceSimulatorAttachments(
             workspaces: taskWorkspaces, taskIDs: { [weak self] in self?.store.sessions.map(\.id) ?? [] })
         simulators.isTurnRunning = { [weak self] id in self?.isRunning(id) ?? false }
+        // A Simulator tab that closes lets go of its device, as Disconnect does.
+        taskWorkspaces.onSimulatorTabsClose = { [weak self] task, tabs in
+            guard let self else { return }
+            for tab in tabs { simulatorTools.tabClosed(tab, of: task) }
+        }
     }
 }
 
@@ -100,7 +105,11 @@ extension AppModel: SimulatorToolHandling {
                                         approvals: SimulatorApprovals(defaults: preferences))
         tools.askPerson = { [weak self] device, task in await self?.asksToUseSimulator(device, task: task) ?? false }
         tools.taskTitle = { [weak self] id in self?.store.sessions.first { $0.id == id }?.title }
-        tools.showPanel = { [weak self] task in self?.showSimulatorTab(for: task) ?? .notShown }
+        tools.showPanel = { [weak self] task, tab in self?.showSimulatorTab(tab, for: task) ?? .notShown }
+        tools.panelTabs = { [weak self] task in
+            guard let self, store.sessions.contains(where: { $0.id == task }) else { return [] }
+            return TaskSurfaceNavigationProjection.simulatorKeys(in: taskWorkspaces.state(for: task).panels)
+        }
         tools.lastPersonInput = { [weak self] device in self?.simulators.lastPersonInput(on: device) }
         tools.handoffStarted = { [weak self] task, device, handoff in
             self?.simulatorHandoffStarted(task, device: device, handoff: handoff)
@@ -135,21 +144,25 @@ extension AppModel: SimulatorToolHandling {
         }
     }
 
-    /// The task's panel shows its Simulator tab, the task in front staying: a device handed to the person, and a click on
-    /// its notification.
+    /// The task's panel shows the Simulator tab of the device it handed to the person, the task in front staying: a
+    /// device handed over, and a click on its notification.
     func showHandedOverSimulator(of task: UUID) {
         let workspace = taskWorkspaces.state(for: task)
-        workspace.setPanels(TaskSurfaceNavigationProjection.showing(TaskSurfaceNavigationProjection.simulatorID,
+        guard let device = simulatorTools.handoffs.handoff(for: task)?.device,
+              let tab = simulators.tab(attaching: device, in: task,
+                                       preferring: TaskSurfaceNavigationProjection.simulatorKeys(in: workspace.panels))
+        else { return }
+        workspace.setPanels(TaskSurfaceNavigationProjection.showing(TaskSurfaceNavigationProjection.simulatorTabID(tab),
                                                                     in: workspace.panels))
     }
 
-    /// `simulator_attach` shows the task's Simulator tab, as the Claude app's attach shows its device, unless the
-    /// person is using another tab of the task's side panel: the Simulator tab then joins the strip, and the panel
-    /// stays on theirs. A subagent's call opens no panel.
-    func showSimulatorTab(for task: UUID) -> SimulatorPanelShowing {
+    /// `simulator_attach` shows the Simulator tab it attached the device in, as the Claude app's attach shows its
+    /// device, unless the person is using another tab of the task's side panel: the Simulator tab then joins the strip,
+    /// and the panel stays on theirs. A subagent's call opens no panel.
+    func showSimulatorTab(_ tab: UUID, for task: UUID) -> SimulatorPanelShowing {
         guard store.sessions.contains(where: { $0.id == task }) else { return .notShown }
         let workspace = taskWorkspaces.state(for: task)
-        let id = TaskSurfaceNavigationProjection.simulatorID
+        let id = TaskSurfaceNavigationProjection.simulatorTabID(tab)
         if let shown = workspace.panels.trailingSurfaceID, shown != id, shown != TaskSurfaceNavigationProjection.launcherID {
             workspace.setPanels(TaskSurfaceNavigationProjection.addingTrailingTab(id, in: workspace.panels))
             return .besidePersonsTab

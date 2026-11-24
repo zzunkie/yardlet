@@ -166,13 +166,16 @@ struct TaskDetail: View {
                     } else if panelState.trailingSurfaceID == "files" {
                         FilesPane(workspaceURL: session.workspaceURL, state: workspaceState.files,
                                   onClose: { closeSidePanelTab("files") })
-                    } else if panelState.trailingSurfaceID == TaskSurfaceNavigationProjection.simulatorID {
+                    } else if let id = panelState.trailingSurfaceID,
+                              let key = TaskSurfaceNavigationProjection.simulatorKey(inTab: id) {
                         if offersSimulator, let simulatorPanel {
-                            SimulatorPane(task: session.id, workspaceURL: session.workspaceURL, services: simulatorPanel,
-                                          attached: workspaceState.simulator,
-                                          onClose: { closeSidePanelTab(TaskSurfaceNavigationProjection.simulatorID) })
+                            SimulatorPane(task: session.id, tab: key, workspaceURL: session.workspaceURL,
+                                          services: simulatorPanel, attached: workspaceState.simulators[key],
+                                          onClose: { closeSidePanelTab(id) })
+                                // Each tab its own view, so one tab's state does not carry over to another's.
+                                .id(id)
                         } else {
-                            Color.clear.onAppear { closeSidePanelTab(TaskSurfaceNavigationProjection.simulatorID) }
+                            Color.clear.onAppear { closeSidePanelTab(id) }
                         }
                     } else if panelState.trailingSurfaceID == "sideChat", let sideChat {
                         sideChat
@@ -192,11 +195,11 @@ struct TaskDetail: View {
                     .padding(.top, areaHeader?.height ?? 0)
             }
         }
-        // Settings › General › Simulator turned off closes the Simulator tab, also one a task kept while it was on.
+        // Settings › General › Simulator turned off closes the Simulator tabs, also those a task kept while it was on.
         .onChange(of: offersSimulator, initial: true) { _, offers in
-            let id = TaskSurfaceNavigationProjection.simulatorID
-            guard !offers, simulatorPanel != nil, panelState.trailingTabs.contains(id) else { return }
-            panelState = TaskSurfaceNavigationProjection.closingTrailingTab(id, in: panelState)
+            let ids = panelState.trailingTabs.filter { TaskSurfaceNavigationProjection.simulatorKey(inTab: $0) != nil }
+            guard !offers, simulatorPanel != nil, !ids.isEmpty else { return }
+            panelState = TaskSurfaceNavigationProjection.closingTrailingTabs(ids, in: panelState)
         }
         // The terminal goes where Settings now put it.
         .onChange(of: terminalLocation, initial: true) { _, raw in
@@ -886,7 +889,8 @@ struct TaskDetail: View {
                     return tasks?.record(taskID).map { TaskSidePanelTabs.taskTab($0) }
                 }
                 return TaskSidePanelTabs.tab(id, selectedFilePath: workspaceState.files.preferences.selectedPath,
-                                             browserTabs: workspaceState.browserTabs, simulator: simulatorTab)
+                                             browserTabs: workspaceState.browserTabs,
+                                             simulator: simulatorTabs)
             },
             activeID: panelState.trailingSurfaceID,
             choices: sidePanelChoices,
@@ -918,10 +922,14 @@ struct TaskDetail: View {
         simulatorPanel != nil && simulatorSwitch && SimulatorPreference.isOffered
     }
 
-    /// The Simulator tab in the strip, named after the device the task attached.
-    private var simulatorTab: WorkSurfaceTab? {
-        guard offersSimulator else { return nil }
-        return TaskSidePanelTabs.simulatorTab(device: workspaceState.simulator.flatMap { simulatorPanel?.center.device($0) })
+    /// The Simulator tabs in the strip while the panel offers them.
+    private var simulatorTabs: ((UUID) -> WorkSurfaceTab)? {
+        offersSimulator ? { key in simulatorTab(key) } : nil
+    }
+
+    /// A Simulator tab in the strip, named after the device attached in it.
+    private func simulatorTab(_ key: UUID) -> WorkSurfaceTab {
+        TaskSidePanelTabs.simulatorTab(key, device: workspaceState.simulators[key].flatMap { simulatorPanel?.center.device($0) })
     }
 
     /// A tab in the strip only shows its panel; it never starts a side chat or a shell.
@@ -932,8 +940,11 @@ struct TaskDetail: View {
 
     private func openSidePanel(_ id: String) {
         switch id {
-        case "files", TaskSurfaceNavigationProjection.launcherID, TaskSurfaceNavigationProjection.simulatorID:
+        case "files", TaskSurfaceNavigationProjection.launcherID:
             showSidePanelTab(id)
+        case TaskSurfaceNavigationProjection.simulatorChoiceID:
+            // A new Simulator tab each time, as Browser opens a new browser tab, so a task shows several devices.
+            showSidePanelTab(TaskSurfaceNavigationProjection.simulatorTabID(UUID()))
         case "sideChat":
             onOpenSideChat?()
         case TaskSurfaceNavigationProjection.browserChoiceID:

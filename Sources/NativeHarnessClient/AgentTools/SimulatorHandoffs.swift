@@ -23,9 +23,9 @@ struct SimulatorHandoff: Equatable, Sendable {
     var notice: String { "yardlet-simulator-handoff-\(id.uuidString)" }
 }
 
-/// Each task's device handed to the person, which its Simulator tab shows in a bar over the device with Done and
-/// Decline, as a browser tab handed over shows one (`BrowserTab.handOff(reason:)`): a task hands over its one attached
-/// device at a time.
+/// Each task's device handed to the person, which the Simulator tab of that device shows in a bar over it with Done and
+/// Decline, as a browser tab handed over shows one (`BrowserTab.handOff(reason:)`): a task hands over one of its
+/// attached devices at a time.
 @MainActor
 @Observable
 final class SimulatorHandoffs {

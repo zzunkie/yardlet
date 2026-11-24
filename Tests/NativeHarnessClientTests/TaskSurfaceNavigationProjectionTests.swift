@@ -155,19 +155,27 @@ final class TaskSurfaceNavigationProjectionTests: XCTestCase {
         XCTAssertEqual(toggleSidePanel(toggleSidePanel(review)).trailingSurfaceID, "diff")
         XCTAssertEqual(review.trailingTabs, [browser, "diff"], "Switching tabs keeps their order")
 
-        // The Simulator tab has no key of its own: the side panel's toggle returns to it, and it is saved as a tab.
-        let simulator = Projection.showing(Projection.simulatorID, in: review)
-        XCTAssertEqual(Projection.placement(for: Projection.simulatorID), .trailing)
-        XCTAssertEqual(simulator.trailingTabs, [browser, "diff", Projection.simulatorID])
-        XCTAssertEqual(toggleSidePanel(toggleSidePanel(simulator)).trailingSurfaceID, Projection.simulatorID)
+        // Each Simulator tab has a key of its own, so a task shows several devices: the side panel's toggle returns
+        // to the one used last, each is saved as a tab, and closing one leaves the other.
+        let (phoneKey, tabletKey) = (UUID(), UUID())
+        let (phone, tablet) = (Projection.simulatorTabID(phoneKey), Projection.simulatorTabID(tabletKey))
+        XCTAssertEqual(Projection.simulatorKey(inTab: phone), phoneKey)
+        XCTAssertNil(Projection.simulatorKey(inTab: Projection.simulatorChoiceID), "Simulator in the launcher is no tab")
+        XCTAssertEqual(Projection.placement(for: phone), .trailing)
+        let simulator = Projection.showing(tablet, in: Projection.showing(phone, in: review))
+        XCTAssertEqual(simulator.trailingTabs, [browser, "diff", phone, tablet])
+        XCTAssertEqual(Projection.simulatorKeys(in: simulator), [tabletKey, phoneKey], "The one used last first")
+        XCTAssertEqual(toggleSidePanel(toggleSidePanel(simulator)).trailingSurfaceID, tablet)
         let saved = try JSONDecoder().decode(Projection.PanelState.self, from: JSONEncoder().encode(simulator))
         XCTAssertEqual(Projection.reconciled(saved), simulator)
-        XCTAssertEqual(Projection.closingTrailingTab(Projection.simulatorID, in: simulator).trailingSurfaceID, "diff")
+        let closed = Projection.closingTrailingTab(tablet, in: simulator)
+        XCTAssertEqual(closed.trailingSurfaceID, phone)
+        XCTAssertEqual(closed.trailingTabs, [browser, "diff", phone])
 
         // An agent's attach while the person uses another tab adds the Simulator tab without showing it.
-        let beside = Projection.addingTrailingTab(Projection.simulatorID, in: review)
+        let beside = Projection.addingTrailingTab(phone, in: review)
         XCTAssertEqual(beside.trailingSurfaceID, "diff")
-        XCTAssertEqual(beside.trailingTabs, [browser, "diff", Projection.simulatorID])
+        XCTAssertEqual(beside.trailingTabs, [browser, "diff", phone])
         XCTAssertEqual(Projection.closingTrailingTab("diff", in: beside).trailingSurfaceID, browser,
                        "Closing the shown tab goes to the one used before, not to the added tab")
     }
@@ -318,15 +326,24 @@ final class TaskSurfaceNavigationProjectionTests: XCTestCase {
         XCTAssertEqual(TaskSidePanelTabs.choices(canOpenSideChat: true, offersReview: false, offersSimulator: true).map(\.id),
                        ["files", "sideChat", "browser", "simulator", "terminal"])
         XCTAssertEqual(TaskSidePanelTabs.draftChoices.map(\.id), ["terminal", "browser", "files"])
-        // Its tab is named after the attached device, and is left out of the strip while the switch is off.
-        XCTAssertNil(TaskSidePanelTabs.tab("simulator", selectedFilePath: nil))
+        // Each Simulator tab is named after the device attached in it, and is left out of the strip while the switch
+        // is off.
+        let (key, other) = (UUID(), UUID())
+        let id = TaskSurfaceNavigationProjection.simulatorTabID(key)
+        XCTAssertNil(TaskSidePanelTabs.tab(id, selectedFilePath: nil))
         let phone = SimulatorDevice(identity: .iOSSimulator(udid: UUID().uuidString), name: "iPhone 17", state: .on,
                                     osName: "iOS 27.2", osVersion: "27.2")
-        let tab = TaskSidePanelTabs.tab("simulator", selectedFilePath: nil,
-                                        simulator: TaskSidePanelTabs.simulatorTab(device: phone))
-        XCTAssertEqual(tab?.title, "iPhone 17")
-        XCTAssertEqual(tab?.systemName, "iphone")
-        XCTAssertEqual(TaskSidePanelTabs.simulatorTab(device: nil).title, L10n.string("Simulator"))
+        let pixel = SimulatorDevice(identity: .androidEmulator(avd: "Pixel_9"), name: "Pixel 9", state: .on,
+                                    osName: "Android 15", osVersion: "35")
+        let devices = [key: phone, other: pixel]
+        let tabs = [id, TaskSurfaceNavigationProjection.simulatorTabID(other)].compactMap {
+            TaskSidePanelTabs.tab($0, selectedFilePath: nil,
+                                  simulator: { TaskSidePanelTabs.simulatorTab($0, device: devices[$0]) })
+        }
+        XCTAssertEqual(tabs.map(\.title), ["iPhone 17", "Pixel 9"])
+        XCTAssertEqual(tabs.map(\.id), [id, TaskSurfaceNavigationProjection.simulatorTabID(other)])
+        XCTAssertNotEqual(tabs[0].systemName, tabs[1].systemName, "Each tab shows its platform")
+        XCTAssertEqual(TaskSidePanelTabs.simulatorTab(UUID(), device: nil).title, L10n.string("Simulator"))
     }
 
     func testPanelsToggleIndependentlyAndChatClosesAllPanels() {

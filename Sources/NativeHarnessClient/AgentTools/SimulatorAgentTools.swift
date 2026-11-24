@@ -3,7 +3,7 @@ import YardletAgentTools
 
 /// How `simulator_attach` left the task's side panel.
 enum SimulatorPanelShowing: Equatable, Sendable {
-    /// The panel shows the task's Simulator tab.
+    /// The panel shows the Simulator tab the device was attached in.
     case shown
     /// The person was using another tab of the panel: the Simulator tab stands beside it, and the panel stays on theirs.
     case besidePersonsTab
@@ -11,10 +11,12 @@ enum SimulatorPanelShowing: Equatable, Sendable {
     case notShown
 }
 
-/// Runs the simulator tools (`SimulatorToolCatalog`, docs/SIMULATOR.md, "Agent tools") against the device the calling
+/// Runs the simulator tools (`SimulatorToolCatalog`, docs/SIMULATOR.md, "Agent tools") against the devices the calling
 /// task attached, through the simulator center (`SimulatorCenter`) and each platform's driver
-/// (`SimulatorDeviceDriving`). The checks that keep an agent to its own device live here, in code: a tool acts only on
-/// the task's attached device, which only `simulator_attach` attaches; the person allows each device before a task's
+/// (`SimulatorDeviceDriving`). The checks that keep an agent to its own devices live here, in code: a tool acts only on
+/// a device attached in one of the task's Simulator tabs, which only `simulator_attach` or the person attaches, the one
+/// its `device` names or, without one, the task's only device or that of its Simulator tab used last
+/// (`targetDevice`); the person allows each device before a task's
 /// agent first uses it, whatever the task's permission mode (`SimulatorApprovals`); positions stay on the screen, and
 /// durations, counts and text within their limits; a snapshot's text is scrubbed as the browser tools' results are.
 /// A real Android device's approval holds only in the task it was given in, and its card says what the device can
@@ -39,8 +41,11 @@ final class SimulatorAgentTools {
     /// Asks the person, on a card in the calling task, to let the task's agent use the device, and waits for the
     /// answer: true to go ahead. The app asks (`AppModel.asksToUseSimulator`); without it (tests) the answer is no.
     var askPerson: @MainActor (SimulatorDevice, UUID) async -> Bool = { _, _ in false }
-    /// Shows the task's Simulator tab, unless the person is using another tab of its panel.
-    var showPanel: @MainActor (UUID) -> SimulatorPanelShowing = { _ in .notShown }
+    /// Shows one of the task's Simulator tabs, by its key, unless the person is using another tab of its panel.
+    var showPanel: @MainActor (UUID, UUID) -> SimulatorPanelShowing = { _, _ in .notShown }
+    /// The keys of the task's open Simulator tabs, the one used last first: where an attach goes when no tab has its
+    /// device, and whose device a tool acts on when the call names none.
+    var panelTabs: @MainActor (UUID) -> [UUID] = { _ in [] }
     /// When the person last used the device in a Simulator tab.
     var lastPersonInput: @MainActor (SimulatorDeviceIdentity) -> Date? = { _ in nil }
     /// A task's title, for a device another task's agent uses.
@@ -60,8 +65,8 @@ final class SimulatorAgentTools {
         try? await Task.sleep(for: .milliseconds(Int64((seconds * 1000).rounded())))
     }
 
-    /// Each task's latest snapshot: the device it read and the elements its references name.
-    private var snapshots: [UUID: (device: SimulatorDeviceIdentity, refs: [String: SimulatorSnapshot.Target])] = [:]
+    /// Each task's latest snapshot of each of its devices: the elements its references name.
+    private var snapshots: [UUID: [SimulatorDeviceIdentity: [String: SimulatorSnapshot.Target]]] = [:]
 
     init(center: @escaping @MainActor () -> SimulatorCenter, approvals: SimulatorApprovals,
          drivers: [SimulatorPlatform: any SimulatorDeviceDriving] = [:]) {
@@ -75,7 +80,7 @@ final class SimulatorAgentTools {
         switch tool {
         case SimulatorToolCatalog.list: return await list(for: task)
         case SimulatorToolCatalog.attach: return await attach(arguments, task: task)
-        case SimulatorToolCatalog.detach: return detach(task)
+        case SimulatorToolCatalog.detach: return detach(arguments, task: task)
         case SimulatorToolCatalog.handoff: return await handOff(arguments, task: task)
         case SimulatorToolCatalog.screenshot, SimulatorToolCatalog.snapshot, SimulatorToolCatalog.tap,
              SimulatorToolCatalog.swipe, SimulatorToolCatalog.type, SimulatorToolCatalog.press:
@@ -95,6 +100,13 @@ final class SimulatorAgentTools {
     /// The task's turn ended: a device it handed to the person is no longer handed over, as a browser tab is not.
     func taskTurnEnded(_ task: UUID) {
         handoffs.turnEnded(for: task)
+    }
+
+    /// One of the task's Simulator tabs closed: it lets go of its device, as `simulator_detach` does.
+    func tabClosed(_ tab: UUID, of task: UUID) {
+        let center = center()
+        guard let identity = center.detach(task, tab: tab) else { return }
+        settleDetached(identity, task: task)
     }
 
     // MARK: - simulator_list
@@ -142,15 +154,36 @@ final class SimulatorAgentTools {
             return refused(refusal, task: task)
         }
         if let declined = await approval(of: device, for: task) { return declined }
-        switch await center.attach(device.identity, to: task, by: .agent) {
+        // The tab that has the device already, the one used last first, else an empty Simulator tab of the task, else
+        // a new one beside the others: an attach never takes another device's tab.
+        let open = panelTabs(task)
+        let existing = center.tab(attaching: device.identity, in: task, preferring: open)
+        let tab = existing ?? open.first { center.attachment(of: task, tab: $0) == nil } ?? UUID()
+        let isNewTab = existing == nil && !open.contains(tab)
+        switch await center.attach(device.identity, to: task, tab: tab, by: .agent) {
         case let .refused(refusal):
             return refused(refusal, task: task)
-        case let .failed(device, message):
-            return Self.didNotStart(device, message)
+        case let .failed(failed, message):
+            // A tab no panel ever showed goes with the failed start, so nothing stays attached out of sight; a tab
+            // the person can see keeps the device, with Turn On.
+            guard isNewTab else { return Self.didNotStart(failed, message) }
+            if center.detach(task, tab: tab) != nil { settleDetached(device.identity, task: task) }
+            return .failure("\(failed.name) did not start: \(message). It was not attached; simulator_attach tries "
+                + "again.", .unreachable, retry: .later)
         case let .attached(attachment):
-            snapshots[task] = nil
+            // The person closed the tab while the device started, which let go of it there.
+            guard center.attachment(of: task, tab: tab) == device.identity else {
+                return .failure("The person closed the Simulator tab while \(attachment.device.name) was starting, so "
+                    + "it is not attached to this task.", .refused, retry: .no)
+            }
+            snapshots[task]?[device.identity] = nil
+            let others = center.attachedDevices(of: task).filter { $0 != device.identity }
             var lines = ["Attached \(attachment.device.name) (\(attachment.device.osName)) to this task. "
                 + "Its id is \(attachment.device.toolID): \(Self.ownToolsLine(attachment.device))"]
+            if !others.isEmpty {
+                lines.append("This task also has \(describeAttached(others)) attached: pass device to the other "
+                    + "simulator tools to say which one they act on.")
+            }
             switch await screen(of: attachment.device) {
             case let .success(screen):
                 let units = Self.units(attachment.device.platform)
@@ -160,7 +193,7 @@ final class SimulatorAgentTools {
                 lines.append("Yardlet cannot show or drive its screen: \(error.message)")
             }
             lines.append(Self.originLine(attachment))
-            switch showPanel(task) {
+            switch showPanel(task, tab) {
             case .shown: lines.append("The task's side panel shows it.")
             case .besidePersonsTab:
                 lines.append("The person is using another tab of the task's side panel, so a Simulator tab was added "
@@ -174,22 +207,89 @@ final class SimulatorAgentTools {
 
     // MARK: - simulator_detach
 
-    private func detach(_ task: UUID) -> AgentToolResult {
+    private func detach(_ arguments: ToolJSON, task: UUID) -> AgentToolResult {
         let center = center()
-        guard let identity = center.attachment(of: task) else { return .text("This task has no attached device.") }
+        guard !center.attachedDevices(of: task).isEmpty else { return .text("This task has no attached device.") }
+        if let invalid = Self.checkWithoutScreen(SimulatorToolCatalog.detach, arguments) { return invalid }
+        let identity: SimulatorDeviceIdentity
+        switch targetDevice(arguments, task: task) {
+        case let .success(found): identity = found
+        case let .failure(failure): return failure.result
+        }
         let device = center.device(identity)
         let wasStarted = center.startedByYardlet[identity] != nil
-        handoffs.end(for: task)
-        snapshots[task] = nil
-        center.detach(task)
-        if let device, center.attachment(of: task) == nil, !center.claims.keys.contains(identity) {
-            drivers[device.platform]?.release(device)
-        }
+        // Every tab of the task that shows it, so the task's claim goes too; the tabs stay, listing the devices.
+        while let tab = center.tab(attaching: identity, in: task) { center.detach(task, tab: tab) }
+        settleDetached(identity, task: task)
         var text = "Let go of \(device?.name ?? identity.value)."
         if wasStarted {
             text += " As Yardlet started it, it shuts down 10 minutes after no task attaches it."
         }
+        let remaining = center.attachedDevices(of: task)
+        if !remaining.isEmpty { text += " This task still has \(describeAttached(remaining)) attached." }
         return .text(text)
+    }
+
+    /// The task no longer attaches the device: a handoff of it ends, its snapshot goes, and its driver lets go once no
+    /// task claims it.
+    private func settleDetached(_ identity: SimulatorDeviceIdentity, task: UUID) {
+        let center = center()
+        guard !center.attachedDevices(of: task).contains(identity) else { return }
+        if handoffs.handoff(for: task)?.device == identity { handoffs.end(for: task) }
+        snapshots[task]?[identity] = nil
+        if let device = center.device(identity), !center.claims.keys.contains(identity) {
+            drivers[device.platform]?.release(device)
+        }
+    }
+
+    // MARK: - The device a tool acts on
+
+    /// Why a call has no device to act on.
+    private struct NoTarget: Error {
+        var result: AgentToolResult
+    }
+
+    /// The device a tool acts on: the attached device its `device` names, by id or name; without one, the task's only
+    /// attached device, or with several, that of the task's Simulator tab used last.
+    private func targetDevice(_ arguments: ToolJSON, task: UUID) -> Result<SimulatorDeviceIdentity, NoTarget> {
+        let center = center()
+        let attached = center.attachedDevices(of: task)
+        let query = arguments["device"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !query.isEmpty {
+            var matches = attached.filter {
+                $0.value.caseInsensitiveCompare(query) == .orderedSame || center.device($0)?.adbSerial == query
+            }
+            if matches.isEmpty {
+                matches = attached.filter { center.device($0)?.name.caseInsensitiveCompare(query) == .orderedSame }
+            }
+            if matches.count == 1 { return .success(matches[0]) }
+            if matches.count > 1 {
+                return .failure(NoTarget(result: Self.invalid("More than one device attached to this task is named "
+                    + "\(query): \(describeAttached(matches)). Give its id.")))
+            }
+            let message = attached.isEmpty ? "This task has no attached device"
+                : "\(query) is not attached to this task, which has \(describeAttached(attached))"
+            return .failure(NoTarget(result: .failure(message + ". Attach it with simulator_attach first.", .notFound,
+                                                      retry: .withChanges,
+                                                      details: ["next": .string(SimulatorToolCatalog.attach)])))
+        }
+        if attached.count <= 1, let only = attached.first { return .success(only) }
+        if let shown = panelTabs(task).lazy.compactMap({ center.attachment(of: task, tab: $0) }).first {
+            return .success(shown)
+        }
+        guard let first = attached.first else {
+            return .failure(NoTarget(result: .failure("This task has no attached device.", .notFound,
+                                                      retry: .withChanges)))
+        }
+        return .success(first)
+    }
+
+    /// The devices, by name and id, for a message.
+    private func describeAttached(_ identities: [SimulatorDeviceIdentity]) -> String {
+        identities.prefix(Self.listedDeviceLimit).map { identity in
+            let device = center().device(identity)
+            return "\(device?.name ?? identity.value) (id \(device?.toolID ?? identity.value))"
+        }.joined(separator: ", ")
     }
 
     // MARK: - simulator_handoff
@@ -199,13 +299,18 @@ final class SimulatorAgentTools {
     /// theirs and a call waits again.
     private func handOff(_ arguments: ToolJSON, task: UUID) async -> AgentToolResult {
         let center = center()
-        guard let identity = center.attachment(of: task) else { return await notAttached(task) }
+        guard !center.attachedDevices(of: task).isEmpty else { return await notAttached(task) }
         if let invalid = Self.checkWithoutScreen(SimulatorToolCatalog.handoff, arguments) { return invalid }
+        let identity: SimulatorDeviceIdentity
+        switch targetDevice(arguments, task: task) {
+        case let .success(found): identity = found
+        case let .failure(failure): return failure.result
+        }
         let known = center.device(identity)
             ?? SimulatorDevice(identity: identity, name: identity.value, state: .off, osName: "", osVersion: "")
         if let declined = await approval(of: known, for: task) { return declined }
         let device: SimulatorDevice
-        switch await center.prepareAttachedDevice(for: task) {
+        switch await center.prepareAttachedDevice(identity, for: task) {
         case let .attached(prepared): device = prepared.device
         case let .refused(refusal): return refused(refusal, task: task)
         case let .failed(device, message): return Self.didNotStart(device, message)
@@ -217,16 +322,17 @@ final class SimulatorAgentTools {
         let timeout = min(Duration.milliseconds(Int64((min(asked, 86_400) * 1000).rounded())), handoffWaitCeiling(task))
         let started = handoffs.handOff(device.identity, reason: reason, for: task)
         if started.isNew { handoffStarted(task, device, started.handoff) }
-        center.noteToolUse(for: task)
-        defer { center.noteToolUse(for: task) }
+        center.noteToolUse(of: device.identity, for: task)
+        defer { center.noteToolUse(of: device.identity, for: task) }
         let start = ContinuousClock.now
         func waited() -> String {
             BrowserAgentTools.format(Double((ContinuousClock.now - start).components.seconds)) + " seconds"
         }
         while true {
             guard let handoff = handoffs.handoff(for: task), handoff.id == started.handoff.id,
-                  center.isEnabled, center.attachment(of: task) == device.identity else {
-                handoffs.end(for: task)
+                  center.isEnabled, center.attachedDevices(of: task).contains(device.identity) else {
+                // Only this call's handoff: a later call may have handed over another device meanwhile.
+                if handoffs.handoff(for: task)?.id == started.handoff.id { handoffs.end(for: task) }
                 return .failure("\(device.name) was let go from this task before the person answered.", .notFound,
                                 retry: .withChanges, details: ["next": .string(SimulatorToolCatalog.attach)])
             }
@@ -262,14 +368,19 @@ final class SimulatorAgentTools {
 
     private func act(_ tool: String, _ arguments: ToolJSON, task: UUID) async -> AgentToolResult {
         let center = center()
-        guard let identity = center.attachment(of: task) else { return await notAttached(task) }
+        guard !center.attachedDevices(of: task).isEmpty else { return await notAttached(task) }
         if let invalid = Self.checkWithoutScreen(tool, arguments) { return invalid }
+        let identity: SimulatorDeviceIdentity
+        switch targetDevice(arguments, task: task) {
+        case let .success(found): identity = found
+        case let .failure(failure): return failure.result
+        }
         // Asked before the device is read again and started if it shut down, which `prepareAttachedDevice` does.
         let known = center.device(identity)
             ?? SimulatorDevice(identity: identity, name: identity.value, state: .off, osName: "", osVersion: "")
         if let declined = await approval(of: known, for: task) { return declined }
         let attachment: SimulatorAttachment
-        switch await center.prepareAttachedDevice(for: task) {
+        switch await center.prepareAttachedDevice(identity, for: task) {
         case let .attached(prepared): attachment = prepared
         case let .refused(refusal): return refused(refusal, task: task)
         case let .failed(device, message): return Self.didNotStart(device, message)
@@ -292,7 +403,7 @@ final class SimulatorAgentTools {
             result = .failure("\(tool) did not finish on \(device.name): \(error.localizedDescription)", .outcomeUnknown,
                               retry: .afterChecking)
         }
-        center.noteToolUse(for: task)
+        center.noteToolUse(of: device.identity, for: task)
         var notes: [String] = []
         if attachment.startedNow {
             notes.append("Yardlet started \(device.name) again first: it had shut down while unused.")
@@ -317,21 +428,21 @@ final class SimulatorAgentTools {
             let tree = try await driver.snapshot(of: device)
             let scrub = self.scrub
             let rendered = SimulatorSnapshot.render(tree, screen: screen, scrub: { scrub($0) })
-            snapshots[task] = (device.identity, rendered.refs)
+            snapshots[task, default: [:]][device.identity] = rendered.refs
             return .text("Snapshot of \(device.name)'s screen, \(screen.width)×\(screen.height) \(units); simulator_tap "
                 + "takes a reference in place of x and y.\n" + rendered.text)
         case SimulatorToolCatalog.tap:
             var element: SimulatorSnapshot.Target?
             if let ref = arguments["ref"]?.stringValue {
-                guard let snapshot = snapshots[task], snapshot.device == device.identity else {
+                guard let refs = snapshots[task]?[device.identity] else {
                     return .failure("There is no snapshot of \(device.name) to take \(ref) from. Take one with "
                         + "simulator_snapshot.", .notFound, retry: .withChanges,
                         details: ["next": .string(SimulatorToolCatalog.snapshot)])
                 }
                 let name = ref.hasPrefix("@") ? ref : "@" + ref
-                guard let target = snapshot.refs[name] else {
+                guard let target = refs[name] else {
                     return .failure("The latest snapshot has no \(ref): its references go up to "
-                        + "@e\(snapshot.refs.count). Take another snapshot if the screen changed.", .notFound,
+                        + "@e\(refs.count). Take another snapshot if the screen changed.", .notFound,
                         retry: .withChanges, details: ["next": .string(SimulatorToolCatalog.snapshot)])
                 }
                 element = target
@@ -419,6 +530,9 @@ final class SimulatorAgentTools {
     /// The arguments that need no screen to check: durations, counts, text, names. Positions are checked against the
     /// screen once it is known.
     static func checkWithoutScreen(_ tool: String, _ arguments: ToolJSON) -> AgentToolResult? {
+        if let device = arguments["device"], device.stringValue == nil {
+            return invalid("device is the id or name of a device attached to this task, from simulator_list.")
+        }
         if arguments["duration"] != nil {
             guard let duration = number(arguments["duration"]),
                   (0...SimulatorToolCatalog.longestDuration).contains(duration) else {

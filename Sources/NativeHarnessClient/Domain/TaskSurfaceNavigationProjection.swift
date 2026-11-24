@@ -63,12 +63,14 @@ enum TaskSurfaceNavigationProjection {
         case bottom
     }
 
-    /// Side-panel surfaces that stay as tabs, besides browser tabs (`browserTabID`) and other tasks'
-    /// conversations (`taskTabID`). A Claude subtask is shown in the panel but is not a tab.
-    static let trailingTabIDs = ["diff", "files", "sideChat", simulatorID]
-    /// The task's Simulator tab: the device the task attached (`SimulatorCenter`), or the list to pick one from.
-    /// One per task, with no key of its own; the side panel's toggle returns to it as to any tab used last.
-    static let simulatorID = "simulator"
+    /// Side-panel surfaces that stay as tabs, besides browser tabs (`browserTabID`), Simulator tabs
+    /// (`simulatorTabID`) and other tasks' conversations (`taskTabID`). A Claude subtask is shown in the panel
+    /// but is not a tab.
+    static let trailingTabIDs = ["diff", "files", "sideChat"]
+    /// The launcher's and the + menu's Simulator: not a tab. Choosing it opens a new Simulator tab, as Browser
+    /// opens a new browser tab, so a task can show several devices at once. A panel saved while a task had one
+    /// Simulator tab kept it under this id (`TaskWorkspaceSnapshot.migrated`).
+    static let simulatorChoiceID = "simulator"
     /// The launcher's and the + menu's Browser, and `⌘4`: not a tab. Choosing it opens a new browser
     /// tab, as the Codex app's Browser and Open Browser Tab do; `⌘4` shows the browser tab used last.
     static let browserChoiceID = "browser"
@@ -84,6 +86,7 @@ enum TaskSurfaceNavigationProjection {
     static let terminalID = "terminal"
     private static let taskTabPrefix = "task:"
     private static let browserTabPrefix = "browser:"
+    private static let simulatorTabPrefix = "simulator:"
 
     /// One of the task's browser tabs, as the Codex app's side panel holds each browser tab as a tab of
     /// its own. The key is the browser tab's (`BrowserTab.key`), which outlives the browser host.
@@ -106,6 +109,24 @@ enum TaskSurfaceNavigationProjection {
             ?? state.trailingTabs.last { browserKey(inTab: $0) != nil }
     }
 
+    /// One of the task's Simulator tabs: the device attached in it (`SimulatorCenter`), or the list to pick one from.
+    /// The key is the tab's own, which the task's workspace keeps its device under
+    /// (`TaskWorkspaceState.simulators`).
+    static func simulatorTabID(_ key: UUID) -> String { simulatorTabPrefix + key.uuidString }
+
+    /// The Simulator tab a side-panel tab is.
+    static func simulatorKey(inTab id: String?) -> UUID? {
+        guard let id, id.hasPrefix(simulatorTabPrefix) else { return nil }
+        return UUID(uuidString: String(id.dropFirst(simulatorTabPrefix.count)))
+    }
+
+    /// The task's Simulator tabs, the one used last first, then the others in the panel's order.
+    static func simulatorKeys(in state: PanelState) -> [UUID] {
+        let recent = state.recentTrailingTabs.filter(state.trailingTabs.contains).compactMap { simulatorKey(inTab: $0) }
+        let rest = state.trailingTabs.compactMap { simulatorKey(inTab: $0) }.filter { !recent.contains($0) }
+        return recent + rest
+    }
+
     /// The tab that shows another task's conversation in this task's side panel.
     static func taskTabID(_ id: UUID) -> String { taskTabPrefix + id.uuidString }
 
@@ -117,6 +138,7 @@ enum TaskSurfaceNavigationProjection {
     /// A surface that stays in the strip as a tab.
     static func isTab(_ id: String) -> Bool {
         trailingTabIDs.contains(id) || id == terminalID || taskID(inTab: id) != nil || browserKey(inTab: id) != nil
+            || simulatorKey(inTab: id) != nil
     }
 
     static func focusedIndex(surfaceIDs: [String], focusedID: String?) -> Int? {
@@ -141,9 +163,12 @@ enum TaskSurfaceNavigationProjection {
     static func placement(for surfaceID: String) -> Placement {
         switch surfaceID {
         case "terminal": .bottom
-        case "diff", browserChoiceID, "sideChat", "files", simulatorID, "subtask", TaskPanelDetail.surfaceID, launcherID:
+        case "diff", browserChoiceID, "sideChat", "files", simulatorChoiceID, "subtask", TaskPanelDetail.surfaceID,
+             launcherID:
             .trailing
-        default: taskID(inTab: surfaceID) != nil || browserKey(inTab: surfaceID) != nil ? .trailing : .primary
+        default:
+            taskID(inTab: surfaceID) != nil || browserKey(inTab: surfaceID) != nil || simulatorKey(inTab: surfaceID) != nil
+                ? .trailing : .primary
         }
     }
 
@@ -176,7 +201,7 @@ enum TaskSurfaceNavigationProjection {
         return reconciled(next)
     }
 
-    /// Adds a side-panel tab at the end without showing it: the Simulator tab an agent's `simulator_attach` adds while
+    /// Adds a side-panel tab at the end without showing it: a Simulator tab an agent's `simulator_attach` adds while
     /// the person uses another tab of the panel. Least recently used, so closing the shown tab does not move to it.
     static func addingTrailingTab(_ surfaceID: String, in state: PanelState) -> PanelState {
         guard !state.trailingTabs.contains(surfaceID) else { return state }
@@ -297,6 +322,18 @@ enum TaskSurfaceNavigationProjection {
         next.recentTrailingTabs.append(contentsOf: others)
         if next.trailingSurfaceID == legacy { next.trailingSurfaceID = frontedID }
         return reconciled(next)
+    }
+
+    /// A panel saved while a task had one Simulator tab, under `simulatorChoiceID`: that tab becomes the Simulator
+    /// tab of `key`, where it was in the strip and among the tabs used last.
+    static func replacingLegacySimulatorTab(in state: PanelState, key: UUID) -> PanelState {
+        let legacy = simulatorChoiceID
+        let id = simulatorTabID(key)
+        var next = state
+        next.trailingTabs = next.trailingTabs.map { $0 == legacy ? id : $0 }
+        next.recentTrailingTabs = next.recentTrailingTabs.map { $0 == legacy ? id : $0 }
+        if next.trailingSurfaceID == legacy { next.trailingSurfaceID = id }
+        return next
     }
 
     /// Shows the terminal where Settings put it: below the conversation, or as the side panel's Terminal

@@ -25,12 +25,12 @@ struct LiveSimulatorClock: SimulatorClock {
     }
 }
 
-/// Where a task's attached device is kept: its workspace snapshot, so the attachment outlives a restart and goes
-/// with the task when it is archived or deleted.
+/// Where a task's attached devices are kept, each under the key of the Simulator tab it is attached in: the task's
+/// workspace snapshot, so the attachments outlive a restart and go with the task when it is archived or deleted.
 @MainActor
 protocol SimulatorAttachmentStore: AnyObject {
-    func simulatorAttachment(of task: UUID) -> SimulatorDeviceIdentity?
-    func setSimulatorAttachment(_ device: SimulatorDeviceIdentity?, of task: UUID)
+    func simulatorAttachments(of task: UUID) -> [UUID: SimulatorDeviceIdentity]
+    func setSimulatorAttachment(_ device: SimulatorDeviceIdentity?, of task: UUID, tab: UUID)
     /// The tasks whose saved workspace attaches the device. Asked only when Yardlet starts a device or finds one it
     /// started before, so it may read every task's snapshot.
     func tasksAttaching(_ device: SimulatorDeviceIdentity) -> Set<UUID>
@@ -39,19 +39,29 @@ protocol SimulatorAttachmentStore: AnyObject {
 /// Attachments kept in memory: tests, and a model without task workspaces.
 @MainActor
 final class InMemorySimulatorAttachments: SimulatorAttachmentStore {
-    var attachments: [UUID: SimulatorDeviceIdentity] = [:]
+    var attachments: [UUID: [UUID: SimulatorDeviceIdentity]] = [:]
 
-    func simulatorAttachment(of task: UUID) -> SimulatorDeviceIdentity? { attachments[task] }
-    func setSimulatorAttachment(_ device: SimulatorDeviceIdentity?, of task: UUID) { attachments[task] = device }
-    func tasksAttaching(_ device: SimulatorDeviceIdentity) -> Set<UUID> {
-        Set(attachments.filter { $0.value == device }.map(\.key))
+    func simulatorAttachments(of task: UUID) -> [UUID: SimulatorDeviceIdentity] { attachments[task] ?? [:] }
+    func setSimulatorAttachment(_ device: SimulatorDeviceIdentity?, of task: UUID, tab: UUID) {
+        attachments[task, default: [:]][tab] = device
+        if attachments[task]?.isEmpty == true { attachments[task] = nil }
     }
+    func tasksAttaching(_ device: SimulatorDeviceIdentity) -> Set<UUID> {
+        Set(attachments.filter { $0.value.values.contains(device) }.map(\.key))
+    }
+}
+
+/// One Simulator tab of one task: what the simulator center counts as shown.
+struct SimulatorTabSlot: Hashable, Sendable {
+    var task: UUID
+    var tab: UUID
 }
 
 /// A device as one task sees it, with what the agent's `simulator_list` reports.
 struct SimulatorListEntry: Equatable, Sendable {
     /// With its state as Yardlet knows it: booting while Yardlet waits for it to be ready.
     var device: SimulatorDevice
+    /// Attached in the Simulator tab asked about, or, asked for the whole task, in any of its tabs.
     var isAttachedHere: Bool
     /// The task that may send it input, this one or another; nil when none claims it.
     var claimingTask: UUID?
@@ -106,10 +116,12 @@ enum SimulatorAttachResult: Equatable, Sendable {
 /// The devices of every platform, which task attaches and which claims each, and the devices Yardlet started and
 /// stops.
 ///
-/// - An attachment is the device a task chose: at most one per task, kept in the task's workspace snapshot.
+/// - An attachment is the device a Simulator tab of a task chose: at most one per tab, several per task, kept in the
+///   task's workspace snapshot under the tab's key.
 /// - A claim is the right of a task's agent to send a device input: one task per device, in memory only. Attaching a
 ///   device no task claims claims it; a device another task claims is attached for viewing, or refused to an agent.
-///   Detaching, choosing another device and removing the task release both.
+///   Detaching, choosing another device and closing the tab release the tab's attachment, and the task's claim once
+///   no other tab of the task attaches the device; removing the task releases all of them.
 /// - Yardlet writes down each device it starts with its boot (`SimulatorBootIdentity`) and stops only that boot:
 ///   ten minutes after no task attaches it and no panel shows it, thirty minutes after the last turn, tool call or
 ///   panel of the tasks that attach it, never while one of their turns runs, and when Yardlet quits. A Yardlet that
@@ -145,10 +157,12 @@ final class SimulatorCenter {
     @ObservationIgnored private let backends: [SimulatorPlatform: any SimulatorBackend]
     @ObservationIgnored private let record: any SimulatorBootRecordStore
     @ObservationIgnored private let clock: any SimulatorClock
-    /// The attachments read or made in this run, complete for every device Yardlet started.
-    @ObservationIgnored private var attachments: [UUID: SimulatorDeviceIdentity] = [:]
+    /// The attachments read or made in this run, each task's by its Simulator tabs' keys, complete for every device
+    /// Yardlet started.
+    @ObservationIgnored private var attachments: [UUID: [UUID: SimulatorDeviceIdentity]] = [:]
     @ObservationIgnored private var attachmentsRead: Set<UUID> = []
-    @ObservationIgnored private var shownPanels: [UUID: Int] = [:]
+    /// The Simulator tabs on screen, counted, as a tab's view can appear twice while it moves.
+    @ObservationIgnored private var shownPanels: [SimulatorTabSlot: Int] = [:]
     /// When each device Yardlet started was last used: attached or let go, shown or hidden, by a tool or a turn.
     @ObservationIgnored private var lastUse: [SimulatorDeviceIdentity: Date] = [:]
     @ObservationIgnored private var boots: [SimulatorDeviceIdentity: Task<Result<Bool, SimulatorCommandError>, Never>] = [:]
@@ -277,14 +291,15 @@ final class SimulatorCenter {
         transitions[identity] ?? device(identity)?.state ?? .off
     }
 
-    /// The devices with what one task sees of each.
-    func entries(for task: UUID) -> [SimulatorListEntry] {
-        let attached = attachment(of: task)
-        let shown = Set(shownPanels.compactMap { $0.value > 0 ? attachments[$0.key] : nil })
+    /// The devices with what one task sees of each, or one of its Simulator tabs.
+    func entries(for task: UUID, tab: UUID? = nil) -> [SimulatorListEntry] {
+        let attached = tab.map { Set(attachment(of: task, tab: $0).map { [$0] } ?? []) }
+            ?? Set(attachments(of: task).values)
+        let shown = Set(shownPanels.compactMap { $0.value > 0 ? attachments[$0.key.task]?[$0.key.tab] : nil })
         return devices.map { device in
             var device = device
             device.state = state(of: device.identity)
-            return SimulatorListEntry(device: device, isAttachedHere: attached == device.identity,
+            return SimulatorListEntry(device: device, isAttachedHere: attached.contains(device.identity),
                                       claimingTask: claims[device.identity],
                                       isStartedByYardlet: startedByYardlet[device.identity] != nil,
                                       isShown: shown.contains(device.identity))
@@ -307,13 +322,31 @@ final class SimulatorCenter {
 
     // MARK: - Attachments and claims
 
-    /// The device the task attaches, read from its workspace the first time.
-    func attachment(of task: UUID) -> SimulatorDeviceIdentity? {
-        if attachmentsRead.contains(task) { return attachments[task] }
+    /// The devices the task attaches, by the keys of the Simulator tabs they are attached in, read from its workspace
+    /// the first time.
+    func attachments(of task: UUID) -> [UUID: SimulatorDeviceIdentity] {
+        if attachmentsRead.contains(task) { return attachments[task] ?? [:] }
         attachmentsRead.insert(task)
-        let saved = attachmentStore.simulatorAttachment(of: task)
-        attachments[task] = saved
+        let saved = attachmentStore.simulatorAttachments(of: task)
+        attachments[task] = saved.isEmpty ? nil : saved
         return saved
+    }
+
+    /// The device attached in one of the task's Simulator tabs.
+    func attachment(of task: UUID, tab: UUID) -> SimulatorDeviceIdentity? {
+        attachments(of: task)[tab]
+    }
+
+    /// The devices the task attaches, each once, in a stable order.
+    func attachedDevices(of task: UUID) -> [SimulatorDeviceIdentity] {
+        Set(attachments(of: task).values).sorted { $0.value < $1.value }
+    }
+
+    /// The Simulator tab of the task that attaches the device, the first of `preferring` (the task's open tabs, the
+    /// one used last first) that does, else any; nil when none does.
+    func tab(attaching identity: SimulatorDeviceIdentity, in task: UUID, preferring: [UUID] = []) -> UUID? {
+        let tabs = attachments(of: task).filter { $0.value == identity }.keys
+        return preferring.first(where: tabs.contains) ?? tabs.min { $0.uuidString < $1.uuidString }
     }
 
     /// The device an ID or name names (`devices(named:)`), after listing the devices again, or why none does.
@@ -326,10 +359,10 @@ final class SimulatorCenter {
         return .success(device)
     }
 
-    /// Attaches the device an ID or name names (`resolve(_:)`).
-    func attach(_ query: String, to task: UUID, by requester: SimulatorRequester) async -> SimulatorAttachResult {
+    /// Attaches the device an ID or name names (`resolve(_:)`) in one of the task's Simulator tabs.
+    func attach(_ query: String, to task: UUID, tab: UUID, by requester: SimulatorRequester) async -> SimulatorAttachResult {
         switch await resolve(query) {
-        case let .success(device): await attach(device.identity, to: task, by: requester)
+        case let .success(device): await attach(device.identity, to: task, tab: tab, by: requester)
         case let .failure(refusal): .refused(refusal)
         }
     }
@@ -355,8 +388,9 @@ final class SimulatorCenter {
         return nil
     }
 
-    /// Attaches the device to the task, claims it when no task does, and starts it when it is off.
-    func attach(_ identity: SimulatorDeviceIdentity, to task: UUID,
+    /// Attaches the device in one of the task's Simulator tabs, letting go of the one the tab had, claims it when no
+    /// task does, and starts it when it is off.
+    func attach(_ identity: SimulatorDeviceIdentity, to task: UUID, tab: UUID,
                 by requester: SimulatorRequester) async -> SimulatorAttachResult {
         if let refusal = attachRefusal(identity, to: task, by: requester) { return .refused(refusal) }
         guard let device = device(identity), let backend = backends[device.platform],
@@ -364,10 +398,10 @@ final class SimulatorCenter {
         let holder = claims[identity]
         let needsStart = !state(of: identity).isRunning
 
-        if let previous = attachment(of: task), previous != identity { letGo(of: previous, by: task) }
-        if attachments[task] != identity {
-            attachments[task] = identity
-            attachmentStore.setSimulatorAttachment(identity, of: task)
+        if let previous = attachment(of: task, tab: tab), previous != identity { letGo(of: previous, by: task, tab: tab) }
+        if attachments[task]?[tab] != identity {
+            attachments[task, default: [:]][tab] = identity
+            attachmentStore.setSimulatorAttachment(identity, of: task, tab: tab)
         }
         if holder == nil { claims[identity] = task }
         noteUse(identity)
@@ -390,57 +424,61 @@ final class SimulatorCenter {
                                              isStartedByYardlet: startedByYardlet[identity] != nil))
     }
 
-    /// Before an agent's tool acts on the task's device: claims it again when no task does (claims are not kept
+    /// Before an agent's tool acts on one of the task's devices: claims it again when no task does (claims are not kept
     /// across a restart) and starts it again when the idle rules stopped it, under the same rules as an attach.
-    func prepareAttachedDevice(for task: UUID) async -> SimulatorAttachResult {
+    func prepareAttachedDevice(_ identity: SimulatorDeviceIdentity, for task: UUID) async -> SimulatorAttachResult {
         guard isEnabled else { return .refused(refusal(.disabled)) }
-        guard let identity = attachment(of: task) else { return .refused(refusal(.notAttached)) }
+        guard let tab = tab(attaching: identity, in: task) else { return .refused(refusal(.notAttached)) }
         await refreshDevices()
-        return await attach(identity, to: task, by: .agent)
+        return await attach(identity, to: task, tab: tab, by: .agent)
     }
 
-    /// "Use in this task": the task's agent takes the input of the device it attaches from whichever task had it.
-    /// Returns the task that had it.
+    /// "Use in this task": the task's agent takes the input of the device a tab of the task attaches from whichever
+    /// task had it. Returns the task that had it.
     @discardableResult
-    func claim(for task: UUID) -> UUID? {
-        guard let identity = attachment(of: task) else { return nil }
+    func claim(for task: UUID, tab: UUID) -> UUID? {
+        guard let identity = attachment(of: task, tab: tab) else { return nil }
         let previous = claims[identity]
         claims[identity] = task
         noteUse(identity)
         return previous == task ? nil : previous
     }
 
-    /// Detaches the task's device and lets go of its claim.
-    func detach(_ task: UUID) {
-        guard let identity = attachment(of: task) else { return }
-        letGo(of: identity, by: task)
-        attachmentStore.setSimulatorAttachment(nil, of: task)
+    /// Detaches the device of one of the task's Simulator tabs, and lets go of the task's claim once no other tab of
+    /// the task attaches it. Returns the device.
+    @discardableResult
+    func detach(_ task: UUID, tab: UUID) -> SimulatorDeviceIdentity? {
+        guard let identity = attachment(of: task, tab: tab) else { return nil }
+        letGo(of: identity, by: task, tab: tab)
+        attachmentStore.setSimulatorAttachment(nil, of: task, tab: tab)
         rescheduleIdleCheck()
+        return identity
     }
 
-    /// The task was archived or deleted, which removes its saved attachment with its workspace.
+    /// The task was archived or deleted, which removes its saved attachments with its workspace.
     func taskRemoved(_ task: UUID) {
-        if let identity = attachments[task] { letGo(of: identity, by: task) }
+        for (tab, identity) in attachments[task] ?? [:] { letGo(of: identity, by: task, tab: tab) }
         attachmentsRead.insert(task)
-        shownPanels[task] = nil
+        shownPanels = shownPanels.filter { $0.key.task != task }
         rescheduleIdleCheck()
     }
 
     // MARK: - Use
 
-    /// A simulator panel showing the task's device appeared, which also claims the device again when no task does.
-    func panelAppeared(for task: UUID) {
-        shownPanels[task, default: 0] += 1
-        guard let identity = attachment(of: task) else { return }
+    /// One of the task's Simulator tabs appeared, which also claims its device again when no task does.
+    func panelAppeared(for task: UUID, tab: UUID) {
+        shownPanels[SimulatorTabSlot(task: task, tab: tab), default: 0] += 1
+        guard let identity = attachment(of: task, tab: tab) else { return }
         if claims[identity] == nil { claims[identity] = task }
         noteUse(identity)
         rescheduleIdleCheck()
     }
 
-    func panelDisappeared(for task: UUID) {
-        guard let count = shownPanels[task] else { return }
-        shownPanels[task] = count > 1 ? count - 1 : nil
-        guard count == 1, let identity = attachments[task] else { return }
+    func panelDisappeared(for task: UUID, tab: UUID) {
+        let slot = SimulatorTabSlot(task: task, tab: tab)
+        guard let count = shownPanels[slot] else { return }
+        shownPanels[slot] = count > 1 ? count - 1 : nil
+        guard count == 1, let identity = attachments[task]?[tab] else { return }
         noteUse(identity)
         rescheduleIdleCheck()
     }
@@ -456,16 +494,17 @@ final class SimulatorCenter {
         personInput[identity]
     }
 
-    /// An agent's tool acted on the task's device.
-    func noteToolUse(for task: UUID) {
-        guard let identity = attachments[task] else { return }
+    /// An agent's tool acted on one of the task's devices.
+    func noteToolUse(of identity: SimulatorDeviceIdentity, for task: UUID) {
+        guard attachments[task]?.values.contains(identity) == true else { return }
         noteUse(identity)
     }
 
     /// The task's status changed: a turn started or ended, which holds or lets go of the devices it attaches.
     func taskStatusChanged(_ task: UUID) {
-        guard let identity = attachments[task], startedByYardlet[identity] != nil else { return }
-        if !isTurnRunning(task) { noteUse(identity) }
+        let started = Set((attachments[task] ?? [:]).values).filter { startedByYardlet[$0] != nil }
+        guard !started.isEmpty else { return }
+        if !isTurnRunning(task) { started.forEach(noteUse) }
         rescheduleIdleCheck()
     }
 
@@ -484,8 +523,9 @@ final class SimulatorCenter {
     func stopDeadline(for identity: SimulatorDeviceIdentity) -> Date? {
         guard let entry = startedByYardlet[identity], boots[identity] == nil, transitions[identity] == nil
         else { return nil }
-        let attachers = attachments.compactMap { $0.value == identity ? $0.key : nil }
-        if attachers.contains(where: { shownPanels[$0, default: 0] > 0 || isTurnRunning($0) }) { return nil }
+        let attachers = attachments.compactMap { $0.value.values.contains(identity) ? $0.key : nil }
+        let shown = shownPanels.contains { $0.value > 0 && attachments[$0.key.task]?[$0.key.tab] == identity }
+        if shown || attachers.contains(where: isTurnRunning) { return nil }
         let since = lastUse[identity] ?? entry.bootedAt
         return since.addingTimeInterval(attachers.isEmpty ? Self.unattachedStopDelay : Self.idleStopDelay)
     }
@@ -515,10 +555,12 @@ final class SimulatorCenter {
         return SimulatorRefusal(reason: reason, freeRunningDevices: free)
     }
 
-    private func letGo(of identity: SimulatorDeviceIdentity, by task: UUID) {
-        if attachments[task] == identity { attachments[task] = nil }
+    /// The tab lets go of its device; the task's claim goes once no other tab of the task attaches it.
+    private func letGo(of identity: SimulatorDeviceIdentity, by task: UUID, tab: UUID) {
+        if attachments[task]?[tab] == identity { attachments[task]?[tab] = nil }
+        if attachments[task]?.isEmpty == true { attachments[task] = nil }
         attachmentsRead.insert(task)
-        if claims[identity] == task { claims[identity] = nil }
+        if claims[identity] == task, attachments[task]?.values.contains(identity) != true { claims[identity] = nil }
         noteUse(identity)
     }
 
@@ -568,8 +610,7 @@ final class SimulatorCenter {
     /// The tasks that attached the device in an earlier run, which count for its idle rules as any other.
     private func adoptSavedAttachments(of identity: SimulatorDeviceIdentity) {
         for task in attachmentStore.tasksAttaching(identity) where !attachmentsRead.contains(task) {
-            attachmentsRead.insert(task)
-            attachments[task] = identity
+            _ = attachments(of: task)
         }
     }
 
@@ -635,7 +676,7 @@ final class SimulatorCenter {
             }
             adoptSavedAttachments(of: identity)
             lastUse[identity] = clock.now
-            if !attachments.values.contains(identity) { await stop(identity) }
+            if !attachments.values.contains(where: { $0.values.contains(identity) }) { await stop(identity) }
         }
         saveRecord()
         rescheduleIdleCheck()

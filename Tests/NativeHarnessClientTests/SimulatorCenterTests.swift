@@ -113,7 +113,7 @@ final class SimulatorCenterTests: XCTestCase {
 
         // The attachment is kept in the task's workspace and outlives a restart; its claim does not.
         workspaces.persistNow()
-        XCTAssertEqual(repository.snapshots[first]?.simulator, a)
+        XCTAssertEqual(repository.snapshots[first]?.simulators?[SimulatorCenter.testTab], a)
         let restartedWorkspaces = TaskWorkspaceStore(repository: repository)
         let restarted = SimulatorCenter(backends: [backend], attachments: TaskWorkspaceSimulatorAttachments(
             workspaces: restartedWorkspaces, taskIDs: { [first, second] }))
@@ -133,7 +133,120 @@ final class SimulatorCenterTests: XCTestCase {
         workspaces.remove(for: first)
         center.taskRemoved(first)
         XCTAssertNil(center.claims[a])
-        XCTAssertNil(workspaces.simulatorAttachment(of: first))
+        XCTAssertEqual(workspaces.simulatorAttachments(of: first), [:])
+    }
+
+    /// A task attaches a device in each of its Simulator tabs and claims each; a tab that closes lets go of its own
+    /// device only, and of the claim once no other tab of the task attaches it.
+    func testATaskClaimsADeviceInEachSimulatorTabAndAClosedTabLetsGoOfItsOwn() async throws {
+        let backend = FakeSimulatorBackend([(phoneA, .on), (phoneB, .on), (phoneC, .on)])
+        let repository = InMemoryTaskWorkspaceRepository()
+        let workspaces = TaskWorkspaceStore(repository: repository)
+        let task = UUID()
+        let center = SimulatorCenter(backends: [backend], attachments: TaskWorkspaceSimulatorAttachments(
+            workspaces: workspaces, taskIDs: { [task] }))
+        await center.setEnabled(true)
+        let tools = SimulatorAgentTools(center: { center }, approvals: SimulatorApprovals(defaults: .vaultTests()))
+        workspaces.onSimulatorTabsClose = { task, tabs in tabs.forEach { tools.tabClosed($0, of: task) } }
+        let (a, b) = (SimulatorDeviceIdentity.iOSSimulator(udid: phoneA), SimulatorDeviceIdentity.iOSSimulator(udid: phoneB))
+        let (phoneTab, otherTab, sameTab) = (UUID(), UUID(), UUID())
+        let workspace = workspaces.state(for: task)
+        for tab in [phoneTab, otherTab, sameTab] {
+            workspace.setPanels(TaskSurfaceNavigationProjection.showing(TaskSurfaceNavigationProjection.simulatorTabID(tab),
+                                                                        in: workspace.panels))
+        }
+
+        for (identity, tab) in [(a, phoneTab), (b, otherTab)] {
+            guard case let .attached(attached) = await center.attach(identity, to: task, tab: tab, by: .agent) else {
+                return XCTFail("\(identity) was not attached")
+            }
+            XCTAssertTrue(attached.isClaimed)
+        }
+        // The person shows the same device in a third tab: watching it twice claims nothing more.
+        _ = await center.attach(a, to: task, tab: sameTab, by: .person)
+        XCTAssertEqual(center.claims, [a: task, b: task])
+        XCTAssertEqual(center.attachedDevices(of: task), [a, b])
+        XCTAssertEqual(workspace.simulators, [phoneTab: a, otherTab: b, sameTab: a])
+        XCTAssertEqual(center.entries(for: task, tab: otherTab).filter(\.isAttachedHere).map(\.device.identity), [b])
+        XCTAssertEqual(Set(center.entries(for: task).filter(\.isAttachedHere).map(\.device.identity)), [a, b])
+
+        // Shown is counted by tab: only the device of the tab on screen is shown.
+        center.panelAppeared(for: task, tab: otherTab)
+        XCTAssertEqual(center.entries(for: task).filter(\.isShown).map(\.device.identity), [b])
+        center.panelDisappeared(for: task, tab: otherTab)
+
+        // Closing a tab whose device another tab of the task still shows keeps the claim; closing the last lets go.
+        workspace.setPanels(TaskSurfaceNavigationProjection.closingTrailingTab(
+            TaskSurfaceNavigationProjection.simulatorTabID(phoneTab), in: workspace.panels))
+        XCTAssertEqual(center.claims, [a: task, b: task])
+        XCTAssertEqual(workspace.simulators, [otherTab: b, sameTab: a])
+        workspace.setPanels(TaskSurfaceNavigationProjection.closingTrailingTab(
+            TaskSurfaceNavigationProjection.simulatorTabID(sameTab), in: workspace.panels))
+        XCTAssertEqual(center.claims, [b: task], "The other tab's device stays claimed")
+        XCTAssertEqual(center.attachedDevices(of: task), [b])
+
+        // The attachments are saved by tab and outlive a restart.
+        workspaces.persistNow()
+        XCTAssertEqual(repository.snapshots[task]?.simulators, [otherTab: b])
+        XCTAssertNil(repository.snapshots[task]?.simulator)
+        let restartedWorkspaces = TaskWorkspaceStore(repository: repository)
+        let restarted = SimulatorCenter(backends: [backend], attachments: TaskWorkspaceSimulatorAttachments(
+            workspaces: restartedWorkspaces, taskIDs: { [task] }))
+        await restarted.setEnabled(true)
+        XCTAssertEqual(restarted.attachments(of: task), [otherTab: b])
+
+        // Removing the task lets go of every device it attached.
+        _ = await center.attach(a, to: task, tab: UUID(), by: .agent)
+        center.taskRemoved(task)
+        XCTAssertEqual(center.claims, [:])
+    }
+
+    /// A workspace saved while a task had one Simulator tab keeps that tab, where it was, and the device attached in
+    /// it, under one key that every reading of the snapshot gives, so the simulator center reading the saved snapshot
+    /// and the window loading it agree.
+    func testASnapshotWithOneSimulatorTabKeepsItsTabAndDevice() async throws {
+        let a = SimulatorDeviceIdentity.iOSSimulator(udid: phoneA)
+        let legacy = TaskWorkspaceSnapshot(
+            panels: .init(trailingSurfaceID: "simulator", trailingTabs: ["diff", "simulator"],
+                          recentTrailingTabs: ["simulator", "diff"]),
+            panelsRevision: TaskWorkspaceSnapshot.browserTabsPanelsRevision, simulator: a)
+        // As an earlier Yardlet wrote it: no `simulators`.
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy)) as? [String: Any])
+        json["simulators"] = nil
+        let decoded = try JSONDecoder().decode(TaskWorkspaceSnapshot.self,
+                                               from: JSONSerialization.data(withJSONObject: json))
+        let repository = InMemoryTaskWorkspaceRepository()
+        let task = UUID()
+        repository.snapshots[task] = decoded
+        let workspaces = TaskWorkspaceStore(repository: repository)
+        let key = TaskWorkspaceSnapshot.legacySimulatorTabKey
+        let id = TaskSurfaceNavigationProjection.simulatorTabID(key)
+
+        let center = SimulatorCenter(backends: [FakeSimulatorBackend([(phoneA, .on)])],
+                                     attachments: TaskWorkspaceSimulatorAttachments(workspaces: workspaces,
+                                                                                    taskIDs: { [task] }))
+        await center.setEnabled(true)
+        XCTAssertEqual(center.attachments(of: task), [key: a], "Read without loading the task's workspace")
+        let workspace = workspaces.state(for: task)
+        XCTAssertEqual(workspace.panels.trailingTabs, ["diff", id])
+        XCTAssertEqual(workspace.panels.trailingSurfaceID, id)
+        XCTAssertEqual(workspace.simulators, [key: a])
+        workspaces.persistNow()
+        XCTAssertEqual(repository.snapshots[task]?.simulators, [key: a])
+        XCTAssertNil(repository.snapshots[task]?.simulator)
+        XCTAssertEqual(repository.snapshots[task]?.panels.trailingTabs, ["diff", id])
+
+        // A device whose one Simulator tab was closed stayed attached then; closing a tab lets go of its device now,
+        // so it is let go rather than kept in a tab no strip shows.
+        let closed = TaskWorkspaceSnapshot(panels: .init(trailingSurfaceID: "diff", trailingTabs: ["diff"],
+                                                         recentTrailingTabs: ["diff"]),
+                                           panelsRevision: TaskWorkspaceSnapshot.browserTabsPanelsRevision, simulator: a)
+        let closedTask = UUID()
+        repository.snapshots[closedTask] = closed
+        XCTAssertNil(closed.migrated.simulators)
+        XCTAssertNil(closed.migrated.simulator)
+        XCTAssertEqual(center.attachments(of: closedTask), [:])
+        XCTAssertEqual(workspaces.state(for: closedTask).panels.trailingTabs, ["diff"])
     }
 
     func testAnAgentStartsAtMostTwoDevicesAndAPersonIsNotLimited() async throws {
@@ -238,7 +351,7 @@ final class SimulatorCenterTests: XCTestCase {
         let record = InMemorySimulatorBootRecord(entries)
         let attachments = InMemorySimulatorAttachments()
         let task = UUID()
-        attachments.attachments[task] = .iOSSimulator(udid: phoneB)
+        attachments.attachments[task] = [SimulatorCenter.testTab: .iOSSimulator(udid: phoneB)]
         let center = SimulatorCenter(backends: [backend], record: record, attachments: attachments)
 
         await center.setEnabled(true)
@@ -268,6 +381,8 @@ final class SimulatorCenterTests: XCTestCase {
         let tools = SimulatorAgentTools(center: { center }, approvals: SimulatorApprovals(defaults: defaults),
                                         drivers: [.iOS: driver])
         tools.sleep = { _ in }
+        // Each task's one Simulator tab, which an attach takes while it is empty.
+        tools.panelTabs = { _ in [SimulatorCenter.testTab] }
         var asked: [String] = []
         var allows = true
         tools.askPerson = { device, _ in
@@ -417,6 +532,108 @@ final class SimulatorCenterTests: XCTestCase {
         XCTAssertEqual(driver.events, [])
     }
 
+    /// A task's agent attaches a device in a Simulator tab of its own without taking another's: into the tab that has
+    /// it, else an empty one, else a new one. A tool acts on the device its `device` names, or without one on the
+    /// task's only device or that of its Simulator tab used last.
+    func testTheToolsActOnTheDeviceTheCallNamesAmongTheTasksDevices() async throws {
+        let center = SimulatorCenter(backends: [FakeSimulatorBackend([(phoneA, .on), (phoneB, .on), (phoneC, .on)])])
+        await center.setEnabled(true)
+        let tools = SimulatorAgentTools(center: { center }, approvals: SimulatorApprovals(defaults: .vaultTests()),
+                                        drivers: [.iOS: RecordingSimulatorDriver(screen: SimulatorToolScreen(width: 402,
+                                                                                                             height: 874))])
+        tools.sleep = { _ in }
+        tools.askPerson = { _, _ in true }
+        // The task's Simulator tabs, the one used last first, as its panel keeps them.
+        let empty = UUID()
+        var tabs = [empty]
+        tools.panelTabs = { _ in tabs }
+        tools.showPanel = { _, tab in
+            tabs.removeAll { $0 == tab }
+            tabs.insert(tab, at: 0)
+            return .shown
+        }
+        let task = UUID()
+        func run(_ tool: String, _ arguments: [String: ToolJSON] = [:]) async -> AgentToolResult {
+            await tools.run(tool: tool, arguments: .object(arguments), task: task)
+        }
+        let (a, b) = (SimulatorDeviceIdentity.iOSSimulator(udid: phoneA), SimulatorDeviceIdentity.iOSSimulator(udid: phoneB))
+
+        let first = await run(SimulatorToolCatalog.attach, ["device": .string("Phone A")])
+        XCTAssertFalse(first.isError, first.text)
+        XCTAssertEqual(center.attachment(of: task, tab: empty), a, "Into the empty Simulator tab")
+        let second = await run(SimulatorToolCatalog.attach, ["device": .string("Phone B")])
+        XCTAssertFalse(second.isError, second.text)
+        XCTAssertTrue(second.text.contains("also has Phone A"), second.text)
+        XCTAssertEqual(tabs.count, 2, "A new tab, beside the one with Phone A")
+        XCTAssertEqual(center.attachment(of: task, tab: empty), a, "Phone A keeps its tab")
+        XCTAssertEqual(center.claims, [a: task, b: task])
+
+        // Without device: the device of the tab used last; with one, that device, by name or id.
+        let latest = await run(SimulatorToolCatalog.tap, ["x": .integer(10), "y": .integer(10)])
+        XCTAssertTrue(latest.text.contains("on Phone B"), latest.text)
+        _ = await run(SimulatorToolCatalog.attach, ["device": .string(phoneA)])
+        XCTAssertEqual(tabs.count, 2, "Attaching an attached device reuses its tab")
+        let shown = await run(SimulatorToolCatalog.tap, ["x": .integer(10), "y": .integer(10)])
+        XCTAssertTrue(shown.text.contains("on Phone A"), shown.text)
+        let named = await run(SimulatorToolCatalog.tap, ["x": .integer(10), "y": .integer(10),
+                                                         "device": .string("phone b")])
+        XCTAssertTrue(named.text.contains("on Phone B"), named.text)
+        let byID = await run(SimulatorToolCatalog.press, ["button": .string("home"), "device": .string(phoneB)])
+        XCTAssertTrue(byID.text.contains("on Phone B"), byID.text)
+        let unattached = await run(SimulatorToolCatalog.screenshot, ["device": .string("Phone C")])
+        XCTAssertEqual(unattached.failure?.kind, .notFound)
+        XCTAssertTrue(unattached.text.contains("Phone A") && unattached.text.contains("simulator_attach"), unattached.text)
+        let wrongType = await run(SimulatorToolCatalog.screenshot, ["device": .integer(3)])
+        XCTAssertEqual(wrongType.failure?.kind, .invalidArguments)
+
+        // Detaching one keeps the other, which the tools then act on without device.
+        let detached = await run(SimulatorToolCatalog.detach, ["device": .string("Phone A")])
+        XCTAssertTrue(detached.text.contains("Let go of Phone A") && detached.text.contains("still has Phone B"),
+                      detached.text)
+        XCTAssertEqual(center.attachedDevices(of: task), [b])
+        XCTAssertEqual(center.claims, [b: task])
+        let only = await run(SimulatorToolCatalog.tap, ["x": .integer(10), "y": .integer(10)])
+        XCTAssertTrue(only.text.contains("on Phone B"), only.text)
+
+        // With two attached, a handoff hands over the device it names and waits on it alone.
+        _ = await run(SimulatorToolCatalog.attach, ["device": .string(phoneA)])
+        let handedOver = await run(SimulatorToolCatalog.handoff, ["reason": .string("Sign in"), "timeout": .integer(0),
+                                                                   "device": .string("Phone B")])
+        XCTAssertTrue(handedOver.text.contains("Phone B stays handed to them"), handedOver.text)
+        XCTAssertEqual(tools.handoffs.handoff(for: task)?.device, b)
+    }
+
+    /// A name two attached devices share names neither; a start that fails in a tab no panel showed leaves nothing
+    /// attached or claimed.
+    func testAnAmbiguousNameIsRefusedAndAFailedStartLeavesNoHiddenTab() async throws {
+        let backend = FakeSimulatorBackend([(phoneA, .on), (phoneB, .on), (phoneC, .off)])
+        backend.names = [phoneA: "iPhone 17", phoneB: "iPhone 17"]
+        let center = SimulatorCenter(backends: [backend])
+        await center.setEnabled(true)
+        let tools = SimulatorAgentTools(center: { center }, approvals: SimulatorApprovals(defaults: .vaultTests()),
+                                        drivers: [.iOS: RecordingSimulatorDriver(screen: SimulatorToolScreen(width: 402,
+                                                                                                             height: 874))])
+        tools.sleep = { _ in }
+        tools.askPerson = { _, _ in true }
+        let task = UUID()
+        func run(_ tool: String, _ arguments: [String: ToolJSON]) async -> AgentToolResult {
+            await tools.run(tool: tool, arguments: .object(arguments), task: task)
+        }
+        _ = await run(SimulatorToolCatalog.attach, ["device": .string(phoneA)])
+        _ = await run(SimulatorToolCatalog.attach, ["device": .string(phoneB)])
+        let ambiguous = await run(SimulatorToolCatalog.screenshot, ["device": .string("iPhone 17")])
+        XCTAssertEqual(ambiguous.failure?.kind, .invalidArguments)
+        XCTAssertTrue(ambiguous.text.contains(phoneA) && ambiguous.text.contains(phoneB), ambiguous.text)
+
+        backend.failsBoot = true
+        let failed = await run(SimulatorToolCatalog.attach, ["device": .string(phoneC)])
+        XCTAssertEqual(failed.failure?.kind, .unreachable)
+        XCTAssertTrue(failed.text.contains("was not attached"), failed.text)
+        XCTAssertEqual(Set(center.attachedDevices(of: task)),
+                       [.iOSSimulator(udid: phoneA), .iOSSimulator(udid: phoneB)])
+        XCTAssertNil(center.claims[.iOSSimulator(udid: phoneC)])
+    }
+
     /// The tools drive a real Android device as they do an emulator, once the person allowed it in the task asking:
     /// another task asks again, and a declined card leaves the device untouched.
     func testTheToolsAskForARealDeviceInEachTask() async throws {
@@ -553,6 +770,10 @@ private final class FakeSimulatorBackend: SimulatorBackend, @unchecked Sendable 
     private var nextProcess: Int32 = 100
     private var startedUDIDs: [String] = []
     private var stoppedUDIDs: [String] = []
+    /// A start that fails, as `simctl boot` can.
+    var failsBoot = false
+    /// Names other than "Phone" and the UDID's letter, by UDID.
+    var names: [String: String] = [:]
 
     init(_ devices: [(String, SimulatorDeviceState)]) {
         order = devices.map(\.0)
@@ -565,7 +786,7 @@ private final class FakeSimulatorBackend: SimulatorBackend, @unchecked Sendable 
 
     func device(_ udid: String) -> SimulatorDevice {
         lock.withLock {
-            SimulatorDevice(identity: .iOSSimulator(udid: udid), name: "Phone \(udid.prefix(2).suffix(1))",
+            SimulatorDevice(identity: .iOSSimulator(udid: udid), name: names[udid] ?? "Phone \(udid.prefix(2).suffix(1))",
                             state: states[udid] ?? .off, osName: "iOS 27.2", osVersion: "27.2")
         }
     }
@@ -582,7 +803,8 @@ private final class FakeSimulatorBackend: SimulatorBackend, @unchecked Sendable 
     func devices(with toolchain: SimulatorToolchain) async throws -> [SimulatorDevice] { order.map(device) }
 
     func boot(_ device: SimulatorDevice, with toolchain: SimulatorToolchain) async throws -> SimulatorBootStart {
-        lock.withLock {
+        if failsBoot { throw SimulatorCommandError(message: "Unable to boot device") }
+        return lock.withLock {
             let udid = device.identity.value
             guard states[udid] != .on else { return .alreadyOn }
             states[udid] = .on
@@ -687,4 +909,42 @@ private final class FakeSimulatorToolHandler: SimulatorToolHandling {
         return .text("ran")
     }
 
+}
+
+/// The tests written while a task had one Simulator tab: each task's one tab is `testTab`.
+extension SimulatorCenter {
+    static let testTab = UUID(uuidString: "7E57AB00-0000-4000-8000-000000000001")!
+
+    func attach(_ query: String, to task: UUID, by requester: SimulatorRequester) async -> SimulatorAttachResult {
+        await attach(query, to: task, tab: Self.testTab, by: requester)
+    }
+
+    func attach(_ identity: SimulatorDeviceIdentity, to task: UUID,
+                by requester: SimulatorRequester) async -> SimulatorAttachResult {
+        await attach(identity, to: task, tab: Self.testTab, by: requester)
+    }
+
+    func attachment(of task: UUID) -> SimulatorDeviceIdentity? { attachment(of: task, tab: Self.testTab) }
+
+    func detach(_ task: UUID) { detach(task, tab: Self.testTab) }
+
+    @discardableResult
+    func claim(for task: UUID) -> UUID? { claim(for: task, tab: Self.testTab) }
+
+    func panelAppeared(for task: UUID) { panelAppeared(for: task, tab: Self.testTab) }
+
+    func panelDisappeared(for task: UUID) { panelDisappeared(for: task, tab: Self.testTab) }
+
+    func prepareAttachedDevice(for task: UUID) async -> SimulatorAttachResult {
+        guard let identity = attachment(of: task) else { return await prepareAttachedDevice(.iOSSimulator(udid: ""), for: task) }
+        return await prepareAttachedDevice(identity, for: task)
+    }
+}
+
+extension SimulatorDeviceMenu {
+    @MainActor
+    static func make(for task: UUID, in center: SimulatorCenter, taskTitle: (UUID) -> String?,
+                     approvals: SimulatorApprovals? = nil) -> Self {
+        make(for: task, tab: SimulatorCenter.testTab, in: center, taskTitle: taskTitle, approvals: approvals)
+    }
 }

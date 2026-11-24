@@ -31,18 +31,21 @@ extension EnvironmentValues {
     }
 }
 
-/// A task's Simulator tab: the device the task attached, live, with its platform's buttons and the device menu; the
-/// list of iOS simulators and Android emulators to pick one from while none is attached; or what is missing to use
+/// One of a task's Simulator tabs: the device attached in it, live, with its platform's buttons and the device menu;
+/// the list of iOS simulators and Android emulators to pick one from while none is attached; or what is missing to use
 /// them on this Mac.
 ///
-/// Picking a device attaches it to the task, claims its input when no task has it, and starts it when it is off,
-/// with progress while it boots. Several tasks' tabs can show the same device; the others offer "Use in This Task"
-/// to take its input. Closing the tab keeps the attachment, as hiding the panel does.
+/// Picking a device attaches it in the tab, claims its input for the task when no task has it, and starts it when it
+/// is off, with progress while it boots. A task can have several Simulator tabs, each with its own device, and several
+/// tasks' tabs can show the same device; the others offer "Use in This Task" to take its input. Closing the tab lets
+/// go of its device; hiding the panel keeps it.
 struct SimulatorPane: View {
     let task: UUID
+    /// The tab's key (`TaskSurfaceNavigationProjection.simulatorTabID`).
+    let tab: UUID
     let workspaceURL: URL
     let services: SimulatorPanelServices
-    /// The device the task attached, which its workspace keeps (`TaskWorkspaceState.simulator`).
+    /// The device attached in the tab, which the task's workspace keeps (`TaskWorkspaceState.simulators`).
     let attached: SimulatorDeviceIdentity?
     let onClose: () -> Void
     /// The devices were read since the tab appeared: until then an empty list is not taken for no devices.
@@ -80,14 +83,14 @@ struct SimulatorPane: View {
         }
         .background(ParityTheme.canvas)
         .onAppear {
-            center.panelAppeared(for: task)
+            center.panelAppeared(for: task, tab: tab)
             Task {
                 await center.refreshChecks()
                 await center.refreshDevices()
                 hasListed = true
             }
         }
-        .onDisappear { center.panelDisappeared(for: task) }
+        .onDisappear { center.panelDisappeared(for: task, tab: tab) }
     }
 
     // MARK: - Content
@@ -103,7 +106,7 @@ struct SimulatorPane: View {
         } else if listing.isEmpty {
             SimulatorUnavailableView(checks: center.checks, installs: services.installs, openURL: services.openURL)
         } else {
-            SimulatorDeviceList(task: task, entries: center.entries(for: task), platforms: listing,
+            SimulatorDeviceList(task: task, entries: center.entries(for: task, tab: tab), platforms: listing,
                                 taskTitle: services.taskTitle, pick: pick)
         }
     }
@@ -216,13 +219,13 @@ struct SimulatorPane: View {
     // MARK: - Actions
 
     private func pick(_ identity: SimulatorDeviceIdentity) {
-        Task { _ = await center.attach(identity, to: task, by: .person) }
+        Task { _ = await center.attach(identity, to: task, tab: tab, by: .person) }
     }
 
     // MARK: - Device menu
 
     private var deviceMenu: some View {
-        let menu = SimulatorDeviceMenu.make(for: task, in: center, taskTitle: services.taskTitle,
+        let menu = SimulatorDeviceMenu.make(for: task, tab: tab, in: center, taskTitle: services.taskTitle,
                                             approvals: services.approvals)
         return Menu {
             Menu(L10n.string("Switch Device")) {
@@ -260,9 +263,9 @@ struct SimulatorPane: View {
         switch item {
         case let .useInThisTask(heldBy):
             Text(L10n.format("Used by “%@”", heldBy))
-            Button(L10n.string("Use in This Task")) { center.claim(for: task) }
+            Button(L10n.string("Use in This Task")) { center.claim(for: task, tab: tab) }
         case .disconnect:
-            Button(L10n.string("Disconnect")) { center.detach(task) }
+            Button(L10n.string("Disconnect")) { center.detach(task, tab: tab) }
         case .revokeAgentAccess:
             Button(L10n.string("Revoke Agent Access")) {
                 guard let attached else { return }

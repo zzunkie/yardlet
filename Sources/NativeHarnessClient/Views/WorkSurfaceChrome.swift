@@ -61,16 +61,17 @@ enum TaskSidePanelTabs {
         }
     }
 
-    /// - Parameter simulator: the Simulator tab, while the panel offers one; without it the tab is left out.
+    /// - Parameter simulator: a Simulator tab by its key, while the panel offers them; without it they are left out.
     @MainActor
     static func tab(_ id: String, selectedFilePath: String?, browserTabs: TaskBrowserTabs? = nil,
-                    simulator: WorkSurfaceTab? = nil) -> WorkSurfaceTab? {
+                    simulator: ((UUID) -> WorkSurfaceTab)? = nil) -> WorkSurfaceTab? {
         if let key = TaskSurfaceNavigationProjection.browserKey(inTab: id) {
             return browserTabs.map { browserTab(key, in: $0) }
         }
+        if let key = TaskSurfaceNavigationProjection.simulatorKey(inTab: id) {
+            return simulator?(key)
+        }
         return switch id {
-        case TaskSurfaceNavigationProjection.simulatorID:
-            simulator
         case "diff":
             WorkSurfaceTab(id: id, title: L10n.string("Review"), systemName: "plus.rectangle")
         case "files":
@@ -109,15 +110,15 @@ enum TaskSidePanelTabs {
             : [review, terminal, browser] + simulator + [files, sideChat]
     }
 
-    /// The launcher's and the + menu's Simulator, which shows the task's Simulator tab.
+    /// The launcher's and the + menu's Simulator, which opens a new Simulator tab.
     static var simulatorChoice: WorkSurfaceTab {
-        WorkSurfaceTab(id: TaskSurfaceNavigationProjection.simulatorID, title: L10n.string("Simulator"),
+        WorkSurfaceTab(id: TaskSurfaceNavigationProjection.simulatorChoiceID, title: L10n.string("Simulator"),
                        systemName: SimulatorTabSymbol.name(for: nil))
     }
 
-    /// The Simulator tab: the attached device's name and its platform's symbol, or Simulator while none is attached.
-    static func simulatorTab(device: SimulatorDevice?) -> WorkSurfaceTab {
-        WorkSurfaceTab(id: TaskSurfaceNavigationProjection.simulatorID,
+    /// A Simulator tab: the name of the device attached in it and its platform's symbol, or Simulator while none is.
+    static func simulatorTab(_ key: UUID, device: SimulatorDevice?) -> WorkSurfaceTab {
+        WorkSurfaceTab(id: TaskSurfaceNavigationProjection.simulatorTabID(key),
                        title: device?.name ?? L10n.string("Simulator"),
                        systemName: SimulatorTabSymbol.name(for: device?.platform))
     }

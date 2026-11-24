@@ -1,6 +1,6 @@
 import Foundation
 
-/// The Simulator tab's device menu, as what it offers: another device to show, taking the device's input from
+/// A Simulator tab's device menu, as what it offers: another device to show, taking the device's input from
 /// another task, letting go of the device, taking back the person's approval for agents to use it, and shutting down a
 /// device Yardlet started, which says that Yardlet shuts it down once it is unused. Built from what the simulator center knows, so it is checked without opening a
 /// menu.
@@ -25,9 +25,9 @@ struct SimulatorDeviceMenu: Equatable {
     /// - Parameter taskTitle: another task's title, or nil when it is gone.
     /// - Parameter approvals: the devices the person let agents use; nil offers no item for them.
     @MainActor
-    static func make(for task: UUID, in center: SimulatorCenter, taskTitle: (UUID) -> String?,
+    static func make(for task: UUID, tab: UUID, in center: SimulatorCenter, taskTitle: (UUID) -> String?,
                      approvals: SimulatorApprovals? = nil) -> Self {
-        let entries = center.entries(for: task)
+        let entries = center.entries(for: task, tab: tab)
         guard let attached = entries.first(where: \.isAttachedHere) else { return Self(devices: entries, items: []) }
         var items: [Item] = []
         if let holder = attached.claimingTask, holder != task {
