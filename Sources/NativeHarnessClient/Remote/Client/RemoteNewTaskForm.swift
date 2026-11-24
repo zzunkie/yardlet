@@ -134,12 +134,27 @@ final class RemoteNewTaskForm {
         } else {
             confirmedChoices[id] = nil
         }
+        clearModelDependentPicksIfNeeded(for: id)
         picks[id] = value
     }
 
     /// A choice from a setting's own menu, where the host names no roles.
     func pick(_ settingID: String, _ value: String) {
+        clearModelDependentPicksIfNeeded(for: settingID)
         picks[settingID] = value
+    }
+
+    private func clearModelDependentPicksIfNeeded(for settingID: String) {
+        let isModel = options?.settings?.first(where: { $0.id == settingID })?.role == "model" || settingID == "model"
+        guard isModel else { return }
+        for setting in options?.settings ?? [] where setting.role == "effort" || setting.role == "speed" {
+            picks[setting.id] = nil
+            confirmedChoices[setting.id] = nil
+        }
+        for id in ["fastMode", "serviceTier"] {
+            picks[id] = nil
+            confirmedChoices[id] = nil
+        }
     }
 
     /// The choice the host's default stands on, confirmed: the task starts.
@@ -158,9 +173,21 @@ final class RemoteNewTaskForm {
         let requestID = UUID()
         optionReadID = requestID
         defer { if optionReadID == requestID { optionReadID = nil } }
-        let response = await model.response(to: .newTaskOptions(projectID: projectID, harness: harness, settings: picks,
-                                                                 accountID: accountID, composer: model.composerExtensions))
+        var response = await model.response(to: .newTaskOptions(projectID: projectID, harness: harness, settings: picks,
+                                                                accountID: accountID, composer: model.composerExtensions))
         guard !Task.isCancelled, optionReadID == requestID else { return }
+        if !response.ok, response.error?.reason == .setting, !picks.isEmpty {
+            if let named = response.error?.setting, picks[named] != nil {
+                picks[named] = nil
+                confirmedChoices[named] = nil
+            } else {
+                picks = [:]
+                confirmedChoices = [:]
+            }
+            response = await model.response(to: .newTaskOptions(projectID: projectID, harness: harness, settings: picks,
+                                                                accountID: accountID, composer: model.composerExtensions))
+            guard !Task.isCancelled, optionReadID == requestID else { return }
+        }
         guard response.ok else {
             model.commandError = RemoteHostModel.message(for: response.error, host: model.name)
             return

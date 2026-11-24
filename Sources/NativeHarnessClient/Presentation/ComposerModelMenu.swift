@@ -33,7 +33,18 @@ struct ComposerModelMenu: Equatable {
     private var labelParts: [String] {
         [model.map(ProviderCapabilityAccessibility.selectedChoiceName(for:)),
          effort.map(ProviderCapabilityAccessibility.selectedChoiceName(for:)),
-         speed?.currentValue == "on" ? speed?.name : nil].compactMap { $0 }
+         speedLabel].compactMap { $0 }
+    }
+
+    private var speedLabel: String? {
+        guard let speed else { return nil }
+        if speed.isBinarySpeedSwitch {
+            return speed.currentValue == "on" ? speed.name : nil
+        }
+        guard !speed.currentValue.isEmpty, speed.currentValue != "default", speed.currentValue != "off" else {
+            return nil
+        }
+        return ProviderCapabilityAccessibility.selectedChoiceName(for: speed)
     }
 
     /// A provider's own selectors, as Claude Code and the ACP harnesses report them.

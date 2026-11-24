@@ -999,7 +999,8 @@ final class AppModelRemoteBridge: RemoteBridge {
             // Every setting the composer has: a phone's short list is part of it, and the desktop's sends them all.
             let settings = Self.taskSettings(projected)
             guard let setting = settings.first(where: { left[$0.id] != nil }), let value = left.removeValue(forKey: setting.id) else {
-                return .failure(RemoteError(.notAllowed, "The new-task menus have no such setting now", reason: .setting))
+                return .failure(RemoteError(.notAllowed, "The new-task menus have no such setting now", reason: .setting,
+                                            setting: left.keys.sorted().first))
             }
             let offered = setting.choices.first { $0.value == value }
             // The value the menu shows now is taken back as it is, also before its list has it (a default model).

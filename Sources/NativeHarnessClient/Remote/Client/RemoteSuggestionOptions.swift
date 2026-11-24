@@ -37,12 +37,18 @@ final class RemoteSuggestionOptions: TaskSuggestionOptionsSource {
         readID = id
         defer { if readID == id { readID = nil } }
         var response = await host.response(to: request)
-        if !response.ok, response.error?.reason == .setting, !picks.isEmpty {
-            picks = [:]
-            confirmed = [:]
-            response = await host.response(to: request)
-        }
         guard readID == id else { return }
+        if !response.ok, response.error?.reason == .setting, !picks.isEmpty {
+            if let named = response.error?.setting, picks[named] != nil {
+                picks[named] = nil
+                confirmed[named] = nil
+            } else {
+                picks = [:]
+                confirmed = [:]
+            }
+            response = await host.response(to: request)
+            guard readID == id else { return }
+        }
         guard response.ok else {
             host.commandError = RemoteHostModel.message(for: response.error, host: host.name)
             return
@@ -121,6 +127,17 @@ final class RemoteSuggestionOptions: TaskSuggestionOptionsSource {
             options: options,
             pick: { [self] picked in
                 guard case let .providerOption(id, value) = picked else { return }
+                let isModel = settings.first { $0.id == id }?.role == "model" || id == "model"
+                if isModel {
+                    for setting in settings where setting.role == "effort" || setting.role == "speed" {
+                        picks[setting.id] = nil
+                        confirmed[setting.id] = nil
+                    }
+                    for key in ["fastMode", "serviceTier"] {
+                        picks[key] = nil
+                        confirmed[key] = nil
+                    }
+                }
                 picks[id] = value
                 let asks = settings.first { $0.id == id }?.choices.first { $0.value == value }?.confirm != nil
                 confirmed[id] = asks ? value : nil

@@ -137,8 +137,9 @@ enum CodexComposerCommands {
         add(.model, title: L10n.string("Model"), description: "")
         add(.reasoning, title: L10n.string("Reasoning slash command"),
             description: context.modelCatalog.effort.map(CodexReasoningLabel.name) ?? "")
-        if let tier = context.modelCatalog.fastTier {
-            add(.serviceTier(tier.id), title: tier.name, description: context.modelCatalog.isFast
+        for tier in context.modelCatalog.availableServiceTiers {
+            let isActive = context.modelCatalog.serviceTier == tier.id
+            add(.serviceTier(tier.id), title: tier.name, description: isActive
                 ? L10n.format("Turn off %@ and return to standard speed", tier.name) : tier.description)
         }
         if context.modes.contains(where: { $0.mode == "plan" }) {

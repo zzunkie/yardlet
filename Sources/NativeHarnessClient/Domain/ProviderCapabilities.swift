@@ -15,6 +15,11 @@ struct ProviderCapabilitySelector: Equatable, Identifiable, Sendable {
     let category: String?
     var currentValue: String
     let choices: [ProviderCapabilityChoice]
+
+    /// True for a simple Off/On toggle (Claude Code's Fast switch or a single-tier Codex model).
+    var isBinarySpeedSwitch: Bool {
+        choices.count == 2 && choices[0].value == "off" && choices[1].value == "on"
+    }
 }
 
 struct ProviderCapabilityAction: Equatable, Identifiable, Sendable {

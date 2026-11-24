@@ -279,7 +279,12 @@ private struct RemoteScheduleDestination: View {
                             case "model": choice.model
                             case "effort": choice.effort
                             case "permission": draft.harness == .codex ? choice.codexRunLocation.rawValue : choice.permissionMode
-                            case "speed": choice.serviceTier
+                            case "speed":
+                                if setting.choices.map(\.value) == ["off", "on"] {
+                                    choice.serviceTier.map { $0 == "default" || $0 == "off" ? "off" : "on" }
+                                } else {
+                                    choice.serviceTier
+                                }
                             default: nil
                             }
                             if let value, setting.choices.contains(where: { $0.value == value }) { settings[setting.id] = value }
@@ -311,6 +316,14 @@ private struct RemoteScheduleDestination: View {
     }
     private func choose(_ choice: ComposerSessionChoice) {
         if case let .providerOption(id, value) = choice {
+            let isModel = options?.settings?.first(where: { $0.id == id })?.role == "model" || id == "model"
+            if isModel {
+                for setting in options?.settings ?? [] where setting.role == "effort" || setting.role == "speed" {
+                    settings[setting.id] = nil
+                }
+                settings["fastMode"] = nil
+                settings["serviceTier"] = nil
+            }
             settings[id] = value
             // The shared permission control calls back only after its confirmation was accepted.
             // Reuse that consent only for the same destination, account and validated settings.

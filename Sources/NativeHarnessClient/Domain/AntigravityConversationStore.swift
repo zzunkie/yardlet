@@ -25,8 +25,8 @@ struct AntigravityConversationStore: Sendable {
             .appending(path: ".gemini/antigravity-cli", directoryHint: .isDirectory))
     }
 
-    /// The largest index and log Yardlet reads.
-    static let maximumIndexBytes = 64 << 20
+    /// The largest log tail Yardlet reads into memory. The SQLite summary index is queried by
+    /// SQLite without loading the whole file into memory, so it is not capped at a fixed size.
     static let maximumTranscriptBytes = 8 << 20
 
     struct Summary: Equatable, Sendable {
@@ -52,7 +52,7 @@ struct AntigravityConversationStore: Sendable {
     /// it started in, by the conversation ID in lower case.
     func conversations(startedByYardlet: [String: URL] = [:]) throws -> [ImportableConversation] {
         let lastByFolder = lastConversationFolders()
-        return try continuable(summaries()).compactMap { summary -> ImportableConversation? in
+        return try continuableSummaries().compactMap { summary -> ImportableConversation? in
             guard let folder = Self.ownFolder(of: summary,
                                               startedIn: startedByYardlet[summary.conversationID.lowercased()],
                                               lastContinuedIn: lastByFolder[summary.conversationID])
@@ -68,7 +68,7 @@ struct AntigravityConversationStore: Sendable {
                        limit: Int = 50) throws -> [ImportableConversation] {
         let target = Self.path(folder)
         let lastByFolder = lastConversationFolders()
-        return Array(try continuable(summaries()).filter { summary in
+        return Array(try continuableSummaries().filter { summary in
             if let own = Self.ownFolder(of: summary,
                                         startedIn: startedByYardlet[summary.conversationID.lowercased()],
                                         lastContinuedIn: lastByFolder[summary.conversationID]) {
@@ -81,8 +81,10 @@ struct AntigravityConversationStore: Sendable {
         .prefix(limit))
     }
 
-    private func continuable(_ summaries: [Summary]) -> [Summary] {
-        summaries.filter { $0.appDataDirectory == "antigravity-cli" && $0.nestingDepth == 0 && $0.stepCount > 0 }
+    private func continuableSummaries() throws -> [Summary] {
+        try withIndexDatabase { handle in
+            try Self.readSummaries(handle: handle, onlyContinuable: true)
+        } ?? []
     }
 
     private static func importable(_ summary: Summary, in folder: URL) -> ImportableConversation {
@@ -106,14 +108,34 @@ struct AntigravityConversationStore: Sendable {
 
     /// The title the CLI generated for a conversation, for the task's title.
     func title(conversationID: String) -> String? {
-        guard let summary = try? summaries().first(where: { $0.conversationID == conversationID }),
-              !summary.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        return SessionTitleProjection.normalizedProviderTitle(summary.title)
+        let id = conversationID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty, !id.contains("/") else { return nil }
+        let raw: String? = (try? withIndexDatabase { handle in
+            let sql = "SELECT title FROM conversation_summaries WHERE conversation_id = ? LIMIT 1"
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
+                throw AntigravityConversationStoreError.unreadableIndex
+            }
+            defer { sqlite3_finalize(statement) }
+            let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+            sqlite3_bind_text(statement, 1, id, -1, transient)
+            guard sqlite3_step(statement) == SQLITE_ROW,
+                  let pointer = sqlite3_column_text(statement, 0) else { return nil }
+            return String(cString: pointer)
+        }) ?? nil
+        guard let raw, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return SessionTitleProjection.normalizedProviderTitle(raw)
     }
 
     func summaries() throws -> [Summary] {
+        try withIndexDatabase { handle in
+            try Self.readSummaries(handle: handle, onlyContinuable: false)
+        } ?? []
+    }
+
+    private func withIndexDatabase<T>(_ body: (OpaquePointer) throws -> T) throws -> T? {
         let index = root.appending(path: "conversation_summaries.db")
-        guard Self.isRegularFile(index, maximumBytes: Self.maximumIndexBytes) else { return [] }
+        guard Self.isRegularFile(index, maximumBytes: Int.max) else { return nil }
         let copy = FileManager.default.temporaryDirectory
             .appending(path: "yardlet-antigravity-index-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: copy, withIntermediateDirectories: true,
@@ -122,10 +144,18 @@ struct AntigravityConversationStore: Sendable {
         let database = copy.appending(path: "conversation_summaries.db")
         try FileManager.default.copyItem(at: index, to: database)
         let wal = root.appending(path: "conversation_summaries.db-wal")
-        if Self.isRegularFile(wal, maximumBytes: Self.maximumIndexBytes) {
+        if Self.isRegularFile(wal, maximumBytes: Int.max) {
             try? FileManager.default.copyItem(at: wal, to: copy.appending(path: "conversation_summaries.db-wal"))
         }
-        return try Self.readSummaries(databaseURL: database)
+        var handle: OpaquePointer?
+        guard sqlite3_open_v2(database.path(percentEncoded: false), &handle,
+                              SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK,
+              let handle else {
+            sqlite3_close(handle)
+            throw AntigravityConversationStoreError.unreadableIndex
+        }
+        defer { sqlite3_close(handle) }
+        return try body(handle)
     }
 
     static func readSummaries(databaseURL: URL) throws -> [Summary] {
@@ -137,17 +167,23 @@ struct AntigravityConversationStore: Sendable {
             throw AntigravityConversationStoreError.unreadableIndex
         }
         defer { sqlite3_close(handle) }
+        return try readSummaries(handle: handle, onlyContinuable: false)
+    }
+
+    private static func readSummaries(handle: OpaquePointer, onlyContinuable: Bool) throws -> [Summary] {
         // Only the columns read here; a newer CLI may add others.
+        let filter = onlyContinuable ? " WHERE app_data_dir = 'antigravity-cli' AND nesting_depth = 0 AND step_count > 0" : ""
         let sql = """
             SELECT conversation_id, title, preview, step_count, last_modified_time, workspace_uris,
                    parent_conversation_id, nesting_depth, app_data_dir
-            FROM conversation_summaries
+            FROM conversation_summaries\(filter)
             """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
             throw AntigravityConversationStoreError.unreadableIndex
         }
         defer { sqlite3_finalize(statement) }
+        let formatter = Self.makeDateFormatter()
         var rows: [Summary] = []
         while sqlite3_step(statement) == SQLITE_ROW {
             func text(_ column: Int32) -> String {
@@ -161,7 +197,7 @@ struct AntigravityConversationStore: Sendable {
                 title: text(1),
                 preview: text(2),
                 stepCount: Int(sqlite3_column_int64(statement, 3)),
-                updatedAt: date(text(4)),
+                updatedAt: date(text(4), using: formatter),
                 workspaceURLs: folders(in: text(5)),
                 parentConversationID: parent.isEmpty || parent == id ? nil : parent,
                 nestingDepth: Int(sqlite3_column_int64(statement, 7)),
@@ -205,12 +241,24 @@ struct AntigravityConversationStore: Sendable {
 
     /// `2026-10-16 05:41:41.331209+00:00`, as the index stores it.
     static func date(_ value: String) -> Date? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count >= 19 else { return nil }
+        date(value, using: makeDateFormatter())
+    }
+
+    private static let dateFormats = [
+        "yyyy-MM-dd HH:mm:ss.SSSSSSxxx", "yyyy-MM-dd HH:mm:ssxxx",
+        "yyyy-MM-dd'T'HH:mm:ss.SSSSSSxxx", "yyyy-MM-dd'T'HH:mm:ssxxx"
+    ]
+
+    private static func makeDateFormatter() -> DateFormatter {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        for format in ["yyyy-MM-dd HH:mm:ss.SSSSSSxxx", "yyyy-MM-dd HH:mm:ssxxx", "yyyy-MM-dd'T'HH:mm:ss.SSSSSSxxx",
-                       "yyyy-MM-dd'T'HH:mm:ssxxx"] {
+        return formatter
+    }
+
+    private static func date(_ value: String, using formatter: DateFormatter) -> Date? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 19 else { return nil }
+        for format in dateFormats {
             formatter.dateFormat = format
             if let date = formatter.date(from: trimmed) { return date }
         }

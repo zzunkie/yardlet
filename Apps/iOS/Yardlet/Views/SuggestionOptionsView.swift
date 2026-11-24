@@ -107,6 +107,13 @@ struct SuggestionOptionsView: View {
     }
 
     private func pick(_ setting: String, _ value: String) {
+        if answer?.settings?.first(where: { $0.id == setting })?.role == "model" || setting == "model" {
+            for item in answer?.settings ?? [] where item.role == "effort" || item.role == "speed" {
+                picks[item.id] = nil
+            }
+            picks["fastMode"] = nil
+            picks["serviceTier"] = nil
+        }
         picks[setting] = value
         // A setting may depend on another (an effort on its model): read the menus again after the pick.
         reread()
@@ -124,6 +131,7 @@ struct SuggestionOptionsView: View {
         readID = id
         defer { if readID == id { readID = nil } }
         var response = await session.response(to: request)
+        guard readID == id else { return }
         if !response.ok, response.error?.reason == .setting, !picks.isEmpty {
             if let named = response.error?.setting, picks[named] != nil {
                 picks[named] = nil
@@ -131,8 +139,8 @@ struct SuggestionOptionsView: View {
                 picks = [:]
             }
             response = await session.response(to: request)
+            guard readID == id else { return }
         }
-        guard readID == id else { return }
         guard response.ok else {
             error = HostSession.message(for: response.error, host: session.name)
             return

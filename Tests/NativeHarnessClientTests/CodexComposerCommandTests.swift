@@ -111,6 +111,28 @@ final class CodexComposerCommandTests: XCTestCase {
         XCTAssertEqual(rows.first { $0.name == "service-tier:priority" }?.description,
                        L10n.format("Turn off %@ and return to standard speed", "Fast"))
         XCTAssertTrue(context.isPlanModeActive)
+
+        // Models with multiple advertised tiers expose every tier (e.g. Fast and Ultrafast)
+        // and mark only the currently active tier with its turn-off description.
+        var multi = fullContext()
+        multi.modelCatalog = CodexModelCatalog(
+            models: [.init(id: "gpt-6.2-sol", model: "gpt-6.2-sol", displayName: "GPT-6.2-Sol",
+                           defaultReasoningEffort: "high", supportedReasoningEfforts: ["high"], isDefault: true,
+                           serviceTiers: [
+                               .init(id: "priority", name: "Fast", description: "2x speed, increased usage"),
+                               .init(id: "ultrafast", name: "Ultrafast", description: "Fastest responses")
+                           ])],
+            selection: .init(model: "gpt-6.2-sol", reasoningEffort: "high", serviceTier: "ultrafast"))
+        let multiRows = CodexComposerCommands.catalog(multi)
+        XCTAssertEqual(multiRows.first { $0.name == "service-tier:priority" }?.description, "2x speed, increased usage")
+        XCTAssertEqual(multiRows.first { $0.name == "service-tier:ultrafast" }?.description,
+                       L10n.format("Turn off %@ and return to standard speed", "Ultrafast"))
+        if let ultraRow = multiRows.first(where: { $0.name == "service-tier:ultrafast" }) {
+            XCTAssertEqual(CodexComposerCommands.command(for: ultraRow, in: multi), .serviceTier("ultrafast"))
+        } else {
+            XCTFail("Expected service-tier:ultrafast command")
+        }
+
         context.tokenUsage = nil
         XCTAssertEqual(CodexComposerCommands.catalog(context).first { $0.name == "compact" }?.description,
                        L10n.string("Compact this chat's context"))
