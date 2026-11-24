@@ -374,6 +374,7 @@ struct NewTaskHomeLists: View {
                 .font(.parity(.caption, weight: .medium, scale: interfaceScale))
                 .foregroundStyle(isChosen ? AnyShapeStyle(ParityTheme.accent) : AnyShapeStyle(.secondary))
                 .frame(width: 16)
+                .centeredOnCapHeight(ofTextSize: 14.5 * interfaceScale)
             Text(summary.name)
                 .font(.system(size: 14.5 * interfaceScale, weight: .semibold))
                 .foregroundStyle(isChosen ? AnyShapeStyle(ParityTheme.accentText) : AnyShapeStyle(.primary))
@@ -389,6 +390,7 @@ struct NewTaskHomeLists: View {
             Spacer(minLength: 8)
             if let first = summary.pullRequests.first {
                 pill(first)
+                    .centeredOnCapHeight(ofTextSize: 14.5 * interfaceScale)
                 if summary.pullRequests.count > 1 {
                     Text(verbatim: "+\(summary.pullRequests.count - 1)")
                         .font(.system(size: 11.5 * interfaceScale).monospacedDigit())
@@ -581,7 +583,7 @@ struct NewTaskHomeLists: View {
         .font(.system(size: 11 * interfaceScale, weight: .medium))
         .foregroundStyle(TaskPullRequestBadgeView.color(pill.tone))
         .padding(.horizontal, 6)
-        .frame(height: 18)
+        .frame(height: 18 * interfaceScale)
         .background(TaskPullRequestBadgeView.color(pill.tone).opacity(0.12), in: Capsule())
         .fixedSize()
         .help(row.pullRequest.url.absoluteString)

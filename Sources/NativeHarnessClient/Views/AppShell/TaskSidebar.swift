@@ -1243,20 +1243,20 @@ struct SidebarRowTrailingItemsView: View {
                 Image(systemName: "clock")
                     .font(.system(size: 10 * interfaceScale, weight: .medium))
                     .foregroundStyle(.secondary)
-                    .frame(width: 14, height: 14)
+                    .frame(width: 14 * interfaceScale, height: 14 * interfaceScale)
                     .accessibilityHidden(true)
             case .worktree:
                 Image(systemName: "arrow.triangle.branch")
                     .font(.system(size: 10 * interfaceScale, weight: .medium))
                     .foregroundStyle(.secondary)
-                    .frame(width: 14, height: 14)
+                    .frame(width: 14 * interfaceScale, height: 14 * interfaceScale)
                     .accessibilityHidden(true)
             case let .pullRequest(mark):
                 // The Claude app's 12 pt state glyph, without the number.
                 Image(systemName: mark.glyph.systemName)
                     .font(.system(size: 10 * interfaceScale, weight: .semibold))
                     .foregroundStyle(TaskPullRequestBadgeView.color(mark.tone))
-                    .frame(width: 14, height: 14)
+                    .frame(width: 14 * interfaceScale, height: 14 * interfaceScale)
                     .accessibilityHidden(true)
             case let .cpu(percent):
                 SidebarCPUIndicatorView(percent: percent)
@@ -1282,7 +1282,7 @@ struct SidebarTaskStatusView: View {
 
     var body: some View {
         content
-            .frame(width: 14, height: 14)
+            .frame(width: 14 * interfaceScale, height: 14 * interfaceScale)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(status.accessibilityName)
     }
@@ -1758,6 +1758,7 @@ struct SidebarSearchField: View {
             if !text.isEmpty {
                 Button { text = "" } label: {
                     Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12 * interfaceScale))
                         .foregroundStyle(.tertiary)
                 }
                 .buttonStyle(.borderless)
@@ -1839,7 +1840,9 @@ struct SidebarFamilySummaryLine: View {
         if let failed = details.failed { text = text + Text(verbatim: " · ") + Text(failed) }
         if let new = details.new {
             text = text + Text(verbatim: " · ")
+                // Raised onto the words' middle: a small glyph inline rests on the baseline.
                 + Text(Image(systemName: "circle.fill")).font(.system(size: 6 * interfaceScale))
+                    .baselineOffset(2 * interfaceScale)
                     .foregroundStyle(ParityTheme.accent)
                 + Text(verbatim: " ") + Text(new)
         }
@@ -1865,8 +1868,10 @@ struct SidebarFamilySummaryLine: View {
             .font(.system(size: 12 * interfaceScale))
             .foregroundStyle(isHovering ? .primary : .secondary)
             .lineLimit(1)
+            // Clear of the guide's end at every interface scale: the words start where a nested
+            // row's icon does at 100%, and do not move onto the guide as a larger icon would.
             .padding(.leading, SidebarMetrics.familyIndent
-                     + (SidebarMetrics.gutterWidth - SidebarMetrics.nestedIconSize * interfaceScale) / 2)
+                     + (SidebarMetrics.gutterWidth - SidebarMetrics.nestedIconSize) / 2)
             .padding(.trailing, SidebarMetrics.rowTrailingPadding)
             .frame(height: SidebarMetrics.secondaryLineHeight * interfaceScale)
             .contentShape(Rectangle())

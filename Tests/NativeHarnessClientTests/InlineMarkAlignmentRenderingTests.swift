@@ -64,17 +64,53 @@ final class InlineMarkAlignmentRenderingTests: XCTestCase {
         XCTAssertLessThanOrEqual(abs(offset), tolerance, "\(offset) pt")
     }
 
+    func testAFamilySummarysNewDotSitsOnItsWordsMiddle() throws {
+        // The dot inline in the words, compared with the count after it ("1 new").
+        let unread = SessionRecord(harness: .claudeCode, workspaceURL: URL(filePath: "/tmp/w"),
+                                   runtimeExecutableURL: URL(filePath: "/tmp/agent"), title: "EHEH",
+                                   titleOrigin: .provider, status: .ready, hasUnreadUpdate: true)
+        let (offset, tolerance) = try Self.offset(named: "family-summary-new-dot", pick: { clusters, scale in
+            guard let dot = clusters.firstIndex(where: { $0.isRound(widthPoints: 4...8, scale: scale) }),
+                  dot + 1 < clusters.count else { return nil }
+            return (clusters[dot], clusters[dot + 1])
+        }) {
+            SidebarFamilySummaryLine(hidden: [unread], showsMore: false, onExpand: {})
+        }
+        XCTAssertLessThanOrEqual(abs(offset), tolerance, "\(offset) pt")
+    }
+
+    func testTheNewTaskTitlesClearButtonSitsOnItsWordsMiddle() throws {
+        // The button after the project's name, set on the name's capitals: the name's ink from its
+        // top, as tall as the capitals, leaving out the dotted line under it. The sentence around the
+        // name follows the system language.
+        let capHeight = NSFont.systemFont(ofSize: 28).capHeight
+        let (offset, tolerance) = try Self.offset(named: "new-task-title-clear", size: NSSize(width: 640, height: 60),
+                                                  pick: { clusters, scale in
+            guard let button = clusters.firstIndex(where: { $0.isRound(widthPoints: 6...14, scale: scale) }),
+                  button > 0 else { return nil }
+            var name = clusters[button - 1]
+            name.maxY = name.minY + Int((capHeight * scale).rounded()) - 1
+            return (clusters[button], name)
+        }) {
+            NewTaskHeroTitle(kind: .build(project: "EHEH"), onClearProject: {}) { EmptyView() }
+        }
+        XCTAssertLessThanOrEqual(abs(offset), tolerance, "\(offset) pt")
+    }
+
     // MARK: - Measuring
 
     /// The mark's vertical middle less the words' (positive: the mark sits low), in points, from the
     /// light drawing, with the tolerance for the scale it was drawn at. The mark is the last cluster
     /// of ink, or the first when `markIsFirst`.
+    /// `pick` chooses the mark and the words among the clusters, for a line whose mark is neither its
+    /// first nor its last ink.
     private static func offset<Content: View>(
         named name: String, markIsFirst: Bool = false, skipsBorder: Bool = false,
+        size: NSSize = NSSize(width: 360, height: 44),
+        pick: (([Cluster], CGFloat) -> (mark: Cluster, words: Cluster)?)? = nil,
         @ViewBuilder content: () -> Content
     ) throws -> (offset: CGFloat, tolerance: CGFloat) {
         let directory = try WindowlessRender.directory("alignment-qa")
-        let size = NSSize(width: 360, height: 44)
         let view = content()
         let captures = try WindowlessRender.hostedInBothAppearances(name, in: directory, size: size) { appearance in
             view
@@ -84,12 +120,15 @@ final class InlineMarkAlignmentRenderingTests: XCTestCase {
                 .environment(\.colorScheme, appearance.colorScheme)
         }
         let capture = captures[0]
-        let clusters = Array(inkClusters(capture.bitmap).dropFirst(skipsBorder ? 1 : 0))
-        let bound = tolerance(atScale: capture.backingScaleFactor)
+        let scale = capture.backingScaleFactor
+        let clusters = Array(inkClusters(capture.bitmap, scale: scale).dropFirst(skipsBorder ? 1 : 0))
+        let bound = tolerance(atScale: scale)
         XCTAssertGreaterThanOrEqual(clusters.count, 2, "\(name): \(clusters)")
         guard clusters.count >= 2 else { return (.infinity, bound) }
-        let mark = markIsFirst ? clusters[0] : clusters[clusters.count - 1]
-        let words = markIsFirst ? clusters[1] : clusters[0]
+        let picked = pick.map { $0(clusters, scale) }
+            ?? (markIsFirst ? (clusters[0], clusters[1]) : (clusters[clusters.count - 1], clusters[0]))
+        XCTAssertNotNil(picked, "\(name): no mark among \(clusters)")
+        guard let (mark, words) = picked else { return (.infinity, bound) }
         let offset = (mark.middle - words.middle) / capture.backingScaleFactor
         print("alignment \(name): \(offset) pt at \(capture.backingScaleFactor)x (mark \(mark), words \(words))")
         return (offset, bound)
@@ -99,11 +138,17 @@ final class InlineMarkAlignmentRenderingTests: XCTestCase {
         var minX: Int, maxX: Int, minY: Int, maxY: Int
         var middle: CGFloat { CGFloat(minY + maxY + 1) / 2 }
         var description: String { "x \(minX)…\(maxX) y \(minY)…\(maxY)" }
+
+        /// About as wide as it is high, and `widthPoints` wide: a dot, not a letter or a middle dot.
+        func isRound(widthPoints: ClosedRange<CGFloat>, scale: CGFloat) -> Bool {
+            let width = CGFloat(maxX - minX + 1), height = CGFloat(maxY - minY + 1)
+            return widthPoints.contains(width / scale) && abs(width - height) <= max(1, scale)
+        }
     }
 
     /// Runs of columns with ink, split where at least a few blank columns separate them, each with
     /// the rows its ink covers. "EHEH" is one cluster: its letters sit closer than the gap.
-    private static func inkClusters(_ bitmap: NSBitmapImageRep) -> [Cluster] {
+    private static func inkClusters(_ bitmap: NSBitmapImageRep, scale: CGFloat) -> [Cluster] {
         // Inside a card when the line draws one: the right end of the middle row holds no ink.
         let background = bitmap.colorAt(x: bitmap.pixelsWide - 40, y: bitmap.pixelsHigh / 2)?.usingColorSpace(.deviceRGB)
         func isInk(_ x: Int, _ y: Int) -> Bool {
@@ -112,11 +157,11 @@ final class InlineMarkAlignmentRenderingTests: XCTestCase {
                 + abs(c.blueComponent - b.blueComponent)
             return d > 0.12
         }
-        let gap = Int(4 * (CGFloat(bitmap.pixelsWide) / 360))
+        let gap = Int(4 * scale)
         var clusters: [Cluster] = []
         var blank = gap
         // Inside the card's border, which is ink of its own.
-        let inset = Int(8 * (CGFloat(bitmap.pixelsWide) / 360))
+        let inset = Int(8 * scale)
         for x in inset..<(bitmap.pixelsWide - inset) {
             let rows = (inset..<(bitmap.pixelsHigh - inset)).filter { isInk(x, $0) }
             guard let top = rows.first, let bottom = rows.last else { blank += 1; continue }

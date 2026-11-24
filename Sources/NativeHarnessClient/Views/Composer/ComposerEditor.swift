@@ -834,7 +834,7 @@ struct ComposerLabelChip: View {
         .font(.yardlet(.caption2, scale: interfaceScale))
         .foregroundStyle(.secondary)
         .padding(.horizontal, 7)
-        .frame(height: 24)
+        .frame(height: 24 * interfaceScale)
         .background(ParityTheme.subtleFill, in: Capsule())
         .accessibilityElement(children: .contain)
         .accessibilityLabel(L10n.string("Attached input"))

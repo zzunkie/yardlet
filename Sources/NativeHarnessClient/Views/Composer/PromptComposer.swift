@@ -541,15 +541,22 @@ struct PromptComposer: View {
                     } label: {
                         HStack(spacing: 3) {
                             Image(systemName: "text.append")
+                                .font(.system(size: 11.5 * interfaceScale, weight: .medium))
                             if !personQueue.isEmpty {
                                 Text("\(personQueue.count)")
                                     .font(.yardlet(.caption2, scale: interfaceScale).monospacedDigit())
+                                    .lineLimit(1)
+                                    .fixedSize()
                             }
                         }
                         .foregroundStyle(.secondary)
-                        .frame(width: 28, height: 28)
-                        .background(ParityTheme.subtleFill, in: Circle())
-                        .contentShape(Circle())
+                        // A circle while empty; a capsule that grows with the count once people
+                        // wait, so "10" stays on one line.
+                        .padding(.horizontal, personQueue.isEmpty ? 0 : 7)
+                        .frame(minWidth: 28 * interfaceScale, minHeight: 28 * interfaceScale)
+                        .fixedSize()
+                        .background(ParityTheme.subtleFill, in: Capsule())
+                        .contentShape(Capsule())
                     }
                     .buttonStyle(.borderless)
                     .parityPointer()

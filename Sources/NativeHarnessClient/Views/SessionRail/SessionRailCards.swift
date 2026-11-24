@@ -64,7 +64,7 @@ struct SessionRailOutputsCard: View {
                 HStack(spacing: ParitySpace.s8) {
                     Image(systemName: Self.symbol(output.url))
                         .foregroundStyle(.secondary)
-                        .frame(width: 16)
+                        .frame(width: 16 * interfaceScale)
                     Text(output.name).lineLimit(1).truncationMode(.middle)
                     Spacer(minLength: ParitySpace.s8)
                     if let date = output.writtenAt {
@@ -613,7 +613,7 @@ struct SessionJobRailRow: View {
                 Image(systemName: job.kind == .once ? "clock" : "arrow.clockwise")
                     .font(.system(size: 11 * interfaceScale))
                     .foregroundStyle(.secondary)
-                    .frame(width: 14)
+                    .frame(width: 16 * interfaceScale)
                     .padding(.top, 2)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(SessionJobText.title(job))
@@ -653,7 +653,7 @@ struct ScheduleRailRow: View {
                     Image(systemName: schedule.trigger.isRecurring ? "arrow.clockwise" : "clock")
                         .font(.system(size: 11 * interfaceScale))
                         .foregroundStyle(.secondary)
-                        .frame(width: 14)
+                        .frame(width: 16 * interfaceScale)
                         .padding(.top, 2)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(schedule.name)
@@ -661,8 +661,9 @@ struct ScheduleRailRow: View {
                             .foregroundStyle(schedule.isEnabled ? .primary : .secondary)
                             .lineLimit(1)
                             .truncationMode(.tail)
-                        HStack(spacing: ParitySpace.s4) {
+                        HStack(alignment: .firstTextBaseline, spacing: ParitySpace.s4) {
                             ScheduleStateMark(schedule: schedule)
+                                .centeredOnCapHeight(ofTextSize: 12 * interfaceScale)
                             Text(detail)
                                 .font(.parity(.caption, scale: interfaceScale))
                                 .foregroundStyle(.secondary)

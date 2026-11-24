@@ -23,6 +23,7 @@ struct TranscriptCopyButton: View {
     var detail: String? = nil
     let payload: () -> String?
     @State private var feedback: Bool?
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
 
     var body: some View {
         Button {
@@ -35,7 +36,8 @@ struct TranscriptCopyButton: View {
         }
         .buttonStyle(.borderless)
         .parityPointer()
-        .font(.caption)
+        // The size of the message actions it often sits beside.
+        .font(.yardlet(.caption, scale: interfaceScale))
         .foregroundStyle(.secondary)
         .accessibilityLabel(title)
         .accessibilityValue(feedback.map { L10n.string($0 ? "Copied" : "Copy failed") } ?? detail ?? "")

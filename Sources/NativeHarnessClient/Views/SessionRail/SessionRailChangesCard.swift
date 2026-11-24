@@ -15,7 +15,7 @@ struct SessionRailChangesCard: View {
             if let summary = changes.summary, !summary.isEmpty {
                 Button(action: actions.openChanges) {
                     HStack(spacing: ParitySpace.s8) {
-                        Image(systemName: "plusminus").foregroundStyle(.secondary).frame(width: 16)
+                        Image(systemName: "plusminus").foregroundStyle(.secondary).frame(width: 16 * interfaceScale)
                         Text(summary.fileCount == 1 ? L10n.string("1 file")
                              : L10n.format("%lld files", Int64(summary.fileCount)))
                         Spacer(minLength: ParitySpace.s8)

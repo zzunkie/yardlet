@@ -523,7 +523,7 @@ private struct NewTaskProjectNameMenu<Items: View>: View {
                 .buttonStyle(.plain)
                 .parityPointer()
                 .onHover { isHoveringClear = $0 }
-                .alignmentGuide(.firstTextBaseline) { [size] d in d[VerticalAlignment.center] + size * 0.28 }
+                .centeredOnCapHeight(ofTextSize: size)
                 .help(L10n.string("Switch to chat"))
                 .accessibilityLabel(L10n.string("Switch to chat"))
             }

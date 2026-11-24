@@ -698,6 +698,8 @@ struct WorkSurfaceTabIcon: View {
                 .clipShape(RoundedRectangle(cornerRadius: 3))
         } else {
             Image(systemName: systemName)
+                .font(.system(size: 12 * interfaceScale))
+                .frame(width: 16 * interfaceScale, height: 16 * interfaceScale)
         }
     }
 }

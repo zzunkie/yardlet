@@ -447,10 +447,11 @@ struct ConversationTurnView: View, Equatable {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Image(systemName: "list.bullet")
                     .font(.system(size: 11 * interfaceScale, weight: .medium))
+                    .centeredOnCapHeight(ofTextSize: CodexWorkSummaryLabel.fontSize * interfaceScale)
                     .accessibilityHidden(true)
                 Text(L10n.string("Work details"))
                     .conversationSelectionText(L10n.string("Work details"))
-                DisclosureCaret(isOpen: workDetailsAreVisible)
+                DisclosureCaret(isOpen: workDetailsAreVisible, size: 8 * interfaceScale)
                     .centeredOnCapHeight(ofTextSize: CodexWorkSummaryLabel.fontSize * interfaceScale)
             }
             .font(.system(size: CodexWorkSummaryLabel.fontSize * interfaceScale))
@@ -520,10 +521,11 @@ private struct ConversationWorkStretchFold: View {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Image(systemName: "list.bullet")
                     .font(.system(size: 11 * interfaceScale, weight: .medium))
+                    .centeredOnCapHeight(ofTextSize: CodexWorkSummaryLabel.fontSize * interfaceScale)
                     .accessibilityHidden(true)
                 Text(L10n.string("Work details"))
                     .conversationSelectionText(L10n.string("Work details"))
-                DisclosureCaret(isOpen: isOpen)
+                DisclosureCaret(isOpen: isOpen, size: 8 * interfaceScale)
                     .centeredOnCapHeight(ofTextSize: CodexWorkSummaryLabel.fontSize * interfaceScale)
             }
             .font(.system(size: CodexWorkSummaryLabel.fontSize * interfaceScale))
