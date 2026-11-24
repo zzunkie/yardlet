@@ -23,7 +23,7 @@ final class ConversationRequestDock {
             edge.height = 40
             edge.verticalAlignment = .top
             edge.cornerRadius = ConversationStyle.corners(12)
-            edge.background = WindowsTheme.elevated.brush
+            edge.background = WindowsTheme.requestPanelFill.brush
             edge.borderBrush = WindowsTheme.strongSeparator.brush
             edge.borderThickness = Thickness(left: 1, top: 1, right: 1, bottom: 1)
             edge.opacity = 1 - Double(index + 1) * 0.25

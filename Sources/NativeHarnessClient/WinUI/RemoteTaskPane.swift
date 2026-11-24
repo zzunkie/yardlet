@@ -29,6 +29,7 @@ final class RemoteTaskPane {
     private var shownNotices: RemoteTaskNotices??
     private var offersRetry: Bool?
     private var offersEdit: Bool?
+    private var offersAnswerWhileWorking: Bool?
     private var loggedAnswer: String?
 
     /// What the pane reads of the host for the task shown.
@@ -39,6 +40,7 @@ final class RemoteTaskPane {
         let error: String?
         let retries: Bool
         let edits: Bool
+        let answersWhileWorking: Bool
         let limit: TaskProviderNotices?
     }
 
@@ -114,7 +116,9 @@ final class RemoteTaskPane {
                 Shown(conversation: conversation, presentation: conversation.presentation, task: model.task(taskID),
                       error: model.commandError,
                       retries: model.offersRetry(in: conversation, isEditing: drafts.edits[taskID] != nil),
-                      edits: model.taskControls, limit: model.limitNotices(for: conversation))
+                      edits: model.taskControls,
+                      answersWhileWorking: model.nextSteps && model.isConnected,
+                      limit: model.limitNotices(for: conversation))
             }
         } onChange: { [weak self] in
             Task { @MainActor in
@@ -134,8 +138,22 @@ final class RemoteTaskPane {
             offersRetry = shown.retries
             if shown.retries {
                 timeline.retry = { [weak self] turnID in self?.retry(turnID) }
+                timeline.answerQuestion = { [weak self] turnID, answer in
+                    self?.answerQuestion(turnID, answer, whileWorking: false)
+                }
             } else {
                 timeline.retry = nil
+                timeline.answerQuestion = nil
+            }
+        }
+        if shown.answersWhileWorking != offersAnswerWhileWorking {
+            offersAnswerWhileWorking = shown.answersWhileWorking
+            if shown.answersWhileWorking {
+                timeline.answerQuestionWhileWorking = { [weak self] turnID, answer in
+                    self?.answerQuestion(turnID, answer, whileWorking: true)
+                }
+            } else {
+                timeline.answerQuestionWhileWorking = nil
             }
         }
         if shown.edits != offersEdit {
@@ -225,6 +243,14 @@ final class RemoteTaskPane {
         guard let taskID else { return }
         log.write("remote retry: \(turnID)")
         model.send(.nextStep(taskID: taskID, turnID: turnID, action: .retry))
+    }
+
+    /// Sends the person's answer to a host turn's Codex async question (§15.23).
+    private func answerQuestion(_ turnID: String, _ answer: String, whileWorking: Bool) {
+        guard let taskID else { return }
+        log.write("remote answered codex question: \(turnID)")
+        model.send(.nextStep(taskID: taskID, turnID: turnID,
+                             action: whileWorking ? .answerWhileWorking : .answer, text: answer))
     }
 
     /// Edit message: the turn's message goes into the composer to edit, as the local turn's does; what the composer

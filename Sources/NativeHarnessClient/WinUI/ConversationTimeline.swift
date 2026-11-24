@@ -27,6 +27,8 @@ final class ConversationTimeline {
     private var opensAtEnd = false
     /// The request cards, by turn and request, so what a form holds stays while its turn redraws.
     private var cards: [String: RequestCard] = [:]
+    /// The Codex async question cards, by turn, so what a form holds stays while its turn redraws.
+    private var questionCards: [String: CodexQuestionCard] = [:]
     private var requestNote: String?
     /// Carries out the answer a request's card sent, with the route its form made, where the conversation can be
     /// answered here; without it a request shows `requestNote` instead of its answers.
@@ -48,6 +50,10 @@ final class ConversationTimeline {
     var restoreRequest: (@MainActor (CodexComposerDraft) -> Void)?
     /// Starts editing a turn's message in the composer, as the Mac's Edit message under a sent message does.
     var editMessage: (@MainActor (ConversationTurn) -> Void)? { didSet { actionsChanged = true } }
+    /// Sends the person's answer to a Codex async question once its turn ended.
+    var answerQuestion: (@MainActor (String, String) -> Void)? { didSet { actionsChanged = true } }
+    /// Sends the person's answer to a Codex async question into a running turn.
+    var answerQuestionWhileWorking: (@MainActor (String, String) -> Void)? { didSet { actionsChanged = true } }
     /// What the task can do about its turns changed since they were drawn (another computer's task offers Retry only
     /// while it is idle), so the shown turns draw again.
     private var actionsChanged = false
@@ -105,6 +111,7 @@ final class ConversationTimeline {
             drawn = [:]
             order = []
             cards = [:]
+            questionCards = [:]
         }
         guard let presentation, !presentation.turns.isEmpty else {
             shown = nil
@@ -115,6 +122,7 @@ final class ConversationTimeline {
             turnsPanel.children.clear()
             drawn = [:]
             order = []
+            questionCards = [:]
             self.placeholder = placeholder
             if let placeholder {
                 let label = ConversationStyle.text(placeholder, size: 13, tone: .secondary)
@@ -163,9 +171,17 @@ final class ConversationTimeline {
         let limitChanged = limit != limitState
         limitState = limit
         var next: [String: ConversationTurnElement] = [:]
+        var activeQuestionKeys = Set<String>()
         var front: RequestCard?
         var pendingCount = 0
         for turn in presentation.turns {
+            if let answered = turn.actions.answeredQuestions {
+                activeQuestionKeys.insert(Self.questionCardKey(for: turn, questions: answered.questions, isAnswered: true))
+            }
+            if !turn.actions.questionsToAnswer.isEmpty && (!turn.status.isTerminal || turn.actions.answeredQuestions == nil) {
+                activeQuestionKeys.insert(Self.questionCardKey(for: turn, questions: turn.actions.questionsToAnswer,
+                                                               isAnswered: false))
+            }
             if front == nil, let first = turn.requests.first {
                 front = card(for: first, in: turn, answeredByComposerKeys: answersFromComposer)
             }
@@ -181,6 +197,7 @@ final class ConversationTimeline {
                 next[turn.id] = ConversationTurnElement(turn: turn, context: context)
             }
         }
+        questionCards = questionCards.filter { activeQuestionKeys.contains($0.key) }
         let ids = presentation.turns.map(\.id)
         if ids.starts(with: order) {
             // Turns only came after the ones shown: the turns kept redraw in place, the new ones are added.
@@ -216,8 +233,33 @@ final class ConversationTimeline {
             card: { [weak self] request, turn in
                 self?.card(for: request, in: turn) ?? RequestCard(request: request, respond: nil, note: nil)
             },
-            retry: retry, signIn: signIn, restoreRequest: restoreRequest, editMessage: editMessage
+            questionCard: { [weak self] turn, questions, answers, onAnswer in
+                self?.questionCard(for: turn, questions: questions, answers: answers, onAnswer: onAnswer)
+                    ?? CodexQuestionCard(questions: questions, answers: answers, onAnswer: onAnswer)
+            },
+            retry: retry, signIn: signIn, restoreRequest: restoreRequest, editMessage: editMessage,
+            answerQuestion: answerQuestion, answerQuestionWhileWorking: answerQuestionWhileWorking
         )
+    }
+
+    /// The Codex async question card for `turn`, keyed by turn, answered/pending slot, and question IDs so a running
+    /// turn holding both answered and pending question sets keeps each card separate and preserved across redraws.
+    private func questionCard(for turn: ConversationTurn, questions: [CodexAsyncQuestion],
+                              answers: [String: ConversationQuestionAnswer]?,
+                              onAnswer: (@MainActor (String) -> Void)?) -> CodexQuestionCard {
+        let key = Self.questionCardKey(for: turn, questions: questions, isAnswered: answers != nil)
+        if let card = questionCards[key] {
+            card.update(questions: questions, answers: answers, onAnswer: onAnswer)
+            return card
+        }
+        let card = CodexQuestionCard(questions: questions, answers: answers, onAnswer: onAnswer)
+        questionCards[key] = card
+        return card
+    }
+
+    private static func questionCardKey(for turn: ConversationTurn, questions: [CodexAsyncQuestion],
+                                        isAnswered: Bool) -> String {
+        "\(turn.id)\n\(isAnswered ? "answered" : "pending")\n\(questions.map(\.itemID).joined(separator: ","))"
     }
 
     /// The card for `request` as it stands, the same one while the request is in the turn.

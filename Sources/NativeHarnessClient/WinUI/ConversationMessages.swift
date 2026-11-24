@@ -78,7 +78,9 @@ enum ConversationMessages {
         if !images.isEmpty { column.children.append(ConversationImages.sent(images)) }
         if !text.isEmpty || images.isEmpty {
             let bubble = Border()
-            bubble.background = WindowsTheme.selectedFill.brush
+            bubble.background = WindowsTheme.userBubbleFill.brush
+            bubble.borderBrush = WindowsTheme.separator.brush
+            bubble.borderThickness = Thickness(left: 1, top: 1, right: 1, bottom: 1)
             bubble.cornerRadius = ConversationStyle.corners(ConversationStyle.sentBubbleCornerRadius)
             bubble.padding = ConversationStyle.sentBubblePadding
             bubble.maxWidth = ConversationStyle.sentBubbleMaximumWidth

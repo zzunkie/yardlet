@@ -84,6 +84,8 @@ final class NewTaskHomeReplyPane {
         view.children.append(body)
 
         timeline.respond = { [weak self] request, response in self?.respond(request, response) }
+        timeline.answerQuestion = { [weak self] _, answer in self?.answerQuestion(answer, whileWorking: false) }
+        timeline.answerQuestionWhileWorking = { [weak self] _, answer in self?.answerQuestion(answer, whileWorking: true) }
         composer.onSent = { [weak self] in self?.onReplied() }
         composer.onEscape = { [weak self] in self?.onClose() }
     }
@@ -148,6 +150,15 @@ final class NewTaskHomeReplyPane {
         let waitsOn = (model.railChildWait(session)?.requests ?? []).contains { $0.id != request.id }
         answer(request, response, session)
         if !waitsOn { onReplied() }
+    }
+
+    private func answerQuestion(_ answer: String, whileWorking: Bool) {
+        guard let id = sessionID, let session = model.store.sessions.first(where: { $0.id == id }) else { return }
+        Task {
+            await model.submitCodex(CodexComposerDraft(inputs: [.text(answer)]),
+                                    action: whileWorking ? .steer : .automatic, to: session)
+        }
+        onReplied()
     }
 
     /// Which task it is, where it is and how it is, with Open task and Close preview at its end.

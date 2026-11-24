@@ -177,12 +177,13 @@ enum ConversationStyle {
         return button
     }
 
-    /// The Mac's bordered button: its title on a gray fill, without a border.
+    /// The Mac's bordered button: its title on a gray fill with a subtle hairline border.
     static func grayButton(_ title: String, action: @escaping @MainActor () -> Void) -> Button {
         let button = Button()
         button.content = title
         button.cornerRadius = corners(6)
-        paint(button, prefix: "Button", fill: buttonFill, over: buttonFillOver, pressed: buttonFillPressed)
+        paint(button, prefix: "Button", fill: buttonFill, over: buttonFillOver, pressed: buttonFillPressed,
+              border: WindowsTheme.separator)
         try? AutomationProperties.setName(button, title)
         button.click.addHandler { _, _ in action() }
         return button
@@ -201,20 +202,24 @@ enum ConversationStyle {
     }
 
     /// Gives `button` its fills by the theme resources its template reads (Windows' lightweight styling), so they
-    /// hold under the pointer, pressed and disabled too, and no border.
+    /// hold under the pointer, pressed and disabled too, with an optional hairline border.
     private static func paint(_ button: ContentControl, prefix: String, state: String = "", fill: ThemeColor,
-                              over: ThemeColor, pressed: ThemeColor, foreground: ThemeColor? = nil) {
+                              over: ThemeColor, pressed: ThemeColor, foreground: ThemeColor? = nil,
+                              border: ThemeColor? = nil) {
         let resources = button.resources!
+        let stroke = border ?? clear
         let states: [(String, ThemeColor)] = [("", fill), ("PointerOver", over), ("Pressed", pressed), ("Disabled", fill)]
         for (suffix, color) in states {
             _ = resources.insert(prefix + "Background" + state + suffix, color.brush)
-            _ = resources.insert(prefix + "BorderBrush" + state + suffix, clear.brush)
+            _ = resources.insert(prefix + "BorderBrush" + state + suffix, stroke.brush)
             if let foreground {
                 _ = resources.insert(prefix + "Foreground" + state + suffix, foreground.brush)
             }
         }
         button.background = fill.brush
-        button.borderThickness = Thickness(left: 0, top: 0, right: 0, bottom: 0)
+        let line: Double = border == nil ? 0 : 1
+        button.borderBrush = stroke.brush
+        button.borderThickness = Thickness(left: line, top: line, right: line, bottom: line)
         if let foreground { button.foreground = foreground.brush }
     }
 
