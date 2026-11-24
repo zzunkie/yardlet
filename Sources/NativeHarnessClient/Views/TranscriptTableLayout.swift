@@ -30,16 +30,31 @@ struct TranscriptTableLayout: Layout {
         let heights: [CGFloat]
     }
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let sizes = measure(subviews, width: proposal.width)
+    /// What one layout pass, and the passes after it until the cells change, measure again otherwise: SwiftUI
+    /// asks a table's size several times for one proposal, and a resize asks again at widths that leave many
+    /// columns as they were. `updateCache` empties it whenever the cells or the layout change.
+    struct Cache {
+        /// Each column's widest content on one line and longest word.
+        var columns: (content: [CGFloat], words: [CGFloat])?
+        var measurements: [CGFloat?: Measurements] = [:]
+        /// A cell's height at a width, by its index.
+        var heights: [Int: [CGFloat: CGFloat]] = [:]
+    }
+
+    func makeCache(subviews: Subviews) -> Cache { Cache() }
+
+    func updateCache(_ cache: inout Cache, subviews: Subviews) { cache = Cache() }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
+        let sizes = measure(subviews, width: proposal.width, cache: &cache)
         return CGSize(
             width: sizes.widths.reduce(0, +) + spacing(sizes.widths.count),
             height: sizes.heights.reduce(0, +) + CGFloat(max(0, sizes.heights.count - 1)) * rowSpacing
         )
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let sizes = measure(subviews, width: proposal.width)
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        let sizes = measure(subviews, width: proposal.width, cache: &cache)
         guard columns > 0 else { return }
         var y = bounds.minY
         for row in sizes.heights.indices {
@@ -62,13 +77,21 @@ struct TranscriptTableLayout: Layout {
         CGFloat(max(0, count - 1)) * columnSpacing
     }
 
-    private func measure(_ subviews: Subviews, width: CGFloat?) -> Measurements {
+    private func measure(_ subviews: Subviews, width: CGFloat?, cache: inout Cache) -> Measurements {
         guard columns > 0, !subviews.isEmpty else { return Measurements(widths: [], heights: []) }
-        var content = Array(repeating: CGFloat.zero, count: columns)
-        var words = Array(repeating: CGFloat.zero, count: columns)
-        for index in subviews.indices {
-            content[index % columns] = max(content[index % columns], subviews[index].sizeThatFits(.unspecified).width)
-            words[index % columns] = max(words[index % columns], subviews[index][LongestWord.self])
+        if let measured = cache.measurements[width] { return measured }
+        let content: [CGFloat], words: [CGFloat]
+        if let columns = cache.columns {
+            (content, words) = columns
+        } else {
+            var widest = Array(repeating: CGFloat.zero, count: columns)
+            var longest = Array(repeating: CGFloat.zero, count: columns)
+            for index in subviews.indices {
+                widest[index % columns] = max(widest[index % columns], subviews[index].sizeThatFits(.unspecified).width)
+                longest[index % columns] = max(longest[index % columns], subviews[index][LongestWord.self])
+            }
+            (content, words) = (widest, longest)
+            cache.columns = (widest, longest)
         }
         let widths = if let width {
             Self.columnWidths(content: content, words: words, available: width - spacing(columns),
@@ -80,10 +103,20 @@ struct TranscriptTableLayout: Layout {
         }
         var heights = Array(repeating: CGFloat.zero, count: (subviews.count + columns - 1) / columns)
         for index in subviews.indices {
-            let size = subviews[index].sizeThatFits(ProposedViewSize(width: widths[index % columns], height: nil))
-            heights[index / columns] = max(heights[index / columns], size.height)
+            let cellWidth = widths[index % columns]
+            let height = cache.heights[index]?[cellWidth] ?? {
+                let height = subviews[index].sizeThatFits(ProposedViewSize(width: cellWidth, height: nil)).height
+                if cache.heights[index]?.count ?? 0 >= 8 { cache.heights[index] = [:] }
+                cache.heights[index, default: [:]][cellWidth] = height
+                return height
+            }()
+            heights[index / columns] = max(heights[index / columns], height)
         }
-        return Measurements(widths: widths, heights: heights)
+        let measured = Measurements(widths: widths, heights: heights)
+        // A live resize proposes a new width at every step; keep a few rather than every one.
+        if cache.measurements.count >= 8 { cache.measurements.removeAll() }
+        cache.measurements[width] = measured
+        return measured
     }
 
     /// The columns' widths in `available` points, from each column's widest content on one line and

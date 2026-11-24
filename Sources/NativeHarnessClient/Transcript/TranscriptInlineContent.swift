@@ -122,12 +122,16 @@ private extension Strikethrough {
 /// task's folder, absolute, or under the home folder. Only a file or folder that is there links (a
 /// folder opens in Finder); a word that merely looks like a path stays code.
 enum TranscriptFileReference {
+    /// Prepared once: a regex literal compiles its program again in every call that evaluates it, and a long
+    /// answer asks about each of its code spans. A regex is immutable once made (its program is prepared under a
+    /// lock), so sharing it across threads is safe though `Regex` is not marked `Sendable`.
+    nonisolated(unsafe) private static let pathAndLine = /^(.+?)(?::([0-9]+)(?::[0-9]+)?|#L([0-9]+)(?:-L?[0-9]+)?)?$/
     /// The path a code span names and the line it names, if any, by the span's text alone: what `url(for:in:)` looks
     /// for on disk.
     static func path(in code: String) -> (path: String, line: Substring?)? {
         let text = code.trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty, text.count <= 1_024, !text.contains("\n"), !text.contains("://"),
-              let match = text.wholeMatch(of: /^(.+?)(?::([0-9]+)(?::[0-9]+)?|#L([0-9]+)(?:-L?[0-9]+)?)?$/)
+              let match = text.wholeMatch(of: pathAndLine)
         else { return nil }
         let path = String(match.1)
         // A path, not a word: it has a folder or an extension.

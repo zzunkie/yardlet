@@ -223,13 +223,26 @@ struct TranscriptProseBuilder {
         return font
     }
 
+    private struct MarkerFontKey: Hashable {
+        let font: InterfaceFont
+        let size: CGFloat
+    }
+
+    /// Made once per font and size: a descriptor with features is slow to make into a font, and every list
+    /// item of every message asks for one.
+    private static var markerFonts: [MarkerFontKey: NSFont] = [:]
+
     private func markerFont() -> NSFont {
+        let key = MarkerFontKey(font: style.uiFont, size: bodySize)
+        if let font = Self.markerFonts[key] { return font }
         let base = style.uiFont.font(size: bodySize)
         let descriptor = base.fontDescriptor.addingAttributes([
             .featureSettings: [[NSFontDescriptor.FeatureKey.typeIdentifier: kNumberSpacingType,
                                 NSFontDescriptor.FeatureKey.selectorIdentifier: kMonospacedNumbersSelector]]
         ])
-        return NSFont(descriptor: descriptor, size: bodySize) ?? base
+        let font = NSFont(descriptor: descriptor, size: bodySize) ?? base
+        Self.markerFonts[key] = font
+        return font
     }
 
     // MARK: - Building

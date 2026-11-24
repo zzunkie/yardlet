@@ -19,7 +19,7 @@ extension RemoteHostPlatform {
             },
             interfaces: RemoteAddressSelection.systemInterfaces,
             resolveName: RemoteAddressSelection.magicDNSName(for:),
-            isOnPower: { !PowerConditions.current().onBattery },
+            isOnPower: { !PowerSourceWatch.shared.current().onBattery },
             holdAwake: { reason in
                 let activity = ProcessInfo.processInfo.beginActivity(options: [.idleSystemSleepDisabled], reason: reason)
                 return { ProcessInfo.processInfo.endActivity(activity) }

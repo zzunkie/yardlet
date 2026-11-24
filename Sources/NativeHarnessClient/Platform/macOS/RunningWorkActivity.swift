@@ -52,7 +52,7 @@ import YardletLidSleep
     var notify: (@MainActor (String, String, String) -> Void)?
 
     init(defaults: UserDefaults = .yardlet,
-         conditions: @escaping @MainActor () -> PowerConditions = PowerConditions.current,
+         conditions: @escaping @MainActor () -> PowerConditions = { PowerSourceWatch.shared.current() },
          lidHelper: LidSleepHelper? = nil,
          lidIsClosed: @escaping @MainActor () -> Bool = Clamshell.isClosed) {
         self.defaults = defaults
@@ -78,6 +78,8 @@ import YardletLidSleep
     func follow(_ model: AppModel) {
         guard followed !== model else { return }
         followed = model
+        // The battery is read off the main thread; a reading that changed it says so here.
+        PowerSourceWatch.shared.onChange { [weak self] in self?.refresh() }
         let center = NotificationCenter.default
         observers = [
             // Delivered on the writing thread and passed on without holding it, as `MenuBarStatusItem`
