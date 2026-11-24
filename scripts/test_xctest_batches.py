@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """Unit tests for scripts/xctest-batches.py batch planning and timing persistence."""
+import argparse
 import collections
+import contextlib
 import heapq
+import io
 import importlib.machinery
 import importlib.util
 import os
 import tempfile
+import time
 import unittest
 
 SCRIPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "xctest-batches.py")
@@ -123,6 +127,48 @@ class XCTestBatchesTests(unittest.TestCase):
         })
         batch = ["T.WholeA/t1", "T.PartialB/p1", "T.WholeA/t2"]
         self.assertEqual(run.selector(batch), "T.WholeA,T.PartialB/p1")
+
+    def test_a_silent_batch_is_named_then_ended_with_what_its_test_started(self):
+        # A fake xctest: a test named `hang…` starts a child in a process group of its own, as
+        # Foundation's `Process` does, that holds the output pipe open, so the batch ends only when
+        # everything in its session is ended.
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = os.path.join(tmp, "xctest")
+            with open(fake, "w") as file:
+                file.write("""#!/bin/sh
+IFS=,
+for t in $2; do
+  echo "Test Case '-[${t%/*} ${t#*/}]' started."
+  case ${t#*/} in hang*) set -m; sleep 30 & wait ;; esac
+  echo "Test Case '-[${t%/*} ${t#*/}]' passed (0.001 seconds)."
+done
+echo "Test Suite 'Selected tests' passed at now."
+""")
+            os.chmod(fake, 0o755)
+            tests = ["T.ATests/test1", "T.ATests/hang2", "T.ATests/test3"]
+            saved = (xctest_batches.xcrun, xctest_batches.STALL_WARNING, xctest_batches.STALL_LIMIT)
+            xctest_batches.xcrun = lambda *arguments: fake if arguments[0] == "--find" else tmp
+            xctest_batches.STALL_WARNING, xctest_batches.STALL_LIMIT = 0.4, 1.0
+            try:
+                arguments = argparse.Namespace(verbose=False, bundle=os.path.join(tmp, "T.xctest"), workers=1,
+                                               times_file="")
+                run = xctest_batches.Run(arguments, tests, collections.Counter({"T.ATests": 4}))
+                output = io.StringIO()
+                began = time.monotonic()
+                with contextlib.redirect_stdout(output):
+                    status = run.start()
+                elapsed = time.monotonic() - began
+            finally:
+                xctest_batches.xcrun, xctest_batches.STALL_WARNING, xctest_batches.STALL_LIMIT = saved
+        self.assertEqual(status, 1)
+        self.assertLess(elapsed, 10.0)
+        self.assertEqual({test: result for test, (result, _) in run.results.items()},
+                         {"T.ATests/test1": "passed", "T.ATests/hang2": "failed", "T.ATests/test3": "passed"})
+        log = output.getvalue()
+        self.assertIn("batch 1 started (3 tests, ATests)", log)
+        self.assertIn("has printed nothing for", log)
+        self.assertIn("still in T.ATests/hang2", log)
+        self.assertIn("T.ATests/hang2 (xctest ended with no output for 1 s during this test)", log)
 
 
 if __name__ == "__main__":

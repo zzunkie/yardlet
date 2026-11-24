@@ -13,7 +13,13 @@ durations are merged back into `--times-file` when the run finishes.
 A batch whose process crashes or ends before its last test reports the test it was in as failed and
 runs the rest of its tests again in a new process, so every test still gets a result of its own, as
 it would in a process of its own. A process that ends badly between tests or after its last one
-fails the run too.
+fails the run too. A batch that prints nothing for STALL_WARNING seconds is named, with the test it
+is in, every STALL_WARNING seconds; one that prints nothing for STALL_LIMIT seconds is ended the
+same way, so a test that hangs fails with its name rather than running out the CI job's time.
+
+Each xctest process starts in a session of its own, away from the terminal, so a subprocess a test
+starts (a shell script, for instance) cannot stop the whole run by reading from or writing to the
+terminal, and ending a batch ends what its tests started too.
 
 The tests come from `swift test list --disable-swift-testing`, one `Target.Class/test` per line, and
 `--filter` and `--skip` select from them as they do for `swift test`. Each process gets the
@@ -48,6 +54,9 @@ LPT_LARGEST_BATCH = 64
 SMALLEST_BATCH = 4
 LPT_BATCHES_PER_WORKER = 12
 LPT_MIN_TARGET_SECONDS = 10.0
+# A test prints a line as it starts and ends, and the slowest take well under a minute on CI.
+STALL_WARNING = 120.0
+STALL_LIMIT = 300.0
 
 
 def test_key(test_id):
@@ -228,6 +237,7 @@ class Run:
         self.failures = []  # (what, why, output lines)
         self.processes = 0
         self.children = set()
+        self.running = {}  # batch number -> Batch while its process runs
         self.stopping = False
         self.xctest = xcrun("--find", "xctest")
         # The macOS SDK's platform by name: an SDKROOT that names Command Line Tools' SDK, as some CI
@@ -248,6 +258,7 @@ class Run:
         threads = [threading.Thread(target=self.work, daemon=True) for _ in range(self.workers)]
         for thread in threads:
             thread.start()
+        threading.Thread(target=self.watch, daemon=True).start()
         for thread in threads:
             while thread.is_alive():
                 thread.join(0.5)
@@ -273,10 +284,7 @@ class Run:
             children = list(self.children)
             self.condition.notify_all()
         for child in children:
-            try:
-                child.terminate()
-            except ProcessLookupError:
-                pass
+            end_session(child, signal.SIGTERM)
         print(f"Stopped by signal {signal_number}; ended {len(children)} xctest processes.", file=sys.stderr)
 
     def work(self):
@@ -299,13 +307,36 @@ class Run:
                     self.active -= 1
                     self.condition.notify_all()
 
+    def watch(self):
+        """Names each batch that has printed nothing for a while, and ends one that has for too long."""
+        while True:
+            time.sleep(min(STALL_WARNING, STALL_LIMIT) / 8)
+            now = time.monotonic()
+            with self.condition:
+                if self.stopping:
+                    return
+                for number, batch in self.running.items():
+                    quiet = now - batch.last_output
+                    if quiet >= STALL_LIMIT and not batch.stalled:
+                        batch.stalled = True
+                        print(f"batch {number} ({batch.span}) printed nothing for {quiet:.0f} s"
+                              f"{f' in {batch.current}' if batch.current else ''}; ending it.", flush=True)
+                        end_session(batch.process, signal.SIGKILL)
+                    elif quiet >= STALL_WARNING and now - batch.last_warning >= STALL_WARNING:
+                        batch.last_warning = now
+                        print(f"batch {number} ({batch.span}) has printed nothing for {quiet:.0f} s"
+                              f"{f'; still in {batch.current}' if batch.current else ''}.", flush=True)
+
     def run_batch(self, batch, number):
         began = time.monotonic()
         process = subprocess.Popen([self.xctest, "-XCTest", self.selector(batch), self.bundle],
                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                   env=self.environment, text=True, errors="replace")
+                                   env=self.environment, text=True, errors="replace", start_new_session=True)
+        watched = Batch(process, span_of(batch), began)
         with self.condition:
             self.children.add(process)
+            self.running[number] = watched
+            print(f"batch {number} started ({len(batch)} tests, {watched.span})", flush=True)
         lines = []
         spans = {}  # test -> [first line, last line]
         finished = {}  # test -> (result, seconds)
@@ -313,9 +344,11 @@ class Run:
         ended = False
         for line in process.stdout:
             lines.append(line)
+            watched.last_output = time.monotonic()
             match = CASE_START.match(line)
             if match:
                 current = f"{match.group(1)}/{match.group(2)}"
+                watched.current = current
                 spans[current] = [len(lines) - 1, len(lines)]
                 continue
             match = CASE_END.match(line)
@@ -325,6 +358,7 @@ class Run:
                 if test in spans:
                     spans[test][1] = len(lines)
                 current = None
+                watched.current = None
                 continue
             if RUN_END.match(line):
                 ended = True
@@ -333,6 +367,7 @@ class Run:
         status = process.wait()
         with self.condition:
             self.children.discard(process)
+            del self.running[number]
             if self.stopping:
                 return
         failures = []
@@ -342,6 +377,8 @@ class Run:
         remaining = [test for test in batch if test not in finished and test != current]
         retry = []
         ending = f"signal {-status}" if status < 0 else f"exit status {status}"
+        if watched.stalled:
+            ending = f"no output for {STALL_LIMIT:.0f} s"
         if status in (0, 1) and ended:
             for test in remaining:
                 failures.append((test, "listed but not run", []))
@@ -370,8 +407,6 @@ class Run:
                 self.queue.appendleft(retry)
             done = len(self.results)
             seconds = time.monotonic() - began
-            classes = sorted({test.split("/")[0].split(".")[-1] for test in batch})
-            span = classes[0] if len(classes) == 1 else f"{classes[0]} … {classes[-1]}"
             note = f"; {len(retry)} tests left run again in a new process" if retry else ""
             if self.verbose:
                 sys.stdout.writelines(lines)
@@ -379,7 +414,7 @@ class Run:
                 for test, why, output in failures:
                     sys.stdout.writelines(output)
             failed = sum(1 for test, _, _ in failures)
-            print(f"[{done}/{self.total}] batch {number} ({len(batch)} tests, {span}) took {seconds:.1f} s: "
+            print(f"[{done}/{self.total}] batch {number} ({len(batch)} tests, {watched.span}) took {seconds:.1f} s: "
                   f"{failed} failed{note}", flush=True)
 
     def selector(self, batch):
@@ -396,6 +431,39 @@ class Run:
             else:
                 named.append(test)
         return ",".join(named)
+
+
+class Batch:
+    """A batch's process while it runs, and what the watch needs to know about it."""
+
+    def __init__(self, process, span, began):
+        self.process = process
+        self.span = span
+        self.last_output = began
+        self.last_warning = began
+        self.current = None
+        self.stalled = False
+
+
+def span_of(batch):
+    classes = sorted({test.split("/")[0].split(".")[-1] for test in batch})
+    return classes[0] if len(classes) == 1 else f"{classes[0]} … {classes[-1]}"
+
+
+def end_session(process, signal_number):
+    """Ends an xctest process and whatever its tests started: everything in the session it leads.
+
+    A test's subprocess may have a process group of its own (Foundation's `Process` gives it one), so
+    the session is what holds them all, even after their parent has ended. A session's ID is not
+    reused while anything is in it.
+    """
+    listing = subprocess.run(["ps", "-ax", "-o", "pid="], capture_output=True, text=True).stdout
+    for pid in (int(field) for field in listing.split()):
+        try:
+            if os.getsid(pid) == process.pid:
+                os.kill(pid, signal_number)
+        except (ProcessLookupError, PermissionError):
+            pass
 
 
 def xcrun(*arguments):
