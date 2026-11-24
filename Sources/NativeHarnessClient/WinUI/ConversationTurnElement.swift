@@ -10,6 +10,9 @@ struct ConversationTurnContext {
     let workspaceURL: URL?
     /// The card for a request, the same one while the request is in the turn (`ConversationTimeline`).
     let card: (ConversationRequest, ConversationTurn) -> RequestCard
+    /// The card for a turn's Codex async questions (`ConversationTimeline`).
+    var questionCard: ((ConversationTurn, [CodexAsyncQuestion], [String: ConversationQuestionAnswer]?,
+                        (@MainActor (String) -> Void)?) -> CodexQuestionCard)? = nil
     /// Retries a turn by its ID, where the task can (`AppModel.retryTurn`).
     let retry: (@MainActor (String) -> Void)?
     let signIn: HarnessSignIn?
@@ -17,6 +20,10 @@ struct ConversationTurnContext {
     var restoreRequest: (@MainActor (CodexComposerDraft) -> Void)? = nil
     /// Starts editing the turn's message in the composer (its Edit message); nil where the task cannot.
     var editMessage: (@MainActor (ConversationTurn) -> Void)? = nil
+    /// Sends the person's answer to a Codex async question once the turn ended.
+    var answerQuestion: (@MainActor (String, String) -> Void)? = nil
+    /// Sends the person's answer to a Codex async question into a running turn.
+    var answerQuestionWhileWorking: (@MainActor (String, String) -> Void)? = nil
     /// The task's notices and its limit card's actions (`AppModel.providerNotices`).
     var notices: TaskProviderNotices? = nil
     /// The limit card the task continues from (`ConversationPresentation.limitCardEntryID`).
@@ -90,12 +97,26 @@ final class ConversationTurnElement {
             for stretch in ConversationWorkGrouping.stretchesWhenFolded(turn, live: live) { add(stretch, foldsWork: foldsWork) }
         }
         for item in turn.answers { add(item) }
+        if let answered = turn.actions.answeredQuestions, let make = context.questionCard {
+            make(turn, answered.questions, answered.answers, nil).place(in: view)
+        } else if turn.status.isTerminal, !turn.actions.questionsToAnswer.isEmpty, let make = context.questionCard {
+            let turnID = turn.id
+            let send: (@MainActor (String) -> Void)? = context.answerQuestion.map { answer in { answer(turnID, $0) } }
+            make(turn, turn.actions.questionsToAnswer, nil, send).place(in: view)
+        }
         if let live {
             view.children.append(liveLine(live))
         } else if workShows, let line = statusLine(turn.progress) {
             view.children.append(line)
         }
         if let outcome = turn.outcome { view.children.append(outcomeCard(outcome, isTurnOutcome: true)) }
+        if !turn.status.isTerminal, !turn.actions.questionsToAnswer.isEmpty, let make = context.questionCard {
+            let turnID = turn.id
+            let send: (@MainActor (String) -> Void)? = context.answerQuestionWhileWorking.map { answer in
+                { answer(turnID, $0) }
+            }
+            make(turn, turn.actions.questionsToAnswer, nil, send).place(in: view)
+        }
         followTime()
     }
 

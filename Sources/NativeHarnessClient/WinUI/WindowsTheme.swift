@@ -16,7 +16,7 @@ enum WindowsTheme {
     static let contentWidth: Double = 768
     /// The conversation's and the composer's gutter.
     static let conversationInset: Double = 32
-    static let composerCornerRadius: Double = 12
+    static let composerCornerRadius: Double = 14
     static let panelCornerRadius: Double = 12
     static let bodyFontSize: Double = 14
     /// The space between a message's paragraphs, lists and code blocks.
@@ -30,22 +30,30 @@ enum WindowsTheme {
     static let secondaryText = ThemeColor(light: .ink(0.50), dark: .paper(0.55))
     /// Text that recedes further, such as times, as the Mac's tertiary label.
     static let tertiaryText = ThemeColor(light: .ink(0.26), dark: .paper(0.25))
-    static let separator = ThemeColor(light: .ink(0.10), dark: .paper(0.10))
-    static let strongSeparator = ThemeColor(light: .ink(0.12), dark: .paper(0.12))
+    static let separator = ThemeColor(light: .ink(0.095), dark: .paper(0.105))
+    static let strongSeparator = ThemeColor(light: .ink(0.16), dark: .paper(0.18))
     static let subtleFill = ThemeColor(light: .ink(0.035), dark: .paper(0.035))
     /// The chosen row's fill.
     static let selectedFill = ThemeColor(light: .ink(0.095), dark: .paper(0.095))
     /// The fill of a row or button under the pointer.
-    static let hoverFill = ThemeColor(light: .ink(0.065), dark: .paper(0.065))
+    static let hoverFill = ThemeColor(light: .ink(0.062), dark: .paper(0.062))
     /// Raised surfaces such as cards.
-    static let elevated = ThemeColor(light: .gray(1), dark: .gray(0.135))
+    static let elevated = ThemeColor(light: .gray(1), dark: .rgb(0.153, 0.157, 0.173))
     /// The composer's field.
-    static let input = ThemeColor(light: .gray(1), dark: .gray(0.155))
+    static let input = ThemeColor(light: .gray(1), dark: .rgb(0.173, 0.176, 0.192))
+    /// A waiting request's panel: the elevated surface shaded slightly darker in light and lighter in dark, so the
+    /// docked panel stands apart from the canvas and the composer in both appearances.
+    static let requestPanelFill = ThemeColor(light: .rgb(0.955, 0.955, 0.957), dark: .rgb(0.191, 0.195, 0.210))
+    /// Crisp tinted surface for sent user message bubbles.
+    static let userBubbleFill = ThemeColor(light: .rgb(0.949, 0.953, 0.961), dark: .rgb(0.137, 0.145, 0.165))
     /// A primary action such as Send: dark on light, light on dark.
     static let primaryActionFill = ThemeColor(light: .gray(0.20), dark: .gray(0.88))
     static let primaryActionForeground = ThemeColor(light: .gray(1), dark: .gray(0.12))
-    /// Yardlet's accent, for links and what the Mac draws in its accent.
-    static let accent = ThemeColor(light: .rgb(0.08, 0.23, 0.42), dark: .rgb(0.55, 0.72, 0.98))
+    /// Yardlet's softened slate-blue accent, for links and what the Mac draws in its accent.
+    static let accent = ThemeColor(light: .rgb(0.16, 0.36, 0.62), dark: .rgb(0.47, 0.65, 0.89))
+    /// Softened accent border for a focused composer card.
+    static let composerFocusBorder = ThemeColor(light: .rgba(0.16, 0.36, 0.62, 0.32),
+                                                dark: .rgba(0.47, 0.65, 0.89, 0.38))
 
     // MARK: Following Windows' appearance
 
@@ -110,6 +118,9 @@ extension UWP.Color {
     }
     static func rgb(_ red: Double, _ green: Double, _ blue: Double) -> UWP.Color {
         UWP.Color(a: 255, r: byte(red), g: byte(green), b: byte(blue))
+    }
+    static func rgba(_ red: Double, _ green: Double, _ blue: Double, _ alpha: Double) -> UWP.Color {
+        UWP.Color(a: byte(alpha), r: byte(red), g: byte(green), b: byte(blue))
     }
 
     private static func byte(_ value: Double) -> UInt8 { UInt8((min(max(value, 0), 1) * 255).rounded()) }

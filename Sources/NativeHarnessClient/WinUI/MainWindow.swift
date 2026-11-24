@@ -105,6 +105,8 @@ final class MainWindow {
         timeline.retry = { [weak self] turnID in self?.retry(turnID) }
         timeline.restoreRequest = { [weak self] draft in self?.restoreRequest(draft) }
         timeline.editMessage = { [weak self] turn in self?.editMessage(turn) }
+        timeline.answerQuestion = { [weak self] _, answer in self?.answerQuestion(answer, whileWorking: false) }
+        timeline.answerQuestionWhileWorking = { [weak self] _, answer in self?.answerQuestion(answer, whileWorking: true) }
         timeline.signIn = signIn
         let importPane = ImportConversationPane(model: model, log: log) { [weak self] in self?.windowHandle ?? 0 }
         importPane.onImported = { [weak self] in self?.showSelectedTask() }
@@ -342,6 +344,16 @@ final class MainWindow {
         guard let session = selectedSession else { return }
         log.write("retry: \(turnID)")
         Task { await model.retryTurn(turnID, in: session) }
+    }
+
+    /// Sends the person's answer to a Codex async question, steering into a running turn or starting the next turn.
+    private func answerQuestion(_ answer: String, whileWorking: Bool) {
+        guard let session = selectedSession else { return }
+        log.write("answered codex question")
+        Task {
+            await model.submitCodex(CodexComposerDraft(inputs: [.text(answer)]),
+                                    action: whileWorking ? .steer : .automatic, to: session)
+        }
     }
 
     /// Puts a failed turn's request back in the composer without sending it, as the Mac's error card's Edit request

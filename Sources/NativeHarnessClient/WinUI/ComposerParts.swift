@@ -152,7 +152,7 @@ enum ComposerParts {
     /// Send, the Mac's primary action: a dark rounded square with an arrow, dimmed while there is nothing to send.
     static func sendButton(name: String) -> Button {
         let button = iconButton(Glyph.arrowUp, name: name, size: 13, foreground: WindowsTheme.primaryActionForeground,
-                                fill: WindowsTheme.primaryActionFill, radius: 7)
+                                fill: WindowsTheme.primaryActionFill, radius: 6)
         setEnabled(button, false)
         return button
     }
@@ -259,7 +259,7 @@ enum ComposerParts {
     }
 }
 
-/// The Mac's composer card (`ComposerEditor`): rounded 12, filled as an input, a hairline around it that strengthens
+/// The Mac's composer card (`ComposerEditor`): rounded 14, filled as an input, a hairline around it that strengthens
 /// while the text has focus. Top to bottom: what waits above the text (the queue), what the message carries, the text,
 /// a notice in orange, and the bottom row, its controls at the start and its actions at the end. The task's composer
 /// and New task's compose theirs into it; the field is Windows' own text box, its frame and fill left to the card.
@@ -369,7 +369,7 @@ final class ComposerCard {
         grid.children.append(bottom)
         view.child = grid
 
-        field.gotFocus.addHandler { [weak self] _, _ in self?.view.borderBrush = WindowsTheme.strongSeparator.brush }
+        field.gotFocus.addHandler { [weak self] _, _ in self?.view.borderBrush = WindowsTheme.composerFocusBorder.brush }
         field.lostFocus.addHandler { [weak self] _, _ in self?.view.borderBrush = WindowsTheme.separator.brush }
     }
 

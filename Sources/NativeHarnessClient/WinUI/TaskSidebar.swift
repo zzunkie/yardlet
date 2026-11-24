@@ -193,9 +193,11 @@ final class TaskSidebar {
         for key in ["TextControlBackground", "TextControlBackgroundPointerOver"] {
             _ = resources?.insert(key, WindowsTheme.subtleFill.brush)
         }
-        for key in ["TextControlBorderBrush", "TextControlBorderBrushPointerOver"] {
-            _ = resources?.insert(key, SidebarStyle.clear)
-        }
+        _ = resources?.insert("TextControlBorderBrush", WindowsTheme.separator.brush)
+        _ = resources?.insert("TextControlBorderBrushPointerOver", WindowsTheme.strongSeparator.brush)
+        _ = resources?.insert("TextControlBorderBrushFocused", WindowsTheme.strongSeparator.brush)
+        search.borderBrush = WindowsTheme.separator.brush
+        search.borderThickness = Thickness(left: 1, top: 1, right: 1, bottom: 1)
         search.textChanged.addHandler { [weak self] _, _ in
             guard let self else { return }
             let words = self.search.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -492,7 +494,7 @@ final class SidebarProjectSection {
     var onNewTask: () -> Void = {}
     private let headerRow = Grid()
     private let hoverButtons = StackPanel()
-    private let name = SidebarStyle.label("")
+    private let name = SidebarStyle.label("", semibold: true)
     private let caret = SidebarStyle.glyph("\u{E76C}", size: 8, color: WindowsTheme.secondaryText)
     private let end = Grid()
     private let more = Button()
