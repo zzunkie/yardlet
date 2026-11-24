@@ -36,6 +36,8 @@ struct ConversationSentMessage: View {
     var backgroundTaskNotice: ClaudeTaskNotification? = nil
     var phase: ConversationItemPhase = .completed
     var isHistoryMatch = false
+    /// When it was sent, shown with its actions; nil when no record says.
+    var recordedAt: Date? = nil
 
     @Environment(\.yardletInterfaceScale) private var interfaceScale
     @Environment(\.taskSuggestionActions) private var taskActions
@@ -159,7 +161,8 @@ struct ConversationSentMessage: View {
             if isSentByScheduledTask {
                 scheduledTaskLabel
             }
-            SentUserMessage(copyText: text, images: images, minimumLeadingSpace: ConversationLayout.sentMessageLeadingSpace) {
+            SentUserMessage(copyText: text, images: images, minimumLeadingSpace: ConversationLayout.sentMessageLeadingSpace,
+                            recordedAt: recordedAt) {
                 VStack(alignment: .trailing, spacing: 6) {
                     if drawsChips, let attachments {
                         CodexPromptAttachmentRow(attachments: attachments, imagePaths: imagePaths)
@@ -356,6 +359,8 @@ struct ConversationAgentMessage: View {
     /// "Copy item details" in the message's context menu (Codex's item handoff).
     var copyDetails: String? = nil
     var isHistoryMatch = false
+    /// When it was written, shown with its actions; nil when no record says.
+    var recordedAt: Date? = nil
 
     @Environment(\.conversationFind) private var find
     /// The turn's fork, when this is the turn's answer (`ConversationTurnAction`).
@@ -400,6 +405,9 @@ struct ConversationAgentMessage: View {
                         TranscriptCopyButton(title: L10n.string("Copy response")) { dialect.copyText(text) }
                     }
                     ConversationMessageActionButtons(actions: messageActions)
+                    if let recordedAt {
+                        ConversationMessageTime(date: recordedAt)
+                    }
                 }
             }
         }

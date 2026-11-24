@@ -256,11 +256,18 @@ final class CodexPersistedTimelineTests: XCTestCase {
     private static func referenceTranscript(_ state: CodexTaskState) -> [TranscriptEntry] {
         guard let thread = state.thread else { return [] }
         var entries: [TranscriptEntry] = []
-        let fixed = Date(timeIntervalSince1970: 1_600_000_000)
+        let unrecorded = TranscriptEntry.unrecordedTime
         for turn in thread.turns {
+            // Only a time the record names: the turn's start for its first request, its end for its
+            // last message, and no time otherwise.
+            let firstRequest = turn.items.first { if case .userMessage = $0.content { true } else { false } }?.id
+            let lastMessage = turn.items.last { if case .agentMessage = $0.content { true } else { false } }?.id
             for item in turn.items {
-                let createdAt = item.startedAt ?? item.completedAt ?? turn.startedAt ?? turn.completedAt
-                    ?? thread.updatedAt ?? thread.createdAt ?? fixed
+                let createdAt: Date = if case .agentMessage = item.content {
+                    item.completedAt ?? item.startedAt ?? (item.id == lastMessage ? turn.completedAt : nil) ?? unrecorded
+                } else {
+                    item.startedAt ?? item.completedAt ?? (item.id == firstRequest ? turn.startedAt : nil) ?? unrecorded
+                }
                 switch item.content {
                 case let .userMessage(message):
                     let sent = message.sentContent
@@ -284,7 +291,7 @@ final class CodexPersistedTimelineTests: XCTestCase {
             if let error = turn.error?.stringValue,
                !error.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 entries.append(TranscriptEntry(
-                    createdAt: turn.completedAt ?? turn.startedAt ?? fixed,
+                    createdAt: turn.completedAt ?? turn.startedAt ?? unrecorded,
                     content: .error(message: error, recoverable: false)
                 ))
             }

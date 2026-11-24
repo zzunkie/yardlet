@@ -98,6 +98,53 @@ struct ConversationMessageActionButtons: View {
     }
 }
 
+/// When a message was sent or written, beside its actions and shown with them: the time alone for
+/// today's, its day too for an earlier one, and its year for one of an earlier year. Its whole date
+/// is in its tooltip. A message no record names a time for (`ConversationItem.recordedAt`) shows none.
+///
+/// The time is worded only while it shows, so the many messages out of reach of the pointer format
+/// nothing, and it reads the day as it is when shown, past midnight too. Until then a blank keeps the
+/// row's height.
+struct ConversationMessageTime: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @Environment(\.hoverRevealsActions) private var isHovering
+    @Environment(\.revealsSentMessageActions) private var revealsActions
+    let date: Date
+
+    var body: some View {
+        HoverRevealedAction {
+            Group {
+                if revealsActions || isHovering {
+                    Text(Self.text(for: date))
+                        .help(date.formatted(date: .complete, time: .shortened))
+                        .accessibilityLabel(date.formatted(date: .complete, time: .shortened))
+                } else {
+                    Text(verbatim: " ")
+                        .accessibilityHidden(true)
+                }
+            }
+            .font(.yardlet(.caption, scale: interfaceScale))
+            .monospacedDigit()
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
+            .fixedSize()
+        }
+    }
+
+    static func text(for date: Date, now: Date = Date(), calendar: Calendar = .current,
+                     locale: Locale = .autoupdatingCurrent) -> String {
+        var style = Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone)
+            .hour().minute()
+        if !calendar.isDate(date, inSameDayAs: now) {
+            style = style.month(.abbreviated).day()
+            if calendar.component(.year, from: date) != calendar.component(.year, from: now) {
+                style = style.year()
+            }
+        }
+        return date.formatted(style)
+    }
+}
+
 #if DEBUG
 /// A script capturing the showcase (`--ui-fixture-ignore-pointer`) shows no message's actions and no
 /// sidebar row's hover or hover card: whether one shows would depend on where the person's pointer

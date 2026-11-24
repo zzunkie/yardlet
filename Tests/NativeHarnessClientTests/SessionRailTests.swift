@@ -404,6 +404,10 @@ final class SessionRailTests: XCTestCase {
 
         let outputs = SessionRailContent.outputs(entries: builder.entries, codexChanges: [], workspaceURL: folder)
         XCTAssertEqual(outputs.map(\.name), ["report.md", "chart.png", "summary.txt"])
+        // Files a replay read back (`TranscriptEntry.unrecordedTime`) have no time to show.
+        let replayed = builder.entries.map { $0.made(at: TranscriptEntry.unrecordedTime) }
+        XCTAssertEqual(SessionRailContent.outputs(entries: replayed, codexChanges: [], workspaceURL: folder).map(\.writtenAt),
+                       [nil, nil, nil])
         let options = ComposerSessionOptions(harnessName: "Claude Code", input: HarnessComposerInputPolicy(harness: .claudeCode),
                                              submission: .providerInput)
         let rail = content(.claudeCode, options: options, entries: builder.entries)

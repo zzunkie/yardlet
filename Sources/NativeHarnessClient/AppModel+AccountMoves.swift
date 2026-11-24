@@ -338,7 +338,7 @@ extension AppModel {
         for entry in entries.reversed() where entry.id != card {
             switch entry.content {
             case .assistant, .reasoning, .activity:
-                return entry.createdAt
+                return entry.recordedAt
             case let .compaction(compaction) where compaction.phase == .completed:
                 return .distantPast
             default:

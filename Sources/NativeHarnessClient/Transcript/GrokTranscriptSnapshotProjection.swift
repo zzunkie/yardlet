@@ -124,9 +124,10 @@ enum GrokTranscriptSnapshotProjection {
                     )
                 } else {
                     entry = TranscriptEntry(
-                        createdAt: combinedAssistant.createdAt.addingTimeInterval(
-                            Double(assistantOffset) / 1_000_000
-                        ),
+                        // An answer at no time stays at none rather than a moment past it.
+                        createdAt: combinedAssistant.recordedAt.map {
+                            $0.addingTimeInterval(Double(assistantOffset) / 1_000_000)
+                        } ?? TranscriptEntry.unrecordedTime,
                         content: .assistant(text: segment.text, isStreaming: false)
                     )
                 }

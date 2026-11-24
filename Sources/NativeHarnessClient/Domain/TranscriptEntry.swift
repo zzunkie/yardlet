@@ -102,6 +102,25 @@ struct TranscriptEntry: Codable, Equatable, Identifiable, Sendable {
     /// the saved shape then.
     var turnStoppedAt: Date?
 
+    /// The time an entry stands at when no record says when it was made: a conversation read back
+    /// from a record without times (an ACP agent's `session/load` replay, another task's messages a
+    /// side chat starts from), or a saved record that names none. It keeps such entries before any
+    /// that have a time, and `recordedAt` reads it as none.
+    static let unrecordedTime = Date(timeIntervalSince1970: 0)
+
+    /// When the entry was made, as far as a record says: nil for an entry at `unrecordedTime` (or
+    /// before it, as a remote host's read stands), whose `createdAt` is no time anyone sent or
+    /// wrote it.
+    var recordedAt: Date? {
+        createdAt > Self.unrecordedTime ? createdAt : nil
+    }
+
+    /// The entry as it is, made at `date`.
+    func made(at date: Date) -> TranscriptEntry {
+        TranscriptEntry(id: id, createdAt: date, content: content, joinsRunningTurn: joinsRunningTurn, origin: origin,
+                        isProgressUpdate: isProgressUpdate, turnStoppedAt: turnStoppedAt)
+    }
+
     var pendingPermission: PermissionRequest? {
         if case let .permission(request, .pending) = content { return request }
         return nil

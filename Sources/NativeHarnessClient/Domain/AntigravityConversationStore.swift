@@ -518,7 +518,7 @@ enum AntigravityTranscriptParser {
             guard let record = try? JSONDecoder().decode(JSONValue.self, from: Data(raw)),
                   let type = record["type"]?.stringValue else { continue }
             let step = record["step_index"]?.integerValue.map(String.init) ?? "line-\(line)"
-            let createdAt = record["created_at"]?.stringValue.flatMap(isoDate) ?? Date(timeIntervalSince1970: 0)
+            let createdAt = record["created_at"]?.stringValue.flatMap(isoDate) ?? TranscriptEntry.unrecordedTime
             func id(_ part: String) -> UUID {
                 NameBasedUUID.make(namespace: namespace, name: "\(conversationID)|\(step)|\(part)")
             }

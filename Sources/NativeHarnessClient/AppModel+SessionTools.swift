@@ -2346,8 +2346,8 @@ extension AppModel: SessionToolHandling {
         var messages: [PersonMessage] = []
         for (index, turn) in turns.enumerated() {
             for (item, opensTurn) in turn.prompt.map({ ($0, true) }) + turn.work.map({ ($0, false) }) {
-                let sentAt: Date? = if case let .transcript(entry) = item.source { entry.createdAt } else {
-                    turn.timing.startedAt
+                let sentAt: Date? = if case let .transcript(entry) = item.source { entry.recordedAt } else {
+                    item.recordedAt ?? turn.timing.startedAt
                 }
                 switch item.kind {
                 case let .userMessage(text, _) where item.isPersonMessage:

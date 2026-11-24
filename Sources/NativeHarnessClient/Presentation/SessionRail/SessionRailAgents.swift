@@ -278,7 +278,7 @@ struct SessionRailAgents: Equatable {
     /// that started it, and its state is the agent's latest.
     private static func subtasks(in entries: [TranscriptEntry], harness: HarnessKind) -> [Agent] {
         var order: [String] = []
-        var latest: [String: (activity: HarnessActivity, state: TranscriptActivityState, startedAt: Date)] = [:]
+        var latest: [String: (activity: HarnessActivity, state: TranscriptActivityState, startedAt: Date?)] = [:]
         for entry in entries {
             guard case let .activity(activity, state) = entry.content else { continue }
             // A Claude Code Agent call before the CLI named its agent is an agent all the same.
@@ -290,7 +290,7 @@ struct SessionRailAgents: Equatable {
                 latest[id] = (activity, state, known.startedAt)
             } else {
                 order.append(id)
-                latest[id] = (activity, state, entry.createdAt)
+                latest[id] = (activity, state, entry.recordedAt)
             }
         }
         let taskIDs = Set(order.compactMap { latest[$0]?.activity.subtask?.taskID })
@@ -460,7 +460,7 @@ struct SessionRailAgents: Equatable {
             case .stopped: .stopped
             }
             let call = Call(id: activity.id, agentID: asked.agentID, prompt: asked.prompt, harness: asked.harness,
-                            model: asked.model, phase: status, startedAt: entry.createdAt)
+                            model: asked.model, phase: status, startedAt: entry.recordedAt)
             // The same call reported again (its result) replaces what it said while it ran.
             if let index = calls.lastIndex(where: { $0.id == call.id }),
                calls[index].phase == .running {

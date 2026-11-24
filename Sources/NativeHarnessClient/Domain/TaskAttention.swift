@@ -178,7 +178,7 @@ struct TaskLatestTurn: Equatable, Sendable {
             switch entry.content {
             case .user:
                 if entry.joinsRunningTurn == true { continue }
-                turn.startedAt = entry.createdAt
+                turn.startedAt = entry.recordedAt
                 return turn
             // Claude Code names the call `mcp__yardlet__spawn_task`, an ACP agent titles it `yardlet_spawn_task`.
             case let .activity(activity, _) where activity.kind.hasSuffix(TaskSuggestionToolCatalog.spawnTask)

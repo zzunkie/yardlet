@@ -53,6 +53,15 @@ final class GrokTranscriptSnapshotProjectionTests: XCTestCase {
             .assistant(text: "Done.", isStreaming: false)
         ])
         XCTAssertEqual(repaired[1].id, combined.id)
+
+        // A message at no time splits into messages at no time, not moments past it.
+        let unrecorded = try XCTUnwrap(GrokTranscriptSnapshotProjection.repairedEntries(
+            providerSessionID: fixture.providerSessionID,
+            existing: [user, combined.made(at: TranscriptEntry.unrecordedTime), read, execute, permission],
+            grokSessionsRoot: fixture.root
+        ))
+        XCTAssertEqual(unrecorded.filter { if case .assistant = $0.content { true } else { false } }.map(\.recordedAt),
+                       [nil, nil, nil])
     }
 
     func testFailsClosedWhenProviderNarrativeDoesNotExactlyMatchSnapshot() throws {

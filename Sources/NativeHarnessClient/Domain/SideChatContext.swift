@@ -55,15 +55,17 @@ struct SideChatContext: Codable, Hashable, Sendable {
         self.nativeForkSource = nativeForkSource
     }
 
+    /// The messages as entries, which carry no time: they were said before the side chat began.
     var readingEntries: [TranscriptEntry] {
-        messages.map { message in
-            if message.role == "user" { return TranscriptEntry(content: .user(text: message.text)) }
-            if message.role == "assistant-plan" { return TranscriptEntry(content: .plan(message.text)) }
+        let at = TranscriptEntry.unrecordedTime
+        return messages.map { message in
+            if message.role == "user" { return TranscriptEntry(createdAt: at, content: .user(text: message.text)) }
+            if message.role == "assistant-plan" { return TranscriptEntry(createdAt: at, content: .plan(message.text)) }
             if message.role == "tool-summary" {
-                return TranscriptEntry(content: .activity(
+                return TranscriptEntry(createdAt: at, content: .activity(
                     HarnessActivity(id: UUID().uuidString, kind: "context", title: message.text, detail: nil), state: .completed))
             }
-            return TranscriptEntry(content: .assistant(text: message.text, isStreaming: false))
+            return TranscriptEntry(createdAt: at, content: .assistant(text: message.text, isStreaming: false))
         }
     }
 

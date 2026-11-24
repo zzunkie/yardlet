@@ -297,7 +297,7 @@ enum TranscriptConversationProjection {
                 let schedule = ClaudeScheduledPrompt.reading(text)
                 let sent = item(entry, .scheduledTaskMessage(ConversationScheduledTaskMessage(
                     instructions: schedule.instructions, automationID: nil,
-                    currentTimeISO: entry.createdAt.ISO8601Format(), claudeSchedule: schedule.kind
+                    currentTimeISO: entry.recordedAt?.ISO8601Format() ?? "", claudeSchedule: schedule.kind
                 )), .completed)
                 if entry.id == input.entries[0].id, !input.isHead { prompt.append(sent) } else { work.append(sent) }
             case let .user(text, images):
@@ -436,9 +436,10 @@ enum TranscriptConversationProjection {
     /// show, nor does one Yardlet's quit cut off, which ran on past its last entry.
     private static func timing(_ entries: [TranscriptEntry], status: ConversationTurnStatus,
                                stoppedAt: Date?) -> ConversationTurnTiming {
-        let startedAt = entries.first?.createdAt
-        let lastAt = entries.last?.createdAt
-        let endedAt = [lastAt, stoppedAt].compactMap { $0 }.max()
+        // Only times a record names: entries a replay made as it read stand at no time.
+        let startedAt = entries.first?.recordedAt
+        let lastAt = entries.last?.recordedAt
+        let endedAt = [lastAt, stoppedAt.flatMap { $0 > TranscriptEntry.unrecordedTime ? $0 : nil }].compactMap { $0 }.max()
         guard status == .completed || status == .failed || (status == .interrupted && stoppedAt != nil),
               let startedAt, let endedAt, endedAt.timeIntervalSince(startedAt) >= 1 else {
             return ConversationTurnTiming(startedAt: startedAt, isApproximate: true)
@@ -501,7 +502,8 @@ enum TranscriptConversationProjection {
         _ kind: ConversationItemKind,
         _ phase: ConversationItemPhase
     ) -> ConversationItem {
-        ConversationItem(id: entry.id.uuidString, kind: kind, phase: phase, source: .transcript(entry))
+        ConversationItem(id: entry.id.uuidString, kind: kind, phase: phase, source: .transcript(entry),
+                         recordedAt: entry.recordedAt)
     }
 
     private static func phase(of state: TranscriptActivityState) -> ConversationItemPhase {

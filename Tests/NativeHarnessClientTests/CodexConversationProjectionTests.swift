@@ -154,6 +154,27 @@ final class CodexConversationProjectionTests: XCTestCase {
         XCTAssertEqual(run.progressLine, "Built.")
     }
 
+    /// A saved turn's items carry no times of their own: its request reads as sent when the turn
+    /// started and its closing answer as written when it ended, an item's own time wins, and the
+    /// working notes between them show none rather than one made up.
+    func testMessagesReadTheTimesCodexRecorded() throws {
+        let started = Date(timeIntervalSince1970: 1_790_000_000)
+        let completed = started.addingTimeInterval(42)
+        var saved = turn("t1", status: "completed", items: [
+            user("u1", "Fix it"), message("c1", "Looking.", phase: "commentary"), answer("a1", "Fixed.")
+        ])
+        saved.startedAt = started
+        saved.completedAt = completed
+        let projected = try XCTUnwrap(project(state([saved])).turns.first)
+        XCTAssertEqual(projected.prompt.map(\.recordedAt), [started])
+        XCTAssertEqual(projected.answers.map(\.recordedAt), [completed])
+        XCTAssertEqual(projected.work.filter { if case .commentary = $0.kind { true } else { false } }.map(\.recordedAt), [nil])
+
+        let written = started.addingTimeInterval(30)
+        saved.items[2].completedAt = written
+        XCTAssertEqual(try XCTUnwrap(project(state([saved])).turns.first).answers.map(\.recordedAt), [written])
+    }
+
     /// A failed latest turn the server was too busy for, on an idle thread, offers retry and edit,
     /// and reads as the error card.
     func testAServerBusyTurnOffersRetryAndEdit() {

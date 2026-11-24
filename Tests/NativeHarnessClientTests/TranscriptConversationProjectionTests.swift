@@ -321,6 +321,32 @@ final class TranscriptConversationProjectionTests: XCTestCase {
         XCTAssertEqual(project(entries, status: .ready, latestTurnIsComplete: true).turns[1].timing.durationMilliseconds, 1_000)
     }
 
+    /// A message shows when it was sent or written only when its record says (`recordedAt`): an entry
+    /// a replay made as it read (an ACP agent's `session/load`) stands at no time and shows none.
+    func testMessagesCarryOnlyTheTimesTheirRecordNames() throws {
+        let request = entry(0, .user(text: "One"))
+        let answer = entry(4, .assistant(text: "A", isStreaming: false))
+        let turn = try XCTUnwrap(project([request, answer], latestTurnIsComplete: true).turns.first)
+        XCTAssertEqual(turn.prompt.map(\.recordedAt), [request.createdAt])
+        XCTAssertEqual(turn.answers.map(\.recordedAt), [answer.createdAt])
+
+        let replayed = ACPReplayTranscript.entries(from: [
+            .object(["sessionUpdate": .string("user_message_chunk"),
+                     "content": .object(["type": .string("text"), "text": .string("Two")])]),
+            .object(["sessionUpdate": .string("agent_message_chunk"),
+                     "content": .object(["type": .string("text"), "text": .string("B")])])
+        ])
+        XCTAssertEqual(replayed.count, 2)
+        XCTAssertEqual(replayed.map(\.recordedAt), [nil, nil])
+        let replayedTurn = try XCTUnwrap(project(replayed, harness: .openCode, latestTurnIsComplete: true).turns.first)
+        XCTAssertNil(replayedTurn.prompt.first?.recordedAt)
+        XCTAssertNil(replayedTurn.answers.first?.recordedAt)
+        // Nor does what reads the entries' times: the turn's timing and the latest turn's start.
+        XCTAssertEqual(replayedTurn.timing, ConversationTurnTiming(isApproximate: true))
+        XCTAssertNil(TaskLatestTurn.reading(replayed).startedAt)
+        XCTAssertEqual(TaskLatestTurn.reading([request, answer]).startedAt, request.createdAt)
+    }
+
     func testClaudeEditAndRestoreFollowTheMessageMenuRules() {
         let message = entry(0, .user(text: "Change it"))
         let answer = entry(1, .assistant(text: "Changed.", isStreaming: false))

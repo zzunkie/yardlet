@@ -32,11 +32,11 @@ struct ConversationItemView: View {
         case let .userMessage(text, images):
             ConversationSentMessage(itemID: item.id, text: text, images: images, attachments: item.promptAttachments,
                                     sentFromTask: item.taskMessage, backgroundTaskNotice: item.backgroundTaskNotice,
-                                    phase: item.phase, isHistoryMatch: item.isHistoryMatch)
+                                    phase: item.phase, isHistoryMatch: item.isHistoryMatch, recordedAt: item.recordedAt)
         case let .scheduledTaskMessage(message):
             ConversationSentMessage(itemID: item.id, text: message.instructions, images: [],
                                     isSentByScheduledTask: true, claudeSchedule: message.claudeSchedule,
-                                    phase: item.phase, isHistoryMatch: item.isHistoryMatch)
+                                    phase: item.phase, isHistoryMatch: item.isHistoryMatch, recordedAt: item.recordedAt)
         case let .shellCommand(message, entryID):
             ClaudeBashCommandRow(entryID: entryID, message: message, runInTerminal: context.actions.runInTerminal)
         case let .answer(text, isStreaming):
@@ -69,7 +69,7 @@ struct ConversationItemView: View {
         ConversationAgentMessage(
             itemID: item.id, harness: context.harness, text: text, isCommentary: isCommentary,
             isStreaming: isStreaming, providerPhase: providerPhase, isSummary: item.isSummary, phase: item.phase,
-            copyDetails: item.copyDetails, isHistoryMatch: item.isHistoryMatch
+            copyDetails: item.copyDetails, isHistoryMatch: item.isHistoryMatch, recordedAt: item.recordedAt
         )
     }
 
