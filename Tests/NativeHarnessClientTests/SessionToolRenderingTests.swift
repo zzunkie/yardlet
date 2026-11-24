@@ -114,10 +114,11 @@ final class SessionToolRenderingTests: XCTestCase {
         run.state = .completed
         run.answer = "`flush()` reads `pending` without a lock. At line 214, wrap it in `queue.sync`."
         let result = AppModel.agentRunResultText(run)
-        // The caller's turn goes on after its subagent answered; once it ends, the card folds into the
-        // turn's work like any call.
+        // The caller's turn goes on after its subagent answered: the card stays in view after what the
+        // caller said before it, and once the turn ends, folds into the turn's work like any call.
         let entries = transcript([
             .user(text: "Have Codex look for the upload queue's concurrency bug"),
+            .assistant(text: "Asking Codex to look.", isStreaming: false),
             .activity(runAgent(harness: "codex", model: "gpt-5.5", prompt: run.prompt, result: result), state: .completed),
             .assistant(text: "Codex found the missing lock in `flush()`. I'll fix it.", isStreaming: true)
         ])

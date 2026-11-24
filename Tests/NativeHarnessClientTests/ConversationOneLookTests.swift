@@ -20,8 +20,10 @@ final class ConversationOneLookTests: XCTestCase {
 
     // MARK: - The same conversation in every harness
 
-    /// One finished turn — a request, thinking, working notes and an answer — draws the same pixels
-    /// whichever harness it came from, at both widths and in both appearances. Codex and Claude Code
+    /// One finished turn — a request, thinking, two messages to the person and an answer — draws the
+    /// same pixels whichever harness it came from, at both widths and in both appearances. A transcript
+    /// harness marks no message as working notes, so the Codex thread it matches says both messages
+    /// to the person too. Codex and Claude Code
     /// both offer their turn's actions on its messages, out of sight until hovered; OpenCode offers
     /// none, so it is compared with Claude Code without them.
     func testOneFinishedTurnDrawsTheSamePixelsInEveryHarness() throws {
@@ -61,11 +63,23 @@ final class ConversationOneLookTests: XCTestCase {
                 XCTAssertEqual(named(claudeWithoutMenu.elements), named(opencode.elements), label)
             }
         }
+        // The turn said two messages, so its last one offers to copy both, beside its own copy.
+        for appearance in WindowlessRender.Appearance.allCases {
+            let revealed = try ConversationDrawing.draw(
+                transcript(.claudeCode, finishedEntries(), status: .ready).environment(\.revealsSentMessageActions, true),
+                size: NSSize(width: 760, height: 640), appearance: appearance
+            )
+            try WindowlessRender.writePNG(revealed.capture.bitmap, to: directory.appending(
+                path: "same-turn-claude-code-actions-\(appearance.suffix).png"))
+            let copies = revealed.elements.filter { $0.label == L10n.string("Copy full response") }
+            XCTAssertEqual(copies.count, 1, revealed.elements.map(\.description).joined(separator: "\n"))
+        }
     }
 
-    /// A running turn that has not written yet reads "Thinking", and once it writes, its working notes
-    /// read "Commentary" with no harness label, for every harness. The two
-    /// transcript harnesses draw it in the same pixels; Codex adds the live time it reports.
+    /// A running turn that has not written yet reads "Thinking", for every harness. Once it writes,
+    /// Codex's working notes read "Commentary" with no harness label, and a transcript harness's message
+    /// reads as said to the person, as its provider marks no working notes. The two transcript harnesses
+    /// draw it in the same pixels; Codex adds the live time it reports.
     func testARunningTurnReadsTheSameInEveryHarness() throws {
         let directory = try WindowlessRender.directory("conversation-m12f-qa")
         let size = NSSize(width: 760, height: 520)
@@ -93,13 +107,12 @@ final class ConversationOneLookTests: XCTestCase {
                 }
                 XCTAssertEqual(thinking, stage == "thinking", "\(name) \(stage):\n\(texts)")
                 XCTAssertEqual(drawing.elements.contains { $0.value == L10n.string("Commentary") },
-                               stage == "writing", "\(name) \(stage):\n\(texts)")
+                               stage == "writing" && name == "codex", "\(name) \(stage):\n\(texts)")
                 XCTAssertFalse(drawing.elements.contains { $0.role == "AXUnknown" && $0.label == name }, texts)
             }
         }
 
-        // Trailing streaming assistant messages in transcript harnesses suppress "Commentary" to avoid
-        // flickering on a streaming final answer; settled commentary still shows it.
+        // A transcript message streams as it stays, with no "Commentary" over it.
         let streamingEntries = [
             TranscriptEntry(createdAt: start, content: .user(text: sentText)),
             TranscriptEntry(createdAt: start.addingTimeInterval(1),
@@ -108,7 +121,7 @@ final class ConversationOneLookTests: XCTestCase {
         let streamingClaude = try ConversationDrawing.draw(transcript(.claudeCode, streamingEntries, status: .running),
                                                            size: size, appearance: .light)
         XCTAssertFalse(streamingClaude.elements.contains { $0.value == L10n.string("Commentary") },
-                       "A trailing streaming transcript message should not stamp Commentary")
+                       "A streaming transcript message is not working notes")
     }
 
     /// A turn's error is what the turn ended on, so its card reads after everything the turn wrote, for
@@ -304,7 +317,7 @@ final class ConversationOneLookTests: XCTestCase {
                 .object(["id": .string("r1"), "type": .string("reasoning"), "summary": .array([]),
                          "content": .array([.string("The cache is stale.")])]),
                 .object(["id": .string("m1"), "type": .string("agentMessage"), "text": .string("Running the tests first."),
-                         "phase": .string("commentary")]),
+                         "phase": .string("final_answer")]),
                 .object(["id": .string("a1"), "type": .string("agentMessage"),
                          "text": .string("The build passes now. **The cache** was stale; `swift test` ran cleanly."),
                          "phase": .string("final_answer")])

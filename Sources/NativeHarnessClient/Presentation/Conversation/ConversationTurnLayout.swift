@@ -1,9 +1,12 @@
 import Foundation
+import YardletRemote
 
 /// How every harness lays out a turn and folds its work: the Codex app's rules, one rule for every
 /// harness (decisions of 2026-10-23: follow the Codex app properly, and use one rule rather than one
 /// per harness so the app does not become a patchwork; 2026-10-30: fold as the Codex app does rather
-/// than leave notes open as the Claude app does). Where the Codex app 26.1023 has them:
+/// than leave notes open as the Claude app does; 2026-11-24: only what a provider marks as working
+/// notes is notes, so a provider that marks none has its messages kept in view and only the calls
+/// between them folded, as the Claude app draws them). Where the Codex app 26.1023 has them:
 /// `split-items-into-render-groups` lays the turn out, and the work's fold (`Mj`, `wj` and `Tj`) is in
 /// `subagent-activity-chip-group`.
 ///
@@ -14,9 +17,10 @@ import Foundation
 /// - A folded turn keeps in view the final answers it went on past, the messages the person sent into
 ///   it, the other messages sent into it that no finished final answer followed, the questions it
 ///   asked, the calls refused for want of an approval, and while it runs, everything after the latest
-///   final answer it finished (`ConversationTurn.workKeptWhenFolded`).
-/// - A message sent into the turn that stays in view parts the fold: the work before it folds under
-///   the turn header, the work after it on a line of its own (`ConversationTurn.workStretches`).
+///   final answer it finished and every call still running (`ConversationTurn.workKeptWhenFolded`).
+/// - A message that stays in view, sent into the turn or said to the person, parts the fold: the work
+///   before it folds under the turn header, the work after it on a line of its own that reads the calls
+///   it folds (`ConversationTurn.workStretches`).
 ///
 /// What differs between harnesses is only how each projection classifies what its provider wrote:
 /// working notes (`ConversationItemKind.commentary`), what is said to the person
@@ -62,13 +66,34 @@ enum ConversationTurnLayout {
         }
     }
 
-    /// The answer a turn's outcome reads (`read_task`, a subagent's card): the last one with words
-    /// in its work, else its closing answer.
-    static func latestAnswer(answers: [ConversationItem], work: [ConversationItem]) -> String? {
-        for item in (answers + work).reversed() {
-            if case let .answer(text, _) = item.kind, !text.isEmpty { return text }
+    /// What a turn answered, as a task waiting on it reads it (`wait_tasks`, `run_agent`): every
+    /// message it said to the person since the person last wrote into it, in the order they were
+    /// written, a blank line apart. A provider that marks no final answer can write its report before
+    /// its last call and close on a line ("Done."), so none is left out for its length or place. Past
+    /// `limit` UTF-8 bytes the latest words are kept and the cut is marked at the start. `items` is the
+    /// turn's work and then its answers, which is the order they happened in.
+    static func answerText<Items: BidirectionalCollection<ConversationItem>>(
+        _ items: Items, limit: Int = RemoteText.assistantLimit
+    ) -> String? {
+        var said: [String] = []
+        var bytes = 0
+        for item in items.reversed() {
+            if item.isPersonMessage { break }
+            guard case let .answer(text, _) = item.kind, !item.isSentWhileWorking else { continue }
+            let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !words.isEmpty else { continue }
+            said.append(words)
+            bytes += words.utf8.count + 2
+            if bytes >= limit { break }
         }
-        return nil
+        guard !said.isEmpty else { return nil }
+        let text = said.reversed().joined(separator: "\n\n")
+        guard text.utf8.count > limit else { return text }
+        let mark = "…"
+        let utf8 = text.utf8
+        var start = utf8.index(utf8.endIndex, offsetBy: -(limit - mark.utf8.count))
+        while start < utf8.endIndex, UTF8.isContinuation(utf8[start]) { utf8.formIndex(after: &start) }
+        return mark + String(text[start...])
     }
 
     /// A final answer that has begun (`N7a`): said to the person and marked final, not sent while the
@@ -120,7 +145,19 @@ extension ConversationTurn {
     /// The header is drawn when it holds something: a work time or a fold. `foldsWork` is whether the part of the turn
     /// drawn folds its work (`foldsWork` for a whole turn).
     func drawsHeader(foldsWork: Bool) -> Bool {
-        showsHeader && (showsWorkTime || (foldsWork && hasWorkDetails))
+        showsHeader && (showsWorkTime || (foldsWork && opensFoldedWork))
+    }
+
+    /// The header opens something once the work folds: the turn has work details (`hasWorkDetails`) and
+    /// folding hides some of them, its plan, items still to load or work it does not keep in view
+    /// (`workKeptWhenFolded`). A turn that keeps all its work in view (every message Claude wrote, with
+    /// no call between them) has nothing for its header to open. Read from the start, it stops at the
+    /// first hidden item.
+    var opensFoldedWork: Bool {
+        guard hasWorkDetails else { return false }
+        if plan != nil || hasMoreItems { return true }
+        let answered = finishedAnswerIndex
+        return work.indices.contains { !keepsInViewWhenFolded(work[$0], at: $0, answered: answered) }
     }
 
     /// What the header reads once the turn no longer runs: how long it worked, or that it was stopped, as the Codex
@@ -147,7 +184,8 @@ extension ConversationTurn {
     /// - a question it asked, answered or not (the Codex app keeps one left unanswered; Yardlet keeps
     ///   an answered one too, which reads as its answers);
     /// - a call refused for want of an approval the task's policy never asks for;
-    /// - while it runs, everything after the latest final answer the work finished;
+    /// - while it runs, everything after the latest final answer the work finished, and every call still
+    ///   running;
     /// - what waits on the person or tells them what was done, which only Yardlet draws: a suggested
     ///   task, a schedule an agent created, and an error or limit the turn went on past, which a final
     ///   answer never hides.
@@ -158,11 +196,13 @@ extension ConversationTurn {
         }
     }
 
-    /// A folded turn's work, parted at each message sent into the turn that stays in view
-    /// (`workKeptWhenFolded`): the work before the first such message, which the turn header folds,
-    /// then each message with the work after it up to the next, which folds on a line of its own. One
-    /// fold above the person's message read as if the message came after all the work and the answer
-    /// replied to it alone, when it was sent while the work went on. A message folded with the work
+    /// A folded turn's work, parted at each message that stays in view (`workKeptWhenFolded`) and was
+    /// sent into the turn or said to the person: the work before the first such message, which the
+    /// turn header folds, then each message with the work after it up to the next, which folds on a
+    /// line of its own. One fold above the person's message read as if the message came after all the
+    /// work and the answer replied to it alone, when it was sent while the work went on; one fold above
+    /// what the provider said read as if it said it all before working, when it worked between its
+    /// messages, as the Claude app folds only the calls between them. A message folded with the work
     /// (one a finished final answer followed, from another task or a schedule) parts nothing, as it is
     /// not in view to part it.
     var workStretches: [ConversationWorkStretch] {
@@ -170,7 +210,7 @@ extension ConversationTurn {
         var stretches: [ConversationWorkStretch] = []
         var message: ConversationItem?, start = 0, kept: [ConversationItem] = []
         for (index, item) in work.enumerated() where keepsInViewWhenFolded(item, at: index, answered: answered) {
-            if item.isSentIntoTurn {
+            if item.isSentIntoTurn || ConversationTurnLayout.isAnswer(item) {
                 stretches.append(ConversationWorkStretch(message: message, work: work[start..<index], kept: kept))
                 message = item
                 start = index + 1
@@ -183,6 +223,29 @@ extension ConversationTurn {
         return stretches
     }
 
+    /// The message "Copy full response" sits on: the last one the turn said to the person, once the
+    /// turn ended having said more than one since the person last wrote into it
+    /// (`ConversationTurnLayout.answerText`). A turn that said one has only that message's copy. Read
+    /// from the end, it stops at the second message, so a long turn costs no more than a short one.
+    var fullResponseAnswerID: String? {
+        guard status.isTerminal else { return nil }
+        var last: String?
+        for item in [answers.reversed(), work.reversed()].joined() {
+            if item.isPersonMessage { return nil }
+            guard case let .answer(text, _) = item.kind, !item.isSentWhileWorking,
+                  !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            if last != nil { return last }
+            last = item.id
+        }
+        return nil
+    }
+
+    /// What "Copy full response" copies: every message the turn said to the person since the person
+    /// last wrote into it, whole (`ConversationTurnLayout.answerText`).
+    var fullResponseText: String? {
+        ConversationTurnLayout.answerText(work + answers, limit: .max)
+    }
+
     /// Where in the work the latest finished final answer is: past the work when the closing answer
     /// has ended, -1 when there is none.
     private var finishedAnswerIndex: Int {
@@ -192,6 +255,9 @@ extension ConversationTurn {
 
     private func keepsInViewWhenFolded(_ item: ConversationItem, at index: Int, answered: Int) -> Bool {
         if status == .running, answered >= 0, index > answered { return true }
+        // While the turn runs, a call still running stays in view wherever it started: a background
+        // command the provider went on past, which the person stops from its line.
+        if status == .running, item.phase == .running, ConversationWorkSummary.category(of: item) != nil { return true }
         if item.wasRefusedForApproval { return true }
         switch item.kind {
         case .answer:
@@ -212,9 +278,9 @@ extension ConversationTurn {
     }
 }
 
-/// A stretch of a folded turn's work (`ConversationTurn.workStretches`): the message sent into the
-/// turn that opens it, the work after that message up to the next, and what of that work stays in
-/// view while it folds.
+/// A stretch of a folded turn's work (`ConversationTurn.workStretches`): the message that opens it
+/// (sent into the turn, or said to the person), the work after that message up to the next, and what
+/// of that work stays in view while it folds.
 struct ConversationWorkStretch: Identifiable {
     /// The message that opens the stretch; nil for the first, whose work the turn header folds.
     var message: ConversationItem?
@@ -228,6 +294,22 @@ struct ConversationWorkStretch: Identifiable {
 
     /// The fold hides some of the stretch's work.
     var hidesWork: Bool { kept.count < work.count }
+
+    /// What the stretch's fold reads: the calls it hides, as a run of them reads folded
+    /// (`ConversationWorkSummary`), so the line says what happened between the messages around it;
+    /// nil when it hides no call, for the fold to read "Work details".
+    func foldTitle(harness: HarnessKind) -> String? {
+        let keptIDs = Set(kept.map(\.id))
+        let calls = work.filter { !keptIDs.contains($0.id) && ConversationWorkSummary.category(of: $0) != nil }
+        return calls.isEmpty ? nil : ConversationWorkSummary.title(for: calls, harness: harness)
+    }
+
+    /// The stretch opens with what the provider said, not with a message sent into the turn: its fold
+    /// sits close to the messages around it, as the Claude app draws the calls between two messages.
+    var opensWithAnswer: Bool {
+        if case .answer = message?.kind { return true }
+        return false
+    }
 }
 
 private extension ConversationItem {

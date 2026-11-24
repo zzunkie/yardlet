@@ -500,7 +500,7 @@ struct AntigravityTranscript: Equatable, Sendable {
 /// The log's records as the conversation shows them. A record is
 /// `{step_index, type, source, status, created_at, content?, thinking?, tool_calls?, error?, …}`:
 /// `USER_INPUT` (the request inside `<USER_REQUEST>`, after which the CLI adds metadata of its own),
-/// `PLANNER_RESPONSE` (thinking, tool calls `{name, args}` and the answer), `GENERIC` with status
+/// `PLANNER_RESPONSE` (thinking, the words the model wrote and then its tool calls `{name, args}`), `GENERIC` with status
 /// `ERROR` (a tool that failed, after its call), and `SYSTEM_MESSAGE`, which the CLI adds for the
 /// model and is not shown. The log has no tool output, so a tool row shows only its call.
 enum AntigravityTranscriptParser {
@@ -533,6 +533,12 @@ enum AntigravityTranscriptParser {
                     entries.append(TranscriptEntry(id: id("thinking"), createdAt: createdAt,
                                                    content: .reasoning(text: thinking, isStreaming: false)))
                 }
+                // The response's words come before its calls, as the model wrote them and as the live
+                // stream shows them.
+                if let answer = nonEmpty(record["content"]?.stringValue) {
+                    entries.append(TranscriptEntry(id: id("answer"), createdAt: createdAt,
+                                                   content: .assistant(text: answer, isStreaming: false)))
+                }
                 pendingToolEntryIndices = []
                 responseStep = record["step_index"]?.integerValue
                 for (index, call) in (record["tool_calls"]?.arrayValue ?? []).enumerated() {
@@ -546,10 +552,6 @@ enum AntigravityTranscriptParser {
                     pendingToolEntryIndices.append(entries.count)
                     entries.append(TranscriptEntry(id: id("tool-\(index)"), createdAt: createdAt,
                                                    content: .activity(activity, state: .completed)))
-                }
-                if let answer = nonEmpty(record["content"]?.stringValue) {
-                    entries.append(TranscriptEntry(id: id("answer"), createdAt: createdAt,
-                                                   content: .assistant(text: answer, isStreaming: false)))
                 }
             case "GENERIC" where record["status"]?.stringValue?.uppercased() == "ERROR":
                 let message = nonEmpty(record["error"]?.stringValue) ?? nonEmpty(record["content"]?.stringValue)

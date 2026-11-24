@@ -273,7 +273,7 @@ final class CodexTurnRecoveryTests: XCTestCase {
                 HStack(spacing: 12) {
                     ConversationMessageActionButtons(actions: [ConversationTurnAction.fork, .editTurn].map {
                         $0.messageAction(turn: ConversationTurn(id: "turn-qa", status: .failed, timing: ConversationTurnTiming()),
-                                         handlers: ConversationTurnHandlers(edit: { _ in }, fork: {}))
+                                         handlers: ConversationTurnHandlers(edit: { _ in }, fork: {}), harness: .codex)
                     })
                 }
                 .environment(\.revealsSentMessageActions, true)

@@ -342,6 +342,9 @@ enum ConvergenceFixtures {
     static func openCode() -> [TranscriptEntry] {
         entries([
             .user(text: "Retitle the README"),
+            // What it said before its calls stays above them, and the calls after it stay in view while
+            // the turn runs.
+            .assistant(text: "Retitling the README.", isStreaming: false),
             .activity(HarnessActivity(id: "read", kind: "read", title: "Inspect provider output",
                                       input: #"{"path":"README.md"}"#, output: "# Yardlet\n\nA workbench."),
                       state: .completed),
@@ -350,8 +353,7 @@ enum ConvergenceFixtures {
                 id: "edit", kind: "edit", title: "Apply the title", input: #"{"path":"README.md"}"#,
                 diff: HarnessActivityDiff(path: path("README.md"), oldText: "# Yardlet\n\nA workbench.\n",
                                           newText: "# Yardlet workbench\n\nA workbench.\n")
-            ), state: .completed),
-            .assistant(text: "Retitling the README.", isStreaming: true)
+            ), state: .completed)
         ])
     }
 

@@ -17,7 +17,7 @@ final class NativeForkMenuRenderingTests: XCTestCase {
                 HStack(spacing: 12) {
                     ConversationMessageActionButtons(actions: [ConversationTurnAction.fork, .editTurn].map {
                         $0.messageAction(turn: ConversationTurn(id: "turn-qa", status: .completed, timing: ConversationTurnTiming()),
-                                         handlers: ConversationTurnHandlers(edit: { _ in }, fork: {}))
+                                         handlers: ConversationTurnHandlers(edit: { _ in }, fork: {}), harness: .codex)
                     })
                 }
                 .environment(\.revealsSentMessageActions, true)

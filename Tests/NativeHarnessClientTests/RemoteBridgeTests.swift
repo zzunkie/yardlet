@@ -282,8 +282,10 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertEqual(turn.items.map(\.kind), [.user, .turn, .assistant, .activity, .activity, .approval])
         XCTAssertEqual(turn.items[0].text, "Run the migration tests")
         XCTAssertEqual(turn.items[1].status, "running")
-        XCTAssertEqual(turn.items[2].role, "commentary")
-        XCTAssertEqual(turn.items[2].inWork, true)
+        // Claude Code marks no working notes: what it said is said to the person, in view while the turn
+        // folds, and the calls after it stay in view while it runs.
+        XCTAssertEqual(turn.items[2].role, "answer")
+        XCTAssertNil(turn.items[2].inWork)
         // The lines the Mac shows, in Claude Code's words.
         let mac = presentation.turns.last!.work.compactMap { item -> String? in
             switch item.kind {
@@ -333,7 +335,7 @@ final class RemoteBridgeTests: XCTestCase {
 
         let json = RemoteJSON.string(RemoteEvent.items(turn.items))
         XCTAssertFalse(json.contains("SECRET FILE CONTENTS"))
-        XCTAssertEqual(turn.items[1].workCount, 3)
+        XCTAssertEqual(turn.items[1].workCount, 0, "nothing is folded while the calls run after what it said")
     }
 
     func testAnAllowedRequestBecomesTheCallsMarkAndTheTurnFolds() throws {

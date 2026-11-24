@@ -12,6 +12,9 @@ enum ConversationLayout {
     static let turnSpacing: CGFloat = 15
     /// Between the parts of one turn.
     static let itemSpacing: CGFloat = 10
+    /// Taken from the space above and below the fold of the calls between two of the provider's
+    /// messages, which then sits half a part's space from each (`ConversationWorkStretch.opensWithAnswer`).
+    static let foldBetweenMessagesInset: CGFloat = -itemSpacing / 2
     static let topPadding: CGFloat = 24
     static let bottomPadding: CGFloat = 28
     /// The least space before a sent message's bubble.

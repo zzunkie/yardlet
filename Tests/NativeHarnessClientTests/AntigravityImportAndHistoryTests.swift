@@ -195,7 +195,7 @@ final class AntigravityImportAndHistoryTests: XCTestCase {
     // MARK: - The log
 
     /// The log's records as the conversation: the request inside `<USER_REQUEST>` (not the CLI's
-    /// metadata), thinking, each tool call with its command, the failed step after it, and the
+    /// metadata), thinking, the words before its calls, each tool call with its command, the failed step after it, and the
     /// answer; the CLI's system messages are not shown. A second read gives the same IDs.
     func testTheLogBecomesTheConversation() throws {
         let fixture = try makeStore()
@@ -203,7 +203,10 @@ final class AntigravityImportAndHistoryTests: XCTestCase {
         let contents = read.entries.map(\.content)
         XCTAssertEqual(read.requestCount, 2)
         XCTAssertEqual(contents.first, .user(text: "Fixture request one"))
-        XCTAssertTrue(contents.contains(.reasoning(text: "Fixture thinking", isStreaming: false)))
+        // A response's thinking, then its words, then its calls, as the model wrote them and the live stream shows them.
+        XCTAssertEqual(Array(contents[1...2]), [.reasoning(text: "Fixture thinking", isStreaming: false),
+                                                .assistant(text: "Fixture note", isStreaming: false)])
+        if case .activity = contents[3] {} else { XCTFail("the calls follow the words: \(contents)") }
         let tools = read.entries.compactMap { entry -> (HarnessActivity, TranscriptActivityState)? in
             guard case let .activity(activity, state) = entry.content else { return nil }
             return (activity, state)
@@ -474,7 +477,8 @@ final class AntigravityImportAndHistoryTests: XCTestCase {
                 The user changed setting `Model Selection` from None to fixture.
                 </USER_SETTINGS_CHANGE>
                 """),
-            Self.record(index: 1, type: "PLANNER_RESPONSE", source: "MODEL", thinking: "Fixture thinking", toolCalls: [
+            Self.record(index: 1, type: "PLANNER_RESPONSE", source: "MODEL", content: "Fixture note",
+                        thinking: "Fixture thinking", toolCalls: [
                 ["name": .string("list_dir"), "args": .object(["DirectoryPath": .string("/tmp/fixture"),
                     "toolAction": .string("Listing"), "toolSummary": .string("Listing fixture")])],
                 ["name": .string("run_command"), "args": .object(["CommandLine": .string("echo fixture"),

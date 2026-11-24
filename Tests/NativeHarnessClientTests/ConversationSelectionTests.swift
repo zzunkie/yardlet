@@ -27,10 +27,13 @@ final class ConversationSelectionTests: XCTestCase {
             TranscriptEntry(content: .user(text: "Question one")),
             TranscriptEntry(content: .assistant(text: "Answer one.\n\nA second paragraph.", isStreaming: false)),
             TranscriptEntry(content: .user(text: "Question two")),
+            // While the turn runs, the call after what Claude finished saying stays in view, folded on
+            // its line, under the answer being written.
+            TranscriptEntry(content: .assistant(text: "Checking.", isStreaming: false)),
             TranscriptEntry(content: .activity(HarnessActivity(
                 id: "bash-1", kind: "Bash", title: "Bash",
                 input: #"{"command":"swift test","description":"Run the tests"}"#, output: "passed"), state: .completed)),
-            TranscriptEntry(content: .assistant(text: "Answer two, which ends here.", isStreaming: false))
+            TranscriptEntry(content: .assistant(text: "Answer two, which ends here.", isStreaming: true))
         ]
     }
 

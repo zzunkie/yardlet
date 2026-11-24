@@ -450,9 +450,9 @@ extension AppModel {
         sessionTools.dequeue(run.id)
         let started = run.state != .queued
         run.state = state
-        // One the quit or a plan limit cut off answered nothing yet; what it said last is its answer so far.
-        run.answer = run.latestAnswer ?? (state == .interrupted || run.usageLimit != nil ? run.lastWords : nil)
-            ?? run.answer
+        // One that said nothing to the person (Codex working notes alone, or the quit or a plan limit cut
+        // it off first) answers with what it said last.
+        run.answer = run.latestAnswer ?? run.lastWords ?? run.answer
         run.finishTranscript(run.entries)
         for consumer in run.consumers { consumer.cancel() }
         run.consumers = []

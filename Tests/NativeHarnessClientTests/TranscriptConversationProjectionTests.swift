@@ -6,9 +6,9 @@ import XCTest
 final class TranscriptConversationProjectionTests: XCTestCase {
     private let start = Date(timeIntervalSince1970: 1_800_000_000)
 
-    /// A turn that is over folds its settled work under its last message, which is its answer. A
-    /// turn still going has no answer and does not fold, and a request still waiting holds a finished
-    /// turn open under its own card.
+    /// A turn folds its settled work under its last message, which is its answer, and keeps the
+    /// messages before it in view. A turn still going says its message where it is, and a request
+    /// still waiting holds a finished turn open under its own card.
     func testACompletedTurnFoldsItsWorkUnderItsAnswer() {
         let request = entry(0, .user(text: "Check it"))
         let commentary = entry(1, .assistant(text: "I will inspect it.", isStreaming: false))
@@ -26,10 +26,10 @@ final class TranscriptConversationProjectionTests: XCTestCase {
         XCTAssertTrue(done.foldsWork)
         XCTAssertEqual(done.timing.completedAt, final.createdAt, "the subagent's task is no part of the turn's time")
 
+        XCTAssertEqual(done.workKeptWhenFolded.map(\.id), [commentary.id.uuidString])
+
         let going = project([request, commentary]).turns[0]
-        XCTAssertEqual(going.answers, [], "a turn still going has no answer")
-        XCTAssertEqual(going.work.map(\.kind), [.commentary(text: "I will inspect it.", isStreaming: false)])
-        XCTAssertFalse(going.foldsWork)
+        XCTAssertEqual(going.answers.map(\.kind), [.answer(text: "I will inspect it.", isStreaming: false)])
 
         let permission = entry(4, .permission(PermissionRequest(id: "permission", title: "Run", detail: nil,
                                                                 command: "pwd"), state: .pending))
@@ -44,7 +44,7 @@ final class TranscriptConversationProjectionTests: XCTestCase {
     /// the turn's last words, but it is an answer, and it stays in view when the work folds (2026-10-22:
     /// a reply was hidden when messages followed one another). The message stays in view too: what the
     /// person wrote is never folded away (2026-10-31, one rule for every harness). Words followed by a
-    /// call are progress and fold as before.
+    /// call stay in view too, and the call folds after them.
     func testTheAnswerBeforeAMessageReadIntoTheTurnStaysInView() {
         let request = entry(0, .user(text: "Fix the build", images: nil))
         let note = entry(1, .assistant(text: "Looking at the log.", isStreaming: false))
@@ -58,10 +58,11 @@ final class TranscriptConversationProjectionTests: XCTestCase {
 
         XCTAssertEqual(turn.answers.map(\.id), [finalAnswer.id.uuidString])
         XCTAssertTrue(turn.foldsWork)
-        XCTAssertEqual(turn.workKeptWhenFolded.map(\.kind), [.answer(text: "Fixed: the import was missing.", isStreaming: false),
+        XCTAssertEqual(turn.workKeptWhenFolded.map(\.kind), [.answer(text: "Looking at the log.", isStreaming: false),
+                                                             .answer(text: "Fixed: the import was missing.", isStreaming: false),
                                                              .userMessage(text: "Also run the tests", images: [])])
-        XCTAssertTrue(turn.work.contains { $0.kind == .commentary(text: "Looking at the log.", isStreaming: false) },
-                      "progress before a call still folds")
+        // What a waiting task reads starts after the message the person sent into the turn.
+        XCTAssertEqual(ConversationTurnLayout.answerText(turn.work + turn.answers), "All tests pass.")
     }
 
     func testRequestsStartTurnsAndWhatComesFirstIsTheHeadTurn() {
@@ -78,7 +79,8 @@ final class TranscriptConversationProjectionTests: XCTestCase {
         XCTAssertEqual(turns[0].work.map(\.kind), [.compaction(.init(phase: .completed, tokensBefore: 10, tokensAfter: 4))])
         XCTAssertEqual(turns[0].answers.map(\.kind), [.answer(text: "Earlier context", isStreaming: false)])
         let alone = project([context, early], latestTurnIsComplete: true).turns
-        XCTAssertEqual(alone.first?.answers, [], "A head turn with nothing after it has no answer to give")
+        XCTAssertEqual(alone.first?.answers.map(\.kind), [.answer(text: "Earlier context", isStreaming: false)])
+        XCTAssertEqual(alone.first?.foldsWork, false, "A turn read from inside, with no request, does not fold")
         XCTAssertEqual(turns[0].status, .completed)
         XCTAssertEqual(turns[1].prompt.map(\.kind), [
             .userMessage(text: "Look", images: [TranscriptImageAttachment(url: nil, name: "a.png")])
@@ -96,63 +98,79 @@ final class TranscriptConversationProjectionTests: XCTestCase {
         XCTAssertEqual(other, [.userMessage(text: text, images: [])])
     }
 
-    func testRunningTurnHasNoAnswerAndCommentaryIsWork() {
+    func testARunningTurnKeepsWhatItSaidInViewAndItsThinkingInItsWork() {
         let request = entry(0, .user(text: "Go"))
         let said = entry(1, .assistant(text: "Looking.", isStreaming: false))
         let thought = entry(2, .reasoning(text: "Maybe", isStreaming: true))
         let turn = project([request, said, thought], status: .running).turns[0]
         XCTAssertEqual(turn.answers, [])
         XCTAssertEqual(turn.work.map(\.kind), [
-            .commentary(text: "Looking.", isStreaming: false),
+            .answer(text: "Looking.", isStreaming: false),
             .reasoning(summary: nil, detail: "Maybe", isStreaming: true)
         ])
         XCTAssertEqual(turn.work.map(\.phase), [.completed, .running])
         XCTAssertEqual(turn.status, .running)
-        XCTAssertFalse(turn.foldsWork)
+        XCTAssertTrue(turn.foldsWork)
+        XCTAssertEqual(turn.workKeptWhenFolded.map(\.id), [said.id.uuidString, thought.id.uuidString],
+                       "while it runs, what comes after what it said stays in view")
     }
 
-    func testTrailingStreamingAssistantSuppressesCommentaryLabelUntilFollowedByWork() {
+    /// No harness this projection reads marks a message as working notes, so every message is said to
+    /// the person where it was written, while it streams and after (2026-11-24: a report written before
+    /// a last call folded away under "Done."). The turn folds once one streams, so it does not fold all
+    /// at once when it ends, and only the calls between the messages fold, each stretch on a line that
+    /// reads its calls. What a waiting task reads is every message, in order.
+    func testEveryMessageIsSaidToThePersonAndOnlyTheCallsBetweenThemFold() {
         let request = entry(0, .user(text: "Explain the fix"))
-        let earlier = entry(1, .assistant(text: "Checking the files.", isStreaming: false))
+        let note = entry(1, .assistant(text: "Checking the files.", isStreaming: false))
         let read = entry(2, .activity(HarnessActivity(id: "r1", kind: "Read", title: "Read", detail: "Parser.swift"),
                                       state: .completed))
-        let streaming = entry(3, .assistant(text: "The parser now handles", isStreaming: true))
+        let read2 = entry(3, .activity(HarnessActivity(id: "r2", kind: "Read", title: "Read", detail: "Lexer.swift"),
+                                       state: .completed))
+        let streaming = entry(4, .assistant(text: "## Report\nThe parser now handles", isStreaming: true))
 
-        let running = project([request, earlier, read, streaming], status: .running).turns[0]
-        XCTAssertFalse(running.foldsWork)
-        XCTAssertEqual(running.answers, [])
-        XCTAssertFalse(running.work[0].hidesCommentaryLabel, "Earlier commentary before a call keeps its label")
-        XCTAssertTrue(running.work[2].hidesCommentaryLabel, "Trailing streaming assistant suppresses Commentary flicker")
+        let running = project([request, note, read, read2, streaming], status: .running).turns[0]
+        XCTAssertEqual(running.work.first?.kind, .answer(text: "Checking the files.", isStreaming: false))
+        XCTAssertEqual(running.answers.map(\.kind), [.answer(text: "## Report\nThe parser now handles", isStreaming: true)])
+        XCTAssertTrue(running.foldsWork, "the turn folds once a message streams, not when it ends")
 
-        // Trailing reasoning after the streaming assistant still leaves it the tail message.
-        let trailingThought = entry(4, .reasoning(text: "Double checking", isStreaming: false))
-        let withThought = project([request, earlier, read, streaming, trailingThought], status: .running).turns[0]
-        XCTAssertTrue(withThought.work[2].hidesCommentaryLabel)
-
-        // A progress update sent as thinking stays labeled as summarized commentary.
+        // A progress update sent as thinking is a message too, in a summary.
         var summary = entry(3, .reasoning(text: "Summarizing progress", isStreaming: true))
         summary.isProgressUpdate = true
         let withSummary = project([request, summary], status: .running).turns[0]
-        XCTAssertFalse(withSummary.work[0].hidesCommentaryLabel)
-        XCTAssertTrue(withSummary.work[0].isSummary)
+        XCTAssertEqual(withSummary.answers.first?.kind, .answer(text: "Summarizing progress", isStreaming: true))
+        XCTAssertTrue(withSummary.answers.first?.isSummary == true)
 
-        // Once a subsequent tool call arrives after the message, it becomes normal commentary again.
-        let settled = entry(3, .assistant(text: "The parser now handles", isStreaming: false))
-        let followUp = entry(4, .activity(HarnessActivity(id: "c2", kind: "Bash", title: "swift test"), state: .running))
-        let afterCall = project([request, earlier, read, settled, followUp], status: .running).turns[0]
-        XCTAssertFalse(afterCall.work[2].hidesCommentaryLabel)
+        // The report, then a call to commit, then a line: all three stay in view, and the calls fold
+        // between them, each stretch reading what it folds.
+        let report = entry(4, .assistant(text: "## Report\nThe parser now handles tabs.", isStreaming: false))
+        let commit = entry(5, .activity(HarnessActivity(id: "c1", kind: "Bash", title: "git commit"), state: .completed))
+        let done = entry(6, .assistant(text: "Done.", isStreaming: false))
+        let turn = project([request, note, read, read2, report, commit, done], status: .ready,
+                           latestTurnIsComplete: true).turns[0]
+        XCTAssertEqual(turn.answers.map(\.id), [done.id.uuidString])
+        XCTAssertTrue(turn.foldsWork)
+        XCTAssertEqual(turn.workKeptWhenFolded.map(\.id), [note.id.uuidString, report.id.uuidString])
+        let stretches = turn.workStretches
+        XCTAssertEqual(stretches.map { $0.message?.id }, [nil, note.id.uuidString, report.id.uuidString])
+        XCTAssertEqual(stretches.map { $0.work.map(\.id) }, [[], [read.id.uuidString, read2.id.uuidString],
+                                                               [commit.id.uuidString]])
+        XCTAssertNotNil(stretches[1].foldTitle(harness: .claudeCode), "the fold reads the calls it hides")
+        XCTAssertNil(stretches[0].foldTitle(harness: .claudeCode))
+        XCTAssertTrue(stretches[1].opensWithAnswer)
+        XCTAssertEqual(ConversationTurnLayout.answerText(turn.work + turn.answers),
+                       "Checking the files.\n\n## Report\nThe parser now handles tabs.\n\nDone.")
+        XCTAssertEqual(ConversationTurnLayout.answerText(turn.work + turn.answers, limit: 12), "…s.\n\nDone.",
+                       "past its limit the latest words are kept")
+        XCTAssertEqual(turn.fullResponseAnswerID, done.id.uuidString)
 
-        // A stopped or cut-off turn does not treat a leftover streaming entry as actively streaming.
-        let cutOff = TranscriptConversationProjection.presentation(
-            from: [request, earlier, read, streaming], harness: .claudeCode, status: .ready,
-            latestTurnIsComplete: false, latestTurnWasCutOff: true
-        ).turns[0]
-        XCTAssertFalse(cutOff.work[2].hidesCommentaryLabel)
-
-        // Once the turn finishes with the streaming message, it becomes the closing answer.
-        let done = project([request, earlier, read, settled], status: .ready, latestTurnIsComplete: true).turns[0]
-        XCTAssertEqual(done.answers.map(\.id), [settled.id.uuidString])
-        XCTAssertTrue(done.foldsWork)
+        // A turn that ends on a call keeps its report in view and answers with it.
+        let endsOnCall = project([request, report, commit], status: .ready, latestTurnIsComplete: true)
+        XCTAssertEqual(endsOnCall.turns[0].answers, [])
+        XCTAssertEqual(endsOnCall.turns[0].workKeptWhenFolded.map(\.id), [report.id.uuidString])
+        XCTAssertEqual(endsOnCall.turns.last.flatMap { ConversationTurnLayout.answerText($0.work + $0.answers) },
+                       "## Report\nThe parser now handles tabs.")
+        XCTAssertNil(endsOnCall.turns[0].fullResponseAnswerID, "one message has its own copy")
     }
 
     func testAllowedRequestBecomesTheMarkOnItsToolOrSubtask() {
@@ -280,10 +298,10 @@ final class TranscriptConversationProjectionTests: XCTestCase {
         guard case let .error(error)? = turn.outcome else { return XCTFail("The last error is the outcome") }
         XCTAssertEqual(error.summary, "Upstream gone")
         XCTAssertEqual(turn.work.map(\.kind), [
-            .outcome(.error(ConversationTurnError(title: nil, message: "blip", isRecoverable: true, entryID: blip.id))),
-            .commentary(text: "Partial", isStreaming: false)
+            .outcome(.error(ConversationTurnError(title: nil, message: "blip", isRecoverable: true, entryID: blip.id)))
         ])
-        XCTAssertEqual(turn.work.map(\.phase), [.failed, .completed])
+        XCTAssertEqual(turn.answers.map(\.kind), [.answer(text: "Partial", isStreaming: false)])
+        XCTAssertEqual(turn.work.map(\.phase), [.failed])
         XCTAssertEqual(turn.status, .failed)
 
         // Retry is offered only for an error its provider called transient, ending the latest turn while
@@ -409,7 +427,8 @@ final class TranscriptConversationProjectionTests: XCTestCase {
         let turn = request.id.uuidString
         XCTAssertEqual(units, [
             ConversationFindUnit(id: request.id.uuidString, scrollID: turn, revealID: nil, body: .plain("Find me")),
-            ConversationFindUnit(id: said.id.uuidString, scrollID: turn, revealID: turn, body: .markdown("Commentary")),
+            // Every message stays in view of the folded turn, so none opens the turn to show it.
+            ConversationFindUnit(id: said.id.uuidString, scrollID: turn, revealID: nil, body: .markdown("Commentary")),
             ConversationFindUnit(id: answer.id.uuidString, scrollID: turn, revealID: nil, body: .markdown("Answer"))
         ])
     }

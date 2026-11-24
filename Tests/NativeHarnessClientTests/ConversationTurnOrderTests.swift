@@ -372,12 +372,15 @@ final class ConversationTurnOrderTests: XCTestCase {
 
     /// The same turn in Codex and in Claude Code — notes, a call, an answer, a message read into the
     /// running turn, two calls with thinking between them, more notes and a call, and the closing answer
-    /// — is laid out and folded alike, while it runs and once it ended, folded and opened. Folded while
-    /// it runs, the two calls after the answer stay one summary line, as they are in the opened work,
-    /// with the thinking (a Codex reasoning summary, Claude Code's thinking) inside it where it came and
-    /// counted as no call; and the turn reads its time once, on the live line beside what it does now:
-    /// the header only folds the work. Drawn in both appearances, both harnesses.
-    func testCodexAndClaudeCodeLayOutAndFoldTheSameTurnAlike() throws {
+    /// — is laid out and folded by the one rule, while it runs and once it ended, folded and opened. What
+    /// differs is only what each provider marks: Codex marks its notes as working notes, which fold;
+    /// Claude Code marks none, so its notes stay in view and only the calls between its messages fold,
+    /// each stretch on a line that reads its calls. Folded while it runs, the two calls after the answer
+    /// stay one summary line, as they are in the opened work, with the thinking (a Codex reasoning
+    /// summary, Claude Code's thinking) inside it where it came and counted as no call; and the turn
+    /// reads its time once, on the live line beside what it does now: the header only folds the work.
+    /// Drawn in both appearances, both harnesses.
+    func testCodexAndClaudeCodeLayOutTheSameTurnByOneRule() throws {
         let directory = try WindowlessRender.directory("turn-order-qa")
         for finished in [false, true] {
             let stage = finished ? "finished" : "running"
@@ -386,17 +389,30 @@ final class ConversationTurnOrderTests: XCTestCase {
                 from: sharedClaudeEntries(finished: finished), harness: .claudeCode,
                 status: finished ? .ready : .running, latestTurnIsComplete: finished
             ).turns.first)
-            for folded in [true, false] {
-                let rows = { (turn: ConversationTurn, harness: HarnessKind) in
-                    ConversationDrawOrder.rows(turn, harness: harness, folded: folded).map { "\($0.part) \($0.shape): \($0.text)" }
-                }
-                XCTAssertEqual(rows(codex, .codex), rows(claude, .claudeCode), "\(stage), folded \(folded)")
+            // Opened, both list everything where it happened; only the notes' marks differ, and so where
+            // the note being written is drawn: Codex's in the work, Claude Code's as the closing answer.
+            let opened = { (turn: ConversationTurn, harness: HarnessKind) in
+                ConversationDrawOrder.rows(turn, harness: harness, folded: false)
+                    .map { "\($0.shape.replacingOccurrences(of: "commentary", with: "answer")): \($0.text)" }
             }
+            XCTAssertEqual(opened(codex, .codex), opened(claude, .claudeCode), stage)
             XCTAssertTrue(codex.foldsWork && claude.foldsWork, stage)
-            XCTAssertEqual(ConversationDrawOrder.rows(codex, harness: .codex).map { "\($0.shape): \($0.text)" }, finished
+            // Folded, Claude Code keeps every message in view, each fold between them reading its calls.
+            let claudeFolded = ConversationDrawOrder.rows(claude, harness: .claudeCode)
+            XCTAssertEqual(claudeFolded.map { $0.shape == "fold" ? "fold" : "\($0.shape): \($0.text)" }, finished
+                ? ["message: Issue the certificate, then make the API key.", "answer: Checking the certificate page.",
+                   "fold", "answer: The certificate is issued.", "message: Also make the API key.", "fold",
+                   "answer: Making the key.", "fold", "answer: Both are in Downloads."]
+                : ["message: Issue the certificate, then make the API key.", "answer: Checking the certificate page.",
+                   "fold", "answer: The certificate is issued.", "message: Also make the API key.",
+                   "call: swift run keygen", "reasoning: \(Self.thought)", "call: ls Downloads",
+                   "answer (streaming): Making the key.", "line: \(L10n.string("Working"))"], stage)
+            XCTAssertFalse(claudeFolded.contains { $0.shape == "fold" && $0.text == L10n.string("Work details") },
+                           "each fold reads the calls it folds")
+            XCTAssertEqual(ConversationDrawOrder.rows(codex, harness: .codex)
+                .map { $0.shape == "fold" ? "fold" : "\($0.shape): \($0.text)" }, finished
                 ? ["message: Issue the certificate, then make the API key.", "answer: The certificate is issued.",
-                   "message: Also make the API key.", "fold: \(L10n.string("Work details"))",
-                   "answer: Both are in Downloads."]
+                   "message: Also make the API key.", "fold", "answer: Both are in Downloads."]
                 : ["message: Issue the certificate, then make the API key.", "answer: The certificate is issued.",
                    "message: Also make the API key.", "call: swift run keygen", "reasoning: \(Self.thought)",
                    "call: ls Downloads", "commentary (streaming): Making the key.", "line: \(L10n.string("Working"))"])
@@ -431,7 +447,9 @@ final class ConversationTurnOrderTests: XCTestCase {
                     try WindowlessRender.writePNG(folded.capture.bitmap, to: directory.appending(
                         path: "\(harness)-\(stage)-folded-\(appearance.suffix).png"))
                     let texts = folded.elements.map(\.description).joined(separator: "\n")
-                    XCTAssertFalse(texts.contains("Checking the certificate page."), "\(harness) \(stage) folds:\n\(texts)")
+                    // Codex's notes fold; Claude Code's message stays where it was written.
+                    XCTAssertEqual(texts.contains("Checking the certificate page."), harness == "claude-code",
+                                   "\(harness) \(stage):\n\(texts)")
                     XCTAssertTrue(texts.contains("The certificate is issued."), "\(harness) \(stage):\n\(texts)")
                     XCTAssertTrue(texts.contains("Also make the API key."), "\(harness) \(stage):\n\(texts)")
                     if !finished {
@@ -484,8 +502,8 @@ final class ConversationTurnOrderTests: XCTestCase {
     // MARK: - Claude Code, live
 
     /// Claude Code reads a message into its running turn at its next step, after the answer it was
-    /// writing ended: the answer stays above the message, and the turn's end moves nothing. Once the
-    /// closing answer follows the message, the work folds and the message stays in view.
+    /// writing ended: the answer stays above the message, and the turn's end moves nothing. Every
+    /// message stays in view, folded or not, and only the calls between them fold.
     func testAClaudeTurnReadsInOrderWhileItStreamsAndWhenItEnds() throws {
         var session = ClaudeLiveTurn()
         session.send("Fix the build")
@@ -496,12 +514,14 @@ final class ConversationTurnOrderTests: XCTestCase {
         session.delta("Running ")
         let streamingTurn = try session.turn(status: .running)
         XCTAssertEqual(session.drawn(streamingTurn), [
-            "message: Fix the build", "commentary: Looking at the log.", "call: swift build",
-            "answer: Fixed: the import was missing.", "message: Also run the tests", "commentary (streaming): Running "
+            "message: Fix the build", "answer: Looking at the log.", "call: swift build",
+            "answer: Fixed: the import was missing.", "message: Also run the tests", "answer (streaming): Running "
         ], ConversationDrawOrder.listing(streamingTurn, harness: .claudeCode, folded: false))
-        XCTAssertEqual(session.drawn(streamingTurn, folded: true), [
-            "message: Fix the build", "answer: Fixed: the import was missing.", "message: Also run the tests",
-            "commentary (streaming): Running "
+        // Every message stays in view, and the call between the first two folds on its own line.
+        let folds = { (rows: [String]) in rows.map { $0.hasPrefix("fold: ") ? "fold" : $0 } }
+        XCTAssertEqual(folds(session.drawn(streamingTurn, folded: true)), [
+            "message: Fix the build", "answer: Looking at the log.", "fold", "answer: Fixed: the import was missing.",
+            "message: Also run the tests", "answer (streaming): Running "
         ], ConversationDrawOrder.listing(streamingTurn, harness: .claudeCode))
         session.delta("the tests.")
         session.complete("Running the tests.")
@@ -510,13 +530,13 @@ final class ConversationTurnOrderTests: XCTestCase {
         session.end()
         let finished = try session.turn(status: .ready)
         XCTAssertEqual(session.drawn(finished), [
-            "message: Fix the build", "commentary: Looking at the log.", "call: swift build",
-            "answer: Fixed: the import was missing.", "message: Also run the tests", "commentary: Running the tests.",
+            "message: Fix the build", "answer: Looking at the log.", "call: swift build",
+            "answer: Fixed: the import was missing.", "message: Also run the tests", "answer: Running the tests.",
             "call: swift test", "answer: All tests pass."
         ], ConversationDrawOrder.listing(finished, harness: .claudeCode, folded: false))
-        XCTAssertEqual(session.drawn(finished, folded: true), [
-            "message: Fix the build", "answer: Fixed: the import was missing.", "message: Also run the tests",
-            "fold: \(L10n.string("Work details"))", "answer: All tests pass."
+        XCTAssertEqual(folds(session.drawn(finished, folded: true)), [
+            "message: Fix the build", "answer: Looking at the log.", "fold", "answer: Fixed: the import was missing.",
+            "message: Also run the tests", "answer: Running the tests.", "fold", "answer: All tests pass."
         ])
     }
 

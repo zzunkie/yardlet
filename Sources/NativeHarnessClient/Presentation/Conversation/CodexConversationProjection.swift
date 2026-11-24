@@ -238,22 +238,16 @@ enum CodexConversationProjection {
     }
 
     /// What `AppModel.latestAnswer` reads in the latest turn `presentation` draws, without projecting
-    /// the turn's other items: the messages said to the person in its work, and of what follows the
-    /// last of them only as much as decides whether that one closes the turn (`ConversationTurnLayout`).
+    /// the turn's other items: the messages in its work, which are all `ConversationTurnLayout.answerText`
+    /// reads.
     static func latestAnswer(in state: CodexTaskState, workspaceURL: URL) -> String? {
         guard case let (_, items, shown)? = latestWork(in: state, workspaceURL: workspaceURL) else { return nil }
-        var said: [ConversationItem] = []
-        var lastSaidIndex = 0
-        for (index, item) in items.enumerated() {
-            guard case .agentMessage = item.content, let shown = shown(item), case .answer = shown.kind else { continue }
-            said.append(shown)
-            lastSaidIndex = index
-        }
-        guard let last = said.last else { return nil }
-        let closes = !last.isSentWhileWorking
-            && items[(lastSaidIndex + 1)...].lazy.compactMap(shown).allSatisfy(ConversationTurnLayout.leavesAnswerLast)
-        return ConversationTurnLayout.latestAnswer(answers: closes ? [last] : [],
-                                                   work: closes ? Array(said.dropLast()) : said)
+        return ConversationTurnLayout.answerText(items.compactMap { item -> ConversationItem? in
+            switch item.content {
+            case .agentMessage, .userMessage: shown(item)
+            default: nil
+            }
+        })
     }
 
     /// The last item of the latest turn `presentation` draws, the last of its work and answers, read

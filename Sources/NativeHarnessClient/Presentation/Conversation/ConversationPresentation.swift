@@ -266,11 +266,6 @@ struct ConversationItem: Identifiable, Equatable, Sendable {
     /// calls, which the API sent back as thinking (`TranscriptEntry.isProgressUpdate`). The message
     /// says so, as Claude Code's terminal marks it "summarized".
     var isSummary: Bool = false
-    /// A streaming assistant message at the tail of a running shared-transcript turn whose final
-    /// role (working notes vs. closing answer) is not yet known: it stays in the work without
-    /// folding the turn, and suppresses the "Commentary" badge so a streaming final answer does not
-    /// flicker when the turn ends.
-    var hidesCommentaryLabel: Bool = false
     /// When the provider's record says the message was sent or written, which its actions row shows.
     /// Nil when no record names a time for it (a conversation an ACP agent replayed, a Codex item of
     /// a saved turn other than its request and its last message), so no time is made up.

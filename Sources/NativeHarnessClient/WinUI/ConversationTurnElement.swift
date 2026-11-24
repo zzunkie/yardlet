@@ -93,7 +93,9 @@ final class ConversationTurnElement {
             // While the turn runs, its last run with a call still running is the live line's, not listed as well.
             for run in ConversationLiveWork.listedRuns(turn) { add(run, foldsWork: foldsWork, stretchWasOpened: false) }
         } else {
-            // What the fold keeps in view, parted at the messages sent into the turn.
+            // A running turn keeps its plan in view while its work folds: it is what the turn works through.
+            if turn.status == .running, let plan = turn.plan { view.children.append(planCard(plan)) }
+            // What the fold keeps in view, parted at the messages in view.
             for stretch in ConversationWorkGrouping.stretchesWhenFolded(turn, live: live) { add(stretch, foldsWork: foldsWork) }
         }
         for item in turn.answers { add(item) }
@@ -178,11 +180,17 @@ final class ConversationTurnElement {
         if let message = stretch.message { add(message) }
         if folds {
             let id = stretch.id
-            view.children.append(workDetailsFold(isOpen: isOpen) { [weak self] open in
+            let fold = workDetailsFold(title: stretch.foldTitle(harness: context.harness), isOpen: isOpen) { [weak self] open in
                 guard let self else { return }
                 if open { self.openedStretches.insert(id) } else { self.openedStretches.remove(id) }
                 self.draw()
-            })
+            }
+            // Between two messages the provider wrote, the fold sits close to both.
+            if stretch.opensWithAnswer {
+                let inset = -ConversationStyle.itemSpacing / 2
+                fold.margin = Thickness(left: 0, top: inset, right: 0, bottom: inset)
+            }
+            view.children.append(fold)
         }
         for run in ConversationWorkGrouping.runs(isOpen ? Array(stretch.work) : stretch.kept) {
             add(run, foldsWork: foldsWork, stretchWasOpened: isOpen)
@@ -194,7 +202,7 @@ final class ConversationTurnElement {
     /// The work summary and its fold: how long a finished turn worked (`workTimeTitle`), or "Work details" where it
     /// has no time to read; opening it draws the turn again with its work.
     private func header(foldsWork: Bool) -> UIElement {
-        let canExpand = foldsWork && turn.hasWorkDetails
+        let canExpand = foldsWork && turn.opensFoldedWork
         let isOpen = showsWorkDetails
         guard turn.showsWorkTime else {
             return workDetailsFold(isOpen: isOpen) { [weak self] open in self?.showWork(open) }
@@ -213,9 +221,11 @@ final class ConversationTurnElement {
         }
     }
 
-    /// "Work details" with its list mark and caret: a fold with no time to read, the turn's or a stretch's.
-    private func workDetailsFold(isOpen: Bool, toggle: @escaping @MainActor (Bool) -> Void) -> UIElement {
-        let title = L10n.string("Work details")
+    /// "Work details", or the calls a stretch folds (`ConversationWorkStretch.foldTitle`), with its list mark and
+    /// caret: a fold with no time to read, the turn's or a stretch's.
+    private func workDetailsFold(title: String? = nil, isOpen: Bool,
+                                 toggle: @escaping @MainActor (Bool) -> Void) -> ToggleButton {
+        let title = title ?? L10n.string("Work details")
         let words = ConversationStyle.text(title, size: ConversationStyle.captionSize, tone: .secondary,
                                            selectable: false, wraps: false)
         words.verticalAlignment = .center
