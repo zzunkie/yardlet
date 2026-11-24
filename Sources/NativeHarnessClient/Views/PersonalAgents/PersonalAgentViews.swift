@@ -97,7 +97,7 @@ private struct PersonalAgentRow: View {
                                         motion: center.motion(for: agent), size: 22)
                 Text(agent.name)
                     .font(.system(size: 13 * scale, weight: isSelected ? .semibold : .regular))
-                    .foregroundStyle(isSelected ? AnyShapeStyle(ParityTheme.accentText) : AnyShapeStyle(.primary))
+                    .foregroundStyle(.primary)
                     .lineLimit(1)
                 Spacer(minLength: 4)
                 if center.isPaused(agent) {
@@ -107,7 +107,7 @@ private struct PersonalAgentRow: View {
             }
             .padding(.horizontal, 8)
             .frame(height: 32 * scale)
-            .background(isSelected ? AnyShapeStyle(ParityTheme.accentSoftFill)
+            .background(isSelected ? AnyShapeStyle(ParityTheme.selectedFill)
                         : (isHovering ? AnyShapeStyle(ParityTheme.hoverFill) : AnyShapeStyle(.clear)),
                         in: SidebarMetrics.rowShape())
             .contentShape(Rectangle())

@@ -224,7 +224,7 @@ private struct CalendarUpcomingRow: View {
                 }
                 Text(title)
                     .font(.system(size: 13 * scale, weight: isSelected ? .medium : .regular))
-                    .foregroundStyle(isSelected ? AnyShapeStyle(ParityTheme.accentText) : AnyShapeStyle(.primary))
+                    .foregroundStyle(.primary)
                     .lineLimit(1)
                     .layoutPriority(1)
                 Spacer(minLength: 6)
@@ -241,7 +241,7 @@ private struct CalendarUpcomingRow: View {
             }
             .padding(.trailing, SidebarMetrics.rowTrailingPadding)
             .frame(height: SidebarMetrics.rowHeight * scale)
-            .background(isSelected ? AnyShapeStyle(ParityTheme.accentSoftFill)
+            .background(isSelected ? AnyShapeStyle(ParityTheme.selectedFill)
                         : (isHovering ? AnyShapeStyle(ParityTheme.hoverFill) : AnyShapeStyle(.clear)),
                         in: SidebarMetrics.rowShape())
             .contentShape(SidebarMetrics.rowShape())

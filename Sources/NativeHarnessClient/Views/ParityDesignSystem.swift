@@ -286,25 +286,25 @@ enum ParityTheme {
     static let canvas = Color(ThemeSurface.canvas)
     static let originalCanvas = Color(nsColor: NSColor(name: "YardletCanvas") { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(srgbRed: 0.092, green: 0.098, blue: 0.118, alpha: 1) // #17191E
-            : NSColor(srgbRed: 0.988, green: 0.988, blue: 0.992, alpha: 1) // #FCFCFD
+            ? NSColor(srgbRed: 0.098, green: 0.100, blue: 0.108, alpha: 1) // #191A1B
+            : NSColor(srgbRed: 0.988, green: 0.988, blue: 0.990, alpha: 1) // #FCFCFC
     })
     static let sidebar = Color(ThemeSurface.sidebar)
     static let originalSidebar = Color(nsColor: NSColor(name: "YardletSidebar") { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(srgbRed: 0.120, green: 0.129, blue: 0.157, alpha: 1) // #1F2128
-            : NSColor(srgbRed: 0.945, green: 0.953, blue: 0.965, alpha: 1) // #F1F3F6
+            ? NSColor(srgbRed: 0.125, green: 0.129, blue: 0.141, alpha: 1) // #202124
+            : NSColor(srgbRed: 0.957, green: 0.961, blue: 0.969, alpha: 1) // #F4F5F7
     })
     static let elevated = Color(ThemeSurface.elevated)
     static let originalElevated = Color(nsColor: NSColor(name: "YardletElevated") { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(srgbRed: 0.145, green: 0.157, blue: 0.196, alpha: 1) // #252832
+            ? NSColor(srgbRed: 0.153, green: 0.157, blue: 0.173, alpha: 1) // #27282C
             : .white
     })
     static let input = Color(ThemeSurface.input)
     static let originalInput = Color(nsColor: NSColor(name: "YardletInput") { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(srgbRed: 0.165, green: 0.180, blue: 0.224, alpha: 1) // #2A2E39
+            ? NSColor(srgbRed: 0.173, green: 0.176, blue: 0.192, alpha: 1) // #2C2D31
             : .white
     })
     /// Subtle stepped fill for inner section rails (Mail, Calendar, Personal agents) inside the detail surface.
@@ -506,16 +506,16 @@ struct ParityIconButton: View {
     var body: some View {
         Button(action: action) {
             if isProminent {
-                // Primary send action uses the active theme accent when enabled and dims quietly when empty.
+                // Primary send action keeps neutral charcoal/off-white contrast and dims quietly when empty.
                 Image(systemName: systemName)
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(isEnabled ? AnyShapeStyle(ParityTheme.onAccentButton) : AnyShapeStyle(.tertiary))
+                    .foregroundStyle(isEnabled ? AnyShapeStyle(ParityTheme.primaryActionForeground) : AnyShapeStyle(.tertiary))
                     .frame(width: 28, height: 28)
                     .background(
-                        isEnabled ? AnyShapeStyle(ParityTheme.accentButtonFill) : AnyShapeStyle(ParityTheme.subtleFill),
+                        isEnabled ? AnyShapeStyle(ParityTheme.primaryActionFill) : AnyShapeStyle(ParityTheme.subtleFill),
                         in: RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous)
                     )
-                    .opacity(isEnabled && isHovering ? 0.9 : 1)
+                    .opacity(isEnabled && isHovering ? 0.88 : 1)
                     .contentShape(RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous))
             } else {
                 Image(systemName: systemName)
@@ -743,8 +743,8 @@ private struct InnerRailSurfaceStyle: ShapeStyle, Hashable {
     func resolve(in environment: EnvironmentValues) -> Color.Resolved {
         let isDark = environment.colorScheme == .dark
         let base = Color(nsColor: isDark
-            ? NSColor(srgbRed: 0.078, green: 0.086, blue: 0.106, alpha: 1) // #14161B
-            : NSColor(srgbRed: 0.969, green: 0.973, blue: 0.980, alpha: 1) // #F7F8FA
+            ? NSColor(srgbRed: 0.078, green: 0.082, blue: 0.094, alpha: 1) // #141518
+            : NSColor(srgbRed: 0.973, green: 0.973, blue: 0.976, alpha: 1) // #F8F8F9
         ).resolve(in: environment)
         guard let background = environment.yardletColorTheme[ThemeMode(environment.colorScheme)].background else {
             return base
@@ -764,8 +764,8 @@ private struct UserBubbleSurfaceStyle: ShapeStyle, Hashable {
     func resolve(in environment: EnvironmentValues) -> Color.Resolved {
         let isDark = environment.colorScheme == .dark
         let base = Color(nsColor: isDark
-            ? NSColor(srgbRed: 0.114, green: 0.133, blue: 0.173, alpha: 1) // #1D222C
-            : NSColor(srgbRed: 0.933, green: 0.949, blue: 0.969, alpha: 1) // #EEF2F7
+            ? NSColor(srgbRed: 0.137, green: 0.145, blue: 0.165, alpha: 1) // #23252A
+            : NSColor(srgbRed: 0.949, green: 0.953, blue: 0.961, alpha: 1) // #F2F3F5
         ).resolve(in: environment)
         guard let background = environment.yardletColorTheme[ThemeMode(environment.colorScheme)].background else {
             return base
@@ -784,7 +784,7 @@ private struct UserBubbleSurfaceStyle: ShapeStyle, Hashable {
 private struct AccentSoftFillStyle: ShapeStyle, Hashable {
     func resolve(in environment: EnvironmentValues) -> Color.Resolved {
         let accent = ParityTheme.accent.resolve(in: environment)
-        let opacity: Float = environment.colorScheme == .dark ? 0.18 : 0.11
+        let opacity: Float = environment.colorScheme == .dark ? 0.12 : 0.08
         return Color.Resolved(red: accent.red, green: accent.green, blue: accent.blue, opacity: opacity)
     }
 }
@@ -826,8 +826,8 @@ private struct ParitySurfaceElevation: ViewModifier {
             .overlay {
                 if showsFocusRing, isFocused, !accentBorder {
                     shape
-                        .stroke(ParityTheme.accent.opacity(colorScheme == .dark ? 0.24 : 0.15), lineWidth: 3)
-                        .padding(-1.5)
+                        .stroke(ParityTheme.accent.opacity(colorScheme == .dark ? 0.11 : 0.07), lineWidth: 2.5)
+                        .padding(-1.25)
                         .allowsHitTesting(false)
                 }
             }
@@ -839,7 +839,7 @@ private struct ParitySurfaceElevation: ViewModifier {
     private var borderColor: Color {
         if accentBorder { return ParityTheme.accent }
         if contrast == .increased { return Color.primary.opacity(isFocused ? 0.44 : 0.28) }
-        if showsFocusRing, isFocused { return ParityTheme.accent.opacity(colorScheme == .dark ? 0.72 : 0.62) }
+        if showsFocusRing, isFocused { return ParityTheme.accent.opacity(colorScheme == .dark ? 0.38 : 0.32) }
         return isFocused ? ParityTheme.strongSeparator : ParityTheme.separator
     }
 }

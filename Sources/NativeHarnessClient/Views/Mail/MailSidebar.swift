@@ -334,7 +334,7 @@ struct MailThreadRow: View {
                     HStack(spacing: 4) {
                         Text(MailText.senders(thread, me: me))
                             .font(.system(size: 13 * scale, weight: thread.isUnread ? .semibold : .medium))
-                            .foregroundStyle(isSelected ? AnyShapeStyle(ParityTheme.accentText) : AnyShapeStyle(.primary))
+                            .foregroundStyle(.primary)
                             .lineLimit(1)
                         Spacer(minLength: 4)
                         if thread.hasAttachments {
@@ -365,7 +365,7 @@ struct MailThreadRow: View {
             .padding(.vertical, 8 * scale)
             .padding(.trailing, SidebarMetrics.rowTrailingPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isSelected ? AnyShapeStyle(ParityTheme.accentSoftFill)
+            .background(isSelected ? AnyShapeStyle(ParityTheme.selectedFill)
                         : (isHovering ? AnyShapeStyle(ParityTheme.hoverFill) : AnyShapeStyle(.clear)),
                         in: RoundedRectangle(cornerRadius: ParityRadius.row, style: .continuous))
             .overlay(alignment: .leading) {
