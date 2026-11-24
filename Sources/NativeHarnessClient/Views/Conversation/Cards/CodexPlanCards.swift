@@ -34,11 +34,12 @@ struct CodexPlanCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             ForEach(plan.steps) { step in
-                HStack(alignment: .top, spacing: 7) {
+                HStack(alignment: .firstTextBaseline, spacing: 7) {
                     Image(systemName: planSymbol(step.status))
                         .font(.system(size: 11 * interfaceScale, weight: .semibold))
                         .foregroundStyle(planTint(step.status))
                         .frame(width: 14)
+                        .centeredOnCapHeight(ofTextSize: 12 * interfaceScale)
                     Text(step.text)
                         .font(.system(size: 12 * interfaceScale))
                         .foregroundStyle(.primary)

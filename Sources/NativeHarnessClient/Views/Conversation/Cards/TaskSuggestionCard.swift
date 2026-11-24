@@ -369,7 +369,7 @@ struct TaskSuggestionRailRow: View {
                         Image(systemName: "plus.bubble")
                             .font(.system(size: 11 * interfaceScale))
                             .foregroundStyle(.secondary)
-                            .frame(width: 16)
+                            .frame(width: 16 * interfaceScale)
                             .accessibilityHidden(true)
                         Text(title)
                             .lineLimit(1)
@@ -415,7 +415,7 @@ struct TaskSuggestionRailRow: View {
                 summary
                     .font(.system(size: 11.5 * interfaceScale))
                     .lineLimit(2)
-                    .padding(.leading, 22)
+                    .padding(.leading, 16 * interfaceScale + 6)
             }
             if case let .failed(reason)? = progress {
                 Text(reason)
@@ -424,7 +424,7 @@ struct TaskSuggestionRailRow: View {
                     .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
-                    .padding(.leading, 22)
+                    .padding(.leading, 16 * interfaceScale + 6)
             }
         }
         .accessibilityElement(children: .contain)

@@ -411,7 +411,7 @@ struct ParityComposerControl: View {
             }
             if showsChevron {
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .bold))
+                    .font(.system(size: 8 * interfaceScale, weight: .bold))
             }
         }
         .foregroundStyle(isActive ? Color.primary : tint)
@@ -548,12 +548,14 @@ struct ParityHeaderButton: View {
     let systemName: String
     let help: String
     var shortcut: KeyboardShortcut? = nil
+    /// What it shows is open (a details pane), drawn in the label color.
+    var isOn = false
     let action: () -> Void
     @State private var isHovering = false
 
     var body: some View {
         Button(action: action) {
-            ParityHeaderSymbol(systemName: systemName, isHovering: isHovering)
+            ParityHeaderSymbol(systemName: systemName, isHovering: isHovering, isOn: isOn)
         }
         .buttonStyle(.borderless)
         .parityPointer()
@@ -590,13 +592,14 @@ struct ParityHeaderMenu<Content: View>: View {
 struct ParityHeaderSymbol: View {
     let systemName: String
     var isHovering = false
+    var isOn = false
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.yardletInterfaceScale) private var interfaceScale
 
     var body: some View {
         Image(systemName: systemName)
             .font(.system(size: 12 * interfaceScale))
-            .foregroundStyle(isEnabled ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
+            .foregroundStyle(!isEnabled ? AnyShapeStyle(.tertiary) : isOn ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
             .frame(width: ParityHeader.controlSize, height: ParityHeader.controlSize)
             .background(isHovering && isEnabled ? ParityTheme.hoverFill : .clear,
                         in: RoundedRectangle(cornerRadius: ParityHeader.controlRadius, style: .continuous))

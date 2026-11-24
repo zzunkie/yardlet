@@ -95,7 +95,7 @@ struct SessionRailAgentRow: View {
             Image(systemName: symbol)
                 .font(.system(size: 11 * interfaceScale))
                 .foregroundStyle(.secondary)
-                .frame(width: 16)
+                .frame(width: 16 * interfaceScale)
                 .accessibilityHidden(true)
             // The harness and model beside the name where both fit; the name alone where they do not.
             ViewThatFits(in: .horizontal) {

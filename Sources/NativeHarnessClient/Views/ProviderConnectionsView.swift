@@ -77,14 +77,11 @@ struct ProviderConnectionControl: View {
     let action: () -> Void
 
     var body: some View {
+        // The composer's own control, so it matches the controls beside it.
         Button(action: action) {
-            HStack(spacing: 5) {
-                Image(systemName: "person.crop.circle")
-                Text(title).lineLimit(1)
-                Image(systemName: "chevron.down").font(.system(size: 8))
-            }
+            ParityComposerControl(title: title, systemName: "person.crop.circle", showsChevron: true)
         }
-        .font(.caption).buttonStyle(.borderless).parityPointer()
+        .buttonStyle(.plain).parityPointer()
         .frame(maxWidth: 190, alignment: .leading)
         .help(accessibilityTitle)
         .accessibilityLabel(L10n.string("Choose account"))

@@ -56,7 +56,7 @@ struct CodexWorkSummaryLabel: View {
             }
 
             if canExpand {
-                DisclosureCaret(isOpen: isExpanded)
+                DisclosureCaret(isOpen: isExpanded, size: 8 * interfaceScale)
                     .centeredOnCapHeight(ofTextSize: Self.fontSize * interfaceScale)
             }
         }

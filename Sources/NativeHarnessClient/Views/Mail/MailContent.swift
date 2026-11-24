@@ -384,7 +384,8 @@ struct MailFoldedMessage: View {
     var body: some View {
         Button(action: open) {
             HStack(spacing: 10) {
-                MailSenderInitial(address: message.from)
+                // The open message's size, so a folded one does not shift its name.
+                MailSenderInitial(address: message.from, size: 30 * scale)
                 Text(MailText.name(message.from, me: me)).font(.system(size: 13 * scale, weight: .semibold)).lineLimit(1)
                 Text(message.snippet).font(.system(size: 13 * scale)).foregroundStyle(.secondary).lineLimit(1)
                 Spacer(minLength: 8)

@@ -89,7 +89,7 @@ struct MailListRail: View {
                     }
                 }
             }
-            .font(.caption.weight(.semibold))
+            .font(.yardlet(.caption, scale: scale).weight(.semibold))
             .foregroundStyle(.secondary)
             let folder = center.folder(window.mailbox)
             HStack(spacing: 6) {

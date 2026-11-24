@@ -50,6 +50,8 @@ struct CalendarEventDetail: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 ParityIconButton(systemName: "xmark", help: L10n.string("Close"), action: onClose)
+                    .environment(\.parityHeaderControls, true)
+                    .centeredOnCapHeight(ofTextSize: 18 * scale)
             }
             Text(CalendarText.when(event, calendar: calendar))
                 .font(.system(size: 13 * scale))
@@ -157,7 +159,8 @@ struct CalendarEventDetail: View {
             Image(systemName: symbol)
                 .font(.system(size: 11 * scale, weight: .medium))
                 .foregroundStyle(.secondary)
-                .frame(width: 16)
+                .frame(width: 16 * scale)
+                .centeredOnCapHeight(ofTextSize: 13 * scale)
                 .accessibilityHidden(true)
             Text(text)
                 .font(.system(size: 13 * scale))

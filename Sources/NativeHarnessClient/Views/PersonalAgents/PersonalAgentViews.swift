@@ -583,16 +583,12 @@ struct PersonalAgentConversationView: View {
                 PersonalAgentLiveLabel(live: live, agent: agent, reconnecting: reconnecting)
                 Spacer(minLength: 8)
                 originalMenu
-                Button(action: refresh) { Image(systemName: "arrow.clockwise").frame(width: 26, height: 26) }
-                    .buttonStyle(.borderless).parityPointer().disabled(conversation.isLoading)
-                    .help(L10n.string("Refresh")).accessibilityLabel(L10n.string("Refresh conversation"))
-                Button(action: toggleDetails) {
-                    Image(systemName: "sidebar.right").frame(width: 26, height: 26)
-                        .foregroundStyle(showsDetails ? Color.primary : Color.secondary)
-                }
-                .buttonStyle(.borderless).parityPointer()
-                .help(L10n.string(showsDetails ? "Hide dot details" : "Show dot details"))
-                .accessibilityLabel(L10n.string(showsDetails ? "Hide dot details" : "Show dot details"))
+                ParityHeaderButton(systemName: "arrow.clockwise", help: L10n.string("Refresh"), action: refresh)
+                    .disabled(conversation.isLoading)
+                    .accessibilityLabel(L10n.string("Refresh conversation"))
+                ParityHeaderButton(systemName: "sidebar.right",
+                                   help: L10n.string(showsDetails ? "Hide dot details" : "Show dot details"),
+                                   isOn: showsDetails, action: toggleDetails)
             }
             .padding(.horizontal, 20).frame(height: Self.headerHeight)
             if let failure = conversation.failure ?? connectionFailure {
@@ -668,7 +664,7 @@ struct PersonalAgentConversationView: View {
     /// provider's app installed, the app's Dots home, which names no dot. Each opens with the sign-in
     /// its browser or app already has.
     private var originalMenu: some View {
-        Menu {
+        ParityHeaderMenu(systemName: "arrow.up.right.square", help: L10n.string("Open in Dots")) {
             if let page = DotsLinks.web(for: agent) {
                 Button(L10n.string("Open This Dot on the Web")) { openWeb(page) }
             }
@@ -678,17 +674,7 @@ struct PersonalAgentConversationView: View {
                     original.openApp(dotsApp) { openFailed = !$0 }
                 }
             }
-        } label: {
-            // The words name the menu to accessibility; only the symbol shows.
-            Label(L10n.string("Open in Dots"), systemImage: "arrow.up.right.square")
-                .labelStyle(.iconOnly)
-                .frame(width: 26, height: 26)
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .parityPointer()
-        .help(L10n.string("Open in Dots"))
     }
 
     private func openWeb(_ page: URL) {
@@ -1419,7 +1405,7 @@ private struct PersonalAgentFileChip: View {
                 .font(.yardlet(.caption2, scale: interfaceScale))
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 7)
-                .frame(height: 24)
+                .frame(height: 24 * interfaceScale)
                 .background(ParityTheme.subtleFill, in: Capsule())
             }
         }
