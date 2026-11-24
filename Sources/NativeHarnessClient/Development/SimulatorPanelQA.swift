@@ -159,6 +159,7 @@ final class SimulatorPanelQA {
               back && workspace.panels.trailingSurfaceID == Self.simulatorTabID && center.claims[identity] == session,
               "\(workspace.panels)")
 
+        await checkCopy(of: identity, window: window, workspace: workspace)
         await checkAgentTools(identity, window: window, workspace: workspace)
 
         // Turned off: every Simulator tab closes, the launcher leaves Simulator out, and the helper lets the device go.
@@ -175,6 +176,51 @@ final class SimulatorPanelQA {
         try? await Task.sleep(for: .seconds(1))
         await capture(window, "off")
         UserDefaults.yardlet.removeObject(forKey: SimulatorPreference.key)
+    }
+
+    /// Another task uses the device: this task's new Simulator tab picking it gets a copy of its own, a new simulator
+    /// that boots and shows live while the original's screen stays attached for the other task, and closing the tab
+    /// deletes the copy from Xcode's list.
+    private func checkCopy(of identity: SimulatorDeviceIdentity, window: NSWindow, workspace: TaskWorkspaceState) async {
+        let center = model.simulators
+        let screens = MacSimulatorScreens.shared
+        let other = UUID()
+        center.detach(session, tab: Self.simulatorTab)
+        _ = await center.attach(identity, to: other, tab: UUID(), by: .person)
+        let copyTab = UUID()
+        workspace.setPanels(Navigation.showing(Navigation.simulatorTabID(copyTab), in: workspace.panels))
+        let attached = await center.attach(identity, to: session, tab: copyTab, by: .person)
+        guard case let .attached(attachment) = attached, attachment.copyOf == identity else {
+            return check("copy: a simulator another task uses opens as this task's copy", false, "\(attached)")
+        }
+        let copy = attachment.device.identity
+        check("copy: a simulator another task uses opens as this task's copy",
+              copy != identity && attachment.isClaimed && attachment.startedNow && center.claims[identity] == other,
+              "\(attachment)")
+        let live = await waitUntil(.seconds(60)) { self.screenView(in: window)?.frameDisplay.current != nil }
+        // The original's screen, which the other task's tab would show, streams beside the copy's.
+        let toolchain = center.toolchain(for: .iOS) ?? SimulatorToolchain(directory: "")
+        let original = try? await screens.attachForTools(.init(device: identity, adbSerial: nil, toolchain: toolchain))
+        defer { screens.releaseForTools(identity) }
+        let both = await waitUntil(.seconds(30)) {
+            if original != nil, case .attached = screens.link(of: identity), case .attached = screens.link(of: copy) {
+                return true
+            }
+            return false
+        }
+        check("copy: the copy shows live while the original's screen stays attached", live && both,
+              "copy \(String(describing: screens.link(of: copy))), original \(String(describing: screens.link(of: identity)))")
+        try? await Task.sleep(for: .seconds(3))
+        await capture(window, "copy")
+
+        workspace.setPanels(Navigation.closingTrailingTab(Navigation.simulatorTabID(copyTab), in: workspace.panels))
+        let deleted = await waitUntil(.seconds(60)) {
+            center.copies[copy] == nil && center.device(copy) == nil
+        }
+        check("copy: closing its tab deletes the copy from Xcode's list", deleted, "\(center.copies)")
+        center.detach(other, tab: center.tab(attaching: identity, in: other) ?? UUID())
+        _ = await center.attach(identity, to: session, tab: Self.simulatorTab, by: .person)
+        workspace.setPanels(Navigation.showing(Self.simulatorTabID, in: workspace.panels))
     }
 
     /// The agent's tools as a harness calls them: the fixture hands the script the task's `yardlet-mcp` launch

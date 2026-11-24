@@ -79,6 +79,8 @@ struct SimulatorDevice: Equatable, Sendable, Identifiable {
     var osVersion: String
     /// The iOS runtime's identifier; nil for Android.
     var runtimeIdentifier: String? = nil
+    /// The iOS device type's identifier (`com.apple.CoreSimulator.SimDeviceType.iPhone-17`); nil for Android.
+    var deviceTypeIdentifier: String? = nil
     /// The serial adb knows a running Android device by ("emulator-5554"); nil for iOS and for an AVD that is off.
     var adbSerial: String? = nil
 
@@ -157,4 +159,18 @@ protocol SimulatorBackend: Sendable {
     /// The boot the device runs now; nil when it is off or its boot cannot be read.
     func bootIdentity(of device: SimulatorDeviceIdentity, with toolchain: SimulatorToolchain) async
         -> SimulatorBootIdentity?
+    /// Makes a separate device of the same model and OS as a simulator or emulator, which a task uses while another
+    /// task uses the original: fresh, without the original's apps and data. Returns it, off; it lists with the
+    /// platform's devices until `deleteCopy` removes it.
+    func makeCopy(of device: SimulatorDevice, with toolchain: SimulatorToolchain) async throws -> SimulatorDevice
+    /// Stops a copy `makeCopy` made, when it runs, and removes it with everything it wrote.
+    func deleteCopy(_ device: SimulatorDeviceIdentity, with toolchain: SimulatorToolchain) async throws
+}
+
+extension SimulatorBackend {
+    func makeCopy(of device: SimulatorDevice, with toolchain: SimulatorToolchain) async throws -> SimulatorDevice {
+        throw SimulatorCommandError(message: "This platform makes no copies of its devices")
+    }
+
+    func deleteCopy(_ device: SimulatorDeviceIdentity, with toolchain: SimulatorToolchain) async throws {}
 }

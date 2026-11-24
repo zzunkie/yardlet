@@ -50,6 +50,13 @@ final class SimulatorPanelRenderingTests: XCTestCase {
                 XCTAssertTrue(words.contains { $0.hasPrefix("iPhone 17 Pro") && $0.contains("Build the app") }, "\(words)")
             }
 
+            // A saved tab whose simulator another task now uses offers this task a copy instead of sharing it.
+            try await draw(center, task: task, attached: .iOSSimulator(udid: PanelFakeBackend.pro), titles: titles,
+                           appearance: appearance, to: directory.appending(path: name("used-elsewhere")),
+                           showing: [L10n.string("Another task is using this device."),
+                                     L10n.string("A separate copy starts fresh, without this device's apps and data."),
+                                     L10n.string("Open a Separate Copy")])
+
             // iOS simulators and Android emulators together: Android's after iOS's, by API level.
             let both = SimulatorCenter(backends: [PanelFakeBackend(), PanelFakeAndroidBackend()])
             await both.setEnabled(true)

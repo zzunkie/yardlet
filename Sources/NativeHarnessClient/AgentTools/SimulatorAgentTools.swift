@@ -129,6 +129,9 @@ final class SimulatorAgentTools {
             if let holder = entry.claimingTask {
                 fields["usedBy"] = .string(holder == task ? "this task" : taskTitle(holder) ?? "another task")
             }
+            if let original = entry.copyOf {
+                fields["copyOf"] = .string(center.device(original)?.name ?? original.value)
+            }
             return .object(fields)
         }
         var note = devices.isEmpty ? "No simulator or emulator is listed." : "Attach one with simulator_attach to use it."
@@ -167,17 +170,17 @@ final class SimulatorAgentTools {
             // A tab no panel ever showed goes with the failed start, so nothing stays attached out of sight; a tab
             // the person can see keeps the device, with Turn On.
             guard isNewTab else { return Self.didNotStart(failed, message) }
-            if center.detach(task, tab: tab) != nil { settleDetached(device.identity, task: task) }
+            if let detached = center.detach(task, tab: tab) { settleDetached(detached, task: task) }
             return .failure("\(failed.name) did not start: \(message). It was not attached; simulator_attach tries "
                 + "again.", .unreachable, retry: .later)
         case let .attached(attachment):
             // The person closed the tab while the device started, which let go of it there.
-            guard center.attachment(of: task, tab: tab) == device.identity else {
+            guard center.attachment(of: task, tab: tab) == attachment.device.identity else {
                 return .failure("The person closed the Simulator tab while \(attachment.device.name) was starting, so "
                     + "it is not attached to this task.", .refused, retry: .no)
             }
-            snapshots[task]?[device.identity] = nil
-            let others = center.attachedDevices(of: task).filter { $0 != device.identity }
+            snapshots[task]?[attachment.device.identity] = nil
+            let others = center.attachedDevices(of: task).filter { $0 != attachment.device.identity }
             var lines = ["Attached \(attachment.device.name) (\(attachment.device.osName)) to this task. "
                 + "Its id is \(attachment.device.toolID): \(Self.ownToolsLine(attachment.device))"]
             if !others.isEmpty {
@@ -192,7 +195,9 @@ final class SimulatorAgentTools {
             case let .failure(error):
                 lines.append("Yardlet cannot show or drive its screen: \(error.message)")
             }
-            lines.append(Self.originLine(attachment))
+            lines.append(Self.originLine(attachment, originalName: attachment.copyOf.map {
+                center.device($0)?.name ?? $0.value
+            }))
             switch showPanel(task, tab) {
             case .shown: lines.append("The task's side panel shows it.")
             case .besidePersonsTab:
@@ -218,11 +223,14 @@ final class SimulatorAgentTools {
         }
         let device = center.device(identity)
         let wasStarted = center.startedByYardlet[identity] != nil
+        let wasCopy = center.copies[identity] != nil
         // Every tab of the task that shows it, so the task's claim goes too; the tabs stay, listing the devices.
         while let tab = center.tab(attaching: identity, in: task) { center.detach(task, tab: tab) }
         settleDetached(identity, task: task)
         var text = "Let go of \(device?.name ?? identity.value)."
-        if wasStarted {
+        if wasCopy {
+            text += " As it was this task's copy, Yardlet shuts it down and deletes it now."
+        } else if wasStarted {
             text += " As Yardlet started it, it shuts down 10 minutes after no task attaches it."
         }
         let remaining = center.attachedDevices(of: task)
@@ -261,6 +269,15 @@ final class SimulatorAgentTools {
             }
             if matches.isEmpty {
                 matches = attached.filter { center.device($0)?.name.caseInsensitiveCompare(query) == .orderedSame }
+            }
+            // The original's id or name names the task's copy of it.
+            if matches.isEmpty {
+                matches = attached.filter { identity in
+                    let original = center.original(of: identity)
+                    return original != identity && (original.value.caseInsensitiveCompare(query) == .orderedSame
+                        || center.device(original)?.adbSerial == query
+                        || center.device(original)?.name.caseInsensitiveCompare(query) == .orderedSame)
+                }
             }
             if matches.count == 1 { return .success(matches[0]) }
             if matches.count > 1 {
@@ -628,13 +645,17 @@ final class SimulatorAgentTools {
     // MARK: - Approval
 
     /// Asks the person when they have not let this task use the device yet; nil when the tool may go ahead.
+    /// A copy is asked about as its original, which the person knows and allowed.
     private func approval(of device: SimulatorDevice, for task: UUID) async -> AgentToolResult? {
-        guard !approvals.isApproved(device.identity, for: task) else { return nil }
-        guard await askPerson(device, task) else {
-            return .failure("The person did not allow this task to use \(device.name), so nothing was done.",
+        let center = center()
+        let identity = center.original(of: device.identity)
+        guard !approvals.isApproved(identity, for: task) else { return nil }
+        let asked = center.device(identity) ?? device
+        guard await askPerson(asked, task) else {
+            return .failure("The person did not allow this task to use \(asked.name), so nothing was done.",
                             .refused, retry: .no)
         }
-        approvals.approve(device.identity, for: task)
+        approvals.approve(identity, for: task)
         return nil
     }
 
@@ -715,6 +736,9 @@ final class SimulatorAgentTools {
         case .notAttached:
             return .failure("This task has no attached device. Attach one with simulator_attach first.", .notFound,
                             retry: .withChanges, details: ["next": .string(SimulatorToolCatalog.attach)])
+        case let .copyFailed(message):
+            return .failure("Another task uses this device, and Yardlet could not make this task a copy of it: "
+                + "\(message).\(freeLine)", .unreachable, retry: .later)
         }
     }
 
@@ -753,7 +777,12 @@ final class SimulatorAgentTools {
     }
 
     /// Where the attached device came from, and what that means for the agent.
-    private static func originLine(_ attachment: SimulatorAttachment) -> String {
+    private static func originLine(_ attachment: SimulatorAttachment, originalName: String? = nil) -> String {
+        if let originalName {
+            return "Another task uses \(originalName), so Yardlet made this task a separate copy of it: the same model and "
+                + "OS, started fresh without the original's apps and data. Install what you need on it; Yardlet deletes "
+                + "the copy when this task lets go of it."
+        }
         if attachment.isStartedByYardlet { return startedByYardletLine(startedNow: attachment.startedNow) }
         if attachment.device.identity.kind.isPhysical {
             return "It is a real Android device: the person's own accounts may be signed in on it, and Yardlet never "

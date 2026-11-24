@@ -75,6 +75,37 @@ struct MacIOSSimulatorBackend: SimulatorBackend {
         }
     }
 
+    /// A new device of the original's device type and runtime, in the default device set beside the person's own:
+    /// Xcode's build and run (`xcodebuild -destination id=<UDID>`) and `simctl` without `--set` find only devices
+    /// there, and the agent hands the copy's UDID to them. Its name says Yardlet made it; `deleteCopy` removes it.
+    func makeCopy(of device: SimulatorDevice, with toolchain: SimulatorToolchain) async throws -> SimulatorDevice {
+        guard let type = device.deviceTypeIdentifier, let runtime = device.runtimeIdentifier else {
+            throw SimulatorCommandError(message: "simctl did not list \(device.name)'s device type")
+        }
+        let name = Self.copyName(of: device.name)
+        let result = await simctl(["create", name, type, runtime], with: toolchain, timeout: .seconds(60))
+        let udid = result.stdout.split(whereSeparator: \.isNewline).last
+            .map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
+        guard result.succeeded, UUID(uuidString: udid) != nil else {
+            throw SimulatorCommandError(message: result.failureSummary)
+        }
+        return SimulatorDevice(identity: .iOSSimulator(udid: udid), name: name, state: .off, osName: device.osName,
+                               osVersion: device.osVersion, runtimeIdentifier: runtime, deviceTypeIdentifier: type)
+    }
+
+    func deleteCopy(_ device: SimulatorDeviceIdentity, with toolchain: SimulatorToolchain) async throws {
+        guard device.kind == .iOSSimulator else { return }
+        _ = await simctl(["shutdown", device.value], with: toolchain, timeout: .seconds(20))
+        let result = await simctl(["delete", device.value], with: toolchain, timeout: .seconds(60))
+        // A copy already gone, removed in Xcode, is as good as deleted.
+        guard result.succeeded || result.stderr.contains("Invalid device") else {
+            throw SimulatorCommandError(message: result.failureSummary)
+        }
+    }
+
+    /// "iPhone 17 (Yardlet)": the name Xcode's list shows while the copy exists.
+    static func copyName(of name: String) -> String { "\(name) (Yardlet)" }
+
     /// The device's `launchd_sim`: CoreSimulator runs each booted device as a launchd job of the person's own,
     /// `com.apple.CoreSimulator.SimDevice.<UDID>`, whose process is the device's `launchd_sim`, and removes the job
     /// when the device stops. The process's start time goes with its ID, which repeats after the Mac restarts.
@@ -153,6 +184,7 @@ enum SimctlList {
         var name: String
         var state: String
         var isAvailable: Bool?
+        var deviceTypeIdentifier: String?
     }
 
     private struct Listing: Decodable {
@@ -174,7 +206,8 @@ enum SimctlList {
         return runtimes.flatMap { identifier, version, devices in
             devices.filter { $0.isAvailable ?? true }.map {
                 SimulatorDevice(identity: .iOSSimulator(udid: $0.udid), name: $0.name, state: state($0.state),
-                                osName: "iOS \(version)", osVersion: version, runtimeIdentifier: identifier)
+                                osName: "iOS \(version)", osVersion: version, runtimeIdentifier: identifier,
+                                deviceTypeIdentifier: $0.deviceTypeIdentifier)
             }
         }
     }

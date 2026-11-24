@@ -6,7 +6,7 @@ import Foundation
 /// menu.
 struct SimulatorDeviceMenu: Equatable {
     enum Item: Equatable {
-        /// The task attached the device while another task has its input: "Use in This Task" takes it, naming
+        /// The task attached a real device while another task has its input: "Use in This Task" takes it, naming
         /// the task that has it.
         case useInThisTask(heldBy: String)
         case disconnect
@@ -30,12 +30,16 @@ struct SimulatorDeviceMenu: Equatable {
         let entries = center.entries(for: task, tab: tab)
         guard let attached = entries.first(where: \.isAttachedHere) else { return Self(devices: entries, items: []) }
         var items: [Item] = []
-        if let holder = attached.claimingTask, holder != task {
+        // A simulator or emulator another task uses is not taken from it: the tab offers this task a copy.
+        if let holder = attached.claimingTask, holder != task, attached.device.identity.kind.isPhysical {
             items.append(.useInThisTask(heldBy: taskTitle(holder) ?? L10n.string("Another task")))
         }
         items.append(.disconnect)
-        if approvals?.isApprovedAnywhere(attached.device.identity) == true { items.append(.revokeAgentAccess) }
-        if attached.isStartedByYardlet {
+        if approvals?.isApprovedAnywhere(center.original(of: attached.device.identity)) == true {
+            items.append(.revokeAgentAccess)
+        }
+        // Another task's simulator is not this tab's to shut down.
+        if attached.isStartedByYardlet, !center.attachesCopy(attached.device.identity, for: task) {
             if attached.device.state.isRunning { items.append(.shutDown) }
             items.append(.startedByYardletNote)
         }

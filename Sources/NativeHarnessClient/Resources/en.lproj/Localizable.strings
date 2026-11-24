@@ -4419,3 +4419,7 @@
 "MCP Code Mode (experimental)" = "MCP Code Mode (experimental)";
 "Agents find connector and Yardlet tools with search_yardlet_tools and run several at once in a sandboxed JavaScript run_yardlet_script, so connector tool schemas stay out of the context." = "Agents find connector and Yardlet tools with search_yardlet_tools and run several at once in a sandboxed JavaScript run_yardlet_script, so connector tool schemas stay out of the context.";
 "MCP, code mode, JavaScript, tokens, context, connectors, tools, script" = "MCP, code mode, JavaScript, tokens, context, connectors, tools, script";
+"Replaces flat connector tool schemas with search_yardlet_tools and a sandboxed JavaScript run_yardlet_script tool to reduce token usage." = "Replaces flat connector tool schemas with search_yardlet_tools and a sandboxed JavaScript run_yardlet_script tool to reduce token usage.";
+"Another task is using this device." = "Another task is using this device.";
+"A separate copy starts fresh, without this device's apps and data." = "A separate copy starts fresh, without this device's apps and data.";
+"Open a Separate Copy" = "Open a Separate Copy";

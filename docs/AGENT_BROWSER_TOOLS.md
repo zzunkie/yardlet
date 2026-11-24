@@ -319,8 +319,10 @@ Ten tools, `simulator_list`, `simulator_attach`, `simulator_detach`, `simulator_
 simulators, Android emulators and Android devices the task attached, each in a Simulator tab of its own, and hand one to
 the person as `browser_handoff` hands a tab (`SimulatorToolCatalog`). They are listed while Settings → General → Simulator
 was on as the session started or resumed and a platform's devices can be used, and are not in the fallback list built
-into the server. Their arguments, the person's approval of each device, the coordinates and the limits are in
-[SIMULATOR](SIMULATOR.md), "Agent tools".
+into the server. A simulator or emulator another task's agent uses is not shared: `simulator_attach` gives the task a
+copy of its own, which Yardlet deletes when the task lets go of it, when the switch turns off and when Yardlet quits; a
+real Android device stays one task's at a time. Their arguments, the person's approval of each device, the coordinates,
+the limits and the copies are in [SIMULATOR](SIMULATOR.md), "Agent tools" and "Copies for another task".
 
 ### Session tools
 
