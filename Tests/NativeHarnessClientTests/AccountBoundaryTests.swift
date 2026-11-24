@@ -374,6 +374,20 @@ final class AccountBoundaryTests: XCTestCase {
             ),
             .signedOut
         )
+        // Kiro CLI 3.5.0's `whoami`: it exits 1 without a sign-in, and names the method with one.
+        for (exitCode, output, state) in [
+            (Int32(1), "Not logged in\n", AccountAuthState.signedOut),
+            (0, "Logged in with Builder ID\nEmail: owner@example.test\n", .signedIn),
+            (1, "Logged in with Builder ID\n", .unknown),
+            (0, "kiro-cli 3.5.0\n", .unknown)
+        ] {
+            XCTAssertEqual(HarnessAccountBroker.commandAccountState(
+                for: .kiroCLI, result: AccountCommandResult(exitCode: exitCode, output: output)), state, output)
+        }
+        XCTAssertEqual(HarnessAccountBroker.kiroAccountEmail(
+            from: "Logged in with Builder ID\nEmail: owner@example.test\n"), "owner@example.test")
+        XCTAssertNil(HarnessAccountBroker.kiroAccountEmail(
+            from: "Logged in with IAM Identity Center (https://example.awsapps.com/start)\nProfile: work\n"))
     }
 
     func testCommandAccountStateRequiresExplicitPositiveOrNegativeEvidence() {

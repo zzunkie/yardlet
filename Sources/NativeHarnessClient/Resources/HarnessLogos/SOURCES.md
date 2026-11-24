@@ -32,3 +32,10 @@ Margins trimmed on 2026-10-13. The macOS app-icon logos (`codex.png`, `claude-co
 `antigravity-cli.png`) carried the icon grid's transparent margin and drop shadow, so their plate filled
 only about 13 pt of a 16 pt mark. Each is now its plate alone: the square of the opaque columns from
 the top opaque row (104, 104 and 106 px), scaled back to 128 x 128. The artwork is otherwise unchanged.
+
+Kiro mark added on 2026-11-25, trimmed to its plate the same way (the square of the opaque columns from the top opaque
+row, 830 px of the 1024 x 1024 rendition) and scaled to 128 x 128.
+
+| Asset | Official source |
+|---|---|
+| `kiro-cli.png` | Kiro desktop app 1.5.11, `/Applications/Kiro.app/Contents/Resources/Kiro.icns` |

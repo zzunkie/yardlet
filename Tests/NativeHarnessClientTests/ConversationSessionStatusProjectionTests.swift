@@ -58,6 +58,7 @@ final class ConversationSessionStatusProjectionTests: XCTestCase {
             .kimiCode,
             .grokBuild,
             .hermes,
+            .kiroCLI,
             .pi
         ]
         let unavailable: Set<HarnessKind> = [

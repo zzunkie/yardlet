@@ -448,7 +448,7 @@ extension YardletSetting {
     static let continueAfterRestart = YardletSetting(
         id: "continue_after_restart", section: .general, generalGroup: .tasks, symbol: "arrow.clockwise",
         title: L10n.string("Continue running work after a restart"),
-        detail: L10n.string("Claude Code, Codex, Antigravity, OpenCode, Kimi Code, Grok Build and Hermes tasks continue where they left off after Yardlet quits or updates"),
+        detail: L10n.string("Claude Code, Codex, Antigravity, OpenCode, Kimi Code, Grok Build, Hermes and Kiro CLI tasks continue where they left off after Yardlet quits or updates"),
         values: .onOff, storage: .flag(key: RestartResumePreference.key, defaultValue: true),
         keywords: "resume, restart, quit, update")
 

@@ -78,6 +78,8 @@ final class SidebarTaskIndicatorProjectionTests: XCTestCase {
         XCTAssertFalse(ProviderSignIn.asksToSignIn("Invalid API key · Fix external API key"))
         // Claude Code 2.1.325's refresh another process holds passes, and a connector's sign-in is not the task's.
         XCTAssertFalse(ProviderSignIn.asksToSignIn("Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh. This is usually transient; retry in a minute, and if it persists close other Claude Code processes or sign in again"))
+        XCTAssertTrue(ProviderSignIn.asksToSignIn("Authentication required. Not logged in. Set the KIRO_API_KEY environment variable or run `kiro-cli login` first. Then reconnect to start the Kiro agent."))
+        XCTAssertTrue(ProviderSignIn.asksToSignIn("Sign in to Kiro to send a prompt."))
         XCTAssertFalse(ProviderSignIn.asksToSignIn("Authentication required for HTTP server"))
         XCTAssertEqual(SidebarTaskStatus.usageLimit(limit).help,
                        L10n.string("Session limit reached") + "\n" + (ProviderNoticeText.limitReset(limit) ?? ""))

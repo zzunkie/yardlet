@@ -340,7 +340,7 @@ final class ComposerAttachmentParityTests: XCTestCase {
             XCTAssertTrue(HarnessComposerInputPolicy(harness: harness).showsAttachmentControl)
             XCTAssertTrue(HarnessComposerInputPolicy(harness: harness).showsMentionControl)
         }
-        for harness in [HarnessKind.grokBuild, .openCode, .antigravityCLI, .kimiCode, .hermes] {
+        for harness in [HarnessKind.grokBuild, .openCode, .antigravityCLI, .kimiCode, .hermes, .kiroCLI] {
             XCTAssertEqual(
                 HarnessComposerInputPolicy(harness: harness).imageSupport,
                 .negotiated,

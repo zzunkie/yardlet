@@ -7,7 +7,7 @@ final class HarnessPresentationPolicyTests: XCTestCase {
             ($0.id, HarnessPresentationPolicy(harness: $0.id))
         })
 
-        XCTAssertEqual(policies.count, 10)
+        XCTAssertEqual(policies.count, 11)
         XCTAssertEqual(policies[.codex]?.capabilitySurface, .codex)
         XCTAssertEqual(
             policies.filter { $0.value.capabilitySurface == .liveProvider }.keys.sorted {
@@ -16,7 +16,7 @@ final class HarnessPresentationPolicyTests: XCTestCase {
             [
                 .claudeCode, .museCode, .grokBuild, .hermes,
                 .kimiCode, .cursorAgent, .antigravityCLI,
-                .openCode, .pi
+                .openCode, .kiroCLI, .pi
             ].sorted { $0.rawValue < $1.rawValue }
         )
         XCTAssertEqual(

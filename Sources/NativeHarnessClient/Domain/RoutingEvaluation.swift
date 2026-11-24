@@ -220,7 +220,7 @@ actor RoutingLedgerWriter {
 
 /// The model and effort a task's controls show, read from what the harness advertised.
 enum RoutingModelReading {
-    static let effortSelectorIDs: Set<String> = ["effort", "reasoningEffort", "thinking", "thinkingLevel"]
+    static let effortSelectorIDs: Set<String> = ["effort", "effortLevel", "reasoningEffort", "thinking", "thinkingLevel"]
 
     static func model(in selectors: [ProviderCapabilitySelector]) -> String? {
         value(selectors.first { $0.id == "model" || $0.category == "model" })

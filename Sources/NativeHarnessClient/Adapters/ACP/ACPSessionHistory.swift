@@ -86,7 +86,11 @@ struct ACPSessionHistory: Sendable {
                 throw HarnessAdapterError.unsupportedRuntime(
                     version: "ACP \(initialized["protocolVersion"]?.integerValue ?? -1)")
             }
-            let result = try await body(&link, initialized["agentCapabilities"] ?? .object([:]))
+            let capabilities = initialized["agentCapabilities"] ?? .object([:])
+            guard !ACPProtocol.answersWithoutSignIn(harness, agentCapabilities: capabilities) else {
+                throw HarnessSignInRequired()
+            }
+            let result = try await body(&link, capabilities)
             timer.cancel()
             await transport.stop()
             return result

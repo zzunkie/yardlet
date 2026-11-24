@@ -4,17 +4,17 @@ import XCTest
 
 @MainActor
 final class HarnessCatalogTests: XCTestCase {
-    func testBuiltInCatalogHasTenUniqueOpenIdentifiers() throws {
+    func testBuiltInCatalogHasElevenUniqueOpenIdentifiers() throws {
         let descriptors = HarnessCatalog.builtIns
 
-        XCTAssertEqual(descriptors.count, 10)
+        XCTAssertEqual(descriptors.count, 11)
         XCTAssertEqual(Set(descriptors.map(\.id)).count, descriptors.count)
         XCTAssertEqual(
             Set(descriptors.map(\.id)),
             Set([
                 .codex, .claudeCode, .museCode, .openCode,
                 .cursorAgent, .antigravityCLI,
-                .kimiCode, .grokBuild, .hermes, .pi
+                .kimiCode, .grokBuild, .hermes, .kiroCLI, .pi
             ])
         )
         XCTAssertEqual(
@@ -23,7 +23,7 @@ final class HarnessCatalogTests: XCTestCase {
         )
         XCTAssertEqual(
             descriptors.filter { $0.transport == .acp }.map(\.id),
-            [.openCode, .antigravityCLI, .kimiCode, .grokBuild, .hermes]
+            [.openCode, .antigravityCLI, .kimiCode, .grokBuild, .hermes, .kiroCLI]
         )
         XCTAssertEqual(
             descriptors.filter { $0.transport == .piRPC }.map(\.id),

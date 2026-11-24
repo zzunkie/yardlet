@@ -171,7 +171,7 @@ final class ProjectWorkspaceRootsTests: XCTestCase {
     /// `--help` for the subcommand Yardlet launches; none of the ACP or Pi entry points documents
     /// one, so nothing is appended and nothing is invented on the protocol request.
     func testNoACPOrPiCLIDocumentsAnExtraRootFlagSoNothingIsAppended() {
-        for harness in [HarnessKind.openCode, .kimiCode, .grokBuild, .hermes, .pi] {
+        for harness in [HarnessKind.openCode, .kimiCode, .grokBuild, .hermes, .kiroCLI, .pi] {
             XCTAssertNil(
                 HarnessWorkspaceRootLaunchArguments.flag(for: harness),
                 "\(harness) has no documented extra-root flag on the subcommand Yardlet launches"
@@ -298,7 +298,7 @@ final class ProjectWorkspaceRootsTests: XCTestCase {
         XCTAssertNotNil(claude as? any HarnessInstructionSourceReporting)
         XCTAssertNotNil(claude as? any HarnessLaunchOptionConfiguring)
 
-        for harness in [HarnessKind.kimiCode, .grokBuild, .openCode, .hermes, .pi] {
+        for harness in [HarnessKind.kimiCode, .grokBuild, .openCode, .hermes, .kiroCLI, .pi] {
             let routed = await registry.adapter(for: harness, executableURL: executable)
             XCTAssertTrue(routed is YHPProviderCompatibilityAdapter, "\(harness)")
             XCTAssertNotNil(

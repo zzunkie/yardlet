@@ -185,6 +185,14 @@ enum ACPProtocol {
         return capabilities?["stdio"] != .bool(false)
     }
 
+    /// Whether an agent's `initialize` answer is the one it gives while signed out. Kiro CLI starts its
+    /// engine only with a sign-in: until then it answers `initialize` for itself, with no session
+    /// loading or listing, and every other request with "Authentication required". A process started
+    /// after the sign-in advertises both.
+    static func answersWithoutSignIn(_ harness: HarnessKind, agentCapabilities: JSONValue?) -> Bool {
+        harness == .kiroCLI && agentCapabilities?["loadSession"]?.boolValue != true
+    }
+
     static func request(id: Int64, method: String, params: JSONValue) -> JSONValue {
         .object([
             "jsonrpc": .string("2.0"),

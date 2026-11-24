@@ -80,7 +80,7 @@ func members() -> [Member] {
             else if executable.hasPrefix(app) { category = "yardletHelpers" }
             else if tied {
                 let tokens = args(pid).map { ($0 as NSString).lastPathComponent.lowercased() }
-                let agentNames: Set<String> = ["claude", "codex", "codex-code-mode-host", "agy", "antigravity", "kimi", "opencode", "hermes", "grok"]
+                let agentNames: Set<String> = ["claude", "codex", "codex-code-mode-host", "agy", "antigravity", "kimi", "opencode", "hermes", "grok", "kiro-cli"]
                 if agentNames.contains(name.lowercased()) || tokens.contains(where: { agentNames.contains($0) }) || executable.contains("/runtimes/claude/") || executable.contains("/runtimes/codex/") { category = "agents" }
                 else { category = "yardletAttributedOther" }
             } else { category = "otherUserProcesses" }

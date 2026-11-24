@@ -47,6 +47,7 @@ actor ACPAdapter:
     private let capabilityProjector = ACPCapabilityProjector()
 
     private var canLoadSession = false
+    private var answersWithoutSignIn = false
     /// The agent's `initialize` answer on stdio MCP servers; ACP makes them mandatory.
     private var acceptsStdioMCPServers = true
     /// nil until the agent has answered `initialize`.
@@ -267,6 +268,7 @@ actor ACPAdapter:
         let transport = try await ensureInitialized(lane, workspaceURL: workspaceURL, localSessionID: localSessionID)
         guard canLoadSession else {
             await stopProcessIfUnused(lane, used: transport)
+            if answersWithoutSignIn { throw HarnessSignInRequired() }
             throw HarnessAdapterError.capabilityUnavailable(
                 L10n.format(
                     "%@ does not advertise ACP session loading",
@@ -720,6 +722,8 @@ actor ACPAdapter:
                 throw HarnessAdapterError.processExited(code: -1, message: "ACP transport stopped")
             }
             canLoadSession = result["agentCapabilities"]?["loadSession"]?.boolValue == true
+            answersWithoutSignIn = ACPProtocol.answersWithoutSignIn(
+                kind, agentCapabilities: result["agentCapabilities"])
             processes[lane]?.canCloseSession = result["agentCapabilities"]?["sessionCapabilities"]?["close"]?
                 .objectValue != nil
             acceptsStdioMCPServers = ACPProtocol.acceptsStdioMCPServers(initializeResult: result)

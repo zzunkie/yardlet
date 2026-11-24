@@ -27,7 +27,7 @@ several agents and accounts every day, and it is shared for anyone who doesn't h
 ## What it does
 
 - **One window for every agent.** Codex, Claude Code, OpenCode, Cursor Agent, Antigravity CLI,
-  Kimi Code, Grok Build, Pi and others share the same sidebar, conversation view, composer and
+  Kimi Code, Grok Build, Kiro CLI, Pi and others share the same sidebar, conversation view, composer and
   approval cards. Controls stay in the same place; the choices and values come from each agent.
 - **Sessions stay where the agent keeps them.** Codex runs against your normal `CODEX_HOME` and
   Claude Code against its own store, so a session started in Yardlet resumes in the original app or
@@ -185,7 +185,7 @@ Three helpers in the app bundle do work outside the main process:
   videos; WebM video (VP9, AV1) plays. The Intel version uses CEF's own Chromium build, which leaves
   those codecs out; the Apple silicon version has them.
 - Connectors, browser tools and session tools reach Codex, Claude Code and the agents that use ACP
-  (OpenCode, Antigravity CLI, Kimi Code, Grok Build, Hermes). Cursor Agent, Pi and Muse Code have
+  (OpenCode, Antigravity CLI, Kimi Code, Grok Build, Hermes, Kiro CLI). Cursor Agent, Pi and Muse Code have
   no way to add an MCP server to one session, so their tasks run without them.
 - Scheduled tasks run only while Yardlet is open. A run missed while it was closed runs once when it
   opens again, within 7 days. A one-time continuation waits for a busy task to become available,

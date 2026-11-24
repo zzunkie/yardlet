@@ -240,6 +240,56 @@ final class ACPAdapterTests: XCTestCase {
         }
     }
 
+    /// Signed out, `kiro-cli acp` answers `initialize` with no session loading and refuses the rest, so
+    /// a resume asks for the sign-in. Nothing of that process is kept: the next resume starts a new one.
+    func testAKiroProcessStartedSignedOutAsksToSignInAndTheNextOneLoads() async throws {
+        let signedOut = FakeACPTransport(canLoadSession: false)
+        let signedIn = FakeACPTransport()
+        let adapter = ACPAdapter(kind: .kiroCLI, executableURL: URL(filePath: "/tmp/fake-kiro-cli"),
+                                 transportFactory: transportSequence(signedOut, signedIn))
+        let task = UUID()
+        func resume() async throws -> HarnessSessionHandle {
+            try await adapter.resumeSession(providerSessionID: "sess_1", localSessionID: task,
+                                            workspaceURL: URL(filePath: "/tmp/acp-workspace"))
+        }
+        do {
+            _ = try await resume()
+            XCTFail("Expected a signed-out Kiro CLI to ask for its sign-in")
+        } catch {
+            XCTAssertEqual(error as? HarnessSignInRequired, HarnessSignInRequired())
+            XCTAssertTrue(ProviderSignIn.asksToSignIn(error.localizedDescription))
+        }
+        let refused = await signedOut.requestMethods
+        XCTAssertEqual(refused, ["initialize"])
+        let handle = try await resume()
+        let loaded = await signedIn.requestMethods
+        XCTAssertEqual(loaded, ["initialize", "session/load"])
+        let arguments = await signedIn.configuration?.arguments
+        XCTAssertEqual(arguments, ["acp", "--agent-engine", "v3"])
+        await adapter.close(handle)
+    }
+
+    /// The options `kiro-cli acp` 3.5.0 gives a session: its mode, Autopilot and, once signed in, the
+    /// model and `effortLevel` its ACP guide names, where the composer puts each.
+    func testKiroSessionOptionsReachTheComposersControls() {
+        func option(_ id: String, _ category: String?, _ values: [String]) -> JSONValue {
+            var fields: [String: JSONValue] = [
+                "type": .string("select"), "id": .string(id), "name": .string(id), "currentValue": .string(values[0]),
+                "options": .array(values.map { .object(["value": .string($0), "name": .string($0)]) })
+            ]
+            if let category { fields["category"] = .string(category) }
+            return .object(fields)
+        }
+        let state = ACPCapabilityProjector().state(from: .object(["configOptions": .array([
+            option("mode", "mode", ["vibe", "plan"]), option("memoryReflection", nil, ["off", "on"]),
+            option("autopilot", nil, ["on", "off"]), option("model", nil, ["auto"]),
+            option("effortLevel", nil, ["high", "low"])
+        ])]), harness: .kiroCLI)
+        XCTAssertEqual(ConversationSessionStatusProjection.inlineSelectors(from: state).map(\.id),
+                       ["model", "effortLevel", "mode", "autopilot"])
+        XCTAssertEqual(RoutingModelReading.effort(in: state.selectors), "high")
+    }
+
     func testResumeFailsClosedWhenRuntimeDoesNotAdvertiseSessionLoading() async throws {
         let transport = FakeACPTransport(canLoadSession: false)
         let adapter = ACPAdapter(

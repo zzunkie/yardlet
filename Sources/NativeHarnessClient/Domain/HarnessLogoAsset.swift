@@ -16,6 +16,7 @@ enum HarnessLogoAsset {
         case .kimiCode: "kimi-code"
         case .grokBuild: "grok-build"
         case .hermes: "hermes-agent"
+        case .kiroCLI: "kiro-cli"
         case .pi: "pi"
         default: nil
         }
