@@ -125,8 +125,8 @@ Settings > General > Login Items & Extensions**. To remove Yardlet's own data as
 
 ## Privacy
 
-Yardlet has no analytics and no server that receives your work. Task metadata, drafts and reading
-caches live under `~/.yardlet`; agent sessions stay in each agent's own store. If you pair a phone
+Yardlet has no analytics: the app collects and sends no usage data, and no server receives your work.
+Task metadata, drafts and reading caches live under `~/.yardlet`; agent sessions stay in each agent's own store. If you pair a phone
 or another Mac with the remote and it is away from your network, its end-to-end encrypted messages pass
 through Yardlet's relay at `relay.yardlet.app`, which cannot read them and stores none
 ([relay/README.md](relay/README.md)). The Mac also reaches the same relay at `yardlet-relay-pages.pages.dev`, which
@@ -134,7 +134,15 @@ is often nearer, and keeps whichever answers first. Connector sign-ins are kept 
 macOS Keychain, and connector calls go straight from your Mac to the service. What an agent reads
 through a connector is sent to that agent's provider under your account with it. The daily update
 check asks `yardlet.app` for the appcast with Yardlet's and Sparkle's versions in its user agent and
-sends no system profile; updates download from GitHub Releases. When Yardlet's main thread stays
+sends no system profile; updates download from GitHub Releases. On their side, Yardlet's servers count
+what reaches them anyway, anonymously: relay connections and pushes, remote sign-ins and registered Macs,
+update checks by Yardlet version and architecture, and downloads through `dl.yardlet.app` by link and
+architecture. The counts hold no IP address, device, account, room or message
+([relay/README.md](relay/README.md#what-is-counted)). Feedback you write and send from the app goes
+privately to the Yardlet team by email, with what the window shows it will include (the app version and
+screen, and for a problem report the macOS version, agent and error code) and the reply address if you
+give one; the relay forwards it, keeps no copy and stores no IP address
+([relay/README.md](relay/README.md#feedback)). When Yardlet's main thread stays
 busy for more than 250 ms, it writes the time and the stack (function names only) to
 `~/Library/Logs/Yardlet/hangs.log`, with earlier entries in `hangs.1.log` to `hangs.4.log`, kept to
 about 20 MB in all and sent nowhere;

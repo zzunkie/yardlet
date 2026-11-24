@@ -1,11 +1,21 @@
 declare namespace Cloudflare {
   interface GlobalProps {
     mainModule: typeof import("./index");
-    durableNamespaces: "Room" | "Account";
+    durableNamespaces: "Room" | "Account" | "FeedbackSubmission";
   }
   interface Env {
     ROOM: DurableObjectNamespace<import("./room").Room>;
     ACCOUNT: DurableObjectNamespace<import("./account").Account>;
+    FEEDBACK: DurableObjectNamespace<import("./feedback").FeedbackSubmission>;
+    /** Sends feedback mail (Email Routing). Its sender and recipient are `FEEDBACK_FROM` and `FEEDBACK_TO`. */
+    FEEDBACK_MAIL?: SendEmail;
+    FEEDBACK_FROM?: string;
+    FEEDBACK_TO?: string;
+    /** Feedback per client address and for the whole relay. */
+    FEEDBACK_LIMIT?: RateLimit;
+    FEEDBACK_GLOBAL_LIMIT?: RateLimit;
+    /** Workers Analytics Engine; absent, nothing is counted. */
+    METRICS?: AnalyticsEngineDataset;
     /** The Firebase service account's JSON key. */
     FCM_SERVICE_ACCOUNT?: string;
     FCM_PROJECT_ID?: string;

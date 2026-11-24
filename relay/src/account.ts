@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { fromBase64Url, isRoom, roomForKey, verifyEd25519 } from "./keys";
+import { count } from "./metrics";
 import type { Provider } from "./oauth";
 
 const CODE_TTL_MS = 2 * 60_000;
@@ -63,13 +64,13 @@ export class Account extends DurableObject<Env> {
     );
   }
 
-  /** Spends a one-time code; with the right PKCE challenge it becomes a token. */
+  /** Spends a one-time code; with the right PKCE challenge it becomes a token. `created` when the account is new. */
   async redeemCode(input: {
     hash: string;
     challenge: string;
     tokenHash: string;
     deviceName: string;
-  }): Promise<AccountSummary | null> {
+  }): Promise<{ account: AccountSummary; created: boolean } | null> {
     const sql = this.ctx.storage.sql;
     const code = sql
       .exec<{ challenge: string; account_id: string; provider: Provider; name: string; expires_at: number }>(
@@ -81,6 +82,7 @@ export class Account extends DurableObject<Env> {
     sql.exec("DELETE FROM codes WHERE hash = ?", input.hash);
     const now = Date.now();
     if (code.expires_at <= now || code.challenge !== input.challenge) return null;
+    const created = sql.exec("SELECT 1 FROM account").toArray().length === 0;
     sql.exec(
       "INSERT INTO account (id, provider, name) VALUES (?, ?, ?) ON CONFLICT (id) DO UPDATE SET provider = excluded.provider, name = excluded.name",
       code.account_id,
@@ -94,7 +96,7 @@ export class Account extends DurableObject<Env> {
       now,
       now,
     );
-    return { id: code.account_id, provider: code.provider, name: code.name };
+    return { account: { id: code.account_id, provider: code.provider, name: code.name }, created };
   }
 
   async getAccount(tokenHash: string): Promise<ApiResult> {
@@ -133,8 +135,8 @@ export class Account extends DurableObject<Env> {
 
     const sql = this.ctx.storage.sql;
     const known = sql.exec("SELECT 1 FROM macs WHERE room = ?", room).toArray().length > 0;
-    const count = sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM macs").one().n;
-    if (!known && count >= MAX_MACS) return { status: 409, body: { error: "tooMany" } };
+    const macs = sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM macs").one().n;
+    if (!known && macs >= MAX_MACS) return { status: 409, body: { error: "tooMany" } };
     sql.exec(
       `INSERT INTO macs (room, mac_key, relay_key, name, updated_at) VALUES (?, ?, ?, ?, ?)
        ON CONFLICT (room) DO UPDATE SET mac_key = excluded.mac_key, relay_key = excluded.relay_key,
@@ -145,6 +147,7 @@ export class Account extends DurableObject<Env> {
       name,
       Date.now(),
     );
+    if (!known) count(this.env.METRICS, "account.mac", ["added"]);
     return { status: 200, body: { ok: true } };
   }
 
@@ -177,7 +180,8 @@ export class Account extends DurableObject<Env> {
   async deleteMac(tokenHash: string, room: string): Promise<ApiResult> {
     if (!this.authorize(tokenHash)) return unauthorized;
     this.ctx.storage.sql.exec("DELETE FROM link_grants WHERE room = ?", room);
-    this.ctx.storage.sql.exec("DELETE FROM macs WHERE room = ?", room);
+    const removed = this.ctx.storage.sql.exec("DELETE FROM macs WHERE room = ? RETURNING 1", room).toArray().length;
+    if (removed) count(this.env.METRICS, "account.mac", ["removed"], removed);
     return { status: 204 };
   }
 
@@ -189,7 +193,10 @@ export class Account extends DurableObject<Env> {
 
   async deleteAccount(tokenHash: string): Promise<ApiResult> {
     if (!this.authorize(tokenHash)) return unauthorized;
+    const macs = this.ctx.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM macs").one().n;
     await this.ctx.storage.deleteAll();
+    if (macs) count(this.env.METRICS, "account.mac", ["removed"], macs);
+    count(this.env.METRICS, "account.deleted");
     this.createTables();
     return { status: 204 };
   }

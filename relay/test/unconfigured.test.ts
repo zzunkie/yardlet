@@ -28,3 +28,18 @@ it("offers no sign-in provider without their credentials", async () => {
   expect(start.status).toBe(501);
   expect(await start.json()).toEqual({ error: "notConfigured" });
 });
+
+it("answers notConfigured for feedback without a sender and a recipient", async () => {
+  const response = await exports.default.fetch(`${RELAY}/v1/feedback`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      id: crypto.randomUUID(),
+      kind: "feedback",
+      message: "Hello",
+      context: { app: "0.11.16 (38)", surface: "settings" },
+    }),
+  });
+  expect(response.status).toBe(503);
+  expect(await response.json()).toEqual({ status: "notConfigured" });
+});

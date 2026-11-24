@@ -1,5 +1,6 @@
 import type { ApiResult } from "./account";
 import { fromBase64Url, sha256, toBase64Url } from "./keys";
+import { count } from "./metrics";
 import {
   accountIdFor,
   authorizeUrl,
@@ -100,12 +101,16 @@ async function callback(env: Env, provider: string, query: URLSearchParams): Pro
   const back = (fields: Record<string, string>) =>
     redirect(`${APP_REDIRECT}?${new URLSearchParams({ ...fields, state: flow.s })}`);
 
+  const failed = (error: string) => {
+    count(env.METRICS, "account.signInFailed", [config.provider, error]);
+    return back({ error });
+  };
   const providerError = query.get("error");
-  if (providerError !== null) return back({ error: /^[a-z_]{1,64}$/.test(providerError) ? providerError : "providerFailed" });
+  if (providerError !== null) return failed(/^[a-z_]{1,64}$/.test(providerError) ? providerError : "providerFailed");
   const code = query.get("code");
-  if (!code) return back({ error: "providerFailed" });
+  if (!code) return failed("providerFailed");
   const identity = await fetchIdentity(config, code);
-  if (!identity) return back({ error: "providerFailed" });
+  if (!identity) return failed("providerFailed");
 
   const accountId = await accountIdFor(config.provider, identity.subject);
   const secret = crypto.getRandomValues(new Uint8Array(32));
@@ -134,16 +139,24 @@ async function redeem(request: Request, env: Env): Promise<Response> {
     return error(400, "badRequest");
   }
   const credential = parseCredential(code);
-  if (!credential) return error(401, "unauthorized");
+  if (!credential) return redeemFailed(env);
   const tokenSecret = crypto.getRandomValues(new Uint8Array(32));
-  const account = await accountStub(env, credential.accountId).redeemCode({
+  const redeemed = await accountStub(env, credential.accountId).redeemCode({
     hash: await hashSecret(credential.secret),
     challenge: toBase64Url(await sha256(new TextEncoder().encode(verifier))),
     tokenHash: await hashSecret(tokenSecret),
     deviceName,
   });
-  if (!account) return error(401, "unauthorized");
+  if (!redeemed) return redeemFailed(env);
+  const { account, created } = redeemed;
+  count(env.METRICS, created ? "account.signUp" : "account.signIn", [account.provider]);
   return json(200, { token: `${account.id}.${toBase64Url(tokenSecret)}`, account });
+}
+
+/** A code the relay does not take: which provider it came from is not known. */
+function redeemFailed(env: Env): Response {
+  count(env.METRICS, "account.signInFailed", ["unknown", "invalidCode"]);
+  return error(401, "unauthorized");
 }
 
 type AccountStub = ReturnType<typeof accountStub>;

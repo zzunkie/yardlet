@@ -837,11 +837,13 @@ more Noise transport messages:
 | `GET /v1/rooms/<room>/host` (WebSocket) | the Mac | §14.2 |
 | `GET /v1/rooms/<room>/connect` (WebSocket) | a phone | §14.3. `404` when no Mac holds the room, `429` when the room has 8 phones the Mac answered, `400` for a malformed room |
 | `POST`, `DELETE /v1/rooms/<room>/push-targets` | a phone | §14.5 |
+| `POST /v1/feedback` | the app's Feedback window | forwarded by email, not stored ([relay/README.md](../relay/README.md#feedback)) |
 
 One room per Mac. The relay keeps a room's sockets only in memory while its Mac is connected and logs no frame
 contents; what it stores for a room is the push targets its phones registered (§14.5). What it sees: rooms, IP
 addresses, when sockets open and close, frame sizes and times, and the push tokens phones register (FCM's
-registration token or APNs' device token).
+registration token or APNs' device token). It counts connections, closes and pushes by kind and close code, with
+no room or address ([relay/README.md](../relay/README.md#what-is-counted)).
 
 ### 14.2 The Mac's socket
 

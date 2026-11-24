@@ -110,9 +110,15 @@ describe("sign-in", () => {
     expect(await (await call("/v1/account", bearer(token))).json()).toEqual({ id, provider: "github", name: "example-user", macs: [] });
   });
 
-  it("signs in with Google", async () => {
+  it("signs in with Google, counting a new account apart from a later sign-in", async () => {
+    const write = vi.spyOn(env.METRICS!, "writeDataPoint");
     const { account } = await signIn("google", "2002", "Example Person");
     expect(account).toEqual({ id: await accountIdFor("google", "2002"), provider: "google", name: "Example Person" });
+    await signIn("google", "2002", "Example Person");
+    expect(write.mock.calls.map(([point]) => point?.blobs)).toEqual([
+      ["account.signUp", "google"],
+      ["account.signIn", "google"],
+    ]);
   });
 
   it("refuses a forged or expired state", async () => {
