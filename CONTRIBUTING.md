@@ -25,10 +25,13 @@ changes land on `main` through pull requests.
 
 1. For anything larger than a small fix, open an issue first so the approach can be agreed before
    you spend time on it.
-2. Build and run the quick tests before you open the pull request:
+2. Build, check for warnings and run the tests for what you changed before you open the pull
+   request (see [Checking your change](#checking-your-change)):
 
    ```bash
-   swift build --build-system native
+   swift build --build-system native 2>&1 | tee build.log
+   ./scripts/product-warnings.sh build.log
+   swift test --build-system native --filter <TestClass>
    ./scripts/test-fast.sh
    ```
 
@@ -45,7 +48,9 @@ changes land on `main` through pull requests.
    update user-visible strings in `Sources/NativeHarnessClient/Resources/en.lproj/Localizable.strings`
    only (see [Localization](#localization)).
 
-[AGENTS.md](AGENTS.md) has the same rules for coding agents working in this repository.
+[AGENTS.md](AGENTS.md) has the same rules for coding agents working in this repository, and
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) maps the targets, layers and documents and says where each kind of
+change starts.
 
 ## Localization
 
@@ -89,6 +94,58 @@ follow these principles:
   adding a new one, and keep tool schemas concise without dropping safety boundaries.
 - **Scale with what changed.** Conversations hold thousands of items and runs emit thousands of events;
   main-thread updates and rendering work must scale with the delta, not re-project full history.
+
+## Before you start a change
+
+Find your kind of change in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#where-to-start), read the document it
+names, and extend the tests it lists. The short version:
+
+- **New ACP harness:** add a `HarnessDescriptor` with `transport: .acp` in
+  `Sources/NativeHarnessClient/Domain/HarnessKind.swift` and let the shared ACP adapter run it; add its logo
+  and, if it has separate account homes, its entry in `Account/ProviderConnections.swift`
+  ([PROVIDER_CONNECTIONS](docs/PROVIDER_CONNECTIONS.md)). Extend `HarnessCatalogTests` and the ACP tests.
+- **MCP tool or connector:** read [AGENT_BROWSER_TOOLS](docs/AGENT_BROWSER_TOOLS.md) and
+  [CONNECTORS](docs/CONNECTORS.md). Extend an existing tool before adding one, keep the schema short, and keep
+  credentials on the host. Extend `YardletMCPServerTests` or `AgentToolInjectionTests`.
+- **UI change:** follow [DESIGN_SYSTEM](docs/DESIGN_SYSTEM.md), put what a screen shows in a projection under
+  `Presentation/` or `Domain/` where it can be shared, and attach light and dark screenshots from the running app
+  or `WindowlessRender`.
+- **Remote protocol:** change [REMOTE_PROTOCOL](docs/REMOTE_PROTOCOL.md) in the same pull request, keep the
+  Mac (`Sources/YardletRemote/`, `Sources/NativeHarnessClient/Remote/`), the phone (`Apps/iOS/`) and the relay
+  (`relay/`) consistent, and extend `RemoteProtocolTests` or `RemoteServerTests`.
+
+## Common review requests
+
+These come up most often in review, and checking them first saves a round trip:
+
+- **A control, setting or shortcut for one provider only.** Design for every supported agent first; one
+  provider's API offering something is not a reason for new UI.
+- **Compiler warnings in a product target.** CI fails on any warning under `Sources/`
+  (`scripts/product-warnings.sh`).
+- **macOS-only code in the engine.** An `import AppKit`, `SwiftUI`, `Darwin` or similar outside `Views/`,
+  `WinUI/`, `Browser/`, `Development/` and `Platform/` fails `EnginePortabilityTests` and the engine-only build
+  ([PLATFORM_PORTABILITY](docs/PLATFORM_PORTABILITY.md)). Put the platform part in `Platform/macOS/` under a
+  name the engine calls.
+- **Edits to non-English `.lproj` catalogs.** Feature pull requests change `en.lproj/Localizable.strings` only.
+- **A visible change without light and dark screenshots.**
+- **Behavior changed without the document that describes it.** The documents in `docs/` describe how Yardlet
+  works now; update the one that owns the behavior in the same pull request.
+
+## Checking your change
+
+| What you changed | Check locally |
+| --- | --- |
+| Anything in Swift | `swift build --build-system native 2>&1 \| tee build.log` and `./scripts/product-warnings.sh build.log` |
+| A contract with tests | `swift test --build-system native --filter <TestClass>` |
+| Before the pull request | `./scripts/test-fast.sh` (CI runs it too) |
+| Engine code | `YARDLET_ENGINE_ONLY=1 swift build --build-system native --target NativeHarnessClient --force-resolved-versions` |
+| A view | `swift test --build-system native --filter WindowlessRenderTests`, or a render of your view with `WindowlessRender`; images go to `.build/windowless-render-qa` |
+| User-visible strings | `python3 -B scripts/l10n.py check` |
+| The relay | `cd relay && npm ci && npm run typecheck && npm test` |
+| The iPhone app | The `xcodebuild` command in [Apps/iOS/README.md](Apps/iOS/README.md) |
+
+A test that waits for something to happen uses `waitUntil`
+(`Tests/NativeHarnessClientTests/Support/WaitUntil.swift`), not a fixed sleep, because CI runs slower than a Mac.
 
 ## Building from source
 
