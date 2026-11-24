@@ -1254,6 +1254,7 @@ final class RestartResumeTests: XCTestCase {
         XCTAssertEqual(entries[approval.id]?.wasWaitingForApproval, true)
         clock.elapseAll()
         await second.shutdown()
+        XCTAssertEqual(fixture.transports.all.count, 4, "A start window that passes as Yardlet quits begins nothing more")
 
         // The next launch starts four again, the rest in line, the approval when opened.
         let third = try await fixture.relaunch(repository: repository, selecting: shown.id)
