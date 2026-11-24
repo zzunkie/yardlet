@@ -2361,7 +2361,7 @@ struct MainWindow: View {
             isSidebarVisible: isSidebarVisible,
             isAttached: session.map { model.isAttached($0.id) } ?? false,
             showsSessionRail: false,
-            onToggleSessionRail: toggleSessionRail,
+            onToggleSessionRail: { sessionRail.toggle(for: session?.id ?? model.store.selectedSessionID) },
             sessionRail: sessionRail,
             panelState: taskPanelState,
             focusedSurface: focusedSurface ?? $focusedTaskSurface,

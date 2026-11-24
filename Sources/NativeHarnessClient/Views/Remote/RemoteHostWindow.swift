@@ -286,8 +286,7 @@ struct RemoteHostView: View {
             pendingCommand = nil
             command?.action()
         }) {
-            let palette = RemoteCommandPalette(model: model, commands: taskCommands,
-                                               showsRail: shell.showsRail(shownTaskID?.uuidString))
+            let palette = RemoteCommandPalette(model: model, commands: taskCommands, showsRail: shownRail)
             CommandPaletteView(items: palette.items, tasks: palette.tasks, onSelect: { pendingCommand = $0 })
         }
         .focusedSceneValue(\.yardletTaskCommands, taskCommands)
@@ -472,6 +471,7 @@ struct RemoteHostView: View {
                                layout: $shell.workspaceLayout,
                                review: Binding(get: { shell.reviews[taskID] ?? .init() }, set: { shell.reviews[taskID] = $0 }))
                     .id(taskID)
+                    .onAppear { shell.noteRailShown(taskID) }
             }
         case .newTask:
             // The new task draws its refusals under its own composer.
@@ -612,6 +612,12 @@ struct RemoteHostView: View {
     }
 
     /// The host's task the window shows.
+    /// Whether the shown task's rail is on, for the command palette's words.
+    private var shownRail: Bool {
+        if case let .task(taskID) = model.selection { return shell.showsRail(taskID) }
+        return shell.defaultShowsRail
+    }
+
     private var shownTaskID: UUID? {
         if case let .session(id) = windowSelection { return id }
         return nil
@@ -724,9 +730,8 @@ struct RemoteHostView: View {
         }
         commands.archive = { id in model.send(.archiveTask(taskID: id.uuidString)) }
         commands.shownTaskID = showingTasks ? shownTaskID : nil
-        let railTaskID = shownTaskID?.uuidString
-        commands.toggleSessionRail = { shell.setShowsRail(!shell.showsRail(railTaskID), for: railTaskID) }
         if showingTasks, case let .task(taskID) = model.selection, shownTaskID != nil {
+            commands.toggleSessionRail = { shell.setShowsRail(!shell.showsRail(taskID), for: taskID) }
             // The View menu's side panel and terminal keys, as the title bar's buttons toggle them.
             commands.sessionRailTitle = L10n.string(shell.showsRail(taskID) ? "Hide session rail" : "Show session rail")
             commands.panels = shell.panels[taskID] ?? .init()
@@ -759,6 +764,8 @@ final class RemoteHostShell {
     var railShown: [String: Bool] = [:]
     /// The switch the person last turned, which a task not yet shown in this window takes.
     var defaultShowsRail = true
+    /// The tasks this window showed, which keep the switch they showed when another task's turns.
+    @ObservationIgnored private var railShownTaskIDs: Set<String> = []
     /// Each task's side panel as the local task keeps its own (the tab shown, the tabs open), the panel's width, and each
     /// task's Review choices.
     var panels: [String: TaskSurfaceNavigationProjection.PanelState] = [:]
@@ -768,11 +775,16 @@ final class RemoteHostShell {
     var railFolds = SessionRailFolds()
     let railPreferences = SessionRailPreferenceStore()
 
-    func showsRail(_ taskID: String?) -> Bool { taskID.flatMap { railShown[$0] } ?? defaultShowsRail }
+    func showsRail(_ taskID: String) -> Bool { railShown[taskID] ?? defaultShowsRail }
+
+    func noteRailShown(_ taskID: String) { railShownTaskIDs.insert(taskID) }
 
     /// Turns one task's rail on or off. The tasks already shown keep theirs; a task shown next takes this one.
-    func setShowsRail(_ shown: Bool, for taskID: String?) {
-        if let taskID { railShown[taskID] = shown }
+    func setShowsRail(_ shown: Bool, for taskID: String) {
+        if shown != defaultShowsRail {
+            for id in railShownTaskIDs where id != taskID && railShown[id] == nil { railShown[id] = defaultShowsRail }
+        }
+        railShown[taskID] = shown
         defaultShowsRail = shown
     }
     /// The sidebar's project actions are the host's (`TaskSidebar.managesProjects`); this store only stands in for them.

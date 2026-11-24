@@ -238,6 +238,43 @@ final class SessionRailTests: XCTestCase {
         XCTAssertFalse(restored.isShown(saved))
     }
 
+    /// Windows share the tasks' workspaces: turning a rail in one leaves the tasks another window
+    /// shows, and the workspaces no window showed, as they were.
+    func testTurningARailLeavesTheTasksOtherWindowsShowed() throws {
+        let store = TaskWorkspaceStore()
+        let one = SessionRailWindowState(defaultShown: true, workspaces: store)
+        let two = SessionRailWindowState(defaultShown: false, workspaces: store)
+        let first = UUID(), second = UUID(), unseen = UUID()
+        for id in [first, second, unseen] { _ = store.state(for: id) }
+        one.setFits(true, for: first)
+        two.setFits(true, for: second)
+        XCTAssertFalse(two.isOnScreen(second))
+
+        one.toggle(for: first)
+        XCTAssertEqual(store.state(for: first).showsSessionRail, false)
+        XCTAssertNil(store.state(for: second).showsSessionRail)
+        XCTAssertFalse(two.isOnScreen(second))
+        XCTAssertNil(store.state(for: unseen).showsSessionRail)
+        XCTAssertNil(store.state(for: TaskWorkspaceStore.draftID).showsSessionRail)
+
+        // Saved and read back as it was, and left out of a snapshot that has none.
+        for value in [nil, true, false] as [Bool?] {
+            let data = try JSONEncoder().encode(TaskWorkspaceSnapshot(showsSessionRail: value))
+            XCTAssertEqual(try JSONDecoder().decode(TaskWorkspaceSnapshot.self, from: data).showsSessionRail, value)
+        }
+    }
+
+    /// Another Mac's window: a task shown earlier keeps its rail when the next one's turns.
+    func testAnotherMacsWindowKeepsEachTasksRail() {
+        let shell = RemoteHostShell()
+        shell.noteRailShown("A")
+        shell.noteRailShown("B")
+        shell.setShowsRail(false, for: "B")
+        XCTAssertTrue(shell.showsRail("A"))
+        XCTAssertFalse(shell.showsRail("B"))
+        XCTAssertFalse(shell.showsRail("C"), "a task shown next takes the switch last turned")
+    }
+
     func testTheToggleTitleFollowsWhetherTheRailIsOnScreen() {
         let state = SessionRailWindowState()
         let task = UUID()

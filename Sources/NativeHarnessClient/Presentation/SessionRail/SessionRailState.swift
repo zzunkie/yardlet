@@ -316,6 +316,9 @@ final class SessionRailWindowState {
     @ObservationIgnored private weak var workspaces: TaskWorkspaceStore?
     /// The switches of tasks without a loaded workspace.
     private var shownWithoutWorkspace: [UUID: Bool] = [:]
+    /// The tasks this window showed (`setFits`). Only they keep the switch they showed when another
+    /// task's turns: the store's other workspaces may be another window's, or never shown.
+    @ObservationIgnored private var shownTaskIDs: Set<UUID> = []
 
     init(defaultShown: Bool = true, workspaces: TaskWorkspaceStore? = nil) {
         visibility = SessionRailVisibility(defaultShown: defaultShown)
@@ -337,14 +340,15 @@ final class SessionRailWindowState {
     func isOnScreen(_ taskID: UUID) -> Bool { visibility.isOnScreen(taskID, shown: isShown(taskID)) }
 
     /// Turns the task's rail, and only the task's; nil turns the switch a task shown next takes. The
-    /// tasks loaded without a switch of their own keep the one they showed until now, so another task
-    /// beside this one, or shown before it, stays as it was.
+    /// tasks this window showed without a switch of their own keep the one they showed until now, so
+    /// another task beside this one, or shown before it, stays as it was.
     func toggle(for taskID: UUID?) {
         var shown = taskID.map(isShown) ?? visibility.defaultShown
         let before = visibility.defaultShown
         visibility.toggle(for: taskID, shown: &shown)
-        if visibility.defaultShown != before, let workspaces {
-            for workspace in workspaces.loadedStates where workspace.showsSessionRail == nil {
+        if visibility.defaultShown != before {
+            for id in shownTaskIDs where id != taskID {
+                guard let workspace = workspace(id), workspace.showsSessionRail == nil else { continue }
                 workspace.showsSessionRail = before
             }
         }
@@ -357,6 +361,7 @@ final class SessionRailWindowState {
     }
 
     func setFits(_ fits: Bool, for taskID: UUID) {
+        shownTaskIDs.insert(taskID)
         guard visibility.fittingTaskIDs.contains(taskID) != fits else { return }
         visibility.setFits(fits, for: taskID, shown: isShown(taskID))
     }

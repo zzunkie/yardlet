@@ -703,9 +703,6 @@ final class TaskWorkspaceStore {
         states[id]
     }
 
-    /// The workspaces loaded so far, without loading any.
-    var loadedStates: Dictionary<UUID, TaskWorkspaceState>.Values { states.values }
-
     func state(for id: UUID, initialSurface: String? = nil) -> TaskWorkspaceState {
         if let state = states[id] { return state }
         let loaded = repository.load(for: id)
