@@ -99,6 +99,15 @@ enum ThemeContrast {
         let lum = luminance(accent)
         if lum <= 0.179 { return (accent, white) }
         if lum >= 0.30 { return (accent, black) }
+        // Gently calm overly saturated mid-luminance accents (such as macOS system blue) before
+        // darkening to 4.5:1 so filled accent controls read cleanly rather than harsh cobalt.
+        let toned = Color.Resolved(
+            red: accent.red * 0.84 + 0.36 * 0.16,
+            green: accent.green * 0.84 + 0.36 * 0.16,
+            blue: accent.blue * 0.84 + 0.36 * 0.16,
+            opacity: 1
+        )
+        if ratio(toned, white) >= 4.5 { return (toned, white) }
         var low: Float = 0
         var high: Float = 1
         var best = black
@@ -106,9 +115,9 @@ enum ThemeContrast {
             let mid = (low + high) * 0.5
             let factor = 1 - mid
             let darkened = Color.Resolved(
-                red: accent.red * factor,
-                green: accent.green * factor,
-                blue: accent.blue * factor,
+                red: toned.red * factor,
+                green: toned.green * factor,
+                blue: toned.blue * factor,
                 opacity: 1
             )
             if ratio(darkened, white) >= 4.5 {

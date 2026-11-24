@@ -1075,11 +1075,7 @@ private struct ProjectTaskHeader: View {
     var body: some View {
         ZStack(alignment: .trailing) {
             Button(action: onToggle) {
-                HStack(spacing: 5) {
-                    Circle()
-                        .fill(ParityProjectPalette.color(for: displayName))
-                        .frame(width: 6 * interfaceScale, height: 6 * interfaceScale)
-                        .accessibilityHidden(true)
+                HStack(spacing: 4) {
                     Text(displayName)
                         .font(.system(size: SidebarMetrics.projectHeaderFontSize * interfaceScale, weight: .semibold))
                         .foregroundStyle(isHovering ? .primary : .secondary)
@@ -1607,7 +1603,7 @@ struct SidebarActionRow<Trailing: View>: View {
             }
             Text(title)
                 .font(.system(size: 13 * interfaceScale, weight: isSelected ? .semibold : titleWeight))
-                .foregroundStyle(isSelected ? AnyShapeStyle(ParityTheme.accentText) : AnyShapeStyle(.primary))
+                .foregroundStyle(.primary)
                 .lineLimit(1)
             Spacer(minLength: SidebarMetrics.rowTrailingPadding)
             trailing
@@ -1619,7 +1615,7 @@ struct SidebarActionRow<Trailing: View>: View {
         .overlay {
             if isSelected {
                 SidebarMetrics.rowShape()
-                    .strokeBorder(ParityTheme.accent.opacity(0.18), lineWidth: 0.5)
+                    .strokeBorder(ParityTheme.separator, lineWidth: 0.5)
                     .allowsHitTesting(false)
             }
         }
@@ -1627,7 +1623,7 @@ struct SidebarActionRow<Trailing: View>: View {
     }
 
     private var backgroundFill: AnyShapeStyle {
-        if isSelected { return AnyShapeStyle(ParityTheme.accentSoftFill) }
+        if isSelected { return AnyShapeStyle(ParityTheme.selectedFill) }
         if isFilled || isHovering { return AnyShapeStyle(ParityTheme.hoverFill) }
         return AnyShapeStyle(.clear)
     }
