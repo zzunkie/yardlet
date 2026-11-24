@@ -247,16 +247,17 @@ struct SessionRailHost: View {
     }
 }
 
-/// Keeps the window's rail switch with the window (scene storage), so each window remembers its own
-/// across launches, as the Claude app remembers its one switch (`sessionRailShown`, on by default).
+/// Keeps the rail switch the window last turned with the window (scene storage), as the Claude app
+/// remembers its one switch (`sessionRailShown`, on by default): a task without a switch of its own,
+/// a new one or one saved before each task kept its own, takes it.
 struct SessionRailStorage: View {
     let state: SessionRailWindowState
     @SceneStorage("Yardlet.sessionRailShown") private var isShown = true
 
     var body: some View {
         Color.clear
-            .onAppear { if state.visibility.isShown != isShown { state.visibility.isShown = isShown } }
-            .onChange(of: state.visibility.isShown) { _, shown in if shown != isShown { isShown = shown } }
+            .onAppear { if state.visibility.defaultShown != isShown { state.visibility.defaultShown = isShown } }
+            .onChange(of: state.visibility.defaultShown) { _, shown in if shown != isShown { isShown = shown } }
             .accessibilityHidden(true)
             .allowsHitTesting(false)
     }

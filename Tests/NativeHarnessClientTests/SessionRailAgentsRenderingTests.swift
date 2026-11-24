@@ -79,12 +79,12 @@ final class SessionRailAgentsRenderingTests: XCTestCase {
 
         // With the rail hidden the request still waits in the conversation.
         let hidden = try AgentsRailFixture()
-        hidden.window.visibility.isShown = false
+        hidden.window.visibility.defaultShown = false
         let second = WindowlessRender.Host(hidden.taskView.frame(width: size.width, height: size.height), size: size,
                                            appearance: .light)
         defer { second.close() }
         second.settle(passes: 30, interval: 0.04)
-        XCTAssertFalse(hidden.window.visibility.isOnScreen(hidden.session.id))
+        XCTAssertFalse(hidden.window.isOnScreen(hidden.session.id))
         XCTAssertEqual(second.hosting.buttons(titled: response.title).count, 1, "the conversation's alone")
     }
 
@@ -103,7 +103,7 @@ final class SessionRailAgentsRenderingTests: XCTestCase {
                 size: size, appearance: appearance)
             defer { host.close() }
             host.settle(passes: 30, interval: 0.04)
-            XCTAssertTrue(fixture.window.visibility.isInline(fixture.session.id), "The rail stands beside the conversation")
+            XCTAssertTrue(fixture.window.isInline(fixture.session.id), "The rail stands beside the conversation")
             try WindowlessRender.writePNG(host.capture().bitmap,
                                           to: directory.appending(path: "task-rail-\(appearance.suffix).png"))
 

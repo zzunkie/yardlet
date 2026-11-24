@@ -119,7 +119,7 @@ struct TaskDetail: View {
             showsTrailing: panelState.trailingSurfaceID != nil,
             showsTerminal: panelState.isTerminalPresented,
             preferences: $workspaceState.layout,
-            wantsRail: railServices?.window.visibility.isShown ?? false,
+            wantsRail: railServices?.window.isShown(session.id) ?? false,
             onRailFitChange: { fits in railServices?.window.setFits(fits, for: session.id) },
             onReturnToChat: closeTrailingSurface,
             onCloseTrailing: closeTrailingSurface,
@@ -190,7 +190,7 @@ struct TaskDetail: View {
             bottom: { auxiliarySurface(.terminal) }
         )
         .overlay(alignment: .topTrailing) {
-            if let railServices, railServices.window.visibility.isRaised(session.id) {
+            if let railServices, railServices.window.isRaised(session.id) {
                 SessionRailRaisedLayer(onDismiss: railServices.window.dismissRaised) { railHost(isRaised: true) }
                     .padding(.top, areaHeader?.height ?? 0)
             }
@@ -451,7 +451,7 @@ struct TaskDetail: View {
     /// The session rail on screen lists these in its card, so the composer's line does not.
     private func railLists(_ card: SessionRailCardKind) -> Bool {
         guard !conversationOnly, let railServices else { return false }
-        return railServices.window.visibility.isOnScreen(session.id)
+        return railServices.window.isOnScreen(session.id)
             && !railServices.preferences.preferences.isHidden(card)
     }
 

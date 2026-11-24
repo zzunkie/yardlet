@@ -231,7 +231,7 @@ struct IntegratedTitleBar: View {
     @ViewBuilder
     private var controls: some View {
         if let session {
-            TaskSurfaceControls(showsSessionRail: sessionRail?.visibility.isOnScreen(session.id) ?? showsSessionRail,
+            TaskSurfaceControls(showsSessionRail: sessionRail?.isOnScreen(session.id) ?? showsSessionRail,
                                 onToggleSessionRail: onToggleSessionRail,
                                 panelState: $panelState, focusedSurface: focusedSurface, isFolded: isFolded,
                                 find: conversationFind)

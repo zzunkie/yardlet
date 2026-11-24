@@ -286,7 +286,8 @@ struct RemoteHostView: View {
             pendingCommand = nil
             command?.action()
         }) {
-            let palette = RemoteCommandPalette(model: model, commands: taskCommands, showsRail: shell.showsRail)
+            let palette = RemoteCommandPalette(model: model, commands: taskCommands,
+                                               showsRail: shell.showsRail(shownTaskID?.uuidString))
             CommandPaletteView(items: palette.items, tasks: palette.tasks, onSelect: { pendingCommand = $0 })
         }
         .focusedSceneValue(\.yardletTaskCommands, taskCommands)
@@ -465,7 +466,8 @@ struct RemoteHostView: View {
                                editing: Binding(get: { drafts.edits[taskID] }, set: { drafts.edits[taskID] = $0 }),
                                titleBar: titleBar, find: drafts.find(for: taskID),
                                readingPosition: drafts.readingPosition(for: taskID), renderState: drafts.renderState(for: taskID),
-                               showsRail: $shell.showsRail, railFolds: $shell.railFolds, railPreferences: shell.railPreferences,
+                               showsRail: Binding(get: { shell.showsRail(taskID) }, set: { shell.setShowsRail($0, for: taskID) }),
+                               railFolds: $shell.railFolds, railPreferences: shell.railPreferences,
                                panels: Binding(get: { shell.panels[taskID] ?? .init() }, set: { shell.panels[taskID] = $0 }),
                                layout: $shell.workspaceLayout,
                                review: Binding(get: { shell.reviews[taskID] ?? .init() }, set: { shell.reviews[taskID] = $0 }))
@@ -722,10 +724,11 @@ struct RemoteHostView: View {
         }
         commands.archive = { id in model.send(.archiveTask(taskID: id.uuidString)) }
         commands.shownTaskID = showingTasks ? shownTaskID : nil
-        commands.toggleSessionRail = { shell.showsRail.toggle() }
+        let railTaskID = shownTaskID?.uuidString
+        commands.toggleSessionRail = { shell.setShowsRail(!shell.showsRail(railTaskID), for: railTaskID) }
         if showingTasks, case let .task(taskID) = model.selection, shownTaskID != nil {
             // The View menu's side panel and terminal keys, as the title bar's buttons toggle them.
-            commands.sessionRailTitle = L10n.string(shell.showsRail ? "Hide session rail" : "Show session rail")
+            commands.sessionRailTitle = L10n.string(shell.showsRail(taskID) ? "Hide session rail" : "Show session rail")
             commands.panels = shell.panels[taskID] ?? .init()
             commands.toggleSidePanel = { togglePanel(taskID, TaskSurfaceNavigationProjection.sidePanelToggleID) }
             if model.offersTerminals {
@@ -752,7 +755,10 @@ final class RemoteHostShell {
     let disclosure = SidebarDisclosureStore(defaults: nil)
     var isShowingActivity = false
     var activityPlaces: [UUID: TaskAttentionPlace] = [:]
-    var showsRail = true
+    /// Whether each task's rail is shown, as each local task keeps its own (`TaskWorkspaceState.showsSessionRail`).
+    var railShown: [String: Bool] = [:]
+    /// The switch the person last turned, which a task not yet shown in this window takes.
+    var defaultShowsRail = true
     /// Each task's side panel as the local task keeps its own (the tab shown, the tabs open), the panel's width, and each
     /// task's Review choices.
     var panels: [String: TaskSurfaceNavigationProjection.PanelState] = [:]
@@ -761,6 +767,14 @@ final class RemoteHostShell {
     /// The rail's folded cards and the order the person gave them, as the local rail keeps them.
     var railFolds = SessionRailFolds()
     let railPreferences = SessionRailPreferenceStore()
+
+    func showsRail(_ taskID: String?) -> Bool { taskID.flatMap { railShown[$0] } ?? defaultShowsRail }
+
+    /// Turns one task's rail on or off. The tasks already shown keep theirs; a task shown next takes this one.
+    func setShowsRail(_ shown: Bool, for taskID: String?) {
+        if let taskID { railShown[taskID] = shown }
+        defaultShowsRail = shown
+    }
     /// The sidebar's project actions are the host's (`TaskSidebar.managesProjects`); this store only stands in for them.
     let projects = ProjectStore()
     /// The window's tabs once it has two or more, as the local window's: what each shows, the shown one following what
