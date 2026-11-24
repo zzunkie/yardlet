@@ -1165,7 +1165,6 @@
 "Focused" = "已聚焦";
 "Close pane" = "关闭窗格";
 "Maximize pane" = "最大化窗格";
-"Restore split view" = "恢复分屏视图";
 "Show the focused pane alone for now; the split view keeps its panes." = "暂时只显示当前聚焦的窗格；分屏视图会保留其窗格。";
 "Split pane right" = "向右拆分窗格";
 "Split pane down" = "向下拆分窗格";
