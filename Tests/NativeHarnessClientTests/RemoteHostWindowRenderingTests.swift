@@ -1029,6 +1029,16 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
         } check: { elements in
             XCTAssertTrue(elements.contains { $0.label == L10n.string("Permissions") }, elements.description)
         }
+        // With two tabs the window's tab bar takes its top, as the local window's, the task's header a step down under it
+        // and the window's buttons centred on the bar.
+        let tabbed = RemoteHostShell()
+        tabbed.tabs = [.session(parser.id), .session(guide.id)]
+        try await render("remote-controls-codex-tabs", size: size, titled: true, title: model.name) {
+            RemoteHostView(model: model, directory: hosts, shell: tabbed)
+        } check: { elements in
+            XCTAssertTrue(elements.contains { $0.label == L10n.string("New Tab") }, "the tab bar's New Tab")
+            XCTAssertTrue(elements.contains { $0.label == guide.title }, "the other task's tab")
+        }
         let localDraft = TaskComposerDraft()
         try await render("local-controls-codex", size: column, titled: false) {
             localTask(host, parser, draft: localDraft).environment(\.revealsSentMessageActions, true)

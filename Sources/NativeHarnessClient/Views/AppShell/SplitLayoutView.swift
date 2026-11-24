@@ -21,7 +21,7 @@ enum SplitLayoutMetrics {
     static let minimumPaneHeight: CGFloat = 200
     static let handleThickness: CGFloat = 6
     /// A pane's header, which heads its task's area (`SplitPaneHeader`).
-    static let paneHeaderHeight: CGFloat = 36
+    static let paneHeaderHeight: CGFloat = ParityTheme.areaHeaderHeight
 
     /// Whether a pane of `size` has room for two panes along `direction`.
     static func canSplit(_ size: CGSize?, _ direction: SplitDirection) -> Bool {

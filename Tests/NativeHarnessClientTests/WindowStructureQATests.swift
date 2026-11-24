@@ -717,16 +717,23 @@ final class WindowStructureQATests: XCTestCase {
             try draw(host, "header-single-panel", appearance)
             if light {
                 let all = controls(in: host)
+                // The window's tabs have the window's top row; the task's header and the side panel's strip share
+                // the row a step down under it.
+                func inHeaderRow(_ control: Control?) -> Bool {
+                    control.map { $0.frame.midY > ParityTheme.windowTabBarHeight
+                        && $0.frame.midY < ParityTheme.windowTabBarHeight + ParityTheme.areaHeaderHeight } ?? false
+                }
                 // The panel's close is the rightmost of the two "Hide side panel" buttons; the header's toggle is the other.
-                XCTAssertTrue(inTitleBar(all.filter { $0.label == WorkSurfacePanelKind.taskSidePanel.title }
-                                         .max { $0.frame.maxX < $1.frame.maxX }),
-                              "the side panel's strip is in the title bar's row")
-                XCTAssertTrue(inTitleBar(all.first { $0.label == fixture.left.title && $0.frame.minX > ParityTheme.sidebarWidth }),
-                              "the window's tabs are in the title bar")
+                XCTAssertTrue(inHeaderRow(all.filter { $0.label == WorkSurfacePanelKind.taskSidePanel.title }
+                                          .max { $0.frame.maxX < $1.frame.maxX }),
+                              "the side panel's strip is in the header's row under the tab bar")
+                XCTAssertTrue(all.first { $0.label == fixture.left.title && $0.frame.minX > ParityTheme.sidebarWidth }
+                                .map { $0.frame.midY < ParityTheme.windowTabBarHeight } ?? false,
+                              "the window's tabs are in the tab bar")
                 let top = try XCTUnwrap(pageTop(host), "the browser's address bar")
-                XCTAssertEqual(top, ParityTheme.titleBarHeight + 41, accuracy: 2)
+                XCTAssertEqual(top, ParityTheme.windowTabBarHeight + ParityTheme.areaHeaderHeight + 41, accuracy: 2)
                 notes.append("One task + three tabs + side panel browser: page starts at \(Int(top.rounded())) pt "
-                             + "(previous layout 34 + 50 + 42 + 41 = 167 pt)")
+                             + "(tab bar 36 + header 36 + address bar 41)")
             }
             host.close()
 
@@ -777,6 +784,34 @@ final class WindowStructureQATests: XCTestCase {
         XCTAssertEqual(fromTop, ParityTheme.titleBarHeight / 2, accuracy: 1.5)
         notes.append("Traffic light center: \(String(format: "%.1f", fromTop)) pt from the window top (middle of the 50 pt title row)")
         titled.close()
+        // With two tabs the tab bar is the window's top row, and the buttons follow it.
+        splits.newTab()
+        XCTAssertEqual(splits.tabs.count, 2)
+        let tabbed = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: Self.size.width, height: Self.size.height),
+                              styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                              backing: .buffered, defer: false)
+        tabbed.isReleasedWhenClosed = false
+        tabbed.titlebarAppearsTransparent = true
+        tabbed.titleVisibility = .hidden
+        tabbed.contentView = NSHostingView(rootView: window(model, .light, size: Self.size)
+            .ignoresSafeArea(.container, edges: .top))
+        tabbed.alphaValue = 0
+        tabbed.orderFrontRegardless()
+        let tabbedClose = try XCTUnwrap(tabbed.standardWindowButton(.closeButton))
+        func tabbedFromTop() -> CGFloat {
+            (tabbed.contentView?.bounds.height ?? 0) - (tabbedClose.superview?.convert(tabbedClose.frame, to: nil).midY ?? 0)
+        }
+        // A transparent window takes its update in its own time.
+        let deadline = Date().addingTimeInterval(testWaitLimitSeconds)
+        while abs(tabbedFromTop() - ParityTheme.windowTabBarHeight / 2) > 1.5, Date() < deadline {
+            tabbed.contentView?.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+        XCTAssertEqual(tabbedFromTop(), ParityTheme.windowTabBarHeight / 2, accuracy: 1.5,
+                       "the window's buttons are centred on the tab bar")
+        notes.append("Traffic light center with two tabs: \(String(format: "%.1f", tabbedFromTop())) pt (middle of the 36 pt tab bar)")
+        tabbed.close()
+        splits.closeOtherTabs()
 
         // Dragging, with the pointer, in a window off every screen.
         for existing in splits.splits { splits.dissolve(existing.id) }
@@ -928,7 +963,9 @@ final class WindowStructureQATests: XCTestCase {
         splits.activate(.session(fixture.running.id))
         model.taskWorkspaces.state(for: fixture.running.id).setPanels(panel)
         host.settle(passes: 30, interval: 0.03)
-        let files = try XCTUnwrap(controls(in: host).first { $0.label == L10n.string("Files") && $0.frame.midY < ParityTheme.titleBarHeight })
+        // Under the window's tab bar, in the task's header row.
+        let files = try XCTUnwrap(controls(in: host).first { $0.label == L10n.string("Files")
+            && $0.frame.midY < ParityTheme.windowTabBarHeight + ParityTheme.areaHeaderHeight })
         let closePanel = try XCTUnwrap(controls(in: host).filter { $0.label == WorkSurfacePanelKind.taskSidePanel.title }
             .max { $0.frame.maxX < $1.frame.maxX })
         let end = NSPoint(x: closePanel.frame.minX - 60, y: files.frame.midY)

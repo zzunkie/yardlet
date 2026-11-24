@@ -11,6 +11,8 @@ struct TitleBarSidebarPart: View {
     let onNewTask: () -> Void
     /// The activity view's button, beside New task while the sidebar shows.
     var activityToggle: ActivityViewToggle? = nil
+    /// The window's top row: the title bar's, or the tab bar's once the window has two tabs or more.
+    var height: CGFloat = ParityTheme.titleBarHeight
 
     /// The part's width without the sidebar.
     static let collapsedWidth: CGFloat = 154
@@ -37,16 +39,14 @@ struct TitleBarSidebarPart: View {
             )
         }
         .padding(.trailing, 7)
-        .frame(width: width, height: ParityTheme.titleBarHeight)
+        .frame(width: width, height: height)
         .background(ParityTheme.sidebar)
         .accessibilitySortPriority(ParityAccessibility.titleBar)
         .focusSection()
     }
 }
 
-/// The window's tabs in the title bar, once there are two or more: the tab the window shows holds the
-/// shown item's title, which opens its actions, as Safari's compact tab bar puts the page's field in the
-/// active tab.
+/// The window's tabs, once there are two or more, for its tab bar (`WindowTabBar`).
 struct TitleBarTabs {
     let tabs: [WindowTab]
     let selection: WindowItem
@@ -58,12 +58,12 @@ struct TitleBarTabs {
     var onOpenTask: (UUID, WindowItem?) -> Void = { _, _ in }
 }
 
-/// The title bar beside the sidebar: the header of the item the tab shows, with the window's tabs when it
-/// has two or more. For one task it is the task's header (its title, which opens its actions, harness,
-/// pull request, state, and the find, rail, terminal and side panel buttons); for a split view the split
-/// view's name and actions, its tasks' headers being in their panes; for the new-task screen its panel
-/// buttons. A task's area draws it over its conversation (`TaskAreaHeader`), so a side panel beside the
-/// conversation reaches the window's top with its tabs in this row.
+/// The title bar beside the sidebar: the header of the item the tab shows. For one task it is the task's
+/// header (its title, which opens its actions, harness, pull request, state, and the find, rail, terminal
+/// and side panel buttons); for the new-task screen its panel buttons. A task's area draws it over its
+/// conversation (`TaskAreaHeader`), so a side panel beside the conversation reaches the header's top with
+/// its tabs in this row. Once the window has two tabs or more the window's tab bar (`WindowTabBar`) takes
+/// the window's top and this header stands under it, a step down, at a pane header's height.
 struct IntegratedTitleBar: View {
     let session: SessionRecord?
     let isSidebarVisible: Bool
@@ -101,14 +101,11 @@ struct IntegratedTitleBar: View {
     var onOpenServer: (SessionRecord, TaskServerPort) -> Void = { _, _ in }
     /// The task's find in its conversation, for the header's Find button.
     var conversationFind: ConversationFindModel? = nil
-    /// The split view the window shows, whose name opens its actions in its window tab. The title bar
-    /// stands over a split view only for the window's tabs: each pane's header heads its task.
-    var splitTitle: SplitViewTitleMenu? = nil
     /// The new-task screen's panels, when the tab shows it: its header has the terminal and side
     /// panel buttons, as a task's has (the Claude app's New session header, the Codex app's new thread).
     var draftPanels: Binding<TaskSurfaceNavigationProjection.PanelState>? = nil
-    /// The window's tabs, when it has two or more.
-    var tabs: TitleBarTabs? = nil
+    /// The window's tab bar stands over this header, which then leaves the window's top to it.
+    var isBelowTabBar = false
     /// What a screen in a task's place shows as its title, such as an archived task read beside the
     /// archived list; nil shows none.
     var title: String? = nil
@@ -137,32 +134,21 @@ struct IntegratedTitleBar: View {
     }
 
     private var isFolded: Bool {
-        // With the window's tabs, the shown tab holds the title and the tabs need their room as well.
-        let tabsRoom = tabs.map { WindowTabMetrics.roomBeyondTitle(count: $0.tabs.count) * interfaceScale } ?? 0
-        return TaskHeaderFold.folds(headerWidth: headerWidth - tabsRoom, interfaceScale: interfaceScale)
+        TaskHeaderFold.folds(headerWidth: headerWidth, interfaceScale: interfaceScale)
     }
+
+    private var height: CGFloat { isBelowTabBar ? ParityTheme.areaHeaderHeight : ParityTheme.titleBarHeight }
 
     var body: some View {
         HStack(spacing: 0) {
-            if !isSidebarVisible {
+            if !isSidebarVisible, !isBelowTabBar {
                 TitleBarSidebarPart(isSidebarVisible: false, width: TitleBarSidebarPart.collapsedWidth,
                                     onToggleSidebar: onToggleSidebar, onNewTask: onNewTask)
                 Rectangle().fill(ParityTheme.separator).frame(width: 1)
             }
 
             HStack(spacing: 8) {
-                if let tabs {
-                    WindowTabStrip(tabs: tabs.tabs, selection: tabs.selection, onSelect: tabs.onSelect,
-                                   onClose: tabs.onClose, onCloseOthers: tabs.onCloseOthers, onNewTab: tabs.onNewTab,
-                                   onOpenTask: tabs.onOpenTask, selectedTitle: { selectedTitle })
-                        .layoutPriority(1)
-                    WindowDragRegion().frame(minWidth: 24, maxWidth: .infinity)
-                    if let session {
-                        TaskHeaderStatus(session: session, actions: headerActions, showsHarness: false)
-                            .id(session.id)
-                    }
-                    controls
-                } else if let session {
+                if let session {
                     TaskHeaderIdentity(session: session, actions: headerActions)
                         .id(session.id)
                         .layoutPriority(1)
@@ -189,42 +175,25 @@ struct IntegratedTitleBar: View {
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame = $0 }
             .background(ParityTheme.canvas)
         }
-        .frame(height: ParityTheme.titleBarHeight)
+        .frame(height: height)
         .accessibilitySortPriority(ParityAccessibility.titleBar)
         .focusSection()
         .onChange(of: frame, initial: true) { registerAsTabBar() }
-        .onChange(of: tabs == nil) { registerAsTabBar() }
+        .onChange(of: isBelowTabBar) { registerAsTabBar() }
         .onDisappear { drag?.removeWindowTabs(token: token) }
     }
 
     /// Stands in for the tab bar while there is none; the bar registers itself once there are two tabs.
     private func registerAsTabBar() {
-        guard tabs == nil, session != nil, frame != .zero else {
+        guard !isBelowTabBar, session != nil, frame != .zero else {
             return drag?.removeWindowTabs(token: token) ?? ()
         }
         drag?.setWindowTabs(WindowDropGeometry.Strip(frame: frame, tabs: []), token: token)
     }
 
     private var isDropTarget: Bool {
-        guard tabs == nil, case .windowTabs? = drag?.target else { return false }
+        guard !isBelowTabBar, case .windowTabs? = drag?.target else { return false }
         return true
-    }
-
-    /// The shown item's title in the tab that shows it: a task's or a split view's opens its actions.
-    @ViewBuilder
-    private var selectedTitle: some View {
-        if let session {
-            TaskTitleMenu(session: session, actions: headerActions)
-                .id(session.id)
-        } else if let splitTitle {
-            splitTitle
-        } else {
-            // The tab drags by it, as by the rest of the tab.
-            Text(L10n.string("New task"))
-                .font(.parity(.control, weight: .medium, scale: interfaceScale))
-                .lineLimit(1)
-                .allowsHitTesting(false)
-        }
     }
 
     /// The task's buttons, or the new-task screen's; a split view's are in its panes.
@@ -245,11 +214,28 @@ struct IntegratedTitleBar: View {
     }
 }
 
-/// Keeps the window's buttons centred on the title bar's row: attached to the window's content, whose
-/// top is the window's.
+/// Keeps the window's buttons centred on the window's top row, the title bar's or the tab bar's:
+/// attached to the window's content, whose top is the window's.
 struct WindowChromeAlignmentAnchor: View {
+    var rowHeight: CGFloat = ParityTheme.titleBarHeight
+
     var body: some View {
-        WindowChromeAlignment(targetCenterFromTop: ParityTheme.titleBarHeight / 2)
+        WindowChromeAlignment(targetCenterFromTop: rowHeight / 2)
+    }
+}
+
+/// The window's tab bar's shown tab: its item's title, which the tab drags by as by the rest of the tab. The
+/// header under the bar holds the title's actions.
+struct WindowTabTitle: View {
+    let title: String
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
+
+    var body: some View {
+        Text(title)
+            .font(.parity(.control, weight: .medium, scale: interfaceScale))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .allowsHitTesting(false)
     }
 }
 

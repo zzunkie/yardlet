@@ -227,7 +227,8 @@ struct RemoteHostView: View {
                             isSidebarVisible: true, width: shell.sidebarWidth.shown(inWindowWidth: windowWidth),
                             onToggleSidebar: toggleSidebar, onNewTask: showNewTask,
                             activityToggle: ActivityViewToggle(isOn: isActivityShown, needsAttention: needsAttention,
-                                                               toggle: toggleActivity))
+                                                               toggle: toggleActivity),
+                            height: windowTopRowHeight)
                         if model.showsSchedules {
                             RemoteScheduleList(model: model)
                         } else {
@@ -237,6 +238,16 @@ struct RemoteHostView: View {
                 }
             }
             VStack(spacing: 0) {
+                // The window's tab bar, as the local window's, over the header of what the tab shows.
+                if let tabs = tabStrip {
+                    WindowTabBar(tabs: tabs, windowLead: shell.isSidebarVisible ? nil : AnyView(TitleBarSidebarPart(
+                        isSidebarVisible: false, width: TitleBarSidebarPart.collapsedWidth,
+                        onToggleSidebar: toggleSidebar, onNewTask: showNewTask,
+                        height: ParityTheme.windowTabBarHeight))) {
+                        WindowTabTitle(title: shownTaskID.flatMap { model.task($0.uuidString)?.title }
+                                       ?? L10n.string("New task"))
+                    }
+                }
                 detail
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -246,8 +257,9 @@ struct RemoteHostView: View {
             windowSize = $0
             windowWidth = $0.width
         }
-        // The title bar's row is the window's top, as in the local window, with the window's buttons centred on it.
-        .background(WindowChromeAlignmentAnchor())
+        // The title bar's row, or the tab bar's, is the window's top, as in the local window, with the window's
+        // buttons centred on it.
+        .background(WindowChromeAlignmentAnchor(rowHeight: windowTopRowHeight))
         .ignoresSafeArea(.container, edges: .top)
         // Ordinary controls stay monochrome, as in the local window; status, links and Send opt into the accent.
         .tint(Color.primary)
@@ -511,7 +523,10 @@ struct RemoteHostView: View {
     /// host refused last (a schedule's Run now, Pause or Delete, or a sidebar action taken from here).
     private func plainDetail(showsRefusal: Bool = true, @ViewBuilder _ content: () -> some View) -> some View {
         VStack(spacing: 0) {
-            RemoteTitleBar(context: titleBar) { WindowDragRegion().frame(maxWidth: .infinity) }
+            // Under the window's tab bar there is nothing to name in a row of its own.
+            if titleBar.tabs == nil {
+                RemoteTitleBar(context: titleBar) { WindowDragRegion().frame(maxWidth: .infinity) }
+            }
             RemoteConnectionBanner(model: model, directory: directory)
             if showsRefusal, let error = model.commandError {
                 Text(error)
@@ -531,12 +546,17 @@ struct RemoteHostView: View {
     private var titleBar: RemoteTitleBarContext {
         RemoteTitleBarContext(isSidebarVisible: shell.isSidebarVisible, toggleSidebar: toggleSidebar, newTask: showNewTask,
                               banner: AnyView(RemoteConnectionBanner(model: model, directory: directory)),
-                              tabs: tabStrip, selectedTitle: shownTaskID.flatMap { model.task($0.uuidString)?.title })
+                              tabs: tabStrip)
+    }
+
+    /// The window's top row: the tab bar's once there are two tabs or more, otherwise the title bar's.
+    private var windowTopRowHeight: CGFloat {
+        tabStrip == nil ? ParityTheme.titleBarHeight : ParityTheme.windowTabBarHeight
     }
 
     // MARK: Tabs
 
-    /// The window's tabs in the title bar once there are two or more, drawn by the local window's strip.
+    /// The window's tabs once there are two or more, drawn by the local window's tab bar.
     private var tabStrip: TitleBarTabs? {
         guard shell.tabs.count > 1 else { return nil }
         let mirror = model.sidebar
@@ -790,45 +810,33 @@ struct RemoteTitleBarContext {
     var toggleSidebar: () -> Void
     var newTask: () -> Void
     var banner: AnyView
-    /// The window's tabs, once there are two or more.
+    /// The window's tabs, once there are two or more; their bar then stands over the detail's row.
     var tabs: TitleBarTabs?
-    /// The shown task's title, which its tab holds; nil for the new task.
-    var selectedTitle: String?
+
+    /// The detail's row: the window's title bar, or a step down under the tab bar.
+    var rowHeight: CGFloat { tabs == nil ? ParityTheme.titleBarHeight : ParityTheme.areaHeaderHeight }
 }
 
-/// The row in the window's title bar over the detail, as the local window's: with the sidebar hidden, the bar's sidebar
-/// part (Show sidebar, New task) first, then what the detail names, with a drag region where it leaves room.
+/// The row over the detail, as the local window's: in the window's title bar, with the sidebar hidden the bar's sidebar
+/// part (Show sidebar, New task) first, then what the detail names, with a drag region where it leaves room. Under the
+/// window's tab bar (`WindowTabBar`) it is the detail's header, a step down.
 struct RemoteTitleBar<Content: View>: View {
     let context: RemoteTitleBarContext
     @ViewBuilder let content: Content
-    @Environment(\.yardletInterfaceScale) private var interfaceScale
 
     var body: some View {
         HStack(spacing: 0) {
-            if !context.isSidebarVisible {
+            if !context.isSidebarVisible, context.tabs == nil {
                 TitleBarSidebarPart(isSidebarVisible: false, width: TitleBarSidebarPart.collapsedWidth,
                                     onToggleSidebar: context.toggleSidebar, onNewTask: context.newTask)
                 Rectangle().fill(ParityTheme.separator).frame(width: 1)
             }
             HStack(spacing: 8) {
-                if let tabs = context.tabs {
-                    WindowTabStrip(tabs: tabs.tabs, selection: tabs.selection, onSelect: tabs.onSelect,
-                                   onClose: tabs.onClose, onCloseOthers: tabs.onCloseOthers, onNewTab: tabs.onNewTab,
-                                   onOpenTask: tabs.onOpenTask, selectedTitle: {
-                                       Text(context.selectedTitle ?? L10n.string("New task"))
-                                           .font(.parity(.control, weight: .medium, scale: interfaceScale))
-                                           .lineLimit(1)
-                                           .allowsHitTesting(false)
-                                   })
-                        .layoutPriority(1)
-                    WindowDragRegion().frame(minWidth: 24, maxWidth: .infinity)
-                } else {
-                    content
-                }
+                content
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, context.tabs == nil ? 16 : 12)
         }
-        .frame(height: ParityTheme.titleBarHeight)
+        .frame(height: context.rowHeight)
     }
 }
 
@@ -1086,7 +1094,7 @@ struct RemoteTaskView: View {
             rail: { rail },
             trailing: { sidePanel.environment(\.workSurfaceNavigation, sidePanelNavigation) },
             bottom: { terminal(inSidePanel: false) })
-        .environment(\.taskAreaHeader, TaskAreaHeader(height: ParityTheme.titleBarHeight, isTitleBar: true,
+        .environment(\.taskAreaHeader, TaskAreaHeader(height: titleBar.rowHeight, isTitleBar: titleBar.tabs == nil,
                                                       content: AnyView(RemoteTitleBar(context: titleBar) { header })))
         // The browser's tab follows the host's watch, also as the view appears: a handoff's Show Tab or a new tab
         // shows it in the panel.

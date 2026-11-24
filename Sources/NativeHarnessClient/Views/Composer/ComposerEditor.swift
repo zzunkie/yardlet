@@ -146,6 +146,7 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
     @Environment(\.yardletColorTheme) private var theme
     @Environment(\.yardletInterfaceScale) private var interfaceScale
     @Environment(\.taskKeyboardFocus) private var keyboardFocus
+    @Environment(\.splitPaneEmphasis) private var paneEmphasis
     /// Which Return sends (`ComposerReturnKey`).
     @AppStorage(SendShortcut.preferenceKey) private var sendShortcut = SendShortcut.return
     @State private var commandHighlight = 0
@@ -233,12 +234,23 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
 
             footer
         }
-        .background(ParityTheme.input, in: RoundedRectangle(cornerRadius: ParityTheme.composerCornerRadius, style: .continuous))
+        // In a split pane that does not have the focus the composer lies flat on the pane, so the focused
+        // pane's composer, raised, shows where typing goes.
+        .background {
+            let shape = RoundedRectangle(cornerRadius: ParityTheme.composerCornerRadius, style: .continuous)
+            if paneEmphasis == .unfocused {
+                // Opaque, as the conversation may scroll beneath it.
+                shape.fill(ParityTheme.canvas).overlay(shape.fill(ParityTheme.subtleFill))
+            } else {
+                shape.fill(ParityTheme.input)
+            }
+        }
         .parityElevatedSurface(
             cornerRadius: ParityTheme.composerCornerRadius,
             isFocused: isFocused.wrappedValue,
             accentBorder: isBashMode,
-            showsFocusRing: true
+            showsFocusRing: true,
+            emphasis: paneEmphasis.composer
         )
         .overlay {
             if let receive = externalInput {

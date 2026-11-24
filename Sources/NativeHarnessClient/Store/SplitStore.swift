@@ -179,6 +179,9 @@ final class SplitStore {
     private(set) var selection: WindowItem
     /// Never empty, always holds `selection`, and no item twice.
     private(set) var tabs: [WindowItem]
+    /// The pane a split view shows alone for now (`toggleMaximizedPane`). It is not saved: the split view keeps
+    /// its panes and their places, and a restart shows them all.
+    private var maximizedPaneID: UUID?
 
     @ObservationIgnored private let repository: any SplitRepository
     @ObservationIgnored private var pendingSave: Task<Void, Never>?
@@ -259,6 +262,20 @@ final class SplitStore {
 
     var canSplit: Bool { selection != .home }
     var canClosePane: Bool { activeSplit != nil }
+
+    /// The pane the shown split view shows alone, while it keeps the focus: moving the focus to another
+    /// pane, or the split view losing panes down to one, shows them all again.
+    var maximizedPane: SplitPane? {
+        guard let split = activeSplit, let maximizedPaneID, maximizedPaneID == split.focusedPaneID,
+              split.panes.count > 1 else { return nil }
+        return split.focusedPane
+    }
+
+    /// Shows the focused pane alone over its split view, or the split view again.
+    func toggleMaximizedPane() {
+        guard let split = activeSplit, split.panes.count > 1 else { return }
+        maximizedPaneID = maximizedPane == nil ? split.focusedPaneID : nil
+    }
 
     var activeTabIndex: Int { tabs.firstIndex(of: selection) ?? 0 }
     /// A window's last tab is not closed as a tab; closing it closes the window.

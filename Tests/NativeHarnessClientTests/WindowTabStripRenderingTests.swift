@@ -151,9 +151,68 @@ final class WindowTabStripRenderingTests: XCTestCase {
         }
     }
 
+    /// The tab bar over a task with its side panel, a split view in three panes with the focused one standing
+    /// out, and one of its panes maximized, at a wide and a laptop window's width: the tab bar is a row of its
+    /// own, the task's header and the panel's tabs a step down under it.
+    func testTabBarOverTheHeaderAndTheFocusedPaneAtTwoWidths() throws {
+        let directory = try WindowlessRender.directory(Self.folder)
+        let fixture = try makeFixture()
+        let splits = fixture.model.splits
+        splits.activate(.session(fixture.running.id))
+        splits.openInNewTab(.session(fixture.left.id))
+        splits.combine(fixture.right.id, with: fixture.left.id)
+        let split = try XCTUnwrap(splits.activeSplit)
+        let workspace = fixture.model.taskWorkspaces.state(for: fixture.running.id)
+        for id in ["files", "diff"] {
+            workspace.setPanels(TaskSurfaceNavigationProjection.showing(id, in: workspace.panels))
+        }
+        let sizes = [NSSize(width: 1440, height: 860), NSSize(width: 1200, height: 800)]
+
+        func render(_ name: String) throws {
+            for size in sizes {
+                for appearance in WindowlessRender.Appearance.allCases {
+                    let content = MainWindow(model: fixture.model)
+                        .frame(width: size.width, height: size.height)
+                        .environment(\.colorScheme, appearance.colorScheme)
+                    let host = WindowlessRender.Host(content, size: size, appearance: appearance)
+                    host.settle(passes: 30, interval: 0.03)
+                    try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(
+                        path: "\(name)-\(Int(size.width))-\(appearance.suffix).png"))
+                    host.close()
+                }
+            }
+        }
+
+        splits.selectTab(.session(fixture.running.id))
+        try render("bar-task-panel")
+
+        splits.selectTab(.split(split.id))
+        try render("bar-split-two")
+
+        splits.split(.right)
+        XCTAssertEqual(splits.activeSplit?.panes.count, 3)
+        splits.moveFocus(.left)
+        try render("bar-split-three")
+
+        splits.toggleMaximizedPane()
+        let maximized = try XCTUnwrap(splits.maximizedPane)
+        try render("bar-split-maximized")
+        let host = WindowlessRender.Host(window(fixture.model, .light), size: Self.size, appearance: .light)
+        host.settle(passes: 20, interval: 0.03)
+        let labels = Set(host.accessibilityElements().map(\.label))
+        XCTAssertTrue(labels.contains(SplitCommandTitle.maximize(isMaximized: true)), "the maximized pane restores the split view")
+        XCTAssertEqual(host.accessibilityElements().filter { $0.label == L10n.string("Close pane") }.count, 1,
+                       "only the maximized pane is drawn")
+        XCTAssertEqual(maximized.id, splits.activeSplit?.focusedPaneID)
+        host.close()
+        splits.toggleMaximizedPane()
+        XCTAssertEqual(splits.activeSplit?.panes.count, 3, "restoring keeps the split view's panes")
+    }
+
     func testTabsShareTheWidthAndTheShownTabKeepsItsTitleWhenNarrow() {
         XCTAssertEqual(WindowTabMetrics.widths(count: 2, available: 1000).shown, WindowTabMetrics.tabMaxWidth)
-        XCTAssertEqual(WindowTabMetrics.widths(count: 5, available: 900).other, (900 - 8 - 8) / 5)
+        XCTAssertEqual(WindowTabMetrics.widths(count: 5, available: 900).other,
+                       (900 - WindowTabMetrics.inset * 2 - 4 * WindowTabMetrics.spacing) / 5)
         // In a narrow title bar the shown tab keeps its title's room and the others give way, to their marks.
         let narrow = WindowTabMetrics.widths(count: 4, available: 420)
         XCTAssertGreaterThanOrEqual(narrow.shown, WindowTabMetrics.shownMinWidth)

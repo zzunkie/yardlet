@@ -365,7 +365,8 @@ struct SplitViewTitleMenu: View {
 }
 
 /// A split pane's header: its task's header (title, harness, state, the panel buttons that act on
-/// this pane's task) and Close pane, or for an empty pane what fills it. Pressing it focuses the pane.
+/// this pane's task), Maximize pane and Close pane, or for an empty pane what fills it. Pressing it focuses
+/// the pane.
 ///
 /// With no tab bar over the split view, the panes reach the window's top and the top ones stand in for
 /// the title bar, so they read as windows side by side: such a header has the title bar's height and
@@ -377,6 +378,9 @@ struct SplitPaneHeader<Identity: View, Controls: View>: View {
     let isFocused: Bool
     let onFocus: () -> Void
     let onClose: () -> Void
+    /// The pane is shown alone over its split view for now; its button shows the split view again.
+    var isMaximized = false
+    var onToggleMaximized: (() -> Void)? = nil
     /// The pane's task: dragging the header moves the pane beside another, onto another's middle to swap
     /// the two, or onto the window's tabs to give the task a tab of its own (`WindowDragState`). An empty
     /// pane does not drag.
@@ -419,6 +423,14 @@ struct SplitPaneHeader<Identity: View, Controls: View>: View {
                 WindowDragRegion(onPress: onFocus).frame(minWidth: ParitySpace.s8, maxWidth: .infinity)
             }
             controls(isFolded)
+            if let onToggleMaximized {
+                ParityHeaderButton(
+                    systemName: isMaximized ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                    help: SplitCommandTitle.maximize(isMaximized: isMaximized),
+                    shortcut: isFocused ? MacShortcut.maximizePane.binding : nil,
+                    isOn: isMaximized,
+                    action: onToggleMaximized)
+            }
             // ⌃⌘W closes the focused pane only.
             ParityTabCloseButton(help: ShortcutHelp.text(L10n.string("Close pane"),
                                                          isFocused ? MacShortcut.closePane.binding : nil),

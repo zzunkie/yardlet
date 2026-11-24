@@ -12,7 +12,9 @@ extension RemoteHostView {
     @ViewBuilder var mailDetail: some View {
         if model.needsMailCalendarPermission {
             VStack(spacing: 0) {
-                RemoteTitleBar(context: titleBarContext) { WindowDragRegion().frame(maxWidth: .infinity) }
+                if titleBarContext.tabs == nil {
+                    RemoteTitleBar(context: titleBarContext) { WindowDragRegion().frame(maxWidth: .infinity) }
+                }
                 RemoteConnectionBanner(model: model, directory: directory)
                 RemotePermissionNote(text: permissionWords)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -28,7 +30,7 @@ extension RemoteHostView {
                 },
                 onRefresh: { Task { await model.mailbox.refresh() } }
             )
-            .environment(\.taskAreaHeader, TaskAreaHeader(height: ParityTheme.titleBarHeight, isTitleBar: true,
+            .environment(\.taskAreaHeader, TaskAreaHeader(height: titleBarContext.rowHeight, isTitleBar: titleBarContext.tabs == nil,
                 content: AnyView(VStack(spacing: 0) {
                     RemoteTitleBar(context: titleBarContext) {
                         HStack(spacing: 8) {

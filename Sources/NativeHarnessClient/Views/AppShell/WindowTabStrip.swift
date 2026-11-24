@@ -1,10 +1,46 @@
 import SwiftUI
 
-/// The window's task tabs in the title bar, as a browser's tab bar: shown once the window has two tabs
-/// or more (Safari's default). Each tab has the item's harness mark or split mark, its title, and the
-/// state its sidebar row shows; the tab under the pointer and the active tab show the close button
-/// instead. The active tab holds the shown item's title, which opens its actions, as Safari's compact
-/// tab bar puts the page's field in the active tab. "+" opens a new tab (⌘T).
+/// The window's own tab bar, as a browser's: a row of its own at the window's top once the window has two
+/// tabs or more (Safari's default), in the sidebar's tone, over the header of the item the tab shows. The
+/// shown tab stands on the canvas and runs into the header below it without a line, as a browser's shown
+/// tab runs into its page; with the sidebar hidden the bar starts with the title bar's sidebar part, which
+/// keeps the window's buttons on the bar's row.
+struct WindowTabBar<SelectedTitle: View>: View {
+    let tabs: TitleBarTabs
+    /// The title bar's part for the window's buttons and the sidebar button (`TitleBarSidebarPart`), while
+    /// the sidebar is hidden.
+    var windowLead: AnyView? = nil
+    @ViewBuilder let selectedTitle: () -> SelectedTitle
+
+    var body: some View {
+        HStack(spacing: 0) {
+            if let windowLead { windowLead }
+            HStack(spacing: 0) {
+                WindowTabStrip(tabs: tabs.tabs, selection: tabs.selection, onSelect: tabs.onSelect,
+                               onClose: tabs.onClose, onCloseOthers: tabs.onCloseOthers, onNewTab: tabs.onNewTab,
+                               onOpenTask: tabs.onOpenTask, selectedTitle: selectedTitle)
+                    .layoutPriority(1)
+                WindowDragRegion().frame(minWidth: 24, maxWidth: .infinity)
+            }
+            .padding(.trailing, ParitySpace.s8)
+        }
+        .frame(height: ParityTheme.windowTabBarHeight)
+        // The bar's edge runs under the tabs, and the shown tab covers it where it joins the header below.
+        .background(alignment: .bottom) {
+            ZStack(alignment: .bottom) {
+                ParityTheme.sidebar
+                Rectangle().fill(ParityTheme.separator).frame(height: 1)
+            }
+        }
+        .accessibilitySortPriority(ParityAccessibility.titleBar)
+        .focusSection()
+    }
+}
+
+/// The window's task tabs, as a browser's tab bar (`WindowTabBar`). Each tab has the item's harness mark or
+/// split mark, its title, and the state its sidebar row shows; the tab under the pointer and the active tab
+/// show the close button instead. The active tab holds the shown item's title: a split view's opens its
+/// actions, as a split view has no header of its own. "+" opens a new tab (⌘T).
 ///
 /// A tab drags along the bar to another place, and a task's tab drags onto a pane's side to join a split
 /// view (`WindowDragState`); the active tab drags by its mark and the room around its title. A sidebar
@@ -33,7 +69,7 @@ struct WindowTabStrip<SelectedTitle: View>: View {
             GeometryReader { proxy in
                 let widths = WindowTabMetrics.widths(count: tabs.count, available: proxy.size.width)
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: WindowTabMetrics.spacing) {
+                    HStack(alignment: .bottom, spacing: WindowTabMetrics.spacing) {
                         ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
                             let isSelected = tab.id == selection
                             let width = isSelected ? widths.shown : widths.other
@@ -42,6 +78,8 @@ struct WindowTabStrip<SelectedTitle: View>: View {
                                 isSelected: isSelected,
                                 canClose: tabs.count > 1,
                                 showsTitle: isSelected || width >= WindowTabMetrics.titledWidth,
+                                // A hairline parts two tabs side by side; the shown tab's own edge parts it from its neighbours.
+                                showsDivider: index > 0 && !isSelected && tabs[index - 1].id != selection,
                                 onSelect: { onSelect(tab.id) },
                                 onClose: { onClose(tab.id) },
                                 onCloseOthers: { onCloseOthers(tab.id) },
@@ -50,7 +88,8 @@ struct WindowTabStrip<SelectedTitle: View>: View {
                             .frame(width: width)
                             .offset(x: slide(index, width: (tabFrames[draggedItem ?? tab.id]?.width ?? width)
                                                 + WindowTabMetrics.spacing))
-                            .zIndex(draggedIndex == index ? 1 : 0)
+                            // The shown tab's feet reach over its neighbours.
+                            .zIndex(draggedIndex == index ? 2 : (isSelected ? 1 : 0))
                             // Read outside the offset: where the tab is laid out, not where it slid.
                             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
                                 if tabFrames[tab.id] != frame { tabFrames[tab.id] = frame }
@@ -67,7 +106,7 @@ struct WindowTabStrip<SelectedTitle: View>: View {
                         }
                     }
                     .padding(.horizontal, WindowTabMetrics.inset)
-                    .frame(height: proxy.size.height)
+                    .frame(height: proxy.size.height, alignment: .bottom)
                     .animation(.easeOut(duration: 0.15), value: slideGap)
                 }
             }
@@ -80,6 +119,8 @@ struct WindowTabStrip<SelectedTitle: View>: View {
                 onDrop: { id, index in onOpenTask(id, tabs.indices.contains(index) ? tabs[index].id : nil) }))
             ParityHeaderButton(systemName: "plus", help: L10n.string("New Tab"), shortcut: MacShortcut.newTab.binding,
                                action: onNewTab)
+                // Level with the tabs, which stand on the bar's bottom edge.
+                .padding(.top, WindowTabMetrics.barHeight - WindowTabMetrics.tabHeight)
         }
         // The first frames count too: a title bar drawn anew for another item registers its bar at once.
         .onChange(of: stripFrame, initial: true) { register() }
@@ -134,9 +175,15 @@ struct WindowTabStrip<SelectedTitle: View>: View {
 enum WindowTabMetrics {
     static let tabMaxWidth: CGFloat = 240
     static let tabMinWidth: CGFloat = 120
-    static let spacing: CGFloat = 2
-    /// The bar's padding on each side.
-    static let inset: CGFloat = 4
+    static let spacing: CGFloat = 0
+    /// The bar's padding on each side, which keeps the shown tab's feet in the bar.
+    static let inset: CGFloat = 10
+    static let barHeight: CGFloat = ParityTheme.windowTabBarHeight
+    /// A tab stands on the bar's bottom edge, the room above it the bar's.
+    static let tabHeight: CGFloat = 30
+    /// The shown tab's top corners, and the curves where its sides meet the bar's edge.
+    static let cornerRadius: CGFloat = 8
+    static let footRadius: CGFloat = 6
 
     /// The shown tab's width while the others can still give way; it holds the shown item's title.
     static let shownMinWidth: CGFloat = 170
@@ -162,14 +209,6 @@ enum WindowTabMetrics {
         return (min(tabMaxWidth, max(shownFloor, room - others * other)), other)
     }
 
-    /// What the bar needs in the title bar beyond the room a header keeps for a title and the harness
-    /// (`TaskHeaderFold.titleRoom`): the shown tab with its title, the others at their marks, and New Tab.
-    /// The task's buttons fold into More before the tabs would scroll.
-    static func roomBeyondTitle(count: Int) -> CGFloat {
-        shownMinWidth + CGFloat(max(0, count - 1)) * (markWidth + spacing) + inset * 2 + newTabWidth
-            - TaskHeaderFold.titleRoom
-    }
-
     /// The bar's width with every tab at its widest; what is left of the title bar moves the window.
     static func idealWidth(count: Int) -> CGFloat {
         CGFloat(count) * tabMaxWidth + CGFloat(max(0, count - 1)) * spacing + inset * 2
@@ -182,6 +221,8 @@ private struct WindowTabButton<SelectedTitle: View>: View {
     let canClose: Bool
     /// A tab squeezed to its mark shows its title in its help.
     var showsTitle = true
+    /// The hairline at its leading edge, between two tabs that are not shown.
+    var showsDivider = false
     let onSelect: () -> Void
     let onClose: () -> Void
     let onCloseOthers: () -> Void
@@ -245,8 +286,8 @@ private struct WindowTabButton<SelectedTitle: View>: View {
                     .padding(.trailing, 3)
             }
         }
-        .frame(height: ParityHeader.controlSize)
-        .background { ParityTabBackground(isSelected: isSelected, isHovering: isHovering) }
+        .frame(height: WindowTabMetrics.tabHeight)
+        .background { WindowTabGround(isSelected: isSelected, isHovering: isHovering, showsDivider: showsDivider) }
         .onHover { isHovering = $0 }
         .contextMenu {
             Button(L10n.string("Close tab"), action: onClose).disabled(!canClose)
@@ -285,5 +326,67 @@ private struct WindowTabButton<SelectedTitle: View>: View {
         if case let .task(harness) = tab.kind { lines.append(harness.displayName) }
         if let status = tab.status { lines.append(status.accessibilityName) }
         return lines.joined(separator: "\n")
+    }
+}
+
+/// A tab's ground in the window's tab bar. The shown tab stands on the canvas with rounded top corners and a
+/// hairline edge that curves out into the bar's bottom edge, so it runs into the header below without a line,
+/// as a browser's shown tab runs into its page. Another tab shows the hover fill under the pointer, and a
+/// hairline parts it from the tab before it.
+private struct WindowTabGround: View {
+    let isSelected: Bool
+    let isHovering: Bool
+    let showsDivider: Bool
+
+    var body: some View {
+        if isSelected {
+            ZStack {
+                WindowTabShape(closesBottom: true).fill(ParityTheme.canvas)
+                WindowTabShape(closesBottom: false)
+                    .stroke(ParityTheme.separator, lineWidth: 1)
+                    // The edge's ends lie on the bar's own bottom line.
+                    .offset(y: -0.5)
+            }
+        } else {
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isHovering ? ParityTheme.hoverFill : .clear)
+                    .padding(.horizontal, 2)
+                    .padding(.vertical, 3)
+                if showsDivider, !isHovering {
+                    Rectangle().fill(ParityTheme.strongSeparator)
+                        .frame(width: 1)
+                        .padding(.vertical, 9)
+                        .offset(x: -0.5)
+                }
+            }
+        }
+    }
+}
+
+/// The shown tab's outline: rounded at the top and open at the bottom, where its sides curve out into the
+/// bar's bottom edge. The curves reach `WindowTabMetrics.footRadius` past the tab on each side.
+struct WindowTabShape: Shape {
+    /// Closed along the bottom for the fill; open for the edge, which the header below continues.
+    var closesBottom: Bool
+
+    func path(in rect: CGRect) -> Path {
+        let radius = min(WindowTabMetrics.cornerRadius, rect.height / 2)
+        let foot = WindowTabMetrics.footRadius
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX - foot, y: rect.maxY))
+        path.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.maxY),
+                    tangent2End: CGPoint(x: rect.minX, y: rect.maxY - foot), radius: foot)
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + radius))
+        path.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.minY),
+                    tangent2End: CGPoint(x: rect.minX + radius, y: rect.minY), radius: radius)
+        path.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.minY))
+        path.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.minY),
+                    tangent2End: CGPoint(x: rect.maxX, y: rect.minY + radius), radius: radius)
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - foot))
+        path.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.maxY),
+                    tangent2End: CGPoint(x: rect.maxX + foot, y: rect.maxY), radius: foot)
+        if closesBottom { path.closeSubpath() }
+        return path
     }
 }
