@@ -44,7 +44,8 @@ enum RemoteConversationProjection {
                           childTasks: childTasks))
         }
         let headerIndex = items.count
-        if let plan = turn.plan { add(self.plan(plan, turnID: turn.id)) }
+        // A running turn keeps its plan in view while its work folds, as the Mac draws it.
+        if let plan = turn.plan { add(self.plan(plan, turnID: turn.id, inWork: turn.status != .running)) }
         let kept = Set(turn.workKeptWhenFolded.map(\.id))
         for item in turn.work {
             add(self.item(item, turnID: turn.id, harness: harness, workspaceURL: workspaceURL,
@@ -493,9 +494,9 @@ enum RemoteConversationProjection {
         return result
     }
 
-    private static func plan(_ plan: ConversationPlan, turnID: String) -> RemoteItem {
+    private static func plan(_ plan: ConversationPlan, turnID: String, inWork: Bool) -> RemoteItem {
         var item = RemoteItem(id: "plan:\(turnID)", turnId: turnID, kind: .plan)
-        item.inWork = true
+        if inWork { item.inWork = true }
         item.explanation = RemoteText.short(plan.explanation, RemoteText.requestDetailLimit)
         item.steps = plan.steps.prefix(RemoteText.stepCount).map { step in
             let status = switch step.status {

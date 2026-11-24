@@ -134,6 +134,19 @@ final class TranscriptConversationProjectionTests: XCTestCase {
         XCTAssertEqual(running.answers.map(\.kind), [.answer(text: "## Report\nThe parser now handles", isStreaming: true)])
         XCTAssertTrue(running.foldsWork, "the turn folds once a message streams, not when it ends")
 
+        // A running turn keeps its plan in view while its work folds, on the Mac and on a phone, so its
+        // header has nothing to open; once it ended, the plan folds.
+        let plan = entry(1, .plan("◉ Fix the parser"))
+        let planning = project([request, plan, streaming], status: .running).turns[0]
+        XCTAssertTrue(planning.foldsWork)
+        XCTAssertFalse(planning.opensFoldedWork)
+        let remotePlan = RemoteConversationProjection.turn(planning, harness: .claudeCode, workspaceURL: nil)
+            .items.first { $0.kind == .plan }
+        XCTAssertNotNil(remotePlan)
+        XCTAssertNil(remotePlan?.inWork)
+        XCTAssertTrue(project([request, plan, entry(4, .assistant(text: "Done.", isStreaming: false))], status: .ready,
+                              latestTurnIsComplete: true).turns[0].opensFoldedWork)
+
         // A progress update sent as thinking is a message too, in a summary.
         var summary = entry(3, .reasoning(text: "Summarizing progress", isStreaming: true))
         summary.isProgressUpdate = true
@@ -162,6 +175,20 @@ final class TranscriptConversationProjectionTests: XCTestCase {
                        "Checking the files.\n\n## Report\nThe parser now handles tabs.\n\nDone.")
         XCTAssertEqual(ConversationTurnLayout.answerText(turn.work + turn.answers, limit: 12), "…s.\n\nDone.",
                        "past its limit the latest words are kept")
+        // The cut lands on a whole character: a decomposed Hangul syllable, an emoji sequence and a flag
+        // are kept whole or left out, never split after the mark; a limit too small for the mark gives none.
+        let hangul = "\u{1112}\u{1161}\u{11AB}", family = "👨‍👩‍👧‍👦", flag = "🇰🇷"
+        func cut(_ text: String, _ limit: Int) -> String? {
+            ConversationTurnLayout.answerText([ConversationItem(id: "a", kind: .answer(text: text, isStreaming: false),
+                                                                phase: .completed, source: .transcript(report))],
+                                              limit: limit)
+        }
+        XCTAssertEqual(cut(String(repeating: "x", count: 10) + hangul, 3 + 9), "…" + hangul)
+        XCTAssertEqual(cut(String(repeating: "x", count: 10) + hangul, 3 + 8), "…")
+        XCTAssertEqual(cut(String(repeating: "x", count: 10) + family + flag, 3 + 8), "…" + flag)
+        XCTAssertEqual(cut(String(repeating: "x", count: 10) + family + flag, 3 + 33), "…" + family + flag)
+        XCTAssertEqual(cut("abc", 2), "")
+        XCTAssertEqual(cut("abcd", 3), "…")
         XCTAssertEqual(turn.fullResponseAnswerID, done.id.uuidString)
 
         // A turn that ends on a call keeps its report in view and answers with it.

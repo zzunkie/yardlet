@@ -61,6 +61,9 @@ struct ConversationMessageAction: Identifiable {
     let title: String
     let systemImage: String
     let perform: @MainActor () -> Void
+    /// What the action copies, when copying is what it does: it is drawn as a message's copy is, with
+    /// its "Copied" feedback.
+    var copies: (@MainActor () -> String?)? = nil
 }
 
 private struct ConversationMessageActionsKey: EnvironmentKey {
@@ -85,16 +88,24 @@ struct ConversationMessageActionButtons: View {
     var body: some View {
         ForEach(actions) { action in
             HoverRevealedAction {
-                Button(action: action.perform) {
-                    Label(action.title, systemImage: action.systemImage)
+                if let copies = action.copies {
+                    TranscriptCopyButton(title: action.title, payload: copies)
+                } else {
+                    button(action)
                 }
-                .buttonStyle(.borderless)
-                .parityPointer()
-                .font(.yardlet(.caption, scale: interfaceScale))
-                .foregroundStyle(.secondary)
-                .help(action.title)
             }
         }
+    }
+
+    private func button(_ action: ConversationMessageAction) -> some View {
+        Button(action: action.perform) {
+            Label(action.title, systemImage: action.systemImage)
+        }
+        .buttonStyle(.borderless)
+        .parityPointer()
+        .font(.yardlet(.caption, scale: interfaceScale))
+        .foregroundStyle(.secondary)
+        .help(action.title)
     }
 }
 

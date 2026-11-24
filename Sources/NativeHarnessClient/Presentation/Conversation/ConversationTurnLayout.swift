@@ -90,9 +90,12 @@ enum ConversationTurnLayout {
         let text = said.reversed().joined(separator: "\n\n")
         guard text.utf8.count > limit else { return text }
         let mark = "…"
+        guard limit > mark.utf8.count else { return limit == mark.utf8.count ? mark : "" }
+        // The cut moves forward to the next whole character, so a composed letter, an emoji sequence
+        // or a line break is never split after the mark.
         let utf8 = text.utf8
         var start = utf8.index(utf8.endIndex, offsetBy: -(limit - mark.utf8.count))
-        while start < utf8.endIndex, UTF8.isContinuation(utf8[start]) { utf8.formIndex(after: &start) }
+        while start < utf8.endIndex, start.samePosition(in: text) == nil { utf8.formIndex(after: &start) }
         return mark + String(text[start...])
     }
 
@@ -149,13 +152,13 @@ extension ConversationTurn {
     }
 
     /// The header opens something once the work folds: the turn has work details (`hasWorkDetails`) and
-    /// folding hides some of them, its plan, items still to load or work it does not keep in view
-    /// (`workKeptWhenFolded`). A turn that keeps all its work in view (every message Claude wrote, with
+    /// folding hides some of them, its plan once the turn no longer runs (a running turn keeps it in
+    /// view), items still to load or work it does not keep in view (`workKeptWhenFolded`). A turn that keeps all its work in view (every message Claude wrote, with
     /// no call between them) has nothing for its header to open. Read from the start, it stops at the
     /// first hidden item.
     var opensFoldedWork: Bool {
         guard hasWorkDetails else { return false }
-        if plan != nil || hasMoreItems { return true }
+        if (plan != nil && status != .running) || hasMoreItems { return true }
         let answered = finishedAnswerIndex
         return work.indices.contains { !keepsInViewWhenFolded(work[$0], at: $0, answered: answered) }
     }

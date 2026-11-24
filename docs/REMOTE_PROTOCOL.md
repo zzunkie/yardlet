@@ -485,7 +485,8 @@ Unknown kinds: skip them. Text fields are capped (`truncated: true` when cut).
 ```
 
 - A step plan or to-do list. `status`: `pending`, `inProgress`, `completed`. Up to 50 steps, each
-  ≤ 500 characters.
+  ≤ 500 characters. It is in the turn's work (`inWork`) once the turn no longer runs; while the turn
+  runs, it stays in view.
 
 ### 6.7 `error`
 

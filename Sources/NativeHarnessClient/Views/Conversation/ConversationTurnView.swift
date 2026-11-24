@@ -107,14 +107,18 @@ enum ConversationTurnAction: Hashable, Sendable {
     @MainActor
     func messageAction(turn: ConversationTurn, handlers: ConversationTurnHandlers,
                        harness: HarnessKind) -> ConversationMessageAction {
-        switch self {
-        case .copyFullResponse:
-            ConversationMessageAction(id: self, title: L10n.string("Copy full response"),
-                                      systemImage: "doc.on.doc") {
-                // Read when the person copies, not each time the turn is drawn.
-                guard let text = turn.fullResponseText else { return }
-                TranscriptClipboard.copy(TranscriptMarkdownDialect(messagesOf: harness).copyText(text))
+        if self == .copyFullResponse {
+            // Read when the person copies, not each time the turn is drawn.
+            let text: @MainActor () -> String? = {
+                turn.fullResponseText.map(TranscriptMarkdownDialect(messagesOf: harness).copyText)
             }
+            return ConversationMessageAction(id: self, title: L10n.string("Copy full response"),
+                                             systemImage: "doc.on.doc",
+                                             perform: { TranscriptClipboard.copy(text()) }, copies: text)
+        }
+        return switch self {
+        case .copyFullResponse:
+            preconditionFailure("drawn above")
         case .fork:
             ConversationMessageAction(id: self, title: L10n.string("Fork from here"),
                                       systemImage: "arrow.triangle.branch") { handlers.fork?() }
