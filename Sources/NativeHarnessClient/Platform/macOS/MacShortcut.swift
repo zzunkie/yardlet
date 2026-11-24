@@ -379,12 +379,17 @@ extension View {
         else { onKeyPress(command.definition.key, action: perform) }
     }
 
+    /// Nil leaves the key to the views around this one, without changing this view's identity.
     @ViewBuilder
-    func onMacShortcutExit(_ command: MacShortcut = .dismiss, perform: @escaping () -> Void) -> some View {
+    func onMacShortcutExit(_ command: MacShortcut = .dismiss, perform: (() -> Void)?) -> some View {
         if MacShortcutPreferences.shared.snapshot.overrides[command.id] == nil {
             onExitCommand(perform: perform)
         } else {
-            onMacKeyPress(command, phases: .down) { _ in perform(); return .handled }
+            onMacKeyPress(command, phases: .down) { _ in
+                guard let perform else { return .ignored }
+                perform()
+                return .handled
+            }
         }
     }
 

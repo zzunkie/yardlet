@@ -17,6 +17,9 @@ struct TaskWorkspaceMetrics: Equatable {
     /// How far a side panel floating over the area's edge reaches over the conversation, which keeps
     /// its minimum width beneath it.
     var conversationCover: CGFloat = 0
+    /// The margin a floating panel keeps from the area's top, trailing and bottom edges; 0 where it
+    /// does not float.
+    var panelInset: CGFloat = 0
 
     var showsRail: Bool { railWidth > 0 }
 
@@ -50,21 +53,26 @@ struct TaskWorkspaceMetrics: Equatable {
     static func resolve(size: CGSize, trailing: Bool, terminal: Bool, preferredWidth: CGFloat, preferredHeight: CGFloat,
                         expanded: Bool = false, interfaceScale: CGFloat = 1, rail: Bool = false) -> Self {
         let placement = trailing ? SidePanelPlacement(areaWidth: size.width, expanded: expanded) : nil
+        let inset = placement?.floats == true ? SidePanelWidth.floatingInset : 0
         let panelWidth: CGFloat = switch placement {
         case nil: 0
         case .beside: SidePanelWidth.clamped(preferredWidth, areaWidth: size.width)
         case .over: SidePanelWidth.minimum
+        case .sheet: max(0, size.width - SidePanelWidth.sheetPeek - inset)
         case .inPlace: size.width
         }
+        // What the panel takes of the area's width, with its margin from the trailing edge.
+        let panelFootprint = panelWidth + inset
         let terminalHeight = terminal ? constrainedTerminalHeight(
             preferredHeight, availableHeight: size.height, trailing: trailing, interfaceScale: interfaceScale
         ) : 0
         // The conversation's side of the area: the whole area, what a panel beside it and its divider
-        // leave, or, under a floating panel, up to the panel and never less than the conversation's minimum.
+        // leave, under a floating panel up to the panel and never less than the conversation's minimum,
+        // or behind a sheet the whole area it showed at before the panel opened.
         let sessionWidth: CGFloat = switch placement {
-        case nil: size.width
+        case nil, .sheet: size.width
         case .beside: size.width - panelWidth - SidePanelWidth.divider
-        case .over: max(size.width - panelWidth, SidePanelWidth.conversationShare)
+        case .over: max(size.width - panelFootprint, SidePanelWidth.conversationShare)
         case .inPlace: 0
         }
         // A floating panel stands where the rail would.
@@ -80,7 +88,8 @@ struct TaskWorkspaceMetrics: Equatable {
             railWidth: railWidth,
             railFits: railFits,
             panelPlacement: placement,
-            conversationCover: placement == .over ? max(0, sessionWidth - (size.width - panelWidth)) : 0
+            conversationCover: placement == .over ? max(0, sessionWidth - (size.width - panelFootprint)) : 0,
+            panelInset: inset
         )
     }
 
@@ -106,17 +115,26 @@ enum SidePanelPlacement: Equatable {
     /// and where that would narrow it past its minimum it keeps its minimum under the panel's edge.
     /// The rail has no room.
     case over
-    /// In the conversation's place: expanded, or an area narrower than the Codex app's conversation
-    /// share and panel minimum, where a floating panel would leave too little of the conversation.
+    /// Floating as a sheet over most of an area narrower than the Codex app's conversation share and
+    /// panel minimum, where a panel at its minimum would leave too little of the conversation to work
+    /// from: the conversation's leading edge shows behind it, dimmed, and a click there or Escape closes
+    /// the panel.
+    case sheet
+    /// In the conversation's place, at any width: the panel's expand button.
     case inPlace
 
     init(areaWidth: CGFloat, expanded: Bool) {
-        if expanded || areaWidth < SidePanelWidth.conversationInView {
+        if expanded {
             self = .inPlace
+        } else if areaWidth < SidePanelWidth.conversationInView {
+            self = .sheet
         } else {
             self = areaWidth >= SidePanelWidth.besideConversation ? .beside : .over
         }
     }
+
+    /// Floating over the conversation, as a rounded, edged and shadowed card inset from the area's edges.
+    var floats: Bool { self == .over || self == .sheet }
 }
 
 /// The side panel's width, as the Codex app sizes its right panel (ChatGPT.app 26.1016 `EZt`, `DZt`,
@@ -136,8 +154,13 @@ enum SidePanelWidth {
     /// narrower one floats the panel over the conversation's edge (`SidePanelPlacement.over`).
     static let besideConversation: CGFloat = minimum + divider + conversationShare
     /// The narrowest area that keeps the conversation in view while the panel is open: the Codex app's
-    /// 320 and 352 (`zZt`) and the divider. A narrower one shows the panel in the conversation's place.
+    /// 320 and 352 (`zZt`) and the divider. A narrower one shows the panel as a sheet over it.
     static let conversationInView: CGFloat = minimum + 352 + divider
+    /// The margin a floating panel keeps from the area's top, trailing and bottom edges, as the rail
+    /// raised in a narrow window keeps (`SessionRailRaisedLayer`).
+    static let floatingInset: CGFloat = ParitySpace.s8
+    /// What of the conversation shows beside a panel floating as a sheet (`SidePanelPlacement.sheet`).
+    static let sheetPeek: CGFloat = ParitySpace.s48
 
     static func maximum(areaWidth: CGFloat) -> CGFloat {
         max(minimum, areaWidth - divider - conversationShare)
@@ -264,8 +287,9 @@ extension View {
 /// the conversation and the side panel, as the Claude app puts its rail beside the conversation and
 /// its side panes after it. The area's header (`taskAreaHeader`) runs over the conversation and the
 /// rail; the side panel beside them reaches the top, its tab strip in the header's row. A panel
-/// floating over the area's edge (`SidePanelPlacement.over`) or in the conversation's place sits
-/// below the header, which then runs the whole width.
+/// floating over the area's edge (`SidePanelPlacement.over`), as a sheet over a narrow area
+/// (`SidePanelPlacement.sheet`) or in the conversation's place sits below the header, which then runs
+/// the whole width.
 struct TaskWorkspaceLayout<Chat: View, Rail: View, Trailing: View, Bottom: View>: View {
     let showsTrailing: Bool
     let showsTerminal: Bool
@@ -293,6 +317,7 @@ struct TaskWorkspaceLayout<Chat: View, Rail: View, Trailing: View, Bottom: View>
     @Environment(\.yardletInterfaceScale) private var interfaceScale
     @Environment(\.taskWindowHeight) private var windowHeight
     @Environment(\.taskAreaHeader) private var header
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         GeometryReader { proxy in
@@ -310,8 +335,12 @@ struct TaskWorkspaceLayout<Chat: View, Rail: View, Trailing: View, Bottom: View>
             // The panel beside the conversation reaches the top and shares the header's row.
             let panelInRow = header != nil && metrics.panelPlacement == .beside
             let trailingTop = panelInRow ? 0 : headerHeight
-            let floats = metrics.panelPlacement == .over
-            // Under the panel in its place, the conversation keeps the width it last showed at and takes no room. Given
+            let floats = metrics.panelPlacement?.floats == true
+            // Behind a sheet the conversation shows its edge but is not worked from: a click on it closes the panel.
+            let behindSheet = metrics.panelPlacement == .sheet
+            let chatIsActive = metrics.showsChat && !behindSheet
+            // Under the panel in its place or behind a sheet, the conversation keeps the width it last showed at; in its
+            // place it takes no room, and behind a sheet it is clipped to the area. Given
             // none, it laid each of its turns out again at a width it never shows at, and again once it showed.
             let chatWidth = shownChat.width(for: metrics, areaWidth: below.width)
             ZStack(alignment: .topLeading) {
@@ -320,11 +349,19 @@ struct TaskWorkspaceLayout<Chat: View, Rail: View, Trailing: View, Bottom: View>
                         HStack(spacing: 0) {
                             chat()
                                 .frame(width: chatWidth, height: metrics.upperHeight)
-                                .frame(width: metrics.showsChat ? chatWidth : 0, alignment: .leading)
+                                .frame(width: metrics.showsChat ? (behindSheet ? below.width : chatWidth) : 0, alignment: .leading)
                                 .contentShape(Rectangle()).clipped().opacity(metrics.showsChat ? 1 : 0)
-                                .disabled(!metrics.showsChat).allowsHitTesting(metrics.showsChat)
-                                .accessibilityHidden(!metrics.showsChat)
+                                .disabled(!chatIsActive).allowsHitTesting(chatIsActive)
+                                .accessibilityHidden(!chatIsActive)
                                 .environment(\.conversationTrailingCover, metrics.conversationCover)
+                                .overlay {
+                                    if behindSheet {
+                                        Rectangle().fill(.black.opacity(colorScheme == .dark ? 0.32 : 0.12))
+                                            .contentShape(Rectangle())
+                                            .onTapGesture(perform: onReturnToChat)
+                                            .accessibilityHidden(true)
+                                    }
+                                }
                             if metrics.showsRail {
                                 rail()
                                     .frame(width: metrics.railWidth, height: metrics.upperHeight)
@@ -334,7 +371,8 @@ struct TaskWorkspaceLayout<Chat: View, Rail: View, Trailing: View, Bottom: View>
                         .padding(.top, headerHeight)
                         // A floating panel takes no room from the conversation, which keeps its width under the
                         // panel's edge rather than narrowing past its minimum.
-                        .frame(width: floats ? max(0, proxy.size.width - metrics.trailingWidth) : nil, alignment: .leading)
+                        .frame(width: floats ? max(0, proxy.size.width - metrics.trailingWidth - metrics.panelInset) : nil,
+                               alignment: .leading)
                         if showsTrailing {
                             if metrics.panelPlacement == .beside {
                                 resizeHandle(vertical: true)
@@ -376,25 +414,20 @@ struct TaskWorkspaceLayout<Chat: View, Rail: View, Trailing: View, Bottom: View>
                                     Divider()
                                 }
                                 trailing()
-                                    .environment(\.workSurfaceExpansion,
-                                                 proxy.size.width >= SidePanelWidth.conversationInView ? $preferences.isExpanded : nil)
+                                    .environment(\.workSurfaceExpansion, $preferences.isExpanded)
                                     .environment(\.workSurfaceHeaderRow, panelInRow ? header.map {
                                         WorkSurfaceHeaderRow(height: $0.height, isTitleBar: $0.isTitleBar)
                                     } : nil)
                             }
-                            .frame(width: metrics.trailingWidth, height: metrics.upperHeight + headerHeight - trailingTop)
-                            .contentShape(Rectangle()).clipped()
-                            // Floating, it is backed, edged and shadowed as the rail raised in a narrow window
-                            // is (`SessionRailRaisedLayer`). It stays the same view either way, so what it shows
-                            // is kept, and the shadow falls from a plain shape behind it, not from its content.
-                            .background {
-                                if floats {
-                                    Rectangle().fill(ParityTheme.canvas).shadow(color: .black.opacity(0.14), radius: 16, x: -4)
-                                }
-                            }
-                            .overlay(alignment: .leading) {
-                                if floats { Rectangle().fill(ParityTheme.separator).frame(width: 1) }
-                            }
+                            .frame(width: metrics.trailingWidth,
+                                   height: max(0, metrics.upperHeight + headerHeight - trailingTop - 2 * metrics.panelInset))
+                            .contentShape(Rectangle())
+                            // Floating, it is a card as the rail raised in a narrow window is (`SessionRailRaisedLayer`).
+                            // It stays the same view either way, so what it shows is kept.
+                            .floatingSurface(floats)
+                            // Escape puts a sheet away, as a click beside it does.
+                            .onMacShortcutExit(perform: behindSheet ? onReturnToChat : nil)
+                            .padding([.top, .trailing, .bottom], metrics.panelInset)
                             .padding(.top, trailingTop)
                         }
                     }
@@ -499,10 +532,46 @@ struct TaskWorkspaceLayout<Chat: View, Rail: View, Trailing: View, Bottom: View>
 private final class ShownChatWidth {
     private var width: CGFloat?
 
-    /// The width to lay the conversation out at: the one it shows at, or while hidden the last it showed at,
-    /// else the area's.
+    /// The width to lay the conversation out at: the one it shows at, or while hidden or behind a sheet
+    /// (`SidePanelPlacement.sheet`) the last it showed at, else the area's.
     func width(for metrics: TaskWorkspaceMetrics, areaWidth: CGFloat) -> CGFloat {
-        if metrics.showsChat { width = max(0, metrics.chatWidth) }
+        if metrics.showsChat, metrics.panelPlacement != .sheet { width = max(0, metrics.chatWidth) }
         return width ?? areaWidth
+    }
+}
+
+/// A surface floating over the task's area: the side panel over the conversation's edge or as a sheet,
+/// and the rail raised in a narrow window. A card inset from the area's edges, with the surface radius,
+/// the elevated fill, a hairline edge and a soft shadow that falls from a plain shape behind it, not from
+/// what the surface shows. Off, it is a plain clipped rectangle and stays the same view.
+private struct FloatingSurface: ViewModifier {
+    let isFloating: Bool
+    @Environment(\.colorScheme) private var colorScheme
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: isFloating ? ParityRadius.surface : 0, style: .continuous)
+        let dark = colorScheme == .dark
+        content
+            .clipShape(shape)
+            .overlay {
+                if isFloating {
+                    shape.strokeBorder(dark ? ParityTheme.strongSeparator : ParityTheme.separator, lineWidth: 1)
+                        .allowsHitTesting(false)
+                }
+            }
+            .background {
+                if isFloating {
+                    shape.fill(ParityTheme.elevated)
+                        .shadow(color: .black.opacity(dark ? 0.30 : 0.06), radius: 2, y: 1)
+                        .shadow(color: .black.opacity(dark ? 0.45 : 0.14), radius: 18, y: 8)
+                }
+            }
+    }
+}
+
+extension View {
+    /// Draws the view as a card floating over the task's area (`FloatingSurface`) while `isFloating`.
+    func floatingSurface(_ isFloating: Bool = true) -> some View {
+        modifier(FloatingSurface(isFloating: isFloating))
     }
 }

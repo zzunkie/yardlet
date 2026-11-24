@@ -263,7 +263,8 @@ struct SessionRailStorage: View {
 }
 
 /// The rail raised over the task's trailing edge where the area has no room for it, as the Claude
-/// app raises its rail in a narrow window: a click outside it or Escape puts it away.
+/// app raises its rail in a narrow window: a card inset from the area's edges, as a side panel floating
+/// there is (`SidePanelPlacement.over`). A click outside it or Escape puts it away.
 struct SessionRailRaisedLayer<Rail: View>: View {
     let onDismiss: () -> Void
     @ViewBuilder let rail: () -> Rail
@@ -276,12 +277,9 @@ struct SessionRailRaisedLayer<Rail: View>: View {
                 .accessibilityHidden(true)
             rail()
                 .frame(maxHeight: .infinity, alignment: .top)
-                .background(ParityTheme.canvas)
-                .overlay(alignment: .leading) {
-                    Rectangle().fill(ParityTheme.separator).frame(width: 1)
-                }
-                .shadow(color: .black.opacity(0.14), radius: 16, x: -4)
+                .floatingSurface()
                 .onMacShortcutExit(perform: onDismiss)
+                .padding([.top, .trailing, .bottom], SidePanelWidth.floatingInset)
         }
     }
 }
