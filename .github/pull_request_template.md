@@ -6,5 +6,8 @@
 ## How it was checked
 
 - [ ] `swift build --build-system native`
-- [ ] `./scripts/test-fast.sh`
-- [ ] For a change you can see: a screenshot or a short recording below
+- [ ] `scripts/product-warnings.sh` on the build log: no warnings
+- [ ] Relevant `swift test --build-system native --filter …`, or `./scripts/test-fast.sh`
+- [ ] User-visible strings added to `en.lproj/Localizable.strings` only
+- [ ] For a visible UI change: light and dark screenshots below
+- [ ] Relevant `docs/` updated if behavior changed

@@ -19,7 +19,9 @@ Maintainers keep working notes outside this repository, in the ignored folder `d
   files without explicit request or approval, and keep credentials and trust boundaries host-local.
 - Protect MCP tool budgets across harnesses: prefer extending an existing tool over adding a new one,
   and keep schemas concise without weakening safety rules.
-- Keep user-visible strings updated across every supported `.lproj` localization catalog.
+- Add or change user-visible strings in `Sources/NativeHarnessClient/Resources/en.lproj/Localizable.strings`
+  only. Other `.lproj` catalogs fall back to English at run time and are synced separately with
+  `scripts/l10n.py` ([CONTRIBUTING.md](CONTRIBUTING.md#localization)).
 - For session storage, import, resume, titles or the Account Center, read
   [native session storage](docs/NATIVE_SESSION_STORAGE.md). See [CONTRIBUTING.md](CONTRIBUTING.md#what-fits-yardlet)
   for the full contributor principles.
@@ -28,6 +30,8 @@ Maintainers keep working notes outside this repository, in the ignored folder `d
 
 - App and agent adapters: `Sources/NativeHarnessClient/`; tests: `Tests/NativeHarnessClientTests/`;
   package targets: [Package.swift](Package.swift).
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) maps the targets, layers and documents, and says where each kind
+  of change starts.
 - Building needs Xcode 27.1 or later. Build with `swift build --build-system native`: the default
   build system also compiles SwiftTerm's Metal shaders and stops when the Metal toolchain is missing.
 - The product targets build without compiler warnings, and CI fails on one
