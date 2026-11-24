@@ -341,6 +341,10 @@ final class TranscriptConversationProjectionTests: XCTestCase {
         let replayedTurn = try XCTUnwrap(project(replayed, harness: .openCode, latestTurnIsComplete: true).turns.first)
         XCTAssertNil(replayedTurn.prompt.first?.recordedAt)
         XCTAssertNil(replayedTurn.answers.first?.recordedAt)
+        // Nor does what reads the entries' times: the turn's timing and the latest turn's start.
+        XCTAssertEqual(replayedTurn.timing, ConversationTurnTiming(isApproximate: true))
+        XCTAssertNil(TaskLatestTurn.reading(replayed).startedAt)
+        XCTAssertEqual(TaskLatestTurn.reading([request, answer]).startedAt, request.createdAt)
     }
 
     func testClaudeEditAndRestoreFollowTheMessageMenuRules() {

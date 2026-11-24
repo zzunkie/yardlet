@@ -154,8 +154,6 @@ final class CodexConversationProjectionTests: XCTestCase {
         XCTAssertEqual(run.progressLine, "Built.")
     }
 
-    /// A failed latest turn the server was too busy for, on an idle thread, offers retry and edit,
-    /// and reads as the error card.
     /// A saved turn's items carry no times of their own: its request reads as sent when the turn
     /// started and its closing answer as written when it ended, an item's own time wins, and the
     /// working notes between them show none rather than one made up.
@@ -177,6 +175,8 @@ final class CodexConversationProjectionTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(project(state([saved])).turns.first).answers.map(\.recordedAt), [written])
     }
 
+    /// A failed latest turn the server was too busy for, on an idle thread, offers retry and edit,
+    /// and reads as the error card.
     func testAServerBusyTurnOffersRetryAndEdit() {
         var busy = state([
             turn("turn-1", status: "completed", durationMs: 2_000, items: [user("u1", "First"), answer("a1", "Done")]),

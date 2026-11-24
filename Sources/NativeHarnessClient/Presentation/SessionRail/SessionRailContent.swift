@@ -322,7 +322,7 @@ struct SessionRailContent: Equatable {
             guard case let .activity(activity, .completed) = entry.content, let diff = activity.diff,
                   diff.oldText == nil, diff.newText != nil, !diff.path.isEmpty else { continue }
             let url = PathRules.current.url(for: diff.path, in: workspaceURL)
-            add(url, at: entry.createdAt)
+            add(url, at: entry.recordedAt)
         }
         for change in codexChanges.reversed() where change.status == "add" && change.isApplied {
             guard result.count < outputLimit else { break }

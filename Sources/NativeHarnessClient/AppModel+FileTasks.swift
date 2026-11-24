@@ -105,7 +105,7 @@ extension AppModel {
             guard case let .activity(activity, .completed) = entry.content, let path = activity.diff?.path,
                   activity.outcome == nil else { return nil }
             return FileTouch(path: Self.absolute(path, in: session.workspaceURL.path(percentEncoded: false)),
-                             kind: .edit, at: entry.createdAt, callID: activity.id)
+                             kind: .edit, at: entry.recordedAt ?? session.updatedAt, callID: activity.id)
         }
     }
 

@@ -357,10 +357,11 @@ enum CodexConversationProjection {
         let workIDs = Set(layout.workItems.map(\.id)).union(steered)
         let arranged = ConversationTurnLayout.arrange(project(turn.items.filter { workIDs.contains($0.id) }))
         result.answers = arranged.answers
-        // A saved turn's items carry no times of their own: its request was sent when the turn
-        // started, and the answer that closes it was written when it ended.
+        // A saved turn's items carry no times of their own: its request (the person's, or a
+        // schedule's) was sent when the turn started, and the answer that closes it was written
+        // when it ended.
         if let startedAt = turn.startedAt, let first = result.prompt.indices.first,
-           result.prompt[first].recordedAt == nil, case .userMessage = result.prompt[first].kind {
+           result.prompt[first].recordedAt == nil {
             result.prompt[first].recordedAt = startedAt
         }
         if let completedAt = turn.completedAt, let last = result.answers.indices.last,
