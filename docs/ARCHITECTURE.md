@@ -46,7 +46,7 @@ transport. `HarnessRegistry` (`Runtime/HarnessRegistry.swift`) chooses the adapt
 | --- | --- | --- |
 | `codexAppServer` | `Adapters/Codex/` | Codex |
 | `claudeStreamJSON` | `Adapters/Claude/` | Claude Code |
-| `acp` (Agent Client Protocol) | `Adapters/ACP/` | OpenCode, Antigravity CLI, Kimi Code, Grok Build, Hermes Agent |
+| `acp` (Agent Client Protocol) | `Adapters/ACP/` | OpenCode, Antigravity CLI, Kimi Code, Grok Build, Hermes Agent, Kiro CLI |
 | `cursorStreamJSON` | `Adapters/Headless/` | Cursor Agent |
 | `msp` | `Adapters/Muse/` | Muse Code |
 | `piRPC` | `Adapters/PiRPC/` | Pi |
