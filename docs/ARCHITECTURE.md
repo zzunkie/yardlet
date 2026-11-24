@@ -8,7 +8,8 @@ area; this page only points to them.
 ## Targets and layers
 
 All Swift targets are declared in [Package.swift](../Package.swift). Which of them a build includes depends on
-the platform and on two environment variables: `YARDLET_ENGINE_ONLY=1` and `YARDLET_CEF_DIR`.
+the platform and on three environment variables: `YARDLET_ENGINE_ONLY=1` and `YARDLET_CEF_DIR` for the product
+targets, and `YARDLET_WINDOWS_TESTS=1` for the Windows tests.
 
 | Target or folder | What it is | Boundary |
 | --- | --- | --- |
@@ -84,15 +85,16 @@ Yardlet reads and stores beside it.
 - The adapter is in `Adapters/<Harness>/`; process launch and environment are in `Runtime/`; Yardlet's own
   index is in `Store/`.
 - Keep a session ID with the storage it was saved in, and never rewrite provider-owned history.
-- Tests to extend: the adapter's own tests (`CodexAdapterTests`, `ClaudeAdapterTests`, `ACPAdapterTests` and
-  the like) and the recorded fixtures in `Tests/NativeHarnessClientTests/Fixtures/`.
+- Tests to extend: the adapter's and protocol's own tests (`CodexAdapterTests`, `CodexProtocolTests`,
+  `ClaudeAdapterTests`, `ClaudeProtocolTests`, `ACPAdapterTests` and the like), with the shared transcripts in
+  `Tests/NativeHarnessClientTests/Support/ConversationFixtures.swift` and `TranscriptProjectionFixtures.swift`.
 
 ### MCP tool or connector
 
 - Read [AGENT_BROWSER_TOOLS](AGENT_BROWSER_TOOLS.md) (tools, injection per harness, code locations, security)
   and [CONNECTORS](CONNECTORS.md).
 - Tool definitions are catalogs in `Sources/YardletAgentTools/`; their answers are in
-  `Sources/NativeHarnessClient/AgentTools/` and `AppModel+*Tools.swift`; connectors are in
+  `Sources/NativeHarnessClient/AgentTools/` and `AppModel+*Tool*.swift`; connectors are in
   `Sources/NativeHarnessClient/Connectors/`.
 - Every tool schema costs prompt budget in every harness: extend an existing tool before adding one, and keep
   descriptions short without dropping safety rules.
@@ -131,8 +133,8 @@ Yardlet reads and stores beside it.
 | Localization catalogs | `python3 -B scripts/l10n.py check` (`--strict` for full parity) |
 | Relay | `cd relay && npm ci && npm run typecheck && npm test` |
 
-CI workflows are in `.github/workflows/`: `ci.yml` (build, warnings, quick suite), `linux-engine.yml` and
-`windows-engine.yml` (engine-only builds), `linux-host.yml`, `windows-app.yml`, `ios.yml`, `relay.yml` and the
+CI workflows are in `.github/workflows/`: `ci.yml` (build, warnings, quick suite), `linux-engine.yml` (engine-only build),
+`windows-engine.yml` (engine-only build, the Windows app build and `YardletWindowsTests`), `linux-host.yml`, `windows-app.yml`, `ios.yml`, `relay.yml` and the
 nightly `full-tests.yml`.
 
 ## Documents
