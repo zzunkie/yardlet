@@ -148,7 +148,7 @@ echo "Test Suite 'Selected tests' passed at now."
             tests = ["T.ATests/test1", "T.ATests/hang2", "T.ATests/test3"]
             saved = (xctest_batches.xcrun, xctest_batches.STALL_WARNING, xctest_batches.STALL_LIMIT)
             xctest_batches.xcrun = lambda *arguments: fake if arguments[0] == "--find" else tmp
-            xctest_batches.STALL_WARNING, xctest_batches.STALL_LIMIT = 0.4, 1.0
+            xctest_batches.STALL_WARNING, xctest_batches.STALL_LIMIT = 0.4, 2.0
             try:
                 arguments = argparse.Namespace(verbose=False, bundle=os.path.join(tmp, "T.xctest"), workers=1,
                                                times_file="")
@@ -168,7 +168,7 @@ echo "Test Suite 'Selected tests' passed at now."
         self.assertIn("batch 1 started (3 tests, ATests)", log)
         self.assertIn("has printed nothing for", log)
         self.assertIn("still in T.ATests/hang2", log)
-        self.assertIn("T.ATests/hang2 (xctest ended with no output for 1 s during this test)", log)
+        self.assertIn("T.ATests/hang2 (xctest ended with no output for 2 s during this test)", log)
 
 
 if __name__ == "__main__":

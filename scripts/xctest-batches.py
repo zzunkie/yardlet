@@ -31,6 +31,7 @@ usage: xctest-batches.py --bundle PATH.xctest --tests FILE [--workers N] [--time
 """
 import argparse
 import collections
+import ctypes
 import math
 import os
 import re
@@ -239,6 +240,7 @@ class Run:
         self.children = set()
         self.running = {}  # batch number -> Batch while its process runs
         self.stopping = False
+        self.done = False
         self.xctest = xcrun("--find", "xctest")
         # The macOS SDK's platform by name: an SDKROOT that names Command Line Tools' SDK, as some CI
         # runners have, is no SDK of the selected Xcode and has no platform path.
@@ -253,15 +255,24 @@ class Run:
 
     def start(self):
         began = time.monotonic()
-        for signal_number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
-            signal.signal(signal_number, self.stop)
-        threads = [threading.Thread(target=self.work, daemon=True) for _ in range(self.workers)]
-        for thread in threads:
-            thread.start()
-        threading.Thread(target=self.watch, daemon=True).start()
-        for thread in threads:
-            while thread.is_alive():
-                thread.join(0.5)
+        handlers = {number: signal.signal(number, self.stop) for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+        watch = threading.Thread(target=self.watch, daemon=True)
+        try:
+            threads = [threading.Thread(target=self.work, daemon=True) for _ in range(self.workers)]
+            for thread in threads:
+                thread.start()
+            watch.start()
+            for thread in threads:
+                while thread.is_alive():
+                    thread.join(0.5)
+        finally:
+            with self.condition:
+                self.done = True
+                self.condition.notify_all()
+            for number, handler in handlers.items():
+                signal.signal(number, handler)
+        if watch.is_alive():
+            watch.join(5)
         if self.stopping:
             return 130
         if self.times_file:
@@ -310,22 +321,25 @@ class Run:
     def watch(self):
         """Names each batch that has printed nothing for a while, and ends one that has for too long."""
         while True:
-            time.sleep(min(STALL_WARNING, STALL_LIMIT) / 8)
-            now = time.monotonic()
+            stalled = []
             with self.condition:
-                if self.stopping:
+                self.condition.wait(timeout=min(STALL_WARNING, STALL_LIMIT) / 8)
+                if self.stopping or self.done:
                     return
+                now = time.monotonic()
                 for number, batch in self.running.items():
                     quiet = now - batch.last_output
                     if quiet >= STALL_LIMIT and not batch.stalled:
                         batch.stalled = True
                         print(f"batch {number} ({batch.span}) printed nothing for {quiet:.0f} s"
                               f"{f' in {batch.current}' if batch.current else ''}; ending it.", flush=True)
-                        end_session(batch.process, signal.SIGKILL)
+                        stalled.append(batch.process)
                     elif quiet >= STALL_WARNING and now - batch.last_warning >= STALL_WARNING:
                         batch.last_warning = now
                         print(f"batch {number} ({batch.span}) has printed nothing for {quiet:.0f} s"
                               f"{f'; still in {batch.current}' if batch.current else ''}.", flush=True)
+            for process in stalled:
+                end_session(process, signal.SIGKILL)
 
     def run_batch(self, batch, number):
         began = time.monotonic()
@@ -334,9 +348,17 @@ class Run:
                                    env=self.environment, text=True, errors="replace", start_new_session=True)
         watched = Batch(process, span_of(batch), began)
         with self.condition:
-            self.children.add(process)
-            self.running[number] = watched
-            print(f"batch {number} started ({len(batch)} tests, {watched.span})", flush=True)
+            stopping = self.stopping
+            if not stopping:
+                self.children.add(process)
+                self.running[number] = watched
+                print(f"batch {number} started ({len(batch)} tests, {watched.span})", flush=True)
+        if stopping:
+            # A signal ended the run while this process started, after `stop` listed what to end.
+            end_session(process, signal.SIGTERM)
+            process.stdout.close()
+            process.wait()
+            return
         lines = []
         spans = {}  # test -> [first line, last line]
         finished = {}  # test -> (result, seconds)
@@ -453,17 +475,43 @@ def span_of(batch):
 def end_session(process, signal_number):
     """Ends an xctest process and whatever its tests started: everything in the session it leads.
 
-    A test's subprocess may have a process group of its own (Foundation's `Process` gives it one), so
-    the session is what holds them all, even after their parent has ended. A session's ID is not
-    reused while anything is in it.
+    Its own process group first, then each other member of its session: a test's subprocess may have
+    a process group of its own (Foundation's `Process` gives it one), so the session is what holds
+    them all, even after their parent has ended. A session's ID is not reused while anything is in it.
     """
-    listing = subprocess.run(["ps", "-ax", "-o", "pid="], capture_output=True, text=True).stdout
-    for pid in (int(field) for field in listing.split()):
+    if process.returncode is not None:
+        return  # already reaped: its number may be someone else's
+    try:
+        os.killpg(process.pid, signal_number)
+    except OSError:
+        pass
+    for pid in session_members(process.pid):
         try:
-            if os.getsid(pid) == process.pid:
-                os.kill(pid, signal_number)
-        except (ProcessLookupError, PermissionError):
+            os.kill(pid, signal_number)
+        except OSError:
             pass
+
+
+def session_members(session):
+    """The processes in a session, from libproc rather than `ps`, which is setuid and which a sandbox
+    may refuse to run. Empty when the processes cannot be listed."""
+    try:
+        libsystem = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+        count = libsystem.proc_listallpids(None, 0)
+        if count <= 0:
+            return []
+        pids = (ctypes.c_int * (count + 256))()
+        count = libsystem.proc_listallpids(pids, ctypes.sizeof(pids))
+    except (OSError, AttributeError):
+        return []
+    members = []
+    for pid in pids[:max(count, 0)]:
+        try:
+            if pid > 0 and os.getsid(pid) == session:
+                members.append(pid)
+        except OSError:
+            pass
+    return members
 
 
 def xcrun(*arguments):

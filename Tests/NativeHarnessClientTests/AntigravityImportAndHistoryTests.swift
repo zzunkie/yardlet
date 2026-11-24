@@ -30,6 +30,7 @@ final class AntigravityImportAndHistoryTests: XCTestCase {
     private static let h = "02000000-0000-4000-8000-000000000002"
     private static let i = "03000000-0000-4000-8000-000000000003"
     private static let j = "04000000-0000-4000-8000-000000000004"
+    private static let k = "05000000-0000-4000-8000-000000000005"
 
     // MARK: - The index
 
@@ -38,7 +39,7 @@ final class AntigravityImportAndHistoryTests: XCTestCase {
     /// or, for a row the CLI kept without one, from `last_conversations.json`. A row with several
     /// folders (a shared `agy acp` process lists every folder it served, sorted) is found in each,
     /// unless `last_conversations.json` names its own. A row whose conversation file is gone (earlier
-    /// CLIs kept only the newest 500) is not.
+    /// CLIs kept only the newest 500) is not, even when its `-wal` file is left.
     func testTheIndexOffersWhatTheCLICanContinue() throws {
         let fixture = try makeStore()
         let listed = try fixture.store.conversations()
@@ -442,15 +443,17 @@ final class AntigravityImportAndHistoryTests: XCTestCase {
             (Self.g, "No folder", "No folder", 2, "2026-09-01 00:00:00.000000+00:00", "", "", 0, "antigravity-cli"),
             (Self.h, "Shared process", "Shared", 6, "2026-10-15 00:00:00.000000+00:00", both, "", 0, "antigravity-cli"),
             (Self.i, "Continued here", "Continued", 7, "2026-10-14 00:00:00.000000+00:00", both, "", 0, "antigravity-cli"),
-            (Self.j, "Removed by the CLI", "Removed", 9, "2026-10-17 00:00:00.000000+00:00", uri, "", 0, "antigravity-cli")
+            (Self.j, "Removed by the CLI", "Removed", 9, "2026-10-17 00:00:00.000000+00:00", uri, "", 0, "antigravity-cli"),
+            (Self.k, "Only its WAL left", "WAL", 3, "2026-10-17 01:00:00.000000+00:00", uri, "", 0, "antigravity-cli")
         ])
-        // Each conversation's own file, but `j`'s; `b` in the format older CLIs saved.
+        // Each conversation's own file, but `j`'s and `k`'s (only a `-wal`); `b` in the format older CLIs saved.
         let saved = cli.appending(path: "conversations", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: saved, withIntermediateDirectories: true)
         for id in [Self.a, Self.c, Self.d, Self.e, Self.f, Self.g, Self.h, Self.i] {
             try Data().write(to: saved.appending(path: "\(id).db"))
         }
         try Data().write(to: saved.appending(path: "\(Self.b).pb"))
+        try Data().write(to: saved.appending(path: "\(Self.k).db-wal"))
         try JSONSerialization.data(withJSONObject: [otherProject.path(percentEncoded: false): Self.b,
                                                     project.path(percentEncoded: false): Self.i])
             .write(to: cli.appending(path: "cache/last_conversations.json"))
