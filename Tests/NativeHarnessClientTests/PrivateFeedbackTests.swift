@@ -107,6 +107,55 @@ final class PrivateFeedbackTests: XCTestCase {
         bodies.compactMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
     }
 
+    /// Cancel, the close button and ⌘W all ask before losing a note and wait while it is going; a send
+    /// stopped by closing says nothing went wrong; a closed sheet lets go of its window and the note.
+    func testClosingAsksFirstStopsTheSendAndLetsGoOfTheNote() async throws {
+        let form = PrivateFeedbackForm(context: problem, client: .offline)
+        XCTAssertTrue(form.mayClose(), "Nothing written")
+        form.message = "Half a thought"
+        XCTAssertFalse(form.mayClose())
+        XCTAssertTrue(form.confirmsDiscard)
+
+        let hanging = PrivateFeedbackForm(context: problem, client: PrivateFeedbackClient(
+            endpoint: URL(string: "https://relay.example.test/v1/feedback")) { _ in
+            try await Task.sleep(for: .seconds(60))
+            throw URLError(.timedOut)
+        })
+        hanging.message = "Going"
+        hanging.startSending()
+        try await waitUntil { hanging.state == .sending }
+        XCTAssertFalse(hanging.mayClose(), "Not while it is going")
+        hanging.cancelSending()
+        try await waitUntil { hanging.state == .editing }
+        XCTAssertEqual(hanging.message, "Going")
+
+        // Control characters the endpoint refuses are left out; tabs and line breaks stay.
+        hanging.message = "a\u{0007}b\tc\nd\u{0085}"
+        XCTAssertEqual(hanging.trimmedMessage, "ab\tc\nd")
+        hanging.addsEmail = true
+        hanging.email = "dä@example.com"
+        XCTAssertFalse(hanging.emailIsValid, "Printable US-ASCII only, as the endpoint takes")
+
+        // A parent that is never shown, so nothing comes onto the screen.
+        let parent = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 500), styleMask: [.titled],
+                              backing: .buffered, defer: true)
+        parent.alphaValue = 0
+        weak var closedWindow: NSWindow?
+        weak var closedForm: PrivateFeedbackForm?
+        autoreleasepool {
+            let shown = PrivateFeedbackWindow(form: PrivateFeedbackForm(context: problem, client: .offline), over: parent)
+            closedWindow = shown.window
+            closedForm = shown.form
+            XCTAssertEqual(shown.window.title, L10n.string("Send Problem Report"))
+            XCTAssertFalse(shown.window.styleMask.contains(.closable), "A sheet closes with Cancel")
+            shown.form.message = "Unsent"
+            XCTAssertFalse(shown.windowShouldClose(shown.window), "Asks first")
+            XCTAssertTrue(shown.form.confirmsDiscard)
+            shown.finish()
+        }
+        try await waitUntil { closedWindow == nil && closedForm == nil }
+    }
+
     func testTheSheetListsWhatIsSentBeforeSending() throws {
         let directory = try WindowlessRender.directory("private-feedback-qa")
         XCTAssertEqual(problem.includedLines.map(\.label), [

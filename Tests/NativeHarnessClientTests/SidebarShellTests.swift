@@ -16,7 +16,8 @@ import XCTest
 /// - `sidebar-520-*.png`: the widest the line goes.
 /// - `sidebar-update-240-*.png`: the standard width with a staged build ready to install, "Restart to
 ///   update" over the footer.
-/// - `account-button-*.png`: Settings and Feedback alone, at rest, each hovered and at 170 pt, under the
+/// - `account-button-*.png`: Settings and Feedback alone, at rest and each hovered, then the footer at 232
+///   and 170 pt, under the
 ///   update strip at rest, hovered and while the update waits for tasks.
 /// - `.build/sidebar-grouping-qa/grouping-*.png`: the task list under the title bar with its grouping
 ///   menu beside the search field, by project and by state at 240 and 360 pt, and where the menu opens.
@@ -353,7 +354,7 @@ final class SidebarShellTests: XCTestCase {
         grok.close()
 
         try WindowlessRender.hostedInBothAppearances("account-button", in: directory,
-                                                     size: NSSize(width: 240, height: 300)) { appearance in
+                                                     size: NSSize(width: 240, height: 340)) { appearance in
             VStack(alignment: .leading, spacing: 8) {
                 SidebarUpdateStripLabel(line: .ready(build: "abc1234"))
                 SidebarUpdateStripLabel(line: .ready(build: "abc1234"), isHovering: true)
@@ -361,14 +362,16 @@ final class SidebarShellTests: XCTestCase {
                 HStack(spacing: 2) { SidebarSettingsButtonLabel(); SidebarFeedbackButtonLabel() }
                 HStack(spacing: 2) { SidebarSettingsButtonLabel(isHovering: true); SidebarFeedbackButtonLabel() }
                 HStack(spacing: 2) { SidebarSettingsButtonLabel(); SidebarFeedbackButtonLabel(isHovering: true) }
-                // The sidebar's narrowest: both stay whole targets.
-                HStack(spacing: 2) { SidebarSettingsButtonLabel(); SidebarFeedbackButtonLabel() }
-                    .frame(width: 170)
+                // The footer as the sidebar lays it out, at the standard width and at its narrowest, where
+                // Feedback becomes its bubble alone rather than cutting Settings short.
+                SidebarFooter(context: SidebarAccountMenuContext()).frame(width: 232)
+                SidebarFooter(context: SidebarAccountMenuContext()).frame(width: 170)
             }
             .padding(.horizontal, 4)
             .padding(.vertical, 14)
             .environment(\.colorScheme, appearance.colorScheme)
-            .frame(width: 240, height: 300, alignment: .top)
+            .environment(\.yardletSendFeedback, YardletSendFeedbackAction { _ in })
+            .frame(width: 240, height: 340, alignment: .top)
             .background(ParityTheme.sidebar)
         }
     }

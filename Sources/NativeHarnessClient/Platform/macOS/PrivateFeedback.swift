@@ -28,7 +28,8 @@ struct PrivateFeedbackContext: Equatable, Sendable {
 
     /// An error card's kind of failure and, when the provider named one, its code.
     struct Failure: Equatable, Sendable {
-        /// "signIn", "actionFailed", "sessionFailed", "taskStart", "remoteConnection".
+        /// "signIn", "actionFailed", "sessionFailed", "taskStart", "accountCheck", "yardletSignIn",
+        /// "remoteConnection".
         var kind: String
         var code: String?
     }
@@ -155,6 +156,8 @@ struct PrivateFeedbackClient: Sendable {
         case accepted
         /// The note was not taken; the person may send it again, which sends the same note.
         case failed(String)
+        /// The send was stopped here, as the sheet closed; nothing is said about it.
+        case cancelled
     }
 
     var endpoint: URL?
@@ -165,8 +168,8 @@ struct PrivateFeedbackClient: Sendable {
     }
 
     static var defaultEndpoint: URL? {
-        if let override = ProcessInfo.processInfo.environment["YARDLET_FEEDBACK_URL"], let url = URL(string: override) {
-            return url
+        if let override = ProcessInfo.processInfo.environment["YARDLET_FEEDBACK_URL"] {
+            return webURL(override)
         }
         let relay = Bundle.main.object(forInfoDictionaryKey: RemoteControlService.builtInRelayURLKey) as? String
         return relay.flatMap(endpoint(forRelay:))
@@ -187,12 +190,23 @@ struct PrivateFeedbackClient: Sendable {
         return components.url
     }
 
+    /// An http or https address with a host, else nil.
+    static func webURL(_ text: String) -> URL? {
+        guard let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme),
+              url.host?.isEmpty == false else { return nil }
+        return url
+    }
+
     func send(_ submission: PrivateFeedbackSubmission) async -> Outcome {
         guard let endpoint else { return .failed(L10n.string("This build of Yardlet cannot send feedback.")) }
+        guard let body = try? JSONEncoder().encode(submission) else {
+            return .failed(L10n.string("The note could not be read. Shorten it and try again."))
+        }
         var request = URLRequest(url: endpoint, timeoutInterval: 30)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONEncoder().encode(submission)
+        request.httpBody = body
         do {
             let (_, response) = try await post(request)
             switch (response as? HTTPURLResponse)?.statusCode ?? 0 {
@@ -201,8 +215,13 @@ struct PrivateFeedbackClient: Sendable {
             case 400, 413, 415: return .failed(L10n.string("The note could not be read. Shorten it and try again."))
             default: return .failed(L10n.string("The note could not be sent. Try again later."))
             }
+        } catch is CancellationError {
+            return .cancelled
+        } catch let error as URLError where error.code == .cancelled {
+            return .cancelled
         } catch {
-            return .failed(L10n.string("The note could not be sent. Check your connection and try again."))
+            return Task.isCancelled ? .cancelled
+                : .failed(L10n.string("The note could not be sent. Check your connection and try again."))
         }
     }
 }
@@ -222,26 +241,66 @@ final class PrivateFeedbackForm {
     var message = ""
     var addsEmail = false
     var email = ""
+    /// Closing asked with an unsent note: the sheet asks whether to discard it.
+    var confirmsDiscard = false
     private(set) var state = State.editing
     @ObservationIgnored private let client: PrivateFeedbackClient
     @ObservationIgnored private var lastAttempt: PrivateFeedbackSubmission?
+    @ObservationIgnored private var sending: Task<Void, Never>?
 
     init(context: PrivateFeedbackContext, client: PrivateFeedbackClient = .live) {
         self.context = context
         self.client = client
     }
 
-    var trimmedMessage: String { message.trimmingCharacters(in: .whitespacesAndNewlines) }
+    /// The note as sent: without the control characters the endpoint refuses (tabs and line breaks stay).
+    var trimmedMessage: String {
+        String(String.UnicodeScalarView(message.unicodeScalars.filter { !Self.isRefusedControl($0) }))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func isRefusedControl(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x09, 0x0A, 0x0D: false
+        case 0x00...0x1F, 0x7F...0x9F: true
+        default: false
+        }
+    }
+
     var trimmedEmail: String { email.trimmingCharacters(in: .whitespacesAndNewlines) }
     var isTooLong: Bool { trimmedMessage.count > PrivateFeedbackSubmission.maximumMessageLength }
+    /// Printable US-ASCII in the shape the endpoint takes for a reply address.
     var emailIsValid: Bool {
         !addsEmail || trimmedEmail.isEmpty
-            || (trimmedEmail.count <= 254
-                && trimmedEmail.range(of: #"^[^@\s]+@[^@\s]+\.[^@\s]+$"#, options: .regularExpression) != nil)
+            || (trimmedEmail.count <= 254 && trimmedEmail.unicodeScalars.allSatisfy { (0x21...0x7E).contains($0.value) }
+                && trimmedEmail.range(of: #"^[^@]+@[^@]+\.[^@]+$"#, options: .regularExpression) != nil)
     }
     var canSend: Bool { !trimmedMessage.isEmpty && !isTooLong && emailIsValid && state != .sending && state != .sent }
     /// Closing would lose something the person wrote.
     var hasUnsentNote: Bool { state != .sent && (!trimmedMessage.isEmpty || (addsEmail && !trimmedEmail.isEmpty)) }
+
+    /// Starts sending, kept so closing the sheet can stop it (`cancelSending`).
+    func startSending() {
+        guard canSend else { return }
+        sending = Task { await send() }
+    }
+
+    /// Stops a send under way; the note goes back to editing.
+    func cancelSending() {
+        sending?.cancel()
+        sending = nil
+    }
+
+    /// Closing, from Cancel, the close button or ⌘W: allowed at once when nothing would be lost; while a
+    /// note is going it is not, and with an unsent note the sheet asks first.
+    func mayClose() -> Bool {
+        if state == .sending { return false }
+        if hasUnsentNote {
+            confirmsDiscard = true
+            return false
+        }
+        return true
+    }
 
     func send() async {
         guard canSend else { return }
@@ -255,41 +314,72 @@ final class PrivateFeedbackForm {
         switch await client.send(submission) {
         case .accepted: state = .sent
         case let .failed(reason): state = .failed(reason)
+        case .cancelled: state = .editing
         }
     }
 }
 
 // MARK: - Presenting
 
-/// Opens Send Feedback as a sheet over the window it was asked from, or on its own when there is none.
-/// One sheet at a time: asked again, the open one comes forward. DEBUG QA replaces `open` so nothing
-/// opens on the person's screen.
+/// Opens Send Feedback as a sheet over the window it was asked from, or as a window of its own when there is
+/// none or that window already shows a sheet (Settings). One at a time: asked again, the open one comes
+/// forward. DEBUG QA replaces `open` so nothing opens on the person's screen.
 @MainActor
 enum PrivateFeedbackPresenter {
     static var open: @MainActor (_ context: PrivateFeedbackContext, _ window: NSWindow?) -> Void = present
-    private static weak var shown: NSWindow?
+    /// The open one, released as it closes.
+    fileprivate(set) static var shown: PrivateFeedbackWindow?
 
     private static func present(_ context: PrivateFeedbackContext, over window: NSWindow?) {
-        if let shown, shown.isVisible {
-            shown.makeKeyAndOrderFront(nil)
+        if let shown {
+            shown.window.makeKeyAndOrderFront(nil)
             return
         }
         let parent = (window ?? NSApp.keyWindow ?? NSApp.mainWindow).flatMap { $0.sheetParent ?? $0 }
-        let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: PrivateFeedbackSheet.width, height: 420),
-                             styleMask: parent == nil ? [.titled, .closable] : [.titled], backing: .buffered, defer: true)
-        sheet.title = L10n.string("Send Feedback")
-        sheet.isReleasedWhenClosed = false
-        let form = PrivateFeedbackForm(context: context)
-        sheet.contentViewController = NSHostingController(rootView: PrivateFeedbackSheet(form: form) {
-            if let parent = sheet.sheetParent { parent.endSheet(sheet) } else { sheet.close() }
+        let sheetParent = parent?.attachedSheet == nil ? parent : nil
+        shown = PrivateFeedbackWindow(form: PrivateFeedbackForm(context: context), over: sheetParent)
+    }
+}
+
+/// The sheet's window and its form. Cancel, the close button and ⌘W all go through `mayClose`; once
+/// closed, the send is stopped and the window lets go of its content, so neither the window nor the note
+/// outlives it.
+@MainActor
+final class PrivateFeedbackWindow: NSObject, NSWindowDelegate {
+    let window: NSWindow
+    let form: PrivateFeedbackForm
+
+    init(form: PrivateFeedbackForm, over parent: NSWindow?) {
+        self.form = form
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: PrivateFeedbackSheet.width, height: 420),
+                          styleMask: parent == nil ? [.titled, .closable] : [.titled], backing: .buffered, defer: true)
+        super.init()
+        window.title = form.context.kind == .problem ? L10n.string("Send Problem Report") : L10n.string("Send Feedback")
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        window.contentViewController = NSHostingController(rootView: PrivateFeedbackSheet(form: form) { [weak self] in
+            self?.finish()
         })
-        shown = sheet
-        if let parent, parent.attachedSheet == nil {
-            parent.beginSheet(sheet)
+        if let parent {
+            parent.beginSheet(window)
         } else {
-            sheet.center()
-            sheet.makeKeyAndOrderFront(nil)
+            window.center()
+            window.makeKeyAndOrderFront(nil)
         }
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if form.mayClose() { finish() }
+        return false
+    }
+
+    /// Closes for good: stops a send, takes the window down and breaks its hold on the form.
+    func finish() {
+        form.cancelSending()
+        if let parent = window.sheetParent { parent.endSheet(window) } else { window.orderOut(nil) }
+        window.delegate = nil
+        window.contentViewController = nil
+        if PrivateFeedbackPresenter.shown === self { PrivateFeedbackPresenter.shown = nil }
     }
 }
 

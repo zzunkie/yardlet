@@ -8,7 +8,6 @@ struct PrivateFeedbackSheet: View {
 
     @Bindable var form: PrivateFeedbackForm
     let close: () -> Void
-    @State private var confirmsDiscard = false
     @FocusState private var isMessageFocused: Bool
 
     var body: some View {
@@ -25,7 +24,7 @@ struct PrivateFeedbackSheet: View {
         .padding(20)
         .frame(width: Self.width)
         .onAppear { isMessageFocused = true }
-        .confirmationDialog(L10n.string("Discard this note?"), isPresented: $confirmsDiscard) {
+        .confirmationDialog(L10n.string("Discard this note?"), isPresented: $form.confirmsDiscard) {
             Button(L10n.string("Discard"), role: .destructive, action: close)
             Button(L10n.string("Keep Editing"), role: .cancel) {}
         } message: {
@@ -128,12 +127,12 @@ struct PrivateFeedbackSheet: View {
                     .keyboardShortcut(.defaultAction)
             } else {
                 Button(L10n.string("Cancel")) {
-                    if form.hasUnsentNote { confirmsDiscard = true } else { close() }
+                    if form.mayClose() { close() }
                 }
                 .keyboardShortcut(.cancelAction)
                 .disabled(form.state == .sending)
                 Button(isRetry ? L10n.string("Send Again") : L10n.string("Send")) {
-                    Task { await form.send() }
+                    form.startSending()
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(!form.canSend)

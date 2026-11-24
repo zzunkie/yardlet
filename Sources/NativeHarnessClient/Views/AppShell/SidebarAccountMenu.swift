@@ -276,11 +276,22 @@ struct SidebarFooter: View {
     @Environment(\.yardletFeedbackSurface) private var surface
 
     var body: some View {
-        HStack(spacing: 2) {
-            SidebarSettingsButton(context: context)
-            if let sendFeedback {
-                SidebarFeedbackButton { sendFeedback(.feedback(surface: surface)) }
+        if let sendFeedback {
+            let open = { sendFeedback(.feedback(surface: surface)) }
+            // Feedback keeps its title while Settings' whole title still fits beside it, and is its bubble
+            // alone in a narrower sidebar or a longer language.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 2) {
+                    SidebarSettingsButton(context: context)
+                    SidebarFeedbackButton(action: open)
+                }
+                HStack(spacing: 2) {
+                    SidebarSettingsButton(context: context)
+                    SidebarFeedbackButton(showsTitle: false, action: open)
+                }
             }
+        } else {
+            SidebarSettingsButton(context: context)
         }
     }
 }
