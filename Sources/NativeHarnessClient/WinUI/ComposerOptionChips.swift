@@ -212,15 +212,23 @@ final class ComposerOptionChips {
         }
         if let speed = menu.speed {
             if menu.model != nil || menu.effort != nil { flyout.items.append(MenuFlyoutSeparator()) }
-            let toggle = ToggleMenuFlyoutItem()
-            toggle.text = speed.name
-            toggle.isChecked = speed.currentValue == "on"
-            if let description = speed.description { try? ToolTipService.setToolTip(toggle, description) }
-            toggle.click.addHandler { [weak self, weak anchor] _, _ in
-                self?.pick(speed.currentValue == "on" ? "off" : "on", id: speed.id, apply: apply, confirmation: nil,
-                           anchor: anchor)
+            if speed.isBinarySpeedSwitch {
+                let toggle = ToggleMenuFlyoutItem()
+                toggle.text = speed.name
+                toggle.isChecked = speed.currentValue == "on"
+                if let description = speed.description { try? ToolTipService.setToolTip(toggle, description) }
+                toggle.click.addHandler { [weak self, weak anchor] _, _ in
+                    self?.pick(speed.currentValue == "on" ? "off" : "on", id: speed.id, apply: apply, confirmation: nil,
+                               anchor: anchor)
+                }
+                flyout.items.append(toggle)
+            } else {
+                let heading = MenuFlyoutItem()
+                heading.text = speed.name
+                heading.isEnabled = false
+                flyout.items.append(heading)
+                append(speed, to: flyout, apply: apply, confirmations: [:], anchor: anchor)
             }
-            flyout.items.append(toggle)
         }
         return flyout
     }

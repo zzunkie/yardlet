@@ -680,6 +680,7 @@
 "Base branch" = "기준 브랜치";
 "Stop active work before starting a review." = "검토를 시작하기 전에 진행 중인 작업을 멈춰 주세요.";
 "Fast" = "Fast";
+"Speed" = "속도";
 "Context compaction is unavailable for this runtime." = "이 런타임에서는 컨텍스트 압축을 지원하지 않습니다.";
 "Stop active work before compacting this chat." = "컨텍스트를 압축하려면 진행 중인 작업을 먼저 중지하세요.";
 "Use this command with an empty composer while the chat is idle." = "진행 중인 작업이 없고 입력란이 비어 있을 때 실행해 주세요.";

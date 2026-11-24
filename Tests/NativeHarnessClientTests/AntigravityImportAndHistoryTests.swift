@@ -63,6 +63,37 @@ final class AntigravityImportAndHistoryTests: XCTestCase {
         XCTAssertEqual(try fixture.store.conversations(in: fixture.otherProject).map(\.providerSessionID), [Self.h, Self.b])
         XCTAssertEqual(fixture.store.title(conversationID: Self.a), "Fixture conversation title")
         XCTAssertNil(fixture.store.title(conversationID: Self.b))
+        XCTAssertNil(fixture.store.title(conversationID: "missing-conversation"))
+        XCTAssertNil(fixture.store.title(conversationID: "../escape"))
+
+        // An uncheckpointed WAL row is visible to both listing and direct title lookup without
+        // writing into Antigravity's folder.
+        let walID = "09000000-0000-4000-8000-000000000009"
+        let dbURL = fixture.store.root.appending(path: "conversation_summaries.db")
+        var writer: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(dbURL.path(percentEncoded: false), &writer), SQLITE_OK)
+        defer { sqlite3_close(writer) }
+        XCTAssertEqual(sqlite3_exec(writer, "PRAGMA wal_autocheckpoint=0;", nil, nil, nil), SQLITE_OK)
+        let uri = #"["\#(fixture.project.absoluteString)"]"#
+        var insert: OpaquePointer?
+        let insertSQL = """
+            INSERT INTO conversation_summaries (conversation_id, title, preview, step_count, last_modified_time,
+                workspace_uris, status, project_id, parent_conversation_id, nesting_depth, last_user_input_time,
+                app_data_dir, raw_summary)
+            VALUES (?, 'Uncheckpointed WAL title', 'WAL preview', 2, '2026-10-16 07:00:00.000000+00:00',
+                ?, 'CASCADE_RUN_STATUS_IDLE', 'default-cli-project', '', 0, '2026-10-16 07:00:00.000000+00:00',
+                'antigravity-cli', x'0a00')
+            """
+        XCTAssertEqual(sqlite3_prepare_v2(writer, insertSQL, -1, &insert, nil), SQLITE_OK)
+        sqlite3_bind_text(insert, 1, walID, -1, antigravityTestTransient)
+        sqlite3_bind_text(insert, 2, uri, -1, antigravityTestTransient)
+        XCTAssertEqual(sqlite3_step(insert), SQLITE_DONE)
+        sqlite3_finalize(insert)
+
+        let beforeWALRead = try listing(fixture.store.root)
+        XCTAssertEqual(fixture.store.title(conversationID: walID), "Uncheckpointed WAL title")
+        XCTAssertEqual(try fixture.store.conversations(in: fixture.project).first?.providerSessionID, walID)
+        XCTAssertEqual(try listing(fixture.store.root), beforeWALRead)
     }
 
     /// The index is read from a private copy: Antigravity's folder gets no new file (no `-wal`,

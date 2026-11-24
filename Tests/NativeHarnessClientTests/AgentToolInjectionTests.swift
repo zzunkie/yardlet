@@ -43,6 +43,8 @@ final class AgentToolInjectionTests: XCTestCase {
         let codex = server.codexConfig["mcp_servers"]?["yardlet"]
         XCTAssertEqual(codex?["command"], .string(server.command))
         XCTAssertEqual(codex?["args"], .array([]))
+        XCTAssertEqual(codex?["required"], .bool(true),
+                       "Marks yardlet-mcp required so Codex's lazy stdio startup does not skip live tool updates or drop readOnlyHint")
         XCTAssertEqual(codex?["tool_timeout_sec"], .integer(1_800))
         XCTAssertNil(codex?["tools"], "Whether Codex asks follows the task's approval setting, not a per-tool mode of Yardlet's")
         XCTAssertEqual(codex?["env"]?[AgentToolEnvironment.session], .string(server.environment[AgentToolEnvironment.session]!))

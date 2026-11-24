@@ -680,6 +680,7 @@
 "Base branch" = "Base branch";
 "Stop active work before starting a review." = "Stop active work before starting a review.";
 "Fast" = "Fast";
+"Speed" = "Speed";
 "Context compaction is unavailable for this runtime." = "Context compaction is unavailable for this runtime.";
 "Stop active work before compacting this chat." = "Stop active work before compacting this chat.";
 "Use this command with an empty composer while the chat is idle." = "Use this command with an empty composer while the chat is idle.";

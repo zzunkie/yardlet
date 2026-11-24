@@ -20,21 +20,45 @@ enum CodexModelMenuProjection {
             })
     }
 
-    /// The model's Fast tier as the shared menu's speed row, named and described as Codex names it.
+    /// The model's speed tiers as the shared menu's speed row, named and described as Codex names them.
+    /// A model with one tier uses an Off/On toggle (the same shape as Claude Code's Fast switch); a model
+    /// with multiple tiers (such as Fast and Ultrafast) offers Default and every advertised tier by its ID.
     static func speed(_ catalog: CodexModelCatalog) -> ProviderCapabilitySelector? {
-        guard let fast = catalog.fastTier else { return nil }
-        return ProviderCapabilitySelector(id: "fastMode", name: fast.name,
-            description: fast.description.isEmpty ? nil : fast.description, category: "speed",
-            currentValue: catalog.isFast ? "on" : "off",
-            choices: [.init(value: "off", name: L10n.string("Off"), description: nil),
-                      .init(value: "on", name: L10n.string("On"), description: nil)])
+        let tiers = catalog.availableServiceTiers
+        guard !tiers.isEmpty else { return nil }
+        if tiers.count == 1, let tier = tiers.first {
+            return ProviderCapabilitySelector(
+                id: "fastMode", name: tier.name,
+                description: tier.description.isEmpty ? nil : tier.description, category: "speed",
+                currentValue: catalog.serviceTier == tier.id ? "on" : "off",
+                choices: [.init(value: "off", name: L10n.string("Off"), description: nil),
+                          .init(value: "on", name: L10n.string("On"), description: nil)])
+        }
+        let current = catalog.activeServiceTier?.id ?? "default"
+        let choices = [ProviderCapabilityChoice(value: "default", name: L10n.string("Default"), description: nil)]
+            + tiers.map { tier in
+                ProviderCapabilityChoice(
+                    value: tier.id, name: tier.name,
+                    description: tier.description.isEmpty ? nil : tier.description)
+            }
+        return ProviderCapabilitySelector(
+            id: "serviceTier", name: L10n.string("Speed"), description: nil, category: "speed",
+            currentValue: current, choices: choices)
     }
 
     static func selection(id: String, value: String, catalog: CodexModelCatalog) -> CodexModelSelection? {
         switch id {
         case "fastMode":
-            guard let fast = catalog.fastTier else { return nil }
-            return catalog.selectingServiceTier(value == "on" ? fast.id : "default")
+            if value == "off" || value == "default" {
+                return catalog.selectingServiceTier("default")
+            }
+            if value == "on" {
+                guard let tier = catalog.fastTier ?? catalog.availableServiceTiers.first else { return nil }
+                return catalog.selectingServiceTier(tier.id)
+            }
+            return catalog.selectingServiceTier(value)
+        case "serviceTier":
+            return catalog.selectingServiceTier(value)
         case "model":
             guard let model = catalog.models.first(where: { $0.model == value }) else { return nil }
             return catalog.selecting(model)

@@ -548,33 +548,118 @@ struct HarnessIntelligencePicker: View {
         }
     }
 
-    /// Both apps' speed row: a bolt, the name and what it costs, and a switch; the menu stays open.
+    /// Speed control at the bottom of the model menu: an Off/On switch when the model offers one
+    /// tier (Claude Code Fast or a single Codex tier), or a tier picker when it offers several
+    /// (such as Fast and Ultrafast). The menu stays open so the change is visible at once.
+    @ViewBuilder
     private func speedRow(_ speed: ProviderCapabilitySelector) -> some View {
-        let isOn = speed.currentValue == "on"
-        return IntelligencePickerRow(isEnabled: isAttached) {
-            onSetOption(speed.id, isOn ? "off" : "on")
-        } content: {
-            Image(systemName: "bolt")
-                .font(.system(size: 12 * interfaceScale, weight: .medium))
-                .foregroundStyle(isOn ? AnyShapeStyle(ParityTheme.accent) : AnyShapeStyle(.secondary))
-                .frame(width: 16)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(speed.name)
-                if let description = speed.description, !description.isEmpty {
-                    Text(description).font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary)
+        if speed.isBinarySpeedSwitch {
+            let isOn = speed.currentValue == "on"
+            IntelligencePickerRow(isEnabled: isAttached) {
+                onSetOption(speed.id, isOn ? "off" : "on")
+            } content: {
+                Image(systemName: "bolt")
+                    .font(.system(size: 12 * interfaceScale, weight: .medium))
+                    .foregroundStyle(isOn ? AnyShapeStyle(ParityTheme.accent) : AnyShapeStyle(.secondary))
+                    .frame(width: 16)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(speed.name)
+                    if let description = speed.description, !description.isEmpty {
+                        Text(description).font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.vertical, 5)
+                Spacer()
+                Toggle(speed.name, isOn: Binding(get: { isOn }, set: { onSetOption(speed.id, $0 ? "on" : "off") }))
+                    .labelsHidden()
+                    .toggleStyle(.paritySwitch)
+                    .controlSize(.mini)
+                    .disabled(!isAttached)
+            }
+            .accessibilityLabel(speed.name)
+            .accessibilityValue(isOn ? L10n.string("On") : L10n.string("Off"))
+        } else {
+            let selected = speed.choices.first { $0.value == speed.currentValue }
+            let isElevated = !speed.currentValue.isEmpty && speed.currentValue != "default" && speed.currentValue != "off"
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(systemName: "bolt")
+                        .font(.system(size: 11 * interfaceScale, weight: .medium))
+                        .foregroundStyle(isElevated ? AnyShapeStyle(ParityTheme.accent) : AnyShapeStyle(.secondary))
+                    Text(speed.name)
+                        .font(.yardlet(.caption, scale: interfaceScale).weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+                    Text(selected?.name ?? selectedName(for: speed))
+                        .font(.yardlet(.callout, scale: interfaceScale).weight(.semibold))
+                        .foregroundStyle(isElevated ? AnyShapeStyle(ParityTheme.accentText) : AnyShapeStyle(.primary))
+                        .accessibilityHidden(true)
+                }
+                if speed.choices.count <= 3 {
+                    HStack(spacing: 6) {
+                        ForEach(speed.choices) { choice in
+                            let isSelected = choice.value == speed.currentValue
+                            Button {
+                                guard isAttached, !isSelected else { return }
+                                onSetOption(speed.id, choice.value)
+                            } label: {
+                                Text(choice.name)
+                                    .font(.yardlet(.caption, scale: interfaceScale).weight(.medium))
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.8)
+                                    .foregroundStyle(isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                                    .padding(.horizontal, 6)
+                                    .frame(maxWidth: .infinity, minHeight: 24)
+                                    .background(isSelected ? ParityTheme.selectedFill : .clear, in: Capsule(style: .circular))
+                                    .overlay(Capsule(style: .circular).strokeBorder(isSelected ? .clear : ParityTheme.strongSeparator))
+                                    .contentShape(Capsule(style: .circular))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!isAttached)
+                            .parityPointer()
+                            .help(choice.description ?? "")
+                            .accessibilityLabel(choice.name)
+                            .accessibilityAddTraits(isSelected ? .isSelected : [])
+                        }
+                    }
+                } else {
+                    VStack(spacing: 2) {
+                        ForEach(speed.choices) { choice in
+                            let isSelected = choice.value == speed.currentValue
+                            IntelligencePickerRow(isEnabled: isAttached) {
+                                guard isAttached, !isSelected else { return }
+                                onSetOption(speed.id, choice.value)
+                            } content: {
+                                Text(choice.name).lineLimit(1)
+                                Spacer()
+                                if isSelected {
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 10 * interfaceScale, weight: .bold))
+                                        .foregroundStyle(ParityTheme.accent)
+                                }
+                            }
+                            .help(choice.description ?? "")
+                            .accessibilityLabel(choice.name)
+                            .accessibilityAddTraits(isSelected ? .isSelected : [])
+                        }
+                    }
+                    .padding(.horizontal, -7)
+                }
+                if let description = selected?.description, !description.isEmpty {
+                    Text(description)
+                        .font(.yardlet(.caption, scale: interfaceScale))
+                        .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .padding(.vertical, 5)
-            Spacer()
-            Toggle(speed.name, isOn: Binding(get: { isOn }, set: { onSetOption(speed.id, $0 ? "on" : "off") }))
-                .labelsHidden()
-                .toggleStyle(.paritySwitch)
-                .controlSize(.mini)
-                .disabled(!isAttached)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 6)
+            .opacity(isAttached ? 1 : 0.6)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(speed.name)
+            .accessibilityValue(selected?.name ?? selectedName(for: speed))
         }
-        .accessibilityLabel(speed.name)
-        .accessibilityValue(isOn ? L10n.string("On") : L10n.string("Off"))
     }
 
     private func pickModel(_ choice: ProviderCapabilityChoice, in selector: ProviderCapabilitySelector) {

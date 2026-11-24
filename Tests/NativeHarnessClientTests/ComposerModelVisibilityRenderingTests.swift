@@ -87,11 +87,15 @@ final class ComposerModelVisibilityRenderingTests: XCTestCase {
             speed: nil, canChoose: true)
         let codex = ComposerModelMenu.codex(CodexComposerModelProjection.catalog(live: CodexModelCatalog(), stored: nil,
             defaults: HarnessModelDefaults(model: "gpt-6-astra", effort: "xhigh"), cached: codexModels))
+        let codexMultiSpeed = ComposerModelMenu.codex(CodexComposerModelProjection.catalog(live: CodexModelCatalog(), stored: nil,
+            defaults: HarnessModelDefaults(model: "gpt-6.2-sol", effort: "high", serviceTier: "ultrafast"), cached: codexModels))
         XCTAssertEqual(claude.effort?.choices.map(\.value), ["default", "low", "medium", "high", "xhigh", "max"])
         XCTAssertEqual(codex.effort?.choices.map(\.value), ["low", "medium", "high", "xhigh", "max", "ultra"])
+        XCTAssertEqual(codexMultiSpeed.speed?.choices.map(\.value), ["default", "priority", "ultrafast"])
+        XCTAssertEqual(codexMultiSpeed.speed?.currentValue, "ultrafast")
         // The effort list scrolls, which ImageRenderer does not draw, so the menus draw in the window too.
-        for (name, menu) in [("menu-claude", claude), ("menu-codex", codex)] {
-            try render(name: name, size: NSSize(width: 284, height: 300)) {
+        for (name, menu) in [("menu-claude", claude), ("menu-codex", codex), ("menu-codex-ultrafast", codexMultiSpeed)] {
+            try render(name: name, size: NSSize(width: 284, height: 320)) {
                 HarnessIntelligencePicker(modelSelector: menu.model, reasoningSelector: menu.effort,
                     isAttached: true, onSetOption: { _, _ in }, onDismiss: {}, speedSelector: menu.speed)
                     .frame(width: 284)
@@ -100,8 +104,13 @@ final class ComposerModelVisibilityRenderingTests: XCTestCase {
     }
 
     private var codexModels: [CodexModelOption] {
-        [CodexModelOption(id: "gpt-6.1-sol", model: "gpt-6.1-sol", displayName: "GPT-6.1-Sol", defaultReasoningEffort: "low",
-                          supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"], isDefault: true,
+        [CodexModelOption(id: "gpt-6.2-sol", model: "gpt-6.2-sol", displayName: "GPT-6.2-Sol", defaultReasoningEffort: "high",
+                          supportedReasoningEfforts: ["low", "medium", "high", "xhigh"], isDefault: true,
+                          serviceTiers: [CodexServiceTier(id: "priority", name: "Fast", description: "2x speed, increased usage"),
+                                         CodexServiceTier(id: "ultrafast", name: "Ultrafast",
+                                                          description: "The fastest available responses for latency-sensitive work.")]),
+         CodexModelOption(id: "gpt-6.1-sol", model: "gpt-6.1-sol", displayName: "GPT-6.1-Sol", defaultReasoningEffort: "low",
+                          supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"], isDefault: false,
                           serviceTiers: [CodexServiceTier(id: "priority", name: "Fast", description: "2x speed, increased usage")]),
          CodexModelOption(id: "gpt-6-astra", model: "gpt-6-astra", displayName: "GPT-6-Astra", defaultReasoningEffort: "medium",
                           supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"], isDefault: false),

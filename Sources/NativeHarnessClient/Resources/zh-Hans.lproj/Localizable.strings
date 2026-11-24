@@ -680,6 +680,7 @@
 "Base branch" = "基础分支";
 "Stop active work before starting a review." = "开始审查前，请先停止当前进行中的工作。";
 "Fast" = "快速";
+"Speed" = "速度";
 "Context compaction is unavailable for this runtime." = "此运行时不支持压缩上下文。";
 "Stop active work before compacting this chat." = "压缩此对话前，请先停止当前进行中的工作。";
 "Use this command with an empty composer while the chat is idle." = "请在对话空闲且输入框为空时使用此命令。";

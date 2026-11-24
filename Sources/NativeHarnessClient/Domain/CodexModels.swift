@@ -48,8 +48,20 @@ struct CodexModelCatalog: Codable, Equatable, Sendable {
 
     var effort: String? { selection?.reasoningEffort ?? selectedModel?.defaultReasoningEffort }
     var serviceTier: String? { selection?.serviceTier ?? selectedModel?.defaultServiceTier }
+    /// Every non-default speed tier the selected model advertises, in the catalog's order.
+    var availableServiceTiers: [CodexServiceTier] {
+        var seen = Set<String>()
+        return (selectedModel?.serviceTiers ?? []).filter { tier in
+            !tier.id.isEmpty && tier.id != "default" && seen.insert(tier.id).inserted
+        }
+    }
+    /// The non-default speed tier currently selected, or nil when running at standard speed.
+    var activeServiceTier: CodexServiceTier? {
+        guard let serviceTier, serviceTier != "default" else { return nil }
+        return availableServiceTiers.first { $0.id == serviceTier }
+    }
     var fastTier: CodexServiceTier? {
-        selectedModel?.serviceTiers?.first { $0.id == "priority" || $0.id == "fast" }
+        availableServiceTiers.first { $0.id == "priority" || $0.id == "fast" }
     }
     var isFast: Bool {
         guard let fastTier else { return false }

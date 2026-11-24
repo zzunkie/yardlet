@@ -66,11 +66,18 @@ struct AgentToolServerLaunch: Equatable, Sendable {
     /// `approval_mode` of Yardlet's: whether Codex asks before a call follows the task's own
     /// approval setting and the tool's annotations, as for any server (decision of 2026-10-22:
     /// whether approval is skipped follows each harness's own setting).
+    ///
+    /// Marking the entry `required: true` prevents Codex's lazy stdio startup
+    /// (`mcp_lazy_stdio_startup`) from skipping launch and serving a cached tool list with
+    /// stripped annotations (`readOnlyHint`) or missing live `notifications/tools/list_changed`
+    /// updates when a task resumes after Yardlet tool toggles change. `AgentToolBroker` emits a
+    /// launch only after confirming `yardlet-mcp` is executable and its local endpoint is live.
     var codexConfig: JSONValue {
         .object(["mcp_servers": .object([name: .object([
             "command": .string(command),
             "args": .array(arguments.map { .string($0) }),
             "env": .object(environment.mapValues { .string($0) }),
+            "required": .bool(true),
             "tool_timeout_sec": .integer(Self.codexToolTimeoutSeconds)
         ])])])
     }

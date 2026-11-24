@@ -680,6 +680,7 @@
 "Base branch" = "ベースブランチ";
 "Stop active work before starting a review." = "レビューを開始する前に実行中の作業を停止してください。";
 "Fast" = "高速";
+"Speed" = "速度";
 "Context compaction is unavailable for this runtime." = "このランタイムではコンテキストの圧縮は利用できません。";
 "Stop active work before compacting this chat." = "このチャットを圧縮する前に実行中の作業を停止してください。";
 "Use this command with an empty composer while the chat is idle." = "このコマンドは、チャットが待機中で入力欄が空のときに使用してください。";

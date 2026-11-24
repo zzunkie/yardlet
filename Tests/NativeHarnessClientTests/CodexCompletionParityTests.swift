@@ -136,6 +136,39 @@ final class CodexCompletionParityTests: XCTestCase {
         XCTAssertTrue(legacy.isFast)
         XCTAssertEqual(legacy.fastTier?.id, "fast")
         XCTAssertFalse(CodexModelCatalog().isFast)
+
+        let multiTierModel = CodexModelOption(
+            id: "gpt-6.2-sol", model: "gpt-6.2-sol", displayName: "GPT-6.2-Sol",
+            defaultReasoningEffort: "high", supportedReasoningEfforts: ["low", "high"], isDefault: true,
+            serviceTiers: [
+                .init(id: "priority", name: "Fast", description: "2x speed, increased usage"),
+                .init(id: "ultrafast", name: "Ultrafast", description: "The fastest available responses for latency-sensitive work.")
+            ])
+        let singleTierModel = CodexModelOption(
+            id: "gpt-6.2-astra", model: "gpt-6.2-astra", displayName: "GPT-6.2-Astra",
+            defaultReasoningEffort: "high", supportedReasoningEfforts: ["high"], isDefault: false,
+            serviceTiers: [.init(id: "priority", name: "Fast", description: "2x speed, increased usage")])
+        let multiCatalog = CodexModelCatalog(
+            models: [multiTierModel, singleTierModel],
+            selection: .init(model: "gpt-6.2-sol", reasoningEffort: "high", serviceTier: "ultrafast"))
+        XCTAssertEqual(multiCatalog.availableServiceTiers.map(\.id), ["priority", "ultrafast"])
+        XCTAssertEqual(multiCatalog.activeServiceTier?.id, "ultrafast")
+        let speedSelector = try XCTUnwrap(CodexModelMenuProjection.speed(multiCatalog))
+        XCTAssertEqual(speedSelector.id, "serviceTier")
+        XCTAssertFalse(speedSelector.isBinarySpeedSwitch)
+        XCTAssertEqual(speedSelector.currentValue, "ultrafast")
+        XCTAssertEqual(speedSelector.choices.map(\.value), ["default", "priority", "ultrafast"])
+        XCTAssertEqual(CodexModelMenuProjection.selection(id: "serviceTier", value: "priority", catalog: multiCatalog)?.serviceTier, "priority")
+        XCTAssertEqual(CodexModelMenuProjection.selection(id: "serviceTier", value: "default", catalog: multiCatalog)?.serviceTier, "default")
+        let highLabel = CodexReasoningLabel.name("high")
+        XCTAssertEqual(ComposerModelMenu.codex(multiCatalog).title, "GPT-6.2-Sol · \(highLabel) · Ultrafast")
+        XCTAssertEqual(multiCatalog.selecting(singleTierModel).serviceTier, "default",
+                       "Switching to a model without ultrafast resets serviceTier to default")
+        let defaultMultiCatalog = CodexModelCatalog(
+            models: [multiTierModel],
+            selection: .init(model: "gpt-6.2-sol", reasoningEffort: "high", serviceTier: "default"))
+        XCTAssertEqual(ComposerModelMenu.codex(defaultMultiCatalog).title, "GPT-6.2-Sol · \(highLabel)")
+        XCTAssertEqual(CodexModelMenuProjection.speed(defaultMultiCatalog)?.currentValue, "default")
     }
 
     private func thread(status: String = "idle") -> JSONValue {
