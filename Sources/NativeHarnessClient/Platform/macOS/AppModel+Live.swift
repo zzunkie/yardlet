@@ -98,8 +98,9 @@ extension AppModel {
             model.accountAssignments = AccountAssignmentLog(
                 fileURL: storageRootURL.appending(path: AccountAssignmentLog.fileName))
             model.personalAgentReadings = PersonalAgentReadings(cache: PersonalAgentCacheFiles.live)
-            model.simulators = SimulatorCenter(backends: [MacIOSSimulatorBackend(), AndroidEmulatorBackend()],
-                                               record: simulatorStartRecord())
+            model.simulators = SimulatorCenter(
+                backends: [MacIOSSimulatorBackend(), AndroidEmulatorBackend(copiesHome: simulatorCopiesHome())],
+                record: simulatorStartRecord())
             wireSimulatorScreens(to: model)
             model.simulatorTools.drivers[.iOS] = MacIOSSimulatorDriver(screens: MacSimulatorScreens.shared)
             model.simulatorTools.drivers[.android] = MacAndroidEmulatorDriver(screens: MacSimulatorScreens.shared)
@@ -152,6 +153,16 @@ extension AppModel {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Application Support")
         return support.appending(path: "\(YardletProduct.applicationSupportDirectoryName)/Simulator", directoryHint: .isDirectory)
+    }
+
+    /// The AVD folder of the emulator copies Yardlet makes, beside its record, which nothing creates until a copy is
+    /// made. A QA run makes its copies in its own temporary folder, as it must never delete the person's Yardlet's.
+    private static func simulatorCopiesHome() -> URL {
+        guard !QABackground.isOn else {
+            return FileManager.default.temporaryDirectory.appending(path: "yardlet-qa-avd-\(ProcessInfo.processInfo.processIdentifier)",
+                                                                    directoryHint: .isDirectory)
+        }
+        return simulatorFolder().appending(path: "AVD", directoryHint: .isDirectory)
     }
 
     /// Where the simulators Yardlet started are written down: in Yardlet's Application Support folder, which nothing

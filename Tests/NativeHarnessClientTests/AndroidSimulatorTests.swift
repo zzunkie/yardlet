@@ -93,6 +93,66 @@ final class AndroidSimulatorTests: XCTestCase {
         XCTAssertFalse(arguments.contains("-read-only"))
     }
 
+    /// A copy of an emulator is a new AVD of the same configuration in Yardlet's own AVD folder, which the person's
+    /// list never shows: it starts without a snapshot from that folder, and deleting it removes its files.
+    func testACopyOfAnEmulatorIsANewAVDInYardletsOwnFolder() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "avd-copies-\(UUID().uuidString)",
+                                                                    directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (avds, copies) = (root.appending(path: "person", directoryHint: .isDirectory),
+                              root.appending(path: "yardlet", directoryHint: .isDirectory))
+        try FileManager.default.createDirectory(at: avds.appending(path: "Test_AVD.avd"), withIntermediateDirectories: true)
+        try Data("path=\(avds.appending(path: "Test_AVD.avd").nativePath)\ntarget=android-34\n".utf8)
+            .write(to: avds.appending(path: "Test_AVD.ini"))
+        try Data("""
+            avd.ini.displayname=Test Phone API 34
+            image.sysdir.1=system-images/android-34/google_apis/arm64-v8a/
+            hw.sdCard=yes
+            sdcard.size=512 MB
+            hw.lcd.width=1080
+
+            """.utf8).write(to: avds.appending(path: "Test_AVD.avd/config.ini"))
+        let ended = Listing("")
+        let launcher = RecordedLaunches(ended: ended)
+        let runner = ScriptedCommands { command -> String? in
+            switch command.arguments {
+            case ["-list-avds"]: return "Test_AVD\n"
+            case ["devices", "-l"]:
+                let running = !launcher.arguments.isEmpty && ended.value.isEmpty
+                return "List of devices attached\n" + (running ? "emulator-5554 device\n" : "")
+            case ["-s", "emulator-5554", "emu", "kill"]:
+                ended.value = "yes"
+                return "OK\n"
+            default: return nil
+            }
+        }
+        let backend = AndroidEmulatorBackend(runner: runner, launcher: launcher, avdHome: { avds }, copiesHome: copies,
+                                             ports: [5554])
+        let sdk = SimulatorToolchain(directory: "/srv/sdk")
+        let originals = try await backend.devices(with: sdk)
+        let original = try XCTUnwrap(originals.first)
+
+        let copy = try await backend.makeCopy(of: original, with: sdk)
+        XCTAssertEqual(copy.name, "Test Phone API 34 (Yardlet)")
+        XCTAssertTrue(copy.identity.value.hasPrefix(AndroidEmulatorBackend.copyPrefix))
+        let config = try String(contentsOf: copies.appending(path: "\(copy.identity.value).avd/config.ini"), encoding: .utf8)
+        XCTAssertTrue(config.contains("image.sysdir.1=system-images/android-34/google_apis/arm64-v8a/"), config)
+        XCTAssertTrue(config.contains("hw.lcd.width=1080") && config.contains("hw.sdCard=no"), config)
+        XCTAssertFalse(config.contains("sdcard.size"), config)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: avds.nativePath).sorted(),
+                       ["Test_AVD.avd", "Test_AVD.ini"], "The person's AVD folder is left alone")
+        let listed = try await backend.devices(with: sdk)
+        XCTAssertEqual(listed.map(\.name), ["Test Phone API 34", "Test Phone API 34 (Yardlet)"])
+        XCTAssertEqual(listed.last?.osName, "Android API 34")
+
+        _ = try await backend.boot(copy, with: sdk)
+        XCTAssertEqual(launcher.arguments.last?.suffix(1), ["-no-snapshot"])
+        XCTAssertEqual(launcher.environments.last, ["ANDROID_AVD_HOME": copies.nativePath])
+        try await backend.deleteCopy(copy.identity, with: sdk)
+        XCTAssertTrue(runner.commands.contains { $0.arguments == ["-s", "emulator-5554", "emu", "kill"] })
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: copies.nativePath), [])
+    }
+
     func testEncodesControlMessagesAndReadsTheVideoStreamInAnyPieces() throws {
         let position = ScrcpyPosition(x: 100, y: 200, screenWidth: 1080, screenHeight: 2400)
         XCTAssertEqual([UInt8](ScrcpyControlMessage.touch(.down, pointer: ScrcpyControlMessage.fingerPointer,
@@ -355,8 +415,27 @@ private final class Listing: @unchecked Sendable {
     }
 }
 
+/// Keeps each launch's arguments and variables; its process ends once `ended` holds anything.
+private final class RecordedLaunches: AndroidEmulatorLaunching, @unchecked Sendable {
+    private let lock = NSLock()
+    private let ended: Listing
+    private var launched: [(arguments: [String], environment: [String: String])] = []
+
+    init(ended: Listing) { self.ended = ended }
+
+    var arguments: [[String]] { lock.withLock { launched.map(\.arguments) } }
+    var environments: [[String: String]] { lock.withLock { launched.map(\.environment) } }
+
+    func launch(_ executable: URL, arguments: [String], environment: [String: String]) throws -> Int32 {
+        lock.withLock { launched.append((arguments, environment)) }
+        return 4242
+    }
+
+    func hasEnded(_ processID: Int32) -> Bool? { !ended.value.isEmpty }
+}
+
 private struct NoLaunches: AndroidEmulatorLaunching {
-    func launch(_ executable: URL, arguments: [String]) throws -> Int32 { throw SimulatorCommandError(message: "no") }
+    func launch(_ executable: URL, arguments: [String], environment: [String: String]) throws -> Int32 { throw SimulatorCommandError(message: "no") }
     func hasEnded(_ processID: Int32) -> Bool? { nil }
 }
 

@@ -4,7 +4,8 @@
 # it without a window (no Simulator.app), then launches the bundle in the background with a temporary home
 # (qa-launch.sh: never active, its windows past every screen) and the DEBUG fixture SimulatorPanelQA
 # (`--ui-fixture-simulator-check`). The fixture follows the Simulator switch as the app does at launch, opens the
-# tab, attaches the device, checks its live screen and a click through the bundle's simulator host, hands this script
+# tab, attaches the device, checks its live screen and a click through the bundle's simulator host, opens a copy of
+# the device that another task uses and checks both screens stream and the copy is deleted, hands this script
 # the task's yardlet-mcp launch for drive-tools.py to call the agent's simulator tools with (the fixture allows the
 # approval card they raise), turns the switch off and checks the tab closes, capturing each step in both appearances. However the run ends, the script
 # ends the app by its PID, shuts the device down and deletes it, and removes the QA bundle and home; devices it did
@@ -52,6 +53,18 @@ cleanup() {
     /usr/bin/xcrun simctl shutdown "$udid" >/dev/null 2>&1 || true
     /usr/bin/xcrun simctl delete "$udid" >/dev/null 2>&1 || true
     print "Deleted $name ($udid)"
+    # A copy the fixture made and did not delete, as when the app ended early, is named after the device.
+    local copy
+    for copy in $(/usr/bin/xcrun simctl list devices -j | /usr/bin/python3 -I -c '
+import json, sys
+name = sys.argv[1] + " (Yardlet)"
+for devices in json.load(sys.stdin)["devices"].values():
+    print("\n".join(device["udid"] for device in devices if device["name"] == name))
+' "$name"); do
+        /usr/bin/xcrun simctl shutdown "$copy" >/dev/null 2>&1 || true
+        /usr/bin/xcrun simctl delete "$copy" >/dev/null 2>&1 || true
+        print "Deleted the copy $copy"
+    done
     rm -rf "${qa_root:?}/browser-host-qa"
     rmdir "${qa_root:?}" 2>/dev/null || true
 }

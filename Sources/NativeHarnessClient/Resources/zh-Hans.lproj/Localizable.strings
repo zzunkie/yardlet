@@ -4220,3 +4220,7 @@
 "MCP Code Mode (experimental)" = "MCP 代码模式（实验性）";
 "Agents find connector and Yardlet tools with search_yardlet_tools and run several at once in a sandboxed JavaScript run_yardlet_script, so connector tool schemas stay out of the context." = "智能体通过 search_yardlet_tools 查找连接器和 Yardlet 工具，并在沙盒 JavaScript 工具 run_yardlet_script 中一次运行多个工具。连接器工具模式不再占用上下文，从而节省令牌。";
 "MCP, code mode, JavaScript, tokens, context, connectors, tools, script" = "MCP, 代码模式, JavaScript, 令牌, 上下文, 连接器, 工具, 脚本";
+"Replaces flat connector tool schemas with search_yardlet_tools and a sandboxed JavaScript run_yardlet_script tool to reduce token usage." = "用 search_yardlet_tools 和沙盒 JavaScript 工具 run_yardlet_script 替代平铺的连接器工具模式，以减少令牌消耗。";
+"Another task is using this device." = "另一个任务正在使用此设备。";
+"A separate copy starts fresh, without this device's apps and data." = "单独的副本会全新启动，不含此设备的应用和数据。";
+"Open a Separate Copy" = "打开单独的副本";

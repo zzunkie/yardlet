@@ -4220,3 +4220,7 @@
 "MCP Code Mode (experimental)" = "MCP コードモード（実験的）";
 "Agents find connector and Yardlet tools with search_yardlet_tools and run several at once in a sandboxed JavaScript run_yardlet_script, so connector tool schemas stay out of the context." = "エージェントは search_yardlet_tools でコネクタと Yardlet のツールを探し、サンドボックス化された JavaScript ツール run_yardlet_script で複数のツールをまとめて実行します。コネクタのツールスキーマがコンテキストに載らず、トークンを節約できます。";
 "MCP, code mode, JavaScript, tokens, context, connectors, tools, script" = "MCP, コードモード, JavaScript, トークン, コンテキスト, コネクタ, ツール, スクリプト";
+"Replaces flat connector tool schemas with search_yardlet_tools and a sandboxed JavaScript run_yardlet_script tool to reduce token usage." = "コネクタのツールスキーマ一覧を search_yardlet_tools とサンドボックス化された JavaScript ツール run_yardlet_script に置き換え、トークン使用量を削減します。";
+"Another task is using this device." = "別のタスクがこのデバイスを使用しています。";
+"A separate copy starts fresh, without this device's apps and data." = "別のコピーは、このデバイスのアプリやデータなしで新しく起動します。";
+"Open a Separate Copy" = "別のコピーを開く";

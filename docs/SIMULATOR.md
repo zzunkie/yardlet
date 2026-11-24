@@ -4,7 +4,8 @@ A task's side panel can hold Simulator tabs, each with an iOS simulator's, an An
 screen, live, which the person uses with the mouse, the trackpad and the keyboard as on the device. Yardlet runs the
 simulators of the person's own Xcode without opening Simulator.app, and the emulators of the person's own Android SDK
 without a window, shows the Android phones and tablets that SDK's adb reaches, and changes nothing in Xcode's or the
-SDK's settings or their lists of devices.
+SDK's settings. The only devices it adds are the copies a task gets of a simulator or emulator another task uses
+("Copies for another task"), which go once no tab uses them, when the switch turns off and when Yardlet quits.
 
 The code:
 
@@ -140,7 +141,7 @@ Finding the switch off at launch asks nothing.
 With no device attached, the tab lists the devices: those that are on first, under Running, then the iOS
 simulators by runtime, newest first, then the Android emulators by API level; an Android device, always on while
 it is listed, is under Running. A device another task claims says
-"Used by" and that task's title.
+"Used by" and that task's title. Another task's copies are not listed.
 
 Picking a device attaches it to the task and claims it when no task does. A device that is off starts without a
 window (`simctl boot`), with "Starting iPhone 17…" in the tab while it boots; such a device is one Yardlet
@@ -155,8 +156,8 @@ Android Studio. An emulator already running, from Android Studio for one, is use
 again. An Android device is shown as it is and never started or stopped, so its device menu has no Shut Down; one
 that goes away, unplugged or out of reach, leaves the list, and its tab lists the devices until it is back.
 
-Apart from the AVD an Android install makes (above), Yardlet does not create, delete or erase simulators or
-emulators; that is Xcode's and Android Studio's part.
+Apart from the AVD an Android install makes (above) and the copies below, Yardlet does not create, delete or erase
+simulators or emulators; that is Xcode's and Android Studio's part.
 
 ## Several tasks and one device
 
@@ -170,10 +171,12 @@ A simulator is shared by the whole Mac, so two words keep apart what a task has:
 
 The rules:
 
-1. Watching is free. Several tasks' tabs can show the same device at once; the simulator host makes each frame
+1. One task claims a device. A real Android device is one phone: picking it while another task claims it attaches it
+   for watching, as several tasks' tabs can show it at once, and its device menu offers "Use in This Task", which
+   moves the claim. A simulator or emulator is never shared that way: picking one another task claims attaches this
+   task's own copy of it instead ("Copies for another task").
+2. Tabs of one task share. Two tabs of the same task can show the same device; the simulator host makes each frame
    once and every tab that shows the device gets it.
-2. One task claims a device. Picking a device another task claims attaches it for watching, and its device menu
-   offers "Use in This Task", which moves the claim.
 3. The person's hands come first. Touches and keys from any tab showing a device go in at once, claimed or not.
    Each one notes the time on the device (`SimulatorCenter.lastPersonInput(on:)`), in memory.
 
@@ -184,6 +187,38 @@ to the device of a tab on screen, not to every device of its task.
 
 Yardlet cannot see what moves a device from outside it (Simulator.app, Xcode, other tools); the tab always shows
 what the device draws, so the screen is right, but input from both may mix.
+
+## Copies for another task
+
+When a task's tab or agent picks a simulator or emulator that another task claims, Yardlet makes the task a copy of
+it, attaches and claims the copy, and starts it: a new device of the same model and OS, which starts fresh, without
+the original's apps and data, so the two tasks never drive one screen. A task has one copy of each original, which
+all its tabs that pick the original share. The copy's name is the original's with "(Yardlet)" after it; only its own
+task lists it, and a name in an agent's call names the original, never a copy. A person's approval of the original
+covers its copies (`SimulatorCenter.copies`, `SimulatorBackend.makeCopy`).
+
+- An iOS copy is `simctl create "<name> (Yardlet)" <device type> <runtime>` in the default device set, beside the
+  person's own simulators, so Xcode lists it while it exists. A device set of Yardlet's own (`simctl --set`) would
+  keep it out of that list, and the simulator host could open it, but `xcodebuild -destination id=<UDID>` and `simctl`
+  without `--set` find only devices of the default set, and the copy's UDID is what the agent hands to its own build
+  and install tools.
+- An Android copy is a new AVD, `yardlet_copy_<id>`, in Yardlet's own AVD folder (`Simulator/AVD` in Yardlet's
+  Application Support folder), with the original's `config.ini` (the same hardware profile and system image), no SD
+  card, and its data partition made from the system image on the first boot. It starts with
+  `ANDROID_AVD_HOME` set to that folder and `-no-snapshot`, so Android Studio never lists it and it writes no
+  snapshot. An emulator can run one AVD twice only when every instance of it is read-only (`-read-only`), which
+  Android Studio's and Yardlet's own starts are not, so a copy is its own AVD rather than a second instance.
+- A real Android device has no copy.
+
+A copy counts as a device Yardlet started: it is limited for agents and stopped by the idle rules below like any
+other, and stays, stopped, while a tab attaches it. Yardlet deletes it (`simctl shutdown` and `simctl delete`; an
+emulator's `adb emu kill` and the AVD's files) once no tab attaches it, as when its tab closes, the tab picks another
+device or Disconnect, `simulator_detach` or the task's archiving lets go of it, and every copy when the switch turns
+off and when Yardlet quits. A tab that attached a copy then attaches the original, so after a relaunch it shows
+"Another task is using this device." while another task claims the original, with "Open a Separate Copy", which
+makes a new copy. Each copy is written down with its original in `Simulator/started-devices.json` as soon as it is
+made; a Yardlet that ended without deleting its copies points their tabs at the originals and deletes them at its next
+start with the switch on.
 
 ## Devices Yardlet starts
 
@@ -262,7 +297,7 @@ beside it.
 
 - iOS devices have a Home button; Android devices have Back, Home and Recents, in the order of Android's
   navigation bar.
-- The device menu: Switch Device (the list of devices), "Use in This Task" when another task claims the device,
+- The device menu: Switch Device (the list of devices), "Use in This Task" when another task claims the real device,
   Disconnect, "Revoke Agent Access" when the person let agents use the device (below, "Agent tools"), and for a
   device Yardlet started and still on, Shut Down with a note that Yardlet shuts it down when no task uses it.
 
@@ -282,7 +317,7 @@ screen"). A real device is asked for in each task, with what it can reach (below
 | Tool | Arguments | Behavior |
 |---|---|---|
 | `simulator_list` | none | JSON `{devices:[{device, platform, name, os, state, realDevice, attached, usedBy, startedByYardlet, shown}], note}`: every listed device with its id (an iOS simulator's UDID; an Android emulator's adb serial while it runs, else its AVD name; an Android device's adb serial), whether it is a real device, whether this task attached it in any of its tabs, the task whose agent uses it ("this task" or that task's title), whether Yardlet started it and whether a Simulator tab shows it. The note names a platform that cannot be used and why. Read-only |
-| `simulator_attach` | `device` (required: an id or a name) | After the person's approval (below), attaches the device to the task and claims it, starting it when it is off and waiting until it is ready. It goes into the task's Simulator tab that has it already, else the task's empty Simulator tab used last, else a new Simulator tab, so it never takes another device's tab: the task keeps the devices it had, and the result names them. A device that does not start in a new tab is not attached; in a tab the person can see it stays attached, with Turn On. A tab the person closes while the device starts lets go of it, and the call says so. Shows that tab; while the person uses another tab of the panel, the tab joins the strip beside it and the result says so. The result gives the id to pass to the agent's own build and install tools (`xcrun simctl install <id> <app>`; `adb -s <id> install <apk>` on Android), the screen's size in points (dp on Android), and whether Yardlet started the device (it then shuts down when unused), it was on before (another app may be using it), or it is a real device (the person's own accounts may be signed in on it, and Yardlet never turns it on or off). Refused: an unknown id or name, a name several devices share (naming them), a device another task's agent uses (with that task's title), a start past the two devices Yardlet runs for agents; each names the devices that are on and free |
+| `simulator_attach` | `device` (required: an id or a name) | After the person's approval (below), attaches the device to the task and claims it, starting it when it is off and waiting until it is ready. It goes into the task's Simulator tab that has it already, else the task's empty Simulator tab used last, else a new Simulator tab, so it never takes another device's tab: the task keeps the devices it had, and the result names them. A device that does not start in a new tab is not attached; in a tab the person can see it stays attached, with Turn On. A tab the person closes while the device starts lets go of it, and the call says so. Shows that tab; while the person uses another tab of the panel, the tab joins the strip beside it and the result says so. The result gives the id to pass to the agent's own build and install tools (`xcrun simctl install <id> <app>`; `adb -s <id> install <apk>` on Android), the screen's size in points (dp on Android), and whether Yardlet started the device (it then shuts down when unused), it was on before (another app may be using it), or it is a real device (the person's own accounts may be signed in on it, and Yardlet never turns it on or off). A simulator or emulator another task claims attaches the task's copy of it ("Copies for another task"): the result gives the copy's id and says it is a fresh copy that goes when the task lets go of it, and `simulator_list` lists the copy with `copyOf`, the original's name; the other tools take the copy's id or the original's id or name. Refused: an unknown id or name, a name several devices share (naming them), a real device another task's agent uses (with that task's title), a copy Yardlet could not make, a start past the two devices Yardlet runs for agents; each names the devices that are on and free |
 | `simulator_detach` | `device` | Lets go of the device in every tab of the task that attaches it, and of the claim; the tabs stay, listing the devices. The result names the devices the task still has. A device Yardlet started shuts down ten minutes after no task attaches it |
 | `simulator_screenshot` | `format` (png or jpeg), `device` | The screen at its size in points (402×874 for an iPhone 17) or dp (411×914 for a Pixel 6), which the result names. An Android device's is the stream's last frame, scaled to dp |
 | `simulator_snapshot` | `device` | The app in front's accessibility elements as indented text, `- button "General" [id=com.apple.settings.general] [ref=@e6]`: each element's role, label, value and id (an iOS accessibility identifier, an Android resource id). Groups and layouts without a label or value are read through. Elements whose middle is on the screen get a reference for `simulator_tap`; the others say `[off screen]`. The references belong to the task's latest snapshot of that device. Labels, values and ids are scrubbed as the browser tools' results are (docs/AGENT_BROWSER_TOOLS.md, "Keys and tokens") and cut at 200 characters, and the text at 40,000. On iOS the simulator host reads the device's accessibility runtime through macOS's AccessibilityPlatformTranslation (`AXPTranslator`, the way Xcode's Accessibility Inspector and idb read it), at most 600 elements or 15 seconds; on Android, UI Automator (`adb exec-out uiautomator dump /dev/tty`), with bounds turned into dp. UI Automator gives up while an animation keeps running, which the result says |
@@ -343,7 +378,10 @@ automation.
 
 - `TaskSurfaceNavigationProjectionTests` and `SimulatorCenterTests` check the tabs' place in the panel, several
   Simulator tabs each named after its device, the launcher's order and the device menu's items.
-  `SimulatorCenterTests` also checks a task claiming a device in each of its tabs, a closed tab letting go of its own
+  `SimulatorCenterTests` also checks a real device another task claims being watched or taken, a simulator another
+  task claims opening as the task's copy (one for all its tabs, listed for it only, within the agents' limit, deleted
+  with its last tab, at quit and after a Yardlet that ended without deleting it), a task claiming a device in each of
+  its tabs, a closed tab letting go of its own
   device only, a snapshot saved with one Simulator tab keeping its tab and device, and the agent tools: the list each
   task gets, the attached devices only, an attach into a tab of its own, the device a call names or else that of the
   tab used last, approvals and their reach, positions turned into fractions of the screen, the
@@ -353,7 +391,7 @@ automation.
 - `SessionToolRenderingTests` draws the approval cards of a simulator and of a real device under
   `.build/session-tools-qa/`.
 - `SimulatorPanelRenderingTests` draws each state of the tab with fictional devices (the list, each missing
-  part, a saved tab whose Xcode is gone, booting, off, several Simulator tabs in one task, a device handed to the person and once answered, an
+  part, a saved tab whose Xcode is gone, a saved tab whose simulator another task uses, booting, off, several Simulator tabs in one task, a device handed to the person and once answered, an
   unsupported Xcode, a screen that could not be shown) in both appearances under `.build/simulator-panel/`.
 - `SimulatorInstallTests` checks Install without downloading or installing anything: the iOS runtime's size from a
   fixture of Apple's list and a fake `xcodebuild` in a fake Xcode, and the Android SDK from fixture archives laid out
@@ -364,7 +402,8 @@ automation.
   Home and typing, through the helper, and the agent tools' select-all and paste, which puts the device's clipboard
   back. Simulators it did not make are left alone.
 - `AndroidSimulatorTests` check the SDK's lookup and the device list against recorded output (Android devices
-  known by the serial number they report, asked once a connection, never started), the scrcpy
+  known by the serial number they report, asked once a connection, never started), an emulator's copy made in
+  Yardlet's own AVD folder with the original's configuration, started from it without a snapshot and removed, the scrcpy
   protocol, the decoding of a stream across a rotation, the keys' codes and modifiers, UI Automator's dump in dp, and
   that the bundle carries the server file the client checks.
 - `scripts/simulator-qa/run-android-check.sh` runs `AndroidScreenQATests` against an AVD it makes in a folder of its
@@ -398,8 +437,11 @@ automation.
   the approval card in the task and allows it, and the calls attach the device beside the tab the person uses, tap,
   swipe, paste, type keys and press buttons, and are refused out of bounds; a snapshot of Settings gives General's
   row a reference whose tap opens General. Their handoffs show the Simulator tab with its bar, which the fixture
-  captures: one left to time out, then, called again, answered with I'm done, and one declined. Turning the switch off
-  removes the approval.
+  captures: one left to time out, then, called again, answered with I'm done, and one declined. Before the tools, it
+  lets another task claim the simulator and picks it in a new tab of its own task, which gets a copy that boots and
+  shows live while the original's screen stays attached, and closing that tab deletes the copy from Xcode's list; a
+  copy left by a run that ended early is deleted with the run's simulator. Turning the switch off removes the
+  approval.
 
 The performance bench's `simulator-scroll` scene scrolls a long conversation beside a Simulator tab whose
 screen is still and then changes 60 times a second (docs/PERFORMANCE_BENCH.md, "2. Scenes").

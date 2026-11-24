@@ -5766,8 +5766,10 @@ final class AppModel {
         taskWorkspaces.persistNow()
         splits.persistNow()
         await StateFileWriter.shared.flushed()
-        // The devices Yardlet started stop with it, as the harness processes it started do.
+        // The devices Yardlet started stop with it, as the harness processes it started do, and the copies it made
+        // go, their tabs attaching the originals again, which is saved once more.
         await simulators.stopForQuit()
+        taskWorkspaces.persistNow()
         let attachments = handlesBySessionID.compactMap { localSessionID, handle in
             adaptersBySessionID[localSessionID].map { ($0, handle) }
         }

@@ -3,8 +3,8 @@ import Foundation
 /// Starts an emulator, which runs on after the command that started it: the `emulator` program becomes the
 /// emulator's own process (`qemu-system-*`) under the same process ID.
 protocol AndroidEmulatorLaunching: Sendable {
-    /// Starts it without input or output and returns its process ID.
-    func launch(_ executable: URL, arguments: [String]) throws -> Int32
+    /// Starts it without input or output, with these variables over Yardlet's own, and returns its process ID.
+    func launch(_ executable: URL, arguments: [String], environment: [String: String]) throws -> Int32
     /// Whether a process this launcher started has ended; nil for one it did not start.
     func hasEnded(_ processID: Int32) -> Bool?
 }
@@ -16,7 +16,7 @@ final class LiveAndroidEmulatorLauncher: AndroidEmulatorLaunching, @unchecked Se
     private let lock = NSLock()
     private var processes: [Int32: Process] = [:]
 
-    func launch(_ executable: URL, arguments: [String]) throws -> Int32 {
+    func launch(_ executable: URL, arguments: [String], environment: [String: String]) throws -> Int32 {
         let process = Process()
         process.executableURL = executable
         process.arguments = arguments
@@ -24,7 +24,7 @@ final class LiveAndroidEmulatorLauncher: AndroidEmulatorLaunching, @unchecked Se
         process.standardInput = FileHandle.childNullDevice()
         process.standardOutput = FileHandle.childNullDevice()
         process.standardError = FileHandle.childNullDevice()
-        process.environment = RuntimeProcessEnvironment.values(executableURL: executable)
+        process.environment = RuntimeProcessEnvironment.values(executableURL: executable, overrides: environment)
         try NativeProcessTree.run(process)
         let processID = process.processIdentifier
         lock.withLock { processes[processID] = process }
@@ -46,7 +46,15 @@ final class LiveAndroidEmulatorLauncher: AndroidEmulatorLaunching, @unchecked Se
 /// Real devices: the phones and tablets adb lists ready, over USB or `adb connect`, each known by the serial number it
 /// reports (`ro.serialno`), never by adb's serial, which a wireless connection changes. Yardlet never turns one on or
 /// off; one that is unauthorized or offline is not listed, as nothing can be read from it.
+///
+/// Copies (`makeCopy`): an AVD runs once unless every instance of it is read-only, and Android Studio's and Yardlet's
+/// are not, so a task whose AVD another task uses gets a new AVD of the same hardware and system image instead, in
+/// Yardlet's own AVD folder (`copiesHome`), which Android Studio's list never reads. It boots fresh, keeps no
+/// snapshot, and `deleteCopy` removes its folder.
 struct AndroidEmulatorBackend: SimulatorBackend {
+    /// The start of a copy's AVD name, which only Yardlet's AVD folder holds.
+    static let copyPrefix = "yardlet_copy_"
+
     /// The console ports the emulator takes, even ones; each emulator also takes the odd port above for adb.
     static let consolePorts = Array(stride(from: 5554, through: 5682, by: 2))
 
@@ -56,6 +64,8 @@ struct AndroidEmulatorBackend: SimulatorBackend {
     var locateSDK: @Sendable () -> AndroidSDK? = { AndroidSDKLocator.locate() }
     var avdHome: @Sendable () -> URL = { AndroidSDKLocator.avdHome() }
     var readText: @Sendable (URL) -> String? = { try? String(contentsOf: $0, encoding: .utf8) }
+    /// Yardlet's own AVD folder, holding the copies it made; nil makes none.
+    var copiesHome: URL? = nil
     /// The console ports to start an emulator on, the first free one taken.
     var ports = AndroidEmulatorBackend.consolePorts
     /// How long to wait for a started emulator to be ready, and between looks.
@@ -76,11 +86,12 @@ struct AndroidEmulatorBackend: SimulatorBackend {
         async let avds = runner.run(CLICommand(executable: sdk.emulator, arguments: ["-list-avds"], timeout: .seconds(30)))
         let listed = try await adbDevices(sdk)
         let running = try await runningEmulators(sdk, listed: listed)
-        let names = await avds.succeeded ? AndroidDeviceList.avdNames(avds.stdout) : []
+        let copies = copyNames()
+        let names = (await avds.succeeded ? AndroidDeviceList.avdNames(avds.stdout) : []).filter { !copies.contains($0) }
         // An AVD running from another AVD folder is listed too: it can be used where it runs.
-        let all = names + running.keys.filter { !names.contains($0) }.sorted()
-        let home = avdHome()
+        let all = names + copies + running.keys.filter { !names.contains($0) && !copies.contains($0) }.sorted()
         let emulators = all.map { name in
+            let home = home(of: name)
             let entry = AndroidDeviceList.iniValues(readText(home.appending(path: "\(name).ini")) ?? "")
             let config = entry["path"].flatMap {
                 readText(URL(filePath: $0, directoryHint: .isDirectory).appending(path: "config.ini"))
@@ -115,7 +126,10 @@ struct AndroidEmulatorBackend: SimulatorBackend {
         }
         let processID: Int32
         do {
-            processID = try launcher.launch(sdk.emulator, arguments: Self.launchArguments(avd: avd, port: port))
+            let copy = isCopy(avd)
+            processID = try launcher.launch(
+                sdk.emulator, arguments: Self.launchArguments(avd: avd, port: port, isCopy: copy),
+                environment: copy ? ["ANDROID_AVD_HOME": home(of: avd).nativePath] : [:])
         } catch {
             throw SimulatorCommandError(message: "The emulator did not start: \(error.localizedDescription)")
         }
@@ -185,9 +199,92 @@ struct AndroidEmulatorBackend: SimulatorBackend {
 
     /// The emulator's arguments: no window, so the person's screen is never taken; the Mac's GPU, as without a
     /// window the emulator otherwise draws in software; no audio, as the emulator would open the Mac's microphone,
-    /// which asks the person for Yardlet's access, and the panel carries no sound.
-    static func launchArguments(avd: String, port: Int) -> [String] {
+    /// which asks the person for Yardlet's access, and the panel carries no sound. A copy keeps no snapshot: it is
+    /// deleted once its task lets go of it, and a snapshot would take gigabytes meanwhile.
+    static func launchArguments(avd: String, port: Int, isCopy: Bool = false) -> [String] {
         ["-avd", avd, "-no-window", "-gpu", "host", "-no-boot-anim", "-no-audio", "-port", String(port)]
+            + (isCopy ? ["-no-snapshot"] : [])
+    }
+
+    // MARK: - Copies
+
+    /// A new AVD in Yardlet's AVD folder with the original's `config.ini`: the same hardware profile and system
+    /// image, its own name, no SD card image (which only the AVD manager makes), and a data partition the emulator
+    /// makes from the system image on its first boot.
+    func makeCopy(of device: SimulatorDevice, with toolchain: SimulatorToolchain) async throws -> SimulatorDevice {
+        guard device.identity.kind == .androidEmulator, let copiesHome else {
+            throw SimulatorCommandError(message: "Yardlet makes copies of emulators only")
+        }
+        let source = device.identity.value
+        let sourceHome = home(of: source)
+        let entry = AndroidDeviceList.iniValues(readText(sourceHome.appending(path: "\(source).ini")) ?? "")
+        guard let path = entry["path"],
+              let config = readText(URL(filePath: path, directoryHint: .isDirectory).appending(path: "config.ini"))
+        else { throw SimulatorCommandError(message: "\(device.name)'s configuration can't be read") }
+        let name = Self.copyPrefix + UUID().uuidString.prefix(8).lowercased()
+        let folder = copiesHome.appending(path: "\(name).avd", directoryHint: .isDirectory)
+        let displayName = Self.copyName(of: device.name)
+        var lines = config.split(whereSeparator: \.isNewline).map(String.init).filter { line in
+            let key = line.split(separator: "=", maxSplits: 1).first.map { $0.trimmingCharacters(in: .whitespaces) }
+            return !["avd.ini.displayname", "hw.sdCard", "sdcard.size", "sdcard.path", "AvdId", "avd.id", "avd.name",
+                     "disk.dataPartition.path"].contains(key ?? "")
+        }
+        lines += ["avd.ini.displayname=\(displayName)", "AvdId=\(name)", "hw.sdCard=no"]
+        var ini = ["avd.ini.encoding=UTF-8", "path=\(folder.nativePath)"]
+        if let target = entry["target"] { ini.append("target=\(target)") }
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try (lines.joined(separator: "\n") + "\n").write(to: folder.appending(path: "config.ini"), atomically: true,
+                                                            encoding: .utf8)
+            try (ini.joined(separator: "\n") + "\n").write(to: copiesHome.appending(path: "\(name).ini"),
+                                                          atomically: true, encoding: .utf8)
+        } catch {
+            try? FileManager.default.removeItem(at: folder)
+            throw SimulatorCommandError(message: "The copy of \(device.name) can't be written: \(error.localizedDescription)")
+        }
+        return SimulatorDevice(identity: .androidEmulator(avd: name), name: displayName, state: .off,
+                               osName: device.osName, osVersion: device.osVersion)
+    }
+
+    func deleteCopy(_ device: SimulatorDeviceIdentity, with toolchain: SimulatorToolchain) async throws {
+        guard device.kind == .androidEmulator, isCopy(device.value), let copiesHome else { return }
+        let sdk = AndroidSDK(toolchain: toolchain)
+        if let serial = try? await serial(of: device.value, sdk: sdk) {
+            let copy = SimulatorDevice(identity: device, name: device.value, state: .on, osName: "", osVersion: "",
+                                       adbSerial: serial)
+            try await shutDown(copy, with: toolchain)
+        }
+        for item in [copiesHome.appending(path: "\(device.value).avd", directoryHint: .isDirectory),
+                     copiesHome.appending(path: "\(device.value).ini")]
+            where FileManager.default.fileExists(atPath: item.nativePath) {
+            do {
+                try FileManager.default.removeItem(at: item)
+            } catch {
+                throw SimulatorCommandError(message: "The copy can't be removed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// "Pixel 9 (Yardlet)": the name the copy shows.
+    static func copyName(of name: String) -> String { "\(name) (Yardlet)" }
+
+    /// The copies in Yardlet's AVD folder.
+    func copyNames() -> [String] {
+        guard let copiesHome,
+              let items = try? FileManager.default.contentsOfDirectory(atPath: copiesHome.nativePath)
+        else { return [] }
+        return items.filter { $0.hasPrefix(Self.copyPrefix) && $0.hasSuffix(".ini") }
+            .map { String($0.dropLast(4)) }.sorted()
+    }
+
+    private func isCopy(_ avd: String) -> Bool {
+        copiesHome != nil && avd.hasPrefix(Self.copyPrefix)
+    }
+
+    /// The AVD folder an AVD is in: Yardlet's for a copy, else the person's.
+    private func home(of avd: String) -> URL {
+        if isCopy(avd), let copiesHome { return copiesHome }
+        return avdHome()
     }
 
     private static let notTurnedOnOrOff = SimulatorCommandError(message: "Yardlet does not turn real devices on or off")

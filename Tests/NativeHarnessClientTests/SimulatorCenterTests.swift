@@ -71,17 +71,19 @@ final class SimulatorCenterTests: XCTestCase {
         XCTAssertNil(XcodeLocator.choose(selected: nil, installs: []))
     }
 
-    func testOneTaskClaimsADeviceWhileOthersViewItOrTakeIt() async throws {
-        let backend = FakeSimulatorBackend([(phoneA, .on), (phoneB, .on), (phoneC, .off)])
+    func testOneTaskClaimsARealDeviceWhileOthersViewItOrTakeIt() async throws {
+        let backend = FakeSimulatorBackend([(phoneB, .on), (phoneC, .off)])
         let repository = InMemoryTaskWorkspaceRepository()
         let workspaces = TaskWorkspaceStore(repository: repository)
         let (first, second) = (UUID(), UUID())
-        let center = SimulatorCenter(backends: [backend], attachments: TaskWorkspaceSimulatorAttachments(
+        let center = SimulatorCenter(backends: [backend, ConnectedPhoneBackend()],
+                                     attachments: TaskWorkspaceSimulatorAttachments(
             workspaces: workspaces, taskIDs: { [first, second] }))
         await center.setEnabled(true)
-        let a = SimulatorDeviceIdentity.iOSSimulator(udid: phoneA)
+        let a = ConnectedPhoneBackend.phone.identity
+        let phoneA = a.value
 
-        guard case let .attached(attached) = await center.attach("Phone A", to: first, by: .agent) else {
+        guard case let .attached(attached) = await center.attach("Test Phone", to: first, by: .agent) else {
             return XCTFail("The free device was not attached")
         }
         XCTAssertTrue(attached.isClaimed)
@@ -115,7 +117,8 @@ final class SimulatorCenterTests: XCTestCase {
         workspaces.persistNow()
         XCTAssertEqual(repository.snapshots[first]?.simulators?[SimulatorCenter.testTab], a)
         let restartedWorkspaces = TaskWorkspaceStore(repository: repository)
-        let restarted = SimulatorCenter(backends: [backend], attachments: TaskWorkspaceSimulatorAttachments(
+        let restarted = SimulatorCenter(backends: [backend, ConnectedPhoneBackend()],
+                                        attachments: TaskWorkspaceSimulatorAttachments(
             workspaces: restartedWorkspaces, taskIDs: { [first, second] }))
         await restarted.setEnabled(true)
         XCTAssertEqual(restarted.attachment(of: first), a)
@@ -134,6 +137,86 @@ final class SimulatorCenterTests: XCTestCase {
         center.taskRemoved(first)
         XCTAssertNil(center.claims[a])
         XCTAssertEqual(workspaces.simulatorAttachments(of: first), [:])
+    }
+
+    /// A simulator another task uses is never shared: a second task, its agent or the person, gets a copy of it,
+    /// one for the task however many of its tabs ask, which no other task lists and which is deleted with the last
+    /// tab that attaches it, when Yardlet quits and, after a Yardlet that ended without deleting it, at the next start.
+    func testASimulatorAnotherTaskUsesOpensAsTheTasksOwnCopy() async throws {
+        let backend = FakeSimulatorBackend([(phoneA, .on), (phoneB, .off)])
+        let repository = InMemoryTaskWorkspaceRepository()
+        let workspaces = TaskWorkspaceStore(repository: repository)
+        let record = InMemorySimulatorBootRecord()
+        let (first, second, third) = (UUID(), UUID(), UUID())
+        let center = SimulatorCenter(backends: [backend], record: record, attachments: TaskWorkspaceSimulatorAttachments(
+            workspaces: workspaces, taskIDs: { [first, second, third] }))
+        await center.setEnabled(true)
+        let a = SimulatorDeviceIdentity.iOSSimulator(udid: phoneA)
+        let (agentTab, personTab) = (UUID(), UUID())
+
+        guard case .attached = await center.attach(a, to: first, by: .agent) else { return XCTFail("A was not attached") }
+        guard case let .attached(copied) = await center.attach("Phone A", to: second, tab: agentTab, by: .agent) else {
+            return XCTFail("The second task got no copy")
+        }
+        let copy = copied.device.identity
+        XCTAssertNotEqual(copy, a)
+        XCTAssertEqual(copied.copyOf, a)
+        XCTAssertEqual(copied.device.name, "Phone A (Yardlet)")
+        XCTAssertTrue(copied.isClaimed && copied.startedNow && copied.isStartedByYardlet)
+        XCTAssertEqual(center.claims, [a: first, copy: second])
+        XCTAssertEqual(backend.boots, [copy.value])
+        XCTAssertEqual(record.loadCopies().map(\.device), [copy])
+        // The person picking the original in another tab of the same task gets the same copy.
+        guard case let .attached(again) = await center.attach(a, to: second, tab: personTab, by: .person) else {
+            return XCTFail("The person's tab got no copy")
+        }
+        XCTAssertEqual(again.device.identity, copy)
+        XCTAssertEqual(backend.copiesMade.count, 1)
+        XCTAssertEqual(center.tab(attaching: a, in: second, preferring: [personTab]), personTab)
+        // The copy is the second task's own: no other task lists it, and its name names the original.
+        XCTAssertFalse(center.entries(for: third).contains { $0.device.identity == copy })
+        XCTAssertEqual(center.entries(for: second).first { $0.device.identity == copy }?.copyOf, a)
+        XCTAssertEqual(center.devices(named: "Phone A").map(\.identity), [a])
+        XCTAssertEqual(SimulatorDeviceMenu.make(for: second, tab: personTab, in: center, taskTitle: { _ in nil }).items,
+                       [.disconnect, .shutDown, .startedByYardletNote])
+        // A third task's agent gets a copy too, within the limit on what Yardlet starts for agents.
+        guard case .attached = await center.attach(a, to: third, by: .agent) else { return XCTFail("No third copy") }
+        let refused = await center.attach(a, to: UUID(), by: .agent)
+        XCTAssertEqual(refused, .refused(SimulatorRefusal(reason: .startLimit(SimulatorCenter.agentStartLimit),
+                                                          freeRunningDevices: [])))
+
+        // Closing one of its tabs keeps the copy; closing the last deletes it, stopped first.
+        center.detach(second, tab: agentTab)
+        XCTAssertTrue(backend.copiesDeleted.isEmpty)
+        center.detach(second, tab: personTab)
+        try await waitUntil { backend.copiesDeleted == [copy.value] }
+        XCTAssertNil(center.copies[copy])
+        XCTAssertNil(center.claims[copy])
+        XCTAssertFalse(backend.listed.contains(copy.value))
+        XCTAssertNil(center.startedByYardlet[copy])
+
+        // Quitting deletes the copies, and their tabs attach the originals again.
+        guard case let .attached(second2) = await center.attach(a, to: second, tab: agentTab, by: .agent) else {
+            return XCTFail("No new copy")
+        }
+        await center.stopForQuit()
+        XCTAssertTrue(backend.copiesDeleted.contains(second2.device.identity.value))
+        XCTAssertEqual(center.copies, [:])
+        XCTAssertEqual(record.loadCopies(), [])
+        XCTAssertEqual(workspaces.simulatorAttachments(of: second), [agentTab: a])
+        XCTAssertEqual(workspaces.simulatorAttachments(of: third)[SimulatorCenter.testTab], a)
+
+        // A Yardlet that ended without deleting its copy deletes it at its next start, its tab on the original.
+        let orphan = try await backend.makeCopy(of: backend.device(phoneA), with: SimulatorToolchain(directory: "/x"))
+        workspaces.state(for: second).simulators[agentTab] = orphan.identity
+        let restarted = SimulatorCenter(
+            backends: [backend], record: InMemorySimulatorBootRecord(copies: [
+                SimulatorCopyRecordEntry(device: orphan.identity, source: a, madeAt: Date())]),
+            attachments: TaskWorkspaceSimulatorAttachments(workspaces: workspaces, taskIDs: { [first, second, third] }))
+        await restarted.setEnabled(true)
+        XCTAssertTrue(backend.copiesDeleted.contains(orphan.identity.value))
+        XCTAssertEqual(restarted.attachment(of: second, tab: agentTab), a)
+        XCTAssertEqual(restarted.copies, [:])
     }
 
     /// A task attaches a device in each of its Simulator tabs and claims each; a tab that closes lets go of its own
@@ -406,9 +489,14 @@ final class SimulatorCenterTests: XCTestCase {
                       attached.text)
         XCTAssertTrue(attached.text.contains("started outside Yardlet"), attached.text)
         XCTAssertEqual(asked, ["Phone A"])
-        let claimed = await run(SimulatorToolCatalog.attach, ["device": .string(phoneA)], in: second)
-        XCTAssertEqual(claimed.failure?.kind, .refused, "Another task's agent uses it")
-        XCTAssertEqual(asked, ["Phone A"], "No card for a device the attach would refuse")
+        // Another task's agent gets a copy of its own, asked about as the original the person allowed.
+        let copied = await run(SimulatorToolCatalog.attach, ["device": .string(phoneA)], in: second)
+        XCTAssertFalse(copied.isError, copied.text)
+        XCTAssertTrue(copied.text.contains("separate copy of it") && !copied.text.contains("Its id is \(phoneA)"),
+                      copied.text)
+        XCTAssertEqual(asked, ["Phone A"])
+        let listed = await run(SimulatorToolCatalog.list, in: second)
+        XCTAssertTrue(listed.text.contains(#""copyOf":"Phone A""#), listed.text)
         _ = await run(SimulatorToolCatalog.detach)
         let reused = await run(SimulatorToolCatalog.attach, ["device": .string(phoneA)], in: second)
         XCTAssertFalse(reused.isError, reused.text)
@@ -764,8 +852,10 @@ private struct ConnectedPhoneBackend: SimulatorBackend {
 private final class FakeSimulatorBackend: SimulatorBackend, @unchecked Sendable {
     let platform = SimulatorPlatform.iOS
     private let lock = NSLock()
-    private let order: [String]
+    private var order: [String]
     private var states: [String: SimulatorDeviceState]
+    private var copiedUDIDs: [String] = []
+    private var deletedUDIDs: [String] = []
     private var running: [String: SimulatorBootIdentity] = [:]
     private var nextProcess: Int32 = 100
     private var startedUDIDs: [String] = []
@@ -782,6 +872,9 @@ private final class FakeSimulatorBackend: SimulatorBackend, @unchecked Sendable 
     }
 
     var boots: [String] { lock.withLock { startedUDIDs } }
+    var copiesMade: [String] { lock.withLock { copiedUDIDs } }
+    var copiesDeleted: [String] { lock.withLock { deletedUDIDs } }
+    var listed: [String] { lock.withLock { order } }
     var shutDowns: [String] { lock.withLock { stoppedUDIDs } }
 
     func device(_ udid: String) -> SimulatorDevice {
@@ -827,6 +920,29 @@ private final class FakeSimulatorBackend: SimulatorBackend, @unchecked Sendable 
     func bootIdentity(of device: SimulatorDeviceIdentity, with toolchain: SimulatorToolchain) async
         -> SimulatorBootIdentity? {
         bootIdentity(device.value)
+    }
+
+    /// A new simulator, off, named after the original.
+    func makeCopy(of device: SimulatorDevice, with toolchain: SimulatorToolchain) async throws -> SimulatorDevice {
+        let udid = UUID().uuidString
+        lock.withLock {
+            order.append(udid)
+            states[udid] = .off
+            names[udid] = "\(device.name) (Yardlet)"
+            copiedUDIDs.append(udid)
+        }
+        return self.device(udid)
+    }
+
+    func deleteCopy(_ device: SimulatorDeviceIdentity, with toolchain: SimulatorToolchain) async throws {
+        lock.withLock {
+            let udid = device.value
+            if states[udid] == .on { stoppedUDIDs.append(udid) }
+            order.removeAll { $0 == udid }
+            states[udid] = nil
+            running[udid] = nil
+            deletedUDIDs.append(udid)
+        }
     }
 
     /// Called with the lock held, or from init.

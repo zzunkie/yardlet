@@ -69,6 +69,8 @@ struct SimulatorListEntry: Equatable, Sendable {
     var isStartedByYardlet: Bool
     /// A simulator panel shows it.
     var isShown: Bool
+    /// The device it is a copy of, made for this task while another task used that one.
+    var copyOf: SimulatorDeviceIdentity? = nil
 }
 
 /// A task's attachment, as an attach left it.
@@ -82,6 +84,8 @@ struct SimulatorAttachment: Equatable, Sendable {
     var startedNow: Bool
     /// Yardlet started the device, now or before, and stops it once it is unused.
     var isStartedByYardlet: Bool
+    /// The device is a copy of this one, made for the task as another task uses that one.
+    var copyOf: SimulatorDeviceIdentity? = nil
 }
 
 /// Why an attach was refused, with the devices that are on and free to offer instead.
@@ -100,6 +104,8 @@ struct SimulatorRefusal: Error, Equatable, Sendable {
         case startLimit(Int)
         /// The task has no attached device.
         case notAttached
+        /// Another task uses the simulator or emulator, and Yardlet could not make this task a copy of it.
+        case copyFailed(String)
     }
 
     var reason: Reason
@@ -119,13 +125,17 @@ enum SimulatorAttachResult: Equatable, Sendable {
 /// - An attachment is the device a Simulator tab of a task chose: at most one per tab, several per task, kept in the
 ///   task's workspace snapshot under the tab's key.
 /// - A claim is the right of a task's agent to send a device input: one task per device, in memory only. Attaching a
-///   device no task claims claims it; a device another task claims is attached for viewing, or refused to an agent.
-///   Detaching, choosing another device and closing the tab release the tab's attachment, and the task's claim once
-///   no other tab of the task attaches the device; removing the task releases all of them.
+///   device no task claims claims it. A real device another task claims is attached for viewing, or refused to an
+///   agent. A simulator or emulator another task claims is never shared: the task gets a copy of it (`copies`), a new
+///   device of the same model and OS that Yardlet makes, attaches and claims instead, and deletes once no tab
+///   attaches it, when the switch turns off and when Yardlet quits; a tab that attached the copy then attaches its
+///   original. Detaching, choosing another device and closing the tab release the tab's attachment, and the task's
+///   claim once no other tab of the task attaches the device; removing the task releases all of them.
 /// - Yardlet writes down each device it starts with its boot (`SimulatorBootIdentity`) and stops only that boot:
 ///   ten minutes after no task attaches it and no panel shows it, thirty minutes after the last turn, tool call or
 ///   panel of the tasks that attach it, never while one of their turns runs, and when Yardlet quits. A Yardlet that
-///   ended without stopping them stops, at its next start, those still on in the same boot that no task attaches.
+///   ended without stopping them stops, at its next start, those still on in the same boot that no task attaches, and
+///   deletes the copies it made.
 ///
 /// Nothing runs until the feature is turned on (`setEnabled(_:)`): no command, no file. Devices are read when asked
 /// (`refreshDevices()`), never on a timer, and the published state changes only when a device's does.
@@ -147,6 +157,8 @@ final class SimulatorCenter {
     private(set) var startedByYardlet: [SimulatorDeviceIdentity: SimulatorBootRecordEntry] = [:]
     /// Devices Yardlet is starting or stopping.
     private(set) var transitions: [SimulatorDeviceIdentity: SimulatorDeviceState] = [:]
+    /// The copies Yardlet made of simulators and emulators other tasks used, each with its original.
+    private(set) var copies: [SimulatorDeviceIdentity: SimulatorCopyRecordEntry] = [:]
 
     /// Whether a task's turn runs, which keeps the devices it attaches on.
     @ObservationIgnored var isTurnRunning: @MainActor (UUID) -> Bool = { _ in false }
@@ -174,6 +186,15 @@ final class SimulatorCenter {
     /// When the person last pressed, typed or scrolled on each device in a simulator panel. Not published: it
     /// changes with every touch, and only the agent's tools read it, to say a person is using the device.
     @ObservationIgnored private var personInput: [SimulatorDeviceIdentity: Date] = [:]
+    /// Copies being made, by task and original, so two attaches at once make one.
+    @ObservationIgnored private var copying: [CopyKey: Task<Result<SimulatorDevice, SimulatorCommandError>, Never>] = [:]
+    /// Copies being deleted.
+    @ObservationIgnored private var deletingCopies: Set<SimulatorDeviceIdentity> = []
+
+    private struct CopyKey: Hashable {
+        var task: UUID
+        var original: SimulatorDeviceIdentity
+    }
 
     init(backends: [any SimulatorBackend] = [],
          record: any SimulatorBootRecordStore = InMemorySimulatorBootRecord(),
@@ -199,10 +220,12 @@ final class SimulatorCenter {
         isEnabled = enabled
         if enabled {
             await refreshChecks()
+            await recoverCopies()
             await recoverStartedDevices()
             await refreshDevices()
         } else {
             await stopEveryStartedDevice()
+            await deleteEveryCopy()
             idleCheck?.cancel()
             idleCheck = nil
             claims = [:]
@@ -214,11 +237,13 @@ final class SimulatorCenter {
         }
     }
 
-    /// Yardlet quits: every device it started stops, attached or not.
+    /// Yardlet quits: every device it started stops, attached or not, and every copy it made is deleted, the tabs
+    /// that attached one attaching its original.
     func stopForQuit() async {
         idleCheck?.cancel()
         idleCheck = nil
         await stopEveryStartedDevice()
+        await deleteEveryCopy()
     }
 
     // MARK: - Platforms and devices
@@ -296,18 +321,21 @@ final class SimulatorCenter {
         let attached = tab.map { Set(attachment(of: task, tab: $0).map { [$0] } ?? []) }
             ?? Set(attachments(of: task).values)
         let shown = Set(shownPanels.compactMap { $0.value > 0 ? attachments[$0.key.task]?[$0.key.tab] : nil })
-        return devices.map { device in
+        let ownCopies = Set(attachments(of: task).values).filter { copies[$0] != nil }
+        // Another task's copies are that task's own: this one gets its own copy of the original.
+        return devices.filter { copies[$0.identity] == nil || ownCopies.contains($0.identity) }.map { device in
             var device = device
             device.state = state(of: device.identity)
             return SimulatorListEntry(device: device, isAttachedHere: attached.contains(device.identity),
                                       claimingTask: claims[device.identity],
                                       isStartedByYardlet: startedByYardlet[device.identity] != nil,
-                                      isShown: shown.contains(device.identity))
+                                      isShown: shown.contains(device.identity),
+                                      copyOf: copies[device.identity]?.source)
         }
     }
 
     /// The listed devices an ID or a name names: the device of that UDID, adb serial or AVD name, else those of that
-    /// name, the one that is on when only one of them is.
+    /// name, the one that is on when only one of them is. A copy is named by its ID only, so a name names its original.
     func devices(named query: String) -> [SimulatorDevice] {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return [] }
@@ -315,7 +343,9 @@ final class SimulatorCenter {
             $0.identity.value.caseInsensitiveCompare(query) == .orderedSame || $0.adbSerial == query
         }
         if !byID.isEmpty { return byID }
-        let byName = devices.filter { $0.name.caseInsensitiveCompare(query) == .orderedSame }
+        let byName = devices.filter {
+            copies[$0.identity] == nil && $0.name.caseInsensitiveCompare(query) == .orderedSame
+        }
         let running = byName.filter { state(of: $0.identity).isRunning }
         return byName.count > 1 && running.count == 1 ? running : byName
     }
@@ -342,10 +372,10 @@ final class SimulatorCenter {
         Set(attachments(of: task).values).sorted { $0.value < $1.value }
     }
 
-    /// The Simulator tab of the task that attaches the device, the first of `preferring` (the task's open tabs, the
-    /// one used last first) that does, else any; nil when none does.
+    /// The Simulator tab of the task that attaches the device, or the task's copy of it, the first of `preferring` (the
+    /// task's open tabs, the one used last first) that does, else any; nil when none does.
     func tab(attaching identity: SimulatorDeviceIdentity, in task: UUID, preferring: [UUID] = []) -> UUID? {
-        let tabs = attachments(of: task).filter { $0.value == identity }.keys
+        let tabs = attachments(of: task).filter { $0.value == identity || copies[$0.value]?.source == identity }.keys
         return preferring.first(where: tabs.contains) ?? tabs.min { $0.uuidString < $1.uuidString }
     }
 
@@ -379,20 +409,50 @@ final class SimulatorCenter {
             return refusal(.unavailable(platform, checks[platform]?.availability ?? missing))
         }
         guard requester == .agent else { return nil }
+        var target = identity
         if let holder = claims[identity], holder != task {
-            return refusal(.claimedByAnotherTask(holder), excluding: identity)
+            guard !identity.kind.isPhysical else { return refusal(.claimedByAnotherTask(holder), excluding: identity) }
+            // A copy of a simulator or emulator, which needs a start unless the task's copy runs already.
+            let original = original(of: identity)
+            guard let own = ownCopy(of: original, in: task) else {
+                return startedCount >= Self.agentStartLimit
+                    ? refusal(.startLimit(Self.agentStartLimit), excluding: identity) : nil
+            }
+            target = own
         }
-        if !state(of: identity).isRunning, startedCount >= Self.agentStartLimit {
-            return refusal(.startLimit(Self.agentStartLimit), excluding: identity)
+        if !state(of: target).isRunning, startedCount >= Self.agentStartLimit {
+            return refusal(.startLimit(Self.agentStartLimit), excluding: target)
         }
         return nil
     }
 
+    /// The device a copy was made of; any other device is its own.
+    func original(of identity: SimulatorDeviceIdentity) -> SimulatorDeviceIdentity {
+        copies[identity]?.source ?? identity
+    }
+
+    /// Whether attaching the device to the task attaches a copy of it instead: a simulator or emulator, or another
+    /// task's copy of one, whose input another task has.
+    func attachesCopy(_ identity: SimulatorDeviceIdentity, for task: UUID) -> Bool {
+        guard !identity.kind.isPhysical, let holder = claims[identity] else { return false }
+        return holder != task
+    }
+
     /// Attaches the device in one of the task's Simulator tabs, letting go of the one the tab had, claims it when no
     /// task does, and starts it when it is off.
+    ///
+    /// A simulator or emulator another task claims is not shared: the task's copy of it, made now when the task has
+    /// none, is attached instead.
     func attach(_ identity: SimulatorDeviceIdentity, to task: UUID, tab: UUID,
                 by requester: SimulatorRequester) async -> SimulatorAttachResult {
         if let refusal = attachRefusal(identity, to: task, by: requester) { return .refused(refusal) }
+        var identity = identity
+        if attachesCopy(identity, for: task) {
+            switch await copy(of: original(of: identity), for: task) {
+            case let .success(copy): identity = copy
+            case let .failure(error): return .refused(refusal(.copyFailed(error.message), excluding: identity))
+            }
+        }
         guard let device = device(identity), let backend = backends[device.platform],
               let toolchain = toolchain(for: device.platform) else { return .refused(refusal(.unknownDevice(identity.value))) }
         let holder = claims[identity]
@@ -421,7 +481,8 @@ final class SimulatorCenter {
         let claimant = claims[identity]
         return .attached(SimulatorAttachment(device: current, isClaimed: claimant == task,
                                              claimingTask: claimant == task ? nil : claimant, startedNow: startedNow,
-                                             isStartedByYardlet: startedByYardlet[identity] != nil))
+                                             isStartedByYardlet: startedByYardlet[identity] != nil,
+                                             copyOf: copies[identity]?.source))
     }
 
     /// Before an agent's tool acts on one of the task's devices: claims it again when no task does (claims are not kept
@@ -433,8 +494,8 @@ final class SimulatorCenter {
         return await attach(identity, to: task, tab: tab, by: .agent)
     }
 
-    /// "Use in this task": the task's agent takes the input of the device a tab of the task attaches from whichever
-    /// task had it. Returns the task that had it.
+    /// "Use in this task": the task's agent takes the input of the real device a tab of the task attaches from
+    /// whichever task had it. Returns the task that had it. A simulator or emulator gets a copy instead (`attach`).
     @discardableResult
     func claim(for task: UUID, tab: UUID) -> UUID? {
         guard let identity = attachment(of: task, tab: tab) else { return nil }
@@ -551,17 +612,132 @@ final class SimulatorCenter {
                          excluding identity: SimulatorDeviceIdentity? = nil) -> SimulatorRefusal {
         let free = devices.filter {
             $0.identity != identity && state(of: $0.identity) == .on && claims[$0.identity] == nil
+                && copies[$0.identity] == nil
         }
         return SimulatorRefusal(reason: reason, freeRunningDevices: free)
     }
 
-    /// The tab lets go of its device; the task's claim goes once no other tab of the task attaches it.
+    /// The tab lets go of its device; the task's claim goes once no other tab of the task attaches it, and a copy is
+    /// deleted once no tab does.
     private func letGo(of identity: SimulatorDeviceIdentity, by task: UUID, tab: UUID) {
         if attachments[task]?[tab] == identity { attachments[task]?[tab] = nil }
         if attachments[task]?.isEmpty == true { attachments[task] = nil }
         attachmentsRead.insert(task)
         if claims[identity] == task, attachments[task]?.values.contains(identity) != true { claims[identity] = nil }
         noteUse(identity)
+        if copies[identity] != nil, !isAttachedAnywhere(identity) {
+            Task { @MainActor [weak self] in await self?.deleteCopy(identity) }
+        }
+    }
+
+    private func isAttachedAnywhere(_ identity: SimulatorDeviceIdentity) -> Bool {
+        attachments.values.contains { $0.values.contains(identity) }
+    }
+
+    // MARK: - Copies
+
+    /// The copy of the device that one of the task's tabs attaches.
+    private func ownCopy(of original: SimulatorDeviceIdentity, in task: UUID) -> SimulatorDeviceIdentity? {
+        attachments(of: task).values.filter { copies[$0]?.source == original && !deletingCopies.contains($0) }
+            .min { $0.value < $1.value }
+    }
+
+    /// The task's copy of the device, made now when it has none: written down as soon as it is made, so a Yardlet that
+    /// ends before deleting it deletes it at its next start.
+    private func copy(of original: SimulatorDeviceIdentity,
+                      for task: UUID) async -> Result<SimulatorDeviceIdentity, SimulatorCommandError> {
+        if let own = ownCopy(of: original, in: task) { return .success(own) }
+        let key = CopyKey(task: task, original: original)
+        if let making = copying[key] { return await making.value.map(\.identity) }
+        guard let device = device(original), let backend = backends[device.platform],
+              let toolchain = toolchain(for: device.platform) else {
+            return .failure(SimulatorCommandError(message: "\(original.value) is not listed"))
+        }
+        let making = Task { @MainActor [weak self] () -> Result<SimulatorDevice, SimulatorCommandError> in
+            do {
+                let copy = try await backend.makeCopy(of: device, with: toolchain)
+                guard let self else { return .success(copy) }
+                self.copies[copy.identity] = SimulatorCopyRecordEntry(device: copy.identity, source: original,
+                                                                      madeAt: self.clock.now)
+                self.saveCopies()
+                return .success(copy)
+            } catch let error as SimulatorCommandError {
+                return .failure(error)
+            } catch {
+                return .failure(SimulatorCommandError(message: String(describing: error)))
+            }
+        }
+        copying[key] = making
+        let result = await making.value
+        copying[key] = nil
+        guard case let .success(copy) = result else { return result.map(\.identity) }
+        await refreshDevices()
+        // Listed at once, even when the platform's list failed just now.
+        if self.device(copy.identity) == nil { devices = SimulatorDeviceOrder.sorted(devices + [copy]) }
+        return .success(copy.identity)
+    }
+
+    /// Deletes a copy no tab attaches, after stopping it; one a tab took up again meanwhile stays.
+    private func deleteCopy(_ identity: SimulatorDeviceIdentity) async {
+        guard copies[identity] != nil, !deletingCopies.contains(identity), !isAttachedAnywhere(identity),
+              let backend = backends[identity.kind.platform],
+              let toolchain = checks[identity.kind.platform]?.toolchain else { return }
+        deletingCopies.insert(identity)
+        defer { deletingCopies.remove(identity) }
+        if state(of: identity).isRunning { transitions[identity] = .shuttingDown }
+        do {
+            try await backend.deleteCopy(identity, with: toolchain)
+        } catch {
+            // Written down still: deleted at the switch's next turning on, or at the next start.
+            transitions[identity] = nil
+            return
+        }
+        transitions[identity] = nil
+        copies[identity] = nil
+        claims[identity] = nil
+        forget(identity)
+        saveRecord()
+        saveCopies()
+        if isEnabled { await refreshDevices() }
+        rescheduleIdleCheck()
+    }
+
+    /// The switch turns off, or Yardlet quits: every copy is deleted, and the tabs that attached one attach its
+    /// original, which they show again at the next start.
+    private func deleteEveryCopy() async {
+        for (copy, entry) in copies { replaceAttachments(of: copy, with: entry.source) }
+        let deletions = copies.keys.map { identity in
+            Task { @MainActor [weak self] in await self?.deleteCopy(identity) }
+        }
+        for deletion in deletions { await deletion.value }
+    }
+
+    /// At the switch's turning on: the copies an earlier Yardlet made and did not delete, which it ended before it
+    /// could. Their tabs attach their originals again, and they are deleted.
+    private func recoverCopies() async {
+        let entries = record.loadCopies()
+        guard !entries.isEmpty else { return }
+        for entry in entries {
+            copies[entry.device] = entry
+            replaceAttachments(of: entry.device, with: entry.source)
+        }
+        for entry in entries { await deleteCopy(entry.device) }
+    }
+
+    /// Every tab that attaches the copy, saved or read, attaches its original instead, without claiming it.
+    private func replaceAttachments(of copy: SimulatorDeviceIdentity, with original: SimulatorDeviceIdentity) {
+        let tasks = attachmentStore.tasksAttaching(copy).union(attachments.filter { $0.value.values.contains(copy) }.keys)
+        for task in tasks {
+            for (tab, identity) in attachments(of: task) where identity == copy {
+                attachments[task]?[tab] = original
+                attachmentStore.setSimulatorAttachment(original, of: task, tab: tab)
+            }
+        }
+        claims[copy] = nil
+    }
+
+    private func saveCopies() {
+        record.saveCopies(copies.values.sorted { $0.madeAt < $1.madeAt })
     }
 
     private func noteUse(_ identity: SimulatorDeviceIdentity) {

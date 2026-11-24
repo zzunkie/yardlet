@@ -36,9 +36,11 @@ extension EnvironmentValues {
 /// them on this Mac.
 ///
 /// Picking a device attaches it in the tab, claims its input for the task when no task has it, and starts it when it
-/// is off, with progress while it boots. A task can have several Simulator tabs, each with its own device, and several
-/// tasks' tabs can show the same device; the others offer "Use in This Task" to take its input. Closing the tab lets
-/// go of its device; hiding the panel keeps it.
+/// is off, with progress while it boots. A task can have several Simulator tabs, each with its own device. Several
+/// tasks' tabs can show the same real device; the others offer "Use in This Task" to take its input. A simulator or
+/// emulator another task uses is not shared: picking it opens a separate copy for this task, and a tab that still
+/// attaches it (saved before Yardlet quit) offers that copy. Closing the tab lets go of its device; hiding the panel
+/// keeps it.
 struct SimulatorPane: View {
     let task: UUID
     /// The tab's key (`TaskSurfaceNavigationProjection.simulatorTabID`).
@@ -128,6 +130,19 @@ struct SimulatorPane: View {
 
     @ViewBuilder
     private func deviceContent(_ device: SimulatorDevice) -> some View {
+        if center.attachesCopy(device.identity, for: task) {
+            WorkSurfaceEmptyState(title: L10n.string("Another task is using this device."),
+                                  message: L10n.string("A separate copy starts fresh, without this device's apps and data."),
+                                  systemName: "iphone") {
+                Button(L10n.string("Open a Separate Copy")) { pick(device.identity) }.controlSize(.small)
+            }
+        } else {
+            deviceStateContent(device)
+        }
+    }
+
+    @ViewBuilder
+    private func deviceStateContent(_ device: SimulatorDevice) -> some View {
         switch center.state(of: device.identity) {
         case .booting:
             progress(L10n.format("Starting %@…", device.name))
@@ -257,7 +272,7 @@ struct SimulatorPane: View {
         case .revokeAgentAccess:
             Button(L10n.string("Revoke Agent Access")) {
                 guard let attached else { return }
-                services.approvals?.revoke(attached)
+                services.approvals?.revoke(center.original(of: attached))
             }
         case .shutDown:
             Button(L10n.string("Shut Down")) {
