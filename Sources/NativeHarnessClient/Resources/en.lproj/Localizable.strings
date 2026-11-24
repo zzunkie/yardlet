@@ -1210,6 +1210,8 @@
 "Split view: %@" = "Split view: %@";
 "Focused" = "Focused";
 "Close pane" = "Close pane";
+"Maximize pane" = "Maximize pane";
+"Show the focused pane alone for now; the split view keeps its panes." = "Show the focused pane alone for now; the split view keeps its panes.";
 "Split pane right" = "Split pane right";
 "Split pane down" = "Split pane down";
 "Focus pane left" = "Focus pane left";

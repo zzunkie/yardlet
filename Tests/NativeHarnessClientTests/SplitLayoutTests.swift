@@ -170,6 +170,54 @@ final class SplitLayoutTests: XCTestCase {
         XCTAssertEqual(store.selection, .session(a))
     }
 
+    /// Maximize pane shows the focused pane alone without changing the split view's tree, and the split view
+    /// comes back as it was: on Restore, when the focus moves to another pane, and after the panes go down to one.
+    func testMaximizingAPaneKeepsTheSplitTreeAndRestoresIt() throws {
+        let store = SplitStore()
+        store.adopt(selection: nil, knownSessionIDs: [], isFinal: true)
+        let a = UUID(), b = UUID(), c = UUID()
+        store.activate(.session(a))
+        store.split(.right, placing: b)
+        store.split(.down, placing: c)
+        let tree = try XCTUnwrap(store.activeSplit?.root)
+        let focused = try XCTUnwrap(store.activeSplit?.focusedPaneID)
+
+        store.toggleMaximizedPane()
+        XCTAssertEqual(store.maximizedPane?.id, focused)
+        XCTAssertEqual(store.activeSplit?.root, tree, "the split view keeps its panes and their places")
+        store.toggleMaximizedPane()
+        XCTAssertNil(store.maximizedPane)
+
+        store.toggleMaximizedPane()
+        store.moveFocus(.up)
+        XCTAssertNil(store.maximizedPane, "moving the focus shows every pane again")
+        XCTAssertEqual(store.activeSplit?.root, tree)
+        // Coming back to the pane does not maximize it again.
+        store.focusPane(focused)
+        XCTAssertNil(store.maximizedPane, "the pane comes back in the split view, not alone")
+
+        // A pane without the focus maximized from its own header: it takes the focus, then shows alone.
+        let other = try XCTUnwrap(store.activeSplit?.panes.first { $0.id != focused }?.id)
+        store.toggleMaximizedPane()
+        store.focusPane(other)
+        store.toggleMaximizedPane()
+        XCTAssertEqual(store.maximizedPane?.id, other, "the other pane's button maximizes that pane")
+
+        // Another tab and back: the split view shows all its panes.
+        let split = try XCTUnwrap(store.activeSplit?.id)
+        store.newTab()
+        store.selectTab(.split(split))
+        XCTAssertNil(store.maximizedPane, "returning to the tab shows every pane")
+        store.focusPane(focused)
+
+        store.toggleMaximizedPane()
+        store.closePane()
+        store.closePane()
+        XCTAssertNil(store.maximizedPane, "no split view is left to maximize in")
+        store.toggleMaximizedPane()
+        XCTAssertNil(store.maximizedPane)
+    }
+
     func testDroppingTasksCombinesAddsAndKeepsEachTaskInOnePlace() throws {
         let store = SplitStore()
         store.adopt(selection: nil, knownSessionIDs: [], isFinal: true)

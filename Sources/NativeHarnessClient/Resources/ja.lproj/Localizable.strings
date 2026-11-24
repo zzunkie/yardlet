@@ -1164,6 +1164,8 @@
 "Split view: %@" = "分割表示: %@";
 "Focused" = "フォーカス中";
 "Close pane" = "ペインを閉じる";
+"Maximize pane" = "ペインを最大化";
+"Show the focused pane alone for now; the split view keeps its panes." = "フォーカスしたペインだけを一時的に大きく表示します。分割表示のペインはそのまま残ります。";
 "Split pane right" = "ペインを右に分割";
 "Split pane down" = "ペインを下に分割";
 "Focus pane left" = "左のペインにフォーカス";

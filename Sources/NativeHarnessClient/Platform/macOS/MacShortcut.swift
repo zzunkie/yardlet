@@ -7,7 +7,7 @@ enum MacShortcut: Hashable, Identifiable {
     case settings, palette, help, newTask, toggleSidebar, previousTask, nextTask, nextTaskNeedingAttention
     case toggleActivityView, togglePinned, markUnread, archive, toggleSessionRail, toggleSidePanel
     case toggleTerminal, terminalAlternate, openModelMenu, back, forward, newTab, closeTab, closeWindow
-    case reopenClosedTab, nextTab, previousTab, splitRight, splitDown, closePane, focusLeft, focusRight
+    case reopenClosedTab, nextTab, previousTab, splitRight, splitDown, closePane, maximizePane, focusLeft, focusRight
     case focusUp, focusDown, conversationFind, nextResult, previousResult, surfaceChat, surfaceReview
     case surfaceTerminal, surfaceBrowser, zoomIn, zoomOut, actualSize
     case composerSend, composerAlternate, composerNewline, composerEscape, start, acceptSuggestion, complete
@@ -55,7 +55,7 @@ enum MacShortcut: Hashable, Identifiable {
         .nextTaskNeedingAttention, .toggleActivityView, .togglePinned, .markUnread, .archive,
         .toggleSessionRail, .toggleSidePanel, .toggleTerminal, .terminalAlternate, .openModelMenu, .back,
         .forward, .newTab, .closeTab, .closeWindow, .reopenClosedTab, .nextTab, .previousTab, .splitRight,
-        .splitDown, .closePane, .focusLeft, .focusRight, .focusUp, .focusDown, .conversationFind,
+        .splitDown, .closePane, .maximizePane, .focusLeft, .focusRight, .focusUp, .focusDown, .conversationFind,
         .nextResult, .previousResult, .surfaceChat, .surfaceReview, .surfaceTerminal, .surfaceBrowser,
         .actualSize, .zoomIn, .zoomOut,
         .composerSend, .composerAlternate, .composerNewline, .composerEscape, .start, .acceptSuggestion,
@@ -101,6 +101,7 @@ enum MacShortcut: Hashable, Identifiable {
         case .splitRight: .init("Window", "Split pane right", "d", [.command, .shift])
         case .splitDown: .init("Window", "Split pane down", "d", [.command, .shift, .option])
         case .closePane: .init("Window", "Close pane", "w", [.command, .control])
+        case .maximizePane: .init("Window", "Maximize pane", .return, [.command, .control])
         case .focusLeft: .init("Window", "Focus pane left", .leftArrow, [.command, .option])
         case .focusRight: .init("Window", "Focus pane right", .rightArrow, [.command, .option])
         case .focusUp: .init("Window", "Focus pane above", .upArrow, [.command, .option])

@@ -146,6 +146,8 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
     @Environment(\.yardletColorTheme) private var theme
     @Environment(\.yardletInterfaceScale) private var interfaceScale
     @Environment(\.taskKeyboardFocus) private var keyboardFocus
+    @Environment(\.splitPaneEmphasis) private var paneEmphasis
+    @Environment(\.activateSplitPane) private var activatePane
     /// Which Return sends (`ComposerReturnKey`).
     @AppStorage(SendShortcut.preferenceKey) private var sendShortcut = SendShortcut.return
     @State private var commandHighlight = 0
@@ -233,12 +235,23 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
 
             footer
         }
-        .background(ParityTheme.input, in: RoundedRectangle(cornerRadius: ParityTheme.composerCornerRadius, style: .continuous))
+        // In a split pane that does not have the focus the composer lies flat on the pane, so the focused
+        // pane's composer, raised, shows where typing goes.
+        .background {
+            let shape = RoundedRectangle(cornerRadius: ParityTheme.composerCornerRadius, style: .continuous)
+            if paneEmphasis == .unfocused {
+                // Opaque, as the conversation may scroll beneath it.
+                shape.fill(ParityTheme.canvas).overlay(shape.fill(ParityTheme.subtleFill))
+            } else {
+                shape.fill(ParityTheme.input)
+            }
+        }
         .parityElevatedSurface(
             cornerRadius: ParityTheme.composerCornerRadius,
             isFocused: isFocused.wrappedValue,
             accentBorder: isBashMode,
-            showsFocusRing: true
+            showsFocusRing: true,
+            emphasis: paneEmphasis.composer
         )
         .overlay {
             if let receive = externalInput {
@@ -253,6 +266,11 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
         .background { ComposerWindowProbe(context: fieldContext).accessibilityHidden(true) }
         .onChange(of: typedMention?.query, initial: true) { _, query in
             fileMentions.update(query: query, roots: mentionRoots, search: mentionSearch)
+        }
+        // In a split pane without the focus, the composer taking the keyboard brings its pane the focus, so the
+        // raised composer and the clear title stay where typing goes.
+        .onChange(of: isFocused.wrappedValue) { _, focused in
+            if focused { activatePane?() }
         }
         .onChange(of: typedCommandQuery) { old, query in
             commandHighlight = 0

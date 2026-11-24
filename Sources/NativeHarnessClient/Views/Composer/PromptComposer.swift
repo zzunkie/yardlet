@@ -110,6 +110,7 @@ struct PromptComposer: View {
     }
 
     @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @Environment(\.splitPaneEmphasis) private var paneEmphasis
     @State private var openComposerMenu: ComposerMenu?
     @State private var keyboardOpenedComposerMenu: ComposerMenu?
     @State private var requestedMenuReturn: ComposerMenu?
@@ -382,7 +383,7 @@ struct PromptComposer: View {
             .padding(.trailing, 9)
             .padding(.bottom, 9)
         }
-        .shadow(color: .black.opacity(0.05), radius: 10, y: 3)
+        .shadow(color: .black.opacity(paneEmphasis == .unfocused ? 0 : 0.05), radius: 10, y: 3)
         .frame(maxWidth: ParityTheme.contentWidth)
         .padding(.horizontal, 24)
         .padding(.top, 6)

@@ -1210,6 +1210,8 @@
 "Split view: %@" = "분할 화면: %@";
 "Focused" = "포커스됨";
 "Close pane" = "구획 닫기";
+"Maximize pane" = "구획 최대화";
+"Show the focused pane alone for now; the split view keeps its panes." = "포커스된 구획만 잠시 크게 봅니다. 분할 화면의 구획은 그대로 남습니다.";
 "Split pane right" = "구획 오른쪽 분할";
 "Split pane down" = "구획 아래 분할";
 "Focus pane left" = "왼쪽 구획 포커스";

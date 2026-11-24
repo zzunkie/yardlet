@@ -24,6 +24,9 @@ struct YardletSplitCommandSet {
     var togglePinnedSplit: () -> Void = {}
     var archiveSplit: () -> Void = {}
     var focusPane: (PaneFocusDirection) -> Void = { _ in }
+    /// The focused pane is shown alone over its split view for now.
+    var isPaneMaximized = false
+    var toggleMaximizedPane: () -> Void = {}
     var activate: (WindowItem) -> Void = { _ in }
     var tabs = YardletTabCommandSet()
 }
@@ -118,6 +121,11 @@ enum SplitCommandTitle {
         }
     }
 
+    /// Maximize pane, or Restore split view while a pane is shown alone.
+    static func maximize(isMaximized: Bool) -> String {
+        L10n.string(isMaximized ? "Restore split view" : "Maximize pane")
+    }
+
     static func focusSymbol(_ direction: PaneFocusDirection) -> String {
         switch direction {
         case .left: "arrow.left"
@@ -142,6 +150,11 @@ struct YardletWindowLayerCommands: Commands {
             Button(L10n.string("Close pane")) { split?.closePane() }
                 .keyboardShortcut(MacShortcut.closePane.menuBinding)
                 .disabled(!(split?.canClosePane ?? false))
+            Button(SplitCommandTitle.maximize(isMaximized: split?.isPaneMaximized ?? false)) {
+                split?.toggleMaximizedPane()
+            }
+            .keyboardShortcut(MacShortcut.maximizePane.menuBinding)
+            .disabled(!(split?.canClosePane ?? false))
             Button(L10n.string("End split view")) { split?.dissolve() }
                 .disabled(!(split?.canClosePane ?? false))
 

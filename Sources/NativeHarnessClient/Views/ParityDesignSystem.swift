@@ -227,6 +227,10 @@ enum ParityTheme {
 
     static let sidebarWidth: CGFloat = 240
     static let titleBarHeight: CGFloat = 50
+    /// The window's own tab bar, over the item's header once the window has two tabs or more (`WindowTabBar`).
+    static let windowTabBarHeight: CGFloat = 36
+    /// A header below the window's top: the shown task's under the tab bar, and a split pane's.
+    static let areaHeaderHeight: CGFloat = 36
     static let toolbarHeight: CGFloat = 46
     static let paneToolbarHeight: CGFloat = 40
     static let contentWidth: CGFloat = 768
@@ -324,6 +328,13 @@ enum ParityTheme {
             : NSColor.black.withAlphaComponent(0.16)
     })
     static let darkTopHighlight = Color.white.opacity(0.10)
+    /// The shade over a split pane that does not have the focus, so the focused one reads as the window's
+    /// front: a darkening in light appearance and a lightening in dark, under every color preset.
+    static let paneWash = Color(nsColor: NSColor(name: "YardletPaneWash") { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor.white.withAlphaComponent(0.015)
+            : NSColor.black.withAlphaComponent(0.018)
+    })
     static let subtleFill = Color.primary.opacity(0.035)
     static let selectedFill = Color.primary.opacity(0.095)
     static let hoverFill = Color.primary.opacity(0.062)
@@ -931,6 +942,7 @@ private struct ParitySurfaceElevation: ViewModifier {
     var isFocused: Bool = false
     var accentBorder: Bool = false
     var showsFocusRing: Bool = false
+    var emphasis: ParitySurfaceEmphasis = .standard
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var contrast
@@ -939,7 +951,7 @@ private struct ParitySurfaceElevation: ViewModifier {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         content
             .overlay {
-                if colorScheme == .dark, !accentBorder {
+                if colorScheme == .dark, !accentBorder, emphasis != .flat {
                     shape
                         .strokeBorder(
                             LinearGradient(
@@ -965,24 +977,64 @@ private struct ParitySurfaceElevation: ViewModifier {
                         .allowsHitTesting(false)
                 }
             }
-            .shadow(color: colorScheme == .light ? .black.opacity(0.045) : .black.opacity(0.28), radius: 1.5, y: 1)
-            .shadow(color: colorScheme == .light ? .black.opacity(isFocused ? 0.095 : 0.065) : .black.opacity(isFocused ? 0.42 : 0.30),
-                    radius: isFocused ? 14 : 11, y: isFocused ? 5 : 4)
+            .shadow(color: emphasis == .flat ? .clear
+                        : colorScheme == .light ? .black.opacity(0.045) : .black.opacity(0.28), radius: 1.5, y: 1)
+            .shadow(color: emphasis == .flat ? .clear
+                        : colorScheme == .light ? .black.opacity(isRaised ? 0.095 : 0.065) : .black.opacity(isRaised ? 0.42 : 0.30),
+                    radius: isRaised ? 14 : 11, y: isRaised ? 5 : 4)
     }
+
+    private var isRaised: Bool { isFocused || emphasis == .raised }
 
     private var borderColor: Color {
         if accentBorder { return ParityTheme.accent }
-        if contrast == .increased { return Color.primary.opacity(isFocused ? 0.44 : 0.28) }
+        if contrast == .increased { return Color.primary.opacity(isRaised ? 0.44 : 0.28) }
         if showsFocusRing, isFocused { return ParityTheme.accent.opacity(colorScheme == .dark ? 0.38 : 0.32) }
-        return isFocused ? ParityTheme.strongSeparator : ParityTheme.separator
+        return isRaised ? ParityTheme.strongSeparator : ParityTheme.separator
     }
+}
+
+/// How far an elevated surface stands off what is behind it: as usual, raised as though focused (the focused
+/// split pane's composer), or flat, without its shadow (the composers of the panes that do not have the focus).
+enum ParitySurfaceEmphasis {
+    case standard, raised, flat
+}
+
+/// Which split pane a view is in, for the panes to tell the focused one apart (`SplitPaneEmphasis`).
+enum SplitPaneEmphasis {
+    /// The task a tab shows alone.
+    case alone
+    case focused
+    case unfocused
+
+    /// The composer's surface in such a pane.
+    var composer: ParitySurfaceEmphasis {
+        switch self {
+        case .alone: .standard
+        case .focused: .raised
+        case .unfocused: .flat
+        }
+    }
+}
+
+/// Gives a split pane without the focus the focus.
+struct SplitPaneActivation {
+    let activate: () -> Void
+    func callAsFunction() { activate() }
+}
+
+extension EnvironmentValues {
+    /// Set on a split pane's content: whether its pane has the window's focus.
+    @Entry var splitPaneEmphasis: SplitPaneEmphasis = .alone
+    /// Set on a split pane's content while the pane does not have the focus.
+    @Entry var activateSplitPane: SplitPaneActivation? = nil
 }
 
 extension View {
     func parityElevatedSurface(cornerRadius: CGFloat = ParityRadius.surface,
                                isFocused: Bool = false, accentBorder: Bool = false,
-                               showsFocusRing: Bool = false) -> some View {
+                               showsFocusRing: Bool = false, emphasis: ParitySurfaceEmphasis = .standard) -> some View {
         modifier(ParitySurfaceElevation(cornerRadius: cornerRadius, isFocused: isFocused,
-                                        accentBorder: accentBorder, showsFocusRing: showsFocusRing))
+                                        accentBorder: accentBorder, showsFocusRing: showsFocusRing, emphasis: emphasis))
     }
 }

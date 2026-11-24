@@ -22,7 +22,9 @@ extension RemoteHostView {
     @ViewBuilder var calendarDetail: some View {
         if model.needsMailCalendarPermission {
             VStack(spacing: 0) {
-                RemoteTitleBar(context: titleBarContext) { WindowDragRegion().frame(maxWidth: .infinity) }
+                if titleBarContext.tabs == nil {
+                    RemoteTitleBar(context: titleBarContext) { WindowDragRegion().frame(maxWidth: .infinity) }
+                }
                 RemoteConnectionBanner(model: model, directory: directory)
                 RemotePermissionNote(text: permissionWords)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

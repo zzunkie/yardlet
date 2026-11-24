@@ -153,6 +153,7 @@ extension MacShortcut {
         case .toggleActivityView: ["View activity", "Turn off activity view"]
         case .togglePinned: ["Pin task", "Unpin task", "Pin split view", "Unpin split view"]
         case .closeTab: ["Close Tab", "Close"]
+        case .maximizePane: ["Maximize pane", "Restore split view"]
         case .nextTab: ["Show Next Tab", "Next task"]
         case .previousTab: ["Show Previous Tab", "Previous task"]
         case .help, .newTask, .previousTask, .nextTask, .nextTaskNeedingAttention, .markUnread, .archive,

@@ -21,7 +21,7 @@ enum SplitLayoutMetrics {
     static let minimumPaneHeight: CGFloat = 200
     static let handleThickness: CGFloat = 6
     /// A pane's header, which heads its task's area (`SplitPaneHeader`).
-    static let paneHeaderHeight: CGFloat = 36
+    static let paneHeaderHeight: CGFloat = ParityTheme.areaHeaderHeight
 
     /// Whether a pane of `size` has room for two panes along `direction`.
     static func canSplit(_ size: CGSize?, _ direction: SplitDirection) -> Bool {
@@ -248,5 +248,67 @@ private struct PaneDropDelegate: DropDelegate {
     /// The side of the pane nearest the pointer.
     static func edge(for location: CGPoint, in size: CGSize) -> SplitDirection {
         PaneDropEdge.edge(for: location, in: size)
+    }
+}
+
+/// Gives a split pane the focus when a press lands anywhere in it, also on the parts AppKit draws and takes
+/// the press for itself: the composer's text, the conversation's text, a terminal, a browser page. It watches only
+/// while its pane does not have the focus, and lets every press through to what is under it. A press on a sheet or a
+/// popover over the window is the sheet's or the popover's, not the pane's behind it.
+struct PanePressMonitor: NSViewRepresentable {
+    let isActive: Bool
+    let onPress: () -> Void
+
+    func makeNSView(context: Context) -> PanePressMonitorView {
+        let view = PanePressMonitorView()
+        updateNSView(view, context: context)
+        return view
+    }
+
+    func updateNSView(_ view: PanePressMonitorView, context: Context) {
+        view.onPress = onPress
+        view.isActive = isActive
+    }
+
+    static func dismantleNSView(_ view: PanePressMonitorView, coordinator: ()) {
+        view.isActive = false
+    }
+}
+
+final class PanePressMonitorView: NSView {
+    var onPress: () -> Void = {}
+    var isActive = false {
+        didSet { if isActive != oldValue { updateMonitor() } }
+    }
+    private var monitor: Any?
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateMonitor()
+    }
+
+    private func updateMonitor() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+        guard isActive, window != nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            MainActor.assumeIsolated {
+                guard let self, self.contains(event) else { return }
+                // After the press reaches its view, so a control pressed there still acts on it.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.isActive else { return }
+                    self.onPress()
+                }
+            }
+            return event
+        }
+    }
+
+    /// The press is in this pane, in its own window with no sheet over it.
+    private func contains(_ event: NSEvent) -> Bool {
+        guard let window, window.attachedSheet == nil, event.window === window else { return false }
+        return bounds.contains(convert(event.locationInWindow, from: nil))
     }
 }
