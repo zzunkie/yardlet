@@ -968,10 +968,11 @@ Yardlet removes there is the CLI's extra copies of Yardlet's tool schemas, descr
   `app_data_dir`.
 - **What is imported:** rows whose `app_data_dir` is `antigravity-cli` (rows of the app, `antigravity`, are left out
   because the CLI can continue them only after copying them into its own store from the Other tab of `/resume`), with
-  `nesting_depth` 0 (subagent conversations excluded), `step_count` > 0 and a known folder. A conversation an `agy acp`
-  process ran lists every folder that process served, sorted, so its own folder is the one Yardlet opened it in when
-  Yardlet started it: its task's (the local index, listed or archived), or a `run_agent` subagent's, which Yardlet
-  notes as the subagent starts in `~/.yardlet/agent-runs/<host task>/antigravity-conversations.json`
+  `nesting_depth` 0 (subagent conversations excluded), `step_count` > 0, its own file in `conversations/` (`<id>.db`, or
+  `.pb` from older CLIs; earlier CLIs removed all but the newest 500 at startup and left their rows in the index) and a
+  known folder. A conversation an `agy acp` process ran lists every folder that process served, sorted, so its own
+  folder is the one Yardlet opened it in when Yardlet started it: its task's (the local index, listed or archived), or
+  a `run_agent` subagent's, which Yardlet notes as the subagent starts in `~/.yardlet/agent-runs/<host task>/antigravity-conversations.json`
   (`{conversation ID: folder}`, the host task's kept subagents' folder, removed with them when the task is deleted).
   Otherwise it is the one `cache/last_conversations.json` (folder → ID) names for it, else the only one in its
   `workspace_uris`. One whose own folder is not known (another client's, or a subagent's from before Yardlet noted
