@@ -1,6 +1,6 @@
 # Simulators in the side panel
 
-A task's side panel can hold a Simulator tab: an iOS simulator's, an Android emulator's or an Android device's
+A task's side panel can hold Simulator tabs, each with an iOS simulator's, an Android emulator's or an Android device's
 screen, live, which the person uses with the mouse, the trackpad and the keyboard as on the device. Yardlet runs the
 simulators of the person's own Xcode without opening Simulator.app, and the emulators of the person's own Android SDK
 without a window, shows the Android phones and tablets that SDK's adb reaches, and changes nothing in Xcode's or the
@@ -31,15 +31,23 @@ only one that offers it. An agent that changes it through Yardlet's settings too
 
 - On: once the saved tasks are read at launch, Yardlet checks this Mac's Xcode and Android SDK off the main
   thread and lists the devices. Simulator is offered in the side panel's launcher and + menu.
-- Off: Simulator leaves the launcher and the + menu, open Simulator tabs close, the simulator host ends, and
+- Off: Simulator leaves the launcher and the + menu, every open Simulator tab closes, the simulator host ends, and
   the devices Yardlet started shut down, a download stops, and Yardlet asks whether to remove what it installed
   ("Removing what Yardlet installed"). Nothing runs while it is off: no command and no file.
 
 Simulator stands in the launcher and the + menu after Browser: Review, Terminal, Browser, Simulator, Files,
-Side chat in a task with a repository; Files, Side chat, Browser, Simulator, Terminal in one without. The new
-task screen does not offer it, since a device belongs to a task. There is no title bar button or shortcut of its
-own: the side panel's button and ⌥⌘B come back to the tab used last, Simulator included. The tab's title is the
-attached device's name, and its icon a phone.
+Side chat in a task with a repository; Files, Side chat, Browser, Simulator, Terminal in one without. Choosing it
+opens a new Simulator tab each time, as Browser opens a new browser tab, so one task can show an iPhone and an Android
+emulator side by side. The new task screen does not offer it, since a device belongs to a task. There is no title bar
+button or shortcut of its own: the side panel's button and ⌥⌘B come back to the tab used last, a Simulator tab
+included. Each tab's title is the name of the device attached in it, or Simulator while it has none, and its icon its
+platform's phone.
+
+Each tab has its own key (`simulator:<key>` among the panel's tabs), and the task's workspace snapshot keeps the
+device attached in each tab under that key (`TaskWorkspaceSnapshot.simulators`). A snapshot saved while a task had one
+Simulator tab (the tab `simulator` and the field `simulator`) keeps that tab, where it was in the strip, and its device
+under one fixed key, the same at every reading, so the simulator center and the window agree before it is saved
+again.
 
 ## What it needs
 
@@ -153,10 +161,11 @@ emulators; that is Xcode's and Android Studio's part.
 
 A simulator is shared by the whole Mac, so two words keep apart what a task has:
 
-- **Attached:** the device a task chose. At most one per task, kept in the task's workspace snapshot, so it
-  survives a relaunch. The task's Simulator tab shows it.
+- **Attached:** the device a Simulator tab of a task chose. At most one per tab and several per task, kept in the
+  task's workspace snapshot under the tab's key, so it survives a relaunch. That tab shows it.
 - **Claimed:** the right of the task's agent to send the device input. One task per device, kept in memory
-  only; after a relaunch a task claims its device again when it next needs it, unless another task has.
+  only, and a task may claim several devices at once; after a relaunch a task claims its devices again when it next
+  needs them, unless another task has.
 
 The rules:
 
@@ -167,8 +176,10 @@ The rules:
 3. The person's hands come first. Touches and keys from any tab showing a device go in at once, claimed or not.
    Each one notes the time on the device (`SimulatorCenter.lastPersonInput(on:)`), in memory.
 
-Disconnect in the device menu, picking another device, and archiving or deleting the task release both the
-attachment and the claim. Closing the tab or hiding the panel releases neither.
+Disconnect in the device menu, picking another device and closing the tab release the tab's attachment, and the task's
+claim once no other tab of the task attaches the same device; archiving or deleting the task releases every attachment
+and claim it has. Hiding the panel releases neither. A tab counts as shown on its own, so the idle rules below hold on
+to the device of a tab on screen, not to every device of its task.
 
 Yardlet cannot see what moves a device from outside it (Simulator.app, Xcode, other tools); the tab always shows
 what the device draws, so the screen is right, but input from both may mix.
@@ -258,7 +269,7 @@ Rotation, appearance, location, pinching and the Mac's clipboard are not in the 
 
 ## Agent tools
 
-A task's agent sees and drives the device its task attached through ten tools of Yardlet's MCP server
+A task's agent sees and drives the devices its task attached through ten tools of Yardlet's MCP server
 (docs/AGENT_BROWSER_TOOLS.md, "Simulator tools"); Antigravity CLI tasks access the same ten tools through the compact
 `list_simulator_tools` and `call_simulator_tool` gateway (`SimulatorGatewayToolCatalog`) with identical validation and
 approvals. A task gets them when the switch was on as its session started or
@@ -269,16 +280,16 @@ screen"). A real device is asked for in each task, with what it can reach (below
 
 | Tool | Arguments | Behavior |
 |---|---|---|
-| `simulator_list` | none | JSON `{devices:[{device, platform, name, os, state, realDevice, attached, usedBy, startedByYardlet, shown}], note}`: every listed device with its id (an iOS simulator's UDID; an Android emulator's adb serial while it runs, else its AVD name; an Android device's adb serial), whether it is a real device, whether this task attached it, the task whose agent uses it ("this task" or that task's title), whether Yardlet started it and whether a Simulator tab shows it. The note names a platform that cannot be used and why. Read-only |
-| `simulator_attach` | `device` (required: an id or a name) | After the person's approval (below), attaches the device to the task and claims it, starting it when it is off and waiting until it is ready. Shows the task's Simulator tab; while the person uses another tab of the panel, the Simulator tab joins the strip beside it and the result says so. The result gives the id to pass to the agent's own build and install tools (`xcrun simctl install <id> <app>`; `adb -s <id> install <apk>` on Android), the screen's size in points (dp on Android), and whether Yardlet started the device (it then shuts down when unused), it was on before (another app may be using it), or it is a real device (the person's own accounts may be signed in on it, and Yardlet never turns it on or off). Refused: an unknown id or name, a name several devices share (naming them), a device another task's agent uses (with that task's title), a start past the two devices Yardlet runs for agents; each names the devices that are on and free |
-| `simulator_detach` | none | Lets go of the attachment and the claim. A device Yardlet started shuts down ten minutes after no task attaches it |
-| `simulator_screenshot` | `format` (png or jpeg) | The screen at its size in points (402×874 for an iPhone 17) or dp (411×914 for a Pixel 6), which the result names. An Android device's is the stream's last frame, scaled to dp |
-| `simulator_snapshot` | none | The app in front's accessibility elements as indented text, `- button "General" [id=com.apple.settings.general] [ref=@e6]`: each element's role, label, value and id (an iOS accessibility identifier, an Android resource id). Groups and layouts without a label or value are read through. Elements whose middle is on the screen get a reference for `simulator_tap`; the others say `[off screen]`. The references belong to the task's latest snapshot of that device. Labels, values and ids are scrubbed as the browser tools' results are (docs/AGENT_BROWSER_TOOLS.md, "Keys and tokens") and cut at 200 characters, and the text at 40,000. On iOS the simulator host reads the device's accessibility runtime through macOS's AccessibilityPlatformTranslation (`AXPTranslator`, the way Xcode's Accessibility Inspector and idb read it), at most 600 elements or 15 seconds; on Android, UI Automator (`adb exec-out uiautomator dump /dev/tty`), with bounds turned into dp. UI Automator gives up while an animation keeps running, which the result says |
-| `simulator_tap` | `x` and `y`, or `ref`; `duration` | One finger down and up at the point, or at the middle of the element `ref` names in the latest snapshot; held longer than 0.5 seconds, a long press. A reference not in that snapshot is `not_found`, naming `simulator_snapshot` |
-| `simulator_swipe` | `x`, `y`, `x2`, `y2` (required), `duration` (0.3 by default) | One finger moved in even 16 ms steps from the first point to the second. One that starts within 4 points of an edge is the system's edge gesture, which the description says |
-| `simulator_type` | `text` (required), `method` (`paste`, the default, or `keys`) | `paste` reads the text on the device's clipboard (`simctl pbpaste`), puts the text there (`simctl pbcopy`, given a UTF-8 locale, without which it refuses text outside ASCII), presses ⌘V as hardware keys and puts the earlier text back half a second later. Text in any language goes in as written, and iOS asks no "Allow Paste", since the paste comes from the keyboard. `keys` types ASCII as hardware keys, which the device reads with its own keyboard layout, so the text goes in as written only while that layout is English; the result says so. The agent uses `keys` for a field that refuses a paste (the text does not appear) or when the clipboard cannot be used, as the description and the results say. Yardlet does not judge a paste from the screen, which changes anyway (a blinking cursor, search suggestions). Something other than text on the device's clipboard does not come back. On Android, `paste` uses scrcpy's clipboard messages: it asks for the clipboard (`GET_CLIPBOARD`), sets the text with the paste flag (`SET_CLIPBOARD`, which the device acknowledges once it has pressed its paste key), and half a second later sets the earlier text back without pasting; a clipboard with no text, which the device does not answer, is left with empty text. `keys` is scrcpy's text injection (`INJECT_TEXT`): key events the device makes from the text with its own key map |
-| `simulator_press` | `button` or `key`, `count` (1 to 50) | An iPhone's buttons: home, lock, volume_up, volume_down and action (back, recents and power are Android's, refused on an iPhone). An Android emulator's or device's: back, home, recents, power, volume_up and volume_down, as scrcpy key events with Android's key codes (lock and action are refused). Keys: return, delete, tab, escape, space, up, down, left, right and select_all (⌘A on iOS, Control-A on Android) |
-| `simulator_handoff` | `reason` (required), `timeout` (seconds, 600 by default) | Hands the attached device to the person for a step only they can take (signing in with their own account, approving a payment, a CAPTCHA) and waits, as `browser_handoff` hands a tab (docs/AGENT_BROWSER_TOOLS.md, "2. Tools"): after the person's approval, and starting the device again if it shut down, it shows the task's Simulator tab with a bar above the device ("The agent handed this device to you", the reason, "Decline" and "I'm done") and posts a macOS notification ("The agent needs you on iPhone 17", the task's title and the reason), whose click opens the task with the tab. Returns on the person's answer, on a message the person sends the task instead (the result says so and that the message comes with it, as `browser_handoff`'s does), at the end of the turn, when the device is let go (`simulator_detach`, another device picked in the tab, the switch turned off), or at the timeout (within the harness limit `SessionToolPolicy.waitCeiling`, and a day at most). After the timeout the device stays handed over with its bar, and the next call waits on it again with its new reason and gets an answer given meanwhile; the turn's end takes the bar and the notification away. It sends the device nothing, and the agent's other tools still act on it meanwhile. No `text` to wait for: `simulator_snapshot` reads the screen once the call returns; the panel has no Face ID or fingerprint control, so the description does not offer those steps. A phone following the Mac (docs/REMOTE_PROTOCOL.md) does not show the handoff |
+| `simulator_list` | none | JSON `{devices:[{device, platform, name, os, state, realDevice, attached, usedBy, startedByYardlet, shown}], note}`: every listed device with its id (an iOS simulator's UDID; an Android emulator's adb serial while it runs, else its AVD name; an Android device's adb serial), whether it is a real device, whether this task attached it in any of its tabs, the task whose agent uses it ("this task" or that task's title), whether Yardlet started it and whether a Simulator tab shows it. The note names a platform that cannot be used and why. Read-only |
+| `simulator_attach` | `device` (required: an id or a name) | After the person's approval (below), attaches the device to the task and claims it, starting it when it is off and waiting until it is ready. It goes into the task's Simulator tab that has it already, else the task's empty Simulator tab used last, else a new Simulator tab, so it never takes another device's tab: the task keeps the devices it had, and the result names them. Shows that tab; while the person uses another tab of the panel, the tab joins the strip beside it and the result says so. The result gives the id to pass to the agent's own build and install tools (`xcrun simctl install <id> <app>`; `adb -s <id> install <apk>` on Android), the screen's size in points (dp on Android), and whether Yardlet started the device (it then shuts down when unused), it was on before (another app may be using it), or it is a real device (the person's own accounts may be signed in on it, and Yardlet never turns it on or off). Refused: an unknown id or name, a name several devices share (naming them), a device another task's agent uses (with that task's title), a start past the two devices Yardlet runs for agents; each names the devices that are on and free |
+| `simulator_detach` | `device` | Lets go of the device in every tab of the task that attaches it, and of the claim; the tabs stay, listing the devices. The result names the devices the task still has. A device Yardlet started shuts down ten minutes after no task attaches it |
+| `simulator_screenshot` | `format` (png or jpeg), `device` | The screen at its size in points (402×874 for an iPhone 17) or dp (411×914 for a Pixel 6), which the result names. An Android device's is the stream's last frame, scaled to dp |
+| `simulator_snapshot` | `device` | The app in front's accessibility elements as indented text, `- button "General" [id=com.apple.settings.general] [ref=@e6]`: each element's role, label, value and id (an iOS accessibility identifier, an Android resource id). Groups and layouts without a label or value are read through. Elements whose middle is on the screen get a reference for `simulator_tap`; the others say `[off screen]`. The references belong to the task's latest snapshot of that device. Labels, values and ids are scrubbed as the browser tools' results are (docs/AGENT_BROWSER_TOOLS.md, "Keys and tokens") and cut at 200 characters, and the text at 40,000. On iOS the simulator host reads the device's accessibility runtime through macOS's AccessibilityPlatformTranslation (`AXPTranslator`, the way Xcode's Accessibility Inspector and idb read it), at most 600 elements or 15 seconds; on Android, UI Automator (`adb exec-out uiautomator dump /dev/tty`), with bounds turned into dp. UI Automator gives up while an animation keeps running, which the result says |
+| `simulator_tap` | `x` and `y`, or `ref`; `duration`, `device` | One finger down and up at the point, or at the middle of the element `ref` names in the latest snapshot; held longer than 0.5 seconds, a long press. A reference not in that snapshot is `not_found`, naming `simulator_snapshot` |
+| `simulator_swipe` | `x`, `y`, `x2`, `y2` (required), `duration` (0.3 by default), `device` | One finger moved in even 16 ms steps from the first point to the second. One that starts within 4 points of an edge is the system's edge gesture, which the description says |
+| `simulator_type` | `text` (required), `method` (`paste`, the default, or `keys`), `device` | `paste` reads the text on the device's clipboard (`simctl pbpaste`), puts the text there (`simctl pbcopy`, given a UTF-8 locale, without which it refuses text outside ASCII), presses ⌘V as hardware keys and puts the earlier text back half a second later. Text in any language goes in as written, and iOS asks no "Allow Paste", since the paste comes from the keyboard. `keys` types ASCII as hardware keys, which the device reads with its own keyboard layout, so the text goes in as written only while that layout is English; the result says so. The agent uses `keys` for a field that refuses a paste (the text does not appear) or when the clipboard cannot be used, as the description and the results say. Yardlet does not judge a paste from the screen, which changes anyway (a blinking cursor, search suggestions). Something other than text on the device's clipboard does not come back. On Android, `paste` uses scrcpy's clipboard messages: it asks for the clipboard (`GET_CLIPBOARD`), sets the text with the paste flag (`SET_CLIPBOARD`, which the device acknowledges once it has pressed its paste key), and half a second later sets the earlier text back without pasting; a clipboard with no text, which the device does not answer, is left with empty text. `keys` is scrcpy's text injection (`INJECT_TEXT`): key events the device makes from the text with its own key map |
+| `simulator_press` | `button` or `key`, `count` (1 to 50), `device` | An iPhone's buttons: home, lock, volume_up, volume_down and action (back, recents and power are Android's, refused on an iPhone). An Android emulator's or device's: back, home, recents, power, volume_up and volume_down, as scrcpy key events with Android's key codes (lock and action are refused). Keys: return, delete, tab, escape, space, up, down, left, right and select_all (⌘A on iOS, Control-A on Android) |
+| `simulator_handoff` | `reason` (required), `timeout` (seconds, 600 by default), `device` | Hands the attached device to the person for a step only they can take (signing in with their own account, approving a payment, a CAPTCHA) and waits, as `browser_handoff` hands a tab (docs/AGENT_BROWSER_TOOLS.md, "2. Tools"): after the person's approval, and starting the device again if it shut down, it shows the Simulator tab of that device with a bar above it ("The agent handed this device to you", the reason, "Decline" and "I'm done") and posts a macOS notification ("The agent needs you on iPhone 17", the task's title and the reason), whose click opens the task with the tab. Returns on the person's answer, on a message the person sends the task instead (the result says so and that the message comes with it, as `browser_handoff`'s does), at the end of the turn, when the device is let go (`simulator_detach`, another device picked in the tab, the switch turned off), or at the timeout (within the harness limit `SessionToolPolicy.waitCeiling`, and a day at most). After the timeout the device stays handed over with its bar, and the next call waits on it again with its new reason and gets an answer given meanwhile; the turn's end takes the bar and the notification away. It sends the device nothing, and the agent's other tools still act on it meanwhile. No `text` to wait for: `simulator_snapshot` reads the screen once the call returns; the panel has no Face ID or fingerprint control, so the description does not offer those steps. A phone following the Mac (docs/REMOTE_PROTOCOL.md) does not show the handoff |
 
 **The person's approval.** The first time a task's agent uses a device, Yardlet asks on the request card in the
 task ("Let this task use the iPhone 17 simulator?"), whatever the task's permission mode, as the Claude app asks once
@@ -297,11 +308,16 @@ declined when the turn stops, or after ten minutes. Declined, the call is `refus
 
 **What the code holds the agent to.**
 
-- Every tool but `simulator_list` and `simulator_attach` acts on the task's attached device, and no tool attaches one
-  by itself: a device that is on may be the person's own in Simulator.app or another task's QA device. Without an
-  attached device a tool answers `not_found`, naming the devices and `simulator_attach`.
+- Every tool but `simulator_list` and `simulator_attach` acts on a device attached in one of the task's tabs, and no
+  tool attaches one by itself: a device that is on may be the person's own in Simulator.app or another task's QA
+  device. Without an attached device a tool answers `not_found`, naming the devices and `simulator_attach`.
+- The optional `device` (an id or a name, as in `simulator_list`) says which of the task's devices a tool acts on. A
+  device the task did not attach is `not_found`, naming those it did; a name two of them share is
+  `invalid_arguments`. Without `device` a tool acts on the task's only device, or, with several, on that of the task's
+  Simulator tab used last, so a call written for one device works unchanged.
 - Positions are points (dp on Android) of the last screenshot, checked to be on the screen. A reference stands for
-  the middle of its element in the task's latest snapshot of the device; attaching or detaching drops the snapshot.
+  the middle of its element in the task's latest snapshot of that device; attaching or detaching the device drops its
+  snapshot.
   A duration is at most 10 seconds, a count at most 50, a text at most 1,000 characters; past these the call is
   `invalid_arguments` with the range, before anything reaches the device.
 - Before each tool the device is claimed again and, when the idle rules shut it down, started again under the attach's
@@ -324,16 +340,19 @@ automation.
 
 ## Checking it
 
-- `TaskSurfaceNavigationProjectionTests` and `SimulatorCenterTests` check the tab's place in the panel, the
-  launcher's order and the device menu's items. `SimulatorCenterTests` also checks the agent tools: the list each task
-  gets, the attached device only, approvals and their reach, positions turned into fractions of the screen, the
+- `TaskSurfaceNavigationProjectionTests` and `SimulatorCenterTests` check the tabs' place in the panel, several
+  Simulator tabs each named after its device, the launcher's order and the device menu's items.
+  `SimulatorCenterTests` also checks a task claiming a device in each of its tabs, a closed tab letting go of its own
+  device only, a snapshot saved with one Simulator tab keeping its tab and device, and the agent tools: the list each
+  task gets, the attached devices only, an attach into a tab of its own, the device a call names or else that of the
+  tab used last, approvals and their reach, positions turned into fractions of the screen, the
   limits, a snapshot's text and references (scrubbed, groups read through, off-screen elements without one), a tap by
   reference at its element's middle, a handoff answered from the tab's bar, by a message or by the turn's end, and
   timing out to wait again, and that a real device is asked for in each task.
 - `SessionToolRenderingTests` draws the approval cards of a simulator and of a real device under
   `.build/session-tools-qa/`.
 - `SimulatorPanelRenderingTests` draws each state of the tab with fictional devices (the list, each missing
-  part, a saved tab whose Xcode is gone, booting, off, a device handed to the person and once answered, an
+  part, a saved tab whose Xcode is gone, booting, off, several Simulator tabs in one task, a device handed to the person and once answered, an
   unsupported Xcode, a screen that could not be shown) in both appearances under `.build/simulator-panel/`.
 - `SimulatorInstallTests` checks Install without downloading or installing anything: the iOS runtime's size from a
   fixture of Apple's list and a fake `xcodebuild` in a fake Xcode, and the Android SDK from fixture archives laid out

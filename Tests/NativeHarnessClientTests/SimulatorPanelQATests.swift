@@ -33,8 +33,8 @@ final class SimulatorPanelQATests: XCTestCase {
         // The device is on already: the center attaches it without starting it, so it never stops it.
         let center = SimulatorCenter(backends: [MacIOSSimulatorBackend()])
         await center.setEnabled(true)
-        let task = UUID()
-        guard case let .attached(attachment) = await center.attach(device.uuidString, to: task, by: .person) else {
+        let (task, tab) = (UUID(), UUID())
+        guard case let .attached(attachment) = await center.attach(device.uuidString, to: task, tab: tab, by: .person) else {
             return XCTFail("The throwaway device was not attached")
         }
         XCTAssertFalse(attachment.isStartedByYardlet)
@@ -42,7 +42,7 @@ final class SimulatorPanelQATests: XCTestCase {
         screens.executable = helper
         let services = SimulatorPanelServices(center: center, screens: screens, taskTitle: { _ in nil })
         let host = WindowlessRender.Host(
-            SimulatorPane(task: task, workspaceURL: URL(filePath: "/tmp/project"), services: services,
+            SimulatorPane(task: task, tab: tab, workspaceURL: URL(filePath: "/tmp/project"), services: services,
                           attached: attachment.device.identity, onClose: {})
                 .frame(width: size.width, height: size.height),
             size: size, appearance: .light)

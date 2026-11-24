@@ -16,8 +16,8 @@ host's structure is in [BROWSER_HOST](BROWSER_HOST.md).
   from then on get no browser tools. The server still goes in, with the task suggestion tools (`spawn_task` and
   `dismiss_task`, section 2, "Task suggestion tools"), the session tools (section 2, "Session tools"), the settings tools
   (section 2, "Settings tools") and the tools of connected connectors.
-- The same server carries the simulator tools (`simulator_*`), which see and drive the simulator, emulator or Android
-  device a task attached, under the same rule with Settings → General → Simulator (section 2, "Simulator tools").
+- The same server carries the simulator tools (`simulator_*`), which see and drive the simulators, emulators and Android
+  devices a task attached, under the same rule with Settings → General → Simulator (section 2, "Simulator tools").
 
 ## 2. Tools
 
@@ -316,8 +316,8 @@ tool search), and goes into Claude Code's `--allowedTools`.
 
 Ten tools, `simulator_list`, `simulator_attach`, `simulator_detach`, `simulator_screenshot`, `simulator_snapshot`,
 `simulator_tap`, `simulator_swipe`, `simulator_type`, `simulator_press` and `simulator_handoff`, see and drive the iOS
-simulator, Android emulator or Android device the task attached, the one its Simulator tab shows, and hand it to the
-person as `browser_handoff` hands a tab (`SimulatorToolCatalog`). They are listed while Settings → General → Simulator
+simulators, Android emulators and Android devices the task attached, each in a Simulator tab of its own, and hand one to
+the person as `browser_handoff` hands a tab (`SimulatorToolCatalog`). They are listed while Settings → General → Simulator
 was on as the session started or resumed and a platform's devices can be used, and are not in the fallback list built
 into the server. Their arguments, the person's approval of each device, the coordinates and the limits are in
 [SIMULATOR](SIMULATOR.md), "Agent tools".

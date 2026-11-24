@@ -37,6 +37,9 @@ import YardletSimulatorHostProtocol
 @MainActor
 final class SimulatorPanelQA {
     private typealias Navigation = TaskSurfaceNavigationProjection
+    /// The Simulator tab the fixture opens, by its key.
+    private static let simulatorTab = UUID(uuidString: "51A0C0DE-0000-4000-8000-000000000001")!
+    private static var simulatorTabID: String { Navigation.simulatorTabID(simulatorTab) }
     private static var started = false
     private let output: URL
     private let session: UUID
@@ -103,21 +106,21 @@ final class SimulatorPanelQA {
         try? await Task.sleep(for: .seconds(1))
         await capture(window, "launcher")
 
-        workspace.setPanels(Navigation.showing(Navigation.simulatorID, in: workspace.panels))
+        workspace.setPanels(Navigation.showing(Self.simulatorTabID, in: workspace.panels))
         let listed = await waitUntil(.seconds(30)) { center.device(.iOSSimulator(udid: device.uuidString)) != nil }
         check("list: the throwaway device is listed", listed, "\(center.devices.count) devices")
         await capture(window, "list")
 
         // The device picked shows live, through the bundle's helper.
         let identity = SimulatorDeviceIdentity.iOSSimulator(udid: device.uuidString)
-        let attached = await center.attach(identity, to: session, by: .person)
+        let attached = await center.attach(identity, to: session, tab: Self.simulatorTab, by: .person)
         check("attach: the device the person picked is attached and claimed",
               { if case let .attached(attachment) = attached { return attachment.isClaimed && !attachment.isStartedByYardlet }
                 return false }(), "\(attached)")
         let live = await waitUntil(.seconds(30)) { self.screenView(in: window)?.frameDisplay.current != nil }
         check("live: the bundle's helper sends frames into the panel", live,
               "\(String(describing: MacSimulatorScreens.shared.link(of: identity)))")
-        check("tab: the task keeps the device it attached", workspace.simulator == identity, "")
+        check("tab: the task keeps the device it attached", workspace.simulators[Self.simulatorTab] == identity, "")
         MacSimulatorScreens.shared.press(.home, on: identity)
         try? await Task.sleep(for: .seconds(2))
         await capture(window, "live")
@@ -140,12 +143,28 @@ final class SimulatorPanelQA {
             MacSimulatorScreens.shared.press(.home, on: identity)
         }
 
+        // A second Simulator tab, as Simulator in the + menu opens one: it lists the devices while the first keeps its
+        // device; closing it returns to the first, its device live and still claimed.
+        let second = Navigation.simulatorTabID(UUID())
+        workspace.setPanels(Navigation.showing(second, in: workspace.panels))
+        let listing = await waitUntil(.seconds(10)) { self.screenView(in: window) == nil }
+        try? await Task.sleep(for: .seconds(1))
+        await capture(window, "second-tab")
+        check("tabs: a second Simulator tab lists the devices, the first keeps its device",
+              listing && workspace.panels.trailingTabs.filter { Navigation.simulatorKey(inTab: $0) != nil }.count == 2
+                  && workspace.simulators[Self.simulatorTab] == identity, "\(workspace.panels.trailingTabs)")
+        workspace.setPanels(Navigation.closingTrailingTab(second, in: workspace.panels))
+        let back = await waitUntil(.seconds(15)) { self.screenView(in: window)?.frameDisplay.current != nil }
+        check("tabs: closing the second tab returns to the first, its device live and claimed",
+              back && workspace.panels.trailingSurfaceID == Self.simulatorTabID && center.claims[identity] == session,
+              "\(workspace.panels)")
+
         await checkAgentTools(identity, window: window, workspace: workspace)
 
-        // Turned off: the tab closes, the launcher leaves Simulator out, and the helper lets the device go.
+        // Turned off: every Simulator tab closes, the launcher leaves Simulator out, and the helper lets the device go.
         UserDefaults.yardlet.set(false, forKey: SimulatorPreference.key)
         let closed = await waitUntil(.seconds(20)) {
-            !workspace.panels.trailingTabs.contains(Navigation.simulatorID) && !center.isEnabled
+            !workspace.panels.trailingTabs.contains { Navigation.simulatorKey(inTab: $0) != nil } && !center.isEnabled
                 && MacSimulatorScreens.shared.link(of: identity) == nil
         }
         check("switch off: the tab closes, the center stops, the screen is let go", closed,
@@ -165,7 +184,7 @@ final class SimulatorPanelQA {
                                  captures prefix: String = "") async {
         model.simulatorTools.drivers[.iOS] = MacIOSSimulatorDriver(screens: MacSimulatorScreens.shared)
         model.simulatorTools.drivers[.android] = MacAndroidEmulatorDriver(screens: MacSimulatorScreens.shared)
-        model.simulators.detach(session)
+        model.simulators.detach(session, tab: Self.simulatorTab)
         // The person is using another tab: the agent's attach adds the Simulator tab beside it.
         workspace.setPanels(Navigation.showing("files", in: workspace.panels))
         let broker = MacAgentToolService.shared.broker
@@ -202,7 +221,7 @@ final class SimulatorPanelQA {
             }
             if let handoff = handoffs.waiting(for: session) {
                 if handoffShown == nil {
-                    handoffShown = workspace.panels.trailingSurfaceID == Navigation.simulatorID
+                    handoffShown = workspace.panels.trailingSurfaceID == Self.simulatorTabID
                     try? await Task.sleep(for: .seconds(1))
                     await capture(window, prefix + "handoff")
                 }
@@ -219,14 +238,14 @@ final class SimulatorPanelQA {
         check("tools: a simulator's approval holds for every task",
               model.simulatorTools.approvals.isApproved(identity, for: UUID()), "")
         check("tools: the Simulator tab joined beside the tab the person uses",
-              placement.trailingTabs.contains(Navigation.simulatorID) && placement.trailingSurfaceID == "files",
+              placement.trailingTabs.contains(Self.simulatorTabID) && placement.trailingSurfaceID == "files",
               "\(placement)")
         check("tools: a handoff shows the Simulator tab with its bar", handoffShown == true,
               "\(String(describing: handoffShown))")
         check("tools: the fixture answered the handoffs as the person, I'm done then Decline", answers == [.done, .declined],
               "\(answers)")
         check("tools: no handoff waits once the calls ended", handoffs.handoff(for: session) == nil, "")
-        workspace.setPanels(Navigation.showing(Navigation.simulatorID, in: workspace.panels))
+        workspace.setPanels(Navigation.showing(Self.simulatorTabID, in: workspace.panels))
         try? await Task.sleep(for: .seconds(2))
         await capture(window, prefix + "tools")
     }
@@ -287,13 +306,13 @@ final class SimulatorPanelQA {
               "\(String(describing: center.checks[.android]))")
 
         let identity = SimulatorDeviceIdentity.androidEmulator(avd: avd)
-        workspace.setPanels(Navigation.showing(Navigation.simulatorID, in: workspace.panels))
+        workspace.setPanels(Navigation.showing(Self.simulatorTabID, in: workspace.panels))
         let listed = await waitUntil(.seconds(30)) { center.device(identity)?.state == .on }
         check("list: the throwaway emulator is listed, running", listed,
               "\(center.devices.map { "\($0.name) \($0.state)" })")
         await capture(window, "android-list")
 
-        let attached = await center.attach(identity, to: session, by: .person)
+        let attached = await center.attach(identity, to: session, tab: Self.simulatorTab, by: .person)
         check("attach: the emulator the person picked is attached and claimed, not started by Yardlet",
               { if case let .attached(attachment) = attached { return attachment.isClaimed && !attachment.isStartedByYardlet }
                 return false }(), "\(attached)")
@@ -350,7 +369,7 @@ final class SimulatorPanelQA {
             // Turned off: the tab closes, the screen is let go, and the server on the device ends with the stream.
             UserDefaults.yardlet.set(false, forKey: SimulatorPreference.key)
             let closed = await waitUntil(.seconds(20)) {
-                !workspace.panels.trailingTabs.contains(Navigation.simulatorID) && !center.isEnabled
+                !workspace.panels.trailingTabs.contains(Self.simulatorTabID) && !center.isEnabled
                     && screens.link(of: identity) == nil
             }
             var serverEnded = false
@@ -390,11 +409,11 @@ final class SimulatorPanelQA {
         guard listed else { return }
         await capture(window, "android-connected-list")
 
-        let attached = await center.attach(identity, to: session, by: .person)
+        let attached = await center.attach(identity, to: session, tab: Self.simulatorTab, by: .person)
         check("connected: the person attaches it; Yardlet did not start it and offers no Shut Down",
               { if case let .attached(attachment) = attached { return attachment.isClaimed && !attachment.isStartedByYardlet }
                 return false }()
-                && !SimulatorDeviceMenu.make(for: session, in: center, taskTitle: { _ in nil }).items.contains(.shutDown),
+                && !SimulatorDeviceMenu.make(for: session, tab: Self.simulatorTab, in: center, taskTitle: { _ in nil }).items.contains(.shutDown),
               "\(attached)")
         let live = await waitUntil(.seconds(30)) {
             if case .attached = screens.link(of: identity) { return self.screenView(in: window)?.frameDisplay.current != nil }
@@ -484,7 +503,7 @@ final class SimulatorPanelQA {
             return check("device: the center finds the Android SDK", false, "\(String(describing: center.checks[.android]))")
         }
         let adb = AndroidSDK(toolchain: sdk).adb
-        workspace.setPanels(Navigation.showing(Navigation.simulatorID, in: workspace.panels))
+        workspace.setPanels(Navigation.showing(Self.simulatorTabID, in: workspace.panels))
         var device: SimulatorDevice?
         for _ in 0..<30 where device == nil {
             await center.refreshDevices()
@@ -499,11 +518,11 @@ final class SimulatorPanelQA {
 
         // Settings first, so the tab shows nothing else of the phone's.
         await adbCommand(adb, serial, ["shell", "am start -W -a android.settings.SETTINGS"])
-        let attached = await center.attach(identity, to: session, by: .person)
+        let attached = await center.attach(identity, to: session, tab: Self.simulatorTab, by: .person)
         check("device: the person attaches it; Yardlet did not start it and offers no Shut Down",
               { if case let .attached(attachment) = attached { return attachment.isClaimed && !attachment.isStartedByYardlet }
                 return false }()
-                && !SimulatorDeviceMenu.make(for: session, in: center, taskTitle: { _ in nil }).items.contains(.shutDown),
+                && !SimulatorDeviceMenu.make(for: session, tab: Self.simulatorTab, in: center, taskTitle: { _ in nil }).items.contains(.shutDown),
               "\(attached)")
         let live = await waitUntil(.seconds(30)) {
             if case .attached = screens.link(of: identity) { return self.screenView(in: window)?.frameDisplay.current != nil }
@@ -566,7 +585,7 @@ final class SimulatorPanelQA {
         try? await Task.sleep(for: .seconds(1))
         UserDefaults.yardlet.set(false, forKey: SimulatorPreference.key)
         let closed = await waitUntil(.seconds(20)) {
-            !workspace.panels.trailingTabs.contains(Navigation.simulatorID) && !center.isEnabled && screens.link(of: identity) == nil
+            !workspace.panels.trailingTabs.contains(Self.simulatorTabID) && !center.isEnabled && screens.link(of: identity) == nil
         }
         var serverEnded = false
         for _ in 0..<100 where !serverEnded {
@@ -629,7 +648,7 @@ final class SimulatorPanelQA {
         model.startSimulators(defaults: .yardlet)
         let center = model.simulators
         let installs = model.simulatorInstalls
-        workspace.setPanels(Navigation.showing(Navigation.simulatorID, in: workspace.panels))
+        workspace.setPanels(Navigation.showing(Self.simulatorTabID, in: workspace.panels))
         let missing = await waitUntil(.seconds(60)) { center.checks[.android]?.availability == .sdkMissing }
         check("install: the tab finds no Android SDK", missing, "\(String(describing: center.checks[.android]))")
         guard missing, let check = center.checks[.android] else { return }
@@ -704,7 +723,7 @@ final class SimulatorPanelQA {
 
         // The AVD starts without a window and shows live in the tab.
         let booting = ContinuousClock.now
-        let attached = await center.attach(identity, to: session, by: .person)
+        let attached = await center.attach(identity, to: session, tab: Self.simulatorTab, by: .person)
         let on = center.state(of: identity) == .on
         notes["bootSeconds"] = .number(booting.duration(to: .now) / .seconds(1))
         self.check("install: the AVD boots (sys.boot_completed), started by Yardlet",

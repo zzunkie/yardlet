@@ -6,7 +6,8 @@ import XCTest
 /// The Simulator tab drawn in an unshown window with fictional devices: the launcher with Simulator after Browser,
 /// the device list with a device another task uses, iOS simulators and Android emulators listed together, what each
 /// missing part says, both platforms missing at once, a saved tab whose Xcode or Android SDK is gone, a device
-/// booting, a device that is off, and a screen the helper could not show, for each reason. Drawn under
+/// booting, a device that is off, several Simulator tabs in one task, and a screen the helper could not show, for each
+/// reason. Drawn under
 /// `.build/simulator-panel/`, in both appearances. The live screen is checked against a real simulator in
 /// `SimulatorPanelQATests`.
 @MainActor
@@ -108,6 +109,14 @@ final class SimulatorPanelRenderingTests: XCTestCase {
             try await draw(center, task: task, attached: phone, titles: titles, appearance: appearance,
                            to: directory.appending(path: name("off")),
                            showing: [L10n.string("This simulator is off."), L10n.string("Turn On")])
+
+            // Several Simulator tabs in one task, an Android emulator's beside an iPhone's: each named after the device
+            // attached in it, with its platform's symbol, and the shown one's device below.
+            let pixel = try XCTUnwrap(both.devices.first { $0.platform == .android })
+            try await draw(both, task: task, attached: phone, others: [pixel.identity, nil], titles: titles,
+                           appearance: appearance, to: directory.appending(path: name("several-tabs")),
+                           showing: [pixel.name, "iPhone 17", L10n.string("Simulator"),
+                                     L10n.string("This simulator is off.")])
 
             // A device the agent handed to the person (simulator_handoff): its reason, with Decline and I'm done, in a
             // bar above the device, as browser_handoff's over a tab.
@@ -254,7 +263,9 @@ final class SimulatorPanelRenderingTests: XCTestCase {
 
     /// The Simulator tab of `task` in the side panel's strip, beside a Files tab, with the + menu's choices, drawn
     /// once it reads out every text of `showing`.
+    /// - Parameter others: the devices of the task's other Simulator tabs, which stand before it in the strip.
     private func draw(_ center: SimulatorCenter, task: UUID, attached: SimulatorDeviceIdentity?,
+                      others: [SimulatorDeviceIdentity?] = [],
                       titles: [UUID: String], appearance: WindowlessRender.Appearance,
                       helper: String = "/nonexistent/Yardlet Simulator Host",
                       installs: SimulatorInstalls? = nil, handoffs: SimulatorHandoffs? = nil, to url: URL,
@@ -263,14 +274,16 @@ final class SimulatorPanelRenderingTests: XCTestCase {
         screens.executable = URL(filePath: helper)
         let services = SimulatorPanelServices(center: center, screens: screens, taskTitle: { titles[$0] },
                                               installs: installs, handoffs: handoffs)
-        let tab = TaskSidePanelTabs.simulatorTab(device: attached.flatMap(center.device))
+        let key = SimulatorCenter.testTab
+        let tab = TaskSidePanelTabs.simulatorTab(key, device: attached.flatMap(center.device))
+        let otherTabs = others.map { TaskSidePanelTabs.simulatorTab(UUID(), device: $0.flatMap(center.device)) }
         let files = try XCTUnwrap(TaskSidePanelTabs.tab("files", selectedFilePath: nil))
         let navigation = WorkSurfaceNavigation(
-            tabs: [files, tab], activeID: tab.id,
+            tabs: [files] + otherTabs + [tab], activeID: tab.id,
             choices: TaskSidePanelTabs.choices(canOpenSideChat: true, offersSimulator: true),
             select: { _ in }, open: { _ in }, closeTab: { _ in }, closePanel: {})
         let host = WindowlessRender.Host(
-            SimulatorPane(task: task, workspaceURL: URL(filePath: "/tmp/project"), services: services,
+            SimulatorPane(task: task, tab: key, workspaceURL: URL(filePath: "/tmp/project"), services: services,
                           attached: attached, onClose: {})
                 .environment(\.workSurfaceNavigation, navigation)
                 .environment(\.colorScheme, appearance.colorScheme)

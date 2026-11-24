@@ -118,19 +118,35 @@ struct TaskWorkspaceSnapshot: Codable, Equatable {
     /// Which panel rules the saved panels were kept under: nil before the side panel opened to its
     /// launcher, when a panel that had never been used opened to Review on its own.
     var panelsRevision: Int?
-    /// The device the task attached for its simulator panel and its agent's simulator tools.
+    /// The devices the task attached, each in the Simulator tab of its key (`simulatorTabID`), for the tab and the
+    /// agent's simulator tools.
+    var simulators: [UUID: SimulatorDeviceIdentity]?
+    /// The one device a task attached before it could have several Simulator tabs; read once into `simulators`
+    /// (`migrated`), never written.
     var simulator: SimulatorDeviceIdentity?
 
     static let launcherPanelsRevision = 2
+    /// The key a task's one Simulator tab, saved before a task could have several, takes: the same for every task and
+    /// every reading, so a snapshot read again before it is saved, as the simulator center reads one, gives the same.
+    static let legacySimulatorTabKey = UUID(uuidString: "53494D55-4C41-5400-8000-000000000001")!
     /// Each browser tab is a side-panel tab of its own (2026-10-23).
     static let browserTabsPanelsRevision = 3
 
     /// A snapshot saved before the launcher, whose only side-panel tab is Review, most likely got it
     /// from the panel opening there on its own: it opens to the launcher instead, once. A snapshot
     /// saved before each browser tab was a side-panel tab turns its one Browser tab, which held the
-    /// task's browser tabs, into a side-panel tab per browser tab, once.
+    /// task's browser tabs, into a side-panel tab per browser tab, once. A snapshot saved while a task had one
+    /// Simulator tab keeps it, and the device attached in it, under `legacySimulatorTabKey`.
     var migrated: Self {
         var next = self
+        let legacySimulator = TaskSurfaceNavigationProjection.simulatorChoiceID
+        if next.simulator != nil || next.panels.trailingTabs.contains(legacySimulator)
+            || next.panels.trailingSurfaceID == legacySimulator {
+            let key = Self.legacySimulatorTabKey
+            next.panels = TaskSurfaceNavigationProjection.replacingLegacySimulatorTab(in: next.panels, key: key)
+            if let device = next.simulator, next.simulators?[key] == nil { next.simulators = [key: device] }
+            next.simulator = nil
+        }
         if panelsRevision == nil, panels.trailingTabs == ["diff"] {
             next.panels.trailingTabs = []
             next.panels.recentTrailingTabs = []
@@ -219,8 +235,9 @@ final class TaskWorkspaceState {
     var sideChatSessionID: UUID?
     /// The session rail's folds for this task, kept with its panels.
     var railFolds: SessionRailFolds { didSet { if railFolds != oldValue { onChange?() } } }
-    /// The device the task attached (`SimulatorCenter`), kept with its panels.
-    var simulator: SimulatorDeviceIdentity? { didSet { if simulator != oldValue { onChange?() } } }
+    /// The devices the task attached (`SimulatorCenter`), by the key of the Simulator tab each is attached in, kept
+    /// with its panels. A tab's device may outlive its tab only where no panel showed the task as an agent attached it.
+    var simulators: [UUID: SimulatorDeviceIdentity] { didSet { if simulators != oldValue { onChange?() } } }
     /// What the side panel shows over its tabs for an agent or a background task. Never saved.
     private(set) var panelDetail: TaskPanelDetail?
     /// Whether a Git repository holds one of the task's folders, read as its side panel shows, which
@@ -272,6 +289,8 @@ final class TaskWorkspaceState {
     @ObservationIgnored var onChange: (() -> Void)?
     /// The side chat's tab closed, which ends the side chat.
     @ObservationIgnored var onSideChatClose: (() -> Void)?
+    /// Simulator tabs closed, by their keys: each lets go of the device attached in it.
+    @ObservationIgnored var onSimulatorTabsClose: (([UUID]) -> Void)?
 
     /// - Parameter sizes: the window's shared sizes; a task shown on its own (a render, a test)
     ///   keeps the sizes its snapshot carries.
@@ -281,7 +300,7 @@ final class TaskWorkspaceState {
         isExpanded = snapshot.layout.isExpanded
         review = snapshot.review ?? .init()
         railFolds = snapshot.railFolds ?? SessionRailFolds()
-        simulator = snapshot.simulator
+        simulators = snapshot.simulators ?? [:]
         files = WorkspaceFilesState(preferences: snapshot.files ?? .init())
         browserTabs = TaskBrowserTabs(pages: snapshot.browser?.pages ?? [], visited: snapshot.browser?.visited ?? [])
         // A Claude subtask is not restored; a saved panel list opens the tab it leads to.
@@ -485,7 +504,7 @@ final class TaskWorkspaceState {
                                      browser: browserTabs.preferences(order: browserKeys, latest: latestBrowser),
                                      railFolds: railFolds.isDefault ? nil : railFolds,
                                      panelsRevision: TaskWorkspaceSnapshot.browserTabsPanelsRevision,
-                                     simulator: simulator)
+                                     simulators: simulators.isEmpty ? nil : simulators)
     }
 
     func setPanels(_ value: TaskSurfaceNavigationProjection.PanelState) {
@@ -497,9 +516,17 @@ final class TaskWorkspaceState {
             terminalHandoff = nil
         }
         let closesSideChat = panels.trailingTabs.contains("sideChat") && !value.trailingTabs.contains("sideChat")
+        let closedSimulators = TaskSurfaceNavigationProjection.simulatorKeys(in: panels)
+            .filter { !value.trailingTabs.contains(TaskSurfaceNavigationProjection.simulatorTabID($0)) }
         panels = value
         onChange?()
         if closesSideChat { onSideChatClose?() }
+        // A Simulator tab that closes lets go of its device: the app's simulator center first, which knows who
+        // claims it, then the workspace, for a state no center follows.
+        if !closedSimulators.isEmpty {
+            onSimulatorTabsClose?(closedSimulators)
+            for key in closedSimulators where simulators[key] != nil { simulators[key] = nil }
+        }
         // The browser tab the panel shows is the one in front, which the agent's tools use when they
         // name no tab; the browser is told before anything else can ask it.
         frontShownBrowserTab()
@@ -639,6 +666,8 @@ final class TaskWorkspaceStore {
     private var sizesDirty = false
     /// A task's side chat tab closed (`TaskWorkspaceState.onSideChatClose`).
     var onSideChatClose: ((UUID) -> Void)?
+    /// A task's Simulator tabs closed, by their keys (`TaskWorkspaceState.onSimulatorTabsClose`).
+    var onSimulatorTabsClose: ((UUID, [UUID]) -> Void)?
 
     /// The browser engine the tasks' browser tabs open in, when this build has one; a store without it
     /// keeps each browser tab as a WebKit preview page.
@@ -673,6 +702,7 @@ final class TaskWorkspaceStore {
         if saved == nil, initialSurface != nil { state.terminalStartRequested = state.panels.showsTerminal }
         state.onChange = { [weak self] in self?.changed(id) }
         state.onSideChatClose = { [weak self] in self?.onSideChatClose?(id) }
+        state.onSimulatorTabsClose = { [weak self] keys in self?.onSimulatorTabsClose?(id, keys) }
         states[id] = state
         if let client = browserClient() { state.attachBrowser(client, session: id) }
         // A snapshot moved to newer panel rules is saved under them at once: its new browser tab keys
@@ -694,10 +724,11 @@ final class TaskWorkspaceStore {
 
     var mail: TaskWorkspaceState { state(for: Self.mailID) }
 
-    /// The device the task attached, read from its saved workspace when it is not loaded, so asking loads nothing.
-    func simulatorAttachment(of id: UUID) -> SimulatorDeviceIdentity? {
-        if let state = states[id] { return state.simulator }
-        return repository.load(for: id)?.simulator
+    /// The devices the task attached, by their Simulator tabs' keys, read from its saved workspace when it is not
+    /// loaded, so asking loads nothing.
+    func simulatorAttachments(of id: UUID) -> [UUID: SimulatorDeviceIdentity] {
+        if let state = states[id] { return state.simulators }
+        return repository.load(for: id)?.migrated.simulators ?? [:]
     }
 
     /// The task started from the new-task screen takes over its panels and its terminal's shell.
