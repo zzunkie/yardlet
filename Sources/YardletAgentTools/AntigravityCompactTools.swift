@@ -27,7 +27,7 @@ package enum AntigravityCompactTools {
     private static let toolDescriptions: [String: String] = [
         // Browser tools
         AgentToolCatalog.navigate: "Load a URL in the browser tab and wait for load (http/https/file/data/about; bare host gets https). Returns URL and title.",
-        AgentToolCatalog.snapshot: "Read page accessibility tree (frames included) with element refs like @e3 for actions and landmarks/forms/dialogs/tables. Refs stay valid until element disappears or page navigates. Pass ref to read only that subtree. Never show refs to the user; name elements by label or text.",
+        AgentToolCatalog.snapshot: "Read page accessibility tree (frames included) with element refs like @e3 for actions and landmarks/forms/dialogs/tables. Refs stay valid until element disappears or page navigates. Pass ref for a subtree or query to return only matching lines with ancestor refs. Never show refs to the user; name elements by label or text.",
         AgentToolCatalog.click: "Click an element by snapshot ref or visible-page CSS pixel coordinates (x, y). Trusted mouse input.",
         AgentToolCatalog.type: "Replace text of an editable element via trusted keyboard input; optionally press Enter.",
         AgentToolCatalog.pressKey: "Press a key or shortcut in the focused element (e.g. Enter, Escape, Tab, Shift+Tab, Meta+a).",
@@ -110,7 +110,9 @@ package enum AntigravityCompactTools {
 
     private static let toolPropertyDescriptions: [String: [String: String]] = [
         AgentToolCatalog.snapshot: [
-            "ref": "Read only this element subtree (ref from latest browser_snapshot). Omit for full page."
+            "ref": "Read only this element subtree (ref from latest browser_snapshot). Omit for full page.",
+            "query": "Case-insensitive text filter returning matching lines, ancestor containers and nearby lines with @eN refs.",
+            "maxResults": "Max matches when query is set (default 20, max 100)."
         ],
         AgentToolCatalog.click: [
             "x": "CSS pixel X when no ref.",

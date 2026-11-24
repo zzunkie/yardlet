@@ -60,6 +60,10 @@ struct BrowserAgentScrub: Sendable {
     @concurrent func result(_ result: AgentToolResult) async -> AgentToolResult {
         result.mappingText { VaultSetupText.scrub(self($0)) }
     }
+
+    @concurrent func outputText(_ text: String) async -> String {
+        VaultSetupText.scrub(self(text))
+    }
 }
 
 /// Runs the browser tools against a task's pages over CDP. Input is trusted CDP input
@@ -843,10 +847,45 @@ final class BrowserAgentTools {
     }
 
     /// The page as an accessibility tree, or with a reference the part of it under that element. A part reads the whole
-    /// page as well, so the references everywhere are what a full snapshot gives.
+    /// page as well, so the references everywhere are what a full snapshot gives. When `query` is set, the tree is
+    /// rendered past the normal display cap and filtered to matching lines with their ancestor containers and nearby
+    /// context, keeping the same `@eN` references.
     private func snapshot(_ arguments: JSONValue, on page: BrowserAgentPage) async throws -> AgentToolResult {
         let scopeRef = arguments["ref"]?.stringValue.map { $0.hasPrefix("@") ? $0 : "@" + $0 }
         let scope = try scopeRef.map { try element($0, on: page, scopingSnapshot: true) }
+        let query: String?
+        if let rawQueryValue = arguments["query"], rawQueryValue != .null {
+            guard case let .string(rawQuery) = rawQueryValue else {
+                throw BrowserAgentToolError("browser_snapshot query must be a string.",
+                                            AgentToolFailure(.invalidArguments, retry: .withChanges))
+            }
+            let trimmed = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                throw BrowserAgentToolError("browser_snapshot query cannot be empty.",
+                                            AgentToolFailure(.invalidArguments, retry: .withChanges))
+            }
+            query = trimmed
+        } else {
+            query = nil
+        }
+        let maxResults: Int
+        if let rawMax = arguments["maxResults"], rawMax != .null {
+            let parsed: Int?
+            switch rawMax {
+            case let .integer(n): parsed = Int(exactly: n)
+            case let .number(d) where d.isFinite && d >= 1 && d <= Double(BrowserAgentSnapshot.maximumSearchResults):
+                parsed = Int(exactly: d)
+            default: parsed = nil
+            }
+            guard let parsed, (1...BrowserAgentSnapshot.maximumSearchResults).contains(parsed) else {
+                throw BrowserAgentToolError(
+                    "browser_snapshot maxResults must be an integer between 1 and \(BrowserAgentSnapshot.maximumSearchResults).",
+                    AgentToolFailure(.invalidArguments, retry: .withChanges))
+            }
+            maxResults = parsed
+        } else {
+            maxResults = BrowserAgentSnapshot.defaultMaxSearchResults
+        }
         let mark = page.cdp.eventLog.count
         // On a filled page, the fields that took a value and the text that shows one are left out by node: a code split
         // over one-digit boxes, or a part of a value, matches no scrubbed string.
@@ -857,14 +896,19 @@ final class BrowserAgentTools {
         }
         let read = try await readFrames(page)
         let names = page.referenceNames()
-        let scrub: (String) -> String = { [unowned self] in self.scrub($0) }
-        var rendered = BrowserAgentSnapshot.render(frames: read.frames, hidden: hidden, scrub: scrub, named: names.named,
+        let scrub: (String) -> String = { [unowned self] in VaultSetupText.scrub(self.scrub($0)) }
+        let renderLimit = query == nil ? 60_000 : BrowserAgentSnapshot.searchMaximumRenderLength
+        var rendered = BrowserAgentSnapshot.render(frames: read.frames, maximumLength: renderLimit,
+                                                   hidden: hidden, scrub: scrub, named: names.named,
                                                    nextNumber: names.next)
         var part = ""
+        var sourceTruncated = rendered.isTruncated
+        var isEmptyContent = rendered.isEmpty
         if let scope, let scopeRef {
             var named = names.named
             for (name, element) in rendered.refs { named[element] = name }
-            guard let scoped = BrowserAgentSnapshot.render(scope, in: read.frames, hidden: hidden, scrub: scrub, named: named,
+            guard let scoped = BrowserAgentSnapshot.render(scope, in: read.frames, maximumLength: renderLimit,
+                                                           hidden: hidden, scrub: scrub, named: named,
                                                            nextNumber: rendered.nextNumber) else {
                 throw BrowserAgentToolError("\(scopeRef) has left the page since snapshot \(page.snapshotCount) of tab "
                     + "\(page.tabID). browser_snapshot without ref gives the current references.",
@@ -872,8 +916,25 @@ final class BrowserAgentTools {
             }
             rendered.refs.merge(scoped.refs) { _, inPart in inPart }
             rendered.nextNumber = scoped.nextNumber
-            rendered.text = scoped.text.isEmpty ? "(\(scopeRef) shows nothing readable now: it may be hidden or empty.)" : scoped.text
+            sourceTruncated = scoped.isTruncated
+            isEmptyContent = scoped.isEmpty
+            rendered.text = scoped.isEmpty ? "(\(scopeRef) shows nothing readable now: it may be hidden or empty.)" : scoped.text
             part = ", only \(scopeRef) and what it holds"
+        }
+        if let query {
+            // Scrub the assembled tree (including joined text and setup URIs) before matching so
+            // query cannot act as an oracle against redacted credentials or vault values.
+            let searchable = isEmptyContent ? "" : await resultScrub.outputText(rendered.text)
+            let filtered = BrowserAgentSnapshot.filter(searchable, query: query, maxResults: maxResults,
+                                                       sourceTruncated: sourceTruncated)
+            rendered.text = filtered.text
+            if filtered.matchCount == 0 {
+                part += ", no matches for \"\(query)\""
+            } else if filtered.shownCount < filtered.matchCount {
+                part += ", showing \(filtered.shownCount) of \(filtered.matchCount) matches for \"\(query)\""
+            } else {
+                part += ", \(filtered.matchCount) \(filtered.matchCount == 1 ? "match" : "matches") for \"\(query)\""
+            }
         }
         page.replaceRefs(rendered.refs, frameOwners: read.owners, eventMark: mark, nextNumber: rendered.nextNumber)
         let location = try await pageLocation(page)

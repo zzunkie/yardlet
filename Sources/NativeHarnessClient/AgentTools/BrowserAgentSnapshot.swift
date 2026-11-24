@@ -38,6 +38,145 @@ enum BrowserAgentSnapshot {
         var isTruncated: Bool
         /// The number the next element without a reference gets.
         var nextNumber = 1
+        /// True when the page or scoped element rendered no readable lines.
+        var isEmpty = false
+    }
+
+    struct SearchResult: Equatable {
+        var text: String
+        var matchCount: Int
+        var shownCount: Int
+        var isTruncated: Bool
+    }
+
+    /// Upper bound for building the full tree before filtering by `query`, so matches past the
+    /// 60,000-character display cap are still reached while pathological trees stay bounded.
+    static let searchMaximumRenderLength = 2_000_000
+    static let defaultMaxSearchResults = 20
+    static let maximumSearchResults = 100
+
+    /// Filters a rendered snapshot tree to lines matching `query` (case-insensitive substring),
+    /// keeping each match's ancestor container chain and immediate neighboring lines so container
+    /// `@eN` refs and local context stay intact. Skipped spans are marked with `…`.
+    static func filter(_ renderedText: String, query: String, maxResults: Int = defaultMaxSearchResults,
+                       maximumLength: Int = 60_000, sourceTruncated: Bool = false) -> SearchResult {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else {
+            return SearchResult(text: renderedText, matchCount: 0, shownCount: 0, isTruncated: sourceTruncated)
+        }
+        guard !renderedText.isEmpty else {
+            let note = sourceTruncated
+                ? "(No elements matched \"\(needle)\" in the searched portion; the page exceeded the snapshot search limit.)"
+                : "(No elements matched \"\(needle)\".)"
+            return SearchResult(text: note, matchCount: 0, shownCount: 0, isTruncated: sourceTruncated)
+        }
+        let limit = min(max(maxResults, 1), maximumSearchResults)
+        let lines = renderedText.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let depths = lines.map(lineDepth)
+
+        // Track ancestor indices for every line from its indentation level.
+        var ancestorsByLine: [[Int]] = Array(repeating: [], count: lines.count)
+        var stack: [(depth: Int, index: Int)] = []
+        var matchingIndices: [Int] = []
+        var contentLineCount = 0
+        for (index, line) in lines.enumerated() {
+            if line.hasPrefix("… ") { continue }
+            contentLineCount = index + 1
+            let depth = depths[index]
+            while let last = stack.last, last.depth >= depth { stack.removeLast() }
+            ancestorsByLine[index] = stack.map(\.index)
+            stack.append((depth, index))
+            if line.range(of: needle, options: .caseInsensitive) != nil {
+                matchingIndices.append(index)
+            }
+        }
+
+        guard !matchingIndices.isEmpty else {
+            let note = sourceTruncated
+                ? "(No elements matched \"\(needle)\" in the searched portion; the page exceeded the snapshot search limit.)"
+                : "(No elements matched \"\(needle)\".)"
+            return SearchResult(text: note, matchCount: 0, shownCount: 0, isTruncated: sourceTruncated)
+        }
+
+        let keptMatches = Array(matchingIndices.prefix(limit))
+        let keptMatchSet = Set(keptMatches)
+        var included = Set<Int>()
+        for match in keptMatches {
+            included.insert(match)
+            for ancestor in ancestorsByLine[match] { included.insert(ancestor) }
+            // Include immediate neighboring lines in the same container for local label/value context.
+            let matchParent = ancestorsByLine[match].last
+            for neighbor in [match - 1, match + 1] where lines.indices.contains(neighbor) && !lines[neighbor].hasPrefix("… ") {
+                if ancestorsByLine[neighbor].last == matchParent || ancestorsByLine[neighbor].contains(match) {
+                    included.insert(neighbor)
+                    for ancestor in ancestorsByLine[neighbor] { included.insert(ancestor) }
+                }
+            }
+        }
+
+        let sortedIncluded = included.sorted()
+        var output: [String] = []
+        var length = 0
+        var outputTruncated = false
+        var lastEmitted: Int?
+        var emittedMatches = 0
+
+        for index in sortedIncluded {
+            let marker: String?
+            if let previous = lastEmitted, index > previous + 1 {
+                let gapDepth = min(depths[previous], depths[index])
+                marker = String(repeating: "  ", count: gapDepth) + "…"
+            } else if lastEmitted == nil, index > 0 {
+                marker = "…"
+            } else {
+                marker = nil
+            }
+            let line = lines[index]
+            var needed = 0
+            if let marker { needed += marker.count + (output.isEmpty ? 0 : 1) }
+            needed += line.count + (output.isEmpty && marker == nil ? 0 : 1)
+            guard length + needed <= maximumLength else {
+                outputTruncated = true
+                break
+            }
+            if let marker { output.append(marker) }
+            output.append(line)
+            length += needed
+            lastEmitted = index
+            if keptMatchSet.contains(index) { emittedMatches += 1 }
+        }
+        if !outputTruncated, let last = lastEmitted, last < contentLineCount - 1 {
+            let marker = "…"
+            let needed = marker.count + (output.isEmpty ? 0 : 1)
+            if length + needed <= maximumLength {
+                output.append(marker)
+            }
+        }
+
+        var text = output.joined(separator: "\n")
+        if outputTruncated {
+            let prefix = text.isEmpty ? "" : "\n"
+            if emittedMatches < matchingIndices.count {
+                text += "\(prefix)… Showing \(emittedMatches) of \(matchingIndices.count) matches (output cap reached). Narrow query or lower maxResults."
+            } else {
+                text += "\(prefix)… Matching results reached the output cap; narrow query or lower maxResults."
+            }
+        } else if matchingIndices.count > emittedMatches {
+            text += "\n… Showing first \(emittedMatches) of \(matchingIndices.count) matches. Narrow query or raise maxResults."
+        }
+        if sourceTruncated {
+            text += "\n… The page exceeded the snapshot search limit; later elements were not searched."
+        }
+        return SearchResult(text: text, matchCount: matchingIndices.count,
+                            shownCount: emittedMatches, isTruncated: outputTruncated || sourceTruncated)
+    }
+
+    private static func lineDepth(_ line: String) -> Int {
+        var spaces = 0
+        for byte in line.utf8 {
+            if byte == 0x20 { spaces += 1 } else { break }
+        }
+        return spaces / 2
     }
 
     /// Containers that only group other content; without a name they add a level and no meaning.
@@ -78,7 +217,7 @@ enum BrowserAgentSnapshot {
     static func render(frames: [Frame], maximumLength: Int = 60_000, hidden: Set<Ref> = [],
                        scrub: @escaping (String) -> String = { $0 }, named: [Ref: String] = [:], nextNumber: Int = 1) -> Result {
         guard let main = frames.first else {
-            return Result(text: "(The page has no readable content.)", refs: [:], isTruncated: false, nextNumber: nextNumber)
+            return Result(text: "(The page has no readable content.)", refs: [:], isTruncated: false, nextNumber: nextNumber, isEmpty: true)
         }
         var renderer = Renderer(frames: frames, maximumLength: maximumLength,
                                 pageOrigin: rootURL(of: main.nodes).flatMap(origin(of:)), hidden: hidden, scrub: scrub)
@@ -90,8 +229,9 @@ enum BrowserAgentSnapshot {
             text += "\n… The page is larger than one snapshot; the rest was left out. Scroll, or read a part "
                 + "with browser_evaluate."
         }
-        return Result(text: text.isEmpty ? "(The page has no readable content.)" : text,
-                      refs: renderer.refs, isTruncated: renderer.isTruncated, nextNumber: renderer.nextNumber)
+        let isEmpty = text.isEmpty
+        return Result(text: isEmpty ? "(The page has no readable content.)" : text,
+                      refs: renderer.refs, isTruncated: renderer.isTruncated, nextNumber: renderer.nextNumber, isEmpty: isEmpty)
     }
 
     /// One element and what it holds, its frames included, read as `render(frames:)` reads them and starting at no
@@ -114,7 +254,8 @@ enum BrowserAgentSnapshot {
             text += "\n… This part is larger than one snapshot; the rest was left out. Read a smaller part by the reference "
                 + "of an element in it, or with browser_evaluate."
         }
-        return Result(text: text, refs: renderer.refs, isTruncated: renderer.isTruncated, nextNumber: renderer.nextNumber)
+        return Result(text: text, refs: renderer.refs, isTruncated: renderer.isTruncated, nextNumber: renderer.nextNumber,
+                      isEmpty: text.isEmpty)
     }
 
     private struct Renderer {
@@ -235,8 +376,9 @@ enum BrowserAgentSnapshot {
                 guard let value = properties[property], value != "false" else { continue }
                 line += value == "true" ? " [\(property)]" : " [\(property)=\(value)]"
             }
-            if role == "link", let url = properties["url"], !url.isEmpty {
-                line += " [url=\(String(shortened(url).prefix(200)))]"
+            if role == "link", let rawURL = properties["url"], !rawURL.isEmpty {
+                let url = scrub(shortened(rawURL))
+                line += " [url=\(String(url.prefix(200)))]"
             }
             let held = backend.flatMap { frames[frame].children[$0] }
             if let held, let url = rootURL(of: frames[held].nodes), let origin = BrowserAgentSnapshot.origin(of: url),

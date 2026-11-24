@@ -166,11 +166,21 @@ package enum AgentToolCatalog {
                 + "ref. An element keeps its reference in later snapshots while it stays on the page; a "
                 + "reference whose element is not in the latest snapshot stops working, and a navigation of the page "
                 + "ends them all. With ref, it returns only that element and what it holds, with the same references, "
-                + "which costs far fewer tokens than the whole page when only that part matters or changed. References "
+                + "which costs far fewer tokens than the whole page when only that part matters or changed. With query, "
+                + "it searches the full page (or ref subtree) across frames and past the length cap and returns only "
+                + "matching lines with their ancestor containers and nearby lines, using the same references. References "
                 + "are the tools' own and the user never sees them: name an element to the user by its label or text.",
             inputSchema: pageInput([
                 "ref": property("string", "Read only this element and what it holds: a reference from the tab's latest "
-                    + "browser_snapshot, such as @e3. Omit to read the whole page.")
+                    + "browser_snapshot, such as @e3. Omit to read the whole page."),
+                "query": property("string", "Case-insensitive text to find in the accessibility tree; returns only "
+                    + "matching lines, their ancestor containers and nearby context, with the same @eN references."),
+                "maxResults": .object([
+                    "type": .string("integer"),
+                    "minimum": .integer(1),
+                    "maximum": .integer(100),
+                    "description": .string("Maximum matching lines to include when query is set. Defaults to 20, at most 100.")
+                ])
             ]),
             readOnly: true
         ),
