@@ -260,7 +260,8 @@ enum ACPReplayTranscript {
         finishRequest()
         finishAnswer()
         builder.apply(.turnCompleted)
-        return builder.entries
+        // The replay carries no times: the entries were made as it was read, not when anyone wrote them.
+        return builder.entries.map { $0.made(at: TranscriptEntry.unrecordedTime) }
     }
 }
 

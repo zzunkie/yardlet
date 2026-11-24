@@ -501,7 +501,8 @@ enum TranscriptConversationProjection {
         _ kind: ConversationItemKind,
         _ phase: ConversationItemPhase
     ) -> ConversationItem {
-        ConversationItem(id: entry.id.uuidString, kind: kind, phase: phase, source: .transcript(entry))
+        ConversationItem(id: entry.id.uuidString, kind: kind, phase: phase, source: .transcript(entry),
+                         recordedAt: entry.recordedAt)
     }
 
     private static func phase(of state: TranscriptActivityState) -> ConversationItemPhase {

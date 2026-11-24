@@ -33,6 +33,8 @@ final class SentUserMessageTests: XCTestCase {
         var thread = decoder.thread(from: .object(["id": .string("thread-qa")]))!
         thread.turns = [decoder.turn(from: .object([
             "id": .string("turn-1"), "status": .string("completed"), "durationMs": .integer(18_000),
+            "startedAt": .integer(Int64(Date().timeIntervalSince1970) - 60),
+            "completedAt": .integer(Int64(Date().timeIntervalSince1970) - 42),
             "items": .array([
                 .object(["id": .string("u1"), "type": .string("userMessage"), "content": .array([
                     .object(["type": .string("text"), "text": .string("Find out why the title bar is cut off on this screen")]),
@@ -55,8 +57,11 @@ final class SentUserMessageTests: XCTestCase {
         try render(timeline, height: 420, name: "codex-request-at-rest")
 
         let entries = [
-            TranscriptEntry(content: .user(text: "", images: [TranscriptImageAttachment(url: inline)])),
-            TranscriptEntry(content: .assistant(text: "That is the settings sheet.", isStreaming: false)),
+            // An earlier day's messages name their day beside their actions.
+            TranscriptEntry(createdAt: Date().addingTimeInterval(-86_400 * 2),
+                            content: .user(text: "", images: [TranscriptImageAttachment(url: inline)])),
+            TranscriptEntry(createdAt: Date().addingTimeInterval(-86_400 * 2 + 30),
+                            content: .assistant(text: "That is the settings sheet.", isStreaming: false)),
             // The latest request carries the side menu, which stays level with its bubble.
             TranscriptEntry(content: .user(
                 text: "Why is the toolbar clipped here?\n@/Users/me/yardlet/Sources/AppTitleBar.swift",
@@ -115,6 +120,26 @@ final class SentUserMessageTests: XCTestCase {
 
 extension SentUserMessageTests {
     // MARK: - Model
+
+    /// A message's time reads as its time alone today, with its day before, and with its year in an
+    /// earlier year, in the person's language.
+    func testAMessagesTimeNamesItsDayOnlyWhenItIsNotToday() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Seoul"))
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 11, day: 24, hour: 21)))
+        let today = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 11, day: 24, hour: 19, minute: 1)))
+        let earlier = try XCTUnwrap(calendar.date(byAdding: .day, value: -3, to: today))
+        let lastYear = try XCTUnwrap(calendar.date(byAdding: .year, value: -1, to: today))
+        func text(_ date: Date, _ locale: String) -> String {
+            ConversationMessageTime.text(for: date, now: now, calendar: calendar, locale: Locale(identifier: locale))
+                .replacingOccurrences(of: "\u{202F}", with: " ")
+        }
+        XCTAssertEqual(text(today, "en_US"), "7:01 PM")
+        XCTAssertEqual(text(earlier, "en_US"), "Nov 21 at 7:01 PM")
+        XCTAssertEqual(text(lastYear, "en_US"), "Nov 24, 2025 at 7:01 PM")
+        XCTAssertEqual(text(today, "ko_KR"), "오후 7:01")
+        XCTAssertEqual(text(earlier, "ko_KR"), "11월 21일 오후 7:01")
+    }
 
     func testARequestWithoutImagesKeepsTheSavedShapeOlderSnapshotsUse() throws {
         let saved = #"[{"id":"7C0B1E5E-6A3B-4F55-9C3E-3E3A8C1D2F10","createdAt":0,"content":{"user":{"text":"hello"}}}]"#

@@ -357,6 +357,16 @@ enum CodexConversationProjection {
         let workIDs = Set(layout.workItems.map(\.id)).union(steered)
         let arranged = ConversationTurnLayout.arrange(project(turn.items.filter { workIDs.contains($0.id) }))
         result.answers = arranged.answers
+        // A saved turn's items carry no times of their own: its request was sent when the turn
+        // started, and the answer that closes it was written when it ended.
+        if let startedAt = turn.startedAt, let first = result.prompt.indices.first,
+           result.prompt[first].recordedAt == nil, case .userMessage = result.prompt[first].kind {
+            result.prompt[first].recordedAt = startedAt
+        }
+        if let completedAt = turn.completedAt, let last = result.answers.indices.last,
+           result.answers[last].recordedAt == nil, case .answer = result.answers[last].kind {
+            result.answers[last].recordedAt = completedAt
+        }
         // A waiting request is pinned under the turn; an answered one joins the work after the item
         // it asked about, or at the end of the work (D1).
         let requests = requests(in: turn, approvals: input.approvals, serverRequests: input.serverRequests)
@@ -688,9 +698,12 @@ enum CodexConversationProjection {
         if let attachments = prompt?.attachments, !attachments.isEmpty { result.promptAttachments = attachments }
         result.taskMessage = taskMessage
         switch item.content {
+        case .userMessage:
+            result.recordedAt = item.startedAt ?? item.completedAt
         case let .agentMessage(message):
             result.isSentWhileWorking = message.isDeliveredAsync
             result.isUnmarkedAnswer = message.isUnmarkedAnswer
+            result.recordedAt = item.completedAt ?? item.startedAt
         case let .mcpToolCall(tool):
             result.wasRefusedForApproval = tool.wasRefusedForApproval
         default:

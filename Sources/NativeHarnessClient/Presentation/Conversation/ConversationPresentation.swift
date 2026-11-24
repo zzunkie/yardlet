@@ -271,6 +271,10 @@ struct ConversationItem: Identifiable, Equatable, Sendable {
     /// folding the turn, and suppresses the "Commentary" badge so a streaming final answer does not
     /// flicker when the turn ends.
     var hidesCommentaryLabel: Bool = false
+    /// When the provider's record says the message was sent or written, which its actions row shows.
+    /// Nil when no record names a time for it (a conversation an ACP agent replayed, a Codex item of
+    /// a saved turn other than its request and its last message), so no time is made up.
+    var recordedAt: Date? = nil
 
     /// A message the person wrote, rather than one another task sent (`taskMessage`), a background
     /// command's notice (`backgroundTaskNotice`) or a schedule's prompt (`scheduledTaskMessage`).

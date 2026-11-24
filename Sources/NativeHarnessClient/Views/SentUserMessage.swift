@@ -11,6 +11,8 @@ struct SentUserMessage<Bubble: View, Accessory: View>: View {
     let copyText: String
     let images: [TranscriptImageAttachment]
     let minimumLeadingSpace: CGFloat
+    /// When it was sent, shown with its actions; nil when no record says.
+    var recordedAt: Date? = nil
     @ViewBuilder let bubble: () -> Bubble
     @ViewBuilder let accessory: () -> Accessory
 
@@ -25,8 +27,11 @@ struct SentUserMessage<Bubble: View, Accessory: View>: View {
                 }
                 bubble()
                     .alignmentGuide(.sentBubbleCenter) { $0[VerticalAlignment.center] }
-                if !copyText.isEmpty || !messageActions.isEmpty {
+                if !copyText.isEmpty || !messageActions.isEmpty || recordedAt != nil {
                     HStack(spacing: 12) {
+                        if let recordedAt {
+                            ConversationMessageTime(date: recordedAt)
+                        }
                         if !copyText.isEmpty {
                             HoverRevealedAction {
                                 TranscriptCopyButton(title: L10n.string("Copy message")) { copyText }
@@ -54,10 +59,10 @@ struct SentUserMessage<Bubble: View, Accessory: View>: View {
 extension SentUserMessage where Accessory == EmptyView {
     init(
         copyText: String, images: [TranscriptImageAttachment], minimumLeadingSpace: CGFloat,
-        @ViewBuilder bubble: @escaping () -> Bubble
+        recordedAt: Date? = nil, @ViewBuilder bubble: @escaping () -> Bubble
     ) {
         self.init(
-            copyText: copyText, images: images, minimumLeadingSpace: minimumLeadingSpace,
+            copyText: copyText, images: images, minimumLeadingSpace: minimumLeadingSpace, recordedAt: recordedAt,
             bubble: bubble, accessory: { EmptyView() }
         )
     }

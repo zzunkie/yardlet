@@ -717,7 +717,7 @@ struct ClaudeSubagentTranscriptReader: Sendable {
             let sourceID = value["uuid"]?.stringValue ?? ""
             // Claude writes millisecond timestamps, which the default formatter options reject.
             let timestamp = value["timestamp"]?.stringValue.flatMap(Self.timestamp)
-                ?? Date(timeIntervalSince1970: 0)
+                ?? TranscriptEntry.unrecordedTime
             for (index, entry) in added.enumerated() {
                 let bytes = Array(SHA256.hash(data: Data("\(sessionID)|\(sourceID)|\(index)".utf8)).prefix(16))
                 let stableID = UUID(uuid: (bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5],

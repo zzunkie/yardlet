@@ -46,22 +46,32 @@ enum CodexTranscriptSnapshotProjection {
                 newestFirst.append(
                     TranscriptEntry(
                         id: errorEntryID(threadID: thread.id, turnID: turn.id),
-                        createdAt: turn.completedAt ?? turn.startedAt ?? Date(),
+                        createdAt: turn.completedAt ?? turn.startedAt ?? TranscriptEntry.unrecordedTime,
                         content: .error(message: error, recoverable: false)
                     )
                 )
             }
 
             let names = EntryNames(turn: turn, threadID: thread.id)
+            let firstRequestIndex = turn.items.firstIndex {
+                if case .userMessage = $0.content { true } else { false }
+            }
+            let lastMessageIndex = turn.items.lastIndex {
+                if case .agentMessage = $0.content { true } else { false }
+            }
             for (index, item) in turn.items.enumerated().reversed() {
                 guard newestFirst.count < limit else { break walk }
-                let createdAt = item.startedAt
-                    ?? item.completedAt
-                    ?? turn.startedAt
-                    ?? turn.completedAt
-                    ?? thread.updatedAt
-                    ?? thread.createdAt
-                    ?? Date()
+                // When the provider says the item was made: a request when it was sent, which the one
+                // that opens the turn was when the turn started, and a message when it was written,
+                // which the turn's last message was when the turn ended. An item no time names is
+                // left without one.
+                let madeAt: Date? = switch item.content {
+                case .agentMessage:
+                    item.completedAt ?? item.startedAt ?? (index == lastMessageIndex ? turn.completedAt : nil)
+                default:
+                    item.startedAt ?? item.completedAt ?? (index == firstRequestIndex ? turn.startedAt : nil)
+                }
+                let createdAt = madeAt ?? TranscriptEntry.unrecordedTime
 
                 switch item.content {
                 case let .userMessage(message):
