@@ -8,6 +8,9 @@ import Foundation
 ///   its title, preview, folders (`workspace_uris`), times and `parent_conversation_id`. Rows whose
 ///   `app_data_dir` is `antigravity` are the desktop app's (its `~/.gemini/antigravity`), which the
 ///   CLI copies into its own store before it continues one, so they are not offered.
+/// - `conversations/<id>.db`, the conversation itself, which `agy` needs to continue it. Earlier CLIs
+///   removed all but the newest 500 of these at startup and left their index rows, so a row whose
+///   file is gone is not offered.
 /// - `cache/last_conversations.json`, the folder each `agy` run last continued, which names the
 ///   folder of such a conversation (`ownFolder`) when Yardlet did not start it.
 /// - `brain/<id>/.system_generated/logs/transcript_full.jsonl` (else `transcript.jsonl`), the
@@ -82,9 +85,21 @@ struct AntigravityConversationStore: Sendable {
     }
 
     private func continuableSummaries() throws -> [Summary] {
-        try withIndexDatabase { handle in
+        let saved = savedConversationIDs()
+        return (try withIndexDatabase { handle in
             try Self.readSummaries(handle: handle, onlyContinuable: true)
-        } ?? []
+        } ?? []).filter { saved.contains($0.conversationID) }
+    }
+
+    /// The IDs of the conversations whose own file (`conversations/<id>.db`, or `.pb` from older CLIs)
+    /// is still there, from one listing of the folder.
+    private func savedConversationIDs() -> Set<String> {
+        let folder = root.appending(path: "conversations", directoryHint: .isDirectory)
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: Self.path(folder))) ?? []
+        return Set(names.compactMap { name in
+            let file = URL(filePath: name)
+            return ["db", "pb"].contains(file.pathExtension) ? file.deletingPathExtension().lastPathComponent : nil
+        })
     }
 
     private static func importable(_ summary: Summary, in folder: URL) -> ImportableConversation {
