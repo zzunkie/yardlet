@@ -78,8 +78,8 @@ struct WindowTabStrip<SelectedTitle: View>: View {
             .onDrop(of: [.yardletTaskReference], delegate: TaskDropOnStrip(
                 strip: { stripFrame }, tabs: { orderedFrames }, index: $systemDropIndex,
                 onDrop: { id, index in onOpenTask(id, tabs.indices.contains(index) ? tabs[index].id : nil) }))
-            ParityIconButton(systemName: "plus", help: L10n.string("New Tab"), shortcut: MacShortcut.newTab.binding,
-                             action: onNewTab)
+            ParityHeaderButton(systemName: "plus", help: L10n.string("New Tab"), shortcut: MacShortcut.newTab.binding,
+                               action: onNewTab)
         }
         // The first frames count too: a title bar drawn anew for another item registers its bar at once.
         .onChange(of: stripFrame, initial: true) { register() }
@@ -214,8 +214,8 @@ private struct WindowTabButton<SelectedTitle: View>: View {
                             .frame(width: 16, height: 16)
                         if showsTitle {
                             Text(tab.title)
-                                .font(.system(size: 12.5 * interfaceScale,
-                                              weight: tab.hasUnreadUpdate ? .semibold : .regular))
+                                .font(.parity(.control, weight: tab.hasUnreadUpdate ? .semibold : .regular,
+                                              scale: interfaceScale))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
@@ -238,29 +238,15 @@ private struct WindowTabButton<SelectedTitle: View>: View {
             }
 
             if showsClose {
-                Button(action: onClose) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 9 * interfaceScale, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 18, height: 18)
-                        .background(Circle().fill(isHovering ? ParityTheme.hoverFill : .clear))
-                        // The circle stays small in the tab; the click takes a 22 pt square around it.
-                        .frame(width: 22, height: 22)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.borderless)
-                .parityPointer()
                 // ⌘W closes the shown tab only.
-                .help(ShortcutHelp.text(L10n.string("Close tab"), isSelected ? MacShortcut.closeTab.binding : nil))
-                .accessibilityLabel(L10n.format("Close tab %@", tab.title))
-                .padding(.trailing, 3)
+                ParityTabCloseButton(help: ShortcutHelp.text(L10n.string("Close tab"),
+                                                             isSelected ? MacShortcut.closeTab.binding : nil),
+                                     accessibilityLabel: L10n.format("Close tab %@", tab.title), action: onClose)
+                    .padding(.trailing, 3)
             }
         }
-        .frame(height: 28)
-        .background(
-            isSelected ? ParityTheme.selectedFill : (isHovering ? ParityTheme.hoverFill : .clear),
-            in: RoundedRectangle(cornerRadius: 7, style: .continuous)
-        )
+        .frame(height: ParityHeader.controlSize)
+        .background { ParityTabBackground(isSelected: isSelected, isHovering: isHovering) }
         .onHover { isHovering = $0 }
         .contextMenu {
             Button(L10n.string("Close tab"), action: onClose).disabled(!canClose)

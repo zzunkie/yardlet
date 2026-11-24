@@ -51,9 +51,9 @@ private struct TaskSurfaceButtonLabel: View {
         Image(systemName: symbol)
             .font(.system(size: 12 * interfaceScale))
             .foregroundStyle(isActive ? Color.primary : Color.secondary)
-            .frame(minWidth: 28, minHeight: 28)
+            .frame(minWidth: ParityHeader.controlSize, minHeight: ParityHeader.controlSize)
             .background(isActive ? ParityTheme.selectedFill : (isHovering && isEnabled ? ParityTheme.hoverFill : .clear),
-                        in: RoundedRectangle(cornerRadius: 7))
+                        in: RoundedRectangle(cornerRadius: ParityHeader.controlRadius, style: .continuous))
             .contentShape(Rectangle())
             .onHover { isHovering = $0 }
             .animation(ParityMotion.easeOut(reduceMotion: reduceMotion, duration: 0.1), value: isHovering)

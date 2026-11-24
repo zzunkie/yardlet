@@ -394,26 +394,20 @@ struct SplitPaneHeader<Identity: View, Controls: View>: View {
             identity(isFolded)
                 .frame(minWidth: 60, maxWidth: isAtWindowTop ? nil : .infinity, alignment: .leading)
                 .layoutPriority(1)
+                // The header stands on the pane's canvas, as one task's title bar does; the panes other than the
+                // focused one show their titles faded, as a window behind others does.
+                .opacity(isFocused ? 1 : 0.6)
             if isAtWindowTop {
                 WindowDragRegion(onPress: onFocus).frame(minWidth: ParitySpace.s8, maxWidth: .infinity)
             }
             controls(isFolded)
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9 * interfaceScale, weight: .semibold))
-                    .frame(width: 22, height: 22)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.borderless)
-            .parityPointer()
-            .foregroundStyle(.secondary)
             // ⌃⌘W closes the focused pane only.
-            .help(ShortcutHelp.text(L10n.string("Close pane"), isFocused ? MacShortcut.closePane.binding : nil))
-            .accessibilityLabel(L10n.string("Close pane"))
+            ParityTabCloseButton(help: ShortcutHelp.text(L10n.string("Close pane"),
+                                                         isFocused ? MacShortcut.closePane.binding : nil),
+                                 accessibilityLabel: L10n.string("Close pane"), action: onClose)
         }
         .padding(.horizontal, ParitySpace.s8)
         .frame(maxHeight: .infinity)
-        .background(isFocused ? ParityTheme.selectedFill : ParityTheme.subtleFill)
         .contentShape(Rectangle())
         .onTapGesture(perform: onFocus)
         .windowDraggable(dragged.map { .pane(sessionID: $0.task) }, preview: dragged?.preview)

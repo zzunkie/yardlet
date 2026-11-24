@@ -489,6 +489,111 @@ struct ParityLabelWidth: Layout {
     }
 }
 
+/// The title bar's row and a panel's header: their buttons and tabs share one height and corner, so the
+/// window's tabs, a task's panel buttons and a side panel's tabs read as one bar on the canvas.
+enum ParityHeader {
+    static let controlSize: CGFloat = 28
+    static let controlRadius: CGFloat = 7
+}
+
+/// A tab's ground in a header row. The shown tab stands on the elevated surface with a hairline edge, as
+/// Safari's compact tabs stand out of their bar, rather than on a grey fill; another tab shows the hover fill
+/// under the pointer.
+struct ParityTabBackground: View {
+    let isSelected: Bool
+    var isHovering = false
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: ParityHeader.controlRadius, style: .continuous)
+        if isSelected {
+            shape.fill(ParityTheme.elevated)
+                .overlay(shape.strokeBorder(ParityTheme.separator, lineWidth: 1))
+        } else {
+            shape.fill(isHovering ? ParityTheme.hoverFill : .clear)
+        }
+    }
+}
+
+/// A tab's close button: a small cross in an 18 pt circle that fills under the pointer, clicked anywhere in
+/// the 22 pt square around it.
+struct ParityTabCloseButton: View {
+    let help: String
+    var accessibilityLabel: String? = nil
+    let action: () -> Void
+    @State private var isHovering = false
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "xmark")
+                .font(.system(size: 9 * interfaceScale, weight: .semibold))
+                .foregroundStyle(isEnabled ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
+                .frame(width: 18, height: 18)
+                .background(Circle().fill(isHovering && isEnabled ? ParityTheme.hoverFill : .clear))
+                .frame(width: 22, height: 22)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .parityPointer()
+        .help(help)
+        .accessibilityLabel(accessibilityLabel ?? help)
+        .onHover { isHovering = $0 }
+    }
+}
+
+/// A header row's icon button, drawn as a task's panel buttons are (`TaskSurfaceControls`): the symbol in the
+/// secondary colour, on the hover fill under the pointer.
+struct ParityHeaderButton: View {
+    let systemName: String
+    let help: String
+    var shortcut: KeyboardShortcut? = nil
+    let action: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            ParityHeaderSymbol(systemName: systemName, isHovering: isHovering)
+        }
+        .buttonStyle(.borderless)
+        .parityPointer()
+        .accessibilityLabel(help)
+        .help(ShortcutHelp.text(help, shortcut))
+        .onHover { isHovering = $0 }
+    }
+}
+
+/// The label of a header row's icon button or menu (`ParityHeaderButton`).
+struct ParityHeaderSymbol: View {
+    let systemName: String
+    var isHovering = false
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.system(size: 12 * interfaceScale))
+            .foregroundStyle(isEnabled ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
+            .frame(width: ParityHeader.controlSize, height: ParityHeader.controlSize)
+            .background(isHovering && isEnabled ? ParityTheme.hoverFill : .clear,
+                        in: RoundedRectangle(cornerRadius: ParityHeader.controlRadius, style: .continuous))
+            .contentShape(Rectangle())
+    }
+}
+
+private struct ParityHeaderControlsKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// Set on a header row (a panel's header), whose icon buttons (`ParityIconButton`) draw as the title
+    /// bar's do (`ParityHeaderSymbol`).
+    var parityHeaderControls: Bool {
+        get { self[ParityHeaderControlsKey.self] }
+        set { self[ParityHeaderControlsKey.self] = newValue }
+    }
+}
+
 struct ParityIconButton: View {
     let systemName: String
     let help: String
@@ -502,10 +607,13 @@ struct ParityIconButton: View {
     /// A borderless button draws its label as given, so a disabled one dims here: send on an empty
     /// draft, Back with no history.
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.parityHeaderControls) private var isInHeader
 
     var body: some View {
         Button(action: action) {
-            if isProminent {
+            if isInHeader && !isProminent {
+                ParityHeaderSymbol(systemName: systemName, isHovering: isHovering)
+            } else if isProminent {
                 // Primary send action keeps neutral charcoal/off-white contrast and dims quietly when empty.
                 Image(systemName: systemName)
                     .font(.system(size: 13, weight: .semibold))
