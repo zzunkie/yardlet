@@ -13,6 +13,8 @@ struct TranscriptErrorCard: View {
     var signIn: ConversationSignIn? = nil
     @State private var showsDetails = false
     @Environment(\.yardletReportProblem) private var reportProblem
+    @Environment(\.yardletSendFeedback) private var sendFeedback
+    @Environment(\.yardletFeedbackSurface) private var feedbackSurface
 
     private var asksToSignIn: Bool { ProviderSignIn.asksToSignIn(message) }
     private var offeredSignIn: ConversationSignIn? { asksToSignIn ? signIn : nil }
@@ -35,7 +37,8 @@ struct TranscriptErrorCard: View {
                 }
             }
             // Buttons, as the Codex app draws its Retry: a bare label here read as a heading.
-            if onRetry != nil || onEditRequest != nil || onShowHarnessSettings != nil || offeredSignIn != nil {
+            if onRetry != nil || onEditRequest != nil || onShowHarnessSettings != nil || offeredSignIn != nil
+                || sendFeedback != nil {
                 ControlRowLayout(spacing: 8, rowSpacing: 8) {
                     recoveryActions
                 }
@@ -104,5 +107,17 @@ struct TranscriptErrorCard: View {
             Button(L10n.string("Harness settings"), action: onShowHarnessSettings)
                 .parityPointer()
         }
+        if let sendFeedback {
+            // A private note to the Yardlet team with this error's kind and code, never its message.
+            Button(L10n.string("Send problem report")) { sendFeedback(problemContext) }
+                .parityPointer()
+                .help(L10n.string("Tell the Yardlet team privately what happened"))
+        }
+    }
+
+    private var problemContext: PrivateFeedbackContext {
+        let kind = asksToSignIn ? "signIn" : recoverable ? "actionFailed" : "sessionFailed"
+        return .problem(surface: feedbackSurface, harness: harness,
+                        failure: .init(kind: kind, code: PrivateFeedbackContext.errorCode(in: message)))
     }
 }

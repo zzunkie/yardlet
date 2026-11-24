@@ -60,7 +60,6 @@ final class MenuBarRenderingTests: XCTestCase {
 
         // The sidebar's account menu reads the same Usage lines.
         let account = SidebarAccountMenuController(content: SidebarAccountMenu.make(
-            identity: SidebarAccountIdentity(fullName: "Jordan Park", userName: nil),
             settingsSections: SettingsSection.available(hasAccounts: true, hasConnectors: true, hasRemote: true),
             usage: model.menuBarMenu(now: now).usage)) { _ in }
         let accountLines = MenuLine.lines(account.menu.items)

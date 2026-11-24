@@ -2148,7 +2148,6 @@
 "Check %@ for updates" = "%@ のアップデートを確認";
 "CLI Updates" = "CLI アップデート";
 "Resize sidebar" = "サイドバーのサイズを変更";
-"Account menu, %@" = "アカウントメニュー、%@";
 "Detach to top level" = "最上位へ切り離す";
 "Move up one level" = "1 つ上の階層へ移動";
 "Move under task" = "タスクの下に移動";
@@ -4227,3 +4226,33 @@
 "Another task is using this device." = "別のタスクがこのデバイスを使用しています。";
 "A separate copy starts fresh, without this device's apps and data." = "別のコピーは、このデバイスのアプリやデータなしで新しく起動します。";
 "Open a Separate Copy" = "別のコピーを開く";
+
+/* Send Feedback: the sidebar's Settings and Feedback, the private feedback sheet and an error card's report. */
+"Remote task" = "リモートタスク";
+"App version" = "アプリのバージョン";
+"Screen" = "画面";
+"This build of Yardlet cannot send feedback." = "このビルドの Yardlet ではフィードバックを送信できません。";
+"Too many notes were sent just now. Try again in a minute." = "短時間に送信が多すぎます。1 分後にもう一度お試しください。";
+"The note could not be read. Shorten it and try again." = "内容を受け付けられませんでした。短くしてもう一度お試しください。";
+"The note could not be sent. Try again later." = "送信できませんでした。しばらくしてからもう一度お試しください。";
+"The note could not be sent. Check your connection and try again." = "送信できませんでした。接続を確認してもう一度お試しください。";
+"Send Feedback" = "フィードバックを送信";
+"Send Problem Report" = "問題を送信";
+"Discard this note?" = "書いた内容を破棄しますか？";
+"Discard" = "破棄";
+"Keep Editing" = "編集を続ける";
+"What you wrote will not be sent." = "書いた内容は送信されません。";
+"Where did you get stuck, or what bothered you?" = "どこで困りましたか？何が不便でしたか？";
+"Keep the note under %@ characters." = "%@ 文字以内で入力してください。";
+"Add an email for a reply" = "返信用のメールアドレスを追加";
+"Enter an email address, or leave it empty." = "メールアドレスを入力するか、空欄のままにしてください。";
+"Sent privately to the Yardlet team, with:" = "Yardlet チームに非公開で届きます。一緒に送られる情報:";
+"Conversations, file paths, accounts, logs and screenshots are not included." = "会話、ファイルパス、アカウント、ログ、スクリーンショットは含まれません。";
+"Feedback sent. Thank you." = "フィードバックを送信しました。ありがとうございます。";
+"Send Again" = "もう一度送信";
+"Send problem report" = "問題を送信";
+"Tell the Yardlet team privately what happened" = "何が起きたかを Yardlet チームに非公開で伝えます";
+"Settings, accounts, usage and more" = "設定、アカウント、使用量など";
+"Settings menu" = "設定メニュー";
+"Feedback" = "フィードバック";
+"Send Feedback…" = "フィードバックを送信…";

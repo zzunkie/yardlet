@@ -2233,7 +2233,6 @@
 
 /* The sidebar: its width, the account button, a row's pull request and detaching a nested task (2026-10-16). */
 "Resize sidebar" = "Resize sidebar";
-"Account menu, %@" = "Account menu, %@";
 "Detach to top level" = "Detach to top level";
 "Move up one level" = "Move up one level";
 "Move under task" = "Move under task";
@@ -4426,3 +4425,33 @@
 "Another task is using this device." = "Another task is using this device.";
 "A separate copy starts fresh, without this device's apps and data." = "A separate copy starts fresh, without this device's apps and data.";
 "Open a Separate Copy" = "Open a Separate Copy";
+
+/* Send Feedback: the sidebar's Settings and Feedback, the private feedback sheet and an error card's report. */
+"Remote task" = "Remote task";
+"App version" = "App version";
+"Screen" = "Screen";
+"This build of Yardlet cannot send feedback." = "This build of Yardlet cannot send feedback.";
+"Too many notes were sent just now. Try again in a minute." = "Too many notes were sent just now. Try again in a minute.";
+"The note could not be read. Shorten it and try again." = "The note could not be read. Shorten it and try again.";
+"The note could not be sent. Try again later." = "The note could not be sent. Try again later.";
+"The note could not be sent. Check your connection and try again." = "The note could not be sent. Check your connection and try again.";
+"Send Feedback" = "Send Feedback";
+"Send Problem Report" = "Send Problem Report";
+"Discard this note?" = "Discard this note?";
+"Discard" = "Discard";
+"Keep Editing" = "Keep Editing";
+"What you wrote will not be sent." = "What you wrote will not be sent.";
+"Where did you get stuck, or what bothered you?" = "Where did you get stuck, or what bothered you?";
+"Keep the note under %@ characters." = "Keep the note under %@ characters.";
+"Add an email for a reply" = "Add an email for a reply";
+"Enter an email address, or leave it empty." = "Enter an email address, or leave it empty.";
+"Sent privately to the Yardlet team, with:" = "Sent privately to the Yardlet team, with:";
+"Conversations, file paths, accounts, logs and screenshots are not included." = "Conversations, file paths, accounts, logs and screenshots are not included.";
+"Feedback sent. Thank you." = "Feedback sent. Thank you.";
+"Send Again" = "Send Again";
+"Send problem report" = "Send problem report";
+"Tell the Yardlet team privately what happened" = "Tell the Yardlet team privately what happened";
+"Settings, accounts, usage and more" = "Settings, accounts, usage and more";
+"Settings menu" = "Settings menu";
+"Feedback" = "Feedback";
+"Send Feedback…" = "Send Feedback…";

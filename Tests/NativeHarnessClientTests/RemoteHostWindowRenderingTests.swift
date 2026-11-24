@@ -260,7 +260,11 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
         try await render("remote-host-answered", size: size, model: model, hosts: hosts)
 
         model.select(.newTask)
-        try await render("remote-host-new", size: size, model: model, hosts: hosts)
+        try await render("remote-host-new", size: size, model: model, hosts: hosts) { elements in
+            // Feedback is its own target beside the host's menu, which still names the host.
+            XCTAssertTrue(elements.contains { $0.label == L10n.string("Send Feedback") }, elements.description)
+            XCTAssertTrue(elements.contains { $0.label.hasPrefix("Mac Studio, ") }, elements.description)
+        }
 
         model.select(.task(RemoteFixtureBridge.ID.form))
         try await waitUntil { model.conversations[RemoteFixtureBridge.ID.form]?.isLoaded == true }
@@ -2214,6 +2218,8 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
                          opening: opening, press: press) {
             RemoteHostView(model: model, directory: hosts)
                 .environment(\.opensDetailsForReview, opensDetails)
+                // As the app's Remote Mac scene gives it: Feedback beside the host's name.
+                .environment(\.yardletSendFeedback, YardletSendFeedbackAction { _ in })
         } check: { check($0) }
     }
 

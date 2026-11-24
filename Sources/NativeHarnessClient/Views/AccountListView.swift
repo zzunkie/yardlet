@@ -47,6 +47,15 @@ struct AccountList: View {
         AccountListProjection.choices(mode, store: store, manageHarnesses: manageHarnesses, search: search)
     }
 
+    /// Where a report about the list's error says it was sent from.
+    private var feedbackSurface: PrivateFeedbackContext.Surface {
+        switch mode {
+        case .newTask: .home
+        case .switchTask, .continueAfterLimit: .localTask
+        case .manage: .settings
+        }
+    }
+
     var body: some View {
         let choices = choices
         VStack(alignment: .leading, spacing: 12) {
@@ -56,6 +65,8 @@ struct AccountList: View {
             }
             if let error = store.errorMessage {
                 Text(error).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                SendProblemReportLink(surface: feedbackSurface, failure: .init(
+                    kind: "accountCheck", code: PrivateFeedbackContext.errorCode(in: error)))
             }
             if let empty = AccountListProjection.emptyText(mode, choices: choices, search: search) {
                 Text(empty).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)

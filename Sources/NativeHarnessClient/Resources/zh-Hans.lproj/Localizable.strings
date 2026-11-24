@@ -2148,7 +2148,6 @@
 "Check %@ for updates" = "检查 %@ 更新";
 "CLI Updates" = "CLI 更新";
 "Resize sidebar" = "调整边栏大小";
-"Account menu, %@" = "账户菜单，%@";
 "Detach to top level" = "分离到顶层";
 "Move up one level" = "上移一级";
 "Move under task" = "移至任务下";
@@ -4227,3 +4226,33 @@
 "Another task is using this device." = "另一个任务正在使用此设备。";
 "A separate copy starts fresh, without this device's apps and data." = "单独的副本会全新启动，不含此设备的应用和数据。";
 "Open a Separate Copy" = "打开单独的副本";
+
+/* Send Feedback: the sidebar's Settings and Feedback, the private feedback sheet and an error card's report. */
+"Remote task" = "远程任务";
+"App version" = "应用版本";
+"Screen" = "界面";
+"This build of Yardlet cannot send feedback." = "此版本的 Yardlet 无法发送反馈。";
+"Too many notes were sent just now. Try again in a minute." = "刚才发送次数过多。请一分钟后再试。";
+"The note could not be read. Shorten it and try again." = "无法接收此内容。请缩短后重试。";
+"The note could not be sent. Try again later." = "发送失败。请稍后重试。";
+"The note could not be sent. Check your connection and try again." = "发送失败。请检查网络连接后重试。";
+"Send Feedback" = "发送反馈";
+"Send Problem Report" = "发送问题报告";
+"Discard this note?" = "要放弃已写的内容吗？";
+"Discard" = "放弃";
+"Keep Editing" = "继续编辑";
+"What you wrote will not be sent." = "已写的内容不会发送。";
+"Where did you get stuck, or what bothered you?" = "你在哪里卡住了，或者哪里用着不方便？";
+"Keep the note under %@ characters." = "请控制在 %@ 个字符以内。";
+"Add an email for a reply" = "添加用于回复的电子邮件";
+"Enter an email address, or leave it empty." = "请输入电子邮件地址，或留空。";
+"Sent privately to the Yardlet team, with:" = "将以非公开方式发送给 Yardlet 团队，并附带：";
+"Conversations, file paths, accounts, logs and screenshots are not included." = "不包含对话、文件路径、账户、日志和截图。";
+"Feedback sent. Thank you." = "反馈已发送。谢谢！";
+"Send Again" = "重新发送";
+"Send problem report" = "发送问题报告";
+"Tell the Yardlet team privately what happened" = "以非公开方式告诉 Yardlet 团队发生了什么";
+"Settings, accounts, usage and more" = "设置、账户、用量等";
+"Settings menu" = "设置菜单";
+"Feedback" = "反馈";
+"Send Feedback…" = "发送反馈…";
