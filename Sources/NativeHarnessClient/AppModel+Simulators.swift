@@ -147,9 +147,11 @@ extension AppModel: SimulatorToolHandling {
     /// The task's panel shows the Simulator tab of the device it handed to the person, the task in front staying: a
     /// device handed over, and a click on its notification.
     func showHandedOverSimulator(of task: UUID) {
-        guard let device = simulatorTools.handoffs.handoff(for: task)?.device,
-              let tab = simulators.tab(attaching: device, in: task) else { return }
         let workspace = taskWorkspaces.state(for: task)
+        guard let device = simulatorTools.handoffs.handoff(for: task)?.device,
+              let tab = simulators.tab(attaching: device, in: task,
+                                       preferring: TaskSurfaceNavigationProjection.simulatorKeys(in: workspace.panels))
+        else { return }
         workspace.setPanels(TaskSurfaceNavigationProjection.showing(TaskSurfaceNavigationProjection.simulatorTabID(tab),
                                                                     in: workspace.panels))
     }

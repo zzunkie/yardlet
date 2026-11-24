@@ -342,9 +342,11 @@ final class SimulatorCenter {
         Set(attachments(of: task).values).sorted { $0.value < $1.value }
     }
 
-    /// The Simulator tab of the task that attaches the device; nil when none does.
-    func tab(attaching identity: SimulatorDeviceIdentity, in task: UUID) -> UUID? {
-        attachments(of: task).filter { $0.value == identity }.keys.min { $0.uuidString < $1.uuidString }
+    /// The Simulator tab of the task that attaches the device, the first of `preferring` (the task's open tabs, the
+    /// one used last first) that does, else any; nil when none does.
+    func tab(attaching identity: SimulatorDeviceIdentity, in task: UUID, preferring: [UUID] = []) -> UUID? {
+        let tabs = attachments(of: task).filter { $0.value == identity }.keys
+        return preferring.first(where: tabs.contains) ?? tabs.min { $0.uuidString < $1.uuidString }
     }
 
     /// The device an ID or name names (`devices(named:)`), after listing the devices again, or why none does.

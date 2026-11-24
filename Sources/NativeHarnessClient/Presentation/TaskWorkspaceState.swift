@@ -136,15 +136,22 @@ struct TaskWorkspaceSnapshot: Codable, Equatable {
     /// from the panel opening there on its own: it opens to the launcher instead, once. A snapshot
     /// saved before each browser tab was a side-panel tab turns its one Browser tab, which held the
     /// task's browser tabs, into a side-panel tab per browser tab, once. A snapshot saved while a task had one
-    /// Simulator tab keeps it, and the device attached in it, under `legacySimulatorTabKey`.
+    /// Simulator tab keeps it, and the device attached in it, under `legacySimulatorTabKey`; a device whose tab was
+    /// closed then, which kept it attached, is let go, as closing a tab lets go of its device now.
     var migrated: Self {
         var next = self
         let legacySimulator = TaskSurfaceNavigationProjection.simulatorChoiceID
         if next.simulator != nil || next.panels.trailingTabs.contains(legacySimulator)
             || next.panels.trailingSurfaceID == legacySimulator {
             let key = Self.legacySimulatorTabKey
+            let hasLegacyTab = next.panels.trailingTabs.contains(legacySimulator)
+                || next.panels.trailingSurfaceID == legacySimulator
             next.panels = TaskSurfaceNavigationProjection.replacingLegacySimulatorTab(in: next.panels, key: key)
-            if let device = next.simulator, next.simulators?[key] == nil { next.simulators = [key: device] }
+            if hasLegacyTab, let device = next.simulator, next.simulators?[key] == nil {
+                var map = next.simulators ?? [:]
+                map[key] = device
+                next.simulators = map
+            }
             next.simulator = nil
         }
         if panelsRevision == nil, panels.trailingTabs == ["diff"] {

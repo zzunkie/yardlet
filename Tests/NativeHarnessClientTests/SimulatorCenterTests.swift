@@ -235,6 +235,18 @@ final class SimulatorCenterTests: XCTestCase {
         XCTAssertEqual(repository.snapshots[task]?.simulators, [key: a])
         XCTAssertNil(repository.snapshots[task]?.simulator)
         XCTAssertEqual(repository.snapshots[task]?.panels.trailingTabs, ["diff", id])
+
+        // A device whose one Simulator tab was closed stayed attached then; closing a tab lets go of its device now,
+        // so it is let go rather than kept in a tab no strip shows.
+        let closed = TaskWorkspaceSnapshot(panels: .init(trailingSurfaceID: "diff", trailingTabs: ["diff"],
+                                                         recentTrailingTabs: ["diff"]),
+                                           panelsRevision: TaskWorkspaceSnapshot.browserTabsPanelsRevision, simulator: a)
+        let closedTask = UUID()
+        repository.snapshots[closedTask] = closed
+        XCTAssertNil(closed.migrated.simulators)
+        XCTAssertNil(closed.migrated.simulator)
+        XCTAssertEqual(center.attachments(of: closedTask), [:])
+        XCTAssertEqual(workspaces.state(for: closedTask).panels.trailingTabs, ["diff"])
     }
 
     func testAnAgentStartsAtMostTwoDevicesAndAPersonIsNotLimited() async throws {
@@ -582,6 +594,44 @@ final class SimulatorCenterTests: XCTestCase {
         XCTAssertEqual(center.claims, [b: task])
         let only = await run(SimulatorToolCatalog.tap, ["x": .integer(10), "y": .integer(10)])
         XCTAssertTrue(only.text.contains("on Phone B"), only.text)
+
+        // With two attached, a handoff hands over the device it names and waits on it alone.
+        _ = await run(SimulatorToolCatalog.attach, ["device": .string(phoneA)])
+        let handedOver = await run(SimulatorToolCatalog.handoff, ["reason": .string("Sign in"), "timeout": .integer(0),
+                                                                   "device": .string("Phone B")])
+        XCTAssertTrue(handedOver.text.contains("Phone B stays handed to them"), handedOver.text)
+        XCTAssertEqual(tools.handoffs.handoff(for: task)?.device, b)
+    }
+
+    /// A name two attached devices share names neither; a start that fails in a tab no panel showed leaves nothing
+    /// attached or claimed.
+    func testAnAmbiguousNameIsRefusedAndAFailedStartLeavesNoHiddenTab() async throws {
+        let backend = FakeSimulatorBackend([(phoneA, .on), (phoneB, .on), (phoneC, .off)])
+        backend.names = [phoneA: "iPhone 17", phoneB: "iPhone 17"]
+        let center = SimulatorCenter(backends: [backend])
+        await center.setEnabled(true)
+        let tools = SimulatorAgentTools(center: { center }, approvals: SimulatorApprovals(defaults: .vaultTests()),
+                                        drivers: [.iOS: RecordingSimulatorDriver(screen: SimulatorToolScreen(width: 402,
+                                                                                                             height: 874))])
+        tools.sleep = { _ in }
+        tools.askPerson = { _, _ in true }
+        let task = UUID()
+        func run(_ tool: String, _ arguments: [String: ToolJSON]) async -> AgentToolResult {
+            await tools.run(tool: tool, arguments: .object(arguments), task: task)
+        }
+        _ = await run(SimulatorToolCatalog.attach, ["device": .string(phoneA)])
+        _ = await run(SimulatorToolCatalog.attach, ["device": .string(phoneB)])
+        let ambiguous = await run(SimulatorToolCatalog.screenshot, ["device": .string("iPhone 17")])
+        XCTAssertEqual(ambiguous.failure?.kind, .invalidArguments)
+        XCTAssertTrue(ambiguous.text.contains(phoneA) && ambiguous.text.contains(phoneB), ambiguous.text)
+
+        backend.failsBoot = true
+        let failed = await run(SimulatorToolCatalog.attach, ["device": .string(phoneC)])
+        XCTAssertEqual(failed.failure?.kind, .unreachable)
+        XCTAssertTrue(failed.text.contains("was not attached"), failed.text)
+        XCTAssertEqual(Set(center.attachedDevices(of: task)),
+                       [.iOSSimulator(udid: phoneA), .iOSSimulator(udid: phoneB)])
+        XCTAssertNil(center.claims[.iOSSimulator(udid: phoneC)])
     }
 
     /// The tools drive a real Android device as they do an emulator, once the person allowed it in the task asking:
@@ -720,6 +770,10 @@ private final class FakeSimulatorBackend: SimulatorBackend, @unchecked Sendable 
     private var nextProcess: Int32 = 100
     private var startedUDIDs: [String] = []
     private var stoppedUDIDs: [String] = []
+    /// A start that fails, as `simctl boot` can.
+    var failsBoot = false
+    /// Names other than "Phone" and the UDID's letter, by UDID.
+    var names: [String: String] = [:]
 
     init(_ devices: [(String, SimulatorDeviceState)]) {
         order = devices.map(\.0)
@@ -732,7 +786,7 @@ private final class FakeSimulatorBackend: SimulatorBackend, @unchecked Sendable 
 
     func device(_ udid: String) -> SimulatorDevice {
         lock.withLock {
-            SimulatorDevice(identity: .iOSSimulator(udid: udid), name: "Phone \(udid.prefix(2).suffix(1))",
+            SimulatorDevice(identity: .iOSSimulator(udid: udid), name: names[udid] ?? "Phone \(udid.prefix(2).suffix(1))",
                             state: states[udid] ?? .off, osName: "iOS 27.2", osVersion: "27.2")
         }
     }
@@ -749,7 +803,8 @@ private final class FakeSimulatorBackend: SimulatorBackend, @unchecked Sendable 
     func devices(with toolchain: SimulatorToolchain) async throws -> [SimulatorDevice] { order.map(device) }
 
     func boot(_ device: SimulatorDevice, with toolchain: SimulatorToolchain) async throws -> SimulatorBootStart {
-        lock.withLock {
+        if failsBoot { throw SimulatorCommandError(message: "Unable to boot device") }
+        return lock.withLock {
             let udid = device.identity.value
             guard states[udid] != .on else { return .alreadyOn }
             states[udid] = .on

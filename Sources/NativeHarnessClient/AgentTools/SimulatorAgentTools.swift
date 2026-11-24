@@ -154,19 +154,30 @@ final class SimulatorAgentTools {
             return refused(refusal, task: task)
         }
         if let declined = await approval(of: device, for: task) { return declined }
-        // The tab that has the device already, else an empty Simulator tab of the task, else a new one beside the
-        // others: an attach never takes another device's tab.
-        let others = center.attachedDevices(of: task).filter { $0 != device.identity }
-        let tab = center.tab(attaching: device.identity, in: task)
-            ?? panelTabs(task).first { center.attachment(of: task, tab: $0) == nil }
-            ?? UUID()
+        // The tab that has the device already, the one used last first, else an empty Simulator tab of the task, else
+        // a new one beside the others: an attach never takes another device's tab.
+        let open = panelTabs(task)
+        let existing = center.tab(attaching: device.identity, in: task, preferring: open)
+        let tab = existing ?? open.first { center.attachment(of: task, tab: $0) == nil } ?? UUID()
+        let isNewTab = existing == nil && !open.contains(tab)
         switch await center.attach(device.identity, to: task, tab: tab, by: .agent) {
         case let .refused(refusal):
             return refused(refusal, task: task)
-        case let .failed(device, message):
-            return Self.didNotStart(device, message)
+        case let .failed(failed, message):
+            // A tab no panel ever showed goes with the failed start, so nothing stays attached out of sight; a tab
+            // the person can see keeps the device, with Turn On.
+            guard isNewTab else { return Self.didNotStart(failed, message) }
+            if center.detach(task, tab: tab) != nil { settleDetached(device.identity, task: task) }
+            return .failure("\(failed.name) did not start: \(message). It was not attached; simulator_attach tries "
+                + "again.", .unreachable, retry: .later)
         case let .attached(attachment):
+            // The person closed the tab while the device started, which let go of it there.
+            guard center.attachment(of: task, tab: tab) == device.identity else {
+                return .failure("The person closed the Simulator tab while \(attachment.device.name) was starting, so "
+                    + "it is not attached to this task.", .refused, retry: .no)
+            }
             snapshots[task]?[device.identity] = nil
+            let others = center.attachedDevices(of: task).filter { $0 != device.identity }
             var lines = ["Attached \(attachment.device.name) (\(attachment.device.osName)) to this task. "
                 + "Its id is \(attachment.device.toolID): \(Self.ownToolsLine(attachment.device))"]
             if !others.isEmpty {
@@ -320,7 +331,8 @@ final class SimulatorAgentTools {
         while true {
             guard let handoff = handoffs.handoff(for: task), handoff.id == started.handoff.id,
                   center.isEnabled, center.attachedDevices(of: task).contains(device.identity) else {
-                handoffs.end(for: task)
+                // Only this call's handoff: a later call may have handed over another device meanwhile.
+                if handoffs.handoff(for: task)?.id == started.handoff.id { handoffs.end(for: task) }
                 return .failure("\(device.name) was let go from this task before the person answered.", .notFound,
                                 retry: .withChanges, details: ["next": .string(SimulatorToolCatalog.attach)])
             }
