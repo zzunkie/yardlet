@@ -572,12 +572,11 @@ final class SessionListFollowTests: XCTestCase {
     }
 
     func testTheAccountMenuOffersTheRefreshAndSaysWhileItRuns() {
-        let identity = SidebarAccountIdentity(fullName: "Person", userName: nil)
-        let idle = SidebarAccountMenu.make(identity: identity, settingsSections: [.accounts])
+        let idle = SidebarAccountMenu.make(settingsSections: [.accounts])
         let item = idle.items.first { $0.destination == .refreshFromOtherApps }
         XCTAssertEqual(item?.title, L10n.string("Refresh from the Claude App and Codex"))
         XCTAssertEqual(item?.isEnabled, true)
-        let running = SidebarAccountMenu.make(identity: identity, settingsSections: [.accounts], refreshing: true)
+        let running = SidebarAccountMenu.make(settingsSections: [.accounts], refreshing: true)
         let busy = running.items.first { $0.destination == .refreshFromOtherApps }
         XCTAssertEqual(busy?.title, L10n.string("Refreshing from the Claude App and Codex…"))
         XCTAssertEqual(busy?.isEnabled, false)

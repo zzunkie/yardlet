@@ -2233,7 +2233,6 @@
 
 /* The sidebar: its width, the account button, a row's pull request and detaching a nested task (2026-10-16). */
 "Resize sidebar" = "사이드바 크기 조절";
-"Account menu, %@" = "계정 메뉴, %@";
 "Detach to top level" = "최상위 레벨로 분리";
 "Move up one level" = "한 단계 위로 이동";
 "Move under task" = "작업 아래로 이동";
@@ -4426,3 +4425,33 @@
 "Another task is using this device." = "다른 작업이 이 기기를 쓰고 있습니다.";
 "A separate copy starts fresh, without this device's apps and data." = "별도 사본은 이 기기의 앱과 데이터 없이 새로 시작합니다.";
 "Open a Separate Copy" = "별도 사본 열기";
+
+/* Send Feedback: the sidebar's Settings and Feedback, the private feedback sheet and an error card's report. */
+"Remote task" = "원격 작업";
+"App version" = "앱 버전";
+"Screen" = "화면";
+"This build of Yardlet cannot send feedback." = "이 Yardlet 빌드에서는 의견을 보낼 수 없습니다.";
+"Too many notes were sent just now. Try again in a minute." = "방금 너무 많이 보냈습니다. 1분 뒤에 다시 시도하세요.";
+"The note could not be read. Shorten it and try again." = "내용을 받지 못했습니다. 글을 줄여 다시 시도하세요.";
+"The note could not be sent. Try again later." = "보내지 못했습니다. 잠시 뒤 다시 시도하세요.";
+"The note could not be sent. Check your connection and try again." = "보내지 못했습니다. 인터넷 연결을 확인하고 다시 시도하세요.";
+"Send Feedback" = "의견 보내기";
+"Send Problem Report" = "문제 보내기";
+"Discard this note?" = "작성한 글을 버릴까요?";
+"Discard" = "버리기";
+"Keep Editing" = "계속 쓰기";
+"What you wrote will not be sent." = "작성한 글은 보내지 않습니다.";
+"Where did you get stuck, or what bothered you?" = "어디에서 막혔거나 무엇이 불편했나요?";
+"Keep the note under %@ characters." = "%@자 이내로 써 주세요.";
+"Add an email for a reply" = "답장을 받을 이메일 추가";
+"Enter an email address, or leave it empty." = "이메일 주소를 입력하거나 비워 두세요.";
+"Sent privately to the Yardlet team, with:" = "Yardlet 팀에 비공개로 전달되며, 다음 정보가 함께 갑니다:";
+"Conversations, file paths, accounts, logs and screenshots are not included." = "대화 내용, 파일 경로, 계정, 로그, 스크린샷은 포함하지 않습니다.";
+"Feedback sent. Thank you." = "의견을 보냈습니다. 고맙습니다.";
+"Send Again" = "다시 보내기";
+"Send problem report" = "문제 보내기";
+"Tell the Yardlet team privately what happened" = "무슨 일이 있었는지 Yardlet 팀에 비공개로 알립니다";
+"Settings, accounts, usage and more" = "설정, 계정, 사용량 등";
+"Settings menu" = "설정 메뉴";
+"Feedback" = "의견";
+"Send Feedback…" = "의견 보내기…";

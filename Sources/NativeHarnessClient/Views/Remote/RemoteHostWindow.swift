@@ -968,8 +968,9 @@ struct RemoteConnectionBanner: View {
 
 // MARK: - The host
 
-/// The sidebar's last row, where the local window keeps its account button: the host's name and how it is reached, and
-/// its menu (connect again, the paired Macs, and removing the host from this Mac).
+/// The sidebar's last row, where the local window keeps Settings and Feedback: the host's name and how it is reached,
+/// with its menu (connect again, the paired Macs, and removing the host from this Mac), and Feedback beside it as its
+/// own target. A note from here is sent by this Mac, not the host.
 struct RemoteHostFooter: View {
     let model: RemoteHostModel
     let directory: RemoteHostDirectory
@@ -978,8 +979,30 @@ struct RemoteHostFooter: View {
     @State private var confirmsRemoval = false
     @Environment(\.openWindow) private var openWindow
     @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @Environment(\.yardletSendFeedback) private var sendFeedback
 
     var body: some View {
+        HStack(spacing: 2) {
+            hostMenu
+            if let sendFeedback {
+                SidebarFeedbackButton(showsTitle: false, height: 36) { sendFeedback(feedbackContext) }
+            }
+        }
+    }
+
+    /// A note about the host, or, while it cannot be reached, a report naming why.
+    private var feedbackContext: PrivateFeedbackContext {
+        switch model.connection {
+        case .unreachable:
+            .problem(surface: .remoteHost, harness: nil, failure: .init(kind: "remoteConnection", code: "unreachable"))
+        case .removed:
+            .problem(surface: .remoteHost, harness: nil, failure: .init(kind: "remoteConnection", code: "removed"))
+        case .connecting, .connected, .stopped:
+            .feedback(surface: .remoteHost)
+        }
+    }
+
+    private var hostMenu: some View {
         Menu {
             if !model.isConnected {
                 Button(L10n.string("Try Again")) { model.reconnectNow() }

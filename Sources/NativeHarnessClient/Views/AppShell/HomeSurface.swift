@@ -713,6 +713,7 @@ struct NewTaskAccountExplanation: View {
 private struct NewTaskComposer: View {
     @Environment(\.yardletInterfaceScale) private var interfaceScale
     @Environment(\.yardletReportProblem) private var reportProblem
+    @Environment(\.yardletSendFeedback) private var sendFeedback
     @Bindable var draft: NewTaskDraft
     let projects: [Project]
     @Bindable var runtimeSelections: RuntimeSelectionStore
@@ -860,6 +861,15 @@ private struct NewTaskComposer: View {
                     Text(draft.creationError ?? L10n.string("The task could not start. Your draft is still here."))
                         .foregroundStyle(.red)
                         .fixedSize(horizontal: false, vertical: true)
+                    if let sendFeedback {
+                        Button(L10n.string("Send problem report")) {
+                            sendFeedback(.problem(surface: .home, harness: draft.harness, failure: .init(
+                                kind: "taskStart", code: PrivateFeedbackContext.errorCode(in: draft.creationError))))
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(ParityTheme.accentText)
+                        .parityPointer()
+                    }
                     if let reportProblem {
                         Button(L10n.string("Report a Problem…")) {
                             reportProblem(harness: draft.harness, message: draft.creationError)

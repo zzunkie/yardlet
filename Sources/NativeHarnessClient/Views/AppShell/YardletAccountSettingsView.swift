@@ -18,6 +18,10 @@ struct YardletAccountSettingsView: View {
                     .foregroundStyle(service.accountError == nil ? Color.secondary : Color.orange)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
+                if let error = service.accountError {
+                    SendProblemReportLink(surface: .settings, failure: .init(
+                        kind: "yardletSignIn", code: PrivateFeedbackContext.errorCode(in: error)))
+                }
                 if service.account != nil, service.isEnabled {
                     Text(L10n.string("Macs signed in to this account can connect to this Mac."))
                         .font(SettingsMetrics.detailFont)

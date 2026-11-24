@@ -551,6 +551,7 @@ struct NativeHarnessClientApp: App {
                 .environment(\.yardletSparkle, appDelegate.sparkle)
                 .environment(\.yardletStagedUpdate, appDelegate.stagedUpdate)
                 .environment(\.yardletReportProblem, reportProblem)
+                .environment(\.yardletSendFeedback, sendFeedback)
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                     model.resourceMonitor.setApplicationActive(true)
                     model.pullRequests.setApplicationActive(true)
@@ -772,7 +773,7 @@ struct NativeHarnessClientApp: App {
             YardletConversationFindCommands()
             TaskResourceUsageCommands()
             RemoteHostCommands(directory: remoteHosts)
-            YardletHelpCommands(report: reportProblem)
+            YardletHelpCommands(report: reportProblem, sendFeedback: sendFeedback)
         }
 
         // Another Mac's Yardlet, one window per host (File › Connect to Mac…).
@@ -783,6 +784,9 @@ struct NativeHarnessClientApp: App {
                     if !TaskResourceUsageWindow.bringMainWindowForward() { TaskResourceUsageWindow.reopenMainWindow?() }
                 })
                 .imageViewerHost()
+                // Its error cards report a remote task; this Mac sends the note.
+                .environment(\.yardletFeedbackSurface, .remoteTask)
+                .environment(\.yardletSendFeedback, sendFeedback)
             }
         }
         .windowStyle(.hiddenTitleBar)
@@ -810,6 +814,12 @@ struct NativeHarnessClientApp: App {
         .defaultSize(width: 720, height: 360)
         .handlesExternalEvents(matching: [])
         .commandsRemoved()
+    }
+
+    /// Help › Send Feedback…, the sidebar's Feedback and an error card's Send problem report. A visual
+    /// fixture opens nothing.
+    private var sendFeedback: YardletSendFeedbackAction? {
+        model.usesVisualFixture ? nil : .presenting
     }
 
     /// Help › Report a Problem…, and the same form from an error card.

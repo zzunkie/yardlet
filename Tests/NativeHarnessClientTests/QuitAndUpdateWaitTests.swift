@@ -218,14 +218,13 @@ final class QuitAndUpdateWaitTests: XCTestCase {
     }
 
     func testTheAccountMenuShowsTheWaitAndCancelsIt() throws {
-        let identity = SidebarAccountIdentity(fullName: "Alex Kim", userName: "alex")
         let sections = SettingsSection.available(hasAccounts: true, hasConnectors: false)
-        let idle = SidebarAccountMenu.make(identity: identity, settingsSections: sections)
+        let idle = SidebarAccountMenu.make(settingsSections: sections)
         XCTAssertEqual(idle.sections.last?.items.map(\.destination), [.installUpdate])
-        XCTAssertEqual(SidebarAccountMenu.make(identity: identity, settingsSections: sections, checksForUpdates: true)
+        XCTAssertEqual(SidebarAccountMenu.make(settingsSections: sections, checksForUpdates: true)
             .sections.last?.items.map(\.destination), [.checkForUpdates], "A build that updates with Sparkle")
 
-        let waiting = SidebarAccountMenu.make(identity: identity, settingsSections: sections, updateIsWaiting: true)
+        let waiting = SidebarAccountMenu.make(settingsSections: sections, updateIsWaiting: true)
         let lines = try XCTUnwrap(waiting.sections.last?.items)
         XCTAssertEqual(lines.map(\.destination), [.updateWaiting, .cancelUpdateWait])
         XCTAssertEqual(lines.map(\.title), [L10n.string("Waiting to Update"), L10n.string("Cancel Update")])
@@ -243,7 +242,7 @@ final class QuitAndUpdateWaitTests: XCTestCase {
         while box.chosen.isEmpty, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
         XCTAssertEqual(box.chosen, [.cancelUpdateWait])
 
-        let context = SidebarAccountMenuContext(identity: identity, settingsSections: sections, updateIsWaiting: { true })
+        let context = SidebarAccountMenuContext(settingsSections: sections, updateIsWaiting: { true })
         XCTAssertEqual(context.menu().sections.last?.items.map(\.destination), [.updateWaiting, .cancelUpdateWait])
     }
 
@@ -274,8 +273,7 @@ final class QuitAndUpdateWaitTests: XCTestCase {
             }
         }
 
-        let identity = SidebarAccountIdentity(fullName: "Alex Kim", userName: "alex")
-        let account = SidebarAccountMenu.make(identity: identity, settingsSections:
+        let account = SidebarAccountMenu.make(settingsSections:
             SettingsSection.available(hasAccounts: true, hasConnectors: true), updateIsWaiting: true)
         let appMenu = YardletUpdateMenu.items(isWaiting: true)
         try WindowlessRender.hostedInBothAppearances("update-menu", in: directory, size: NSSize(width: 640, height: 250)) { appearance in
@@ -319,7 +317,7 @@ private struct WaitingMenus: View {
         HStack(alignment: .top, spacing: 28) {
             panel(header: "Yardlet", lines: appMenu.map { Line(title: $0.title, symbol: nil, enabled: $0.isEnabled) }
                   + [Line(title: L10n.string("Settings…"), symbol: nil, enabled: true)])
-            panel(header: account.identity.name, lines: account.sections.suffix(3).flatMap { section in
+            panel(header: L10n.string("Settings"), lines: account.sections.suffix(3).flatMap { section in
                 section.items.map { Line(title: $0.title, symbol: $0.systemName, enabled: $0.isEnabled) }
             })
         }

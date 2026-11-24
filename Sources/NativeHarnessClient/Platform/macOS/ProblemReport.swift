@@ -227,17 +227,22 @@ enum DiagnosticLogFolders {
 }
 
 /// The Help menu: Yardlet Help opens the repository's README, which says how to use the app (the app has
-/// no help book, so the system's own item only said help isn't available), then Report a Problem… and
-/// Show Diagnostic Logs.
+/// no help book, so the system's own item only said help isn't available), then Send Feedback…, the
+/// private note the sidebar's Feedback opens, Report a Problem…, the public issue form, and Show
+/// Diagnostic Logs.
 struct YardletHelpCommands: Commands {
     static let helpURL = URL(string: "https://github.com/zzunkie/yardlet#readme")!
     let report: YardletReportProblemAction
+    var sendFeedback: YardletSendFeedbackAction?
 
     var body: some Commands {
         CommandGroup(replacing: .help) {
             Button(L10n.string("Yardlet Help")) { NSWorkspace.shared.open(Self.helpURL) }
                 .keyboardShortcut(MacShortcut.help.menuBinding)
             Divider()
+            if let sendFeedback {
+                Button(L10n.string("Send Feedback…")) { sendFeedback(.feedback(surface: .other)) }
+            }
             Button(L10n.string("Report a Problem…")) { report() }
             Button(L10n.string("Show Diagnostic Logs")) { DiagnosticLogFolders.show() }
         }

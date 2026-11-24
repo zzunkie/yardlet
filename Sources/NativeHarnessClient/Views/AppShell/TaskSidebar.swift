@@ -273,10 +273,10 @@ struct TaskSidebar: View {
     var onRemoteProjectPin: ((WorkspaceGroup) -> Void)? = nil
     var canArchiveRemoteProject = false
     var remoteProjectMoveOptions: ((SessionRecord) -> TaskProjectMove.Options)? = nil
-    /// What the sidebar ends with in place of the account button: another Mac's window names its host there.
+    /// What the sidebar ends with in place of Settings and Feedback: another Mac's window names its host there.
     var footer: AnyView? = nil
     var splitActions = SidebarSplitActions()
-    /// The account button at the bottom and the app-wide places its menu opens.
+    /// The Settings button at the bottom and the app-wide places its menu opens.
     var accountMenu = SidebarAccountMenuContext()
     /// Collapsed projects and "Show more"; the layout above already reflects it.
     var disclosure: SidebarDisclosureStore? = nil
@@ -491,19 +491,19 @@ struct TaskSidebar: View {
 
             Rectangle().fill(ParityTheme.separator).frame(height: 1)
 
-            // A staged build ready to install, over the account button as the Claude app's update strip is.
+            // A staged build ready to install, over the footer as the Claude app's update strip is.
             if let update = accountMenu.update() {
                 SidebarUpdateStrip(line: update) { accountMenu.onSelect(.installUpdate) }
                     .padding(.horizontal, 4)
                     .padding(.top, 6)
             }
-            // One account button, as the Claude and Codex apps end their sidebars; its menu holds
-            // Settings, the accounts, archived tasks and the other app-wide places.
+            // Settings, whose menu holds the accounts, archived tasks and the other app-wide places,
+            // beside Feedback.
             Group {
                 if let footer {
                     footer
                 } else {
-                    SidebarAccountButton(context: accountMenu)
+                    SidebarFooter(context: accountMenu)
                 }
             }
             .padding(.horizontal, 4)

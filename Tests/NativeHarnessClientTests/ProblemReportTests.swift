@@ -54,7 +54,7 @@ import XCTest
 
 }
 
-/// The error card and the new-task start failure offer the same form, drawn in an unshown window into
+/// The error card and the new-task start failure offer the same form and the private report, drawn in an unshown window into
 /// `.build/report-a-problem-qa`. They draw in the Mac's language; `QA_LANGUAGE` names the files.
 @MainActor final class ProblemReportRenderingTests: XCTestCase {
     func testErrorsOfferTheReportWithTheirMessage() throws {
@@ -62,6 +62,8 @@ import XCTest
         let language = ProcessInfo.processInfo.environment["QA_LANGUAGE"] ?? "en"
         var reported: [(HarnessKind?, String?)] = []
         let report = YardletReportProblemAction { reported.append(($0, $1)) }
+        var sent: [PrivateFeedbackContext] = []
+        let send = YardletSendFeedbackAction { sent.append($0) }
         let message = "Codex App Server ended before it answered thread/start (exit code 1)."
 
         let cardSize = NSSize(width: 640, height: 330)
@@ -70,6 +72,7 @@ import XCTest
                 .padding(16).frame(width: cardSize.width, height: cardSize.height, alignment: .top)
                 .background(ParityTheme.canvas).environment(\.colorScheme, appearance.colorScheme)
                 .environment(\.yardletReportProblem, report)
+                .environment(\.yardletSendFeedback, send)
         }
         for appearance in WindowlessRender.Appearance.allCases {
             let host = WindowlessRender.Host(card(appearance), size: cardSize, appearance: appearance)
@@ -84,6 +87,13 @@ import XCTest
                 XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Report a Problem…")))
                 XCTAssertEqual(reported.map(\.0), [.codex])
                 XCTAssertEqual(reported.map(\.1), [message])
+                // The private report names the error's kind and the agent, never its message.
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Send problem report")))
+                XCTAssertEqual(sent.map(\.kind), [.problem])
+                XCTAssertEqual(sent.first?.harness, HarnessKind.codex.displayName)
+                XCTAssertEqual(sent.first?.failure, .init(kind: "actionFailed", code: nil))
+                XCTAssertEqual(sent.first?.surface, .localTask)
+                XCTAssertNotNil(sent.first?.macOS)
             }
         }
 
@@ -110,6 +120,7 @@ import XCTest
                 .frame(width: homeSize.width, height: homeSize.height)
                 .background(ParityTheme.canvas).environment(\.colorScheme, appearance.colorScheme)
                 .environment(\.yardletReportProblem, report)
+                .environment(\.yardletSendFeedback, send)
         }) { XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 4, from: 4, background: (1, 1))) }
     }
 }
