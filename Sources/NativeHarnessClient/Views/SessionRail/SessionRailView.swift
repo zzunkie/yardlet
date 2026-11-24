@@ -62,7 +62,7 @@ struct SessionRailView: View {
     @Binding var folds: SessionRailFolds
     let preferences: SessionRailPreferenceStore
     var actions = SessionRailActions()
-    /// Raised over the task rather than beside the conversation: it draws its own edge and shadow.
+    /// Raised over the task rather than beside the conversation, on the floating card's elevated fill.
     var isRaised = false
 
     @State private var draggedKind: SessionRailCardKind?
@@ -109,7 +109,7 @@ struct SessionRailView: View {
         .scrollIndicators(.automatic)
         .frame(width: SessionRailPlacement.width)
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(ParityTheme.canvas)
+        .background(isRaised ? ParityTheme.elevated : ParityTheme.canvas)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(L10n.string("Session details"))
     }

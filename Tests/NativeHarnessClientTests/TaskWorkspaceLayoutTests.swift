@@ -12,18 +12,25 @@ final class TaskWorkspaceLayoutTests: XCTestCase {
         XCTAssertEqual(layout.terminalHeight, 240)
     }
 
-    func testCompactPanelKeepsChatOffscreenAndFitsTerminalWithinBounds() {
+    /// In an area too narrow to keep the conversation in view, the panel floats as a sheet inset from the
+    /// area's edges, the conversation's leading edge showing behind it.
+    func testCompactPanelFloatsAsASheetAndFitsTerminalWithinBounds() {
         let layout = TaskWorkspaceMetrics.resolve(size: CGSize(width: 519, height: 510), trailing: true, terminal: true, preferredWidth: 900, preferredHeight: 900)
-        XCTAssertFalse(layout.showsChat)
-        XCTAssertEqual(layout.chatWidth, 0)
-        XCTAssertEqual(layout.trailingWidth, 519)
+        XCTAssertEqual(layout.panelPlacement, .sheet)
+        XCTAssertTrue(layout.showsChat)
+        XCTAssertEqual(layout.chatWidth, 519)
+        XCTAssertEqual(layout.panelInset, 8)
+        XCTAssertEqual(layout.trailingWidth, 519 - 48 - 8)
+        XCTAssertEqual(layout.conversationCover, 0)
+        XCTAssertEqual(layout.railWidth, 0)
         XCTAssertEqual(layout.upperHeight + layout.terminalHeight + 6, 510)
         XCTAssertGreaterThanOrEqual(layout.upperHeight, 180)
     }
 
     /// Beside the panel the conversation keeps 560 and the panel the Codex app's 320. Where both do not
-    /// fit, the panel floats over the area's edge at 320 and the conversation runs up to it, keeping
-    /// 560 under its edge; below the Codex app's 320 + 352 the panel takes the conversation's place.
+    /// fit, the panel floats 8 in from the area's edge at 320 and the conversation runs up to it, keeping
+    /// 560 under its edge; below the Codex app's 320 + 352 the panel floats as a sheet over it, and only
+    /// the expand button puts the panel in the conversation's place.
     func testThePanelLeavesTheConversationItsMinimumOrFloatsOverItsEdge() {
         func layout(_ width: CGFloat, preferred: CGFloat = 420) -> TaskWorkspaceMetrics {
             TaskWorkspaceMetrics.resolve(size: CGSize(width: width, height: 700), trailing: true, terminal: false,
@@ -39,15 +46,21 @@ final class TaskWorkspaceLayoutTests: XCTestCase {
         let floating = layout(885)
         XCTAssertEqual(floating.panelPlacement, .over)
         XCTAssertEqual(floating.trailingWidth, 320)
-        XCTAssertEqual(floating.chatWidth, 565, "the conversation runs up to the floating panel")
-        XCTAssertEqual(floating.conversationCover, 0)
+        XCTAssertEqual(floating.panelInset, 8)
+        XCTAssertEqual(floating.chatWidth, 560, "the conversation runs up to the floating panel")
+        XCTAssertEqual(floating.conversationCover, 3)
         let under = layout(760)
         XCTAssertEqual(under.chatWidth, 560, "and keeps its minimum under the panel's edge")
-        XCTAssertEqual(under.conversationCover, 120)
+        XCTAssertEqual(under.conversationCover, 128)
         // The Codex app's 320 + 352 and the divider.
-        XCTAssertTrue(layout(678).showsChat)
-        XCTAssertEqual(layout(677).panelPlacement, .inPlace)
-        XCTAssertFalse(layout(677).showsChat)
+        XCTAssertEqual(layout(678).panelPlacement, .over)
+        XCTAssertEqual(layout(677).panelPlacement, .sheet)
+        XCTAssertTrue(layout(677).showsChat)
+        let expanded = TaskWorkspaceMetrics.resolve(size: CGSize(width: 677, height: 700), trailing: true, terminal: false,
+                                                    preferredWidth: 420, preferredHeight: 240, expanded: true)
+        XCTAssertEqual(expanded.panelPlacement, .inPlace)
+        XCTAssertFalse(expanded.showsChat)
+        XCTAssertEqual(expanded.panelInset, 0)
         let closed = TaskWorkspaceMetrics.resolve(size: CGSize(width: 1000, height: 700), trailing: false, terminal: false, preferredWidth: 674, preferredHeight: 240)
         XCTAssertEqual(closed.chatWidth, 1000)
         XCTAssertEqual(closed.upperHeight, 700)
@@ -103,8 +116,8 @@ final class TaskWorkspaceLayoutTests: XCTestCase {
         }
     }
 
-    /// The panel in the conversation's place, expanded or in a narrow area, leaves the hidden conversation the width
-    /// it showed at: no message is laid out at another width as it hides and shows, and a turn is measured again
+    /// The panel in the conversation's place (expanded) or as a sheet over a narrow area leaves the conversation the
+    /// width it showed at: no message is laid out at another width as it hides and shows, and a turn is measured again
     /// only when it is drawn again (as it is disabled and enabled), however long the conversation.
     /// `NHC_HIDDEN_CONVERSATION_TURNS` sets its length; the main thread's time for each step is printed.
     @MainActor
