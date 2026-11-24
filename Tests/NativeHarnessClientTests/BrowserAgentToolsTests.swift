@@ -663,6 +663,156 @@ final class BrowserAgentToolsTests: XCTestCase {
         XCTAssertEqual(page.snapshotCount, 3, "a part that cannot be read is no snapshot")
     }
 
+    /// `browser_snapshot` with `query` searches across frames and past the 60,000-character cap,
+    /// returning matching lines with their ancestor container refs and nearby context while keeping
+    /// the full snapshot's `@eN` refs usable for subsequent actions.
+    func testSnapshotQueryFindsMatchesAcrossFramesAndPastDisplayCapWithUsableRefs() async throws {
+        func node(_ id: String, _ role: String, _ name: String = "", children: [String] = [], backend: Int64) -> JSONValue {
+            .object([
+                "nodeId": .string(id), "role": .object(["type": .string("role"), "value": .string(role)]),
+                "name": .object(["type": .string("computedString"), "value": .string(name)]),
+                "childIds": .array(children.map { .string($0) }), "backendDOMNodeId": .integer(backend),
+                "properties": .array([])
+            ])
+        }
+        // Build a tree well past the 60,000-char display cap with a matching button at the very end.
+        var children: [String] = []
+        var nodes: [JSONValue] = []
+        for i in 1...1_400 {
+            let id = "p\(i)"
+            children.append(id)
+            nodes.append(node(id, "StaticText", "Filler paragraph \(i) " + String(repeating: "x", count: 40), backend: Int64(100 + i)))
+        }
+        children.append("form")
+        nodes.insert(node("1", "RootWebArea", "Long Page", children: children, backend: 1), at: 0)
+        nodes.append(node("form", "form", "Billing", children: ["label", "save"], backend: 2_000))
+        nodes.append(node("label", "textbox", "Cardholder", backend: 2_001))
+        nodes.append(node("save", "button", "Save Card", backend: 2_002))
+        cdp.responders["Accessibility.getFullAXTree"] = { _ in .object(["nodes": .array(nodes)]) }
+
+        let full = await run(AgentToolCatalog.snapshot)
+        XCTAssertTrue(full.text.contains("The page is larger than one snapshot"), "full snapshot truncates before the end")
+        XCTAssertFalse(full.text.contains("Save Card"))
+
+        let found = await run(AgentToolCatalog.snapshot, ["query": .string("save card")])
+        XCTAssertFalse(found.isError, found.text)
+        XCTAssertTrue(found.text.contains("1 match for \"save card\""), found.text)
+        XCTAssertTrue(found.text.contains("- form \"Billing\" [ref=@e1]"), "ancestor container ref is preserved: \(found.text)")
+        XCTAssertTrue(found.text.contains("- textbox \"Cardholder\" [ref=@e2]"), "nearby sibling context is kept: \(found.text)")
+        XCTAssertTrue(found.text.contains("- button \"Save Card\" [ref=@e3]"), found.text)
+        XCTAssertEqual(page.refs["@e3"], .init(node: 2_002), "matched ref is immediately usable")
+        XCTAssertLessThan(found.text.count, 1_000, "filtered snapshot stays compact")
+
+        // Empty query fails cleanly as invalidArguments; no-match query reports zero matches.
+        let empty = await run(AgentToolCatalog.snapshot, ["query": .string("   ")])
+        XCTAssertEqual(empty.failure?.kind, .invalidArguments)
+        let missing = await run(AgentToolCatalog.snapshot, ["query": .string("nonexistent-xyz")])
+        XCTAssertFalse(missing.isError, missing.text)
+        XCTAssertTrue(missing.text.contains("No elements matched \"nonexistent-xyz\""), missing.text)
+
+        // maxResults caps the returned matches and reports the total count (accepts whole JSON numbers too).
+        let capped = await run(AgentToolCatalog.snapshot, ["query": .string("Filler paragraph"), "maxResults": .number(3)])
+        XCTAssertFalse(capped.isError, capped.text)
+        XCTAssertTrue(capped.text.contains("showing 3 of 1400 matches"), capped.text)
+        XCTAssertTrue(capped.text.contains("Showing first 3 of 1400 matches"), capped.text)
+
+        // Invalid argument types or bounds fail cleanly instead of silently running a full snapshot.
+        let nonStringQuery = await run(AgentToolCatalog.snapshot, ["query": .integer(123)])
+        XCTAssertEqual(nonStringQuery.failure?.kind, .invalidArguments)
+        let zeroMax = await run(AgentToolCatalog.snapshot, ["query": .string("save"), "maxResults": .integer(0)])
+        XCTAssertEqual(zeroMax.failure?.kind, .invalidArguments)
+        let overMax = await run(AgentToolCatalog.snapshot, ["query": .string("save"), "maxResults": .integer(101)])
+        XCTAssertEqual(overMax.failure?.kind, .invalidArguments)
+        let floatMax = await run(AgentToolCatalog.snapshot, ["query": .string("save"), "maxResults": .number(2.5)])
+        XCTAssertEqual(floatMax.failure?.kind, .invalidArguments)
+
+        // ref + query searches only inside the scoped subtree and preserves page-order refs.
+        let scopedMatch = await run(AgentToolCatalog.snapshot, ["ref": .string("@e1"), "query": .string("cardholder")])
+        XCTAssertFalse(scopedMatch.isError, scopedMatch.text)
+        XCTAssertTrue(scopedMatch.text.contains("only @e1 and what it holds, 1 match for \"cardholder\""), scopedMatch.text)
+        XCTAssertTrue(scopedMatch.text.contains("- textbox \"Cardholder\" [ref=@e2]"), scopedMatch.text)
+        let scopedMiss = await run(AgentToolCatalog.snapshot, ["ref": .string("@e1"), "query": .string("Filler paragraph")])
+        XCTAssertFalse(scopedMiss.isError, scopedMiss.text)
+        XCTAssertTrue(scopedMiss.text.contains("No elements matched \"Filler paragraph\""), scopedMiss.text)
+
+        // Same-process child iframe matches via `browser_snapshot(query:)` include the Iframe ancestor and usable ref.
+        let mainWithFrame: [JSONValue] = [
+            node("1", "RootWebArea", "Outer", children: ["f1"], backend: 1),
+            node("f1", "Iframe", "Payment", backend: 3_000)
+        ]
+        let childFrameNodes: [JSONValue] = [
+            .object([
+                "nodeId": .string("r1"), "role": .object(["type": .string("role"), "value": .string("RootWebArea")]),
+                "name": .object(["type": .string("computedString"), "value": .string("Pay")]),
+                "childIds": .array([.string("r2")]), "backendDOMNodeId": .integer(10),
+                "properties": .array([.object(["name": .string("url"), "value": .object(["value": .string("https://pay.other.test/card")])])])
+            ]),
+            node("r2", "button", "Authorize Payment", backend: 3_100)
+        ]
+        cdp.responders["Page.getFrameTree"] = { _ in
+            .object(["frameTree": .object([
+                "frame": .object(["id": .string("MAIN")]),
+                "childFrames": .array([.object(["frame": .object(["id": .string("CHILD"), "parentId": .string("MAIN")])])])
+            ])])
+        }
+        cdp.responders["Accessibility.getFullAXTree"] = { params in
+            params["frameId"] == .string("CHILD") ? .object(["nodes": .array(childFrameNodes)]) : .object(["nodes": .array(mainWithFrame)])
+        }
+        cdp.responders["DOM.getFrameOwner"] = { _ in .object(["backendNodeId": .integer(3_000)]) }
+        let crossFrame = await run(AgentToolCatalog.snapshot, ["query": .string("authorize")])
+        XCTAssertFalse(crossFrame.isError, crossFrame.text)
+        XCTAssertTrue(crossFrame.text.contains("- Iframe \"Payment\" [origin=https://pay.other.test]"), crossFrame.text)
+        XCTAssertTrue(crossFrame.text.contains("- button \"Authorize Payment\""), crossFrame.text)
+        let authRef = try XCTUnwrap(Self.refs(in: crossFrame.text).last)
+        XCTAssertEqual(page.refs[authRef], .init(node: 3_100))
+        cdp.responders["Page.getFrameTree"] = nil
+        cdp.responders["DOM.getFrameOwner"] = nil
+
+        // Cross-origin OOPIF frame tree also preserves [origin=...] ancestor and session ref under filter.
+        let oopifRendered = BrowserAgentSnapshot.render(frames: [
+            BrowserAgentSnapshot.Frame(nodes: mainWithFrame, children: [3_000: 1]),
+            BrowserAgentSnapshot.Frame(nodes: childFrameNodes, session: "S1")
+        ])
+        let oopifFiltered = BrowserAgentSnapshot.filter(oopifRendered.text, query: "authorize")
+        XCTAssertEqual(oopifFiltered.matchCount, 1)
+        XCTAssertTrue(oopifFiltered.text.contains("- Iframe \"Payment\" [origin=https://pay.other.test]"), oopifFiltered.text)
+        let oopifRef = try XCTUnwrap(Self.refs(in: oopifFiltered.text).last)
+        XCTAssertEqual(oopifRendered.refs[oopifRef], .init(node: 3_100, session: "S1"))
+
+        // Scrubbing runs before matching so vault values, setup URIs, and link URLs cannot be probed.
+        tools.vaultScrub.add("SuperSecretVaultToken99")
+        let secretNodes: [JSONValue] = [
+            node("1", "RootWebArea", "Secrets", children: ["l1", "t1"], backend: 1),
+            .object([
+                "nodeId": .string("l1"), "role": .object(["type": .string("role"), "value": .string("link")]),
+                "name": .object(["type": .string("computedString"), "value": .string("Invite")]),
+                "childIds": .array([]), "backendDOMNodeId": .integer(4_001),
+                "properties": .array([.object(["name": .string("url"), "value": .object(["value": .string("https://other.test/?tok=SuperSecretVaultToken99")])])])
+            ]),
+            node("t1", "StaticText", "otpauth://totp/Acme:ada?secret=JBSWY3DPEHPK3PXP&issuer=Acme", backend: 4_002)
+        ]
+        cdp.responders["Accessibility.getFullAXTree"] = { _ in .object(["nodes": .array(secretNodes)]) }
+        let secretLinkProbe = await run(AgentToolCatalog.snapshot, ["query": .string("SuperSecretVaultToken99")])
+        XCTAssertTrue(secretLinkProbe.text.contains("No elements matched"), secretLinkProbe.text)
+        let otpProbe = await run(AgentToolCatalog.snapshot, ["query": .string("JBSWY3DPEHPK3PXP")])
+        XCTAssertTrue(otpProbe.text.contains("No elements matched"), otpProbe.text)
+
+        // Empty page placeholder text is never matched as page content.
+        cdp.responders["Accessibility.getFullAXTree"] = { _ in .object(["nodes": .array([])]) }
+        let emptyPage = await run(AgentToolCatalog.snapshot, ["query": .string("readable")])
+        XCTAssertTrue(emptyPage.text.contains("No elements matched \"readable\""), emptyPage.text)
+
+        // Filter output-cap and source-cap accounting stays accurate without dangling ellipsis lines.
+        let dense = (1...10).map { "- button \"Match \($0) " + String(repeating: "a", count: 40) + "\" [ref=@e\($0)]" }.joined(separator: "\n")
+        let outputCapped = BrowserAgentSnapshot.filter(dense, query: "Match", maxResults: 10, maximumLength: 160, sourceTruncated: true)
+        XCTAssertTrue(outputCapped.isTruncated)
+        XCTAssertLessThan(outputCapped.shownCount, 10)
+        XCTAssertEqual(outputCapped.matchCount, 10)
+        XCTAssertTrue(outputCapped.text.contains("Showing \(outputCapped.shownCount) of 10 matches (output cap reached)"), outputCapped.text)
+        XCTAssertTrue(outputCapped.text.contains("exceeded the snapshot search limit"), outputCapped.text)
+        XCTAssertFalse(outputCapped.text.contains("\n…\n… "), "no dangling ellipsis right above footer: \(outputCapped.text)")
+    }
+
     /// A link the agent clicked navigates without the navigate tool. The old document can stay
     /// alive in the back/forward cache and still answer for its nodes, so the navigation itself
     /// has to end the references.
