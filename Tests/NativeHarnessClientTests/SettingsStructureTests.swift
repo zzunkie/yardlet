@@ -80,6 +80,7 @@ final class SettingsStructureTests: XCTestCase {
             ("context limit", "setting:claude_code_context_limit"), ("shortcut", "section:keyboardShortcuts"),
             ("terminal location", "setting:terminal_location"), ("usage", "section:usage"),
             ("browser cookies", "setting:keep_cookies"), ("브라우저 쿠키", "setting:keep_cookies"),
+            ("code mode", "setting:agent_code_mode"), ("코드 모드", "setting:agent_code_mode"),
         ] {
             XCTAssertEqual(first(query)?.id, expected, "“\(query)” finds \(expected) first")
         }
