@@ -275,7 +275,7 @@ authentication. The read cache stays as the first view, and the thread read repl
 quits, the read cache is rewritten from that view, as for any other visible Codex thread. A failure or a response
 without turns leaves the cache as it is.
 
-**Other ACP agents (OpenCode, Kimi Code, Grok Build, Hermes Agent).** A detached task that shows nothing, an imported or
+**Other ACP agents (OpenCode, Kimi Code, Grok Build, Hermes Agent, Kiro CLI).** A detached task that shows nothing, an imported or
 unarchived one, shows the conversation the agent replays when the session loads (`ACPSessionHistory`,
 `AppModel.replayACPConversation`). Yardlet starts the agent's ACP process for the read alone, with the task's runtime
 and the arguments and account folder environment the task's own process gets, sends `initialize` and `session/load`
@@ -508,13 +508,13 @@ homes, and stores the provider session ID, the `.native` scope and the account b
   account, or for Claude an account that shares the history) opens the existing task.
 - **ACP agents in Import conversation… (the File menu and the account menu; on Windows, Import conversation below the
   tasks):** besides Claude Code, Codex and Antigravity CLI, the sheet lists each other ACP agent that is installed
-  (OpenCode, Kimi Code, Grok Build, Hermes Agent; `ACPSessionHistory.reads`). The list is the agent's own `session/list`
+  (OpenCode, Kimi Code, Grok Build, Hermes Agent, Kiro CLI; `ACPSessionHistory.reads`). The list is the agent's own `session/list`
   (`cwd` the chosen project folder's real path, as `getcwd` gives it to a CLI started there and as the CLI saves its
   sessions: `/private/tmp/…` for `/tmp/…`, links resolved, no trailing slash, on Windows `C:\Users\me\proj` rather than
   a file URL's `/C:/Users/me/proj/`, since an agent such as OpenCode matches the folder character for character; and
   `cursor` for the next page), read by a process of the read's own that stops after `initialize` and the list, with no
   session made or loaded. The agent must advertise `sessionCapabilities.list`, or the sheet says it does not list its
-  conversations. Only sessions whose `cwd` is that folder show, since an agent may list every folder's; each one's title
+  conversations; a signed-out Kiro CLI advertises neither listing nor loading, so it asks for the sign-in instead. Only sessions whose `cwd` is that folder show, since an agent may list every folder's; each one's title
   is the agent's `title` (its first line) and its time `updatedAt`. The account is the one chosen in the sheet: a saved
   Kimi Code, Grok Build, Hermes or OpenCode account's folder (`KIMI_CODE_HOME`, `GROK_HOME`, `HERMES_HOME`, OpenCode's
   XDG folders) is the environment the list is read in, and the imported task keeps that account's binding with the

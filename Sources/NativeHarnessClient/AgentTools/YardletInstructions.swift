@@ -38,7 +38,7 @@ struct YardletInstructionsDelivery: Hashable, Sendable {
 ///   do, but one OpenCode process serves the tasks of every folder and reads it once, so it could
 ///   follow neither a project's text nor its switch), `muse serve` (only an internal evaluation
 ///   variable), `kimi acp` (no options), `hermes acp` (its ephemeral prompt is read by the TUI and
-///   gateway only) and `cursor-agent`.
+///   gateway only), `kiro-cli acp` (3.5.0 documents no text for a session) and `cursor-agent`.
 enum YardletInstructionsRoute: String, CaseIterable, Sendable {
     case claudeAppendSystemPrompt
     case codexDeveloperInstructions

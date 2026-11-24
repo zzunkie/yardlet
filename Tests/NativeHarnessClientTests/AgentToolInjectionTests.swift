@@ -61,7 +61,7 @@ final class AgentToolInjectionTests: XCTestCase {
     func testOnlyClaudeCodexAndACPHaveARoute() {
         XCTAssertEqual(AgentToolInjectionRoute.route(for: .claudeCode), .claudeMCPConfig)
         XCTAssertEqual(AgentToolInjectionRoute.route(for: .codex), .codexThreadConfig)
-        for harness in [HarnessKind.openCode, .antigravityCLI, .kimiCode, .grokBuild, .hermes] {
+        for harness in [HarnessKind.openCode, .antigravityCLI, .kimiCode, .grokBuild, .hermes, .kiroCLI] {
             XCTAssertEqual(AgentToolInjectionRoute.route(for: harness), .acpSessionMCPServers, "\(harness)")
         }
         for harness in [HarnessKind.museCode, .pi, .cursorAgent] {
@@ -72,7 +72,7 @@ final class AgentToolInjectionTests: XCTestCase {
     func testTheAdaptersTheAppRoutesThroughAcceptTheServer() async {
         let registry = HarnessRegistry()
         let executable = URL(filePath: "/tmp/yardlet-agent-tool-routing-fixture")
-        for harness in [HarnessKind.codex, .claudeCode, .openCode, .antigravityCLI, .kimiCode, .grokBuild, .hermes] {
+        for harness in [HarnessKind.codex, .claudeCode, .openCode, .antigravityCLI, .kimiCode, .grokBuild, .hermes, .kiroCLI] {
             let routed = await registry.adapter(for: harness, executableURL: executable)
             XCTAssertNotNil(routed as? any HarnessAgentToolConfiguring,
                             "\(harness) reaches the app through a wrapper that has to carry the server")

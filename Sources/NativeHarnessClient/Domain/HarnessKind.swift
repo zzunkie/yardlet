@@ -28,6 +28,7 @@ struct HarnessKind: RawRepresentable, Codable, Hashable, Identifiable, Sendable 
     static let kimiCode = HarnessKind(rawValue: "kimi-code")
     static let grokBuild = HarnessKind(rawValue: "grok-build")
     static let hermes = HarnessKind(rawValue: "hermes-agent")
+    static let kiroCLI = HarnessKind(rawValue: "kiro-cli")
     static let pi = HarnessKind(rawValue: "pi")
 
     var displayName: String {
@@ -193,6 +194,19 @@ enum HarnessCatalog {
                                       HarnessCatalog.virtualEnvironmentProgram(".hermes/hermes-agent/venv", "hermes")],
             websiteURL: URL(string: "https://hermes-agent.nousresearch.com/")!,
             repositoryURL: URL(string: "https://github.com/NousResearch/hermes-agent")!
+        ),
+        // The v3 engine whatever `acp.agentEngine` says: v2 speaks ACP with other messages (its own
+        // model request, no session list), which Kiro calls legacy.
+        HarnessDescriptor(
+            id: .kiroCLI,
+            displayName: "Kiro CLI",
+            shortName: "Kiro",
+            symbolName: "cloud",
+            transport: .acp,
+            executableName: "kiro-cli",
+            launchArguments: ["acp", "--agent-engine", "v3"],
+            relativeExecutablePaths: [".local/bin/kiro-cli"],
+            websiteURL: URL(string: "https://kiro.dev/docs/cli/")!
         ),
         HarnessDescriptor(
             id: .pi,

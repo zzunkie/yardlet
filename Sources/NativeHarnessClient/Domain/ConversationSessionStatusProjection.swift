@@ -27,11 +27,11 @@ enum ConversationSessionStatusProjection {
         if id == "model" || category == "model" { return .model }
         if id == "mode" || id == "sessionmode" || id == "collaborationmode" { return .mode }
         if category == "thought_level" || category == "model_config"
-            || id.contains("reason") || id.contains("thinking") || id.contains("thought") {
+            || id == "effortlevel" || id.contains("reason") || id.contains("thinking") || id.contains("thought") {
             return .reasoning
         }
         if id.contains("permission") || id.contains("approval")
-            || id.contains("review") || id.contains("sandbox") {
+            || id.contains("review") || id.contains("sandbox") || id == "autopilot" {
             return .permission
         }
         return nil

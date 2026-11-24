@@ -67,7 +67,7 @@ final class RestartResumeTests: XCTestCase {
         XCTAssertEqual(entries.map(\.unseenContinuations), [nil, nil, nil, 2, nil, nil, nil, 1, nil, nil],
             "A turn Yardlet continued unseen is written down again with how many times in a row it has been")
         XCTAssertEqual(entries.map(\.interruptedAt), Array(repeating: nil, count: 10), "Cut off by this quit")
-        XCTAssertEqual(RestartResumePolicy.harnesses, [.claudeCode, .codex, .antigravityCLI, .openCode, .kimiCode, .grokBuild, .hermes])
+        XCTAssertEqual(RestartResumePolicy.harnesses, [.claudeCode, .codex, .antigravityCLI, .openCode, .kimiCode, .grokBuild, .hermes, .kiroCLI])
         XCTAssertEqual(entries.first?.lastActiveAt, claude.updatedAt, "Each keeps its last activity for the launch's order")
         XCTAssertEqual(entries.first?.providerSessionID, claude.providerSessionID)
         XCTAssertEqual(entries.first?.connection, claude.connection)

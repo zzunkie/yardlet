@@ -114,6 +114,11 @@ actor HarnessAccountBroker {
             arguments = ["login"]
             initialInput = nil
             startupMessage = nil
+        case .kiroCLI:
+            // Opens Kiro's sign-in page in the browser, with every way to sign in, and waits for it.
+            arguments = ["login"]
+            initialInput = nil
+            startupMessage = nil
         case .hermes:
             // Hermes owns provider/model selection and authentication. Its ACP
             // --check only checks imports; it is never account evidence.
@@ -186,7 +191,7 @@ actor HarnessAccountBroker {
         case .claudeCode:
             arguments = ["auth", "logout"]
             initialInput = nil
-        case .cursorAgent, .grokBuild, .museCode:
+        case .cursorAgent, .grokBuild, .museCode, .kiroCLI:
             arguments = ["logout"]
             initialInput = nil
         case .openCode:
@@ -355,6 +360,7 @@ actor HarnessAccountBroker {
             return grokSnapshot(descriptor: descriptor)
         case .kimiCode: arguments = ["provider", "list"]
         case .openCode: arguments = ["auth", "list"]
+        case .kiroCLI: arguments = ["whoami"]
         default:
             return HarnessAccountSnapshot(
                 id: descriptor.id.rawValue,
@@ -457,7 +463,8 @@ actor HarnessAccountBroker {
             harness: descriptor.id,
             providerID: nil,
             state: state,
-            accountLabel: claudeIdentity?.displayLabel,
+            accountLabel: descriptor.id == .kiroCLI && state == .signedIn
+                ? Self.kiroAccountEmail(from: result.output) : claudeIdentity?.displayLabel,
             accountOrganization: claudeIdentity?.groupingOrganization,
             accountPlan: claudeIdentity?.planLabel,
             detail: detail,
@@ -751,6 +758,9 @@ actor HarnessAccountBroker {
         if harness == .kimiCode, result.exitCode == 0, kimiHasConfiguredProvider(normalized) {
             return .signedIn
         }
+        if harness == .kiroCLI, result.exitCode == 0, normalized.contains("logged in with ") {
+            return .signedIn
+        }
         let signedOutMarkers = [
             "not logged in", "not authenticated", "authentication required",
             "please sign in", "please log in", "no auth credentials",
@@ -870,6 +880,18 @@ actor HarnessAccountBroker {
         normalizedOutput.split(whereSeparator: \.isNewline).contains {
             $0.range(of: #"^\S+\s+type=\S+\s+models=[0-9]+\s+source="#, options: .regularExpression) != nil
         }
+    }
+
+    /// `kiro-cli whoami` prints "Logged in with <method>" and, for a sign-in that has one, an
+    /// `Email: <address>` line; it prints "Not logged in" and exits 1 without a sign-in.
+    static func kiroAccountEmail(from output: String) -> String? {
+        for line in AccountLoginController.stripANSI(output).split(whereSeparator: \.isNewline) {
+            let parts = line.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard parts.count == 2, parts[0].lowercased() == "email", parts[1].contains("@"),
+                  parts[1].count <= 200 else { continue }
+            return parts[1]
+        }
+        return nil
     }
 
     /// Environment-backed providers cannot be removed by `opencode auth logout`.

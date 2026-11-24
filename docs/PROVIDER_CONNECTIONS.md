@@ -73,6 +73,7 @@ The screen flow is in [ACCOUNT_SELECTION_UX.md](ACCOUNT_SELECTION_UX.md).
 | Hermes Agent | A separate model provider | HERMES_HOME | No safe structured lookup | Choose the environment in a new task |
 | Kimi Code | Its own service or a provider set in the CLI | KIMI_CODE_HOME | Not shown; the CLI publishes none | Choose the environment in a new task |
 | Grok Build | Its own service | GROK_HOME | Not shown; the CLI publishes none | Choose the environment in a new task |
+| Kiro CLI | Its own service | None | Not shown; `whoami` publishes none | Sign out and sign in with the CLI |
 | Other harnesses | The default or external provider settings that the CLI owns | Keep the existing connection | Only public lookups verified before | No extra paths are made up |
 
 An extra account environment is offered only where the CLI officially moves its sign-in and its history together
@@ -177,6 +178,7 @@ credential is copied between folders. As the CLIs' documentation and these versi
 | Cursor Agent 2026.08 | `CURSOR_CONFIG_DIR` moves the settings and chats only | macOS Keychain items with fixed names (`cursor-access-token` and the like) | Chats only | No: two folders would share one sign-in |
 | Antigravity CLI 1.4 | None documented | One OS keyring item (service `gemini`, account `antigravity`) | — | No |
 | Muse Code 1.4 | None documented (the binary reads the XDG folders) | macOS Keychain by default, with a pointer file in the config folder; whether the item differs per folder is not known | With `XDG_DATA_HOME` | Not offered until two sign-ins are seen to stay apart |
+| Kiro CLI 3.5.0 | `KIRO_HOME` (its settings guide says it moves "configuration, sign-ins, sessions, and agent state") | With `KIRO_HOME` set, 3.5.0 still makes `data.sqlite3`, which has its `auth_kv` table, in its own application support folder | `sessions/`, as the guide says | Not offered until two sign-ins are seen to stay apart |
 
 Where no route exists, another account means signing out and signing in to the other one with the CLI. An extra Kimi
 Code or Grok Build account starts in an empty folder of its own and keeps its own history, as a Codex account does:

@@ -18,9 +18,14 @@ enum ProviderSignIn {
     /// because your refresh token has expired. Please log out and sign in again." or "…Please sign in
     /// again."; after its retries of a request sent with no login (0.166.0): "unexpected status 401
     /// Unauthorized: Missing bearer or basic authentication in header".
+    ///
+    /// Kiro CLI 3.5.0 answers every ACP request but `initialize` with "Authentication required. Not
+    /// logged in. Set the KIRO_API_KEY environment variable or run `kiro-cli login` first. …", and
+    /// a prompt of a session whose sign-in is gone with "Sign in to Kiro to send a prompt."
     private static let cliWords = [
         "Please run /login", "Run /login", "Failed to authenticate", "Sign in again to continue",
         "Please log out and sign in again", "Please sign in again", "Missing bearer or basic authentication",
+        "run `kiro-cli login` first", "Sign in to Kiro to send a prompt",
     ]
     /// Antigravity CLI 1.5.9 refuses a session it has no login for with ACP's `auth_required` error,
     /// whose message is these words alone. Claude Code starts other errors with them, about a connector.

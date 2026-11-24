@@ -20,6 +20,7 @@ enum HarnessWorkspaceRootLaunchArguments {
     /// - `grok agent stdio` — debug and leader-socket options only.
     /// - `hermes acp` — auth and setup options only. `hermes project add-folder` exists, but it
     ///   rewrites the user's own profile state rather than configuring one launch.
+    /// - `kiro-cli acp` (3.5.0) — engine, sign-in and v2-only model and trust options.
     /// - `pi --mode rpc` — no additional-directory option, and the RPC session request has no
     ///   field for one.
     static func flag(for harness: HarnessKind) -> String? {

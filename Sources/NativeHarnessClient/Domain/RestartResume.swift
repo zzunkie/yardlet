@@ -137,7 +137,7 @@ struct RestartResumeRecord: Codable, Equatable, Sendable {
 ///   install, within 15 minutes. Yardlet continues Codex tasks after any quit, by the rules above,
 ///   sharing the line with Claude Code tasks; subagent threads, which their parent's turn drives,
 ///   never.
-/// - The ACP agents (Antigravity, OpenCode, Kimi Code, Grok Build, Hermes; 2026-11-06, after an
+/// - The ACP agents (Antigravity, OpenCode, Kimi Code, Grok Build, Hermes, Kiro CLI; 2026-11-06, after an
 ///   Antigravity turn an update cut off read as completed with no answer and nobody continued it):
 ///   none of their own clients continues a turn a quit cut off (the Antigravity app and `agy -c` wait
 ///   for the person's next message, and the Antigravity server only tells the model, at that next

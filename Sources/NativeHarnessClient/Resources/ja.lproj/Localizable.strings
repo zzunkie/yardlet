@@ -2183,7 +2183,7 @@
 "The battery is under 20%. Yardlet keeps tasks working with the lid closed again on power." = "バッテリー残量が 20% 未満です。電源に接続すると、再びディスプレイを閉じてもタスクの実行を続けます。";
 "The Mac is hot with its lid closed" = "ディスプレイを閉じた状態で Mac が高温になっています";
 "Tasks keep working. Open the lid or move the Mac somewhere cooler." = "タスクは実行中です。ディスプレイを開くか、涼しい場所に移動してください。";
-"Claude Code, Codex, Antigravity, OpenCode, Kimi Code, Grok Build and Hermes tasks continue where they left off after Yardlet quits or updates" = "Yardlet の終了やアップデートのあとも、Claude Code、Codex、Antigravity、OpenCode、Kimi Code、Grok Build、Hermes のタスクを中断した箇所から続行します";
+"Claude Code, Codex, Antigravity, OpenCode, Kimi Code, Grok Build, Hermes and Kiro CLI tasks continue where they left off after Yardlet quits or updates" = "Yardlet の終了やアップデートのあとも、Claude Code、Codex、Antigravity、OpenCode、Kimi Code、Grok Build、Hermes、Kiro CLI のタスクを中断した箇所から続行します";
 "Codex did not answer %@ within %lld seconds." = "Codex が %@ に対して %lld 秒以内に応答しませんでした。";
 "This conversation is open in another Codex app, such as ChatGPT, so it cannot continue here. Quit that app, then send again." = "この会話は ChatGPT などの別の Codex アプリで開かれているため、ここでは続行できません。そのアプリを終了してから、もう一度送信してください。";
 "Sent from %@" = "%@ から送信";

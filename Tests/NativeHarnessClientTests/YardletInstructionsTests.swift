@@ -36,7 +36,7 @@ final class YardletInstructionsTests: XCTestCase {
         XCTAssertEqual(YardletInstructionsRoute.route(for: .pi), .piAppendSystemPrompt)
         XCTAssertEqual(YardletInstructionsRoute.route(for: .antigravityCLI), .antigravitySystemPrompt)
         XCTAssertEqual(YardletInstructionsRoute.unsupportedHarnesses,
-                       [.museCode, .openCode, .cursorAgent, .kimiCode, .hermes],
+                       [.museCode, .openCode, .cursorAgent, .kimiCode, .hermes, .kiroCLI],
                        "Every other built-in harness is named as not supported, in catalog order")
         XCTAssertEqual(Set(HarnessCatalog.builtIns.map(\.id)),
                        Set(YardletInstructionsRoute.unsupportedHarnesses + [.claudeCode, .codex, .grokBuild, .pi, .antigravityCLI]))

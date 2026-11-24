@@ -75,6 +75,18 @@ final class ACPSessionHistoryTests: XCTestCase {
         XCTAssertTrue(declined, "What the agent asks during a read is declined")
     }
 
+    func testASignedOutKiroAsksToSignInInsteadOfSayingItCannotList() async throws {
+        let agent = ScriptedACPAgent(sessions: [], replays: [:], listsSessions: false, loadsSessions: false)
+        let history = ACPSessionHistory(makeTransport: { _ in agent.transport() }, timeout: .seconds(10))
+        do {
+            _ = try await history.sessions(of: .kiroCLI, executableURL: URL(filePath: "/tmp/kiro-cli"),
+                                           connection: nil, in: workspace, cursor: nil)
+            XCTFail("Expected the sign-in")
+        } catch {
+            XCTAssertEqual(error as? HarnessSignInRequired, HarnessSignInRequired())
+        }
+    }
+
     func testAnAgentThatDoesNotListSaysSo() async throws {
         let agent = ScriptedACPAgent(sessions: [], replays: [:], listsSessions: false)
         let history = ACPSessionHistory(makeTransport: { _ in agent.transport() }, timeout: .seconds(10))
@@ -179,15 +191,17 @@ final class ScriptedACPAgent: @unchecked Sendable {
     let listsSessions: Bool
     /// Lists every session whatever `cwd` asks, as `agy acp` does.
     let listsEveryFolder: Bool
+    let loadsSessions: Bool
     private let lock = NSLock()
     private var made: [Connection] = []
 
     init(sessions: [JSONValue], replays: [String: [JSONValue]], listsSessions: Bool = true,
-         listsEveryFolder: Bool = false) {
+         listsEveryFolder: Bool = false, loadsSessions: Bool = true) {
         self.sessions = sessions
         self.replays = replays
         self.listsSessions = listsSessions
         self.listsEveryFolder = listsEveryFolder
+        self.loadsSessions = loadsSessions
     }
 
     var connections: [Connection] { lock.withLock { made } }
@@ -227,7 +241,7 @@ final class ScriptedACPAgent: @unchecked Sendable {
                 var sessionCapabilities: [String: JSONValue] = ["resume": .object([:])]
                 if agent.listsSessions { sessionCapabilities["list"] = .object([:]) }
                 answer(id, .object(["protocolVersion": .integer(1), "agentCapabilities": .object([
-                    "loadSession": .bool(true), "sessionCapabilities": .object(sessionCapabilities)])]))
+                    "loadSession": .bool(agent.loadsSessions), "sessionCapabilities": .object(sessionCapabilities)])]))
             case "session/list":
                 // As OpenCode does, a `cwd` lists the sessions saved in exactly that folder.
                 let folder = agent.listsEveryFolder ? nil : value["params"]?["cwd"]?.stringValue

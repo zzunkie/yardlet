@@ -59,7 +59,7 @@ SOFTWARE.
 ## Harness product marks
 
 Yardlet bundles identifying product marks for Codex, Claude Code, Muse Code, OpenCode, Cursor Agent,
-Antigravity CLI, Kimi Code, Grok Build, Hermes Agent, and Pi. Product names and marks remain the property of their respective owners and do not imply
+Antigravity CLI, Kimi Code, Grok Build, Hermes Agent, Kiro CLI, and Pi. Product names and marks remain the property of their respective owners and do not imply
 endorsement. Exact official acquisition sources are recorded in
 `Sources/NativeHarnessClient/Resources/HarnessLogos/SOURCES.md`.
 

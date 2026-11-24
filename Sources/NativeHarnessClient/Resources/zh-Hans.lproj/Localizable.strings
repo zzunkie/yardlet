@@ -2183,7 +2183,7 @@
 "The battery is under 20%. Yardlet keeps tasks working with the lid closed again on power." = "电量低于 20%。接通电源后，Yardlet 会再次在合盖时保持任务运行。";
 "The Mac is hot with its lid closed" = "Mac 合盖状态下温度过高";
 "Tasks keep working. Open the lid or move the Mac somewhere cooler." = "任务仍在继续运行。请打开屏幕盖或将 Mac 移至较凉爽处。";
-"Claude Code, Codex, Antigravity, OpenCode, Kimi Code, Grok Build and Hermes tasks continue where they left off after Yardlet quits or updates" = "Yardlet 退出或更新后，Claude Code、Codex、Antigravity、OpenCode、Kimi Code、Grok Build 和 Hermes 任务将从上次中断处继续";
+"Claude Code, Codex, Antigravity, OpenCode, Kimi Code, Grok Build, Hermes and Kiro CLI tasks continue where they left off after Yardlet quits or updates" = "Yardlet 退出或更新后，Claude Code、Codex、Antigravity、OpenCode、Kimi Code、Grok Build、Hermes 和 Kiro CLI 任务将从上次中断处继续";
 "Codex did not answer %@ within %lld seconds." = "Codex 未在 %2$lld 秒内响应 %1$@。";
 "This conversation is open in another Codex app, such as ChatGPT, so it cannot continue here. Quit that app, then send again." = "此对话已在另一个 Codex 应用（例如 ChatGPT）中打开，因此无法在此继续。请退出该应用，然后重新发送。";
 "Sent from %@" = "由 %@ 发送";

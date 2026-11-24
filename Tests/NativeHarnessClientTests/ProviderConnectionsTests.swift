@@ -119,7 +119,7 @@ import XCTest
             XCTAssertEqual(launched[variable], "/tmp/account-b")
             XCTAssertNil(launched["XAI_API_KEY"])
         }
-        for harness in [HarnessKind.cursorAgent, .antigravityCLI, .museCode] {
+        for harness in [HarnessKind.cursorAgent, .antigravityCLI, .museCode, .kiroCLI] {
             XCTAssertThrowsError(try ProviderConnection(id: "b", name: "B", harness: harness, providerID: nil,
                 homePath: "/tmp/account-b", credentialSelector: nil).validate(for: harness))
         }
