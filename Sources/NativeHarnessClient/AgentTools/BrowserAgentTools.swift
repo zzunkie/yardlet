@@ -2013,8 +2013,26 @@ final class BrowserAgentTools {
                 throw BrowserAgentToolError("\(ref) is stale: the page changed since the last snapshot. Call "
                     + "browser_snapshot again.", Self.missingReference(ref, on: page))
             }
+            // The document the command ran in is gone: the page went to another one meanwhile, which ends the
+            // execution contexts (and the objects) the command named.
+            if Self.endsWithItsDocument(message) {
+                if let ref {
+                    throw BrowserAgentToolError("\(ref) is stale: the page went to another document while \(method) ran. "
+                        + "Call browser_snapshot again.", Self.missingReference(ref, on: page))
+                }
+                throw BrowserAgentToolError("The page went to another document while \(method) ran, so it did not run. "
+                    + "Call browser_snapshot for the current page and try again.",
+                    AgentToolFailure(.notFound, retry: .withChanges, details: ["tabId": .string(String(page.tabID))]))
+            }
             throw BrowserAgentToolError("The browser refused \(method): \(message)")
         }
+    }
+
+    /// The errors Chromium gives a command whose execution context, or an object in it, went with its document.
+    static func endsWithItsDocument(_ message: String) -> Bool {
+        ["Cannot find context with specified id", "Execution context was destroyed",
+         "Cannot find default execution context", "Could not find object with given id"]
+            .contains { message.localizedCaseInsensitiveContains($0) }
     }
 
     private func sendUnlessDialogOpens(

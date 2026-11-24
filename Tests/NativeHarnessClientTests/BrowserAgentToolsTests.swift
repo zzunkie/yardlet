@@ -1407,6 +1407,17 @@ final class BrowserAgentToolsTests: XCTestCase {
         page.replaceRefs(["@e9": .init(node: 3, session: "frame-session")], eventMark: cdp.eventLog.count)
         let framed = await run(VaultToolCatalog.fillCredential, ["ref": .string("@e9")])
         XCTAssertTrue(framed.isError && framed.text.contains("inside a frame"), framed.text)
+
+        // A document change between resolving the field and filling it ends the vault world's context: the fill
+        // reads as a stale reference to snapshot again, not as a browser refusal.
+        page.replaceRefs(["@e2": .init(node: 3)], eventMark: cdp.eventLog.count)
+        cdp.responders["Runtime.callFunctionOn"] = { _ in
+            throw BrowserDevToolsError.protocolError("Runtime.callFunctionOn", .object([
+                "code": .integer(-32000), "message": .string("Cannot find context with specified id")]))
+        }
+        let gone = await run(VaultToolCatalog.fillCredential, ["ref": .string("@e2")])
+        XCTAssertTrue(gone.isError && gone.text.contains("@e2 is stale") && gone.text.contains("browser_snapshot"), gone.text)
+        XCTAssertFalse(gone.text.contains("refused"), gone.text)
     }
 
     /// A filled password stays out of addresses and other sites (docs/BROWSER_VAULT_DESIGN.md, "Filled values and

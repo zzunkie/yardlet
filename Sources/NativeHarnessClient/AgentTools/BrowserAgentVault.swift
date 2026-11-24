@@ -1199,7 +1199,7 @@ extension BrowserAgentTools {
             throw BrowserAgentToolError("\(ref) could not be found on the page. Call browser_snapshot again.")
         }
         let onPage = try await callInVaultWorld(page, objectID,
-            "function() { return this instanceof HTMLElement && this.ownerDocument === document; }")
+            "function() { return this instanceof HTMLElement && this.ownerDocument === document; }", ref: ref)
         guard onPage.boolValue == true else {
             throw BrowserAgentToolError("\(ref) is inside a frame in the page; Yardlet fills only the page's own fields.")
         }
@@ -1657,11 +1657,11 @@ extension BrowserAgentTools {
     }
 
     private func callInVaultWorld(_ page: BrowserAgentPage, _ objectID: String, _ function: String,
-                                  arguments: [JSONValue] = []) async throws -> JSONValue {
+                                  arguments: [JSONValue] = [], ref: String? = nil) async throws -> JSONValue {
         let result = try await send(page, "Runtime.callFunctionOn", [
             "functionDeclaration": .string(function), "objectId": .string(objectID),
             "arguments": .array(arguments.map { .object(["value": $0]) }), "returnByValue": .bool(true)
-        ])
+        ], ref: ref)
         if result["exceptionDetails"] != nil {
             throw BrowserAgentToolError("The fill did not run on this page.")
         }
