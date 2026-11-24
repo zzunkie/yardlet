@@ -38,7 +38,8 @@ struct SimulatorDeviceMenu: Equatable {
         if approvals?.isApprovedAnywhere(center.original(of: attached.device.identity)) == true {
             items.append(.revokeAgentAccess)
         }
-        if attached.isStartedByYardlet {
+        // Another task's simulator is not this tab's to shut down.
+        if attached.isStartedByYardlet, !center.attachesCopy(attached.device.identity, for: task) {
             if attached.device.state.isRunning { items.append(.shutDown) }
             items.append(.startedByYardletNote)
         }

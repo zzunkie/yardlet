@@ -7,6 +7,12 @@ protocol AndroidEmulatorLaunching: Sendable {
     func launch(_ executable: URL, arguments: [String], environment: [String: String]) throws -> Int32
     /// Whether a process this launcher started has ended; nil for one it did not start.
     func hasEnded(_ processID: Int32) -> Bool?
+    /// Ends a process this launcher started: a copy let go of before adb reaches its console.
+    func terminate(_ processID: Int32)
+}
+
+extension AndroidEmulatorLaunching {
+    func terminate(_ processID: Int32) {}
 }
 
 /// The emulators this Yardlet started, one entry for each start, so an ended one still answers.
@@ -33,6 +39,10 @@ final class LiveAndroidEmulatorLauncher: AndroidEmulatorLaunching, @unchecked Se
 
     func hasEnded(_ processID: Int32) -> Bool? {
         lock.withLock { processes[processID].map { !$0.isRunning } }
+    }
+
+    func terminate(_ processID: Int32) {
+        lock.withLock { processes[processID] }?.terminate()
     }
 }
 
@@ -120,10 +130,9 @@ struct AndroidEmulatorBackend: SimulatorBackend {
         let listed = try await adbDevices(sdk)
         // Already running, here or in Android Studio: an AVD runs once, so it is used where it runs.
         if try await runningEmulators(sdk, listed: listed)[avd] != nil { return .alreadyOn }
-        let taken = Set(listed.compactMap(\.emulatorPort)).union(launches.ports)
-        guard let port = ports.first(where: { !taken.contains($0) }) else {
-            throw SimulatorCommandError(message: "No free emulator port between 5554 and 5682")
-        }
+        // Taken under the record's lock, so two emulators starting at once never pick the same port.
+        guard let port = launches.reservePort(for: avd, from: ports, excluding: Set(listed.compactMap(\.emulatorPort)))
+        else { throw SimulatorCommandError(message: "No free emulator port between 5554 and 5682") }
         let processID: Int32
         do {
             let copy = isCopy(avd)
@@ -131,6 +140,7 @@ struct AndroidEmulatorBackend: SimulatorBackend {
                 sdk.emulator, arguments: Self.launchArguments(avd: avd, port: port, isCopy: copy),
                 environment: copy ? ["ANDROID_AVD_HOME": home(of: avd).nativePath] : [:])
         } catch {
+            launches.remove(avd: avd)
             throw SimulatorCommandError(message: "The emulator did not start: \(error.localizedDescription)")
         }
         launches.add(avd: avd, port: port, processID: processID)
@@ -249,9 +259,24 @@ struct AndroidEmulatorBackend: SimulatorBackend {
     func deleteCopy(_ device: SimulatorDeviceIdentity, with toolchain: SimulatorToolchain) async throws {
         guard device.kind == .androidEmulator, isCopy(device.value), let copiesHome else { return }
         let sdk = AndroidSDK(toolchain: toolchain)
-        if let serial = try? await serial(of: device.value, sdk: sdk) {
-            let copy = SimulatorDevice(identity: device, name: device.value, state: .on, osName: "", osVersion: "",
-                                       adbSerial: serial)
+        let copy = SimulatorDevice(identity: device, name: device.value, state: .on, osName: "", osVersion: "")
+        if let launched = liveLaunch(of: device.value) {
+            do {
+                try await shutDown(copy, with: toolchain)
+            } catch {
+                // Started so recently that adb does not reach its console yet: its process is ended instead.
+                launcher.terminate(launched.processID)
+                let deadline = ContinuousClock.now + .seconds(30)
+                while ContinuousClock.now < deadline, launcher.hasEnded(launched.processID) == false {
+                    try await Task.sleep(for: .milliseconds(500))
+                }
+                guard launcher.hasEnded(launched.processID) != false else {
+                    throw SimulatorCommandError(message: "The copy's emulator did not end")
+                }
+                launches.remove(avd: device.value)
+            }
+        } else if try await serial(of: device.value, sdk: sdk) != nil {
+            // An emulator of an earlier Yardlet: its files go only once it has stopped.
             try await shutDown(copy, with: toolchain)
         }
         for item in [copiesHome.appending(path: "\(device.value).avd", directoryHint: .isDirectory),
@@ -385,6 +410,15 @@ struct AndroidEmulatorBackend: SimulatorBackend {
         func avd(onPort port: Int) -> String? { lock.withLock { launches.first { $0.value.port == port }?.key } }
         func add(avd: String, port: Int, processID: Int32) {
             lock.withLock { launches[avd] = Launch(port: port, processID: processID) }
+        }
+        /// Holds the first port free of `excluding` and of the other launches for the AVD until it is launched.
+        func reservePort(for avd: String, from ports: [Int], excluding taken: Set<Int>) -> Int? {
+            lock.withLock {
+                let held = taken.union(launches.filter { $0.key != avd }.map(\.value.port))
+                guard let port = ports.first(where: { !held.contains($0) }) else { return nil }
+                launches[avd] = Launch(port: port, processID: 0)
+                return port
+            }
         }
         func remove(avd: String) { lock.withLock { _ = launches.removeValue(forKey: avd) } }
     }

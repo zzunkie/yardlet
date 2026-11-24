@@ -170,7 +170,7 @@ final class SimulatorAgentTools {
             // A tab no panel ever showed goes with the failed start, so nothing stays attached out of sight; a tab
             // the person can see keeps the device, with Turn On.
             guard isNewTab else { return Self.didNotStart(failed, message) }
-            if center.detach(task, tab: tab) != nil { settleDetached(device.identity, task: task) }
+            if let detached = center.detach(task, tab: tab) { settleDetached(detached, task: task) }
             return .failure("\(failed.name) did not start: \(message). It was not attached; simulator_attach tries "
                 + "again.", .unreachable, retry: .later)
         case let .attached(attachment):
@@ -223,11 +223,14 @@ final class SimulatorAgentTools {
         }
         let device = center.device(identity)
         let wasStarted = center.startedByYardlet[identity] != nil
+        let wasCopy = center.copies[identity] != nil
         // Every tab of the task that shows it, so the task's claim goes too; the tabs stay, listing the devices.
         while let tab = center.tab(attaching: identity, in: task) { center.detach(task, tab: tab) }
         settleDetached(identity, task: task)
         var text = "Let go of \(device?.name ?? identity.value)."
-        if wasStarted {
+        if wasCopy {
+            text += " As it was this task's copy, Yardlet shuts it down and deletes it now."
+        } else if wasStarted {
             text += " As Yardlet started it, it shuts down 10 minutes after no task attaches it."
         }
         let remaining = center.attachedDevices(of: task)

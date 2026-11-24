@@ -206,17 +206,30 @@ final class SimulatorCenterTests: XCTestCase {
         XCTAssertEqual(workspaces.simulatorAttachments(of: second), [agentTab: a])
         XCTAssertEqual(workspaces.simulatorAttachments(of: third)[SimulatorCenter.testTab], a)
 
-        // A Yardlet that ended without deleting its copy deletes it at its next start, its tab on the original.
-        let orphan = try await backend.makeCopy(of: backend.device(phoneA), with: SimulatorToolchain(directory: "/x"))
+        // A Yardlet that ended without deleting its copy deletes it at its next start, its tab on the original, and
+        // keeps the record of the other device it started, which a task still attaches.
+        let toolchain = SimulatorToolchain(directory: "/x")
+        let orphan = try await backend.makeCopy(of: backend.device(phoneA), with: toolchain)
+        _ = try await backend.boot(orphan, with: toolchain)
+        let b = SimulatorDeviceIdentity.iOSSimulator(udid: phoneB)
+        _ = try await backend.boot(backend.device(phoneB), with: toolchain)
         workspaces.state(for: second).simulators[agentTab] = orphan.identity
+        workspaces.state(for: first).simulators[UUID()] = b
+        let earlier = InMemorySimulatorBootRecord(
+            [SimulatorBootRecordEntry(device: b, boot: try XCTUnwrap(backend.bootIdentity(phoneB)), bootedAt: Date()),
+             SimulatorBootRecordEntry(device: orphan.identity, boot: try XCTUnwrap(backend.bootIdentity(orphan.identity.value)),
+                                      bootedAt: Date())],
+            copies: [SimulatorCopyRecordEntry(device: orphan.identity, source: a, madeAt: Date())])
         let restarted = SimulatorCenter(
-            backends: [backend], record: InMemorySimulatorBootRecord(copies: [
-                SimulatorCopyRecordEntry(device: orphan.identity, source: a, madeAt: Date())]),
+            backends: [backend], record: earlier,
             attachments: TaskWorkspaceSimulatorAttachments(workspaces: workspaces, taskIDs: { [first, second, third] }))
         await restarted.setEnabled(true)
         XCTAssertTrue(backend.copiesDeleted.contains(orphan.identity.value))
         XCTAssertEqual(restarted.attachment(of: second, tab: agentTab), a)
         XCTAssertEqual(restarted.copies, [:])
+        XCTAssertEqual(Array(restarted.startedByYardlet.keys), [b])
+        XCTAssertEqual(earlier.load().map(\.device), [b])
+        XCTAssertEqual(earlier.loadCopies(), [])
     }
 
     /// A task attaches a device in each of its Simulator tabs and claims each; a tab that closes lets go of its own

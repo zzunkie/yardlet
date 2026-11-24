@@ -69,7 +69,9 @@ struct SimulatorPane: View {
                 workspaceURL: workspaceURL,
                 onClose: onClose
             ) {
-                if let device, center.state(of: device.identity) == .on, screens.link(of: device.identity).isAttached {
+                // Not for another task's simulator, which this tab offers a copy of instead.
+                if let device, center.state(of: device.identity) == .on, screens.link(of: device.identity).isAttached,
+                   !center.attachesCopy(device.identity, for: task) {
                     platformButtons(device)
                 }
                 if device != nil { deviceMenu }

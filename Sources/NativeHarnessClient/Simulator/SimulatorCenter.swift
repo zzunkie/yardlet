@@ -188,8 +188,14 @@ final class SimulatorCenter {
     @ObservationIgnored private var personInput: [SimulatorDeviceIdentity: Date] = [:]
     /// Copies being made, by task and original, so two attaches at once make one.
     @ObservationIgnored private var copying: [CopyKey: Task<Result<SimulatorDevice, SimulatorCommandError>, Never>] = [:]
-    /// Copies being deleted.
-    @ObservationIgnored private var deletingCopies: Set<SimulatorDeviceIdentity> = []
+    /// Copies being deleted, each with its deletion, which a quit or the switch's turning off waits for.
+    @ObservationIgnored private var deletingCopies: [SimulatorDeviceIdentity: Task<Void, Never>] = [:]
+    /// Bumped for a tab each time it lets go of its device, so an attach that waited on a copy meanwhile sees it.
+    @ObservationIgnored private var tabGenerations: [SimulatorTabSlot: Int] = [:]
+    /// Tasks archived or deleted in this run.
+    @ObservationIgnored private var removedTasks: Set<UUID> = []
+    /// Yardlet is quitting: a copy finished meanwhile is deleted at once.
+    @ObservationIgnored private var isQuitting = false
 
     private struct CopyKey: Hashable {
         var task: UUID
@@ -220,6 +226,8 @@ final class SimulatorCenter {
         isEnabled = enabled
         if enabled {
             await refreshChecks()
+            // The devices an earlier Yardlet started stay written down while its copies are deleted.
+            for entry in record.load() { startedByYardlet[entry.device] = entry }
             await recoverCopies()
             await recoverStartedDevices()
             await refreshDevices()
@@ -240,6 +248,7 @@ final class SimulatorCenter {
     /// Yardlet quits: every device it started stops, attached or not, and every copy it made is deleted, the tabs
     /// that attached one attaching its original.
     func stopForQuit() async {
+        isQuitting = true
         idleCheck?.cancel()
         idleCheck = nil
         await stopEveryStartedDevice()
@@ -375,8 +384,15 @@ final class SimulatorCenter {
     /// The Simulator tab of the task that attaches the device, or the task's copy of it, the first of `preferring` (the
     /// task's open tabs, the one used last first) that does, else any; nil when none does.
     func tab(attaching identity: SimulatorDeviceIdentity, in task: UUID, preferring: [UUID] = []) -> UUID? {
-        let tabs = attachments(of: task).filter { $0.value == identity || copies[$0.value]?.source == identity }.keys
-        return preferring.first(where: tabs.contains) ?? tabs.min { $0.uuidString < $1.uuidString }
+        let attached = attachments(of: task)
+        // The device itself before a copy of it.
+        for exact in [true, false] {
+            let tabs = attached.filter { exact ? $0.value == identity : copies[$0.value]?.source == identity }.keys
+            if let tab = preferring.first(where: tabs.contains) ?? tabs.min(by: { $0.uuidString < $1.uuidString }) {
+                return tab
+            }
+        }
+        return nil
     }
 
     /// The device an ID or name names (`devices(named:)`), after listing the devices again, or why none does.
@@ -448,8 +464,18 @@ final class SimulatorCenter {
         if let refusal = attachRefusal(identity, to: task, by: requester) { return .refused(refusal) }
         var identity = identity
         if attachesCopy(identity, for: task) {
+            let slot = SimulatorTabSlot(task: task, tab: tab)
+            let generation = tabGenerations[slot, default: 0]
             switch await copy(of: original(of: identity), for: task) {
-            case let .success(copy): identity = copy
+            case let .success(copy):
+                // The tab closed, or the task went, while the copy was made: it is not attached.
+                guard tabGenerations[slot, default: 0] == generation, !removedTasks.contains(task), isEnabled,
+                      copies[copy] != nil else {
+                    await deleteCopy(copy)
+                    return .refused(refusal(.copyFailed("the Simulator tab closed while the copy was made"),
+                                            excluding: identity))
+                }
+                identity = copy
             case let .failure(error): return .refused(refusal(.copyFailed(error.message), excluding: identity))
             }
         }
@@ -509,6 +535,7 @@ final class SimulatorCenter {
     /// the task attaches it. Returns the device.
     @discardableResult
     func detach(_ task: UUID, tab: UUID) -> SimulatorDeviceIdentity? {
+        tabGenerations[SimulatorTabSlot(task: task, tab: tab), default: 0] += 1
         guard let identity = attachment(of: task, tab: tab) else { return nil }
         letGo(of: identity, by: task, tab: tab)
         attachmentStore.setSimulatorAttachment(nil, of: task, tab: tab)
@@ -518,6 +545,7 @@ final class SimulatorCenter {
 
     /// The task was archived or deleted, which removes its saved attachments with its workspace.
     func taskRemoved(_ task: UUID) {
+        removedTasks.insert(task)
         for (tab, identity) in attachments[task] ?? [:] { letGo(of: identity, by: task, tab: tab) }
         attachmentsRead.insert(task)
         shownPanels = shownPanels.filter { $0.key.task != task }
@@ -606,7 +634,8 @@ final class SimulatorCenter {
 
     // MARK: - Private
 
-    private var startedCount: Int { Set(startedByYardlet.keys).union(boots.keys).count }
+    /// The devices Yardlet runs, is starting, or makes a copy to start.
+    private var startedCount: Int { Set(startedByYardlet.keys).union(boots.keys).count + copying.count }
 
     private func refusal(_ reason: SimulatorRefusal.Reason,
                          excluding identity: SimulatorDeviceIdentity? = nil) -> SimulatorRefusal {
@@ -638,7 +667,7 @@ final class SimulatorCenter {
 
     /// The copy of the device that one of the task's tabs attaches.
     private func ownCopy(of original: SimulatorDeviceIdentity, in task: UUID) -> SimulatorDeviceIdentity? {
-        attachments(of: task).values.filter { copies[$0]?.source == original && !deletingCopies.contains($0) }
+        attachments(of: task).values.filter { copies[$0]?.source == original && deletingCopies[$0] == nil }
             .min { $0.value < $1.value }
     }
 
@@ -656,7 +685,11 @@ final class SimulatorCenter {
         let making = Task { @MainActor [weak self] () -> Result<SimulatorDevice, SimulatorCommandError> in
             do {
                 let copy = try await backend.makeCopy(of: device, with: toolchain)
-                guard let self else { return .success(copy) }
+                // Turned off, or quitting, meanwhile: the copy goes at once, never written down.
+                guard let self, self.isEnabled, !self.isQuitting else {
+                    try? await backend.deleteCopy(copy.identity, with: toolchain)
+                    return .failure(SimulatorCommandError(message: "the Simulator switch turned off"))
+                }
                 self.copies[copy.identity] = SimulatorCopyRecordEntry(device: copy.identity, source: original,
                                                                       madeAt: self.clock.now)
                 self.saveCopies()
@@ -677,36 +710,50 @@ final class SimulatorCenter {
         return .success(copy.identity)
     }
 
-    /// Deletes a copy no tab attaches, after stopping it; one a tab took up again meanwhile stays.
+    /// Deletes a copy no tab attaches, after stopping it; one a tab took up again meanwhile stays. A deletion under
+    /// way is waited for, not started twice.
     private func deleteCopy(_ identity: SimulatorDeviceIdentity) async {
-        guard copies[identity] != nil, !deletingCopies.contains(identity), !isAttachedAnywhere(identity),
+        if let deleting = deletingCopies[identity] { return await deleting.value }
+        guard copies[identity] != nil, !isAttachedAnywhere(identity),
               let backend = backends[identity.kind.platform],
               let toolchain = checks[identity.kind.platform]?.toolchain else { return }
-        deletingCopies.insert(identity)
-        defer { deletingCopies.remove(identity) }
+        let deletion = Task { @MainActor [weak self] () -> Void in
+            guard let self else { return }
+            await self.performDeletion(of: identity, backend: backend, toolchain: toolchain)
+        }
+        deletingCopies[identity] = deletion
+        await deletion.value
+        deletingCopies[identity] = nil
+    }
+
+    private func performDeletion(of identity: SimulatorDeviceIdentity, backend: any SimulatorBackend,
+                                 toolchain: SimulatorToolchain) async {
         if state(of: identity).isRunning { transitions[identity] = .shuttingDown }
         do {
             try await backend.deleteCopy(identity, with: toolchain)
         } catch {
             // Written down still: deleted at the switch's next turning on, or at the next start.
-            transitions[identity] = nil
+            if boots[identity] == nil { transitions[identity] = nil }
             return
         }
-        transitions[identity] = nil
+        if boots[identity] == nil { transitions[identity] = nil }
         copies[identity] = nil
         claims[identity] = nil
+        let wasStarted = startedByYardlet[identity] != nil
         forget(identity)
-        saveRecord()
+        if wasStarted { saveRecord() }
         saveCopies()
         if isEnabled { await refreshDevices() }
         rescheduleIdleCheck()
     }
 
-    /// The switch turns off, or Yardlet quits: every copy is deleted, and the tabs that attached one attach its
-    /// original, which they show again at the next start.
+    /// The switch turns off, or Yardlet quits: copies being made are waited for, then every copy is deleted, and the
+    /// tabs that attached one attach its original, which they show again at the next start.
     private func deleteEveryCopy() async {
+        for making in Array(copying.values) { _ = await making.value }
         for (copy, entry) in copies { replaceAttachments(of: copy, with: entry.source) }
-        let deletions = copies.keys.map { identity in
+        let identities = Set(copies.keys).union(deletingCopies.keys)
+        let deletions = identities.map { identity in
             Task { @MainActor [weak self] in await self?.deleteCopy(identity) }
         }
         for deletion in deletions { await deletion.value }
@@ -750,12 +797,14 @@ final class SimulatorCenter {
                        toolchain: SimulatorToolchain) async -> Result<Bool, SimulatorCommandError> {
         let identity = device.identity
         if let boot = boots[identity] { return await boot.value }
+        let isCopy = copies[identity] != nil
         let boot = Task { @MainActor [weak self] () -> Result<Bool, SimulatorCommandError> in
             do {
                 let start = try await backend.boot(device, with: toolchain)
                 if start == .started {
-                    // Written down before the wait, so a quit meanwhile stops it.
-                    if let boot = await backend.bootIdentity(of: identity, with: toolchain), let self {
+                    // Written down before the wait, so a quit meanwhile stops it; a copy deleted meanwhile is not.
+                    if let boot = await backend.bootIdentity(of: identity, with: toolchain), let self,
+                       !isCopy || (self.copies[identity] != nil && self.deletingCopies[identity] == nil) {
                         self.recordStart(identity, boot: boot)
                     }
                 }
@@ -772,7 +821,20 @@ final class SimulatorCenter {
         let result = await boot.value
         boots[identity] = nil
         transitions[identity] = nil
-        await refreshDevices()
+        // A copy let go of while it booted: its deletion may have run before the boot ended, so it goes again.
+        if isCopy, !isAttachedAnywhere(identity) {
+            if let deleting = deletingCopies[identity] { await deleting.value }
+            if copies[identity] != nil {
+                await deleteCopy(identity)
+            } else {
+                try? await backend.deleteCopy(identity, with: toolchain)
+                if startedByYardlet[identity] != nil {
+                    forget(identity)
+                    saveRecord()
+                }
+            }
+        }
+        if isEnabled { await refreshDevices() }
         return result
     }
 
