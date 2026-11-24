@@ -1373,7 +1373,7 @@ struct BrowserHostPane: View {
     /// desktop sizes, a phone and a tablet, and the size in use when it is none of them; one the agent set says so.
     /// Then "Import from Another Browser…", where Chrome's and Safari's menus keep their import.
     private var settingsMenu: some View {
-        Menu {
+        ParityHeaderMenu(systemName: "ellipsis", help: L10n.string("Browser settings")) {
             Menu(L10n.string("Viewport")) {
                 Picker(L10n.string("Viewport"), selection: viewportSelection) {
                     Text(viewportTitle(L10n.string("Responsive"), id: "responsive")).tag("responsive")
@@ -1397,18 +1397,7 @@ struct BrowserHostPane: View {
                 Button(L10n.string("All Browser Settings…")) { openSettings(SettingsDestination(.browser)) }
                 Button(L10n.string("Passwords…")) { openSettings(SettingsDestination(.vault)) }
             }
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 13, weight: .semibold))
-                .frame(width: 30, height: 30)
-                .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .parityPointer()
-        .accessibilityLabel(L10n.string("Browser settings"))
-        .help(L10n.string("Browser settings"))
     }
 
     private static let viewportPresets: [(title: String, preset: BrowserViewportEmulation.Preset)] = [

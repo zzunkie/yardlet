@@ -801,6 +801,7 @@ struct RemoteTitleBarContext {
 struct RemoteTitleBar<Content: View>: View {
     let context: RemoteTitleBarContext
     @ViewBuilder let content: Content
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
 
     var body: some View {
         HStack(spacing: 0) {
@@ -815,7 +816,7 @@ struct RemoteTitleBar<Content: View>: View {
                                    onClose: tabs.onClose, onCloseOthers: tabs.onCloseOthers, onNewTab: tabs.onNewTab,
                                    onOpenTask: tabs.onOpenTask, selectedTitle: {
                                        Text(context.selectedTitle ?? L10n.string("New task"))
-                                           .font(.system(size: 12.5, weight: .medium))
+                                           .font(.parity(.control, weight: .medium, scale: interfaceScale))
                                            .lineLimit(1)
                                            .allowsHitTesting(false)
                                    })

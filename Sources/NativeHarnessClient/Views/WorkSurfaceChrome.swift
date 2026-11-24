@@ -406,7 +406,8 @@ struct WorkSurfaceHeader<Trailing: View>: View {
                     .lineLimit(1).truncationMode(.middle)
                     .allowsHitTesting(false)
                     .accessibilityValue(workspaceURL.map { $0.isFileURL ? $0.lastPathComponent : "" } ?? "")
-                ParityTabCloseButton(help: L10n.string("Close tab"), action: onClose)
+                ParityTabCloseButton(help: L10n.string("Close tab"),
+                                     accessibilityLabel: L10n.format("Close tab %@", title), action: onClose)
                     .disabled(navigation?.tabs.first(where: { $0.id == navigation?.activeID })?.isClosable == false)
             }
             .padding(.leading, 9).padding(.trailing, 3)
@@ -512,22 +513,29 @@ private struct PanelTabStripLayout: Layout {
     }
 }
 
-/// A tab in the room the strip gives it (`fills`): a title cut to fit ends a few points short of that room at
-/// a letter, and the tab's background still fills it. Offered unlimited room, as the strip asks each tab for its
-/// whole title, it is as wide as what it holds.
+/// A tab in the room the strip gives it (`fills`): exactly that room, so a tab squeezed to its icon takes no more
+/// than its slot. A title cut to fit ends a few points short of the room at a letter, and the tab's background
+/// still fills it; what holds more than the room is clipped by the tab. Offered unlimited room, as the strip asks
+/// each tab for its whole title, it is as wide as what it holds.
 private struct PanelTabRoom: Layout {
     var fills = true
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let size = subviews.first?.sizeThatFits(proposal) ?? .zero
         guard fills, let width = proposal.width, width.isFinite else { return size }
-        return CGSize(width: max(size.width, width), height: size.height)
+        return CGSize(width: width, height: size.height)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         subviews.first?.place(at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading,
                               proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
     }
+}
+
+/// The widths a side panel tab compares to decide whether its title shows (`WorkSurfaceTabButton`).
+private final class MeasuredTabWidths {
+    var room: CGFloat = .infinity
+    var titled: CGFloat = 0
 }
 
 /// A tab that is open in the side panel but not shown. Hovering a titled tab shows its close
@@ -539,24 +547,25 @@ private struct WorkSurfaceTabButton<Menu: View>: View {
     let onClose: () -> Void
     @ViewBuilder let menu: () -> Menu
     @State private var isHovering = false
-    /// The room the strip gives the tab and the tab's width with its whole title, which decide whether its title shows.
-    @State private var width: CGFloat = .infinity
-    @State private var titledWidth: CGFloat = 0
-
     /// Its title while the whole of it or a few letters fit in the room the strip gives the tab, else its icon
     /// alone. The tab is always measured with its title, so the strip offers it its title's width again once there
-    /// is room.
-    private var showsTitle: Bool { width >= min(PanelTabMetrics.titledWidth, titledWidth) - 0.5 }
+    /// is room. Set only when it changes, so a panel being resized does not draw the tab again at each step.
+    @State private var showsTitle = true
+    /// The room the strip gives the tab and the tab's width with its whole title, which decide `showsTitle`. Held by
+    /// reference, as no view draws them.
+    @State private var widths = MeasuredTabWidths()
 
     var body: some View {
         Button(action: onSelect) {
             PanelTabRoom {
-                titled.opacity(showsTitle ? 1 : 0)
+                titled(iconPlaceholder: !showsTitle).opacity(showsTitle ? 1 : 0)
             }
+            .clipped()
             .background {
-                titled.fixedSize().hidden()
+                titled(iconPlaceholder: true).fixedSize().hidden()
                     .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { measured in
-                        if titledWidth != measured { titledWidth = measured }
+                        widths.titled = measured
+                        updateShowsTitle()
                     }
             }
             .foregroundStyle(.secondary)
@@ -573,7 +582,8 @@ private struct WorkSurfaceTabButton<Menu: View>: View {
         .overlay(alignment: .trailing) {
             if isHovering && showsTitle {
                 // Over the end of the title, on the tab's own ground so the letters under it do not show.
-                ParityTabCloseButton(help: L10n.string("Close tab"), action: onClose)
+                ParityTabCloseButton(help: L10n.string("Close tab"),
+                                     accessibilityLabel: L10n.format("Close tab %@", tab.title), action: onClose)
                     .disabled(!tab.isClosable)
                     .background {
                         Circle().fill(ParityTheme.canvas).overlay(Circle().fill(ParityTheme.hoverFill))
@@ -586,13 +596,25 @@ private struct WorkSurfaceTabButton<Menu: View>: View {
         .background { ParityTabBackground(isSelected: false, isHovering: isHovering) }
         .onHover { isHovering = $0 }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { measured in
-            if width != measured { width = measured }
+            widths.room = measured
+            updateShowsTitle()
         }
     }
 
-    private var titled: some View {
+    private func updateShowsTitle() {
+        let shows = widths.room >= min(PanelTabMetrics.titledWidth, widths.titled) - 0.5
+        if showsTitle != shows { showsTitle = shows }
+    }
+
+    /// The icon and the whole title. Where it is not seen (measured, or hidden behind the icon alone), a loading
+    /// tab's spinner is a space of its size, so the tab runs one spinner.
+    private func titled(iconPlaceholder: Bool) -> some View {
         HStack(spacing: 8) {
-            icon
+            if iconPlaceholder && tab.isLoading {
+                Color.clear.frame(width: 16, height: 16)
+            } else {
+                icon
+            }
             Text(tab.title).font(.parity(.control, scale: interfaceScale)).lineLimit(1).truncationMode(.middle)
         }
         .padding(.horizontal, 9)
@@ -685,11 +707,10 @@ private struct WorkSurfaceOpenMenu: View {
     let choices: [WorkSurfaceTab]
     var taskChoices: @MainActor @Sendable () -> [WorkSurfaceTab] = { [] }
     let onSelect: @MainActor @Sendable (String) -> Void
-    @State private var isHovering = false
 
     var body: some View {
         let taskChoices = taskChoices()
-        return Menu {
+        return ParityHeaderMenu(systemName: "plus", help: L10n.string("Open panel")) {
             ForEach(choices) { choice in
                 Button { onSelect(choice.id) } label: { Label(choice.title, systemImage: choice.systemName) }
                     .disabled(!choice.isAvailable)
@@ -715,18 +736,7 @@ private struct WorkSurfaceOpenMenu: View {
                     Button(L10n.string("All Tasks…")) { onSelect(TaskSurfaceNavigationProjection.launcherID) }
                 }
             }
-        } label: {
-            ParityHeaderSymbol(systemName: "plus", isHovering: isHovering)
         }
-        // SwiftUI draws the label, so it reads as the header's other buttons.
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .parityPointer()
-        .onHover { isHovering = $0 }
-        .help(L10n.string("Open panel"))
-        .accessibilityLabel(L10n.string("Open panel"))
     }
 }
 

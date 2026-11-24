@@ -978,7 +978,10 @@ final class BrowserPanelTabsQATests: XCTestCase {
             workspace.setPanels(Navigation.showing(Navigation.browserTabID(key), in: workspace.panels))
             host.settle(passes: 10, interval: 0.03)
             let shownStrip = strip(in: host)
-            XCTAssertTrue(press(L10n.string("Close tab"), in: host, among: shownStrip), "the shown tab's close")
+            // The shown tab's close button names its tab.
+            let close = shownStrip.map { L10n.format("Close tab %@", $0.label) }
+                .first { label in shownStrip.contains { $0.label == label } }
+            XCTAssertTrue(press(close ?? "", in: host, among: shownStrip), "the shown tab's close")
         }
         XCTAssertEqual(workspace.panels.trailingTabs, ["diff"])
         XCTAssertEqual(workspace.panels.trailingSurfaceID, "diff", "the panel stays with Review")
@@ -1116,7 +1119,9 @@ final class BrowserPanelTabsQATests: XCTestCase {
             host.settle(passes: 8, interval: 0.03)
         }
         let titleBar = controls(in: host).filter { $0.frame.maxY <= ParityTheme.titleBarHeight }
-        let close = try XCTUnwrap(titleBar.first { $0.label == L10n.string("Close tab") }, "the shown browser tab's close")
+        let close = try XCTUnwrap(titleBar.first { control in
+            ["Docs", "Status"].contains { L10n.format("Close tab %@", $0) == control.label }
+        }, "the shown browser tab's close")
         let statusTab = try XCTUnwrap(titleBar.first { $0.label == "Status" })
         let otherWindowTab = try XCTUnwrap(titleBar.first { $0.label == fixture.legacy.title })
         let y: CGFloat = 16

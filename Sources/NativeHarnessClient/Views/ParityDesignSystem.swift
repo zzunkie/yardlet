@@ -563,6 +563,29 @@ struct ParityHeaderButton: View {
     }
 }
 
+/// A header row's menu behind an icon, drawn as its buttons are (`ParityHeaderSymbol`): SwiftUI draws the label,
+/// which a borderless menu would draw at AppKit's own weight.
+struct ParityHeaderMenu<Content: View>: View {
+    let systemName: String
+    let help: String
+    @ViewBuilder let content: () -> Content
+    @State private var isHovering = false
+
+    var body: some View {
+        Menu(content: content) {
+            ParityHeaderSymbol(systemName: systemName, isHovering: isHovering)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .parityPointer()
+        .onHover { isHovering = $0 }
+        .accessibilityLabel(help)
+        .help(help)
+    }
+}
+
 /// The label of a header row's icon button or menu (`ParityHeaderButton`).
 struct ParityHeaderSymbol: View {
     let systemName: String

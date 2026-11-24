@@ -73,7 +73,6 @@ enum TaskPanelSymbol {
 /// the task the window shows; in a split pane's header, on that pane's task. A header too narrow for
 /// them shows them in a "More" menu instead, as the Claude app's header does.
 struct TaskSurfaceControls: View {
-    @Environment(\.yardletInterfaceScale) private var interfaceScale
     /// The session rail is on screen for the task.
     let showsSessionRail: Bool
     let onToggleSessionRail: () -> Void
@@ -175,7 +174,7 @@ struct TaskSurfaceControls: View {
 
     /// The Claude app's overflow menu for a narrow header: the same buttons, by their titles.
     private var foldedMenu: some View {
-        Menu {
+        ParityHeaderMenu(systemName: "ellipsis", help: L10n.string("More")) {
             if let find {
                 Button {
                     pressFind(find)
@@ -190,19 +189,7 @@ struct TaskSurfaceControls: View {
                     Label(controlTitle(surface), systemImage: symbol(surface))
                 }
             }
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 12 * interfaceScale, weight: .semibold))
-                .frame(width: 28, height: 28)
-                .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .foregroundStyle(.secondary)
-        .parityPointer()
-        .accessibilityLabel(L10n.string("More"))
-        .help(L10n.string("More"))
     }
 
     private func symbol(_ surface: TaskSurface) -> String {

@@ -31,6 +31,17 @@ enum ThemeContrast {
                               blue: foreground.blue * alpha + background.blue * (1 - alpha))
     }
 
+    /// The opacity, from `preferred` up to 1, at which the theme's text keeps 4.5:1 over the canvas, so a title
+    /// shown faded still reads under every preset and a person's own colors.
+    static func fadedTextOpacity(_ preferred: Float, in environment: EnvironmentValues) -> Double {
+        let mode = ThemeMode(environment.colorScheme)
+        let text = (environment.yardletColorTheme[mode].text?.color ?? .primary).resolve(in: environment)
+        let canvas = ThemeSurface.canvas.resolve(in: environment)
+        var opacity = preferred
+        while opacity < 1, ratio(over(text, canvas, opacity: opacity), canvas) < 4.5 { opacity += 0.02 }
+        return Double(min(opacity, 1))
+    }
+
     static func readableAccent(_ theme: MacColorTheme, in environment: EnvironmentValues) -> Color.Resolved {
         let mode = ThemeMode(environment.colorScheme)
         let accent = Color(nsColor: theme.accent(in: mode)).resolve(in: environment)
