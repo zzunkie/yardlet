@@ -42,7 +42,7 @@ struct ConversationItemView: View {
         case let .answer(text, isStreaming):
             agentMessage(text: text, isCommentary: false, isStreaming: isStreaming)
         case let .commentary(text, isStreaming):
-            agentMessage(text: text, isCommentary: !item.hidesCommentaryLabel, isStreaming: isStreaming)
+            agentMessage(text: text, isCommentary: true, isStreaming: isStreaming)
         case .reasoning, .command, .fileChange, .tool:
             ConversationWorkLine(item: item, harness: context.harness, workspaceURL: context.workspaceURL,
                                  runInTerminal: context.actions.runInTerminal,

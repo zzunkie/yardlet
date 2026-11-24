@@ -78,7 +78,9 @@ final class SubagentStatePerformanceTests: XCTestCase {
         }
         XCTAssertEqual(runs[0].state, .running)
         XCTAssertEqual(runs[0].progressLine, "Reading part \(streamedStates - 1) of the survey.")
-        XCTAssertEqual(runs[0].currentAnswer, "Surveyed run-0.")
+        // One that still works has not answered yet; what it said so far reads the same.
+        XCTAssertNil(runs[0].currentAnswer)
+        XCTAssertEqual(runs[0].latestAnswer, "Surveyed run-0.")
         XCTAssertGreaterThan(kept, 0)
 
         func median(_ times: [Duration]) -> Duration { times.sorted()[times.count / 2] }

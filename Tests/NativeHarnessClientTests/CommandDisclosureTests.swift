@@ -117,10 +117,11 @@ final class CommandDisclosureTests: XCTestCase {
 
     // MARK: - Drawn
 
-    /// The Claude Code turn the person reported, drawn: every command reads folded on its line, the
-    /// running ones marked running, the shell task with its stop control and without a card; the
-    /// summary of two commands folded; the failed command open on its output; the waiting request
-    /// pinned under the turn with its answers.
+    /// The Claude Code turn the person reported, drawn: every message Claude wrote stays in view; the
+    /// finished calls before a later message fold, those between two messages on a line that reads
+    /// them; every call still running stays in view, folded on its line and marked running, the shell
+    /// task with its stop control and without a card; the failed command open on its output; the
+    /// waiting request pinned under the turn with its answers.
     func testAClaudeCodeTurnDrawsItsCommandsFolded() throws {
         let directory = try WindowlessRender.directory("command-disclosure-qa")
         var stopped: [String] = []
@@ -135,12 +136,14 @@ final class CommandDisclosureTests: XCTestCase {
             guard appearance == .light else { continue }
             let elements = drawing.elements
             let collapsed = L10n.string("Collapsed"), expanded = L10n.string("Expanded")
-            XCTAssertTrue(elements.contains(label: ClaudeTurn.words(ClaudeTurn.checked, .completed), value: collapsed),
-                          "\(elements)")
+            XCTAssertFalse(elements.contains(label: ClaudeTurn.words(ClaudeTurn.checked, .completed)),
+                           "the call before what Claude said folds under the header: \(elements)")
             XCTAssertTrue(elements.contains(label: ClaudeTurn.words(ClaudeTurn.measuring, .running), value: collapsed),
-                          "the running command starts folded: \(elements)")
-            XCTAssertTrue(elements.contains(label: ClaudeTurn.summary, value: collapsed),
-                          "the summary of commands starts folded: \(elements)")
+                          "the running command stays in view, folded: \(elements)")
+            XCTAssertTrue(elements.contains(label: ClaudeTurn.words("Build the app", .running), value: collapsed),
+                          "\(elements)")
+            XCTAssertTrue(elements.contains(label: ClaudeTurn.ranOne, value: collapsed),
+                          "the finished call between two messages folds on a line that reads it: \(elements)")
             XCTAssertTrue(elements.contains(label: ClaudeTurn.words(ClaudeTurn.failing, .failed), value: expanded),
                           "the failed command opens: \(elements)")
             XCTAssertTrue(elements.contains(text: "error: no such module 'Parser'"), "\(elements)")
@@ -166,20 +169,21 @@ final class CommandDisclosureTests: XCTestCase {
         XCTAssertTrue(host.hosting.pressButton(labeled: L10n.string("Stop task")))
         XCTAssertEqual(stopped, ["toolu_measure"])
 
-        // Opened by the person, the running command and the summary show what they hold.
+        // Opened by the person, the running command and the fold between the messages show what they hold.
         XCTAssertTrue(host.hosting.pressButton(labeled: ClaudeTurn.words(ClaudeTurn.measuring, .running)))
-        XCTAssertTrue(host.hosting.pressButton(labeled: ClaudeTurn.summary))
+        XCTAssertTrue(host.hosting.pressButton(labeled: ClaudeTurn.ranOne))
+        let shown = ClaudeTurn.words("Show the working tree", .completed)
         host.settle(until: {
             let elements = host.accessibilityElements()
             return elements.contains(label: ClaudeTurn.words(ClaudeTurn.measuring, .running),
                                      value: L10n.string("Expanded"))
-                && elements.contains(label: ClaudeTurn.summary, value: L10n.string("Expanded"))
+                && elements.contains(label: ClaudeTurn.ranOne, value: L10n.string("Expanded"))
         })
         let opened = host.accessibilityElements()
         XCTAssertTrue(opened.contains(label: ClaudeTurn.words(ClaudeTurn.measuring, .running),
                                       value: L10n.string("Expanded")), "\(opened)")
-        XCTAssertTrue(opened.contains(label: ClaudeTurn.summary, value: L10n.string("Expanded")), "\(opened)")
-        // Its lines show, each command still folded on its own line.
+        // Its line shows, folded on its own line, and the running one after it with it.
+        XCTAssertTrue(opened.contains(label: shown, value: L10n.string("Collapsed")), "\(opened)")
         XCTAssertTrue(opened.contains(label: ClaudeTurn.words("Build the app", .running), value: L10n.string("Collapsed")),
                       "\(opened)")
         XCTAssertFalse(opened.contains(text: "swift build"), "\(opened)")
@@ -274,6 +278,10 @@ final class CommandDisclosureTests: XCTestCase {
                                                  output: "Build complete!"),
                                       TranscriptEntry(id: words, content: .assistant(text: "Built. Testing next.",
                                                                                      isStreaming: false))])
+        // What Claude said after it folds the finished command under the header; opened there, its line
+        // is still open.
+        host.settle(until: { value(of: line("Build the app", .completed), in: host) == nil })
+        XCTAssertTrue(host.hosting.pressTurnHeader(), "\(host.accessibilityElements())")
         host.settle(until: { value(of: line("Build the app", .completed), in: host) == expanded })
         XCTAssertEqual(value(of: line("Build the app", .completed), in: host), expanded, "\(host.accessibilityElements())")
         XCTAssertTrue(host.accessibilityElements().contains(text: "Build complete!"))
@@ -384,12 +392,10 @@ private enum ClaudeTurn {
                                         phase: phase, harness: .claudeCode).map(\.text).joined(separator: ", ")
     }
 
-    /// "Ran 2 commands".
-    static var summary: String {
+    /// "Ran a command".
+    static var ranOne: String {
         ConversationWorkSummary.title(for: [
             ConversationItem(id: "1", kind: .command(ConversationCommand(command: "a", status: "")), phase: .completed,
-                             source: .transcript(TranscriptEntry(content: .plan("")))),
-            ConversationItem(id: "2", kind: .command(ConversationCommand(command: "b", status: "")), phase: .running,
                              source: .transcript(TranscriptEntry(content: .plan(""))))
         ], harness: .claudeCode)
     }

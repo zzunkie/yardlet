@@ -239,10 +239,12 @@ final class AgentRun: Identifiable {
     @ObservationIgnored private var storedCodexState: CodexTaskState?
     /// Its answer once it ended (`AppModel.finishAgentRun`).
     var answer: String?
-    /// Its latest answer: the one it ended on, or while it works what it has said so far, read when
-    /// asked rather than on every state or event it streams.
+    /// Its latest answer: the one it ended on, or while it waits for the person what it has said so
+    /// far, read when asked rather than on every state or event it streams.
     var currentAnswer: String? {
-        state.isFinished ? answer : latestAnswer ?? answer
+        if state.isFinished { return answer }
+        // One that still works has not answered yet; one that waits for the person has, for now.
+        return state == .waitingForApproval ? latestAnswer ?? answer : nil
     }
 
     /// The line its card shows while it works: its latest call or message, in the Mac's words.

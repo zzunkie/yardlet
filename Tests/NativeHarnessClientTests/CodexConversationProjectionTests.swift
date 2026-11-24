@@ -223,7 +223,7 @@ final class CodexConversationProjectionTests: XCTestCase {
         XCTAssertEqual(CodexConversationProjection.pendingRequests(in: state), presentation.turns.flatMap(\.requests),
                        step, file: file, line: line)
         XCTAssertEqual(CodexConversationProjection.latestAnswer(in: state, workspaceURL: workspace),
-                       presentation.turns.last.flatMap { ConversationTurnLayout.latestAnswer(answers: $0.answers, work: $0.work) },
+                       presentation.turns.last.flatMap { ConversationTurnLayout.answerText($0.work + $0.answers) },
                        step, file: file, line: line)
         let last = presentation.turns.last.flatMap { ($0.work + $0.answers).last }
         let read = CodexConversationProjection.lastItem(in: state, workspaceURL: workspace)

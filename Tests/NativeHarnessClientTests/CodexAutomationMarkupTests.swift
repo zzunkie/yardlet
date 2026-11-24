@@ -308,7 +308,8 @@ final class CodexAutomationMarkupTests: XCTestCase {
             from: entries, harness: .codex, status: .ready, latestTurnIsComplete: true
         ).turns
         XCTAssertEqual(turns[0].prompt.map(\.kind), [.scheduledTaskMessage(try XCTUnwrap(ConversationScheduledTaskMessage.parse(heartbeat)))])
-        XCTAssertEqual(turns[0].work.map(\.kind), [.commentary(text: "Checking the build.", isStreaming: false)])
+        // A transcript carries no phases, so what was said before the last message is said to the person.
+        XCTAssertEqual(turns[0].work.map(\.kind), [.answer(text: "Checking the build.", isStreaming: false)])
         XCTAssertEqual(turns[0].answers.map(\.kind), [.answer(text: "The build is still green.", isStreaming: false)])
         XCTAssertEqual(turns[1].answers.map(\.kind), [.answer(text: "Done.", isStreaming: false)])
     }

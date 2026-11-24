@@ -20,6 +20,8 @@ final class StreamedTextTests: XCTestCase {
         input: #"{"command":"swift test","description":"Run the tests"}"#, output: "Executed 3 tests"
     ), state: .completed))
     private let words = TranscriptEntry(content: .assistant(text: "Checking", isStreaming: true))
+    /// What Claude said before its calls, after which the calls stay in view while the turn runs.
+    private let intro = TranscriptEntry(content: .assistant(text: "Building, then testing.", isStreaming: false))
 
     private func writing(_ text: String, isStreaming: Bool = true) -> TranscriptEntry {
         TranscriptEntry(id: words.id, createdAt: words.createdAt, content: .assistant(text: text, isStreaming: isStreaming))
@@ -35,7 +37,7 @@ final class StreamedTextTests: XCTestCase {
 
     func testOnlyTheWordsOfAMessageBeingWrittenAreAStreamedFragment() throws {
         let before = try turn([user, build, test, writing("Checking")])
-        let itemID = try XCTUnwrap(before.work.last?.id)
+        let itemID = try XCTUnwrap(before.answers.last?.id)
 
         let grown = try turn([user, build, test, writing("Checking the build")])
         XCTAssertEqual(grown.streamedTextChange(from: before)?.itemID, itemID)
@@ -100,7 +102,7 @@ final class StreamedTextTests: XCTestCase {
     }
 
     func testAStreamingMessageReadsItsLatestWordsAndTheTurnKeepsWhatThePersonOpened() throws {
-        let host = WindowlessRender.Host(view([user, build, test, writing("Checking")]),
+        let host = WindowlessRender.Host(view([user, intro, build, test, writing("Checking")]),
                                          size: NSSize(width: 760, height: 700), appearance: .light)
         ViewBodyCensus.isEnabled = true
         defer {
@@ -109,7 +111,7 @@ final class StreamedTextTests: XCTestCase {
             host.close()
         }
         host.settle()
-        let calls = try turn([user, build, test, writing("Checking")]).work.prefix(2)
+        let calls = try turn([user, intro, build, test, writing("Checking")]).work.dropFirst().prefix(2)
         let summary = ConversationWorkSummary.title(for: Array(calls), harness: .claudeCode)
         func summaryValue() -> String? {
             host.accessibilityElements().first { $0.label == summary && $0.role == NSAccessibility.Role.button.rawValue }?.value
@@ -124,7 +126,7 @@ final class StreamedTextTests: XCTestCase {
         var text = "Checking"
         for fragment in 0..<12 {
             text += " word\(fragment)"
-            host.hosting.rootView = view([user, build, test, writing(text)])
+            host.hosting.rootView = view([user, intro, build, test, writing(text)])
             host.settle(passes: 1, interval: 0.005)
         }
         host.settle(passes: 2)
@@ -136,7 +138,7 @@ final class StreamedTextTests: XCTestCase {
         XCTAssertEqual(Self.copy(message), text, "A copy of the message gives its latest words")
 
         // How the conversation looks changing draws the turn whole, with its latest words.
-        host.hosting.rootView = view([user, build, test, writing(text)], scheme: .dark)
+        host.hosting.rootView = view([user, intro, build, test, writing(text)], scheme: .dark)
         host.settle()
         XCTAssertEqual(ViewBodyCensus[.conversationTurn], 1)
         XCTAssertEqual(TranscriptProseRenderingTests.proseTextViews(in: host.hosting)
@@ -147,19 +149,20 @@ final class StreamedTextTests: XCTestCase {
             id: "run", kind: "Bash", title: "Bash", detail: "swift run",
             input: #"{"command":"swift run","description":"Run the app"}"#
         ), state: .running))
-        host.hosting.rootView = view([user, build, test, writing(text), next], scheme: .dark)
+        host.hosting.rootView = view([user, intro, build, test, writing(text), next], scheme: .dark)
         host.settle()
         XCTAssertEqual(ViewBodyCensus[.conversationTurn], 2)
         XCTAssertEqual(summaryValue(), L10n.string("Expanded"))
 
-        // The message finished: drawn whole, its final words, the summary still open.
+        // The message finished: drawn whole, its final words, and the calls before it, done with, fold on
+        // the line between the two messages, which reads them.
         let final = text + " Done."
-        host.hosting.rootView = view([user, build, test, writing(final, isStreaming: false), next], scheme: .dark)
+        host.hosting.rootView = view([user, intro, build, test, writing(final, isStreaming: false), next], scheme: .dark)
         host.settle()
         XCTAssertEqual(ViewBodyCensus[.conversationTurn], 3)
         XCTAssertEqual(TranscriptProseRenderingTests.proseTextViews(in: host.hosting)
             .first { $0.string.hasPrefix("Checking") }?.string, final)
-        XCTAssertEqual(summaryValue(), L10n.string("Expanded"))
+        XCTAssertEqual(summaryValue(), L10n.string("Collapsed"))
     }
 
     /// A message's text is laid out at the width it shows at, and only there: the window measures its

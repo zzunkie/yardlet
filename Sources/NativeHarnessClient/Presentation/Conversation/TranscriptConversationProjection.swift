@@ -5,13 +5,13 @@ import Foundation
 ///   the first request is a head turn with no prompt. A message the provider read into the running
 ///   turn (`TranscriptEntry.joinsRunningTurn`) stays in that turn's work where it was read, as the
 ///   Codex app keeps a steered message (D13);
-/// - a turn that is over and ends on a settled assistant message has that message as its answer, and
-///   so does one a message read into the running turn or a question the provider asked followed;
-///   every other assistant message is commentary. A note Claude's API sent back as thinking
+/// - every assistant message is said to the person, where it was written, while it streams too: no
+///   provider this projection reads marks a message as working notes, as only Codex does, so none is
+///   guessed to be one from where it falls in the turn (2026-11-24: a report written before a last call
+///   read as a working note under "Done."). A note Claude's API sent back as thinking
 ///   (`TranscriptEntry.isProgressUpdate`) is an assistant message, in a summary. That is the
 ///   transcript's part: the turn is laid out and folded by the rule every harness shares
-///   (`ConversationTurnLayout`), which draws the closing answer under the work and keeps everything
-///   else where it happened;
+///   (`ConversationTurnLayout`), which keeps the messages in view and folds the work between them;
 /// - an allowed request whose tool call has a card is a mark on that card, not a card of its own;
 /// - a message reads what the Codex app shows of it (`ConversationAutomationText`): a Codex
 ///   automation's heartbeat is its instructions, and its reply and directives read as the app shows
@@ -215,46 +215,7 @@ enum TranscriptConversationProjection {
         let isCutOff = input.isLast && !isBusy && input.wasCutOff
         // The person stopped it (`TranscriptEntry.turnStoppedAt`): it reads as stopped, with how long it ran.
         let stoppedAt = isBusy ? nil : input.entries.lazy.compactMap(\.turnStoppedAt).max()
-        // The part of a turn a read began inside answers too once a later turn follows it: what it
-        // ended with is that turn's answer (a final report shown above a background task's notice).
-        let answerID: UUID? = if !input.isHead || !input.isLast, input.isComplete, let last = shown.last,
-                                 let words = words(last), !words.isStreaming { last.id } else { nil }
-        // A streaming assistant message at the tail of an actively running turn (no later
-        // non-reasoning items) may become the turn's final answer; avoid stamping "Commentary" on
-        // it until later work proves it was working notes.
-        let trailingStreamingAssistantID: UUID? = if input.isLast, isBusy, !input.isComplete {
-            shown.reversed().first(where: { entry in
-                if case .reasoning = entry.content, entry.isProgressUpdate != true { return false }
-                return true
-            }).flatMap { entry in
-                if case .assistant(_, true) = entry.content { entry.id } else { nil }
-            }
-        } else {
-            nil
-        }
         let outcomeID = shown.last(where: isOutcome)?.id
-        // What the provider wrote right before a message read into the turn, with no call after it,
-        // answered what came before that message, as a Codex final answer the person's next message
-        // followed: the turn reads on with the next message, so that answer is not its last words. So
-        // did what it wrote right before asking the person a question, which the question goes on from
-        // ("change C and D to the wording above?").
-        var answersBeforeReplies: Set<UUID> = []
-        var lastWords: UUID?
-        for entry in shown {
-            if let words = words(entry) {
-                if !words.isStreaming { lastWords = entry.id }
-                continue
-            }
-            switch entry.content {
-            case .reasoning: break
-            case .user:
-                if entry.joinsRunningTurn == true, let lastWords { answersBeforeReplies.insert(lastWords) }
-                lastWords = nil
-            default:
-                if isQuestion(entry), let lastWords { answersBeforeReplies.insert(lastWords) }
-                lastWords = nil
-            }
-        }
         // A Codex app automation's turn: its request is a heartbeat (`ConversationAutomationText`).
         let inHeartbeatTurn: Bool = if !input.isHead, case let .user(text, _) = input.entries[0].content {
             ConversationScheduledTaskMessage.parse(text) != nil
@@ -333,14 +294,11 @@ enum TranscriptConversationProjection {
                 guard let words = words(entry), let text = ConversationAutomationText.agentMessage(
                     words.text, harness: input.harness, inHeartbeatTurn: inHeartbeatTurn, isStreaming: words.isStreaming
                 ) else { continue }
-                var said = if entry.id == answerID || answersBeforeReplies.contains(entry.id) {
-                    item(entry, .answer(text: text, isStreaming: false), .completed)
-                } else {
-                    item(entry, .commentary(text: text, isStreaming: words.isStreaming),
-                         words.isStreaming ? .running : .completed)
-                }
+                // Only Codex marks what it writes as working notes; every other harness sends one kind of
+                // message, so each is said to the person where it was written, while it streams too.
+                var said = item(entry, .answer(text: text, isStreaming: words.isStreaming),
+                                words.isStreaming ? .running : .completed)
                 said.isSummary = entry.isProgressUpdate == true
-                said.hidesCommentaryLabel = entry.id == trailingStreamingAssistantID
                 work.append(said)
             case let .reasoning(text, isStreaming):
                 work.append(item(entry, .reasoning(summary: nil, detail: text, isStreaming: isStreaming),
@@ -425,7 +383,7 @@ enum TranscriptConversationProjection {
         // the provider offers on the turn (D3).
         let showsWorkTime = !prompt.isEmpty && status.isTerminal && result.timing.durationMilliseconds != nil
         let offersMenu = result.actions.editLatest != nil || result.actions.restoreFiles != nil || result.actions.canFork
-        result.showsHeader = (result.hasWorkDetails && result.foldsWork) || showsWorkTime || offersMenu
+        result.showsHeader = (result.opensFoldedWork && result.foldsWork) || showsWorkTime || offersMenu
         result.recordOrder = shown.map(\.id.uuidString)
         return result
     }
@@ -603,19 +561,6 @@ enum TranscriptConversationProjection {
         case let .assistant(text, isStreaming): (text, isStreaming)
         case let .reasoning(text, isStreaming) where entry.isProgressUpdate == true: (text, isStreaming)
         default: nil
-        }
-    }
-
-    /// The provider asking the person a question: Claude Code's `AskUserQuestion` call, or the
-    /// question form a request brought.
-    private static func isQuestion(_ entry: TranscriptEntry) -> Bool {
-        switch entry.content {
-        case let .activity(activity, _):
-            activity.kind == ClaudeAnswerableTool.askUserQuestion || activity.answeredQuestions != nil
-        case let .permission(request, _):
-            if case .questions = request.structured { true } else { false }
-        default:
-            false
         }
     }
 

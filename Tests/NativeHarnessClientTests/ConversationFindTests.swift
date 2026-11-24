@@ -194,9 +194,9 @@ final class ConversationFindTests: XCTestCase {
         return (entries, request, reading)
     }
 
-    /// The current match is far above the latest output and inside a completed turn's folded work:
-    /// going there opens the work and shows the match. The work folds in its turn, which every match
-    /// scrolls to.
+    /// The current match is far above the latest output, in what Claude said before its last call in a
+    /// completed turn: the message stays in view of the folded work, so going there scrolls to its turn
+    /// and opens nothing.
     func renderTheLongClaudeConversationMatch() async throws {
         let (entries, request, reading) = longClaudeConversation()
         let transcript = TaskConversationView(harness: .claudeCode, workspaceURL: URL(filePath: "/Users/me/yardlet"),
@@ -206,7 +206,8 @@ final class ConversationFindTests: XCTestCase {
         try await render(transcript, height: 560, name: "claude-folded-match",
                          source: source, query: "title bar", moves: 1) { find in
             XCTAssertEqual(find.activeMatch?.unitID, reading.id.uuidString)
-            XCTAssertEqual(find.activeMatch?.revealID, folded)
+            XCTAssertEqual(find.activeMatch?.scrollID, folded)
+            XCTAssertNil(find.activeMatch?.revealID)
         } drawn: { elements in
             let text = elements.map(\.description).joined(separator: "\n")
             XCTAssertTrue(text.contains("the title bar uses a fixed frame"), "the match is shown:\n\(text)")
@@ -282,12 +283,10 @@ extension ConversationFindTests {
             [user, thought, tool, note, final], latestTurnIsComplete: true
         ).units
         XCTAssertEqual(units.map(\.id), [user, note, final].map(\.id.uuidString))
-        // Every match scrolls to its turn, named by its request; the commentary in the completed
-        // turn's folded work opens the turn.
+        // Every match scrolls to its turn, named by its request; every message Claude wrote stays in
+        // view of the folded work, so none opens it.
         XCTAssertEqual(units.map(\.scrollID), Array(repeating: user.id.uuidString, count: 3))
-        XCTAssertEqual(units[1].revealID, user.id.uuidString)
-        XCTAssertNil(units[0].revealID)
-        XCTAssertNil(units[2].revealID)
+        XCTAssertEqual(units.map(\.revealID), [nil, nil, nil])
 
         var cache = ConversationFindSegmentCache()
         let result = ConversationFindEngine.search("TITLE BAR", units: units, cache: &cache)
@@ -362,18 +361,20 @@ extension ConversationFindTests {
     }
 
     func testGoingToAMatchInFoldedWorkOpensIt() async {
-        let user = TranscriptEntry(content: .user(text: "Fix it"))
-        let note = TranscriptEntry(content: .assistant(text: "Reading the title bar code.", isStreaming: false))
-        let final = TranscriptEntry(content: .assistant(text: "Done.", isStreaming: false))
+        // Codex's working notes fold with its work.
         let find = ConversationFindModel()
         find.debounce = .zero
         find.open()
-        find.updateSource(.transcript([user, note, final], latestTurnIsComplete: true))
-        let container = find.slot(for: .container(user.id.uuidString))
+        find.updateSource(codexFindSource(thread([turn("turn-1", status: "completed", items: [
+            userItem("u1", "Fix it"),
+            agentItem("m1", "Reading the title bar code.", phase: "commentary"),
+            agentItem("a1", "Done.", phase: "final_answer")
+        ])])))
+        let container = find.slot(for: .container("turn-1"))
         XCTAssertEqual(container.revealToken, 0)
         find.query = "title bar"
         await find.waitForSearch()
-        XCTAssertEqual(find.activeMatch?.revealID, user.id.uuidString)
+        XCTAssertEqual(find.activeMatch?.revealID, "turn-1")
         XCTAssertEqual(container.revealToken, 1)
         find.next()
         XCTAssertEqual(container.revealToken, 2, "each visit opens it again if it was folded by hand")

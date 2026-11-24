@@ -57,8 +57,11 @@ final class ConversationFollowUpPlacementTests: XCTestCase {
         XCTAssertEqual(presentation.turns.count, 1)
         let turn = try XCTUnwrap(presentation.turns.first)
         XCTAssertEqual(turn.prompt.map(\.id), [entries[0].id.uuidString])
-        XCTAssertEqual(turn.work.map(\.id), entries[1...].map(\.id.uuidString))
-        XCTAssertEqual(turn.workKeptWhenFolded.map(\.id), [entries[3].id.uuidString], "no answer followed it yet")
+        // The reply being written closes the turn for now; every message stays in view.
+        XCTAssertEqual(turn.work.map(\.id), entries[1..<4].map(\.id.uuidString))
+        XCTAssertEqual(turn.answers.map(\.id), [entries[4].id.uuidString])
+        XCTAssertEqual(turn.workKeptWhenFolded.map(\.id), entries[1..<4].map(\.id.uuidString),
+                       "while it runs, what came after the message it finished stays in view")
 
         // Once the turn is over, its menu works on the latest message, the one read into it.
         let finished = claudeEntries(finished: true)
@@ -68,7 +71,8 @@ final class ConversationFollowUpPlacementTests: XCTestCase {
         XCTAssertEqual(idle.actions.editLatest?.entryID, finished[3].id)
         XCTAssertEqual(idle.actions.restoreFiles?.entryID, finished[3].id)
         XCTAssertEqual(idle.answers.map(\.id), [finished[5].id.uuidString])
-        XCTAssertEqual(idle.workKeptWhenFolded.map(\.id), [finished[3].id.uuidString], "the person's message stays in view")
+        XCTAssertEqual(idle.workKeptWhenFolded.map(\.id), [finished[1], finished[3], finished[4]].map(\.id.uuidString),
+                       "the person's message stays in view, and so does every message Claude wrote")
 
         // A message the provider did not read into a running turn still starts a turn of its own.
         var sequential = finished
@@ -120,7 +124,8 @@ final class ConversationFollowUpPlacementTests: XCTestCase {
     /// answer began and the work folds, the message stays where it was and parts the fold: the work
     /// before it folds under the turn header, the work after it on a line of its own under the
     /// message, which opens only that work; the header opens all of it. Each message sent into the
-    /// turn parts it so. Codex and Claude Code draw the folded turn in the same pixels.
+    /// turn parts it so. Claude Code marks none of its messages as working notes, so its folded turn
+    /// keeps every message in view, in the order it was written, and folds only the calls.
     func testTheMessageIsDrawnWhereItWasTakenAndPartsTheFold() throws {
         let directory = try WindowlessRender.directory("conversation-m12f-qa")
         let size = NSSize(width: 760, height: 900)
@@ -156,6 +161,17 @@ final class ConversationFollowUpPlacementTests: XCTestCase {
                             XCTAssertEqual(texts.filter { $0.contains(followUp.message) }.count, 1, joined)
                         }
                         let turn = try XCTUnwrap(presentation(stage, followUps: followUps, harness: harness).turns.first)
+                        if harness == .claudeCode {
+                            let said = [request, "Reading the script first."]
+                                + followUps.flatMap { [$0.message, $0.reply] } + (stage == .working ? [] : [answer])
+                            let order = try said.map(position)
+                            XCTAssertEqual(order, order.sorted(), "\(name):\n\(joined)")
+                            XCTAssertTrue(turn.foldsWork, name)
+                            if stage == .finished {
+                                XCTAssertFalse(joined.contains("cat script.sh"), "\(name) folds the calls:\n\(joined)")
+                            }
+                            continue
+                        }
                         guard turn.foldsWork else {
                             // Not folded: everything in the order it happened.
                             XCTAssertNotEqual(stage, .finished, name)
@@ -178,7 +194,7 @@ final class ConversationFollowUpPlacementTests: XCTestCase {
                         for followUp in followUps {
                             let message = try position(followUp.message)
                             let fold = try XCTUnwrap(drawing.elements[max(searchedFrom, message)...].firstIndex {
-                                $0.label == L10n.string("Work details") && $0.value == L10n.string("Collapsed")
+                                $0.value == L10n.string("Collapsed")
                             }, "\(name): the fold of the work after \(followUp.message)\n\(joined)")
                             order += [message, fold]
                             searchedFrom = fold + 1
@@ -209,8 +225,6 @@ final class ConversationFollowUpPlacementTests: XCTestCase {
                         }
                     }
                     if stage == .finished {
-                        XCTAssertEqual(ConversationDrawing.differingBytes(codex.capture.bitmap, claude.capture.bitmap), 0,
-                                       "Codex and Claude Code draw the folded turn differently (\(count) messages)")
                         try openFolds(codexTimeline, followUps: followUps, size: size, appearance: appearance,
                                       directory: directory)
                     }
@@ -232,8 +246,10 @@ final class ConversationFollowUpPlacementTests: XCTestCase {
         )
         defer { host.close() }
         host.settle(passes: 10)
-        // The header reads the work time, so the first "Work details" is the fold under the first message.
-        XCTAssertTrue(host.hosting.pressButton(labeled: L10n.string("Work details")), name)
+        // The fold under the first message reads the calls it folds, or "Work details" when it folds none.
+        let turn = try XCTUnwrap(presentation(.finished, followUps: followUps, harness: .codex).turns.first)
+        let fold = ConversationDrawOrder.stretches(turn, harness: .codex)[1]
+        XCTAssertTrue(host.hosting.pressButton(labeled: fold.foldTitle(harness: .codex) ?? L10n.string("Work details")), name)
         host.settle(passes: 10)
         try WindowlessRender.writePNG(try host.capture().bitmap,
                                       to: directory.appending(path: "\(name)-message-opened-\(appearance.rawValue).png"))

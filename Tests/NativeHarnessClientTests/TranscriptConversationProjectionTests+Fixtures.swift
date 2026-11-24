@@ -170,7 +170,7 @@ extension TranscriptConversationProjectionTests {
         }
         let error = TranscriptEntry(content: .error(message: "Failed", recoverable: true))
         for (name, entries) in [
-            ("an error", [request, call("read", .failed), answer, error]),
+            ("an error", [request, call("read", .failed), error]),
             ("a running call", [request, call("read", .running), answer])
         ] {
             let turn = TranscriptConversationProjection.presentation(

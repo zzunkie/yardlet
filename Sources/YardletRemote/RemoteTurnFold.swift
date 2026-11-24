@@ -1,8 +1,9 @@
 /// How a client draws one turn's items while the turn's work folds (the header's `foldsWork`), as the Mac draws it
-/// (docs/REMOTE_PROTOCOL.md §6): the work (`inWork`) before the first message sent into the turn that stays in view
-/// folds under the turn header, and the work after each such message, up to the next, folds on a line of its own
-/// drawn right under the message, which opens only that work. One fold above the person's message read as if the
-/// message came after all the work.
+/// (docs/REMOTE_PROTOCOL.md §6): the work (`inWork`) before the first message that stays in view, sent into the turn
+/// or said to the person, folds under the turn header, and the work after each such message, up to the next, folds on
+/// a line of its own drawn right under the message, which opens only that work. One fold above the person's message
+/// read as if the message came after all the work, and one above what the provider said as if it said it all before
+/// working.
 public enum RemoteTurnFold {
     public enum Row: Equatable, Sendable {
         case item(RemoteItem)
@@ -45,8 +46,8 @@ public enum RemoteTurnFold {
         return rows
     }
 
-    /// A message sent into the turn that stays in view while its work folds.
+    /// A message sent into the turn or said to the person that stays in view while its work folds.
     private static func partsFold(_ item: RemoteItem) -> Bool {
-        item.kind == .user && item.inWork != true
+        (item.kind == .user || item.kind == .assistant) && item.inWork != true
     }
 }

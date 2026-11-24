@@ -86,6 +86,9 @@ enum ConversationTurnAction: Hashable, Sendable {
     case editTurn
     case editMessage
     case restoreFiles
+    /// Copy every message the turn said to the person (`ConversationTurn.fullResponseAnswerID`), drawn
+    /// on its last one beside that message's own copy.
+    case copyFullResponse
 
     static func items(for actions: ConversationTurnActions, handlers: ConversationTurnHandlers) -> [Self] {
         var items: [Self] = []
@@ -102,8 +105,20 @@ enum ConversationTurnAction: Hashable, Sendable {
     /// The control the message draws for the item. Both edits read "Edit message", as the Codex app
     /// names its request's edit.
     @MainActor
-    func messageAction(turn: ConversationTurn, handlers: ConversationTurnHandlers) -> ConversationMessageAction {
-        switch self {
+    func messageAction(turn: ConversationTurn, handlers: ConversationTurnHandlers,
+                       harness: HarnessKind) -> ConversationMessageAction {
+        if self == .copyFullResponse {
+            // Read when the person copies, not each time the turn is drawn.
+            let text: @MainActor () -> String? = {
+                turn.fullResponseText.map(TranscriptMarkdownDialect(messagesOf: harness).copyText)
+            }
+            return ConversationMessageAction(id: self, title: L10n.string("Copy full response"),
+                                             systemImage: "doc.on.doc",
+                                             perform: { TranscriptClipboard.copy(text()) }, copies: text)
+        }
+        return switch self {
+        case .copyFullResponse:
+            preconditionFailure("drawn above")
         case .fork:
             ConversationMessageAction(id: self, title: L10n.string("Fork from here"),
                                       systemImage: "arrow.triangle.branch") { handlers.fork?() }
@@ -134,8 +149,9 @@ enum ConversationTurnAction: Hashable, Sendable {
 /// what the rule every harness shares keeps (`ConversationTurn.workKeptWhenFolded`): the answers it
 /// went on past, the messages the person sent into it, the other messages no finished answer
 /// followed, and while it runs, what came after its latest answer. A message sent into the turn that
-/// stays in view parts the fold (`ConversationTurn.workStretches`): the header folds the work before
-/// it, and the work after it folds on a line of its own under the message, which opens only that work.
+/// stays in view parts the fold (`ConversationTurn.workStretches`), as does a message the provider said
+/// to the person: the header folds the work before it, and the work after it folds on a line of its own
+/// under the message, which reads the calls it folds and opens only that work.
 struct ConversationTurnView: View, Equatable {
     @Environment(\.yardletInterfaceScale) private var interfaceScale
     let turn: ConversationTurn
@@ -244,8 +260,13 @@ struct ConversationTurnView: View, Equatable {
                     runView(run)
                 }
             } else {
+                // A running turn keeps its plan in view while its work folds: it is what the turn works
+                // through, as the Claude app keeps its task list open while it works.
+                if turn.status == .running, let plan = turn.plan {
+                    planCard(plan)
+                }
                 // What the fold keeps in view, as the Codex app keeps it out of its folded work, parted
-                // at the messages sent into the turn; a running turn's live call stays the live line's.
+                // at the messages in view; a running turn's live call stays the live line's.
                 ForEach(ConversationWorkGrouping.stretchesWhenFolded(turn, live: live)) { stretch in
                     stretchView(stretch)
                 }
@@ -329,9 +350,12 @@ struct ConversationTurnView: View, Equatable {
             itemView(message)
         }
         if folds {
-            ConversationWorkStretchFold(isOpen: isOpen) {
+            ConversationWorkStretchFold(title: stretch.foldTitle(harness: context.harness), isOpen: isOpen) {
                 if isOpen { openedStretches.remove(stretch.id) } else { openedStretches.insert(stretch.id) }
             }
+            // Between two messages the provider wrote, the fold sits close to both, so a line of notes
+            // and the calls after it read as one step.
+            .padding(.vertical, stretch.opensWithAnswer ? ConversationLayout.foldBetweenMessagesInset : 0)
         }
         ForEach(ConversationWorkGrouping.runs(isOpen ? Array(stretch.work) : stretch.kept)) { run in
             runView(run, stretchWasOpened: isOpen)
@@ -384,14 +408,17 @@ struct ConversationTurnView: View, Equatable {
 
     /// The turn's actions the item draws beside its copy: the person's request draws its edit and
     /// restore, the turn's last answer its fork — the request, when the turn has no answer (it failed
-    /// or stopped first) — (`ConversationTurnAction`); any other item none.
+    /// or stopped first) — and the last message of a turn that said more than one its full copy
+    /// (`ConversationTurnAction`); any other item none.
     private func messageActions(for item: ConversationItem) -> [ConversationMessageAction] {
         let answerID = turn.answers.last?.id
         let isAnswer = item.id == answerID, isRequest = item.id == requestItemID
-        guard isAnswer || isRequest else { return [] }
-        return ConversationTurnAction.items(for: turn.actions, handlers: handlers)
+        let copiesAll: Bool = if case .answer = item.kind { item.id == turn.fullResponseAnswerID } else { false }
+        guard isAnswer || isRequest || copiesAll else { return [] }
+        let items = ConversationTurnAction.items(for: turn.actions, handlers: handlers)
             .filter { $0.isOnAnswer ? isAnswer || (isRequest && answerID == nil) : isRequest }
-            .map { $0.messageAction(turn: turn, handlers: handlers) }
+        return ((copiesAll ? [.copyFullResponse] : []) + items)
+            .map { $0.messageAction(turn: turn, handlers: handlers, harness: context.harness) }
     }
 
     /// The request the person sent to open the turn, which its edit and restore act on.
@@ -407,7 +434,7 @@ struct ConversationTurnView: View, Equatable {
     /// turn's without a time. What the turn offers to do with its messages is on the messages
     /// (`ConversationTurnAction`).
     private var header: some View {
-        let canExpand = foldsWork && turn.hasWorkDetails
+        let canExpand = foldsWork && turn.opensFoldedWork
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 if canExpand {
@@ -507,24 +534,27 @@ struct ConversationTurnView: View, Equatable {
     }
 }
 
-/// The fold of the work after a message sent into a folded turn (`ConversationWorkStretch`), drawn as
-/// the turn header draws its fold when it has no time to read, "Work details", the same for every
-/// harness: a stretch has no time of its own, as a Codex item carries none. It opens only the work
-/// it folds, in place under it.
+/// The fold of the work after a message in a folded turn (`ConversationWorkStretch`), drawn as the
+/// turn header draws its fold when it has no time to read, the same for every harness: a stretch has
+/// no time of its own, as a Codex item carries none. It reads the calls it folds
+/// (`ConversationWorkStretch.foldTitle`), or "Work details" when it folds none, and opens only the
+/// work it folds, in place under it.
 private struct ConversationWorkStretchFold: View {
     @Environment(\.yardletInterfaceScale) private var interfaceScale
+    let title: String?
     let isOpen: Bool
     let toggle: () -> Void
 
     var body: some View {
+        let title = title ?? L10n.string("Work details")
         Button(action: toggle) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Image(systemName: "list.bullet")
                     .font(.system(size: 11 * interfaceScale, weight: .medium))
                     .centeredOnCapHeight(ofTextSize: CodexWorkSummaryLabel.fontSize * interfaceScale)
                     .accessibilityHidden(true)
-                Text(L10n.string("Work details"))
-                    .conversationSelectionText(L10n.string("Work details"))
+                Text(title)
+                    .conversationSelectionText(title)
                 DisclosureCaret(isOpen: isOpen, size: 8 * interfaceScale)
                     .centeredOnCapHeight(ofTextSize: CodexWorkSummaryLabel.fontSize * interfaceScale)
             }

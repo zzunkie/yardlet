@@ -789,7 +789,9 @@ extension AppModel: SessionToolHandling {
         return SessionToolOutcome(
             id: id.uuidString, kind: "task", title: session.title,
             link: SessionToolText.link(title: session.title, taskID: id), state: SessionToolText.stateWord(state),
-            ended: !Self.isWorking(session), answer: Self.latestAnswer(in: presentation).map(Self.answerExcerpt))
+            ended: !Self.isWorking(session),
+            // A turn that still works has not answered yet; one that waits for the person has, for now.
+            answer: session.status == .running ? nil : Self.latestAnswer(in: presentation).map(Self.answerExcerpt))
     }
 
     /// The longest a call from this harness waits (`SessionToolPolicy.waitCeiling`); tests shorten it.
@@ -801,9 +803,9 @@ extension AppModel: SessionToolHandling {
         session.status == .running || session.status == .waitingForApproval
     }
 
-    /// The last answer of the latest turn.
+    /// What the latest turn answered (`ConversationTurnLayout.answerText`).
     static func latestAnswer(in presentation: ConversationPresentation) -> String? {
-        presentation.turns.last.flatMap { ConversationTurnLayout.latestAnswer(answers: $0.answers, work: $0.work) }
+        presentation.turns.last.flatMap { ConversationTurnLayout.answerText($0.work + $0.answers) }
     }
 
     static func answerExcerpt(_ text: String) -> String {

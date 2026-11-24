@@ -879,18 +879,17 @@ private struct HandoffFixture {
                               codexTaskState: CodexTaskState(thread: thread))
     }
 
-    /// A Claude Code Bash call, a note and a running Read, in a running turn: the Bash call keeps its
-    /// own line and the Read is the live line's (2026-10-16).
+    /// A Claude Code note, a Bash call and the note being written after it, in a running turn: the Bash
+    /// call after the finished note keeps its own line while the turn runs (2026-10-16).
     private static func claude(_ workspace: URL) -> HandoffFixture {
         let bash = HarnessActivity(id: "toolu_b10", kind: "Bash", title: "Bash", detail: claudeCommand,
                                    input: claudeCommand + "\n\ndescription: Print the marker", output: "B10-claude")
         return HandoffFixture(name: "claude", harness: .claudeCode, command: claudeCommand, workspaceURL: workspace,
                               entries: [
                                 TranscriptEntry(content: .user(text: "Print the marker")),
+                                TranscriptEntry(content: .assistant(text: "Printing the marker.", isStreaming: false)),
                                 TranscriptEntry(content: .activity(bash, state: .completed)),
-                                TranscriptEntry(content: .assistant(text: "Reading the README next.", isStreaming: false)),
-                                TranscriptEntry(content: .activity(HarnessActivity(
-                                    id: "toolu_read", kind: "Read", title: "Read", input: "README.md"), state: .running))
+                                TranscriptEntry(content: .assistant(text: "Reading the README next.", isStreaming: true))
                               ])
     }
 

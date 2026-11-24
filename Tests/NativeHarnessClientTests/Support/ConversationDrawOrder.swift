@@ -8,7 +8,7 @@ import Foundation
 enum ConversationDrawOrder {
     struct Row: CustomStringConvertible {
         /// Where the turn draws it: prompt, notice, work, kept (in view over folded work), fold (the
-        /// fold of the work after a message sent into the turn, its ID the stretch's), answer, live
+        /// fold of the work after a message in view, its ID the stretch's), answer, live
         /// (the live line's own call) or request.
         let part: String
         let id: String
@@ -36,7 +36,8 @@ enum ConversationDrawOrder {
             for stretch in stretches(turn, harness: harness) {
                 add("kept", [stretch.message].compactMap { $0 })
                 if stretch.message != nil, stretch.hidesWork {
-                    rows.append(Row(part: "fold", id: stretch.id, shape: "fold", text: L10n.string("Work details")))
+                    rows.append(Row(part: "fold", id: stretch.id, shape: "fold",
+                                    text: stretch.foldTitle(harness: harness) ?? L10n.string("Work details")))
                 }
                 add("kept", ConversationWorkGrouping.runs(stretch.kept).flatMap(items))
             }
