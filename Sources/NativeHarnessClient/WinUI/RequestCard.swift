@@ -1110,6 +1110,10 @@ final class CodexQuestionCard {
         guard questions != self.questions || answers != self.answers || canAnswerChanged else { return }
         if questions != self.questions {
             self.questions = questions
+            sent = nil
+            questionIndex = 0
+            customChosen = []
+            input = ConversationRequestFormInput()
             if answers == nil { input.preselect(questions.map(ConversationQuestionStep.init)) }
         }
         self.answers = answers
