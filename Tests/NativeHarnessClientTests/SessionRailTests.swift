@@ -133,54 +133,146 @@ final class SessionRailTests: XCTestCase {
         XCTAssertNil(repository.snapshots[first])
     }
 
-    // MARK: - The window's switch
+    // MARK: - Each task's switch
 
     func testTheToggleHidesAnInlineRailAndRaisesOneWithoutRoom() {
         let task = UUID()
         var visibility = SessionRailVisibility()
-        XCTAssertTrue(visibility.isShown, "on by default, as the Claude app's")
-        visibility.setFits(true, for: task)
-        XCTAssertTrue(visibility.isInline(task))
-        XCTAssertTrue(visibility.isOnScreen(task))
+        var shown = visibility.defaultShown
+        XCTAssertTrue(shown, "on by default, as the Claude app's")
+        visibility.setFits(true, for: task, shown: shown)
+        XCTAssertTrue(visibility.isInline(task, shown: shown))
+        XCTAssertTrue(visibility.isOnScreen(task, shown: shown))
 
-        // On screen beside the conversation: the toggle turns the window's switch off.
-        visibility.toggle(for: task)
-        XCTAssertFalse(visibility.isShown)
-        XCTAssertFalse(visibility.isOnScreen(task))
+        // On screen beside the conversation: the toggle turns the task's switch off, and a task shown
+        // next takes it.
+        visibility.toggle(for: task, shown: &shown)
+        XCTAssertFalse(shown)
+        XCTAssertFalse(visibility.defaultShown)
+        XCTAssertFalse(visibility.isOnScreen(task, shown: shown))
         // Off: the toggle brings it back beside the conversation.
-        visibility.toggle(for: task)
-        XCTAssertTrue(visibility.isInline(task))
-        XCTAssertFalse(visibility.isRaised(task))
+        visibility.toggle(for: task, shown: &shown)
+        XCTAssertTrue(visibility.isInline(task, shown: shown))
+        XCTAssertFalse(visibility.isRaised(task, shown: shown))
 
         // The area narrows: the rail leaves the column and the button shows it as off.
-        visibility.setFits(false, for: task)
-        XCTAssertTrue(visibility.isShown)
-        XCTAssertFalse(visibility.isOnScreen(task))
+        visibility.setFits(false, for: task, shown: shown)
+        XCTAssertTrue(shown)
+        XCTAssertFalse(visibility.isOnScreen(task, shown: shown))
         // The toggle raises it over the task; the switch stays on.
-        visibility.toggle(for: task)
-        XCTAssertTrue(visibility.isRaised(task))
-        XCTAssertTrue(visibility.isShown)
+        visibility.toggle(for: task, shown: &shown)
+        XCTAssertTrue(visibility.isRaised(task, shown: shown))
+        XCTAssertTrue(shown)
         // Toggled again, or dismissed, the raised rail goes and the switch stays.
-        visibility.toggle(for: task)
-        XCTAssertFalse(visibility.isRaised(task))
-        XCTAssertTrue(visibility.isShown)
-        visibility.toggle(for: task)
+        visibility.toggle(for: task, shown: &shown)
+        XCTAssertFalse(visibility.isRaised(task, shown: shown))
+        XCTAssertTrue(shown)
+        visibility.toggle(for: task, shown: &shown)
         visibility.dismissRaised()
-        XCTAssertFalse(visibility.isOnScreen(task))
+        XCTAssertFalse(visibility.isOnScreen(task, shown: shown))
 
         // A raised rail whose area grows takes its place beside the conversation.
-        visibility.toggle(for: task)
-        visibility.setFits(true, for: task)
+        visibility.toggle(for: task, shown: &shown)
+        visibility.setFits(true, for: task, shown: shown)
         XCTAssertNil(visibility.raisedTaskID)
-        XCTAssertTrue(visibility.isInline(task))
+        XCTAssertTrue(visibility.isInline(task, shown: shown))
 
         // With the switch off and no room, the toggle turns it on and raises it.
-        var narrow = SessionRailVisibility(isShown: false)
-        narrow.toggle(for: task)
-        XCTAssertTrue(narrow.isShown)
-        XCTAssertTrue(narrow.isRaised(task))
+        var narrow = SessionRailVisibility(defaultShown: false)
+        var narrowShown = false
+        narrow.toggle(for: task, shown: &narrowShown)
+        XCTAssertTrue(narrowShown)
+        XCTAssertTrue(narrow.isRaised(task, shown: narrowShown))
         narrow.forget(task)
-        XCTAssertFalse(narrow.isOnScreen(task))
+        XCTAssertFalse(narrow.isOnScreen(task, shown: narrowShown))
+    }
+
+    /// Two tasks, side by side in a split or one after the other, each keep their own rail; the switch
+    /// last turned is the one a task shown next takes, and each task's comes back after a relaunch.
+    func testEachTaskKeepsItsOwnRailAcrossALaunch() {
+        let repository = InMemoryTaskWorkspaceRepository()
+        let store = TaskWorkspaceStore(repository: repository)
+        let window = SessionRailWindowState(workspaces: store)
+        let first = UUID(), second = UUID(), next = UUID()
+        _ = store.state(for: first)
+        _ = store.state(for: second)
+        window.setFits(true, for: first)
+        window.setFits(true, for: second)
+        XCTAssertTrue(window.isOnScreen(first))
+        XCTAssertTrue(window.isOnScreen(second))
+
+        // Closed in the first pane, the rail stays in the second.
+        window.toggle(for: first)
+        XCTAssertFalse(window.isOnScreen(first))
+        XCTAssertTrue(window.isOnScreen(second))
+        XCTAssertEqual(store.state(for: second).showsSessionRail, true)
+        XCTAssertEqual(window.toggleTitle(for: second), L10n.string("Hide session rail"))
+
+        // A task shown for the first time takes the switch last turned, and turning it leaves the others.
+        _ = store.state(for: next)
+        window.setFits(true, for: next)
+        XCTAssertFalse(window.isOnScreen(next))
+        window.toggle(for: next)
+        XCTAssertTrue(window.isOnScreen(next))
+        XCTAssertFalse(window.isOnScreen(first))
+        window.toggle(for: second)
+        XCTAssertFalse(window.isOnScreen(second))
+        XCTAssertTrue(window.isOnScreen(next))
+
+        // After a relaunch each task's rail is as it was.
+        store.persistNow()
+        let relaunched = TaskWorkspaceStore(repository: repository)
+        let restored = SessionRailWindowState(defaultShown: false, workspaces: relaunched)
+        for id in [first, second, next] {
+            _ = relaunched.state(for: id)
+            restored.setFits(true, for: id)
+        }
+        XCTAssertFalse(restored.isShown(first))
+        XCTAssertFalse(restored.isShown(second))
+        XCTAssertTrue(restored.isShown(next))
+        // A task saved before each kept its own takes the window's switch.
+        let saved = UUID()
+        repository.save(TaskWorkspaceSnapshot(), for: saved)
+        _ = relaunched.state(for: saved)
+        XCTAssertNil(relaunched.state(for: saved).showsSessionRail)
+        XCTAssertFalse(restored.isShown(saved))
+    }
+
+    /// Windows share the tasks' workspaces: turning a rail in one leaves the tasks another window
+    /// shows, and the workspaces no window showed, as they were.
+    func testTurningARailLeavesTheTasksOtherWindowsShowed() throws {
+        let store = TaskWorkspaceStore()
+        let one = SessionRailWindowState(defaultShown: true, workspaces: store)
+        let two = SessionRailWindowState(defaultShown: false, workspaces: store)
+        let first = UUID(), second = UUID(), unseen = UUID()
+        for id in [first, second, unseen] { _ = store.state(for: id) }
+        one.setFits(true, for: first)
+        two.setFits(true, for: second)
+        XCTAssertFalse(two.isOnScreen(second))
+
+        one.toggle(for: first)
+        XCTAssertEqual(store.state(for: first).showsSessionRail, false)
+        XCTAssertNil(store.state(for: second).showsSessionRail)
+        XCTAssertFalse(two.isOnScreen(second))
+        XCTAssertNil(store.state(for: unseen).showsSessionRail)
+        XCTAssertNil(store.state(for: TaskWorkspaceStore.draftID).showsSessionRail)
+
+        // Saved and read back as it was, and left out of a snapshot that has none.
+        for value in [nil, true, false] as [Bool?] {
+            let data = try JSONEncoder().encode(TaskWorkspaceSnapshot(showsSessionRail: value))
+            XCTAssertEqual(try JSONDecoder().decode(TaskWorkspaceSnapshot.self, from: data).showsSessionRail, value)
+        }
+    }
+
+    /// Another Mac's window: a task shown earlier keeps its rail when the next one's turns.
+    func testAnotherMacsWindowKeepsEachTasksRail() {
+        let shell = RemoteHostShell()
+        shell.noteRailShown("A")
+        shell.noteRailShown("B")
+        shell.setShowsRail(false, for: "B")
+        XCTAssertTrue(shell.showsRail("A"))
+        XCTAssertFalse(shell.showsRail("B"))
+        XCTAssertFalse(shell.showsRail("C"), "a task shown next takes the switch last turned")
     }
 
     func testTheToggleTitleFollowsWhetherTheRailIsOnScreen() {

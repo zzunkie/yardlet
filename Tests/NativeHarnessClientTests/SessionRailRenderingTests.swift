@@ -250,8 +250,8 @@ final class SessionRailRenderingTests: XCTestCase {
                 host.settle(passes: 30, interval: 0.04)
                 try WindowlessRender.writePNG(host.capture().bitmap,
                                               to: directory.appending(path: "\(item.name)-\(appearance.suffix).png"))
-                captured.append(fixture.window.visibility.isInline(fixture.session.id))
-                if item.raised { XCTAssertTrue(fixture.window.visibility.isRaised(fixture.session.id)) }
+                captured.append(fixture.window.isInline(fixture.session.id))
+                if item.raised { XCTAssertTrue(fixture.window.isRaised(fixture.session.id)) }
                 host.close()
             }
             XCTAssertEqual(captured, [item.shows, item.shows], item.name)

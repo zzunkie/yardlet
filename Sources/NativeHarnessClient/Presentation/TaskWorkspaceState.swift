@@ -115,6 +115,9 @@ struct TaskWorkspaceSnapshot: Codable, Equatable {
     /// The session rail's folded and opened cards for this task; nil while every card keeps its
     /// default.
     var railFolds: SessionRailFolds?
+    /// Whether the task's session rail is shown; nil while the task takes the switch the window last
+    /// turned (`SessionRailWindowState.toggle(for:)`).
+    var showsSessionRail: Bool?
     /// Which panel rules the saved panels were kept under: nil before the side panel opened to its
     /// launcher, when a panel that had never been used opened to Review on its own.
     var panelsRevision: Int?
@@ -242,6 +245,9 @@ final class TaskWorkspaceState {
     var sideChatSessionID: UUID?
     /// The session rail's folds for this task, kept with its panels.
     var railFolds: SessionRailFolds { didSet { if railFolds != oldValue { onChange?() } } }
+    /// Whether the task's session rail is shown, apart from every other task's; nil while it takes the
+    /// switch the window last turned.
+    var showsSessionRail: Bool? { didSet { if showsSessionRail != oldValue { onChange?() } } }
     /// The devices the task attached (`SimulatorCenter`), by the key of the Simulator tab each is attached in, kept
     /// with its panels. A tab's device may outlive its tab only where no panel showed the task as an agent attached it.
     var simulators: [UUID: SimulatorDeviceIdentity] { didSet { if simulators != oldValue { onChange?() } } }
@@ -307,6 +313,7 @@ final class TaskWorkspaceState {
         isExpanded = snapshot.layout.isExpanded
         review = snapshot.review ?? .init()
         railFolds = snapshot.railFolds ?? SessionRailFolds()
+        showsSessionRail = snapshot.showsSessionRail
         simulators = snapshot.simulators ?? [:]
         files = WorkspaceFilesState(preferences: snapshot.files ?? .init())
         browserTabs = TaskBrowserTabs(pages: snapshot.browser?.pages ?? [], visited: snapshot.browser?.visited ?? [])
@@ -510,6 +517,7 @@ final class TaskWorkspaceState {
                                      files: files.preferences == .init() ? nil : files.preferences,
                                      browser: browserTabs.preferences(order: browserKeys, latest: latestBrowser),
                                      railFolds: railFolds.isDefault ? nil : railFolds,
+                                     showsSessionRail: showsSessionRail,
                                      panelsRevision: TaskWorkspaceSnapshot.browserTabsPanelsRevision,
                                      simulators: simulators.isEmpty ? nil : simulators)
     }

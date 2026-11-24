@@ -112,9 +112,9 @@ struct MainWindow: View {
     }
     @State private var connectionPresentation: ConnectionPresentation?
     private var isPresentingHarnesses: Bool { connectionPresentation != nil }
-    /// The window's session rail switch and where each task's rail is (`SessionRailStorage` keeps the
-    /// switch with the window).
-    @State private var sessionRail = SessionRailWindowState()
+    /// Each task's session rail switch, kept with its workspace, and where each task's rail is
+    /// (`SessionRailStorage` keeps the switch a task shown next takes with the window).
+    @State private var sessionRail: SessionRailWindowState
     @State private var isPresentingSettings = false
     /// The connector directory opened from a task's rail or composer ("Add connectors"), over the
     /// window rather than inside Settings.
@@ -172,6 +172,7 @@ struct MainWindow: View {
         self.model = model
         self.personalAgentReader = personalAgentReader
         _searchMemo = State(initialValue: model.conversationSearch())
+        _sessionRail = State(initialValue: SessionRailWindowState(workspaces: model.taskWorkspaces))
         // What the app's windows last read of the dots is shown while this one reads its own.
         _personalAgents = State(initialValue: personalAgentReader != nil
             ? PersonalAgentCenter(drafts: personalAgentDrafts ?? PersonalAgentDrafts(), readings: model.personalAgentReadings)
@@ -877,7 +878,7 @@ struct MainWindow: View {
                 if let session {
                     let workspace = model.taskWorkspaces.state(for: session.id, initialSurface: model.initialTaskSurface)
                     TaskSurfaceControls(
-                        showsSessionRail: sessionRail.visibility.isOnScreen(session.id),
+                        showsSessionRail: sessionRail.isOnScreen(session.id),
                         onToggleSessionRail: { sessionRail.toggle(for: session.id) },
                         panelState: Binding(get: { workspace.panels }, set: { workspace.setPanels($0) }),
                         focusedSurface: isFocused ? $focusedTaskSurface : nil,
@@ -2360,7 +2361,7 @@ struct MainWindow: View {
             isSidebarVisible: isSidebarVisible,
             isAttached: session.map { model.isAttached($0.id) } ?? false,
             showsSessionRail: false,
-            onToggleSessionRail: toggleSessionRail,
+            onToggleSessionRail: { sessionRail.toggle(for: session?.id ?? model.store.selectedSessionID) },
             sessionRail: sessionRail,
             panelState: taskPanelState,
             focusedSurface: focusedSurface ?? $focusedTaskSurface,

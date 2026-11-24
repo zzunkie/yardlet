@@ -234,56 +234,62 @@ final class SessionRailPreferenceStore {
     }
 }
 
-/// Whether a window's rail is shown, and where. The Claude app keeps one switch (`sessionRailShown`,
-/// default on); Yardlet keeps it per window (`MainWindow`'s scene storage). The rail sits beside the
-/// conversation when the task's area has room for it (`SessionRailPlacement`); where it has not, the
-/// same switch raises it over the task's trailing edge until it is dismissed, as the Claude app's
+/// Whether a task's rail is shown, and where. The Claude app keeps one switch (`sessionRailShown`,
+/// default on); Yardlet keeps one for each task (`TaskWorkspaceState.showsSessionRail`), so tasks
+/// side by side in a split, or one after another in a window, each keep theirs. The rail sits beside
+/// the conversation when the task's area has room for it (`SessionRailPlacement`); where it has not,
+/// the same switch raises it over the task's trailing edge until it is dismissed, as the Claude app's
 /// toggle "raises" its rail in a narrow window (`raises`, `dn`).
 struct SessionRailVisibility: Equatable, Sendable {
-    /// The window's switch.
-    var isShown = true
+    /// The switch the person last turned in the window, which a task shown for the first time takes
+    /// and that a task loaded without its own shows (`MainWindow`'s scene storage).
+    var defaultShown = true
     /// The task whose rail is raised over its content, while one is.
     private(set) var raisedTaskID: UUID?
     /// The tasks whose area had room for the rail beside the conversation when last on screen. A task
     /// that shows tells it again (`setFits`).
     private(set) var fittingTaskIDs: Set<UUID> = []
 
-    init(isShown: Bool = true) {
-        self.isShown = isShown
+    init(defaultShown: Bool = true) {
+        self.defaultShown = defaultShown
     }
 
-    func isInline(_ taskID: UUID) -> Bool { isShown && fittingTaskIDs.contains(taskID) }
+    /// - Parameter shown: the task's own switch.
+    func isInline(_ taskID: UUID, shown: Bool) -> Bool { shown && fittingTaskIDs.contains(taskID) }
 
-    func isRaised(_ taskID: UUID) -> Bool { raisedTaskID == taskID && !isInline(taskID) }
+    func isRaised(_ taskID: UUID, shown: Bool) -> Bool { raisedTaskID == taskID && !isInline(taskID, shown: shown) }
 
     /// The rail is on screen for the task, beside the conversation or raised over it.
-    func isOnScreen(_ taskID: UUID) -> Bool { isInline(taskID) || isRaised(taskID) }
+    func isOnScreen(_ taskID: UUID, shown: Bool) -> Bool { isInline(taskID, shown: shown) || isRaised(taskID, shown: shown) }
 
     /// The title bar button, the View menu and ⌃⌘I (the Claude app's `vn`): a rail on screen goes
-    /// away — a raised one is dismissed, an inline one turns the switch off — and otherwise the switch
-    /// turns on and, where the task's area has no room, the rail rises over it.
-    mutating func toggle(for taskID: UUID?) {
+    /// away — a raised one is dismissed, an inline one turns the task's switch off — and otherwise the
+    /// switch turns on and, where the task's area has no room, the rail rises over it. The task's
+    /// switch as it is now becomes the one a task shown next takes.
+    mutating func toggle(for taskID: UUID?, shown: inout Bool) {
         guard let taskID else {
-            isShown.toggle()
+            shown.toggle()
+            defaultShown = shown
             raisedTaskID = nil
             return
         }
-        if isRaised(taskID) {
+        if isRaised(taskID, shown: shown) {
             raisedTaskID = nil
-        } else if isInline(taskID) {
-            isShown = false
+        } else if isInline(taskID, shown: shown) {
+            shown = false
         } else {
-            isShown = true
+            shown = true
             raisedTaskID = fittingTaskIDs.contains(taskID) ? nil : taskID
         }
+        defaultShown = shown
     }
 
     /// The task's area grew or shrank past what the rail needs. A raised rail that now fits takes
     /// its place beside the conversation.
-    mutating func setFits(_ fits: Bool, for taskID: UUID) {
+    mutating func setFits(_ fits: Bool, for taskID: UUID, shown: Bool) {
         if fits {
             fittingTaskIDs.insert(taskID)
-            if isShown, raisedTaskID == taskID { raisedTaskID = nil }
+            if shown, raisedTaskID == taskID { raisedTaskID = nil }
         } else {
             fittingTaskIDs.remove(taskID)
         }
@@ -301,20 +307,63 @@ struct SessionRailVisibility: Equatable, Sendable {
 }
 
 /// One window's rail visibility, observed by the views that draw or toggle it and not by the window.
+/// Each task's switch is kept with the task's workspace (`TaskWorkspaceState.showsSessionRail`); a
+/// task without a loaded one (a render, a test) keeps its switch here while the window is open.
 @MainActor
 @Observable
 final class SessionRailWindowState {
     var visibility: SessionRailVisibility
+    @ObservationIgnored private weak var workspaces: TaskWorkspaceStore?
+    /// The switches of tasks without a loaded workspace.
+    private var shownWithoutWorkspace: [UUID: Bool] = [:]
+    /// The tasks this window showed (`setFits`). Only they keep the switch they showed when another
+    /// task's turns: the store's other workspaces may be another window's, or never shown.
+    @ObservationIgnored private var shownTaskIDs: Set<UUID> = []
 
-    init(isShown: Bool = true) {
-        visibility = SessionRailVisibility(isShown: isShown)
+    init(defaultShown: Bool = true, workspaces: TaskWorkspaceStore? = nil) {
+        visibility = SessionRailVisibility(defaultShown: defaultShown)
+        self.workspaces = workspaces
     }
 
-    func toggle(for taskID: UUID?) { visibility.toggle(for: taskID) }
+    private func workspace(_ taskID: UUID) -> TaskWorkspaceState? { workspaces?.loadedState(for: taskID) }
+
+    /// The task's own switch, or, until the task has one, the switch last turned in the window.
+    func isShown(_ taskID: UUID) -> Bool {
+        if let workspace = workspace(taskID) { return workspace.showsSessionRail ?? visibility.defaultShown }
+        return shownWithoutWorkspace[taskID] ?? visibility.defaultShown
+    }
+
+    func isInline(_ taskID: UUID) -> Bool { visibility.isInline(taskID, shown: isShown(taskID)) }
+
+    func isRaised(_ taskID: UUID) -> Bool { visibility.isRaised(taskID, shown: isShown(taskID)) }
+
+    func isOnScreen(_ taskID: UUID) -> Bool { visibility.isOnScreen(taskID, shown: isShown(taskID)) }
+
+    /// Turns the task's rail, and only the task's; nil turns the switch a task shown next takes. The
+    /// tasks this window showed without a switch of their own keep the one they showed until now, so
+    /// another task beside this one, or shown before it, stays as it was.
+    func toggle(for taskID: UUID?) {
+        var shown = taskID.map(isShown) ?? visibility.defaultShown
+        let before = visibility.defaultShown
+        visibility.toggle(for: taskID, shown: &shown)
+        if visibility.defaultShown != before {
+            for id in shownTaskIDs where id != taskID {
+                guard let workspace = workspace(id), workspace.showsSessionRail == nil else { continue }
+                workspace.showsSessionRail = before
+            }
+        }
+        guard let taskID else { return }
+        if let workspace = workspace(taskID) {
+            workspace.showsSessionRail = shown
+        } else {
+            shownWithoutWorkspace[taskID] = shown
+        }
+    }
 
     func setFits(_ fits: Bool, for taskID: UUID) {
+        shownTaskIDs.insert(taskID)
         guard visibility.fittingTaskIDs.contains(taskID) != fits else { return }
-        visibility.setFits(fits, for: taskID)
+        visibility.setFits(fits, for: taskID, shown: isShown(taskID))
     }
 
     func dismissRaised() {
@@ -330,7 +379,7 @@ final class SessionRailWindowState {
     /// "Hide session rail" while it is on screen for the task, otherwise "Show session rail"
     /// (the Claude app's `U0R7oYkTM1`, `JYaBivMdHH`).
     func toggleTitle(for taskID: UUID?) -> String {
-        let onScreen = taskID.map(visibility.isOnScreen) ?? visibility.isShown
+        let onScreen = taskID.map(isOnScreen) ?? visibility.defaultShown
         return L10n.string(onScreen ? "Hide session rail" : "Show session rail")
     }
 }
