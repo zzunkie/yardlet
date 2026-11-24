@@ -382,7 +382,8 @@ struct AndroidEmulatorBackend: SimulatorBackend {
     /// The emulator this Yardlet started for the AVD, while it runs; one that ended leaves the record, so its port
     /// names no other emulator later.
     private func liveLaunch(of avd: String) -> Launches.Launch? {
-        guard let launched = launches.launch(of: avd) else { return nil }
+        // A port reserved for a launch not made yet is no running emulator.
+        guard let launched = launches.launch(of: avd), launched.processID > 0 else { return nil }
         guard launcher.hasEnded(launched.processID) != true else {
             launches.remove(avd: avd)
             return nil

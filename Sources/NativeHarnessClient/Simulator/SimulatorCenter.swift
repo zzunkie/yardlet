@@ -470,7 +470,7 @@ final class SimulatorCenter {
             case let .success(copy):
                 // The tab closed, or the task went, while the copy was made: it is not attached.
                 guard tabGenerations[slot, default: 0] == generation, !removedTasks.contains(task), isEnabled,
-                      copies[copy] != nil else {
+                      !isQuitting, copies[copy] != nil, deletingCopies[copy] == nil else {
                     await deleteCopy(copy)
                     return .refused(refusal(.copyFailed("the Simulator tab closed while the copy was made"),
                                             excluding: identity))
@@ -719,11 +719,12 @@ final class SimulatorCenter {
               let toolchain = checks[identity.kind.platform]?.toolchain else { return }
         let deletion = Task { @MainActor [weak self] () -> Void in
             guard let self else { return }
+            // Cleared before any waiter wakes, so a waiter that tries again finds no finished deletion.
+            defer { self.deletingCopies[identity] = nil }
             await self.performDeletion(of: identity, backend: backend, toolchain: toolchain)
         }
         deletingCopies[identity] = deletion
         await deletion.value
-        deletingCopies[identity] = nil
     }
 
     private func performDeletion(of identity: SimulatorDeviceIdentity, backend: any SimulatorBackend,
