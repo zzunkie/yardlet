@@ -278,7 +278,7 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     func handle(_ call: AgentToolCall) async -> AgentToolResult {
         guard let sessionID = authorizedSession(call) else { return Self.unrecognizedToken }
         if CodeModeToolCatalog.definition(named: call.tool) != nil, !codeModeEnabled() {
-            return .failure("MCP Code Mode is off in Yardlet's settings. Turn it on in Settings → Connectors.",
+            return .failure("MCP Code Mode is off in Yardlet's settings. Turn it on in Settings → General.",
                             .refused, retry: .no)
         }
         // Yardlet's own tools are checked against the schemas they are listed with before they run; a
@@ -433,7 +433,7 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     private func handleCodeMode(_ call: AgentToolCall, for sessionID: UUID) async -> AgentToolResult {
         guard CodeModePreference.isSupported && codeModeEnabled() else {
             return .failure(
-                "MCP Code Mode is off in Yardlet's settings. Turn it on in Settings → Connectors to use \(call.tool).",
+                "MCP Code Mode is off in Yardlet's settings. Turn it on in Settings → General to use \(call.tool).",
                 .refused, retry: .no
             )
         }
