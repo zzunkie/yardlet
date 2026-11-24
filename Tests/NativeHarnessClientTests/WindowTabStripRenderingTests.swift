@@ -243,6 +243,22 @@ final class WindowTabStripRenderingTests: XCTestCase {
         XCTAssertEqual(presses, 1, "a press on the pane's text focuses the pane")
         try press(at: NSPoint(x: 300, y: 100))
         XCTAssertEqual(presses, 1, "a press in the other pane does not")
+        // A popover or a palette over the pane is a window of its own: a press on it is not the pane's.
+        let over = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 200, height: 200),
+                            styleMask: [.borderless], backing: .buffered, defer: false)
+        over.isReleasedWhenClosed = false
+        over.contentView = NSView()
+        over.alphaValue = 0
+        window.addChildWindow(over, ordered: .above)
+        defer { over.close() }
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            NSApp.sendEvent(try XCTUnwrap(NSEvent.mouseEvent(
+                with: type, location: NSPoint(x: 100, y: 100), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: over.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
+                pressure: type == .leftMouseDown ? 1 : 0)))
+        }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(presses, 1, "a press on a window over the pane does not")
         monitor.isActive = false
         try press(at: NSPoint(x: 100, y: 100))
         XCTAssertEqual(presses, 1, "a focused pane is not watched")

@@ -252,9 +252,9 @@ private struct PaneDropDelegate: DropDelegate {
 }
 
 /// Gives a split pane the focus when a press lands anywhere in it, also on the parts AppKit draws and takes
-/// the press for itself: the composer's text, the conversation's text, a terminal, a browser page (whose child
-/// window counts as the pane's). It watches only while its pane does not have the focus, and lets every press
-/// through to what is under it.
+/// the press for itself: the composer's text, the conversation's text, a terminal, a browser page. It watches only
+/// while its pane does not have the focus, and lets every press through to what is under it. A press on a sheet or a
+/// popover over the window is the sheet's or the popover's, not the pane's behind it.
 struct PanePressMonitor: NSViewRepresentable {
     let isActive: Bool
     let onPress: () -> Void
@@ -297,18 +297,18 @@ final class PanePressMonitorView: NSView {
             MainActor.assumeIsolated {
                 guard let self, self.contains(event) else { return }
                 // After the press reaches its view, so a control pressed there still acts on it.
-                DispatchQueue.main.async { self.onPress() }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.isActive else { return }
+                    self.onPress()
+                }
             }
             return event
         }
     }
 
-    /// The press is in this pane: in its window, or in a window over it such as a browser page's.
+    /// The press is in this pane, in its own window with no sheet over it.
     private func contains(_ event: NSEvent) -> Bool {
-        guard let window, let pressed = event.window,
-              pressed === window || pressed.parent === window else { return false }
-        let onScreen = pressed.convertPoint(toScreen: event.locationInWindow)
-        let point = convert(window.convertPoint(fromScreen: onScreen), from: nil)
-        return bounds.contains(point)
+        guard let window, window.attachedSheet == nil, event.window === window else { return false }
+        return bounds.contains(convert(event.locationInWindow, from: nil))
     }
 }
