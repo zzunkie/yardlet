@@ -370,13 +370,9 @@ struct NewTaskHomeLists: View {
     /// today, and its open pull requests.
     private func header(_ summary: NewTaskProjectSummary, isChosen: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: summary.project == nil ? "bubble.left" : (isChosen ? "folder.fill" : "folder.fill"))
-                .font(.system(size: 12 * interfaceScale, weight: .medium))
-                .foregroundStyle(
-                    isChosen ? AnyShapeStyle(ParityTheme.accent)
-                        : (summary.project == nil ? AnyShapeStyle(.secondary)
-                           : AnyShapeStyle(ParityProjectPalette.color(for: summary.name)))
-                )
+            Image(systemName: summary.project == nil ? "bubble.left" : "folder.fill")
+                .font(.parity(.caption, weight: .medium, scale: interfaceScale))
+                .foregroundStyle(isChosen ? AnyShapeStyle(ParityTheme.accent) : AnyShapeStyle(.secondary))
                 .frame(width: 16)
             Text(summary.name)
                 .font(.system(size: 14.5 * interfaceScale, weight: .semibold))

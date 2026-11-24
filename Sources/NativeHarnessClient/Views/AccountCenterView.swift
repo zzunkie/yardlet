@@ -126,9 +126,9 @@ struct HarnessCenterView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 10) {
+            HStack(spacing: ParitySpace.s12) {
                 Text(L10n.string("Connections"))
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.parity(.body, weight: .semibold, scale: 1))
                 Spacer()
                 Button(L10n.string("Done")) {
                     // A sign-in this sheet was opened for is used however the sheet closes.
@@ -140,7 +140,7 @@ struct HarnessCenterView: View {
                     .controlSize(.small)
                     .parityPointer()
             }
-            .padding(.horizontal, 14)
+            .padding(.horizontal, ParitySpace.s16)
             .frame(height: ParityTheme.toolbarHeight)
 
             Rectangle().fill(ParityTheme.separator).frame(height: 1)
@@ -152,7 +152,7 @@ struct HarnessCenterView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .padding(.horizontal, 16).padding(.vertical, 12)
+                .padding(.horizontal, ParitySpace.s16).padding(.vertical, ParitySpace.s12)
             }
             ConnectionCenterContent(
                 tab: tab, model: model, runtimeSelections: runtimeSelections, connections: connections,
@@ -279,7 +279,7 @@ struct ConnectionCenterContent: View {
                     }, onLogin: startAccountLogin)
             } else if tab == .accounts {
                 accountsList
-                    .padding(.horizontal, 16).padding(.top, 16)
+                    .padding(.horizontal, ParitySpace.s16).padding(.top, ParitySpace.s16)
             } else if let selectedHarness,
                       let descriptor = HarnessCatalog.descriptor(for: selectedHarness) {
                 harnessDetail(descriptor: descriptor)
@@ -518,8 +518,8 @@ struct ConnectionCenterContent: View {
 
     private var harnessGrid: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: ParitySpace.s12) {
+                HStack(spacing: ParitySpace.s8) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                     TextField(L10n.string("Search harnesses"), text: $searchText)
                         .textFieldStyle(.plain)
@@ -529,10 +529,11 @@ struct ConnectionCenterContent: View {
                             .accessibilityLabel(L10n.string("Clear search"))
                     }
                 }
-                .padding(10)
-                .background(ParityTheme.input, in: RoundedRectangle(cornerRadius: 8))
-                .overlay { RoundedRectangle(cornerRadius: 8).stroke(ParityTheme.separator) }
-                HStack(spacing: 12) {
+                .padding(.horizontal, ParitySpace.s12)
+                .padding(.vertical, ParitySpace.s8)
+                .background(ParityTheme.input, in: RoundedRectangle(cornerRadius: ParityRadius.row))
+                .overlay { RoundedRectangle(cornerRadius: ParityRadius.row).stroke(ParityTheme.separator) }
+                HStack(spacing: ParitySpace.s12) {
                     Picker(L10n.string("Connection status"), selection: $filter) {
                         ForEach(HarnessCenterFilter.allCases) { item in
                             Text(L10n.string(item == .all ? "All" : item == .connected ? "Installed" : "Not installed")).tag(item)
@@ -552,31 +553,31 @@ struct ConnectionCenterContent: View {
                     }
                 }
                 if let remoteNote {
-                    Text(remoteNote).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Text(remoteNote).font(.parity(.caption, scale: 1)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .padding(16)
+            .padding(ParitySpace.s16)
             Divider()
             ScrollView {
                 if filteredHarnesses.isEmpty {
-                    VStack(spacing: 10) {
-                        Image(systemName: "magnifyingglass").font(.title2).foregroundStyle(.secondary)
-                        Text(L10n.string("No matching harnesses")).font(.headline)
+                    VStack(spacing: ParitySpace.s12) {
+                        Image(systemName: "magnifyingglass").font(.parity(.section, scale: 1)).foregroundStyle(.secondary)
+                        Text(L10n.string("No matching harnesses")).font(.parity(.control, weight: .semibold, scale: 1))
                         Button(L10n.string("Show all harnesses")) { searchText = ""; filter = .all }
                             .parityPointer()
                     }
-                    .frame(maxWidth: .infinity).padding(.vertical, 46)
+                    .frame(maxWidth: .infinity).padding(.vertical, ParitySpace.s48)
                 } else {
                     LazyVStack(spacing: 0) {
                         ForEach(filteredHarnesses) { descriptor in
                             harnessRow(descriptor)
                             if descriptor.id != filteredHarnesses.last?.id {
-                                Divider().padding(.leading, 50).padding(.trailing, 10)
+                                Divider().padding(.leading, 50).padding(.trailing, ParitySpace.s12)
                             }
                         }
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, ParitySpace.s16)
+                    .padding(.vertical, ParitySpace.s8)
                 }
             }
         }
@@ -586,24 +587,24 @@ struct ConnectionCenterContent: View {
         let installed = runtimeSelections.knownURL(for: descriptor.id) != nil
         let status = L10n.string(installed ? "Installed" : "Not installed")
         return Button { selectedHarness = descriptor.id } label: {
-            HStack(spacing: 12) {
+            HStack(spacing: ParitySpace.s12) {
                 HarnessLogoView(descriptor: descriptor, size: 28)
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: ParitySpace.s4) {
                     Text(descriptor.displayName).font(SettingsMetrics.titleFont).lineLimit(1)
                 }
-                Spacer(minLength: 12)
+                Spacer(minLength: ParitySpace.s12)
                 Label(status, systemImage: installed ? "checkmark.circle" : "minus.circle")
                     .font(SettingsMetrics.detailFont).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+                Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
             }
             .foregroundStyle(.primary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.horizontal, ParitySpace.s12)
+            .padding(.vertical, ParitySpace.s8)
             .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
             .background(
                 hoveredHarness == descriptor.id ? ParityTheme.hoverFill : .clear,
-                in: RoundedRectangle(cornerRadius: 8)
+                in: RoundedRectangle(cornerRadius: ParityRadius.row)
             )
             .contentShape(Rectangle())
         }
@@ -628,8 +629,8 @@ struct ConnectionCenterContent: View {
         let accounts = connections.choices(for: [descriptor.id])
         let hasSavedAccounts = accounts.contains { $0.connection != nil }
         return ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: ParitySpace.s12) {
+                HStack(spacing: ParitySpace.s12) {
                     Button {
                         selectedHarness = nil
                     } label: {
@@ -640,30 +641,30 @@ struct ConnectionCenterContent: View {
                     Spacer()
                 }
                 if let remoteNote {
-                    Text(remoteNote).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Text(remoteNote).font(.parity(.caption, scale: 1)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
 
-                HStack(alignment: .top, spacing: 12) {
+                HStack(alignment: .top, spacing: ParitySpace.s12) {
                     HarnessLogoView(descriptor: descriptor, size: 42)
 
-                    VStack(alignment: .leading, spacing: 4) {
-                        VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: ParitySpace.s4) {
+                        VStack(alignment: .leading, spacing: ParitySpace.s4) {
                             Text(descriptor.displayName)
-                                .font(.system(size: 16, weight: .semibold))
+                                .font(.parity(.section, scale: 1))
                             if hasSavedAccounts {
                                 Text(accounts.map(\.title).joined(separator: ", "))
-                                    .font(.system(size: 12))
+                                    .font(.parity(.caption, scale: 1))
                                     .foregroundStyle(.secondary)
                                     .lineLimit(2)
                             } else {
                                 if let summary = accountSummary(snapshot, harness: descriptor.id) {
                                     Text(summary)
-                                        .font(.system(size: 12))
+                                        .font(.parity(.caption, scale: 1))
                                         .foregroundStyle(.secondary)
                                 }
                                 if let snapshot {
                                     Text(snapshot.detail)
-                                        .font(.callout)
+                                        .font(.parity(.control, scale: 1))
                                         .foregroundStyle(.secondary)
                                         .fixedSize(horizontal: false, vertical: true)
                                 }
@@ -675,9 +676,9 @@ struct ConnectionCenterContent: View {
                             ? ([accountsStatus(accounts)] + accounts.map(\.title)).joined(separator: ", ")
                             : AccountAccessibilityProjection.value(for: snapshot))
                         if hasSavedAccounts, let snapshot {
-                            HStack(spacing: 8) {
+                            HStack(spacing: ParitySpace.s8) {
                                 Text(L10n.string("Default login") + " · " + AccountConnectionPresentation.status(for: snapshot))
-                                    .font(.system(size: 11))
+                                    .font(.parity(.caption, scale: 1))
                                     .foregroundStyle(.secondary)
                                 defaultLoginButton(descriptor: descriptor, snapshot: snapshot)
                             }
@@ -688,44 +689,44 @@ struct ConnectionCenterContent: View {
                     if hasSavedAccounts {
                         let state = accountsState(accounts)
                         Label(accountsStatus(accounts), systemImage: stateSymbol(state))
-                            .font(.system(size: 10.5))
+                            .font(.parity(.caption, scale: 1))
                             .foregroundStyle(stateColor(state))
                             .accessibilityHidden(true)
                     } else {
                         accountActions(descriptor: descriptor, snapshot: snapshot)
                     }
                 }
-                .padding(14)
+                .padding(ParitySpace.s16)
                 .parityCard()
 
-                HStack(spacing: 12) {
+                HStack(spacing: ParitySpace.s12) {
                     Label(L10n.string(runtimeSelections.knownURL(for: descriptor.id) == nil ? "Runtime unavailable" : "Runtime ready"), systemImage: "terminal")
                     Spacer()
                     Text(HarnessConnectionCapabilities.capabilities(for: descriptor.id).access.title)
                         .foregroundStyle(.secondary)
-                }.font(.callout).padding(14).parityCard()
+                }.font(.parity(.control, scale: 1)).padding(ParitySpace.s16).parityCard()
 
                 if AccountConnectionPresentation.usesProviderLanguage(descriptor.id) {
                     providerConnectionSection(descriptor: descriptor, snapshot: snapshot)
-                        .padding(14)
+                        .padding(ParitySpace.s16)
                         .parityCard()
                 }
 
                 DisclosureGroup(L10n.string("Runtime and connection details"), isExpanded: $showsConnectionDetails) {
-                    VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: ParitySpace.s16) {
                         runtimeSection(descriptor)
                         if let snapshot {
                             Divider()
                             Text(L10n.format("Stored by: %@", snapshot.credentialOwner))
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(.parity(.caption, scale: 1)).foregroundStyle(.secondary)
                             Text(L10n.format("Last checked: %@", snapshot.checkedAt.formatted(date: .abbreviated, time: .shortened)))
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(.parity(.caption, scale: 1)).foregroundStyle(.secondary)
                         }
                     }
-                    .padding(.top, 12)
+                    .padding(.top, ParitySpace.s12)
                 }
-                .font(.callout.weight(.medium))
-                .padding(14)
+                .font(.parity(.control, weight: .medium, scale: 1))
+                .padding(ParitySpace.s16)
                 .parityCard()
 
                 if let snapshot, !snapshot.usage.isEmpty {
@@ -735,40 +736,41 @@ struct ConnectionCenterContent: View {
                     let totals = snapshot.usage.filter {
                         $0.evidence != .exactQuota && !$0.id.hasPrefix(HarnessAccountBroker.dailyUsageIDPrefix)
                     }
-                    VStack(alignment: .leading, spacing: 9) {
+                    VStack(alignment: .leading, spacing: ParitySpace.s8) {
                         HStack(alignment: .firstTextBaseline) {
                             Text(L10n.string("Usage"))
-                                .font(.system(size: 12, weight: .semibold))
+                                .font(.parity(.control, weight: .semibold, scale: 1))
                             if let account = accountLabel(snapshot) {
-                                Text(account).font(.system(size: 11)).foregroundStyle(.secondary)
+                                Text(account).font(.parity(.caption, scale: 1)).foregroundStyle(.secondary)
                             }
                             Spacer()
                             if let freshness = AccountFreshnessProjection.text(
                                 checkedAt: snapshot.checkedAt,
                                 status: connections.readingStatus[AccountSnapshotCache.defaultKey(for: descriptor.id)],
                                 isChecking: connections.isCheckingDefault(descriptor.id)) {
-                                Text(freshness).font(.system(size: 10.5)).foregroundStyle(.secondary)
+                                Text(freshness).font(.parity(.caption, scale: 1)).foregroundStyle(.secondary)
                             }
                         }
                         if !quotas.isEmpty {
-                            AccountLimitWindowList(metrics: quotas, reset: .absolute, fontSize: 11.5, rowSpacing: 6)
+                            AccountLimitWindowList(metrics: quotas, reset: .absolute, fontSize: ParityType.caption.size,
+                                                   rowSpacing: ParitySpace.s8)
                         }
                         ForEach(totals) { metric in
                             usageRow(metric, leadingPadding: 0)
                         }
                     }
-                    .padding(14)
+                    .padding(ParitySpace.s16)
                     .parityCard()
                 }
 
                 if let localSessionUsage,
                    localSessionUsage.harness == descriptor.id {
                     localSessionUsageSection(localSessionUsage)
-                        .padding(14)
+                        .padding(ParitySpace.s16)
                         .parityCard()
                 }
             }
-            .padding(14)
+            .padding(ParitySpace.s16)
         }
         .background(ParityTheme.canvas)
     }
@@ -778,13 +780,13 @@ struct ConnectionCenterContent: View {
         descriptor: HarnessDescriptor,
         snapshot: HarnessAccountSnapshot?
     ) -> some View {
-        VStack(alignment: .trailing, spacing: 7) {
+        VStack(alignment: .trailing, spacing: ParitySpace.s8) {
             if let snapshot {
                 Label(
                     AccountConnectionPresentation.status(for: snapshot),
                     systemImage: stateSymbol(snapshot.state)
                 )
-                    .font(.system(size: 10.5))
+                    .font(.parity(.caption, scale: 1))
                     .foregroundStyle(stateColor(snapshot.state))
                     .accessibilityHidden(true)
                 if allowsAccountManagement,
@@ -847,26 +849,26 @@ struct ConnectionCenterContent: View {
         descriptor: HarnessDescriptor,
         snapshot: HarnessAccountSnapshot?
     ) -> some View {
-        VStack(alignment: .leading, spacing: 11) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: ParitySpace.s12) {
+            HStack(spacing: ParitySpace.s8) {
                 Image(systemName: "point.3.connected.trianglepath.dotted")
                     .foregroundStyle(ParityTheme.accent)
                 Text(L10n.string("Model provider"))
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.parity(.control, weight: .semibold, scale: 1))
                 Spacer()
                 Text(AccountConnectionPresentation.providerBadge(for: descriptor.id))
-                    .font(.system(size: 9.5, weight: .semibold))
+                    .font(.parity(.caption, weight: .medium, scale: 1))
                     .foregroundStyle(ParityTheme.accentText)
-                    .padding(.horizontal, 7)
+                    .padding(.horizontal, ParitySpace.s8)
                     .padding(.vertical, 3)
-                    .background(ParityTheme.subtleFill, in: Capsule())
+                    .background(ParityTheme.subtleFill, in: Capsule(style: .circular))
             }
 
             Text(AccountConnectionPresentation.providerTitle(for: descriptor.id))
-                .font(.system(size: 11.5, weight: .medium))
+                .font(.parity(.caption, weight: .medium, scale: 1))
 
             if allowsAccountManagement {
-                HStack(spacing: 8) {
+                HStack(spacing: ParitySpace.s8) {
                     if snapshot?.canLogin == true {
                         if descriptor.id == .pi {
                             PiConnectionProviderPicker(selection: $piProviderID)
@@ -901,12 +903,12 @@ struct ConnectionCenterContent: View {
         let runtime = runtimeSelections.knownURL(for: descriptor.id)
         let remote = runtimeSelections.remoteRuntimes?[descriptor.id]
         let compatibility = HarnessRuntimeVersionNote.compatibility(for: descriptor.id)
-        return VStack(alignment: .leading, spacing: 9) {
-            HStack(spacing: 8) {
+        return VStack(alignment: .leading, spacing: ParitySpace.s8) {
+            HStack(spacing: ParitySpace.s8) {
                 Image(systemName: "terminal")
                     .foregroundStyle(ParityTheme.accent)
                 Text(L10n.string("Runtime"))
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.parity(.control, weight: .semibold, scale: 1))
                 Spacer()
                 if let remote {
                     Menu(L10n.string("Choose…")) {
@@ -937,44 +939,44 @@ struct ConnectionCenterContent: View {
             if let remote {
                 if remote.installed {
                     Label(L10n.string("Available"), systemImage: "checkmark.circle.fill")
-                        .font(.system(size: 10.5))
+                        .font(.parity(.caption, scale: 1))
                         .foregroundStyle(.green)
                     if let label = remote.label {
                         Text(label)
-                            .font(.system(size: 10.5, design: .monospaced)).fontDesign(nil)
+                            .font(.system(size: ParityType.caption.size, design: .monospaced)).fontDesign(nil)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
                             .textSelection(.enabled)
                     }
                     if let note = remote.versionNote {
                         Text(note)
-                            .font(.system(size: 10.5))
+                            .font(.parity(.caption, scale: 1))
                             .foregroundStyle(remote.versionVerified == false ? Color.orange : Color.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 } else {
                     Label(L10n.string("Not installed"), systemImage: "exclamationmark.circle")
-                        .font(.system(size: 10.5))
+                        .font(.parity(.caption, scale: 1))
                         .foregroundStyle(.orange)
                 }
             } else if let runtime {
                 Label(L10n.string("Available"), systemImage: "checkmark.circle.fill")
-                    .font(.system(size: 10.5))
+                    .font(.parity(.caption, scale: 1))
                     .foregroundStyle(.green)
                 Text(runtime.path(percentEncoded: false))
-                    .font(.system(size: 10.5, design: .monospaced)).fontDesign(nil)
+                    .font(.system(size: ParityType.caption.size, design: .monospaced)).fontDesign(nil)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                     .textSelection(.enabled)
                 if compatibility != nil, let runtimeVersionNote {
                     Text(runtimeVersionNote.text)
-                        .font(.system(size: 10.5))
+                        .font(.parity(.caption, scale: 1))
                         .foregroundStyle(runtimeVersionNote.standing == .verified ? Color.secondary : Color.orange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             } else {
                 Label(L10n.string("Not installed"), systemImage: "exclamationmark.circle")
-                    .font(.system(size: 10.5))
+                    .font(.parity(.caption, scale: 1))
                     .foregroundStyle(.orange)
             }
         }
@@ -1019,15 +1021,15 @@ struct ConnectionCenterContent: View {
     private func localSessionUsageSection(
         _ overview: LocalSessionUsageOverview
     ) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: ParitySpace.s8) {
+            HStack(spacing: ParitySpace.s8) {
                 Image(systemName: "chart.bar.xaxis")
                     .foregroundStyle(ParityTheme.accent)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(L10n.string("Thread usage"))
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.parity(.control, weight: .semibold, scale: 1))
                     Text(overview.taskTitle)
-                        .font(.system(size: 10.5))
+                        .font(.parity(.caption, scale: 1))
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -1081,14 +1083,14 @@ struct ConnectionCenterContent: View {
         _ metric: AccountUsageMetric,
         leadingPadding: CGFloat = 39
     ) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: ParitySpace.s4) {
             HStack {
-                Text(metric.label).font(.system(size: 11, weight: .medium))
+                Text(metric.label).font(.parity(.caption, weight: .medium, scale: 1))
                 Text(metric.evidence.displayName)
-                    .font(.system(size: 9.5))
+                    .font(.parity(.caption, scale: 1))
                     .foregroundStyle(.tertiary)
                 Spacer()
-                Text(metric.detail).font(.system(size: 10.5)).foregroundStyle(.secondary)
+                Text(metric.detail).font(.parity(.caption, scale: 1)).foregroundStyle(.secondary)
             }
             if let usedFraction = metric.usedFraction {
                 ProgressView(value: min(max(1 - usedFraction, 0), 1))
@@ -1098,7 +1100,7 @@ struct ConnectionCenterContent: View {
                         "Resets %@",
                         resetsAt.formatted(date: .abbreviated, time: .shortened)
                     ))
-                    .font(.system(size: 9.5))
+                    .font(.parity(.caption, scale: 1))
                     .foregroundStyle(.tertiary)
                 }
             }
@@ -1121,10 +1123,10 @@ struct ConnectionCenterContent: View {
                 .parityPointer()
                 .disabled(model.loginController.isRunning)
                 Spacer()
-                HStack(spacing: 7) {
+                HStack(spacing: ParitySpace.s8) {
                     HarnessLogoView(descriptor: descriptor, size: 20)
                     Text(descriptor.displayName)
-                        .font(.headline)
+                        .font(.parity(.control, weight: .semibold, scale: 1))
                 }
                 Spacer()
                 if model.loginController.isRunning {
@@ -1132,19 +1134,19 @@ struct ConnectionCenterContent: View {
                         .parityPointer()
                 }
             }
-            .padding(14)
+            .padding(ParitySpace.s16)
 
             Divider()
 
-            VStack(spacing: 16) {
-                Spacer(minLength: 4)
+            VStack(spacing: ParitySpace.s16) {
+                Spacer(minLength: ParitySpace.s4)
 
                 HarnessLogoView(descriptor: descriptor, size: 52)
 
-                VStack(spacing: 6) {
+                VStack(spacing: ParitySpace.s8) {
                     Text(connectionHeading(descriptor: descriptor))
-                        .font(.system(size: 17, weight: .semibold))
-                    HStack(spacing: 6) {
+                        .font(.parity(.section, scale: 1))
+                    HStack(spacing: ParitySpace.s8) {
                         if model.loginController.phase == .preparing {
                             ProgressView()
                                 .controlSize(.mini)
@@ -1153,11 +1155,11 @@ struct ConnectionCenterContent: View {
                         }
                         Text(connectionPhaseTitle)
                     }
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.parity(.caption, weight: .medium, scale: 1))
                     .foregroundStyle(connectionPhaseColor)
                     if let detail = connectionPhaseDetail {
                         Text(detail)
-                            .font(.system(size: 11))
+                            .font(.parity(.caption, scale: 1))
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                             .frame(maxWidth: 430)
@@ -1165,10 +1167,10 @@ struct ConnectionCenterContent: View {
                 }
 
                 if let code = model.loginController.detectedCode {
-                    HStack(spacing: 10) {
-                        VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: ParitySpace.s12) {
+                        VStack(alignment: .leading, spacing: ParitySpace.s4) {
                             Text(L10n.string("Verification code"))
-                                .font(.system(size: 9.5, weight: .medium))
+                                .font(.parity(.caption, weight: .medium, scale: 1))
                                 .foregroundStyle(.secondary)
                             Text(code)
                                 .font(.system(size: 15, weight: .semibold, design: .monospaced)).fontDesign(nil)
@@ -1181,15 +1183,15 @@ struct ConnectionCenterContent: View {
                         .controlSize(.small)
                         .parityPointer()
                     }
-                    .padding(11)
+                    .padding(ParitySpace.s12)
                     .frame(maxWidth: 430)
-                    .background(ParityTheme.elevated, in: RoundedRectangle(cornerRadius: 9))
+                    .background(ParityTheme.elevated, in: RoundedRectangle(cornerRadius: ParityRadius.row))
                     .overlay {
-                        RoundedRectangle(cornerRadius: 9).stroke(ParityTheme.separator)
+                        RoundedRectangle(cornerRadius: ParityRadius.row).stroke(ParityTheme.separator)
                     }
                 }
 
-                HStack(spacing: 8) {
+                HStack(spacing: ParitySpace.s8) {
                     if model.loginController.detectedURL != nil {
                         Button(L10n.string("Continue in browser")) {
                             model.loginController.openDetectedURL()
@@ -1237,13 +1239,13 @@ struct ConnectionCenterContent: View {
                     )
                 }
                 .buttonStyle(.plain)
-                .font(.system(size: 10.5))
+                .font(.parity(.caption, scale: 1))
                 .foregroundStyle(.secondary)
                 .parityPointer()
             }
-            .padding(.horizontal, 18)
-            .padding(.top, 16)
-            .padding(.bottom, showsLoginDetails ? 10 : 18)
+            .padding(.horizontal, ParitySpace.s20)
+            .padding(.top, ParitySpace.s16)
+            .padding(.bottom, showsLoginDetails ? ParitySpace.s12 : ParitySpace.s20)
 
             AccountLoginConsoleTerminal(
                 controller: model.loginController,
@@ -1260,11 +1262,11 @@ struct ConnectionCenterContent: View {
 
             if showsLoginDetails {
                 Divider()
-                HStack(spacing: 8) {
+                HStack(spacing: ParitySpace.s8) {
                     Image(systemName: "keyboard")
                         .foregroundStyle(.secondary)
                     Text(L10n.string("Type directly in the terminal. Paste with Command-V."))
-                        .font(.caption)
+                        .font(.parity(.caption, scale: 1))
                         .foregroundStyle(.secondary)
                     Spacer()
                     if model.loginController.isRunning {
@@ -1281,7 +1283,7 @@ struct ConnectionCenterContent: View {
                             .parityPointer()
                     }
                 }
-                .padding(10)
+                .padding(ParitySpace.s12)
                 .background(.bar)
             }
         }

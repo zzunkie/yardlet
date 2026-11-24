@@ -51,10 +51,10 @@ struct TaskHeaderIdentity: View {
     var dragsByHarness = false
 
     var body: some View {
-        HStack(spacing: compact ? 7 : 9) {
+        HStack(spacing: ParitySpace.s8) {
             // The title is offered its width before the status's servers (`TaskServersLink`), and the status
             // keeps the room its harness and pull request need, as before.
-            TaskTitleMenu(session: session, actions: actions, size: compact ? 12 : 13)
+            TaskTitleMenu(session: session, actions: actions, type: compact ? .caption : .control)
                 .layoutPriority(1)
             TaskHeaderStatus(session: session, actions: actions, compact: compact, showsHarnessName: showsHarnessName,
                              dragsByHarness: dragsByHarness)
@@ -68,7 +68,7 @@ struct TaskHeaderIdentity: View {
 struct TaskTitleMenu: View {
     let session: SessionRecord
     let actions: TaskHeaderActions
-    var size: CGFloat = 13
+    var type: ParityType = .control
     @Environment(\.yardletInterfaceScale) private var interfaceScale
 
     @FocusState private var taskInfoFocused: Bool
@@ -76,7 +76,7 @@ struct TaskTitleMenu: View {
     var body: some View {
         Menu { menuContents } label: {
             Text(session.title)
-                .font(.system(size: size * interfaceScale, weight: .medium))
+                .font(.parity(type, weight: .medium, scale: interfaceScale))
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .contentShape(Rectangle())
@@ -164,10 +164,10 @@ struct TaskHeaderStatus: View {
     }
 
     private func row(servers: [TaskServerPort], extent: TaskServersLink.Extent) -> some View {
-        HStack(spacing: compact ? 7 : 9) {
+        HStack(spacing: ParitySpace.s8) {
             if showsHarness {
                 HarnessIdentityLabel(harness: session.harness, size: (compact ? 13 : 14) * interfaceScale, showsName: showsHarnessName)
-                    .font(.system(size: (compact ? 11 : 11.5) * interfaceScale))
+                    .font(.parity(.caption, scale: interfaceScale))
                     .foregroundStyle(.secondary)
                     .fixedSize()
                     .overlay {
@@ -212,7 +212,7 @@ struct TaskServersLink: View {
     }
 
     private func links(_ first: TaskServerPort) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: ParitySpace.s8) {
             Button { onOpen(first) } label: { label(first) }
                 .buttonStyle(.plain)
                 .onHover { isHovered = $0 }
@@ -226,9 +226,9 @@ struct TaskServersLink: View {
                         Button(Self.line(server)) { onOpen(server) }
                     }
                 } label: {
-                    HStack(spacing: 3) {
+                    HStack(spacing: ParitySpace.s4) {
                         Text(L10n.format("and %lld more", servers.count - 1))
-                            .font(.system(size: (compact ? 11 : 11.5) * interfaceScale))
+                            .font(.parity(.caption, scale: interfaceScale))
                         Image(systemName: "chevron.down")
                             .font(.system(size: (compact ? 8 : 8.5) * interfaceScale, weight: .semibold))
                     }
@@ -248,11 +248,11 @@ struct TaskServersLink: View {
     }
 
     private func label(_ first: TaskServerPort) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: ParitySpace.s4) {
             Image(systemName: "globe")
                 .font(.system(size: (compact ? 10 : 10.5) * interfaceScale))
             Text(first.address)
-                .font(.system(size: (compact ? 11 : 11.5) * interfaceScale))
+                .font(.parity(.caption, scale: interfaceScale))
                 .monospacedDigit()
                 .lineLimit(1)
         }
@@ -285,7 +285,7 @@ struct TaskHeaderActivity: View {
                 .help(status.displayName)
         case .waitingForApproval, .failed:
             Image(systemName: status == .failed ? "exclamationmark.triangle" : "exclamationmark.shield")
-                .font(.system(size: 12 * interfaceScale))
+                .font(.parity(.caption, scale: interfaceScale))
                 // Failure in red; a waiting request in the secondary colour, as the conversation's
                 // progress line is the one place a task's view marks it in orange.
                 .foregroundStyle(status == .failed ? Color.red : Color.secondary)
@@ -332,7 +332,7 @@ struct SplitViewTitleMenu: View {
             Button(L10n.string("Archive tasks…"), role: .destructive, action: archive)
         } label: {
             Text(title)
-                .font(.system(size: 12.5 * interfaceScale, weight: .medium))
+                .font(.parity(.control, weight: .medium, scale: interfaceScale))
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .contentShape(Rectangle())
@@ -390,12 +390,12 @@ struct SplitPaneHeader<Identity: View, Controls: View>: View {
     private var header: some View {
         // The close button's room comes out of what the title and the buttons share.
         let isFolded = TaskHeaderFold.folds(headerWidth: width - 24, interfaceScale: interfaceScale)
-        return HStack(spacing: 6) {
+        return HStack(spacing: ParitySpace.s8) {
             identity(isFolded)
                 .frame(minWidth: 60, maxWidth: isAtWindowTop ? nil : .infinity, alignment: .leading)
                 .layoutPriority(1)
             if isAtWindowTop {
-                WindowDragRegion(onPress: onFocus).frame(minWidth: 8, maxWidth: .infinity)
+                WindowDragRegion(onPress: onFocus).frame(minWidth: ParitySpace.s8, maxWidth: .infinity)
             }
             controls(isFolded)
             Button(action: onClose) {
@@ -411,7 +411,7 @@ struct SplitPaneHeader<Identity: View, Controls: View>: View {
             .help(ShortcutHelp.text(L10n.string("Close pane"), isFocused ? MacShortcut.closePane.binding : nil))
             .accessibilityLabel(L10n.string("Close pane"))
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, ParitySpace.s8)
         .frame(maxHeight: .infinity)
         .background(isFocused ? ParityTheme.selectedFill : ParityTheme.subtleFill)
         .contentShape(Rectangle())

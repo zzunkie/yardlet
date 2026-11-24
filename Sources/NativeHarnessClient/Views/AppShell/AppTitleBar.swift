@@ -214,14 +214,14 @@ struct IntegratedTitleBar: View {
     @ViewBuilder
     private var selectedTitle: some View {
         if let session {
-            TaskTitleMenu(session: session, actions: headerActions, size: 12.5)
+            TaskTitleMenu(session: session, actions: headerActions)
                 .id(session.id)
         } else if let splitTitle {
             splitTitle
         } else {
             // The tab drags by it, as by the rest of the tab.
             Text(L10n.string("New task"))
-                .font(.system(size: 12.5 * interfaceScale, weight: .medium))
+                .font(.parity(.control, weight: .medium, scale: interfaceScale))
                 .lineLimit(1)
                 .allowsHitTesting(false)
         }

@@ -5,8 +5,9 @@ consolidation target and maps it to today's implementation. The type, spacing an
 implemented in [`ParityDesignSystem.swift`](../Sources/NativeHarnessClient/Views/ParityDesignSystem.swift),
 the source of shared values: `ParityType` with `Font.parity(_:weight:scale:)`, `ParitySpace` and
 `ParityRadius`. The Settings window (its shell, rows and groups, General, Browser, Appearance,
-Notifications and Keyboard shortcuts) and the conversation's request cards use them; other surfaces
-still carry literal values and move onto the tokens surface by surface. The color
+Notifications, Keyboard shortcuts, Accounts/Harnesses and Usage), the conversation's request cards,
+task headers and the session rail use them; remaining surfaces move onto the tokens surface by
+surface. The color
 presets' values and a person's own colors are in
 [`MacColorTheme.swift`](../Sources/NativeHarnessClient/Views/MacColorTheme.swift), which the same tokens read.
 
@@ -15,7 +16,7 @@ presets' values and a person's own colors are in
 | Surface | Direction |
 | --- | --- |
 | Conversation, composer, task rows, popovers, menus, settings controls, terminal, review | **A: familiar agent UI.** Follow the Claude and Codex apps' hierarchy, density, disclosure, focus and keyboard behavior. Preserve each provider's names and capabilities. Use native controls where appropriate. |
-| App icon/accent, home/new task, sidebar project grouping, empty states | **B: Yardlet identity.** Use typography, spacing and a small selection detail. No beige canvas, decorative numbered labels or badge-covered cards. The identity direction remains open. |
+| App icon/accent, home/new task, sidebar project grouping, empty states | **B: Yardlet identity.** Settled on the quiet A+B direction: neutral default surfaces, typography, spacing and subtle selection details carry Yardlet's identity. Projects stay neutral without random colored dots in the sidebar, Home or Desk. No beige canvas, decorative numbered labels or badge-covered cards. |
 | Split view, accounts/limits, built-in browser, Cloud, remote, mailbox, schedules | **B in structure, A in controls.** Make Yardlet's purpose clear while reusing the same rows, menus, headers and composer. |
 
 The sidebar's task row belongs to A; its project grouping belongs to B. Settings controls belong to
@@ -59,7 +60,8 @@ a fixed line-height on Korean text: validate its actual line boxes and wrapping.
 | `space`, `ParitySpace` | 0, **4**, 8, 12, 16, 20, 24, 32, 48 (`s4` … `s48`) | `conversationInset` = `s32`; `SettingsMetrics` and the request card's insets and gaps. Spacing does not follow the interface size. Elsewhere chrome padding/gaps 5–7 → 8, 9–11 → 12, 14–15 → 16, 18 → 20, 22 → 24, 28 → 32, by role. Keep 1 pt rules and 2 pt optical adjustments separate, and the gap around a middle dot in a run of words is typography, not spacing. |
 | `radius.control`, `ParityRadius.control` | 6 | `ParityComposerControl`, the Settings search field; small-control 6/7 → 6. A 16 pt key cap keeps a 4 pt corner. |
 | `radius.row`, `ParityRadius.row` | 8 | Settings' section and result rows and a highlighted row, request options, the plan box and an option's preview; row/attachment/code-container 8/9/10/11 elsewhere → 8. |
-| `radius.surface`, `ParityRadius.surface` | 12 | `composerCornerRadius`, `panelCornerRadius` and the request panel; popover/sheet surfaces use 12. |
+| `radius.surface`, `ParityRadius.surface` | 12 | `panelCornerRadius` and the request panel; popover/sheet surfaces use 12. |
+| `radius.composer`, `ParityRadius.composer` | 14 | `composerCornerRadius`: 14 pt outer with 8 pt inner padding nests 6 pt inner controls (`14 - 8 = 6`). |
 
 Circles and capsules are shapes, not additional radius tokens. Native menu corners remain the OS's.
 Do not round typography or window geometry onto the spacing grid. `proseLineSpacing` = 5 and
@@ -75,23 +77,25 @@ A color preset or a person's own colors do not form a second palette: they are i
 tokens (`MacColorTheme`, in the environment as `yardletColorTheme`). Their background shifts the
 surface rows together, their text color becomes the window's foreground color in place of the native
 label, and their accent is the Accent row; see Custom appearance. The table gives the defaults.
-The RGB figures below are the current palette's nominal calibrated components,
-rounded to 8-bit notation for reading. The contrast figures use the colors resolved to sRGB. They are neutral, not beige.
+The RGB figures below are the current default sRGB surface values from `ParityDesignSystem.swift`
+(neutral cool grays, not beige). The contrast figures use the colors resolved to sRGB.
 
 | Role / existing name | Light | Dark | Use |
 | --- | --- | --- | --- |
-| Canvas / `canvas` | #FEFEFE | #131313 | Conversation and home |
-| Sidebar / `sidebar` | #F6F6F6 | #1B1B1B | Project navigation |
-| Elevated / `elevated` | #FFFFFF | #222222 | Popover/panel surface |
-| Input / `input` | #FFFFFF | #282828 | Composer and editable field |
+| Canvas / `canvas` | #FCFCFC | #191A1B | Conversation and home |
+| Sidebar / `sidebar` | #F4F5F7 | #202124 | Project navigation |
+| Elevated / `elevated` | #FFFFFF | #27282C | Popover/panel surface |
+| Input / `input` | #FFFFFF | #2C2D31 | Composer and editable field |
+| Inner rail / `innerRail` | #F8F8F9 | #141518 | Stepped inner section rail (Mail, Calendar, Personal agents) |
+| User bubble / `userBubbleFill` | #F2F3F5 | #23252A | Sent user message bubble |
 | Accent / `accent`, AppKit `accentColor` | System by default; preset light value | System by default; preset dark value | One semantic accent for every accent use; see below |
 | Signal / `signal` | #6B8505 | #D1ED2B | Existing signal only; never a default text or background color |
 | Primary action / `primaryActionFill` | #333333 | #E0E0E0 | Send/action fill |
 | On action / `primaryActionForeground` | #FFFFFF | #1F1F1F | Action glyph |
 | Text / proposed `text.primary`, `text.secondary` | Native primary/secondary label | Native primary/secondary label | Alias current `.primary`/`.secondary`; preserve accessibility appearance |
-| Border / `separator`, `strongSeparator` | Primary × 10% / 12% | Primary × 10% / 12% | Noninteractive dividers; not a focus indicator |
-| Fill / `subtleFill`, `hoverFill`, `selectedFill` | Primary × 3.5% / 6.5% / 9.5% | Primary × 3.5% / 6.5% / 9.5% | Rest, hover, selection |
-| Request panel / `requestPanelFill` | Elevated + primary × 4.5% (drawn ≈ #F5F5F5) | Elevated + primary × 4.5% (drawn ≈ #363636) | A waiting request's panel, a shade off the canvas and the composer |
+| Border / `separator`, `strongSeparator` | Black × 9.5% / 16% | White × 10.5% / 18% | Noninteractive dividers; not a focus indicator |
+| Fill / `subtleFill`, `hoverFill`, `selectedFill` | Primary × 3.5% / 6.2% / 9.5% | Primary × 3.5% / 6.2% / 9.5% | Rest, hover, selection |
+| Request panel / `requestPanelFill` | Elevated + primary × 4.5% (drawn ≈ #F4F4F4) | Elevated + primary × 4.5% (drawn ≈ #323337) | A waiting request's panel, a shade off the canvas and the composer |
 | Status / proposed `status.success`, `warning`, `danger` | Native system green/orange/red | Native system green/orange/red | Alias scattered status colors; always pair with text or an icon |
 | Focus / proposed `focus` | Native focus indicator | Native focus indicator | Keep native focus rings; never substitute a faint border. A waiting request's panel draws none: its question shows the focused choice by the selection fill, a field its caret, an answer button the key that gives it. Nor does the turn rail beside a conversation, which a click on a mark gives the arrow keys: the turn it marks shows where it is |
 
@@ -116,9 +120,9 @@ Links use primary text when the accent lacks text contrast. Prose links keep an 
 
 | Preset | Light | Dark | Minimum text contrast, light / dark |
 | --- | --- | --- | --- |
-| Ink | #143B6B | #8CB8FA | 10.58:1 / 6.10:1 |
-| Grove | #14664A | #7AD1AD | 6.52:1 / 6.80:1 |
-| Iris | #5C45AB | #B8A6FA | 6.83:1 / 5.82:1 |
+| Ink | #143B6B | #8CB8FA | 10.31:1 / 6.79:1 |
+| Grove | #14664A | #7AD1AD | 6.36:1 / 7.57:1 |
+| Iris | #5C45AB | #B8A6FA | 6.65:1 / 6.47:1 |
 
 These are the lowest ratios measured across the four resolved canvas/sidebar/elevated/input colors;
 all three pairs exceed 4.5:1 in both themes. White text on each light accent and black text on each

@@ -47,15 +47,15 @@ struct SessionRailAgentRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: ParitySpace.s8) {
+            HStack(spacing: ParitySpace.s8) {
                 title
-                Spacer(minLength: 6)
+                Spacer(minLength: ParitySpace.s8)
                 status
                 if agent.canStop, agent.status.isUnderWay, let stop = actions?.stop {
                     BackgroundTasksGhostButton(action: { stop(agent) }) {
                         Image(systemName: "stop.circle")
-                            .font(.system(size: 12 * interfaceScale))
+                            .font(.parity(.caption, scale: interfaceScale))
                             .foregroundStyle(.secondary)
                             .frame(width: 22, height: 22)
                     }
@@ -68,16 +68,16 @@ struct SessionRailAgentRow: View {
             let answers = requestActions
             ForEach(agent.requests) { request in
                 ConversationRequestCard(request: request, actions: answers)
-                    .font(.system(size: 12 * interfaceScale))
+                    .font(.parity(.caption, scale: interfaceScale))
             }
             if !agent.questions.isEmpty {
                 // The answer goes into the child's running turn, or as its next message once it ended.
                 CodexQuestionOptions(questions: agent.questions,
                                      onAnswer: answers.answerQuestionWhileWorking ?? answers.answerQuestion)
-                    .font(.system(size: 12 * interfaceScale))
+                    .font(.parity(.caption, scale: interfaceScale))
             }
         }
-        .padding(.leading, CGFloat(agent.depth) * 16)
+        .padding(.leading, CGFloat(agent.depth) * ParitySpace.s16)
         .accessibilityElement(children: .contain)
     }
 
@@ -91,7 +91,7 @@ struct SessionRailAgentRow: View {
 
     @ViewBuilder
     private var title: some View {
-        let label = HStack(spacing: 6) {
+        let label = HStack(spacing: ParitySpace.s8) {
             Image(systemName: symbol)
                 .font(.system(size: 11 * interfaceScale))
                 .foregroundStyle(.secondary)
@@ -99,7 +99,7 @@ struct SessionRailAgentRow: View {
                 .accessibilityHidden(true)
             // The harness and model beside the name where both fit; the name alone where they do not.
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 6) {
+                HStack(spacing: ParitySpace.s8) {
                     name.fixedSize()
                     harnessModel
                 }
@@ -129,7 +129,7 @@ struct SessionRailAgentRow: View {
     private var harnessModel: some View {
         if let label = agent.harnessLabel {
             Text(label)
-                .font(.system(size: 11 * interfaceScale))
+                .font(.parity(.caption, scale: interfaceScale))
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
                 .fixedSize()
@@ -180,7 +180,7 @@ struct SessionRailAgentRow: View {
                 EmptyView()
             }
         }
-        .font(.system(size: 11.5 * interfaceScale))
+        .font(.parity(.caption, scale: interfaceScale))
         .foregroundStyle(.secondary)
         .lineLimit(1)
         .fixedSize()

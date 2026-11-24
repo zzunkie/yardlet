@@ -786,9 +786,9 @@ struct IntelligenceEffortSlider: View {
                 .minimumScaleFactor(0.8)
                 .foregroundStyle(isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                 .frame(width: defaultWidth, height: 22)
-                .background(isSelected ? ParityTheme.selectedFill : .clear, in: Capsule())
-                .overlay(Capsule().strokeBorder(isSelected ? .clear : ParityTheme.strongSeparator))
-                .contentShape(Capsule())
+                .background(isSelected ? ParityTheme.selectedFill : .clear, in: Capsule(style: .circular))
+                .overlay(Capsule(style: .circular).strokeBorder(isSelected ? .clear : ParityTheme.strongSeparator))
+                .contentShape(Capsule(style: .circular))
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)

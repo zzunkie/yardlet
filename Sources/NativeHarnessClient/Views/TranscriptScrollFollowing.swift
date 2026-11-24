@@ -396,8 +396,8 @@ struct LatestResponseButton: View {
                 .font(.caption.weight(.medium))
                 .padding(.horizontal, 11)
                 .padding(.vertical, 7)
-                .background(ParityTheme.elevated, in: Capsule())
-                .overlay { Capsule().stroke(ParityTheme.strongSeparator) }
+                .background(ParityTheme.elevated, in: Capsule(style: .circular))
+                .overlay { Capsule(style: .circular).stroke(ParityTheme.strongSeparator) }
         }
         .buttonStyle(.borderless)
         .parityPointer()
