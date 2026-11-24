@@ -118,7 +118,23 @@ describe("downloads", () => {
     expect(missing.headers.get("location")).toBe("https://github.com/zzunkie/yardlet/releases/latest");
   });
 
+  it("falls back for an enclosure that steps out of the releases or carries a query", async () => {
+    for (const url of [
+      `${RELEASES}/../../other/releases/download/v1.0.0/Yardlet-1.0.0.dmg`,
+      `${RELEASES}/v0.11.16/Yardlet-0.11.16.dmg?x=1.dmg`,
+      `${RELEASES}/v0.11.16/Yardlet-0.11.16.dmg#.dmg`,
+    ]) {
+      vi.restoreAllMocks();
+      fakeSite({ "/appcast.xml": `<rss><channel><item><enclosure url="${url}" length="1"/></item></channel></rss>` });
+      const response = await call({}, "https://dl.yardlet.app/site/arm64", { headers: { "user-agent": SAFARI } });
+      expect(response.headers.get("location")).toBe("https://github.com/zzunkie/yardlet/releases/latest");
+    }
+  });
+
   it("answers unknown paths and methods", async () => {
+    const site = fakeSite();
+    expect((await call({}, "https://dl.yardlet.app/appcast.xml", { headers: { "user-agent": SPARKLE } })).status).toBe(404);
+    expect(site).not.toHaveBeenCalled();
     expect((await call({}, "https://dl.yardlet.app/site/ppc")).status).toBe(404);
     expect((await call({}, "https://dl.yardlet.app/site/arm64", { method: "POST" })).status).toBe(405);
     expect((await call({}, "https://dl.yardlet.app/")).headers.get("location")).toBe("https://yardlet.app/");

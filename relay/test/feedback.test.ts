@@ -148,6 +148,25 @@ describe("feedback mail", () => {
     expect(parsed?.replyTo).toBeUndefined();
     expect(decode(mailText(parsed!, "feedback@relay.example.test", "team@example.test")).headers).not.toContain("Reply-To");
   });
+
+  it("drops a reply address with non-ASCII or control characters and still accepts the note", async () => {
+    for (const replyTo of ["정기@example.test", "someone@exämple.test", "some\u0001one@example.test", "some\u007fone@example.test"]) {
+      const parsed = parseFeedback(JSON.stringify({ ...feedback, replyTo }));
+      expect(parsed).not.toBeNull();
+      expect(parsed?.replyTo).toBeUndefined();
+      expect(decode(mailText(parsed!, "feedback@relay.example.test", "team@example.test")).headers).not.toContain("Reply-To");
+    }
+    const send = vi.spyOn(env.FEEDBACK_MAIL! as { send(message: EmailMessage): Promise<EmailSendResult> }, "send");
+    send.mockResolvedValue({ messageId: "message" });
+    const body = { id: crypto.randomUUID(), kind: "feedback", message: "Hi", replyTo: "정기@example.test", context: { app: "0.11.16 (38)", surface: "home" } };
+    const response = await exports.default.fetch(`${RELAY}/v1/feedback`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-connecting-ip": "198.51.100.1" },
+      body: JSON.stringify(body),
+    });
+    expect(response.status).toBe(202);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("counts", () => {

@@ -97,7 +97,7 @@ function table(columns, rows) {
   const cells = rows.map((row) =>
     columns.map((column) => {
       const value = row[column];
-      if (typeof value === "number" || /^\d+(\.\d+)?$/.test(String(value))) {
+      if (column === "n" || column === "perDay") {
         const number = Number(value);
         return Number.isInteger(number) ? String(number) : number.toFixed(1);
       }

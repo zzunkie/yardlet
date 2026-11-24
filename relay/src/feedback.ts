@@ -140,8 +140,8 @@ export function parseFeedback(text: string): Feedback | null {
     id,
     kind,
     message: trimmed,
-    // Only an address that looks like one becomes Reply-To.
-    ...(ADDRESS.test(address) ? { replyTo: address } : {}),
+    // Only a printable US-ASCII address that looks like one becomes Reply-To.
+    ...(/^[\x21-\x7e]+$/.test(address) && ADDRESS.test(address) ? { replyTo: address } : {}),
     context: {
       app,
       surface,

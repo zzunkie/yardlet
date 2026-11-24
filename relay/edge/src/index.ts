@@ -30,7 +30,8 @@ const BOT =
 export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
-    const feed = FEEDS[url.pathname];
+    // The feeds only on the site's own host: anywhere else there is no origin to pass them to.
+    const feed = url.hostname === new URL(env.FEED_ORIGIN ?? DEFAULT_FEED_ORIGIN).hostname ? FEEDS[url.pathname] : undefined;
     if (feed) return passFeed(request, env, feed);
     if (request.method !== "GET" && request.method !== "HEAD") return new Response(null, { status: 405, headers: { allow: "GET, HEAD" } });
     if (url.pathname === "/") return redirect(`${env.FEED_ORIGIN ?? DEFAULT_FEED_ORIGIN}/`);
@@ -81,7 +82,10 @@ async function latestImage(env: EdgeEnv, arch: Arch): Promise<string> {
     });
     if (!response.ok) return fallback;
     const url = /<enclosure\b[^>]*\surl="([^"]+)"/.exec(await response.text())?.[1];
-    return url?.startsWith(`${base}/`) && url.endsWith(".dmg") ? url : fallback;
+    if (!url) return fallback;
+    // Parsed, so `..` cannot step out of the releases and a query or fragment cannot ride along.
+    const parsed = new URL(url);
+    return !parsed.search && !parsed.hash && parsed.href.startsWith(`${base}/`) && parsed.href.endsWith(".dmg") ? parsed.href : fallback;
   } catch {
     return fallback;
   }

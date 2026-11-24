@@ -162,7 +162,7 @@ Cloudflare dashboard (the `yardlet.app` zone is on Cloudflare); `scripts/release
 Nothing here deploys it, and `wrangler.jsonc` names no route, so a deploy leaves the domain as it is (check the
 Worker's Domains tab after one). To run your own:
 
-1. A Cloudflare account. The free plan is enough: both classes use SQLite-backed Durable Objects.
+1. A Cloudflare account. The free plan is enough: all three classes use SQLite-backed Durable Objects.
 2. `npx wrangler login`, then `npx wrangler deploy`. The Worker gets a `*.workers.dev` address; a custom domain
    is optional.
 3. Push (optional): a Firebase project and a service account key allowed to send FCM messages.
