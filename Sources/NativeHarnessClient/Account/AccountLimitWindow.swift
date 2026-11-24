@@ -74,6 +74,11 @@ extension AccountLimitWindow {
         L10n.format("%.0f%% remaining", remainingPercent ?? 0)
     }
 
+    /// The share of the window used, 0 to 100; nil when the provider gave no figure.
+    var usedPercent: Double? {
+        remainingPercent.map { min(max(100 - $0, 0), 100) }
+    }
+
     /// Ten percent or less left, which the account list and a limit card mark.
     var isNearlySpent: Bool { (remainingPercent ?? 100) <= 10 }
 

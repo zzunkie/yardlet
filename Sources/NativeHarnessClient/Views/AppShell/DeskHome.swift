@@ -723,17 +723,11 @@ struct DeskWaitingRow: View, @MainActor Equatable {
                 .lineLimit(1)
                 .layoutPriority(1)
             if showsPlace {
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(ParityProjectPalette.color(for: place))
-                        .frame(width: 6, height: 6)
-                        .accessibilityHidden(true)
-                    Text(place)
-                        .font(.system(size: 12 * interfaceScale))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .fixedSize()
-                }
+                Text(place)
+                    .font(.parity(.caption, scale: interfaceScale))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
             }
             Spacer(minLength: 8)
             NewTaskHomeTime(date: item.session.updatedAt)

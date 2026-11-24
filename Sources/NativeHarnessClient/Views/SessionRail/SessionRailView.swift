@@ -100,11 +100,11 @@ struct SessionRailView: View {
                 }
             }
             // The cards take the column's width, whatever their content would like.
-            .frame(width: SessionRailPlacement.width - (isRaised ? 12 : 4) - 12)
-            .padding(.top, 12)
-            .padding(.bottom, 16)
-            .padding(.leading, isRaised ? 12 : 4)
-            .padding(.trailing, 12)
+            .frame(width: SessionRailPlacement.width - (isRaised ? ParitySpace.s12 : ParitySpace.s4) - ParitySpace.s12)
+            .padding(.top, ParitySpace.s12)
+            .padding(.bottom, ParitySpace.s16)
+            .padding(.leading, isRaised ? ParitySpace.s12 : ParitySpace.s4)
+            .padding(.trailing, ParitySpace.s12)
         }
         .scrollIndicators(.automatic)
         .frame(width: SessionRailPlacement.width)
@@ -182,7 +182,7 @@ private struct SessionRailDropDelegate: DropDelegate {
 
 /// One card: a header with its title, a chevron and — folded — its rollup and meter on the right; the
 /// header folds and opens it. The Claude app's `Xv`, in Yardlet's card look (1 pt separator border,
-/// radius 10).
+/// row corner radius).
 struct SessionRailCard<HeaderMenu: View, Content: View>: View {
     let kind: SessionRailCardKind
     let rollup: String?
@@ -206,36 +206,36 @@ struct SessionRailCard<HeaderMenu: View, Content: View>: View {
             header
             if !isFolded {
                 content()
-                    .font(.system(size: 12 * interfaceScale))
+                    .font(.parity(.caption, scale: interfaceScale))
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 10)
+                    .padding(.horizontal, ParitySpace.s12)
+                    .padding(.bottom, ParitySpace.s12)
             }
         }
-        .background(ParityTheme.canvas, in: RoundedRectangle(cornerRadius: 10))
+        .background(ParityTheme.canvas, in: RoundedRectangle(cornerRadius: ParityRadius.row))
         .overlay {
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: ParityRadius.row)
                 .stroke(isDropTarget ? ParityTheme.accent.opacity(0.6) : ParityTheme.separator,
                         lineWidth: isDropTarget ? 1.5 : 1)
         }
-        .contentShape(RoundedRectangle(cornerRadius: 10))
+        .contentShape(RoundedRectangle(cornerRadius: ParityRadius.row))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(kind.title)
     }
 
     private var header: some View {
         Button(action: onToggle) {
-            HStack(spacing: 6) {
+            HStack(spacing: ParitySpace.s8) {
                 Text(kind.title)
-                    .font(.system(size: 12 * interfaceScale, weight: .semibold))
+                    .font(.parity(.caption, weight: .semibold, scale: interfaceScale))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .layoutPriority(1)
-                Spacer(minLength: 6)
+                Spacer(minLength: ParitySpace.s8)
                 if isFolded {
                     if let rollup {
                         Text(rollup)
-                            .font(.system(size: 11.5 * interfaceScale))
+                            .font(.parity(.caption, scale: interfaceScale))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.tail)
@@ -258,7 +258,7 @@ struct SessionRailCard<HeaderMenu: View, Content: View>: View {
                     .rotationEffect(.degrees(isFolded ? 0 : 90))
                     .accessibilityHidden(true)
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, ParitySpace.s12)
             .frame(height: 34 * interfaceScale)
             .contentShape(Rectangle())
         }
@@ -319,7 +319,7 @@ struct SessionRailRow<Trailing: View>: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: ParitySpace.s8) {
             if let systemName {
                 Image(systemName: systemName)
                     .foregroundStyle(.secondary)
@@ -329,7 +329,7 @@ struct SessionRailRow<Trailing: View>: View {
             Text(title)
                 .lineLimit(1)
                 .truncationMode(.middle)
-            Spacer(minLength: 6)
+            Spacer(minLength: ParitySpace.s8)
             trailing()
         }
         .frame(minHeight: 24 * interfaceScale)

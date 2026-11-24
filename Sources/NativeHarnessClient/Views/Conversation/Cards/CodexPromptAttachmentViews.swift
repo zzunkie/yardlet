@@ -122,9 +122,9 @@ struct CodexPromptChip: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .frame(maxWidth: 320 * interfaceScale)
-        .background(ParityTheme.subtleFill, in: Capsule())
-        .overlay { Capsule().stroke(ParityTheme.separator) }
-        .contentShape(Capsule())
+        .background(ParityTheme.subtleFill, in: Capsule(style: .circular))
+        .overlay { Capsule(style: .circular).stroke(ParityTheme.separator) }
+        .contentShape(Capsule(style: .circular))
         .accessibilityElement(children: .combine)
     }
 }

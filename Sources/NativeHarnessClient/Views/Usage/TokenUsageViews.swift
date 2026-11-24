@@ -37,6 +37,7 @@ struct TokenUsageDayBars: View {
     var showsAxis = false
     /// What the bars are, under them on the left, with "Today" on the right.
     var caption: String? = nil
+    var scale: CGFloat = 1
 
     private var usesCost: Bool { days.contains { $0.amount.cost != nil } }
 
@@ -50,10 +51,10 @@ struct TokenUsageDayBars: View {
 
     var body: some View {
         let peak = max(days.map(value).max() ?? 0, 1)
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: ParitySpace.s4) {
             if showsAxis {
                 Text(amountText(peak))
-                    .font(.system(size: 10.5).monospacedDigit())
+                    .font(.parity(.caption, scale: scale).monospacedDigit())
                     .foregroundStyle(.secondary)
             }
             GeometryReader { geometry in
@@ -85,7 +86,7 @@ struct TokenUsageDayBars: View {
                     Spacer()
                     Text(L10n.string("Today"))
                 }
-                .font(.system(size: 10.5))
+                .font(.parity(.caption, scale: scale))
                 .foregroundStyle(.secondary)
             }
         }
@@ -119,27 +120,29 @@ struct TokenUsageLimitRows: View {
     }
 
     let rows: [Row]
-    var fontSize: CGFloat = 11.5
+    var fontSize: CGFloat = ParityType.caption.size
+    var scale: CGFloat = 1
     var now = Date()
     /// Home's few words: the pace without "at this pace", and no reset; both stay in the tooltip.
     var isCompact = false
 
     var body: some View {
-        LimitWindowGrid(barMinimum: AccountLimitWindowList.barMinimum(fontSize: fontSize), columnSpacing: 10,
-                        rowSpacing: 6) {
+        let scaledSize = fontSize * scale
+        LimitWindowGrid(barMinimum: AccountLimitWindowList.barMinimum(fontSize: scaledSize),
+                        columnSpacing: ParitySpace.s12, rowSpacing: ParitySpace.s8) {
             ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                 if row.isHeading {
-                    HStack(spacing: 6) {
+                    HStack(spacing: ParitySpace.s8) {
                         if let harness = row.harness { HarnessIdentityIcon(harness: harness, size: 14) }
-                        Text(row.name).font(.system(size: 12.5, weight: .medium)).lineLimit(1)
+                        Text(row.name).font(.parity(.control, weight: .medium, scale: scale)).lineLimit(1)
                         if let harness = row.harness {
-                            Text(harness.displayName).font(.system(size: 12)).foregroundStyle(.secondary)
+                            Text(harness.displayName).font(.parity(.caption, scale: scale)).foregroundStyle(.secondary)
                         }
                     }
-                    .padding(.top, index == 0 ? 0 : 6)
+                    .padding(.top, index == 0 ? 0 : ParitySpace.s8)
                     .limitWindowCell(.fullRow, row: index)
                 } else if let window = row.window {
-                    HStack(spacing: 5) {
+                    HStack(spacing: ParitySpace.s4) {
                         if let harness = row.harness {
                             HarnessIdentityIcon(harness: harness, size: 12)
                                 .accessibilityLabel(harness.displayName)
@@ -148,7 +151,7 @@ struct TokenUsageLimitRows: View {
                     }
                     .fixedSize()
                     .limitWindowCell(.label, row: index)
-                    LimitWindowBar(percent: window.remainingPercent, fontSize: fontSize,
+                    LimitWindowBar(percent: window.remainingPercent, fontSize: scaledSize,
                                    tint: (window.remainingPercent ?? 100) <= 10 ? .orange : nil)
                         .limitWindowCell(.bar, row: index)
                     value(window, runsOutAt: row.runsOutAt)
@@ -162,7 +165,7 @@ struct TokenUsageLimitRows: View {
                 }
             }
         }
-        .font(.system(size: fontSize))
+        .font(.system(size: scaledSize))
         .monospacedDigit()
     }
 
@@ -224,15 +227,17 @@ struct TokenUsageHomeBand: View {
     let columns: Int
     let onOpen: () -> Void
     @State private var isHovering = false
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
 
     var body: some View {
         let overview = overview()
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: ParitySpace.s4) {
             Button(action: onOpen) {
                 header(overview)
-                    .padding(.horizontal, 10)
+                    .padding(.horizontal, ParitySpace.s12)
                     .frame(minHeight: 32, alignment: .leading)
-                    .background(isHovering ? ParityTheme.hoverFill : .clear, in: RoundedRectangle(cornerRadius: 8))
+                    .background(isHovering ? ParityTheme.hoverFill : .clear,
+                                in: RoundedRectangle(cornerRadius: ParityRadius.row))
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -246,44 +251,44 @@ struct TokenUsageHomeBand: View {
                     HStack(alignment: .top, spacing: NewTaskHomeLayout.columnSpacing) {
                         bars(overview).frame(width: columns > 2 ? 360 : 260)
                         if !limits.isEmpty {
-                            TokenUsageLimitRows(rows: limits, isCompact: true)
+                            TokenUsageLimitRows(rows: limits, scale: interfaceScale, isCompact: true)
                                 .frame(maxWidth: 560, alignment: .leading)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
                 } else {
-                    VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: ParitySpace.s12) {
                         bars(overview)
                         if !limits.isEmpty {
-                            TokenUsageLimitRows(rows: limits, isCompact: true)
+                            TokenUsageLimitRows(rows: limits, scale: interfaceScale, isCompact: true)
                         }
                     }
                 }
             }
             .padding(.leading, 34)
-            .padding(.trailing, 10)
+            .padding(.trailing, ParitySpace.s12)
         }
     }
 
     private func header(_ overview: TokenUsageOverview) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: ParitySpace.s8) {
             Image(systemName: "chart.bar.xaxis")
-                .font(.system(size: 12, weight: .medium))
+                .font(.parity(.caption, weight: .medium, scale: interfaceScale))
                 .foregroundStyle(.secondary)
                 .frame(width: 16)
             Text(L10n.string("Usage"))
-                .font(.system(size: 14.5, weight: .semibold))
+                .font(.parity(.body, weight: .semibold, scale: interfaceScale))
                 .lineLimit(1)
                 .layoutPriority(1)
             Text(overview.days.isEmpty ? L10n.string("Counting this Mac's transcripts…")
                  : TokenUsageFormat.today(overview.today))
-                .font(.system(size: 12).monospacedDigit())
+                .font(.parity(.caption, scale: interfaceScale).monospacedDigit())
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
-            Spacer(minLength: 8)
+            Spacer(minLength: ParitySpace.s8)
             Image(systemName: "chevron.right")
-                .font(.caption2.weight(.semibold))
+                .font(.system(size: 10 * interfaceScale, weight: .semibold))
                 .foregroundStyle(.tertiary)
                 .accessibilityHidden(true)
         }
@@ -293,7 +298,7 @@ struct TokenUsageHomeBand: View {
     private func bars(_ overview: TokenUsageOverview) -> some View {
         if !overview.days.isEmpty {
             TokenUsageDayBars(days: Array(overview.days.suffix(14)), highlighted: 1, height: 34,
-                              caption: L10n.string("Last 14 days, API equivalent"))
+                              caption: L10n.string("Last 14 days, API equivalent"), scale: interfaceScale)
                 .padding(.top, 2)
         }
     }
@@ -324,7 +329,7 @@ struct TokenUsagePage: View {
                 if !overview.limits.isEmpty { Divider() }
                 if overview.days.isEmpty {
                     Text(L10n.string("Counting this Mac's transcripts…"))
-                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                        .font(.parity(.caption, scale: 1)).foregroundStyle(.secondary)
                 } else {
                     tokens(overview)
                 }
@@ -336,13 +341,13 @@ struct TokenUsagePage: View {
     // MARK: Limits
 
     private func limits(_ overview: TokenUsageOverview) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: ParitySpace.s12) {
             HStack(alignment: .firstTextBaseline) {
-                Text(L10n.string("Plan limits")).font(.system(size: 13, weight: .semibold))
+                Text(L10n.string("Plan limits")).font(SettingsMetrics.groupTitleFont)
                 Spacer()
                 if let limitsCheckedAt = limitsCheckedAt() {
                     Text(L10n.format("Updated %@", limitsCheckedAt.formatted(.relative(presentation: .named))))
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .font(.parity(.caption, scale: 1)).foregroundStyle(.secondary)
                 }
             }
             TokenUsageLimitRows(rows: TokenUsageLimitRows.accounts(overview.limits))
@@ -353,9 +358,9 @@ struct TokenUsagePage: View {
 
     private func tokens(_ overview: TokenUsageOverview) -> some View {
         let amount = overview.amount(over: range)
-        return VStack(alignment: .leading, spacing: 18) {
+        return VStack(alignment: .leading, spacing: ParitySpace.s20) {
             HStack(alignment: .center) {
-                Text(L10n.string("Token usage")).font(.system(size: 13, weight: .semibold))
+                Text(L10n.string("Token usage")).font(SettingsMetrics.groupTitleFont)
                 Spacer()
                 Picker(L10n.string("Range"), selection: $range) {
                     ForEach(TokenUsageRange.allCases) { Text($0.title).tag($0) }
@@ -365,7 +370,7 @@ struct TokenUsagePage: View {
                 .fixedSize()
             }
 
-            HStack(alignment: .top, spacing: 28) {
+            HStack(alignment: .top, spacing: ParitySpace.s32) {
                 stat(L10n.string("Tokens"), TokenUsageFormat.tokens(amount.total))
                 stat(L10n.string("API equivalent"), TokenUsageFormat.cost(amount.cost))
                 stat(L10n.string("Requests"), TokenUsageFormat.tokens(Int64(amount.requests)))
@@ -375,9 +380,9 @@ struct TokenUsagePage: View {
                 Spacer(minLength: 0)
             }
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: ParitySpace.s8) {
                 Text(L10n.string("API equivalent by day"))
-                    .font(.system(size: 11.5, weight: .medium)).foregroundStyle(.secondary)
+                    .font(.parity(.caption, weight: .medium, scale: 1)).foregroundStyle(.secondary)
                 TokenUsageDayBars(days: overview.days, highlighted: range.days, height: 92, showsAxis: true)
             }
 
@@ -389,8 +394,8 @@ struct TokenUsagePage: View {
 
     private func stat(_ label: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(label).font(.system(size: 11)).foregroundStyle(.secondary)
-            Text(value).font(.system(size: 19, weight: .semibold).monospacedDigit())
+            Text(label).font(.parity(.caption, scale: 1)).foregroundStyle(.secondary)
+            Text(value).font(.parity(.section, scale: 1).monospacedDigit())
         }
         .accessibilityElement(children: .combine)
     }
@@ -400,26 +405,26 @@ struct TokenUsagePage: View {
     private func kinds(_ amount: TokenUsageAmount) -> some View {
         let total = Double(max(amount.total, 1))
         let cost = max(amount.cost ?? 0, 0.000_001)
-        return VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: ParitySpace.s8) {
             Text(L10n.string("By kind"))
-                .font(.system(size: 11.5, weight: .medium)).foregroundStyle(.secondary)
-            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
+                .font(.parity(.caption, weight: .medium, scale: 1)).foregroundStyle(.secondary)
+            Grid(alignment: .leading, horizontalSpacing: ParitySpace.s12, verticalSpacing: ParitySpace.s8) {
                 GridRow {
-                    Text(L10n.string("Tokens")).font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text(L10n.string("Tokens")).font(.parity(.caption, scale: 1)).foregroundStyle(.secondary)
                     shareBar { Double($0.tokens(in: amount)) / total }
                 }
                 if amount.cost != nil {
                     GridRow {
-                        Text(L10n.string("API equivalent")).font(.system(size: 11)).foregroundStyle(.secondary)
+                        Text(L10n.string("API equivalent")).font(.parity(.caption, scale: 1)).foregroundStyle(.secondary)
                         shareBar { (amount.kindCost[$0] ?? 0) / cost }
                     }
                 }
             }
-            Grid(alignment: .trailing, horizontalSpacing: 14, verticalSpacing: 4) {
+            Grid(alignment: .trailing, horizontalSpacing: ParitySpace.s16, verticalSpacing: ParitySpace.s4) {
                 ForEach(TokenUsageKind.allCases) { kind in
                     let tokens = kind.tokens(in: amount)
                     GridRow {
-                        HStack(spacing: 6) {
+                        HStack(spacing: ParitySpace.s8) {
                             RoundedRectangle(cornerRadius: 2).fill(TokenUsageColors.kind(kind)).frame(width: 9, height: 9)
                             Text(kind.title)
                         }
@@ -431,10 +436,10 @@ struct TokenUsagePage: View {
                             Text(TokenUsageFormat.percent((amount.kindCost[kind] ?? 0) / cost)).foregroundStyle(.secondary)
                         }
                     }
-                    .font(.system(size: 12).monospacedDigit())
+                    .font(.parity(.caption, scale: 1).monospacedDigit())
                 }
             }
-            .padding(.top, 4)
+            .padding(.top, ParitySpace.s4)
         }
     }
 
@@ -462,10 +467,10 @@ struct TokenUsagePage: View {
     private func breakdown(_ rows: [TokenUsageRow], total: TokenUsageAmount) -> some View {
         let shown = showsAllRows ? rows : Array(rows.prefix(6))
         let peak = Double(max(rows.map { $0.amount.cost ?? Double($0.amount.total) }.max() ?? 1, 0.000_001))
-        return VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: ParitySpace.s8) {
             HStack(alignment: .center) {
                 Text(L10n.string("Where it went"))
-                    .font(.system(size: 11.5, weight: .medium)).foregroundStyle(.secondary)
+                    .font(.parity(.caption, weight: .medium, scale: 1)).foregroundStyle(.secondary)
                 Spacer()
                 Picker(L10n.string("Group by"), selection: $grouping) {
                     ForEach(TokenUsageGrouping.allCases) { Text($0.title).tag($0) }
@@ -474,14 +479,14 @@ struct TokenUsagePage: View {
                 .labelsHidden()
                 .fixedSize()
             }
-            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 7) {
+            Grid(alignment: .leading, horizontalSpacing: ParitySpace.s12, verticalSpacing: ParitySpace.s8) {
                 ForEach(shown) { row in
                     GridRow {
-                        HStack(spacing: 6) {
+                        HStack(spacing: ParitySpace.s8) {
                             if let harness = row.harness { HarnessIdentityIcon(harness: harness, size: 13) }
-                            Text(row.title).font(.system(size: 12.5)).lineLimit(1).truncationMode(.middle)
+                            Text(row.title).font(.parity(.control, scale: 1)).lineLimit(1).truncationMode(.middle)
                             if let detail = row.detail {
-                                Text(detail).font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
+                                Text(detail).font(.parity(.caption, scale: 1)).foregroundStyle(.secondary).lineLimit(1)
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -493,10 +498,10 @@ struct TokenUsagePage: View {
                         }
                         .frame(width: 96, height: 12)
                         Text(TokenUsageFormat.tokens(row.amount.total))
-                            .font(.system(size: 12).monospacedDigit())
+                            .font(.parity(.caption, scale: 1).monospacedDigit())
                             .gridColumnAlignment(.trailing)
                         Text(TokenUsageFormat.cost(row.amount.cost))
-                            .font(.system(size: 12).monospacedDigit())
+                            .font(.parity(.caption, scale: 1).monospacedDigit())
                             .gridColumnAlignment(.trailing)
                     }
                     .accessibilityElement(children: .combine)
@@ -507,7 +512,7 @@ struct TokenUsagePage: View {
                     showsAllRows.toggle()
                 }
                 .buttonStyle(.plain)
-                .font(.system(size: 12))
+                .font(.parity(.caption, scale: 1))
                 .foregroundStyle(.secondary)
             }
         }
@@ -520,7 +525,7 @@ struct TokenUsagePage: View {
             return "\(table.provider) \(copied)"
         }.joined(separator: ", ")
         return Text(L10n.format("API equivalent is an estimate at public API prices (%@), not what a subscription pays.", tables))
-            .font(.system(size: 11))
+            .font(.parity(.caption, scale: 1))
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
     }

@@ -87,7 +87,7 @@ import XCTest
             env.colorScheme = mode.scheme
             env.yardletColorTheme = MacColorTheme()
             let bg = ThemeSurface.canvas.resolve(in: env)
-            for sample in [Color.orange, Color.green, ParityProjectPalette.color(for: "yardlet")] {
+            for sample in [Color.orange, Color.green, ParityTheme.accent] {
                 let adjusted = ThemeContrast.readableTint(sample, over: bg, in: env).resolve(in: env)
                 XCTAssertGreaterThanOrEqual(Self.contrast(adjusted, bg), 4.49, "\(mode): \(sample)")
             }
@@ -104,7 +104,6 @@ import XCTest
                 XCTAssertGreaterThanOrEqual(Self.contrast(textColor, rail), 4.49, "\(preset) \(mode) inner rail")
             }
         }
-        XCTAssertEqual(ParityProjectPalette.index(for: "Yardlet"), ParityProjectPalette.index(for: "yardlet"))
     }
 
     func testParityLabelWidthCachesNaturalMeasurementAcrossProposals() {

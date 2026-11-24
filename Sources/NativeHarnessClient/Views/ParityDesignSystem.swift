@@ -852,28 +852,3 @@ extension View {
                                         accentBorder: accentBorder, showsFocusRing: showsFocusRing))
     }
 }
-
-/// Non-status 6-hue project dot palette (indigo, teal, purple, plum, slate, bronze), excluding status
-/// green, orange, red, and pure running blue so project markers never collide with task status indicators.
-enum ParityProjectPalette {
-    static let lightHexes = ["#5B5FC7", "#0F8B8D", "#7C4DFF", "#A44A7B", "#52657A", "#9A6B3F"]
-    static let darkHexes  = ["#818CF8", "#2DD4BF", "#A78BFA", "#E879A8", "#94A3B8", "#D4A373"]
-
-    static func index(for name: String) -> Int {
-        var hash: UInt64 = 14_695_981_039_346_656_037
-        for byte in name.lowercased().utf8 {
-            hash ^= UInt64(byte)
-            hash &*= 1_099_511_628_211
-        }
-        return Int(hash % UInt64(lightHexes.count))
-    }
-
-    static func color(for name: String) -> Color {
-        let idx = index(for: name)
-        return Color(nsColor: NSColor(name: "YardletProjectHue\(idx)") { appearance in
-            let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            let hex = isDark ? darkHexes[idx] : lightHexes[idx]
-            return ThemeRGB(hex)?.nsColor ?? .secondaryLabelColor
-        })
-    }
-}

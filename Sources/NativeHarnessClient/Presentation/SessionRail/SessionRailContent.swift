@@ -387,15 +387,16 @@ struct SessionRailContent: Equatable {
         case .context:
             return context?.percent.map { "\($0)%" }
         case .usage:
-            // Both the session and the weekly window when the account has both, as the card shows them.
-            let measured = (usage?.windows ?? []).filter { $0.remainingPercent != nil }
+            // Both the session and the weekly window when the account has both, as the card shows them,
+            // expressed as share used so the Usage and Context rollups read in the same direction.
+            let measured = (usage?.windows ?? []).filter { $0.usedPercent != nil }
             if measured.count > 1 {
                 return measured.prefix(2).map { window in
-                    "\(Self.shortWindowName(window.name)) \(Int64(window.remainingPercent!.rounded()))%"
+                    "\(Self.shortWindowName(window.name)) \(Int64(window.usedPercent!.rounded()))%"
                 }.joined(separator: " · ")
             }
-            guard let window = usage?.windows.first, let left = window.remainingPercent else { return nil }
-            return L10n.format("%lld%% left", Int64(left.rounded()))
+            guard let window = usage?.windows.first, let used = window.usedPercent else { return nil }
+            return L10n.format("%.0f%% used", used)
         case .connectors:
             guard let connectors else { return nil }
             let reconnect = connectors.needsReconnectionCount
@@ -436,14 +437,14 @@ struct SessionRailContent: Equatable {
         }
     }
 
-    /// The small meter beside a folded card's rollup: the context window's share used, or what is
-    /// left of the account's only window (two windows say both in words instead).
+    /// The small meter beside a folded card's rollup: the context window's share used, or the share
+    /// used of the account's only window (two windows say both in words instead).
     func meter(_ kind: SessionRailCardKind) -> Double? {
         switch kind {
         case .context: context?.fraction
         case .usage:
-            (usage?.windows ?? []).filter({ $0.remainingPercent != nil }).count > 1
-                ? nil : usage?.windows.first?.remainingPercent.map { $0 / 100 }
+            (usage?.windows ?? []).filter({ $0.usedPercent != nil }).count > 1
+                ? nil : usage?.windows.first?.usedPercent.map { $0 / 100 }
         default: nil
         }
     }

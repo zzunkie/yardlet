@@ -274,10 +274,17 @@ final class SessionRailTests: XCTestCase {
         XCTAssertEqual(rail.environment.branch, "feature/rail")
         XCTAssertEqual(rail.rollup(.context), "60%")
         XCTAssertEqual(rail.meter(.context) ?? 0, 0.6, accuracy: 0.001)
-        // Folded, the usage card says both windows the account has (2026-10-22: with both a 5-hour
-        // and a weekly limit, both show when folded), and its single meter steps aside.
-        XCTAssertEqual(rail.rollup(.usage), "5 hour 64% · 7 day 80%")
+        // Folded, the usage card says both windows the account has as share used, matching the
+        // Context rollup above it, and its single meter steps aside.
+        XCTAssertEqual(rail.rollup(.usage), "5 hour 36% · 7 day 20%")
         XCTAssertNil(rail.meter(.usage))
+        let singleWindowAccount = SessionRailAccount(name: "me@example.com", windows: [
+            AccountLimitWindow(id: "5h", name: "5 hour limit", remainingPercent: 64, resetsAt: nil, evidence: .exactQuota)
+        ])
+        let singleWindowRail = content(.claudeCode, options: options, entries: entries, connectors: connectors,
+                                       account: singleWindowAccount)
+        XCTAssertEqual(singleWindowRail.rollup(.usage), L10n.format("%.0f%% used", 36.0))
+        XCTAssertEqual(singleWindowRail.meter(.usage) ?? 0, 0.36, accuracy: 0.001)
         XCTAssertEqual(SessionRailContent.shortWindowName("5시간 한도"), "5시간")
         XCTAssertEqual(SessionRailContent.shortWindowName("5h limit"), "5h")
         XCTAssertEqual(rail.rollup(.connectors), L10n.string("1 needs reconnection"))

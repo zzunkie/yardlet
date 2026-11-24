@@ -61,15 +61,15 @@ struct SessionRailOutputsCard: View {
     var body: some View {
         SessionRailLimitedList(items: outputs, limit: 5) { output in
             Button { openURL(output.url) } label: {
-                HStack(spacing: 8) {
+                HStack(spacing: ParitySpace.s8) {
                     Image(systemName: Self.symbol(output.url))
                         .foregroundStyle(.secondary)
                         .frame(width: 16)
                     Text(output.name).lineLimit(1).truncationMode(.middle)
-                    Spacer(minLength: 6)
+                    Spacer(minLength: ParitySpace.s8)
                     if let date = output.writtenAt {
                         Text(date.formatted(.relative(presentation: .named, unitsStyle: .abbreviated)))
-                            .font(.yardlet(.caption, scale: interfaceScale))
+                            .font(.parity(.caption, scale: interfaceScale))
                             .foregroundStyle(.tertiary)
                             .lineLimit(1)
                     }
@@ -116,7 +116,7 @@ struct SessionRailLimitedList<Item: Identifiable, Row: View>: View {
                 Button(L10n.format("Show %lld more", Int64(items.count - limit))) { showsAll = true }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
-                    .font(.yardlet(.caption, scale: interfaceScale))
+                    .font(.parity(.caption, scale: interfaceScale))
                     .parityPointer()
                     .padding(.top, 2)
             }
@@ -183,7 +183,7 @@ struct SessionRailEnvironmentCard: View {
             instructionSources
             HarnessIdentityLabel(harness: environment.harness, size: 14)
                 .foregroundStyle(.secondary)
-                .padding(.top, 4)
+                .padding(.top, ParitySpace.s4)
         }
     }
 
@@ -194,22 +194,22 @@ struct SessionRailEnvironmentCard: View {
         if !sources.isEmpty {
             VStack(alignment: .leading, spacing: 2) {
                 Text(L10n.string(sources.origin == .provider ? "Applied instruction files" : "Instruction files present"))
-                    .font(.yardlet(.caption, scale: interfaceScale))
+                    .font(.parity(.caption, scale: interfaceScale))
                     .foregroundStyle(.secondary)
                 ForEach(sources.paths.prefix(Self.visibleInstructionSourceLimit), id: \.self) { path in
                     Text(ProjectSidebarPresentation.abbreviatedPath(for: URL(filePath: path)))
-                        .font(.yardlet(.caption, scale: interfaceScale))
+                        .font(.parity(.caption, scale: interfaceScale))
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .help(path)
                 }
                 if sources.paths.count > Self.visibleInstructionSourceLimit {
                     Text(L10n.format("%lld more", sources.paths.count - Self.visibleInstructionSourceLimit))
-                        .font(.yardlet(.caption, scale: interfaceScale))
+                        .font(.parity(.caption, scale: interfaceScale))
                         .foregroundStyle(.secondary)
                 }
             }
-            .padding(.top, 4)
+            .padding(.top, ParitySpace.s4)
             .accessibilityElement(children: .combine)
         }
     }
@@ -229,7 +229,7 @@ struct SessionRailSettingsCard: View {
     @State private var isPreparing = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: ParitySpace.s4) {
             if let model = settings.model {
                 row(L10n.string("Model")) {
                     ComposerModelControl(menu: model.menu, onPrepare: actions.onPrepareSettings, onSetOption: { id, value in
@@ -274,12 +274,12 @@ struct SessionRailSettingsCard: View {
     }
 
     private func row<Control: View>(_ title: String, @ViewBuilder control: () -> Control) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: ParitySpace.s8) {
             Text(title)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .fixedSize()
-            Spacer(minLength: 4)
+            Spacer(minLength: ParitySpace.s4)
             control()
                 .lineLimit(1)
         }
@@ -289,33 +289,35 @@ struct SessionRailSettingsCard: View {
 
 // MARK: - Usage
 
-/// What is left of the account's plan limits, as the account list draws them.
+/// How much of the account's plan limits have been used, matching the Context card's fill direction
+/// directly above it.
 struct SessionRailUsageCard: View {
     @Environment(\.yardletInterfaceScale) private var interfaceScale
     let account: SessionRailAccount
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: ParitySpace.s8) {
             Text(account.name)
-                .font(.yardlet(.caption, scale: interfaceScale))
+                .font(.parity(.caption, scale: interfaceScale))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
             ForEach(account.windows) { window in
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
+                let used = window.usedPercent ?? 0
+                VStack(alignment: .leading, spacing: ParitySpace.s4) {
+                    HStack(spacing: ParitySpace.s8) {
                         Text(window.name).foregroundStyle(.secondary).lineLimit(1)
-                        Spacer(minLength: 6)
-                        Text(L10n.format("%lld%% left", Int64((window.remainingPercent ?? 0).rounded())))
+                        Spacer(minLength: ParitySpace.s8)
+                        Text(L10n.format("%.0f%% used", used))
                             .monospacedDigit()
                             .foregroundStyle(window.isNearlySpent ? AnyShapeStyle(.orange) : AnyShapeStyle(.primary))
                     }
-                    SessionRailMeter(fraction: (window.remainingPercent ?? 0) / 100,
+                    SessionRailMeter(fraction: used / 100,
                                      tint: window.isNearlySpent ? .orange : .secondary)
                         .frame(height: 4)
                     if let resetsAt = window.resetsAt {
                         Text(L10n.format("Resets %@", ProviderNoticeText.resetTime(resetsAt)))
-                            .font(.yardlet(.caption2, scale: interfaceScale))
+                            .font(.parity(.caption, scale: interfaceScale))
                             .foregroundStyle(.tertiary)
                     }
                 }
@@ -323,7 +325,7 @@ struct SessionRailUsageCard: View {
             }
             if let checkedAt = account.checkedAt {
                 Text(L10n.format("Checked %@", checkedAt.formatted(.relative(presentation: .named))))
-                    .font(.yardlet(.caption2, scale: interfaceScale))
+                    .font(.parity(.caption, scale: interfaceScale))
                     .foregroundStyle(.tertiary)
             }
         }
@@ -354,11 +356,11 @@ struct SessionRailConnectorsCard: View {
             ForEach(ComposerConnectorsMenu.footnotes(list: list, switches: actions.connectors?.setOn != nil),
                     id: \.self) { note in
                 Text(note)
-                    .font(.yardlet(.caption, scale: interfaceScale))
+                    .font(.parity(.caption, scale: interfaceScale))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: 14) {
+            HStack(spacing: ParitySpace.s16) {
                 if let add = actions.connectors?.addConnector {
                     Button(L10n.string("Add connectors"), action: add)
                 }
@@ -369,7 +371,7 @@ struct SessionRailConnectorsCard: View {
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
             .parityPointer()
-            .padding(.top, 4)
+            .padding(.top, ParitySpace.s4)
         }
         // Read when the card appears and again whenever what it lists changes.
         .task(id: list) {
@@ -402,7 +404,7 @@ struct SessionRailProgressCard: View {
     let progress: SessionRailContent.Progress
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: ParitySpace.s4) {
             if let explanation = progress.plan.explanation, !explanation.isEmpty {
                 Text(explanation)
                     .foregroundStyle(.secondary)
@@ -411,7 +413,7 @@ struct SessionRailProgressCard: View {
             }
             ForEach(progress.plan.steps) { step in
                 let isCurrent = step.id == progress.currentStepID
-                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                HStack(alignment: .firstTextBaseline, spacing: ParitySpace.s8) {
                     Image(systemName: Self.symbol(step.status))
                         .font(.system(size: 10 * interfaceScale, weight: .semibold))
                         .foregroundStyle(Self.tint(step.status, current: isCurrent))
@@ -518,7 +520,7 @@ struct SessionRailBackgroundTasksCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: ParitySpace.s4) {
             SessionRailLimitedList(items: items, limit: 4) { item in
                 switch item {
                 case let .job(job):
@@ -536,7 +538,7 @@ struct SessionRailBackgroundTasksCard: View {
                 Button(L10n.string("Stop all")) { stopAll.request() }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
-                    .font(.yardlet(.caption, scale: interfaceScale))
+                    .font(.parity(.caption, scale: interfaceScale))
                     .parityPointer()
                     .padding(.top, 2)
                     .help(L10n.string("Stop all running tasks?"))
@@ -556,14 +558,14 @@ struct SessionRailBackgroundTasksCard: View {
 
     private func terminalRow(_ terminal: CodexBackgroundTerminal) -> some View {
         let isStopping = terminalActions?.isStopping(terminal.id) == true
-        return HStack(spacing: 8) {
+        return HStack(spacing: ParitySpace.s8) {
             Button { terminalActions?.open(terminal) } label: {
-                HStack(spacing: 6) {
+                HStack(spacing: ParitySpace.s8) {
                     Image(systemName: "terminal")
                         .font(.system(size: 11 * interfaceScale))
                         .foregroundStyle(.secondary)
                     Text(terminal.command.isEmpty ? L10n.string("Background terminal") : terminal.command)
-                        .font(.system(size: 12 * interfaceScale, design: .monospaced)).fontDesign(nil)
+                        .font(.system(size: ParityType.caption.size * interfaceScale, design: .monospaced)).fontDesign(nil)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -573,17 +575,17 @@ struct SessionRailBackgroundTasksCard: View {
             .parityPointer()
             .help(terminal.command)
             .disabled(terminalActions?.canOpen != true)
-            Spacer(minLength: 8)
+            Spacer(minLength: ParitySpace.s8)
             if isStopping {
                 Text(L10n.string("Stopping…"))
-                    .font(.system(size: 12 * interfaceScale))
+                    .font(.parity(.caption, scale: interfaceScale))
                     .foregroundStyle(.secondary)
                     .fixedSize()
             }
             if let terminalActions {
                 BackgroundTasksGhostButton(action: { terminalActions.stop(terminal) }) {
                     Image(systemName: "stop.circle")
-                        .font(.system(size: 12 * interfaceScale))
+                        .font(.parity(.caption, scale: interfaceScale))
                         .foregroundStyle(.secondary)
                         .frame(width: 22, height: 22)
                 }
@@ -607,7 +609,7 @@ struct SessionJobRailRow: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             let detail = SessionJobText.detail(job, now: context.date)
-            HStack(alignment: .top, spacing: 6) {
+            HStack(alignment: .top, spacing: ParitySpace.s8) {
                 Image(systemName: job.kind == .once ? "clock" : "arrow.clockwise")
                     .font(.system(size: 11 * interfaceScale))
                     .foregroundStyle(.secondary)
@@ -615,11 +617,11 @@ struct SessionJobRailRow: View {
                     .padding(.top, 2)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(SessionJobText.title(job))
-                        .font(.system(size: 12 * interfaceScale))
+                        .font(.parity(.caption, scale: interfaceScale))
                         .lineLimit(1)
                         .truncationMode(.tail)
                     Text(detail)
-                        .font(.system(size: 11 * interfaceScale))
+                        .font(.parity(.caption, scale: interfaceScale))
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
@@ -647,7 +649,7 @@ struct ScheduleRailRow: View {
             let nextRun = ScheduleRunPolicy.nextRun(of: schedule, now: context.date, calendar: .autoupdatingCurrent)
             let detail = ScheduleText.railDetail(schedule, nextRun: nextRun, now: context.date)
             Button { open?(schedule.id) } label: {
-                HStack(alignment: .top, spacing: 6) {
+                HStack(alignment: .top, spacing: ParitySpace.s8) {
                     Image(systemName: schedule.trigger.isRecurring ? "arrow.clockwise" : "clock")
                         .font(.system(size: 11 * interfaceScale))
                         .foregroundStyle(.secondary)
@@ -655,14 +657,14 @@ struct ScheduleRailRow: View {
                         .padding(.top, 2)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(schedule.name)
-                            .font(.system(size: 12 * interfaceScale))
+                            .font(.parity(.caption, scale: interfaceScale))
                             .foregroundStyle(schedule.isEnabled ? .primary : .secondary)
                             .lineLimit(1)
                             .truncationMode(.tail)
-                        HStack(spacing: 4) {
+                        HStack(spacing: ParitySpace.s4) {
                             ScheduleStateMark(schedule: schedule)
                             Text(detail)
-                                .font(.system(size: 11 * interfaceScale))
+                                .font(.parity(.caption, scale: interfaceScale))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(2)
                         }
@@ -701,16 +703,16 @@ struct SessionRailPreviewCard: View {
     private static let height: CGFloat = 156
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: ParitySpace.s8) {
             frame
                 .frame(maxWidth: .infinity)
                 .frame(height: Self.height)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay { RoundedRectangle(cornerRadius: 6).stroke(ParityTheme.separator) }
-            HStack(spacing: 6) {
+                .clipShape(RoundedRectangle(cornerRadius: ParityRadius.control))
+                .overlay { RoundedRectangle(cornerRadius: ParityRadius.control).stroke(ParityTheme.separator) }
+            HStack(spacing: ParitySpace.s8) {
                 Circle().fill(Color.green).frame(width: 6, height: 6).accessibilityHidden(true)
                 Text(preview.caption)
-                    .font(.system(size: 11.5 * interfaceScale))
+                    .font(.parity(.caption, scale: interfaceScale))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
