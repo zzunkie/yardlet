@@ -30,8 +30,8 @@ enum SidebarStyle {
     static let labelFontSize: Double = 12
     static let statusDotSize: Double = 6
 
-    /// The marks' colors: orange for an approval, a question and a limit, red for a failure, green for success, as the
-    /// Mac's system colors draw them.
+    /// The marks' colors: green for an approval, orange for a question and a limit, red for a failure, as the Mac's
+    /// system colors draw them.
     static let green = ThemeColor(light: .rgb(0.20, 0.78, 0.35), dark: .rgb(0.19, 0.82, 0.35))
     static let orange = ThemeColor(light: .rgb(1.00, 0.58, 0.00), dark: .rgb(1.00, 0.62, 0.04))
     static let red = ThemeColor(light: .rgb(1.00, 0.23, 0.19), dark: .rgb(1.00, 0.27, 0.23))
@@ -283,14 +283,14 @@ final class SidebarTaskRow {
     }
 }
 
-/// A task's state at a row's end, as the Mac's `SidebarTaskStatusView` draws it: a small dot (orange for an approval
-/// or a question, gray while a turn runs, the accent for an unread result), and in place of a dot a warning for a
-/// failed turn, a gauge for a plan limit, a globe while the browser waits and arrows while reconnecting.
+/// A task's state at a row's end, as the Mac's `SidebarTaskStatusView` draws it: a small dot (green for an approval,
+/// orange for a question, gray while a turn runs, the accent for an unread result), and in place of a dot a warning
+/// for a failed turn, a gauge for a plan limit, a globe while the browser waits and arrows while reconnecting.
 @MainActor
 enum SidebarStatusMark {
     static func view(_ status: SidebarTaskStatus) -> FrameworkElement {
         switch status {
-        case .awaitingApproval: dot(SidebarStyle.orange)
+        case .awaitingApproval: dot(SidebarStyle.green)
         case .needsInput: dot(SidebarStyle.orange)
         case .waitingInBrowser: symbol("\u{E774}", SidebarStyle.orange)
         case .failed: symbol(ConversationStyle.Glyph.warning, SidebarStyle.red)
