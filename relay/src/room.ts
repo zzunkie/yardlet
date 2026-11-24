@@ -3,6 +3,7 @@ import type { ApiResult } from "./account";
 import { apnsCredentials, sendApnsPush } from "./apns";
 import { fcmCredentials, isPushProvider, parsePush, sendFcmPush, type Push, type PushError, type PushProvider } from "./fcm";
 import { toBase64Url, verifyHostAuth } from "./keys";
+import { count } from "./metrics";
 import { moveRoomPath } from "./placement";
 import { PUSH_TARGET } from "./push-targets";
 
@@ -84,7 +85,7 @@ export class Room extends DurableObject<Env> {
   private letSocketsGo(): Response {
     for (const ws of this.ctx.getWebSockets()) {
       const state = stateOf(ws);
-      if (state && !state.closed) closeSocket(ws, state, 1012, "the room moved");
+      if (state && !state.closed) this.close(ws, state, 1012, "the room moved");
     }
     return new Response(null, { status: 204 });
   }
@@ -112,9 +113,13 @@ export class Room extends DurableObject<Env> {
 
   private async acceptPhone(address: string): Promise<Response> {
     const mac = this.readyMac();
-    if (!mac) return new Response("no Mac holds this room", { status: 404 });
+    if (!mac) {
+      this.count("relay.client", ["noHost"]);
+      return new Response("no Mac holds this room", { status: 404 });
+    }
     const phones = this.phones();
     if (phones.filter((phone) => isAnswered(phone.state)).length >= MAX_PHONES) {
+      this.count("relay.client", ["full"]);
       return new Response("room is full", { status: 429 });
     }
     // Sockets the Mac has not answered cannot keep a phone out: the oldest of them gives way.
@@ -142,6 +147,7 @@ export class Room extends DurableObject<Env> {
       address,
     } satisfies PhoneState);
     trySend(mac.ws, JSON.stringify({ t: "open", c }));
+    this.count("relay.client", ["open"]);
     await this.scheduleAlarm();
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -169,7 +175,7 @@ export class Room extends DurableObject<Env> {
       const state = stateOf(ws);
       if (!state || state.closed) continue;
       if (state.role === "mac" && !state.ready && state.deadline <= now) {
-        closeSocket(ws, state, 4408, "no auth in time");
+        this.close(ws, state, 4408, "no auth in time");
       } else if (state.role === "phone" && state.lastFrame + PHONE_IDLE_MS <= now) {
         this.dropPhone(ws, state, 4408, "idle");
       } else if (state.role === "phone" && !isAnswered(state) && (state.openedAt ?? 0) + PHONE_ANSWER_MS <= now) {
@@ -183,7 +189,7 @@ export class Room extends DurableObject<Env> {
     if (typeof message === "string") return this.dropPhone(ws, state, 1003, "binary frames only");
     if (message.byteLength > MAX_PHONE_FRAME) return this.dropPhone(ws, state, 1009, "frame too large");
     const mac = this.readyMac();
-    if (!mac) return closeSocket(ws, state, 4404, "the Mac left");
+    if (!mac) return this.close(ws, state, 4404, "the Mac left");
     state.lastFrame = Date.now();
     ws.serializeAttachment(state);
     const frame = new Uint8Array(4 + message.byteLength);
@@ -195,24 +201,29 @@ export class Room extends DurableObject<Env> {
   private async authenticate(ws: WebSocket, state: MacState, message: string | ArrayBuffer): Promise<void> {
     const auth = typeof message === "string" ? parseObject(message) : null;
     if (auth?.t !== "auth" || typeof auth.key !== "string" || typeof auth.sig !== "string") {
-      return closeSocket(ws, state, 4401, "authentication failed");
+      this.count("relay.host", ["authFailed"]);
+      return this.close(ws, state, 4401, "authentication failed");
     }
     const valid = await verifyHostAuth(state.room, state.nonce, auth.key, auth.sig);
     // Other events may have run while verifying.
     const current = stateOf(ws);
     if (current?.role !== "mac" || current.closed || current.ready) return;
-    if (!valid) return closeSocket(ws, current, 4401, "authentication failed");
+    if (!valid) {
+      this.count("relay.host", ["authFailed"]);
+      return this.close(ws, current, 4401, "authentication failed");
+    }
 
     const previous = this.readyMac();
     if (previous) {
       current.next = Math.max(current.next, previous.state.next);
       current.pushWindowStart = previous.state.pushWindowStart;
       current.pushCount = previous.state.pushCount;
-      closeSocket(previous.ws, previous.state, 4409, "replaced by a newer connection");
-      for (const phone of this.phones()) closeSocket(phone.ws, phone.state, 4409, "the Mac reconnected");
+      this.close(previous.ws, previous.state, 4409, "replaced by a newer connection");
+      for (const phone of this.phones()) this.close(phone.ws, phone.state, 4409, "the Mac reconnected");
     }
     current.ready = true;
     ws.serializeAttachment(current);
+    this.count("relay.host", ["ready"]);
     ws.send(JSON.stringify({ t: "ready" }));
     await this.scheduleAlarm();
   }
@@ -267,6 +278,7 @@ export class Room extends DurableObject<Env> {
       await this.scheduleAlarm();
     }
     const error = await send();
+    this.count("relay.push", [provider, error ?? "ok", "offer"]);
     if (!error) return { status: 202, body: { sent: true } };
     // A token the service does not take keeps no target here.
     if (error === "unregistered" || !bound) this.dropTargets("DELETE FROM push_targets WHERE target = ?", target);
@@ -322,7 +334,7 @@ export class Room extends DurableObject<Env> {
     const control = parseObject(message);
     if (control?.t === "close" && typeof control.c === "number") {
       const phone = this.phone(control.c);
-      if (phone) closeSocket(phone.ws, phone.state, typeof control.code === "number" ? control.code : 1000, "");
+      if (phone) this.close(phone.ws, phone.state, typeof control.code === "number" ? control.code : 1000, "");
     } else if (control?.t === "push" && typeof control.id === "string") {
       const error = await this.push(ws, state, control);
       const reply = error ? { t: "pushed", id: control.id, ok: false, error } : { t: "pushed", id: control.id, ok: true };
@@ -339,6 +351,7 @@ export class Room extends DurableObject<Env> {
     if (!send) return "notConfigured";
     if (!this.takePush({ ws, state })) return "rateLimited";
     const error = await send();
+    this.count("relay.push", [push.provider, error ?? "ok", "notify"]);
     // The service no longer knows the token: its target goes too.
     if (error === "unregistered" && push.to !== requested.to) {
       this.dropTargets("DELETE FROM push_targets WHERE target = ?", requested.to);
@@ -377,19 +390,34 @@ export class Room extends DurableObject<Env> {
     const state = stateOf(ws);
     if (!state || state.closed) return;
     state.closed = true;
+    this.countClose(state, code, "peer");
     if (state.role === "phone") {
       const mac = this.readyMac();
       if (mac) trySend(mac.ws, JSON.stringify({ t: "closed", c: state.c, code }));
     } else if (state.ready) {
-      for (const phone of this.phones()) closeSocket(phone.ws, phone.state, 4404, "the Mac left");
+      for (const phone of this.phones()) this.close(phone.ws, phone.state, 4404, "the Mac left");
     }
   }
 
   /** Closes a phone the relay drops itself and tells the Mac. */
   private dropPhone(ws: WebSocket, state: PhoneState, code: number, reason: string): void {
-    closeSocket(ws, state, code, reason);
+    this.close(ws, state, code, reason);
     const mac = this.readyMac();
     if (mac) trySend(mac.ws, JSON.stringify({ t: "closed", c: state.c, code }));
+  }
+
+  /** Closes a socket the relay ends itself. */
+  private close(ws: WebSocket, state: SocketState, code: number, reason: string): void {
+    if (!state.closed) this.countClose(state, code, "relay");
+    closeSocket(ws, state, code, reason);
+  }
+
+  private countClose(state: SocketState, code: number, by: "relay" | "peer"): void {
+    this.count("relay.close", [state.role === "mac" ? "host" : "client", String(code), by]);
+  }
+
+  private count(event: string, labels: string[]): void {
+    count(this.env.METRICS, event, labels);
   }
 
   private readyMac(): Held<MacState> | undefined {

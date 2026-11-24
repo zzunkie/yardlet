@@ -1,9 +1,11 @@
 import { handleAccountRoute } from "./account-api";
+import { handleFeedback } from "./feedback";
 import { isRoom } from "./keys";
 import { moveRoomPath, moveRoomsUntil, roomLocation, roomObjectName } from "./placement";
 import { handlePushTargets } from "./push-targets";
 
 export { Account } from "./account";
+export { FeedbackSubmission } from "./feedback";
 export { Room } from "./room";
 
 const ROOM_PATH = /^\/v1\/rooms\/([^/]+)\/(host|connect|push-targets)$/;
@@ -14,6 +16,7 @@ export default {
     if (pathname === "/v1/health") {
       return request.method === "GET" ? new Response("ok") : new Response(null, { status: 405 });
     }
+    if (pathname === "/v1/feedback") return handleFeedback(request, env);
     const match = ROOM_PATH.exec(pathname);
     if (!match) return (await handleAccountRoute(request, env)) ?? new Response("not found", { status: 404 });
     const [, room, role] = match;

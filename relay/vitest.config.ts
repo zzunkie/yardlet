@@ -44,6 +44,8 @@ export default defineConfig({
                 GOOGLE_CLIENT_SECRET: "google-client-secret",
                 AUTH_STATE_SECRET: stateSecret,
                 PUBLIC_URL: "https://relay.example.test",
+                FEEDBACK_FROM: "feedback@relay.example.test",
+                FEEDBACK_TO: "team@example.test",
               },
             },
           }),
@@ -53,6 +55,10 @@ export default defineConfig({
       {
         plugins: [cloudflareTest({ wrangler })],
         test: { name: "unconfigured", include: ["test/unconfigured.test.ts"] },
+      },
+      {
+        plugins: [cloudflareTest({ wrangler: { configPath: "./edge/wrangler.jsonc" } })],
+        test: { name: "edge", include: ["edge/test/**/*.test.ts"] },
       },
     ],
   },
