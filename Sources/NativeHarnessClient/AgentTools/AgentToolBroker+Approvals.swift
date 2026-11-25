@@ -110,7 +110,8 @@ extension AgentToolBroker {
         }
         let key = "\(host.uuidString)|\(facts.service)"
         let question: PendingReadApproval
-        if let pending = pendingReadApprovals[key] {
+        // A question just withdrawn is not joined: it answers no.
+        if let pending = pendingReadApprovals[key], !pending.answer.isCancelled {
             question = pending
         } else {
             let title = L10n.format("Allow this task to read from %@?", facts.service)
