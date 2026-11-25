@@ -1337,6 +1337,22 @@ final class PersonalAgentRenderingTests: XCTestCase {
                       "\(time) above “\(text)” at \(size): \(rows.map(\.text))", line: line)
     }
 
+    /// A message without a time starts no day and is passed over: the next message is weighed against the
+    /// last one before it that has a time, so a new day after it keeps its divider.
+    func testADayStartsAfterAMessageWithoutATime() {
+        let today = Calendar.current.startOfDay(for: Date()).addingTimeInterval(9 * 3600)
+        let yesterday = today.addingTimeInterval(-86_400)
+        func messages(_ dates: [Date?]) -> [PersonalAgentMessage] {
+            dates.enumerated().map { index, date in
+                PersonalAgentMessage(id: "m\(index)", author: .agent, text: "Message \(index)", createdAt: date,
+                                     isDeleted: false, attachments: [])
+            }
+        }
+        XCTAssertEqual(PersonalAgentDayDivider.days(in: messages([yesterday, nil, today])), [yesterday, nil, today])
+        XCTAssertEqual(PersonalAgentDayDivider.days(in: messages([nil, today])), [nil, today])
+        XCTAssertEqual(PersonalAgentDayDivider.days(in: messages([today, nil, today.addingTimeInterval(60)])), [today, nil, nil])
+    }
+
     /// The words of a message's actions (`PersonalAgentMessageActions`).
     private static let actionWords: Set<String> = [L10n.string("Copy message"), L10n.string("Reply")]
 

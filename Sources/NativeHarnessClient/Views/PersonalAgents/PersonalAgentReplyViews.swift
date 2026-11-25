@@ -47,14 +47,15 @@ struct PersonalAgentReplyQuoteView: View {
             .background(isHovering ? ParityTheme.hoverFill : .clear,
                         in: RoundedRectangle(cornerRadius: ParityRadius.control, style: .continuous))
             .contentShape(Rectangle())
-            .frame(maxWidth: ConversationLayout.sentBubbleMaximumWidth, alignment: alignsTrailing ? .trailing : .leading)
         }
         .buttonStyle(.plain)
         .parityPointer()
-        .onHover { isHovering = $0 }
+        .pointerHover { isHovering = $0 }
         .help(L10n.string("View replies"))
         .accessibilityLabel(L10n.string("Reply to"))
         .accessibilityValue(accessibilityText)
+        // Only the quote itself takes the pointer; the room beside it does not.
+        .frame(maxWidth: ConversationLayout.sentBubbleMaximumWidth, alignment: alignsTrailing ? .trailing : .leading)
     }
 
     private var accessibilityText: String {
@@ -100,7 +101,7 @@ struct PersonalAgentReplyIndicator: View {
         }
         .buttonStyle(.plain)
         .parityPointer()
-        .onHover { isHovering = $0 }
+        .pointerHover { isHovering = $0 }
         .accessibilityLabel(Self.title(count))
     }
 }
@@ -221,6 +222,7 @@ private struct PersonalAgentReplyPanel: View {
     /// read once by itself, and a page that added nothing starts no other.
     @State private var autoRead: (cursor: PersonalAgentReplyThread.Cursor, count: Int)?
     @Environment(\.yardletInterfaceScale) private var scale
+    @Environment(\.colorScheme) private var colorScheme
 
     private var showsEarlier: Bool { thread.cursor != .end || thread.olderFailure != nil }
 
@@ -265,8 +267,11 @@ private struct PersonalAgentReplyPanel: View {
                                 .padding(.horizontal, 10)
                                 .frame(height: 26 * scale)
                                 .background(ParityTheme.elevated, in: Capsule())
-                                .overlay { Capsule().strokeBorder(ParityTheme.separator, lineWidth: 1) }
-                                .shadow(color: .black.opacity(0.08), radius: 6, y: 2)
+                                .overlay {
+                                    Capsule().strokeBorder(colorScheme == .dark ? ParityTheme.strongSeparator : ParityTheme.separator,
+                                                           lineWidth: 1)
+                                }
+                                .shadow(color: .black.opacity(colorScheme == .dark ? 0.40 : 0.12), radius: 8, y: 2)
                                 .contentShape(Capsule())
                         }
                         .buttonStyle(.plain)

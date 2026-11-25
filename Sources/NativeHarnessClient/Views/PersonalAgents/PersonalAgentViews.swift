@@ -335,8 +335,8 @@ struct PersonalAgentsContent: View {
                     // Below the conversation's header, whose button still hides them, raised as a task's
                     // rail is in a narrow window: a click outside or Escape puts them away.
                     if showsDetailsRaised {
-                        SessionRailRaisedLayer(onDismiss: toggleDetails) {
-                            details(agent: agent, conversation: conversation, close: toggleDetails)
+                        SessionRailRaisedLayer(onDismiss: dismissRaisedDetails) {
+                            details(agent: agent, conversation: conversation, close: dismissRaisedDetails)
                         }
                         .padding(.top, PersonalAgentConversationView.headerHeight)
                         .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -406,6 +406,13 @@ struct PersonalAgentsContent: View {
             check: { item in Task { await center.checkInputRequest(item) } },
             choose: { id, index in Task { await center.chooseOption(index, in: id) } },
             retryOption: { Task { await center.retryOptionReply() } })
+    }
+
+    /// Puts the raised details away, once: a click outside or Escape during the closing animation does
+    /// not raise them again.
+    private func dismissRaisedDetails() {
+        guard raisesDetails else { return }
+        withAnimation(.easeInOut(duration: 0.18)) { raisesDetails = false }
     }
 
     private func toggleDetails() {
@@ -609,9 +616,10 @@ struct PersonalAgentConversationView: View {
                         ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(.vertical, 30)
                     }
                     let messages = conversation.visibleMessages
+                    let days = PersonalAgentDayDivider.days(in: messages)
                     ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
                         let previous = index == 0 ? nil : messages[index - 1]
-                        let day = PersonalAgentDayDivider.startsDay(message, after: previous)
+                        let day = days[index]
                         let startsRun = previous == nil || previous?.author != message.author || day != nil
                         VStack(alignment: .leading, spacing: ConversationLayout.turnSpacing) {
                             if let day { PersonalAgentDayDivider(date: day) }
@@ -637,7 +645,7 @@ struct PersonalAgentConversationView: View {
                 PersonalAgentNotice(text: attachmentFailure.message, isWorking: isLoadingAttachment)
                     .conversationColumn().padding(.bottom, 4)
             } else if openFailed {
-                PersonalAgentNotice(text: L10n.string("Dots could not be opened."))
+                PersonalAgentNotice(text: L10n.string("Dots could not be opened."), isWorking: isLoadingAttachment)
                     .conversationColumn().padding(.bottom, 4)
             } else if isLoadingAttachment {
                 ProgressView().controlSize(.small).padding(.bottom, 4)
@@ -785,8 +793,9 @@ struct PersonalAgentConversationView: View {
                 .padding(.leading, ConversationLayout.sentMessageLeadingSpace)
             // A message of pictures or files alone has no empty bubble.
             if message.isDeleted || !message.text.isEmpty {
-                SentUserMessage(copyText: "", images: [],
-                                minimumLeadingSpace: ConversationLayout.sentMessageLeadingSpace) {
+                // The bubble as a task's sent message draws it; its actions are this row's own.
+                HStack(spacing: 0) {
+                    Spacer(minLength: ConversationLayout.sentMessageLeadingSpace)
                     Group {
                         if message.isDeleted {
                             Text(L10n.string("Message deleted")).italic().foregroundStyle(.secondary)

@@ -47,14 +47,17 @@ struct PersonalAgentDayDivider: View {
     let date: Date
     @Environment(\.yardletInterfaceScale) private var scale
 
-    /// The day `message` starts, when it is the first message or the one before it was sent another day.
-    /// A message without a time starts none, and the one after it is weighed against the one before.
-    static func startsDay(_ message: PersonalAgentMessage, after previous: PersonalAgentMessage?,
-                          calendar: Calendar = .current) -> Date? {
-        guard let date = message.createdAt else { return nil }
-        guard let previous else { return date }
-        guard let before = previous.createdAt else { return nil }
-        return calendar.isDate(date, inSameDayAs: before) ? nil : date
+    /// The day each of `messages` starts, in one pass: a message's date when no message before it has a
+    /// time, or the last one that has was sent another day; nil otherwise. A message without a time starts
+    /// none, and is passed over when the next is weighed.
+    static func days(in messages: [PersonalAgentMessage], calendar: Calendar = .current) -> [Date?] {
+        var last: Date?
+        return messages.map { message in
+            guard let date = message.createdAt else { return nil }
+            defer { last = date }
+            guard let last else { return date }
+            return calendar.isDate(date, inSameDayAs: last) ? nil : date
+        }
     }
 
     static func text(for date: Date, now: Date = Date(), calendar: Calendar = .current,
@@ -104,15 +107,19 @@ struct PersonalAgentChip: View {
     @Environment(\.yardletInterfaceScale) private var scale
 
     var body: some View {
-        if let action {
-            Button(action: action) { label }
-                .buttonStyle(.plain)
-                .parityPointer()
-                .onHover { isHovering = $0 }
-                .accessibilityLabel(title)
-        } else {
-            label.accessibilityElement(children: .combine)
+        // Only the chip itself takes the pointer; the room beside it in the column does not.
+        Group {
+            if let action {
+                Button(action: action) { label }
+                    .buttonStyle(.plain)
+                    .parityPointer()
+                    .pointerHover { isHovering = $0 }
+                    .accessibilityLabel(title)
+            } else {
+                label.accessibilityElement(children: .combine)
+            }
         }
+        .frame(maxWidth: 360, alignment: alignsTrailing ? .trailing : .leading)
     }
 
     private var label: some View {
@@ -135,7 +142,6 @@ struct PersonalAgentChip: View {
         .overlay { if isFile { shape.strokeBorder(ParityTheme.separator, lineWidth: 1) } }
         .contentShape(shape)
         .opacity(isEnabled ? 1 : 0.6)
-        .frame(maxWidth: 360, alignment: alignsTrailing ? .trailing : .leading)
     }
 }
 
@@ -160,7 +166,7 @@ struct PersonalAgentTextButton: View {
         }
         .buttonStyle(.plain)
         .parityPointer()
-        .onHover { isHovering = $0 }
+        .pointerHover { isHovering = $0 }
     }
 }
 
@@ -187,9 +193,11 @@ struct PersonalAgentNotice<Actions: View>: View {
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            HStack(spacing: 6) { actions() }
-                .controlSize(.small)
-                .fixedSize()
+            if Actions.self != EmptyView.self {
+                HStack(spacing: 6) { actions() }
+                    .controlSize(.small)
+                    .fixedSize()
+            }
         }
         .font(.yardlet(.caption, scale: scale))
         .padding(.horizontal, 12)
