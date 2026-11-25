@@ -4,7 +4,8 @@ import YardletAgentTools
 import JavaScriptCore
 #endif
 
-/// Settings toggle for Yardlet's native MCP Code Mode (default off; leaves nothing behind when off).
+/// Settings › General › Tasks › MCP Code Mode: `Auto` (the default, decided per task), `On` or `Off`.
+/// Off, it leaves nothing behind.
 enum CodeModePreference {
     static let key = "YardletAgentCodeMode"
 

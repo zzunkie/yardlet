@@ -32,10 +32,19 @@ final class CodeModeToolTests: XCTestCase {
 
     func testModeDefaultsToAutoAndKeepsASwitchSavedBeforeIt() throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("CodeModeMode")))
+        let context = YardletSettingsContext(defaults: defaults)
+        let setting = YardletSetting.agentCodeMode
+        let shown = CodeModePreference.isSupported
         XCTAssertEqual(CodeModePreference.mode(in: defaults), .auto)
-        // The switch saved a value only once the person turned it.
+        XCTAssertEqual(setting.value(in: context), shown ? "auto" : nil)
+        // The switch saved a value only once the person turned it, and Settings and the settings tools
+        // read it right before it is converted.
         defaults.set(true, forKey: CodeModePreference.key)
         XCTAssertEqual(CodeModePreference.mode(in: defaults), .on)
+        XCTAssertEqual(setting.value(in: context), shown ? "on" : nil)
+        defaults.set(false, forKey: CodeModePreference.key)
+        XCTAssertEqual(setting.value(in: context), shown ? "off" : nil)
+        defaults.set(true, forKey: CodeModePreference.key)
         CodeModePreference.convertSavedSwitch(in: defaults)
         XCTAssertEqual(defaults.string(forKey: CodeModePreference.key), "on")
         defaults.set(false, forKey: CodeModePreference.key)
@@ -60,14 +69,28 @@ final class CodeModeToolTests: XCTestCase {
         XCTAssertFalse(codex)
         let claudeBelow = try await listsCodeMode(.claudeCode, connectorTools: threshold - 1)
         XCTAssertFalse(claudeBelow)
+        XCTAssertFalse(CodeModePreference.isOn(.auto, harness: nil, connectorToolCount: 100))
         let claudeAt = try await listsCodeMode(.claudeCode, connectorTools: threshold)
         XCTAssertEqual(claudeAt, supported)
         let antigravityNone = try await listsCodeMode(.antigravityCLI, connectorTools: 0)
         XCTAssertFalse(antigravityNone)
-        let antigravity = try await listsCodeMode(.antigravityCLI, connectorTools: 2)
+        let antigravity = try await listsCodeMode(.antigravityCLI, connectorTools: 1)
         XCTAssertEqual(antigravity, supported)
-        let openCode = try await listsCodeMode(.openCode, connectorTools: 2)
+        let openCode = try await listsCodeMode(.openCode, connectorTools: 1)
         XCTAssertEqual(openCode, supported)
+
+        // Where Auto leaves it off, its tools are refused when called by name.
+        for (harness, count) in [(HarnessKind.codex, 40), (.claudeCode, threshold - 1)] {
+            let (broker, sessionID, token, _) = try makeBroker(
+                codeMode: .auto, connectors: ExperimentConnectorProvider(toolCount: count),
+                connectorScope: ConnectorTaskScope(harness: harness))
+            for tool in [CodeModeToolCatalog.searchTools, CodeModeToolCatalog.runScript] {
+                let refused = await broker.handle(AgentToolCall(token: token, session: sessionID.uuidString, tool: tool,
+                                                                arguments: .object(["code": .string("return 1;")])))
+                XCTAssertEqual(refused.structuredContent?["error"]?["kind"]?.stringValue,
+                               AgentToolFailure.Kind.refused.rawValue, "\(harness.rawValue) \(tool)")
+            }
+        }
     }
 
     func testOffByDefaultRefusesCodeModeToolsEvenWithEmptyArgumentsAndLeavesConnectorListFlat() async throws {
@@ -135,6 +158,21 @@ final class CodeModeToolTests: XCTestCase {
         let gmailTools = try XCTUnwrap(categorySearch["tools"] as? [[String: Any]])
         XCTAssertEqual(gmailTools.first?["category"] as? String, "gmail")
         XCTAssertNotNil(gmailTools.first?["inputSchema"], "Few matches list with schemas")
+
+        let querySearch = try json(of: await brokerOn.handle(AgentToolCall(
+            token: tokenOn, session: sessionOn.uuidString, tool: CodeModeToolCatalog.searchTools,
+            arguments: .object(["query": .string("full gmail thread")])
+        )))
+        XCTAssertEqual((querySearch["tools"] as? [[String: Any]])?.compactMap { $0["name"] as? String },
+                       ["gmail_get_thread"])
+
+        let noMatch = try json(of: await brokerOn.handle(AgentToolCall(
+            token: tokenOn, session: sessionOn.uuidString, tool: CodeModeToolCatalog.searchTools,
+            arguments: .object(["query": .string("no such tool anywhere")])
+        )))
+        XCTAssertEqual(noMatch["count"] as? Int, 0)
+        XCTAssertEqual((noMatch["tools"] as? [Any])?.count, 0)
+        XCTAssertFalse((noMatch["groups"] as? [Any] ?? []).isEmpty, "No match lists every group to widen the search")
 
         // A script gets the search as an object it can filter.
         let scriptedSearch = await brokerOn.handle(AgentToolCall(
@@ -317,7 +355,6 @@ private final class ExperimentConnectorProvider: ConnectorToolProviding {
     var offersTools: Bool { true }
 
     func connectorTools(for context: ConnectorToolContext) async -> [ToolJSON] {
-        guard toolCount > 0 else { return [] }
         var list: [ToolJSON] = [
             makeTool("gmail_search_threads", "Search Gmail threads matching query and return metadata."),
             makeTool("gmail_get_thread", "Fetch full Gmail thread messages, headers, and HTML/text body.")
@@ -329,7 +366,7 @@ private final class ExperimentConnectorProvider: ConnectorToolProviding {
                 "Perform \(service) operation \(i) with pagination, filters, sorting, and expanded metadata fields."
             ))
         }
-        return list
+        return Array(list.prefix(toolCount))
     }
 
     func callConnectorTool(named name: String, arguments: ToolJSON, for context: ConnectorToolContext) async -> AgentToolResult? {

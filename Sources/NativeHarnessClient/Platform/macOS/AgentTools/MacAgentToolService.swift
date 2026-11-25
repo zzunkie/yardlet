@@ -128,7 +128,7 @@ final class MacAgentToolService: NativeSurfaceResource {
         // Observe off the main queue so a background UserDefaults write cannot deadlock with a
         // main-thread flush on the same writer queue.
         sharesTerminal = TerminalSharingPreference.isOn()
-        CodeModePreference.convertSavedSwitch()
+        CodeModePreference.convertSavedSwitch() // Already done at launch (`AppModel.live`); a no-op then.
         codeModeSetting = CodeModePreference.mode()
         terminalSharingObserver = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification, object: UserDefaults.yardlet, queue: nil
