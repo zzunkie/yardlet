@@ -269,6 +269,42 @@ final class AgentToolApprovalTests: XCTestCase {
         let ran = await script.value
         XCTAssertFalse(ran.isError, ran.text)
         XCTAssertEqual(connectors.calls, ["gmail_send", "gmail_send"])
+
+        // The harness's call's end ends the script however long its call's card waits, and the card goes with it.
+        approvals.deadline = .milliseconds(200)
+        let cut = await broker.handle(AgentToolCall(token: token, session: session.uuidString, tool: CodeModeToolCatalog.runScript,
+                                                    arguments: .object(["code": .string(#"return callTool("gmail_send", {});"#),
+                                                                        "timeoutSeconds": .integer(30)])))
+        XCTAssertTrue(cut.isError, cut.text)
+        try await waitUntil { center.approvals(for: host).isEmpty }
+        XCTAssertEqual(connectors.calls, ["gmail_send", "gmail_send"])
+    }
+
+    /// Two calls that leave the same card leave one, which the caller's turn's end takes away; a caller that ended
+    /// (a subagent) answers no to a call still waiting on one.
+    func testTheSameCardLeftTwiceIsOneAndTheCallersEndTakesIt() async throws {
+        let center = SessionToolCenter(defaults: try XCTUnwrap(UserDefaults(suiteName: "approvals-\(UUID().uuidString)")))
+        let task = UUID(), caller = UUID()
+        func ask(wait: Duration) -> Task<SessionToolCenter.CardAnswer, Never> {
+            Task {
+                await ApprovalWait.$record.withValue(ApprovalWait.Record()) {
+                    await center.decide(PermissionRequest(id: UUID().uuidString, title: "t", detail: "d", command: nil),
+                                        in: task, callerID: caller, wait: wait, onChange: {})
+                }
+            }
+        }
+        let first = ask(wait: .milliseconds(100)), second = ask(wait: .milliseconds(150))
+        _ = await (first.value, second.value)
+        XCTAssertEqual(center.approvals(for: task).count, 1, "The second call's card stands for both")
+        center.withdrawLeftApprovals(of: caller)
+        XCTAssertTrue(center.approvals(for: task).isEmpty)
+
+        let waiting = ask(wait: .seconds(60))
+        try await waitUntil { !center.approvals(for: task).isEmpty }
+        center.refuseApprovals(of: caller)
+        let refused = await waiting.value
+        XCTAssertEqual(refused, .declined)
+        XCTAssertTrue(center.approvals(for: task).isEmpty)
     }
 
     func testAFirstReadQuestionIsSharedAndALaterOneIsNotLost() async throws {
@@ -677,6 +713,12 @@ private final class RecordingApprovals: AgentToolApprovalHandling {
     var center: SessionToolCenter?
     /// How long a call waits on such a card; nil waits the card's whole time.
     var callWait: Duration?
+    /// How long the harness's call may take (`callDeadline`); nil sets no end.
+    var deadline: Duration?
+
+    func callDeadline(callerID: UUID) -> ContinuousClock.Instant? {
+        deadline.map { (ApprovalWait.callStarted ?? .now) + $0 }
+    }
 
     func askPerson(title: String, detail: String, callerID: UUID) async -> Bool {
         titles.append(title)

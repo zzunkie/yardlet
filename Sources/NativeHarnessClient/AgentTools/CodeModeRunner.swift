@@ -93,7 +93,7 @@ enum CodeModeRunner {
     static func run(
         code: String,
         timeoutSeconds: Double?,
-        latestEnd: Date? = nil,
+        latestEnd: ContinuousClock.Instant? = nil,
         dispatch: @escaping ToolDispatcher
     ) async -> AgentToolResult {
         let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -138,20 +138,21 @@ enum CodeModeRunner {
         var cancelled = false
         var activeCallTask: Task<Void, Never>?
         var activeCallSemaphore: DispatchSemaphore?
-        /// The script's own end, moved later by each wait for the person.
-        private var deadline: Date
-        private let latestEnd: Date?
+        /// The script's own end, moved later by each wait for the person. On the monotonic clock, which a change of the
+        /// Mac's time does not move.
+        private var deadline: ContinuousClock.Instant
+        private let latestEnd: ContinuousClock.Instant?
         private var personWaits = 0
-        private var personWaitStarted: Date?
+        private var personWaitStarted: ContinuousClock.Instant?
 
-        init(timeoutSeconds: Double, latestEnd: Date?) {
-            self.deadline = Date().addingTimeInterval(timeoutSeconds)
+        init(timeoutSeconds: Double, latestEnd: ContinuousClock.Instant?) {
+            self.deadline = .now + .seconds(timeoutSeconds)
             self.latestEnd = latestEnd
         }
 
         func personWaitBegan() {
             lock.withLock {
-                if personWaits == 0 { personWaitStarted = Date() }
+                if personWaits == 0 { personWaitStarted = .now }
                 personWaits += 1
             }
         }
@@ -160,16 +161,22 @@ enum CodeModeRunner {
             lock.withLock {
                 personWaits -= 1
                 guard personWaits == 0, let started = personWaitStarted else { return }
-                deadline = deadline.addingTimeInterval(Date().timeIntervalSince(started))
+                deadline += started.duration(to: .now)
                 personWaitStarted = nil
             }
         }
 
-        /// When the script ends unless it finishes first: its own end, which does not come while a card waits for the
-        /// person, and the harness's call's end in any case. Read under `lock`.
-        var endsAt: Date {
-            let own = personWaits > 0 ? Date.distantFuture : deadline
-            return latestEnd.map { min($0, own) } ?? own
+        /// Seconds until the script ends unless it finishes first: its own end, which does not come while a card waits
+        /// for the person, and the harness's call's end in any case; at most a day. Read under `lock`.
+        var secondsLeft: Double {
+            let now = ContinuousClock.now
+            let own = personWaits > 0 ? nil : deadline
+            let end = [own, latestEnd].compactMap { $0 }.min()
+            return end.map { Self.seconds(now.duration(to: $0)) }.map { min($0, 86_400) } ?? 86_400
+        }
+
+        private static func seconds(_ duration: Duration) -> Double {
+            Double(duration.components.seconds) + Double(duration.components.attoseconds) * 1e-18
         }
 
         func appendLog(_ line: String) {
@@ -247,7 +254,7 @@ enum CodeModeRunner {
     private static func runInJavaScriptCore(
         code: String,
         timeoutSeconds: Double,
-        latestEnd: Date?,
+        latestEnd: ContinuousClock.Instant?,
         dispatch: @escaping ToolDispatcher
     ) async -> AgentToolResult {
         let state = ExecutionState(timeoutSeconds: timeoutSeconds, latestEnd: latestEnd)
@@ -263,10 +270,10 @@ enum CodeModeRunner {
                 }
 
                 let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .userInitiated))
-                timer.schedule(deadline: .now() + max(0, state.lock.withLock { state.endsAt.timeIntervalSinceNow }) + 0.25)
+                timer.schedule(deadline: .now() + max(0, state.lock.withLock { state.secondsLeft }) + 0.25)
                 timer.setEventHandler { [weak timer] in
                     // A card the script's call waits on moved its end: look again later.
-                    let left = state.lock.withLock { state.endsAt.timeIntervalSinceNow }
+                    let left = state.lock.withLock { state.secondsLeft }
                     if left > 0 {
                         timer?.schedule(deadline: .now() + min(left, 1) + 0.25)
                         return
@@ -321,7 +328,7 @@ enum CodeModeRunner {
             let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
 
             state.lock.lock()
-            let alreadyTimedOut = state.timedOut || Date() >= state.endsAt
+            let alreadyTimedOut = state.timedOut || state.secondsLeft <= 0
             let alreadyCancelled = state.cancelled
             if alreadyTimedOut { state.timedOut = true }
             state.lock.unlock()
@@ -358,7 +365,7 @@ enum CodeModeRunner {
             state.toolCalls += 1
             state.lock.unlock()
 
-            guard state.lock.withLock({ state.endsAt.timeIntervalSinceNow }) > 0 else {
+            guard state.lock.withLock({ state.secondsLeft }) > 0 else {
                 state.lock.lock()
                 state.timedOut = true
                 state.lock.unlock()
@@ -390,7 +397,7 @@ enum CodeModeRunner {
             // Waits until the call answers or the script's end, which a card the call waits on moves.
             var waitResult = DispatchTimeoutResult.timedOut
             while true {
-                let left = state.lock.withLock { state.endsAt.timeIntervalSinceNow }
+                let left = state.lock.withLock { state.secondsLeft }
                 guard left > 0 else { break }
                 if callSemaphore.wait(timeout: .now() + min(left, 1)) == .success {
                     waitResult = .success

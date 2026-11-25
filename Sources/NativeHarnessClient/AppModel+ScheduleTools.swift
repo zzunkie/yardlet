@@ -872,19 +872,20 @@ extension AppModel {
     /// schedule the caller makes may run with: a Claude Code task's own mode, else the mode that matches
     /// the caller's permission level (a harness's default edits its folder as acceptEdits does), raised to
     /// a Codex task's own permission where that is freer (Approve for me as Auto). Codex's Custom, whatever
-    /// `config.toml` says, raises nothing.
+    /// `config.toml` says, raises nothing. A subagent is measured by its own options, never its host task's
+    /// (`sessionToolCallerOptions`).
     func scheduleModeCeiling(_ caller: SessionToolCaller) -> Int {
-        let host = caller.id == caller.hostTaskID ? store.sessions.first(where: { $0.id == caller.hostTaskID }) : nil
-        if caller.harness == .claudeCode, let host {
-            return ClaudePermissionMode.freedom(host.providerOptions[ClaudeLaunchOption.permissionMode])
+        let own = sessionToolCallerOptions(caller)
+        if caller.harness == .claudeCode, let own {
+            return ClaudePermissionMode.freedom(own[ClaudeLaunchOption.permissionMode])
         }
         let ceiling = Self.freedom(of: caller.permission)
-        if caller.harness == .codex, caller.permission != .readOnly, let host,
-           case let location = CodexRunLocation.restored(from: host.providerOptions), location != .custom {
+        if caller.harness == .codex, caller.permission != .readOnly, let own,
+           case let location = CodexRunLocation.restored(from: own), location != .custom {
             return max(ceiling, location.freedom)
         }
-        if caller.harness == .antigravityCLI, caller.permission != .readOnly, let host {
-            return max(ceiling, AntigravityPermissionMode.freedom(host.providerOptions[AntigravityPermissionMode.optionID]))
+        if caller.harness == .antigravityCLI, caller.permission != .readOnly, let own {
+            return max(ceiling, AntigravityPermissionMode.freedom(own[AntigravityPermissionMode.optionID]))
         }
         return ceiling
     }

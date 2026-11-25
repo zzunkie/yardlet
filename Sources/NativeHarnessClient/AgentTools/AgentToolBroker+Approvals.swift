@@ -217,7 +217,10 @@ extension AgentToolBroker {
         let allowed = await question.wait()
         // Only the question this call waited on is cleared: a later one may stand in its place already.
         if pendingDownloadApprovals[key] === question { pendingDownloadApprovals[key] = nil }
-        if allowed { allowedDownloadSites[host, default: []].insert(site) }
+        // A task released meanwhile (archived, deleted) keeps no allow: its question was withdrawn.
+        if allowed, !question.answer.isCancelled, tokens[host] != nil {
+            allowedDownloadSites[host, default: []].insert(site)
+        }
         return allowed && !Task.isCancelled
     }
 
@@ -372,10 +375,13 @@ final class PendingReadApproval {
     var waiters = 0
 
     init(_ ask: @escaping @MainActor () async -> Bool) {
-        // Asked inside a call, its card waits as long as that call may (`AppModel.sessionToolCardWait`).
+        // Asked inside a call, its card stays up as that call's would (`SessionToolCenter.decide`). The clock of the
+        // call that asked first is not the question's: each waiting call stops its own (`wait()`).
         let record = ApprovalWait.record.map { _ in ApprovalWait.Record() }
         self.record = record ?? ApprovalWait.Record()
-        answer = Task { await ApprovalWait.$record.withValue(record) { await ask() } }
+        answer = Task {
+            await ApprovalWait.$clock.withValue(nil) { await ApprovalWait.$record.withValue(record) { await ask() } }
+        }
     }
 
     /// Waits for the answer as one more call. The card goes once every call waiting on it was cancelled.

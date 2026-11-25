@@ -332,10 +332,13 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         simulatorToolsByTask.removeValue(forKey: localSessionID)
         connectorScopes.removeValue(forKey: localSessionID)
         approvedReadServices.removeValue(forKey: localSessionID)
-        // A first read's question still waiting is withdrawn: its answer no longer allows anything.
+        // A first read's or a download's question still waiting is withdrawn: its answer no longer allows anything.
         let prefix = localSessionID.uuidString + "|"
         for key in pendingReadApprovals.keys.filter({ $0.hasPrefix(prefix) }) {
             pendingReadApprovals.removeValue(forKey: key)?.answer.cancel()
+        }
+        for key in pendingDownloadApprovals.keys.filter({ $0.hasPrefix(prefix) }) {
+            pendingDownloadApprovals.removeValue(forKey: key)?.answer.cancel()
         }
         allowedSites.removeValue(forKey: localSessionID)
         allowedDownloadSites.removeValue(forKey: localSessionID)
@@ -583,10 +586,8 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         let started = ApprovalWait.callStarted ?? .now
         let latestEnd = ApprovalWait.$callStarted.withValue(started) { approvals?.callDeadline(callerID: sessionID) }
         // A moment past it, so that a call whose card is still up answers so before the script ends.
-        let left = latestEnd.map { ContinuousClock.now.duration(to: $0) + .seconds(2) }
-        let result = await CodeModeRunner.run(code: code, timeoutSeconds: timeoutSeconds, latestEnd: left.map {
-            Date().addingTimeInterval(Double($0.components.seconds) + Double($0.components.attoseconds) * 1e-18)
-        }) { [weak self] tool, arguments in
+        let result = await CodeModeRunner.run(code: code, timeoutSeconds: timeoutSeconds,
+                                              latestEnd: latestEnd.map { $0 + .seconds(2) }) { [weak self] tool, arguments in
             guard let self else {
                 return .failure("Yardlet tool broker is no longer available.", .unreachable, retry: .no)
             }

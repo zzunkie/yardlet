@@ -579,7 +579,16 @@ final class SessionToolCenter {
     /// The caller's turn ended: the cards it left up and the answers they got meanwhile go, since no call of that turn
     /// comes again to take them.
     func withdrawLeftApprovals(of callerID: UUID) {
-        for id in leftCards.values where cards[id]?.callerID == callerID { withdraw(id) }
+        for (id, card) in cards where card.callerID == callerID && approvalWaiters[id] == nil { withdraw(id) }
+        leftAnswers = leftAnswers.filter { $0.value.callerID != callerID }
+    }
+
+    /// The caller ended (a subagent finished): every card its calls put up goes, and a call still waiting on one is
+    /// answered no.
+    func refuseApprovals(of callerID: UUID) {
+        for (id, card) in cards where card.callerID == callerID {
+            if approvalWaiters[id] != nil { answer(id, allow: false) } else { withdraw(id) }
+        }
         leftAnswers = leftAnswers.filter { $0.value.callerID != callerID }
     }
 
@@ -636,6 +645,8 @@ final class SessionToolCenter {
     /// The call waiting on the card could wait no longer: the card stays up for the same call made again.
     private func leave(_ id: String) {
         guard let card = cards[id], let waiter = approvalWaiters.removeValue(forKey: id) else { return }
+        // The same card another call left before this one goes: the same call made again finds this one.
+        if let earlier = leftCards[card.key], earlier != id { withdraw(earlier) }
         leftCards[card.key] = id
         waiter.resume(returning: .left)
     }

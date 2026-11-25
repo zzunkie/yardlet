@@ -1663,19 +1663,26 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
     /// 2026-10-22: a child session inherits them unless the call says otherwise). A chosen model drops the
     /// caller's effort, which that model may not take. Another harness starts on its own defaults.
     /// What a read-only caller starts reads only, also where the caller is a read-only subagent of a
-    /// task that may do more.
+    /// task that may do more. A subagent passes on its own options, never its host task's
+    /// (`sessionToolCallerOptions`).
     func sessionToolInheritedOptions(harness: HarnessKind, caller: SessionToolCaller,
                                      chosen: [String: String]) -> [String: String] {
-        guard let host = store.sessions.first(where: { $0.id == caller.hostTaskID }) else { return chosen }
+        guard let own = sessionToolCallerOptions(caller) else { return chosen }
         let readOnly = caller.permission == .readOnly ? Self.permissionOptions(for: harness, level: .readOnly) : [:]
         // Another harness reads none of the caller's options, but runs as freely as the caller does,
         // in its own words: a Codex task with full access starts a Claude child that does not ask.
         guard harness == caller.harness else {
-            return Self.permissionOptions(for: harness, level: sessionToolPermission(of: host))
+            return Self.permissionOptions(for: harness, level: caller.permission)
                 .merging(readOnly) { _, new in new }.merging(chosen) { _, new in new }
         }
-        return Self.inheritedOptions(host.providerOptions.merging(readOnly) { _, new in new },
-                                     harness: harness, chosen: chosen)
+        return Self.inheritedOptions(own.merging(readOnly) { _, new in new }, harness: harness, chosen: chosen)
+    }
+
+    /// The options the caller itself runs with: its task's, or a subagent's own (`AgentRun.options`), which may
+    /// be narrower than its host task's. Nil for a caller Yardlet no longer has.
+    func sessionToolCallerOptions(_ caller: SessionToolCaller) -> [String: String]? {
+        if let run = sessionTools.run(caller.id) { return run.options }
+        return store.sessions.first(where: { $0.id == caller.id })?.providerOptions
     }
 
     /// A harness's own option for a permission level: what runs without asking (Claude Code's

@@ -451,7 +451,7 @@ extension AppModel {
     func finishAgentRun(_ run: AgentRun, state: AgentRun.State) {
         guard !run.state.isFinished else { return }
         sessionTools.dequeue(run.id)
-        sessionTools.withdrawLeftApprovals(of: run.id)
+        sessionTools.refuseApprovals(of: run.id)
         let started = run.state != .queued
         run.state = state
         // One that said nothing to the person (Codex working notes alone, or the quit or a plan limit cut

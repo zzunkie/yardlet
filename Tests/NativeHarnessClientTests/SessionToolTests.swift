@@ -1644,7 +1644,14 @@ final class SessionToolTests: XCTestCase {
         XCTAssertEqual(model.agentToolPolicy(callerID: askingAgent.id)?.harnessAsksBeforeDirectCalls, true)
         let nested = try await agent("Nested agent", from: askingAgent.id)
         XCTAssertEqual(nested.permission, .standard)
-        XCTAssertNil(nested.options[ClaudeLaunchOption.permissionMode], "The task's Bypass does not pass its asking caller")
+        XCTAssertEqual(nested.options[ClaudeLaunchOption.permissionMode], ClaudePermissionMode.manual,
+                       "The task's Bypass does not pass its asking caller, whose own mode it takes")
+        // What a subagent starts inherits the subagent's own options, never its host task's, and may not be freer.
+        let childOfAgent = try await child("Fix the parser", [:], from: askingAgent.id)
+        XCTAssertEqual(childOfAgent.providerOptions[ClaudeLaunchOption.permissionMode], ClaudePermissionMode.manual)
+        let freerChild = await call(model, "create_task", ["prompt": "Edit the parser", "permissionMode": "acceptEdits"],
+                                    callerID: askingAgent.id)
+        XCTAssertTrue(freerChild.isError && freerChild.text.contains("do more without asking"), freerChild.text)
 
         // A task that asks may not start one that does not, and each harness takes only its own values.
         let asking = fixture.sibling.id
