@@ -829,38 +829,54 @@ final class GmailConnectorTests: XCTestCase {
         XCTAssertEqual(AgentToolInjectionRoute.route(for: .openCode), .acpSessionMCPServers)
         XCTAssertEqual(AgentToolInjectionRoute.route(for: .antigravityCLI), .acpSessionMCPServers)
 
-        for harness in [HarnessKind.claudeCode, .codex, .openCode, .antigravityCLI] {
-            let task = UUID()
-            let launch = try XCTUnwrap(broker.agentToolServer(for: task, workspaceRoots: [],
-                                                              connectorScope: ConnectorTaskScope(harness: harness)))
-            let token = try XCTUnwrap(launch.environment[AgentToolEnvironment.token])
-            let list = try XCTUnwrapAsync(await broker.list(AgentToolCall(
-                token: token, session: task.uuidString, tool: "", arguments: .object([:]), method: AgentToolCall.listMethod)))
-            let names = list.tools.compactMap { $0["name"]?.stringValue }
-            if harness == .antigravityCLI {
-                XCTAssertTrue(names.contains(ConnectorGatewayToolCatalog.listTools), harness.rawValue)
-                XCTAssertTrue(names.contains(ConnectorGatewayToolCatalog.callTool), harness.rawValue)
-                let listed = await broker.handle(AgentToolCall(
-                    token: token, session: task.uuidString, tool: ConnectorGatewayToolCatalog.listTools,
-                    arguments: .object(["service": .string("gmail")])))
-                XCTAssertFalse(listed.isError, listed.text)
-                let decoded = try JSONDecoder().decode([ToolJSON].self, from: Data(listed.text.utf8))
-                XCTAssertEqual(decoded.count, 9, harness.rawValue)
-                let call = await broker.handle(AgentToolCall(
-                    token: token, session: task.uuidString, tool: ConnectorGatewayToolCatalog.callTool,
-                    arguments: .object([
-                        "tool": .string("gmail_list_labels"),
-                        "arguments": .object(["account": .string("person@example.test")])
-                    ])))
-                XCTAssertFalse(call.isError, "\(harness.rawValue): \(call.text)")
-                XCTAssertTrue(call.text.contains("\"labels\""), call.text)
-            } else {
-                let gmail = names.filter { $0.hasPrefix("gmail_") }
-                let call = await broker.handle(AgentToolCall(token: token, session: task.uuidString, tool: "gmail_list_labels",
-                                                             arguments: .object(["account": .string("person@example.test")])))
-                XCTAssertEqual(gmail.count, 9, harness.rawValue)
-                XCTAssertFalse(call.isError, "\(harness.rawValue): \(call.text)")
-                XCTAssertTrue(call.text.contains("\"labels\""), call.text)
+        // Off, each harness lists the tools (Antigravity through its gateway); in Auto, the default, nine
+        // tools leave Claude Code and Codex as they were and give OpenCode and Antigravity Code Mode.
+        for mode in [CodeModePreference.Mode.off, .auto] {
+            broker.codeModeSetting = { mode }
+            for harness in [HarnessKind.claudeCode, .codex, .openCode, .antigravityCLI] {
+                let task = UUID()
+                let launch = try XCTUnwrap(broker.agentToolServer(for: task, workspaceRoots: [],
+                                                                  connectorScope: ConnectorTaskScope(harness: harness)))
+                let token = try XCTUnwrap(launch.environment[AgentToolEnvironment.token])
+                let list = try XCTUnwrapAsync(await broker.list(AgentToolCall(
+                    token: token, session: task.uuidString, tool: "", arguments: .object([:]), method: AgentToolCall.listMethod)))
+                let names = list.tools.compactMap { $0["name"]?.stringValue }
+                if CodeModePreference.isOn(mode, harness: harness, connectorToolCount: 9) {
+                    XCTAssertEqual(mode, .auto)
+                    XCTAssertTrue(names.contains(CodeModeToolCatalog.runScript), harness.rawValue)
+                    XCTAssertFalse(names.contains { $0.hasPrefix("gmail_") }, harness.rawValue)
+                    XCTAssertFalse(names.contains(ConnectorGatewayToolCatalog.listTools), harness.rawValue)
+                    let script = await broker.handle(AgentToolCall(
+                        token: token, session: task.uuidString, tool: CodeModeToolCatalog.runScript,
+                        arguments: .object(["code": .string(
+                            "return callTool('gmail_list_labels', { account: 'person@example.test' });")])))
+                    XCTAssertFalse(script.isError, "\(harness.rawValue): \(script.text)")
+                    XCTAssertTrue(script.text.contains("labels"), script.text)
+                } else if harness == .antigravityCLI {
+                    XCTAssertTrue(names.contains(ConnectorGatewayToolCatalog.listTools), harness.rawValue)
+                    XCTAssertTrue(names.contains(ConnectorGatewayToolCatalog.callTool), harness.rawValue)
+                    let listed = await broker.handle(AgentToolCall(
+                        token: token, session: task.uuidString, tool: ConnectorGatewayToolCatalog.listTools,
+                        arguments: .object(["service": .string("gmail")])))
+                    XCTAssertFalse(listed.isError, listed.text)
+                    let decoded = try JSONDecoder().decode([ToolJSON].self, from: Data(listed.text.utf8))
+                    XCTAssertEqual(decoded.count, 9, harness.rawValue)
+                    let call = await broker.handle(AgentToolCall(
+                        token: token, session: task.uuidString, tool: ConnectorGatewayToolCatalog.callTool,
+                        arguments: .object([
+                            "tool": .string("gmail_list_labels"),
+                            "arguments": .object(["account": .string("person@example.test")])
+                        ])))
+                    XCTAssertFalse(call.isError, "\(harness.rawValue): \(call.text)")
+                    XCTAssertTrue(call.text.contains("\"labels\""), call.text)
+                } else {
+                    let gmail = names.filter { $0.hasPrefix("gmail_") }
+                    let call = await broker.handle(AgentToolCall(token: token, session: task.uuidString, tool: "gmail_list_labels",
+                                                                 arguments: .object(["account": .string("person@example.test")])))
+                    XCTAssertEqual(gmail.count, 9, harness.rawValue)
+                    XCTAssertFalse(call.isError, "\(harness.rawValue): \(call.text)")
+                    XCTAssertTrue(call.text.contains("\"labels\""), call.text)
+                }
             }
         }
 

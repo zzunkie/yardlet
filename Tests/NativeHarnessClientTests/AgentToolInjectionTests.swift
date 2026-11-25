@@ -579,6 +579,8 @@ final class AgentToolInjectionTests: XCTestCase {
         let connectors = FakeConnectorTools(tools: connectorTools, services: ["Gmail", "Linear"])
         let broker = broker()
         broker.connectors = connectors
+        // With MCP Code Mode off: in Auto, Antigravity gets Code Mode instead (`CodeModeToolTests`).
+        broker.codeModeSetting = { .off }
 
         let agyTask = UUID()
         let agyLaunch = try XCTUnwrap(broker.agentToolServer(
@@ -759,6 +761,7 @@ final class AgentToolInjectionTests: XCTestCase {
         broker.sharesTerminal = { true }
         broker.vault = vault
         broker.connectors = connectors
+        broker.codeModeSetting = { .off }
 
         let agyTask = UUID()
         let agyLaunch = try XCTUnwrap(broker.agentToolServer(
@@ -868,6 +871,18 @@ final class AgentToolInjectionTests: XCTestCase {
                           "Antigravity full tools/list payload (\(fullPayloadBytes) B) must stay below 44,000 B")
         XCTAssertLessThan(agyDeclarationBytes, 38_000,
                           "Antigravity declaration payload (\(agyDeclarationBytes) B) must stay well below agy's ~54 KB eager cap")
+
+        // In Auto, the default, Code Mode takes the connector gateway's place and fits the same budget.
+        broker.codeModeSetting = { .auto }
+        let autoList = try XCTUnwrapAsync(await broker.list(AgentToolCall(
+            token: agyToken, session: agyTask.uuidString, tool: "", arguments: .object([:]), method: AgentToolCall.listMethod
+        )))
+        let autoNames = Set(autoList.tools.compactMap { $0["name"]?.stringValue })
+        XCTAssertEqual(autoNames.contains(CodeModeToolCatalog.runScript), CodeModePreference.isSupported)
+        XCTAssertEqual(autoNames.contains(ConnectorGatewayToolCatalog.listTools), !CodeModePreference.isSupported)
+        let autoPayloadBytes = try encoder.encode(ToolJSON.object(["tools": .array(autoList.tools)])).count
+        XCTAssertLessThan(autoPayloadBytes, 44_000,
+                          "Antigravity tools/list payload in Auto (\(autoPayloadBytes) B) must stay below 44,000 B")
     }
 
     private static func stripSchemaDescriptions(_ value: ToolJSON) -> ToolJSON {
