@@ -350,7 +350,8 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
         let servers = isArchived ? [] : resourceMonitor.servers(of: session.id).map {
             ReadTaskDetails.Server(url: $0.url.absoluteString, process: $0.processName)
         }
-        let subagents = sessionTools.runs(hostedBy: session.id).filter { !$0.state.isFinished }.map { run in
+        let hosted = isArchived ? [] : sessionTools.runs(hostedBy: session.id).filter { !$0.state.isFinished }
+        let subagents = hosted.map { run in
             let asks = run.pendingRequests.map(\.title)
             return ReadTaskDetails.Subagent(agentId: run.id.uuidString, harness: run.harness.rawValue,
                                             state: run.state.word, asks: asks.isEmpty ? nil : asks)
@@ -724,7 +725,15 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
         var ids: [UUID] = []
         var tasks: [SessionRecord] = []
         for reference in references {
-            if let id = UUID(uuidString: reference), sessionTools.run(id) != nil {
+            if let id = UUID(uuidString: reference), let run = sessionTools.run(id) {
+                // Another task's subagent is read as that task is: one of another project asks first, and one whose
+                // task is gone is not read.
+                if run.hostTaskID != caller.hostTaskID {
+                    guard let host = store.sessions.first(where: { $0.id == run.hostTaskID }) else {
+                        return .failure("Not waited for: the task that runs \(reference) is gone.", .refused, retry: .no)
+                    }
+                    if !tasks.contains(where: { $0.id == host.id }) { tasks.append(host) }
+                }
                 ids.append(id)
                 continue
             }

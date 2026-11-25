@@ -12,8 +12,9 @@ enum TaskResourceOwner: Hashable, Sendable {
     case task(UUID)
     /// A Codex App Server Yardlet runs for one account. Many tasks share it, so it is its own row.
     case codexAppServer(CodexAppServerIdentity)
-    /// An ACP agent's process Yardlet runs (`ACPProcessLane`), which the agent's open tasks share. It is
-    /// followed for the servers the tasks' commands start (`TaskServerFinder`) and has no row of its own.
+    /// An ACP agent's process Yardlet runs (`ACPProcessLane`), which the agent's open tasks share: Antigravity's,
+    /// whose commands name their conversation. It is followed for the servers the tasks' commands start
+    /// (`TaskServerFinder`) and has no row of its own.
     case agentProcess(HarnessKind)
 
     var taskID: UUID? {

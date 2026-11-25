@@ -22,6 +22,8 @@ final class BrowserURLPolicyTests: XCTestCase {
         XCTAssertEqual(try BrowserURLPolicy.resolve("0.0.0.0:5173"), "http://0.0.0.0:5173")
         XCTAssertEqual(try BrowserURLPolicy.resolve("[::]:5173/x"), "http://[::]:5173/x")
         XCTAssertFalse(BrowserURLPolicy.isLoopback("0.0.0.0"))
+        XCTAssertTrue(BrowserURLPolicy.looksLikeAddress("[::]:5173"))
+        XCTAssertEqual(try BrowserURLPolicy.addressFieldURL("[::]:5173"), "http://[::]:5173")
         XCTAssertEqual(try BrowserURLPolicy.resolve("  http://example.com  "), "http://example.com")
         XCTAssertEqual(try BrowserURLPolicy.resolve("/tmp/page.html"), "file:///tmp/page.html")
         XCTAssertEqual(try BrowserURLPolicy.resolve("about:blank"), "about:blank")

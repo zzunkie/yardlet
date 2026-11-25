@@ -103,7 +103,7 @@ enum BrowserURLPolicy {
         if value.contains(where: \.isWhitespace) { return false }
         if scheme(of: value) != nil { return true }
         let host = value.prefix { !"/?#".contains($0) }.lowercased()
-        if isLoopback(host) || looksLikeHostWithPort(host) { return true }
+        if isLoopback(host) || isUnspecified(host) || looksLikeHostWithPort(host) { return true }
         let labels = host.split(separator: ".", omittingEmptySubsequences: false)
         guard labels.count >= 2, labels.allSatisfy({ !$0.isEmpty }), let last = labels.last else { return false }
         if labels.count == 4, labels.allSatisfy({ UInt8($0) != nil }) { return true }

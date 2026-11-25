@@ -360,9 +360,11 @@ final class TaskResourceSamplingTests: XCTestCase {
         table.set(1_101, parent: 1_100, environment: ["ANTIGRAVITY_CONVERSATION_ID": "Conv-D"])
         table.set(1_102, parent: 1_101, ports: [3_142], name: "next-server")
         table.set(1_103, parent: 1_100, ports: [7_100])         // no conversation
+        table.set(1_104, parent: 1_100, environment: ["ANTIGRAVITY_CONVERSATION_ID": "conv-e"])
+        table.set(1_105, parent: 1_104, ports: [5_174], name: "vite")
         table.set(1_200, parent: 500)                           // opencode acp
         table.set(1_201, parent: 1_200, ports: [4_200])
-        let taskA = UUID(), taskB = UUID(), taskC = UUID(), taskD = UUID()
+        let taskA = UUID(), taskB = UUID(), taskC = UUID(), taskD = UUID(), taskE = UUID()
         let server = TaskResourceOwner.codexAppServer(CodexAppServerIdentity(connection: nil, environmentScope: .native))
         var sampler = TaskResourceSampler()
         _ = sampler.sample([
@@ -378,7 +380,7 @@ final class TaskResourceSamplingTests: XCTestCase {
         let servers = finder.servers(
             descendants: sampler.yardletDescendants, entries: sampler.lastEntries, claimed: sampler.claimedProcessIDs,
             table: table, claudeSessions: ["session-a": taskA, "session-b": taskB], codexThreads: ["thread-c": taskC],
-            antigravityConversations: ["conv-d": taskD])
+            antigravityConversations: ["conv-d": taskD, "conv-e": taskE])
         XCTAssertEqual(servers, [
             taskA: [TaskServerPort(port: 3_000, processID: 601, processName: "node"),
                     TaskServerPort(port: 6_006, processID: 901, processName: "storybook"),
@@ -386,7 +388,8 @@ final class TaskResourceSamplingTests: XCTestCase {
             taskC: [TaskServerPort(port: 5_173, processID: 802, processName: "vite"),
                     TaskServerPort(port: 8_080, processID: 1_003, processName: "python3")],
             taskD: [TaskServerPort(port: 3_142, processID: 1_102, processName: "next-server"),
-                    TaskServerPort(port: 4_321, processID: 1_005, processName: "")]
+                    TaskServerPort(port: 4_321, processID: 1_005, processName: "")],
+            taskE: [TaskServerPort(port: 5_174, processID: 1_105, processName: "vite")]
         ])
     }
 

@@ -653,6 +653,19 @@ final class SessionToolTests: XCTestCase {
             XCTAssertTrue(read.text.contains(other), read.text)
         }
 
+        // A subagent another project's task runs is read as that task is, as its ID from read_task allows no more.
+        _ = await call(model, "run_agent", ["harness": "claude-code", "prompt": "Other's agent", "background": true],
+                       callerID: fixture.other.id)
+        let othersAgent = try XCTUnwrap(model.sessionTools.runs(hostedBy: fixture.other.id).first)
+        let unseen = Task { await self.call(model, "wait_tasks", ["ids": [othersAgent.id.uuidString], "timeout_seconds": 0],
+                                            from: fixture.caller) }
+        let agentCard = try await waitForApproval(in: fixture.caller.id, model: model)
+        XCTAssertEqual(agentCard.request.title, L10n.string("Read another project's task"))
+        await model.respond(to: agentCard.id, decision: .deny, in: fixture.caller)
+        let unseenResult = await unseen.value
+        XCTAssertEqual(unseenResult.failure?.kind, .refused, unseenResult.text)
+        XCTAssertFalse(unseenResult.text.contains("agent"), unseenResult.text)
+
         // The caller's own project, its split neighbour (another project's, beside it) and itself.
         let near = [fixture.sibling, fixture.neighbor].map(\.id.uuidString)
         for (tool, arguments) in [("read_task", ["task_id": near[0]]), ("read_task", ["task_id": near[1]]),
