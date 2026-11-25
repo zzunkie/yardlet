@@ -74,9 +74,10 @@ several agents and accounts every day, and it is shared for anyone who doesn't h
 
 ## Install
 
-Download the notarized disk image from [Releases](../../releases): `Yardlet-<version>.dmg` for a Mac
-with Apple silicon (M1 or later), `Yardlet-<version>-x86_64.dmg` for an Intel Mac. Open it and drag
-Yardlet to Applications. Or install it with [Homebrew](https://github.com/zzunkie/homebrew-tap),
+Download the notarized disk image for
+[Apple silicon (M1 or later)](https://dl.yardlet.app/readme/arm64) or an
+[Intel Mac](https://dl.yardlet.app/readme/x86_64) (earlier versions and checksums are on
+[Releases](../../releases)). Open it and drag Yardlet to Applications. Or install it with [Homebrew](https://github.com/zzunkie/homebrew-tap),
 which picks the one for your Mac:
 
 ```sh
