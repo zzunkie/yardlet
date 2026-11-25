@@ -196,8 +196,10 @@ final class AgentRun: Identifiable {
     let prompt: String
     let workspaceURL: URL
     let depth: Int
-    /// What it may do without asking: read only when its caller is, else the harness's default.
+    /// What it may do without asking: the level its harness runs at, chosen or inherited, never freer than its caller.
     let permission: TaskPermissionLevel
+    /// The options its harness started with, its permission mode among them.
+    @ObservationIgnored var options: [String: String] = [:]
     /// When it started: when it was asked for, or when it left the line for room.
     var startedAt: Date
     /// Its calling task gets a message when it ends with no call waiting for it (`AppModel.finishAgentRun`),
@@ -407,8 +409,8 @@ final class SessionToolCenter {
     private(set) var approvals: [UUID: [SessionToolApproval]] = [:]
     private(set) var runs: [UUID: AgentRun] = [:]
 
-    /// Each waiting approval's answer: the action the person chose, or nil for no.
-    @ObservationIgnored private var approvalWaiters: [String: CheckedContinuation<String??, Never>] = [:]
+    /// The call waiting on each card, by the card's ID.
+    @ObservationIgnored private var approvalWaiters: [String: CheckedContinuation<CardEnd, Never>] = [:]
     @ObservationIgnored private let defaults: UserDefaults
     /// The tasks `create_task` made, under the key that once kept how deep each sat: only whether a
     /// task is there is read, not the number an older Yardlet wrote for it.
@@ -460,58 +462,216 @@ final class SessionToolCenter {
         approvals.values.lazy.flatMap { $0 }.first { $0.id == id }
     }
 
-    /// Adds an approval and waits for its answer: true to go ahead. A call cancelled meanwhile (a script that
-    /// ran out of time, a stopped turn) takes its card away at once and is answered no.
-    func ask(_ request: PermissionRequest, in taskID: UUID, timeout: Duration = SessionToolPolicy.approvalTimeout,
+    /// Adds an approval and waits for its answer: true to go ahead. Nobody answering within `timeout` is no.
+    func ask(_ request: PermissionRequest, in taskID: UUID, callerID: UUID? = nil,
+             timeout: Duration = SessionToolPolicy.approvalTimeout,
              onChange: @escaping @MainActor () -> Void) async -> Bool {
-        await choose(request, in: taskID, timeout: timeout, onChange: onChange) != nil
+        await choose(request, in: taskID, callerID: callerID, timeout: timeout, onChange: onChange) != nil
     }
 
     /// As `ask`, for a card that offers more than one allow (`PermissionRequest.actions`): the allow the person
     /// chose, an answer that named none (a notification's Allow) taking the narrowest, or nil for no.
-    func choose(_ request: PermissionRequest, in taskID: UUID, timeout: Duration = SessionToolPolicy.approvalTimeout,
+    func choose(_ request: PermissionRequest, in taskID: UUID, callerID: UUID? = nil,
+                timeout: Duration = SessionToolPolicy.approvalTimeout,
                 onChange: @escaping @MainActor () -> Void) async -> String? {
-        guard !Task.isCancelled else { return nil }
-        let approval = SessionToolApproval(id: request.id, taskID: taskID, request: request)
-        approvals[taskID, default: []].append(approval)
-        onChange()
-        let timer = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: timeout)
-            guard !Task.isCancelled else { return }
-            self?.answer(approval.id, allow: false)
+        if case let .allowed(action) = await decide(request, in: taskID, callerID: callerID, wait: timeout,
+                                                    onChange: onChange) {
+            return action
         }
-        // The waiter is in place before the cancellation's hop to the main actor can run.
-        let answer = await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
-                approvalWaiters[approval.id] = continuation
-            }
-        } onCancel: {
-            Task { @MainActor [weak self] in self?.answer(approval.id, allow: false) }
-        }
-        timer.cancel()
-        onChange()
-        guard let answer else { return nil }
-        let allows = request.actions.filter { $0.decision == .allow }
-        if let answer, allows.contains(where: { $0.id == answer }) { return answer }
-        return PermissionActionPreference.preferred(from: allows, decision: .allow)?.id ?? ""
+        return nil
     }
 
-    /// Answers a waiting approval, with the action the person chose where its card offered several. False when
-    /// none waits under this ID.
+    /// What a call that waited on a card got.
+    enum CardAnswer: Equatable, Sendable {
+        /// Allowed, with the allow the person chose ("" where the card offered none of its own).
+        case allowed(String)
+        case declined
+        /// Nobody answered while the call could wait. The card stays up for `cardStays` more, nil once its own time
+        /// ended and it went; the call's `ApprovalWait.record` says so too.
+        case unanswered(cardStays: Duration?)
+    }
+
+    /// Puts a card up in `taskID` and waits up to `wait` for the person's answer (docs/AGENT_BROWSER_TOOLS.md,
+    /// "Approvals"). A card lives `cardLife`, the call waits on it no longer than that, and the card goes once answered.
+    /// A tool call (`ApprovalWait.record`) that may wait less leaves the card up when its wait ends: the same call made
+    /// again (the same caller, title, detail and answers) waits on that card, or takes the answer the person gave
+    /// meanwhile, once. A question asked outside a tool call (a download the agent's act started) takes its card away
+    /// then. A call cancelled meanwhile (a stopped turn, a script stopped) takes its card away at once and is answered no.
+    func decide(_ request: PermissionRequest, in taskID: UUID, callerID: UUID?, wait: Duration,
+                onChange: @escaping @MainActor () -> Void) async -> CardAnswer {
+        guard !Task.isCancelled else { return .declined }
+        let key = Self.cardKey(request, taskID: taskID, callerID: callerID)
+        let now = ContinuousClock.now
+        leftAnswers = leftAnswers.filter { $0.value.until > now }
+        if let left = leftAnswers.removeValue(forKey: key) { return Self.answer(left.answer, to: request) }
+        let id: String
+        if let leftID = leftCards.removeValue(forKey: key), cards[leftID] != nil {
+            id = leftID
+        } else {
+            id = request.id
+            let expires = now + cardLife
+            approvals[taskID, default: []].append(SessionToolApproval(id: id, taskID: taskID, request: request))
+            cards[id] = Card(key: key, taskID: taskID, callerID: callerID, expires: expires, onChange: onChange,
+                             life: Task { @MainActor [weak self] in
+                                 try? await Task.sleep(until: expires)
+                                 guard !Task.isCancelled else { return }
+                                 self?.expire(id)
+                             })
+            onChange()
+        }
+        guard let expires = cards[id]?.expires else { return .declined }
+        let callEnds = now + max(.zero, wait)
+        let staysUp = ApprovalWait.record != nil
+        let leaving = callEnds < expires ? Task { @MainActor [weak self] in
+            try? await Task.sleep(until: callEnds)
+            guard !Task.isCancelled else { return }
+            if staysUp { self?.leave(id) } else { self?.cancelWaiter(id) }
+        } : nil
+        // The waiter is in place before the cancellation's hop to the main actor can run.
+        let end = await ApprovalWait.whilePersonReads {
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { continuation in
+                    approvalWaiters[id] = continuation
+                }
+            } onCancel: {
+                Task { @MainActor [weak self] in self?.cancelWaiter(id) }
+            }
+        }
+        leaving?.cancel()
+        onChange()
+        switch end {
+        case let .answered(answer):
+            return Self.answer(answer, to: request)
+        case .left:
+            let stays = max(.zero, expires - .now)
+            ApprovalWait.record?.note(.init(cardStays: stays))
+            return .unanswered(cardStays: stays)
+        case .expired:
+            ApprovalWait.record?.note(.init(cardStays: nil))
+            return .unanswered(cardStays: nil)
+        }
+    }
+
+    /// Answers an approval, with the action the person chose where its card offered several. One no call waits on
+    /// any more keeps its answer for the same call made again. False when no card is up under this ID.
     @discardableResult
     func answer(_ id: String, allow: Bool, actionID: String? = nil) -> Bool {
-        guard let continuation = approvalWaiters.removeValue(forKey: id) else { return false }
-        for (taskID, list) in approvals {
-            let kept = list.filter { $0.id != id }
-            approvals[taskID] = kept.isEmpty ? nil : kept
+        guard let card = takeCard(id) else { return false }
+        let answer: String?? = allow ? .some(actionID) : nil
+        if let waiter = approvalWaiters.removeValue(forKey: id) {
+            waiter.resume(returning: .answered(answer))
+        } else {
+            leftAnswers[card.key] = (answer, card.taskID, card.callerID, ContinuousClock.now + cardLife)
+            card.onChange()
         }
-        continuation.resume(returning: allow ? .some(actionID) : nil)
         return true
     }
 
-    /// Refuses every approval a task waits on: its turn stopped, or it went away.
+    /// Refuses every approval a task waits on, and takes away the cards no call waits on any more: its turn stopped,
+    /// or it went away.
     func refuseApprovals(in taskID: UUID) {
-        for approval in approvals(for: taskID) { answer(approval.id, allow: false) }
+        for approval in approvals(for: taskID) {
+            if approvalWaiters[approval.id] != nil { answer(approval.id, allow: false) } else { withdraw(approval.id) }
+        }
+        leftAnswers = leftAnswers.filter { $0.value.taskID != taskID }
+    }
+
+    /// The caller's turn ended: the cards it left up and the answers they got meanwhile go, since no call of that turn
+    /// comes again to take them.
+    func withdrawLeftApprovals(of callerID: UUID) {
+        for (id, card) in cards where card.callerID == callerID && approvalWaiters[id] == nil { withdraw(id) }
+        leftAnswers = leftAnswers.filter { $0.value.callerID != callerID }
+    }
+
+    /// The caller ended (a subagent finished): every card its calls put up goes, and a call still waiting on one is
+    /// answered no.
+    func refuseApprovals(of callerID: UUID) {
+        for (id, card) in cards where card.callerID == callerID {
+            if approvalWaiters[id] != nil { answer(id, allow: false) } else { withdraw(id) }
+        }
+        leftAnswers = leftAnswers.filter { $0.value.callerID != callerID }
+    }
+
+    /// How long a card stays up for the person: `SessionToolPolicy.approvalTimeout`; tests shorten it.
+    @ObservationIgnored var cardLife: Duration = SessionToolPolicy.approvalTimeout
+
+    private enum CardEnd {
+        case answered(String??)
+        /// The call that waited on it could wait no longer; it stays up.
+        case left
+        /// Its own time ended and it went.
+        case expired
+    }
+
+    private struct Card {
+        let key: String
+        let taskID: UUID
+        let callerID: UUID?
+        let expires: ContinuousClock.Instant
+        let onChange: @MainActor () -> Void
+        let life: Task<Void, Never>
+    }
+
+    /// Each card that is up, by its approval's ID.
+    @ObservationIgnored private var cards: [String: Card] = [:]
+    /// The cards no call waits on any more, by `cardKey`.
+    @ObservationIgnored private var leftCards: [String: String] = [:]
+    /// The answers such cards got, by `cardKey`, kept for the same call made again until `until`.
+    @ObservationIgnored private var leftAnswers: [String: (answer: String??, taskID: UUID, callerID: UUID?,
+                                                           until: ContinuousClock.Instant)] = [:]
+
+    private static func cardKey(_ request: PermissionRequest, taskID: UUID, callerID: UUID?) -> String {
+        [taskID.uuidString, callerID?.uuidString ?? "", request.title, request.detail ?? "", request.command ?? "",
+         request.actions.map(\.id).joined(separator: ",")].joined(separator: "\u{1}")
+    }
+
+    private static func answer(_ answer: String??, to request: PermissionRequest) -> CardAnswer {
+        guard let answer else { return .declined }
+        let allows = request.actions.filter { $0.decision == .allow }
+        if let answer, allows.contains(where: { $0.id == answer }) { return .allowed(answer) }
+        return .allowed(PermissionActionPreference.preferred(from: allows, decision: .allow)?.id ?? "")
+    }
+
+    /// Takes the card down: off its task's list and out of the cards no call waits on.
+    private func takeCard(_ id: String) -> Card? {
+        guard let card = cards.removeValue(forKey: id) else { return nil }
+        card.life.cancel()
+        if leftCards[card.key] == id { leftCards[card.key] = nil }
+        let kept = (approvals[card.taskID] ?? []).filter { $0.id != id }
+        approvals[card.taskID] = kept.isEmpty ? nil : kept
+        return card
+    }
+
+    /// The call waiting on the card could wait no longer: the card stays up for the same call made again.
+    private func leave(_ id: String) {
+        guard let card = cards[id], let waiter = approvalWaiters.removeValue(forKey: id) else { return }
+        // The same card another call left before this one goes: the same call made again finds this one.
+        if let earlier = leftCards[card.key], earlier != id { withdraw(earlier) }
+        leftCards[card.key] = id
+        waiter.resume(returning: .left)
+    }
+
+    /// The card's own time ended.
+    private func expire(_ id: String) {
+        guard let card = takeCard(id) else { return }
+        if let waiter = approvalWaiters.removeValue(forKey: id) {
+            waiter.resume(returning: .expired)
+        } else {
+            card.onChange()
+        }
+    }
+
+    /// The call waiting on the card was cancelled: the card goes, and the call is answered no.
+    private func cancelWaiter(_ id: String) {
+        guard let waiter = approvalWaiters.removeValue(forKey: id) else { return }
+        _ = takeCard(id)
+        waiter.resume(returning: .answered(nil))
+    }
+
+    /// Takes down a card no call waits on.
+    private func withdraw(_ id: String) {
+        guard approvalWaiters[id] == nil, let card = takeCard(id) else { return }
+        card.onChange()
     }
 
     // MARK: Subagents

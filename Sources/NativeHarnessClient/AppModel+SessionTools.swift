@@ -27,7 +27,7 @@ struct SessionToolCaller: Equatable {
     let permission: TaskPermissionLevel
     /// When the call must have answered, below the caller harness's own limit on one MCP call
     /// (`SessionToolPolicy.waitCeiling`): every wait in the call, the person's approval included,
-    /// shares it.
+    /// shares it, and a call a script makes shares the script's (`ApprovalWait.callStarted`).
     let deadline: ContinuousClock.Instant
     /// The call came from inside `run_yardlet_script`, which the caller's harness never showed the person.
     var throughWrapper = false
@@ -101,14 +101,14 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
                 roots: [session.workspaceURL] + session.additionalRootURLs,
                 projectID: project(for: session)?.id, title: session.title,
                 agentDepth: 0, permission: sessionToolPermission(of: session),
-                deadline: .now + sessionToolWaitCeiling(for: session.harness))
+                deadline: (ApprovalWait.callStarted ?? .now) + sessionToolWaitCeiling(for: session.harness))
         }
         if let run = sessionTools.run(id), let host = store.sessions.first(where: { $0.id == run.hostTaskID }) {
             return SessionToolCaller(
                 id: id, hostTaskID: host.id, harness: run.harness, workspaceURL: run.workspaceURL,
                 roots: [run.workspaceURL], projectID: project(for: host)?.id, title: host.title,
                 agentDepth: run.depth, permission: run.permission,
-                deadline: .now + sessionToolWaitCeiling(for: run.harness))
+                deadline: (ApprovalWait.callStarted ?? .now) + sessionToolWaitCeiling(for: run.harness))
         }
         return nil
     }
@@ -1695,19 +1695,26 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
     /// 2026-10-22: a child session inherits them unless the call says otherwise). A chosen model drops the
     /// caller's effort, which that model may not take. Another harness starts on its own defaults.
     /// What a read-only caller starts reads only, also where the caller is a read-only subagent of a
-    /// task that may do more.
+    /// task that may do more. A subagent passes on its own options, never its host task's
+    /// (`sessionToolCallerOptions`).
     func sessionToolInheritedOptions(harness: HarnessKind, caller: SessionToolCaller,
                                      chosen: [String: String]) -> [String: String] {
-        guard let host = store.sessions.first(where: { $0.id == caller.hostTaskID }) else { return chosen }
+        guard let own = sessionToolCallerOptions(caller) else { return chosen }
         let readOnly = caller.permission == .readOnly ? Self.permissionOptions(for: harness, level: .readOnly) : [:]
         // Another harness reads none of the caller's options, but runs as freely as the caller does,
         // in its own words: a Codex task with full access starts a Claude child that does not ask.
         guard harness == caller.harness else {
-            return Self.permissionOptions(for: harness, level: sessionToolPermission(of: host))
+            return Self.permissionOptions(for: harness, level: caller.permission)
                 .merging(readOnly) { _, new in new }.merging(chosen) { _, new in new }
         }
-        return Self.inheritedOptions(host.providerOptions.merging(readOnly) { _, new in new },
-                                     harness: harness, chosen: chosen)
+        return Self.inheritedOptions(own.merging(readOnly) { _, new in new }, harness: harness, chosen: chosen)
+    }
+
+    /// The options the caller itself runs with: its task's, or a subagent's own (`AgentRun.options`), which may
+    /// be narrower than its host task's. Nil for a caller Yardlet no longer has.
+    func sessionToolCallerOptions(_ caller: SessionToolCaller) -> [String: String]? {
+        if let run = sessionTools.run(caller.id) { return run.options }
+        return store.sessions.first(where: { $0.id == caller.id })?.providerOptions
     }
 
     /// A harness's own option for a permission level: what runs without asking (Claude Code's
@@ -2018,14 +2025,21 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
                                      harnessAsksBeforeDirectCalls: claudeAsksBeforeDirectCalls(caller))
     }
 
-    /// Whether the caller is a Claude Code task in Default or Accept edits, whose CLI asks the person before each
-    /// call of a Yardlet tool it was not told to allow; Plan reads without asking, Auto leaves it to a classifier,
-    /// Don't ask refuses without a card, and a subagent's harness is not the task's.
+    /// Whether the caller is a Claude Code task or subagent in Default or Accept edits, whose CLI asks the person before
+    /// each call of a Yardlet tool it was not told to allow (a subagent's card waits in its task's conversation); Plan
+    /// reads without asking, Auto leaves it to a classifier, and Don't ask refuses without a card.
     func claudeAsksBeforeDirectCalls(_ caller: SessionToolCaller) -> Bool {
-        guard caller.id == caller.hostTaskID, caller.harness == .claudeCode, caller.permission == .standard,
-              let host = store.sessions.first(where: { $0.id == caller.hostTaskID }),
-              host.providerOptions[ClaudeLaunchOption.permissionMode] != "dontAsk" else { return false }
-        return Self.unaskedPermissionMode(of: host) == nil
+        guard caller.harness == .claudeCode, caller.permission == .standard else { return false }
+        let options: [String: String]
+        if caller.id == caller.hostTaskID, let host = store.sessions.first(where: { $0.id == caller.id }) {
+            options = host.providerOptions
+        } else if let run = sessionTools.run(caller.id) {
+            options = run.options
+        } else {
+            return false
+        }
+        let mode = options[ClaudeLaunchOption.permissionMode]
+        return mode != "dontAsk" && mode != "auto" && !ClaudePermissionMode.isElevated(mode)
     }
 
     func askPerson(title: String, detail: String, callerID: UUID) async -> Bool {
@@ -2039,10 +2053,13 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
         let request = PermissionRequest(
             id: SessionToolApproval.idPrefix + UUID().uuidString.lowercased(), title: title, detail: detail,
             command: nil, actions: actions)
-        return await sessionTools.choose(request, in: host,
-                                         timeout: min(SessionToolPolicy.approvalTimeout, caller.remaining)) { [weak self] in
+        return await sessionTools.choose(request, in: host, callerID: caller.id, timeout: caller.remaining) { [weak self] in
             self?.sessionToolApprovalsChanged(in: host)
         }
+    }
+
+    func callDeadline(callerID: UUID) -> ContinuousClock.Instant? {
+        sessionToolCaller(callerID)?.deadline
     }
 
     /// Whether a process of the caller's task, or of the task a subagent runs for, listens on the port. A server the
@@ -2073,8 +2090,7 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
         let request = PermissionRequest(
             id: SessionToolApproval.idPrefix + UUID().uuidString.lowercased(), title: title, detail: detail,
             command: nil)
-        return await sessionTools.ask(request, in: host,
-                                      timeout: min(SessionToolPolicy.approvalTimeout, caller.remaining)) { [weak self] in
+        return await sessionTools.ask(request, in: host, callerID: caller.id, timeout: caller.remaining) { [weak self] in
             self?.sessionToolApprovalsChanged(in: host)
         }
     }

@@ -4,8 +4,8 @@ import YardletAgentTools
 // `run_agent` (docs/AGENT_BROWSER_TOOLS.md, "Session tools"): a prompt run as a subagent on a harness, inside the calling
 // turn, as Claude Code's Agent tool or Codex's `spawn_agent` runs one on its own harness. Yardlet
 // starts one harness session headless through the same adapters its tasks use — the account
-// automatic assignment picks or the call names, its default permission mode or read only when the caller is read only (never
-// more than the caller), the caller's folder, the Yardlet MCP server so it can nest once more —
+// automatic assignment picks or the call names, the permission the call chose or the caller's own (never more than
+// the caller's), the caller's folder, the Yardlet MCP server so it can nest once more —
 // sends the prompt, and answers the call with its final answer. It has no sidebar row. Its
 // requests wait in the calling task's conversation; its conversation is kept with that task, and
 // the harness keeps none of its own where it has a way not to (`HarnessHistoryFreeSessionConfiguring`).
@@ -38,18 +38,20 @@ extension AppModel {
         case let .success(value): options = sessionToolInheritedOptions(harness: harness, caller: caller, chosen: value)
         case let .failure(error): return error.result("Not started")
         }
-        var chosenLevel: TaskPermissionLevel?
         if let mode = arguments["permissionMode"]?.stringValue?.trimmingCharacters(in: .whitespaces) {
             switch sessionToolPermission(mode, harness: harness, caller: caller, subject: "the subagent",
                                          personChooses: "New Task") {
-            case let .success(permission):
-                options = Self.options(options, withPermission: permission, harness: harness)
-                chosenLevel = TaskPermissionLevel.level(harness: harness, options: options)
+            case let .success(permission): options = Self.options(options, withPermission: permission, harness: harness)
             case let .failure(error): return error.result("Not started")
             }
         }
-        let permission: TaskPermissionLevel = caller.permission == .readOnly || chosenLevel == .readOnly
-            ? .readOnly : .standard
+        // Its level is the one its harness runs at, chosen or inherited, and never freer than the caller's: an
+        // inherited Bypass under a subagent that asks drops to the harness's default.
+        let inherited = TaskPermissionLevel.level(harness: harness, options: options)
+        let permission = min(inherited, caller.permission)
+        if permission < inherited, permission != .readOnly {
+            options = Self.options(options, withPermission: nil, harness: harness)
+        }
         if permission == .readOnly {
             guard let readOnly = Self.readOnlyOptions(for: harness) else {
                 return .error("Not started: this task is read only, and Yardlet cannot run "
@@ -81,6 +83,7 @@ extension AppModel {
                            model: model?.isEmpty == false ? model : nil, prompt: prompt, workspaceURL: folder,
                            depth: caller.agentDepth + 1, permission: permission)
         run.accountStart = account
+        run.options = options
         let background = Self.bool(arguments["background"]) == true
         // Only a task can receive a message; a subagent that runs one waits for it or asks wait_tasks.
         run.notifiesCaller = caller.id == caller.hostTaskID && Self.bool(arguments["notify"]) != false
@@ -462,6 +465,7 @@ extension AppModel {
     func finishAgentRun(_ run: AgentRun, state: AgentRun.State) {
         guard !run.state.isFinished else { return }
         sessionTools.dequeue(run.id)
+        sessionTools.refuseApprovals(of: run.id)
         let started = run.state != .queued
         run.state = state
         // One that said nothing to the person (Codex working notes alone, or the quit or a plan limit cut

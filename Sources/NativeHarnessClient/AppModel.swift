@@ -7098,8 +7098,10 @@ final class AppModel {
             readByParent: marksUnread && status == .completed && turnEndReachedParent(id),
             updatesRecency: !isIdleCompaction && (cause != .providerStatus || status != .ready || endsTurn)
         )
-        // What the turn's last call sent its parent belonged to the turn that ended.
+        // What the turn's last call sent its parent belonged to the turn that ended, and so did the cards its calls left
+        // up for the same call made again.
         sessionTools.reportedToParent.remove(id)
+        sessionTools.withdrawLeftApprovals(of: id)
         if endsTurn {
             coordinationLog.record(.init(event: "turn-ended", task: id.uuidString,
                                          harness: store.sessions.first { $0.id == id }?.harness.rawValue,

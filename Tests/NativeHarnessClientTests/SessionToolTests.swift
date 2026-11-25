@@ -609,12 +609,17 @@ final class SessionToolTests: XCTestCase {
                                    ["task_id": fixture.neighbor.id.uuidString, "message": "Hi"], from: fixture.caller)
         XCTAssertTrue(neighbour.text.hasPrefix("Delivered"), neighbour.text)
 
-        // With no answer, the card goes when the call's time is up.
+        // With no answer when the call's time is up, the call learns that nobody answered, and the card stays up for the
+        // same call made again (`AgentToolBroker.unanswered`).
         model.sessionTools.waitCeilingOverride = .milliseconds(300)
-        let unanswered = await call(model, "send_message_to_task",
-                                    ["task_id": fixture.other.id.uuidString, "message": "Ping"], from: fixture.caller)
+        let record = ApprovalWait.Record()
+        let unanswered = await ApprovalWait.$record.withValue(record) {
+            await call(model, "send_message_to_task", ["task_id": fixture.other.id.uuidString, "message": "Ping"],
+                       from: fixture.caller)
+        }
         XCTAssertTrue(unanswered.isError)
-        XCTAssertTrue(model.approvalsAreEmpty(in: fixture.caller.id))
+        XCTAssertNotNil(record.unanswered?.cardStays)
+        XCTAssertFalse(model.approvalsAreEmpty(in: fixture.caller.id))
         await model.shutdown()
     }
 
@@ -1635,6 +1640,31 @@ final class SessionToolTests: XCTestCase {
         started = try await child("Auto replies", ["harness": "antigravity-cli", "permissionMode": "auto"],
                                   from: fixture.caller.id)
         XCTAssertEqual(started.providerOptions[AntigravityPermissionMode.optionID], AntigravityPermissionMode.auto)
+
+        // A subagent's level is the one its harness runs at, inherited or chosen and never freer than its caller's: one
+        // that runs without asking gets no card of Yardlet's, and one whose CLI asks gets none on top of the CLI's.
+        func agent(_ prompt: String, _ arguments: [String: Any] = [:], from callerID: UUID) async throws -> AgentRun {
+            let started = await call(model, "run_agent", arguments.merging(
+                ["harness": "claude-code", "prompt": prompt, "background": true]) { new, _ in new }, callerID: callerID)
+            XCTAssertFalse(started.isError, started.text)
+            return try XCTUnwrap(model.sessionTools.runs(hostedBy: fixture.caller.id).first { $0.prompt == prompt })
+        }
+        let free = try await agent("Free agent", from: fixture.caller.id)
+        XCTAssertEqual(free.permission, .elevated)
+        XCTAssertEqual(model.agentToolPolicy(callerID: free.id)?.asksPerson, false)
+        let askingAgent = try await agent("Asking agent", ["permissionMode": "default"], from: fixture.caller.id)
+        XCTAssertEqual(askingAgent.permission, .standard)
+        XCTAssertEqual(model.agentToolPolicy(callerID: askingAgent.id)?.harnessAsksBeforeDirectCalls, true)
+        let nested = try await agent("Nested agent", from: askingAgent.id)
+        XCTAssertEqual(nested.permission, .standard)
+        XCTAssertEqual(nested.options[ClaudeLaunchOption.permissionMode], ClaudePermissionMode.manual,
+                       "The task's Bypass does not pass its asking caller, whose own mode it takes")
+        // What a subagent starts inherits the subagent's own options, never its host task's, and may not be freer.
+        let childOfAgent = try await child("Fix the parser", [:], from: askingAgent.id)
+        XCTAssertEqual(childOfAgent.providerOptions[ClaudeLaunchOption.permissionMode], ClaudePermissionMode.manual)
+        let freerChild = await call(model, "create_task", ["prompt": "Edit the parser", "permissionMode": "acceptEdits"],
+                                    callerID: askingAgent.id)
+        XCTAssertTrue(freerChild.isError && freerChild.text.contains("do more without asking"), freerChild.text)
 
         // A task that asks may not start one that does not, and each harness takes only its own values.
         let asking = fixture.sibling.id

@@ -88,9 +88,12 @@ enum CodeModeRunner {
 
     typealias ToolDispatcher = @Sendable (_ tool: String, _ arguments: ToolJSON) async -> AgentToolResult
 
+    /// Runs `code` for up to `timeoutSeconds`, not counting the time a call it makes waits for the person on a card
+    /// (`ApprovalWait.whilePersonReads`), and never past `latestEnd`, when the harness's call must have answered.
     static func run(
         code: String,
         timeoutSeconds: Double?,
+        latestEnd: ContinuousClock.Instant? = nil,
         dispatch: @escaping ToolDispatcher
     ) async -> AgentToolResult {
         let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -104,7 +107,7 @@ enum CodeModeRunner {
         let timeout = min(max(timeoutSeconds ?? defaultTimeoutSeconds, 1), maxTimeoutSeconds)
 
 #if canImport(JavaScriptCore)
-        return await runInJavaScriptCore(code: trimmed, timeoutSeconds: timeout, dispatch: dispatch)
+        return await runInJavaScriptCore(code: trimmed, timeoutSeconds: timeout, latestEnd: latestEnd, dispatch: dispatch)
 #else
         return .failure("MCP Code Mode is not available on this platform.", .unreachable, retry: .no)
 #endif
@@ -126,7 +129,7 @@ enum CodeModeRunner {
     }
 
 #if canImport(JavaScriptCore)
-    private final class ExecutionState: @unchecked Sendable {
+    private final class ExecutionState: PersonWaitClock, @unchecked Sendable {
         let lock = NSLock()
         var toolCalls = 0
         var logs: [String] = []
@@ -135,10 +138,45 @@ enum CodeModeRunner {
         var cancelled = false
         var activeCallTask: Task<Void, Never>?
         var activeCallSemaphore: DispatchSemaphore?
-        let deadline: Date
+        /// The script's own end, moved later by each wait for the person. On the monotonic clock, which a change of the
+        /// Mac's time does not move.
+        private var deadline: ContinuousClock.Instant
+        private let latestEnd: ContinuousClock.Instant?
+        private var personWaits = 0
+        private var personWaitStarted: ContinuousClock.Instant?
 
-        init(timeoutSeconds: Double) {
-            self.deadline = Date().addingTimeInterval(timeoutSeconds)
+        init(timeoutSeconds: Double, latestEnd: ContinuousClock.Instant?) {
+            self.deadline = .now + .seconds(timeoutSeconds)
+            self.latestEnd = latestEnd
+        }
+
+        func personWaitBegan() {
+            lock.withLock {
+                if personWaits == 0 { personWaitStarted = .now }
+                personWaits += 1
+            }
+        }
+
+        func personWaitEnded() {
+            lock.withLock {
+                personWaits -= 1
+                guard personWaits == 0, let started = personWaitStarted else { return }
+                deadline += started.duration(to: .now)
+                personWaitStarted = nil
+            }
+        }
+
+        /// Seconds until the script ends unless it finishes first: its own end, which does not come while a card waits
+        /// for the person, and the harness's call's end in any case; at most a day. Read under `lock`.
+        var secondsLeft: Double {
+            let now = ContinuousClock.now
+            let own = personWaits > 0 ? nil : deadline
+            let end = [own, latestEnd].compactMap { $0 }.min()
+            return end.map { Self.seconds(now.duration(to: $0)) }.map { min($0, 86_400) } ?? 86_400
+        }
+
+        private static func seconds(_ duration: Duration) -> Double {
+            Double(duration.components.seconds) + Double(duration.components.attoseconds) * 1e-18
         }
 
         func appendLog(_ line: String) {
@@ -216,9 +254,10 @@ enum CodeModeRunner {
     private static func runInJavaScriptCore(
         code: String,
         timeoutSeconds: Double,
+        latestEnd: ContinuousClock.Instant?,
         dispatch: @escaping ToolDispatcher
     ) async -> AgentToolResult {
-        let state = ExecutionState(timeoutSeconds: timeoutSeconds)
+        let state = ExecutionState(timeoutSeconds: timeoutSeconds, latestEnd: latestEnd)
 
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
@@ -231,8 +270,14 @@ enum CodeModeRunner {
                 }
 
                 let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .userInitiated))
-                timer.schedule(deadline: .now() + timeoutSeconds + 0.25)
-                timer.setEventHandler {
+                timer.schedule(deadline: .now() + max(0, state.lock.withLock { state.secondsLeft }) + 0.25)
+                timer.setEventHandler { [weak timer] in
+                    // A card the script's call waits on moved its end: look again later.
+                    let left = state.lock.withLock { state.secondsLeft }
+                    if left > 0 {
+                        timer?.schedule(deadline: .now() + min(left, 1) + 0.25)
+                        return
+                    }
                     state.cancelInFlightCall(asTimeout: true)
                     gate.finish(with: state.timeoutFailure(timeoutSeconds: timeoutSeconds))
                 }
@@ -283,7 +328,7 @@ enum CodeModeRunner {
             let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
 
             state.lock.lock()
-            let alreadyTimedOut = state.timedOut || Date() >= state.deadline
+            let alreadyTimedOut = state.timedOut || state.secondsLeft <= 0
             let alreadyCancelled = state.cancelled
             if alreadyTimedOut { state.timedOut = true }
             state.lock.unlock()
@@ -320,8 +365,7 @@ enum CodeModeRunner {
             state.toolCalls += 1
             state.lock.unlock()
 
-            let remaining = state.deadline.timeIntervalSinceNow
-            guard remaining > 0 else {
+            guard state.lock.withLock({ state.secondsLeft }) > 0 else {
                 state.lock.lock()
                 state.timedOut = true
                 state.lock.unlock()
@@ -334,7 +378,8 @@ enum CodeModeRunner {
             let callBox = CallBox()
             let callSemaphore = DispatchSemaphore(value: 0)
             let callTask = Task.detached(priority: .userInitiated) {
-                callBox.value = await dispatch(name, parsedArgs)
+                // A card the call waits on stops the script's clock (`ApprovalWait.whilePersonReads`).
+                callBox.value = await ApprovalWait.$clock.withValue(state) { await dispatch(name, parsedArgs) }
                 callSemaphore.signal()
             }
 
@@ -349,7 +394,16 @@ enum CodeModeRunner {
                 return encodeEnvelope(["error": "Script was cancelled."])
             }
 
-            let waitResult = callSemaphore.wait(timeout: .now() + remaining)
+            // Waits until the call answers or the script's end, which a card the call waits on moves.
+            var waitResult = DispatchTimeoutResult.timedOut
+            while true {
+                let left = state.lock.withLock { state.secondsLeft }
+                guard left > 0 else { break }
+                if callSemaphore.wait(timeout: .now() + min(left, 1)) == .success {
+                    waitResult = .success
+                    break
+                }
+            }
 
             state.lock.lock()
             state.activeCallTask = nil
