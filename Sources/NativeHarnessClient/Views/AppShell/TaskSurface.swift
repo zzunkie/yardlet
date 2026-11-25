@@ -13,6 +13,8 @@ struct TaskDetail: View {
     @Environment(\.simulatorPanel) private var simulatorPanel
     /// Settings › General › Simulator: off, the panel offers no Simulator tab and closes the one it has.
     @AppStorage(SimulatorPreference.key) private var simulatorSwitch = true
+    /// Settings › General › "Steer Antigravity turns": the composer offers Steer on an Antigravity task while it is on.
+    @AppStorage(AntigravityLiveSteer.preferenceKey) private var antigravitySteerSwitch = false
     /// The header the task's area draws (the title bar, or a split pane's header), which the raised rail
     /// leaves uncovered.
     @Environment(\.taskAreaHeader) private var areaHeader
@@ -351,7 +353,9 @@ struct TaskDetail: View {
                         || session.status == .waitingForApproval,
                     canSteer: presentationPolicy.showsCodexComposerControls
                         ? readCodexState()?.activeTurnID != nil
-                        : session.harness == .claudeCode && isProviderAttached,
+                        : (session.harness == .claudeCode || session.harness == .antigravityCLI && antigravitySteers)
+                            && isProviderAttached,
+                    antigravitySteers: antigravitySteers,
                     prefilledDraft: editingDraft,
                     prefilledDraftID: editingDraftID,
                     // The composer shows the queue where its harness has one.
@@ -453,6 +457,9 @@ struct TaskDetail: View {
             && !railServices.preferences.preferences.isHidden(card)
     }
 
+    /// "Steer Antigravity turns" on a copy that offers it.
+    private var antigravitySteers: Bool { antigravitySteerSwitch && AntigravityLiveSteer.isSupported }
+
     /// The composer's options for this task, read the same way the composer reads them, for the
     /// rail's Settings, Context and Connectors cards.
     private func railOptions(_ transcript: TranscriptTurns, codexTaskState: CodexTaskState?) -> ComposerSessionOptions {
@@ -460,7 +467,7 @@ struct TaskDetail: View {
             harness: session.harness, session: session, codexCapabilities: codexCapabilities,
             providerCapabilities: providerCapabilities, providerUsage: providerUsage,
             codexTokenUsage: shownCodexTokenUsage(in: codexTaskState),
-            entries: transcript.railEntries, isAttached: isProviderAttached)
+            entries: transcript.railEntries, isAttached: isProviderAttached, antigravitySteers: antigravitySteers)
     }
 
     /// The rail, which reads the transcript in a view of its own (`TaskTranscriptView`).

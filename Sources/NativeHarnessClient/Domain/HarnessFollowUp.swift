@@ -17,6 +17,9 @@ struct HarnessFollowUpDelivery: Codable, Equatable, Sendable {
         case read
         /// The provider let it go without reading it: its session ended or it refused it.
         case dropped
+        /// The provider gave it back unread because its turn ended first (Antigravity's live steer).
+        /// Yardlet holds it again, and it starts the next turn.
+        case returned
     }
 
     let messageID: String
@@ -37,6 +40,10 @@ enum HarnessFollowUpSendNow: String, Codable, Equatable, Sendable {
     /// The provider held no such message: it had already taken it into a turn.
     case nothingWaiting = "nothing_waiting"
 }
+
+/// The provider cannot take a message into its running turn now (Antigravity's live steer outside a
+/// streamed prompt, or a message with images): Yardlet keeps it for the turn's end instead of failing it.
+struct HarnessFollowUpNotNow: Error {}
 
 /// A provider that queues user messages sent while its turn runs and can withdraw one it has not
 /// read yet (Claude Code's `uuid`/`priority` user messages and `cancel_async_message`).

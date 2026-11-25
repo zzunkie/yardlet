@@ -3398,7 +3398,7 @@ final class SessionToolTests: XCTestCase {
         let unasked = try await listedSettings(bypass.model, from: bypass.caller)
         XCTAssertEqual(unasked.first { $0.id == "mailbox" }?.asksThePerson, false)
         XCTAssertEqual(unasked.filter(\.asksThePerson).map(\.id),
-                       ["simulator", "agent_code_mode", "keep_screen_unlocked", "share_terminal", "agent_browser_tools",
+                       ["simulator", "antigravity_live_steer", "agent_code_mode", "keep_screen_unlocked", "share_terminal", "agent_browser_tools",
                         "keep_cookies", "page_suggestions"])
         await fixture.model.shutdown()
         await bypass.model.shutdown()

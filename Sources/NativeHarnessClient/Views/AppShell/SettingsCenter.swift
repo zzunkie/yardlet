@@ -750,7 +750,7 @@ struct SettingsCenterView: View {
                 onSelectRemote: { requestRemoteSettingChange(setting, to: $0) }
             )
         } else {
-            SettingsPreferenceRow(setting: setting, hint: hint)
+            SettingsPreferenceRow(setting: setting, hint: hint, context: settingsContext)
         }
     }
 
@@ -1426,6 +1426,8 @@ private struct SettingsPreferenceRow: View {
     let hint: String?
     var remoteValue: String? = nil
     var onSelectRemote: ((String) -> Void)? = nil
+    /// What a switch the app keeps reads and changes its value through.
+    var context = YardletSettingsContext()
 
     var body: some View {
         SettingsRow(setting: setting) {
@@ -1437,7 +1439,9 @@ private struct SettingsPreferenceRow: View {
         if let remoteValue, let onSelectRemote {
             let label = setting.controlLabel ?? setting.title
             switch setting.storage {
-            case .flag:
+            case .app where !setting.isSwitch:
+                EmptyView()
+            case .flag, .app:
                 Toggle(label, isOn: Binding(
                     get: { remoteValue == YardletSetting.on },
                     set: { onSelectRemote($0 ? YardletSetting.on : YardletSetting.off) }
@@ -1458,8 +1462,6 @@ private struct SettingsPreferenceRow: View {
                 .settingsChoiceStyle(count: setting.choices.count)
                 .fixedSize()
                 .controlSize(.small)
-            case .app:
-                EmptyView()
             }
         } else {
             switch setting.storage {
@@ -1468,9 +1470,46 @@ private struct SettingsPreferenceRow: View {
             case let .choice(key, defaultValue):
                 PreferenceSegments(setting.controlLabel ?? setting.title, key: key, defaultValue: defaultValue,
                                    choices: setting.choices)
+            case .app where setting.isSwitch:
+                AppSettingSwitch(setting: setting, context: context)
             case .app:
                 EmptyView()
             }
+        }
+    }
+}
+
+/// A switch kept by the app rather than in Yardlet's defaults alone, changed through the setting's own call (the
+/// one the agent's settings tool makes). A change it could not make leaves the switch as it was, with the reason.
+private struct AppSettingSwitch: View {
+    let setting: YardletSetting
+    let context: YardletSettingsContext
+    @State private var isOn: Bool
+    @State private var failure: String?
+
+    init(setting: YardletSetting, context: YardletSettingsContext) {
+        self.setting = setting
+        self.context = context
+        _isOn = State(initialValue: setting.value(in: context) == YardletSetting.on)
+    }
+
+    var body: some View {
+        Toggle(setting.controlLabel ?? setting.title, isOn: Binding(get: { isOn }, set: { change($0) }))
+            .labelsHidden()
+            .toggleStyle(.paritySwitch)
+            .controlSize(.small)
+            .help(failure ?? "")
+            // Changed elsewhere: the agent's settings tool, or another device's Settings.
+            .onReceive(NotificationCenter.default.publisher(for: AntigravityLiveSteer.didChangeNotification)) { _ in
+                isOn = setting.value(in: context) == YardletSetting.on
+            }
+    }
+
+    private func change(_ on: Bool) {
+        Task { @MainActor in
+            let failure = await setting.set(on ? YardletSetting.on : YardletSetting.off, in: context)
+            self.failure = failure
+            if failure == nil { isOn = on }
         }
     }
 }

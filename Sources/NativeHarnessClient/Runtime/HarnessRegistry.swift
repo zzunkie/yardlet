@@ -242,7 +242,8 @@ actor HarnessRegistry {
                 launchArguments: ACPLaunchConfiguration.arguments(for: harness, connection: connection),
                 launchEnvironmentOverrides: connection?.environment,
                 schemaCopies: harness == .antigravityCLI ? antigravitySchemaCopies?.counting(executableURL) : nil,
-                conversationStore: harness == .antigravityCLI ? .live : nil)
+                conversationStore: harness == .antigravityCLI ? .live : nil,
+                liveSteer: harness == .antigravityCLI ? .live : nil)
             switch routingPolicy.route(for: harness) {
             case .legacy:
                 return legacy

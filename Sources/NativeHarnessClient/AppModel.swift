@@ -1682,7 +1682,11 @@ final class AppModel {
     /// message starts the next turn as soon as the cancelled turn finishes.
     private func sendFollowUpNow(_ itemID: UUID, into target: FollowUpTarget, in session: SessionRecord) async {
         guard let item = followUps.item(itemID, in: session.id) else { return }
-        if !target.delivery.policy.steers {
+        if target.delivery.policy.stopsTurnToSendNow {
+            // What the hook still holds comes back first, this message and any other, so the turn being
+            // stopped does not read one of them at a last model call and the next turn read it again.
+            await withdrawSentFollowUps(in: session)
+            guard followUps.item(itemID, in: session.id)?.state != .sent else { return }
             await stopAndSendAfterTurn(itemID, in: session, policy: target.delivery.policy)
             return
         }
@@ -1879,6 +1883,8 @@ final class AppModel {
         in sessionID: UUID
     ) async {
         let holds = target.delivery.policy.holdsSentMessages
+        // Where it waited, for a message that ends up waiting again.
+        let place = followUps.queue(for: sessionID).firstIndex { $0.id == itemID }
         if holds {
             // Every write takes a new ID: the CLI drops a second message with an ID it has seen.
             followUps.markSent(itemID, messageID: UUID().uuidString.lowercased(), first: priority == .now, in: sessionID)
@@ -1888,6 +1894,10 @@ final class AppModel {
             try await target.delivery.steer(item, into: target.turn, priority: priority)
             guard !holds, store.sessions.contains(where: { $0.id == sessionID }) else { return }
             followUps.remove(itemID, from: sessionID)
+        } catch is HarnessFollowUpNotNow {
+            // It waits in Yardlet for the turn's end, as a queued message does.
+            guard store.sessions.contains(where: { $0.id == sessionID }) else { return }
+            followUps.hold(itemID, in: sessionID, at: place)
         } catch {
             guard store.sessions.contains(where: { $0.id == sessionID }) else { return }
             markFollowUpFailed(itemID, message: error.localizedDescription, in: sessionID)
@@ -2060,6 +2070,10 @@ final class AppModel {
             }
         case .dropped:
             markFollowUpFailed(item.id, message: policy.droppedMessage, in: sessionID)
+        case .returned:
+            // The turn ended before reading it: once it has, the message starts the next turn, ahead of
+            // the rest (the turn's end drains the queue).
+            followUps.holdAgain(item.id, in: sessionID)
         }
     }
 
