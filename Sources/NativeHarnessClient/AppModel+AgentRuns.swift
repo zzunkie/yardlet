@@ -129,7 +129,15 @@ extension AppModel {
         while !run.state.isFinished, caller.remaining > .zero, !Task.isCancelled {
             try? await Task.sleep(for: .milliseconds(250))
         }
-        return Self.agentRunResultText(run)
+        return Self.agentRunResultText(run, approvalIn: agentRunApprovalPlace(run))
+    }
+
+    /// Where the person answers what a subagent waits for: the task whose conversation shows its requests,
+    /// as a link (`SessionToolText.link`). Nil while it waits for nothing.
+    func agentRunApprovalPlace(_ run: AgentRun) -> String? {
+        guard run.state == .waitingForApproval else { return nil }
+        let title = store.sessions.first { $0.id == run.hostTaskID }?.title ?? ""
+        return SessionToolText.link(title: title, taskID: run.hostTaskID)
     }
 
     /// The options that run a harness read only: Claude Code's and Antigravity's Plan; Codex's
@@ -144,8 +152,9 @@ extension AppModel {
         }
     }
 
-    /// What `run_agent` answers: the agent's ID, its state and its final answer.
-    static func agentRunResultText(_ run: AgentRun) -> String {
+    /// What `run_agent` answers: the agent's ID, its state and its final answer, and while it waits for the
+    /// person, where they answer (`approvalIn`, `agentRunApprovalPlace`) and what it asks.
+    static func agentRunResultText(_ run: AgentRun, approvalIn: String? = nil) -> String {
         var text = "\(ConversationAgentRunProjection.agentIDLabel)\(run.id.uuidString)\n"
             + "harness: \(run.harness.rawValue)" + (run.model.map { " · model: \($0)" } ?? "")
             + " · state: \(run.state.word)"
@@ -153,6 +162,10 @@ extension AppModel {
         if let roomElsewhere = run.accountStart?.roomElsewhere { text += "\n" + roomElsewhere }
         if run.state == .queued {
             text += "\nIt is queued and starts when there is room; wait_tasks with this id waits for it."
+        } else if run.state == .waitingForApproval {
+            text += "\nIt waits for the person's approval" + (approvalIn.map { " on a card in \($0)" } ?? "")
+                + " and goes on once they answer; wait_tasks with this id returns its answer."
+            for request in run.pendingRequests { text += "\nIt asks: \(request.title)" }
         } else if !run.state.isFinished {
             text += "\nIt is still running; wait_tasks with this id returns its answer."
         }
@@ -306,7 +319,8 @@ extension AppModel {
             switch status {
             case .running:
                 run.sawWork = true
-                if run.state == .waitingForApproval { run.state = .running }
+                // A request still open keeps it waiting: the harness may go on with another step meanwhile.
+                if run.state == .waitingForApproval, run.pendingRequests.isEmpty { run.state = .running }
             case .waitingForApproval:
                 run.sawWork = true
                 run.state = .waitingForApproval

@@ -368,7 +368,7 @@ final class AgentToolApprovalTests: XCTestCase {
         }
         // A blank page, a file (weighed by folders elsewhere) and the task's own server go unasked, by any loopback name.
         for address in ["about:blank", "file:///tmp/x.html", "http://localhost:3000/", "http://127.0.0.1:3000/a",
-                        "http://[::1]:3000", "https://localhost:3000"] {
+                        "http://[::1]:3000", "https://localhost:3000", "http://0.0.0.0:3000/", "http://[::]:3000"] {
             let allowed = await goes(address)
             XCTAssertTrue(allowed, address)
         }
@@ -468,7 +468,7 @@ final class AgentToolApprovalTests: XCTestCase {
         }
         XCTAssertEqual(BrowserSite("https://docs.stripe.com/a\\b?q=@x#@y")?.text, "https://docs.stripe.com",
                        "Past the host, such characters are the page's")
-        XCTAssertEqual(BrowserSite("http://[::1]:3000/")?.isLoopbackName, true)
+        XCTAssertEqual(BrowserSite("http://[::1]:3000/")?.namesThisMac, true)
     }
 
     func testACardWithSeveralAllowsReportsTheOneChosen() async throws {

@@ -129,7 +129,9 @@ actor ACPAdapter:
         self.schemaCopies = schemaCopies
         self.conversationStore = conversationStore
         self.agentTurnReadInterval = agentTurnReadInterval
-        self.transportFactory = transportFactory ?? { ACPProcessTransport(executableURL: executableURL) }
+        // The tasks' commands run under the agent's process, which Yardlet follows for their servers.
+        self.transportFactory = transportFactory
+            ?? { ACPProcessTransport(executableURL: executableURL, resourceOwner: .agentProcess(kind)) }
     }
 
     /// Antigravity's saved permission mode, before its session starts, so a session in Bypass

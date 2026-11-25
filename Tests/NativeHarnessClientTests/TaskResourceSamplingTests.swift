@@ -325,10 +325,11 @@ final class TaskResourceSamplingTests: XCTestCase {
     // MARK: - Servers
 
     /// A port belongs to the task whose Yardlet-started tree listens on it: not the harness or shell at
-    /// the root, not a process another app runs, and under a shared Codex App Server only through the
-    /// `CODEX_THREAD_ID` the command's process or its nearest ancestor carries. A server its shell left to
-    /// launchd is the task's whose Yardlet Claude conversation or Codex thread its environment names. A
-    /// port the server and its worker share is listed once, for the process nearer the task.
+    /// the root, not a process another app runs, and under a shared Codex App Server or `agy acp` only
+    /// through the `CODEX_THREAD_ID` or `ANTIGRAVITY_CONVERSATION_ID` the command's process or its nearest
+    /// ancestor carries; another ACP agent's commands name no task. A server its shell left to launchd is
+    /// the task's whose Yardlet Claude conversation, Codex thread or Antigravity conversation its environment
+    /// names. A port the server and its worker share is listed once, for the process nearer the task.
     func testAPortBelongsToTheTaskWhoseProcessesListenOnIt() {
         let table = FakeProcessTable()
         let yardletClaude = ["CLAUDE_CODE_ENTRYPOINT": "native-harness-client"]
@@ -354,26 +355,38 @@ final class TaskResourceSamplingTests: XCTestCase {
         table.set(1_002, parent: 1, environment: ["CODEX_THREAD_ID": "thread-c"])
         table.set(1_003, parent: 1_002, ports: [8_080], name: "python3")
         table.set(1_004, parent: 1, ports: [9_999])
-        let taskA = UUID(), taskB = UUID(), taskC = UUID()
+        table.set(1_005, parent: 1, ports: [4_321], environment: ["ANTIGRAVITY_CONVERSATION_ID": "conv-d"])
+        table.set(1_100, parent: 500)                           // agy acp
+        table.set(1_101, parent: 1_100, environment: ["ANTIGRAVITY_CONVERSATION_ID": "Conv-D"])
+        table.set(1_102, parent: 1_101, ports: [3_142], name: "next-server")
+        table.set(1_103, parent: 1_100, ports: [7_100])         // no conversation
+        table.set(1_200, parent: 500)                           // opencode acp
+        table.set(1_201, parent: 1_200, ports: [4_200])
+        let taskA = UUID(), taskB = UUID(), taskC = UUID(), taskD = UUID()
         let server = TaskResourceOwner.codexAppServer(CodexAppServerIdentity(connection: nil, environmentScope: .native))
         var sampler = TaskResourceSampler()
         _ = sampler.sample([
             TaskResourceRoot(owner: .task(taskA), location: .yardlet, processID: 600),
             TaskResourceRoot(owner: .task(taskB), location: .claudeApp, processID: 700),
             TaskResourceRoot(owner: server, location: .yardlet, processID: 800),
-            TaskResourceRoot(owner: .task(taskA), location: .yardlet, processID: 900)
+            TaskResourceRoot(owner: .task(taskA), location: .yardlet, processID: 900),
+            TaskResourceRoot(owner: .agentProcess(.antigravityCLI), location: .yardlet, processID: 1_100),
+            TaskResourceRoot(owner: .agentProcess(.openCode), location: .yardlet, processID: 1_200)
         ], table: table, at: Self.time(0))
 
         var finder = TaskServerFinder()
         let servers = finder.servers(
             descendants: sampler.yardletDescendants, entries: sampler.lastEntries, claimed: sampler.claimedProcessIDs,
-            table: table, claudeSessions: ["session-a": taskA, "session-b": taskB], codexThreads: ["thread-c": taskC])
+            table: table, claudeSessions: ["session-a": taskA, "session-b": taskB], codexThreads: ["thread-c": taskC],
+            antigravityConversations: ["conv-d": taskD])
         XCTAssertEqual(servers, [
             taskA: [TaskServerPort(port: 3_000, processID: 601, processName: "node"),
                     TaskServerPort(port: 6_006, processID: 901, processName: "storybook"),
                     TaskServerPort(port: 55_433, processID: 1_000, processName: "postgres")],
             taskC: [TaskServerPort(port: 5_173, processID: 802, processName: "vite"),
-                    TaskServerPort(port: 8_080, processID: 1_003, processName: "python3")]
+                    TaskServerPort(port: 8_080, processID: 1_003, processName: "python3")],
+            taskD: [TaskServerPort(port: 3_142, processID: 1_102, processName: "next-server"),
+                    TaskServerPort(port: 4_321, processID: 1_005, processName: "")]
         ])
     }
 
@@ -495,7 +508,7 @@ final class TaskResourceSamplingTests: XCTestCase {
             switch owner {
             case .task(heavy): (.claudeCode, "Run the test suite")
             case .task(idle): (.claudeCode, "Idle")
-            case .task: nil
+            case .task, .agentProcess: nil
             case .codexAppServer: (.codex, "Codex App Server · Default")
             }
         }

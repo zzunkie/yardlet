@@ -27,11 +27,15 @@ struct TaskServerPort: Hashable, Sendable {
 ///   processes the thread that ran it in their environment (`CODEX_THREAD_ID`); the process's own,
 ///   else its nearest ancestor's under the server, names the task. Processes with no thread (the
 ///   server's MCP servers) are no task's.
+/// - An ACP agent's process serves every open task of that agent (`ACPProcessLane`). Antigravity gives a
+///   command's processes the conversation that ran it (`ANTIGRAVITY_CONVERSATION_ID`, which is the task's
+///   ACP session ID), read as a Codex thread is. The other ACP agents name none, so their commands'
+///   servers are no task's.
 /// - A server started in the background from a shell that then ended (`npm run dev &`, `nohup`, a
 ///   database that daemonizes) is left to launchd, out of every tree. Its environment still says who
 ///   ran it: Claude Code gives its commands `CLAUDE_CODE_SESSION_ID`, and Yardlet starts its CLI with
 ///   `CLAUDE_CODE_ENTRYPOINT=native-harness-client` (the Claude app's is `claude-desktop`); Codex gives
-///   `CODEX_THREAD_ID`. Such a process, with what it started, is the task's whose conversation that is.
+///   `CODEX_THREAD_ID`, and Antigravity `ANTIGRAVITY_CONVERSATION_ID`. Such a process, with what it started, is the task's whose conversation that is.
 ///   Each of launchd's children is read once (its environment is fixed when it starts): about 9 ms for
 ///   the 376 on the Mac this was written on, then only the new ones.
 /// - Processes another app runs (the Claude app's CLI) are not read.
@@ -40,7 +44,17 @@ struct TaskServerFinder {
     static let claudeEntrypointVariable = "CLAUDE_CODE_ENTRYPOINT"
     static let yardletClaudeEntrypoint = "native-harness-client"
     static let codexThreadVariable = "CODEX_THREAD_ID"
-    private static let variables: Set<String> = [claudeSessionVariable, claudeEntrypointVariable, codexThreadVariable]
+    static let antigravityConversationVariable = "ANTIGRAVITY_CONVERSATION_ID"
+    private static let variables: Set<String> = [
+        claudeSessionVariable, claudeEntrypointVariable, codexThreadVariable, antigravityConversationVariable
+    ]
+
+    /// A process tree several tasks share, whose processes name their task's conversation in `variable`.
+    private struct SharedTree {
+        let processes: [Int32: ProcessTableEntry]
+        let variable: String
+        let tasks: [String: UUID]
+    }
 
     private struct ProcessKey: Hashable {
         let processID: Int32
@@ -55,31 +69,42 @@ struct TaskServerFinder {
     ///   - descendants: the processes under Yardlet's roots (`TaskResourceSampler.yardletDescendants`).
     ///   - entries: the whole process table, for launchd's children; `claimed`, the processes some
     ///     root's tree already took.
-    ///   - claudeSessions, codexThreads: each Claude conversation and Codex thread Yardlet lists, by its
-    ///     lowercased ID, with its task.
+    ///   - claudeSessions, codexThreads, antigravityConversations: each Claude conversation, Codex thread
+    ///     and Antigravity conversation Yardlet lists, by its lowercased ID, with its task.
     mutating func servers(
         descendants: [TaskResourceOwner: [ProcessTableEntry]], entries: [ProcessTableEntry], claimed: Set<Int32>,
-        table: some ProcessTableReading, claudeSessions: [String: UUID], codexThreads: [String: UUID]
+        table: some ProcessTableReading, claudeSessions: [String: UUID], codexThreads: [String: UUID],
+        antigravityConversations: [String: UUID] = [:]
     ) -> [UUID: [TaskServerPort]] {
-        var candidates: [(task: UUID?, process: ProcessTableEntry, codexTree: [Int32: ProcessTableEntry]?)] = []
+        var candidates: [(task: UUID?, process: ProcessTableEntry, shared: SharedTree?)] = []
         for (owner, processes) in descendants {
+            let variable: String
+            let tasks: [String: UUID]
             switch owner {
             case let .task(id):
                 candidates += processes.map { (id, $0, nil) }
+                continue
             case .codexAppServer:
-                var byID: [Int32: ProcessTableEntry] = [:]
-                for process in processes { byID[process.processID] = process }
-                candidates += processes.map { (nil, $0, byID) }
+                (variable, tasks) = (Self.codexThreadVariable, codexThreads)
+            case .agentProcess(.antigravityCLI):
+                (variable, tasks) = (Self.antigravityConversationVariable, antigravityConversations)
+            case .agentProcess:
+                continue
             }
+            var byID: [Int32: ProcessTableEntry] = [:]
+            for process in processes { byID[process.processID] = process }
+            let tree = SharedTree(processes: byID, variable: variable, tasks: tasks)
+            candidates += processes.map { (nil, $0, tree) }
         }
 
         var present = Set<ProcessKey>()
-        if !claudeSessions.isEmpty || !codexThreads.isEmpty {
+        if !claudeSessions.isEmpty || !codexThreads.isEmpty || !antigravityConversations.isEmpty {
             var children: [Int32: [ProcessTableEntry]]?
             for entry in entries where entry.parentID == 1 && !claimed.contains(entry.processID) {
                 present.insert(ProcessKey(processID: entry.processID, start: entry.startMicroseconds))
                 guard let task = task(ofLeftBehind: entry, table: table, claudeSessions: claudeSessions,
-                                      codexThreads: codexThreads) else { continue }
+                                      codexThreads: codexThreads,
+                                      antigravityConversations: antigravityConversations) else { continue }
                 if children == nil {
                     var map: [Int32: [ProcessTableEntry]] = [:]
                     for entry in entries where entry.parentID != entry.processID { map[entry.parentID, default: []].append(entry) }
@@ -104,8 +129,9 @@ struct TaskServerFinder {
             let ports = table.listeningPorts(of: candidate.process.processID)
             guard !ports.isEmpty else { continue }
             let task: UUID?
-            if let tree = candidate.codexTree {
-                task = thread(of: candidate.process, in: tree, table: table, present: &present).flatMap { codexThreads[$0] }
+            if let tree = candidate.shared {
+                task = conversation(of: candidate.process, in: tree, table: table, present: &present)
+                    .flatMap { tree.tasks[$0] }
             } else {
                 task = candidate.task
             }
@@ -121,30 +147,34 @@ struct TaskServerFinder {
         return found.mapValues { $0.values.sorted { $0.port < $1.port } }
     }
 
-    /// The task of a process launchd took over: the Yardlet Claude conversation or the Codex thread its
-    /// environment names.
+    /// The task of a process launchd took over: the Yardlet Claude conversation, the Codex thread or the
+    /// Antigravity conversation its environment names.
     private mutating func task(ofLeftBehind entry: ProcessTableEntry, table: some ProcessTableReading,
-                               claudeSessions: [String: UUID], codexThreads: [String: UUID]) -> UUID? {
+                               claudeSessions: [String: UUID], codexThreads: [String: UUID],
+                               antigravityConversations: [String: UUID]) -> UUID? {
         let environment = environment(of: entry, table: table)
         if let session = environment[Self.claudeSessionVariable]?.lowercased(),
            environment[Self.claudeEntrypointVariable] == Self.yardletClaudeEntrypoint,
            let task = claudeSessions[session] { return task }
         if let thread = environment[Self.codexThreadVariable]?.lowercased() { return codexThreads[thread] }
+        if let conversation = environment[Self.antigravityConversationVariable]?.lowercased() {
+            return antigravityConversations[conversation]
+        }
         return nil
     }
 
-    /// The Codex thread the process runs for: its own `CODEX_THREAD_ID`, else that of its nearest
-    /// ancestor among the server's processes.
-    private mutating func thread(of process: ProcessTableEntry, in tree: [Int32: ProcessTableEntry],
-                                 table: some ProcessTableReading, present: inout Set<ProcessKey>) -> String? {
+    /// The conversation a process in a shared tree runs for: its own `tree.variable`, else that of its
+    /// nearest ancestor in the tree.
+    private mutating func conversation(of process: ProcessTableEntry, in tree: SharedTree,
+                                       table: some ProcessTableReading, present: inout Set<ProcessKey>) -> String? {
         var current: ProcessTableEntry? = process
         for _ in 0..<32 {
             guard let entry = current else { return nil }
             present.insert(ProcessKey(processID: entry.processID, start: entry.startMicroseconds))
-            if let thread = environment(of: entry, table: table)[Self.codexThreadVariable], !thread.isEmpty {
-                return thread.lowercased()
+            if let value = environment(of: entry, table: table)[tree.variable], !value.isEmpty {
+                return value.lowercased()
             }
-            current = tree[entry.parentID]
+            current = tree.processes[entry.parentID]
         }
         return nil
     }

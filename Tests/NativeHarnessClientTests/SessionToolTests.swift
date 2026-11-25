@@ -1827,6 +1827,22 @@ final class SessionToolTests: XCTestCase {
         try await waitUntil { run.state == .waitingForApproval }
         XCTAssertTrue(model.sessionToolRequests(in: fixture.caller.id).contains { $0.id == "perm-1" })
         XCTAssertEqual(model.taskAttentionDetails[fixture.caller.id]?.pendingRequest, .approval)
+        // A step its harness goes on with meanwhile leaves it waiting, and its caller reads where the card is
+        // and what it asks.
+        await fixture.adapter.emit(.sessionStatusChanged(.running), for: run.id)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(run.state, .waitingForApproval)
+        let waited = try decode([Outcome].self, await call(model, "wait_tasks", ["ids": [run.id.uuidString],
+                                                                                "timeout_seconds": 0], from: fixture.caller).text)
+        XCTAssertEqual(waited.first?.state, "waiting for the person's approval")
+        XCTAssertEqual(waited.first?.approvalIn, SessionToolText.link(title: fixture.caller.title, taskID: fixture.caller.id))
+        XCTAssertEqual(waited.first?.asks?.count, 1)
+        XCTAssertTrue(waited.first?.asks?.first?.hasSuffix("Run swift build") == true, "\(waited)")
+        let read = await call(model, "read_task", ["task_id": "self"], from: fixture.caller)
+        XCTAssertTrue(read.text.contains(#""agentId":"\#(run.id.uuidString)""#), read.text)
+        XCTAssertTrue(read.text.contains("Run swift build"), read.text)
+        XCTAssertTrue(AppModel.agentRunResultText(run, approvalIn: "[Caller](#x)")
+            .contains("It waits for the person's approval on a card in [Caller](#x)"))
         await model.respond(to: "perm-1", decision: .allow, in: fixture.caller)
         let decisions = await fixture.adapter.decisions
         XCTAssertEqual(decisions["perm-1"], .allow, "Answered in the subagent's own session")
@@ -3629,6 +3645,8 @@ final class SessionToolTests: XCTestCase {
         var state: String
         var ended: Bool
         var answer: String?
+        var approvalIn: String?
+        var asks: [String]?
     }
 
     // MARK: - Personal agents

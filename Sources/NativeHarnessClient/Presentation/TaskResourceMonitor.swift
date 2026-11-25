@@ -160,15 +160,19 @@ extension AppModel {
     /// What a resource sample needs from the app: each task's bash-mode shell, the Claude tasks
     /// whose conversation another app may run, with the config folder each one's account reads
     /// (`isHeldElsewhere` reads the same folder), and whether to find the tasks' servers, with each
-    /// Codex task's thread.
+    /// Codex task's thread and Antigravity task's conversation.
     func taskResourceRequest() -> TaskResourceRequest {
         var request = TaskResourceRequest(shells: taskShells.processIDs())
         guard !usesVisualFixture else { return request }
         if TaskServersPreference.isOn() {
             request.findsServers = true
-            for session in store.sessions where session.harness == .codex {
-                guard let thread = session.providerSessionID, !thread.isEmpty else { continue }
-                request.codexThreads[thread.lowercased()] = session.id
+            for session in store.sessions where session.harness == .codex || session.harness == .antigravityCLI {
+                guard let conversation = session.providerSessionID?.lowercased(), !conversation.isEmpty else { continue }
+                if session.harness == .codex {
+                    request.codexThreads[conversation] = session.id
+                } else {
+                    request.antigravityConversations[conversation] = session.id
+                }
             }
         }
         let environment = ProcessInfo.processInfo.environment
@@ -198,6 +202,8 @@ extension AppModel {
             let account = (reported?.isEmpty == false ? reported : nil) ?? choice?.knownLabel
                 ?? identity.connection?.name ?? L10n.string("Default account")
             return (.codex, L10n.format("Codex App Server · %@", account))
+        case .agentProcess:
+            return nil
         }
     }
 }
