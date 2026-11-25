@@ -160,6 +160,8 @@ struct MainWindow: View {
     @Environment(\.yardletSparkle) private var sparkle
     /// A staged build ready to install: the sidebar's "Restart to update".
     @Environment(\.yardletStagedUpdate) private var stagedUpdate
+    /// The person on this Mac, read once for the account button.
+    @State private var accountIdentity = SidebarAccountIdentity.current()
 
     /// What the personal agents are read through in place of the chosen account's Dots, for a rendered
     /// window; its drafts then stay in memory, in `personalAgentDrafts` when one is given.
@@ -1301,10 +1303,11 @@ struct MainWindow: View {
         windowSize == .zero ? nil : windowSize.width
     }
 
-    /// The sidebar's Settings button: the app-wide places its menu opens.
+    /// The sidebar's footer: the person on this Mac, and the app-wide places the account menu opens.
     private var accountMenu: SidebarAccountMenuContext {
         let connections = model.connections
         return SidebarAccountMenuContext(
+            identity: accountIdentity,
             settingsSections: SettingsSection.available(hasAccounts: true, hasConnectors: true, hasVault: true,
                                                         hasRemote: model.remoteControl != nil,
                                                         hasUsage: settingsUsage != nil),

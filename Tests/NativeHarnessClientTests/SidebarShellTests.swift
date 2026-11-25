@@ -3,8 +3,8 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// The sidebar's shell: Settings and Feedback at the bottom, Settings' menu holding the other
-/// app-wide places, projects as faint labels over tasks
+/// The sidebar's shell: the person on this Mac at the bottom, whose menu holds Settings and the other
+/// app-wide places, with Settings and Feedback as icons beside it, projects as faint labels over tasks
 /// listed flush under them, and a width the person sets by dragging the line, kept across launches.
 /// Renders go to `.build/sidebar-ui-qa`, light and dark, in unshown windows. No provider, process,
 /// account or user data.
@@ -12,20 +12,38 @@ import XCTest
 /// - `sidebar-240-*.png`, `sidebar-360-*.png`: the same sidebar at the standard width and wider,
 ///   beside the line and a strip of the window's content: Pinned, Chats, three projects (one with a
 ///   family of nested tasks and "Show more", one collapsed with a waiting task's mark, one empty
-///   with "No chats"), pull request glyphs, and Settings beside Feedback.
+///   with "No chats"), pull request glyphs, and the footer.
 /// - `sidebar-520-*.png`: the widest the line goes.
 /// - `sidebar-update-240-*.png`: the standard width with a staged build ready to install, "Restart to
 ///   update" over the footer.
-/// - `account-button-*.png`: Settings and Feedback alone, at rest and each hovered, then the footer at 232
-///   and 170 pt, under the
-///   update strip at rest, hovered and while the update waits for tasks.
+/// - `account-button-*.png`: the account button and the two icons, at rest and each hovered, then the
+///   footer at 232 and 170 pt and with a long name, under the update strip at rest, hovered and while the
+///   update waits for tasks.
 /// - `.build/sidebar-grouping-qa/grouping-*.png`: the task list under the title bar with its grouping
 ///   menu beside the search field, by project and by state at 240 and 360 pt, and where the menu opens.
 @MainActor
 final class SidebarShellTests: XCTestCase {
+    fileprivate static let identity = SidebarAccountIdentity(fullName: "Alex Kim", userName: "alex")
     private let now = Date()
 
     // MARK: - Account button and menu
+
+    /// The button names the person signed in to this Mac: the full name, else the user name, else
+    /// "Settings" as the Codex app's footer does without a profile; the mark is the first letter.
+    func testTheAccountButtonNamesThePersonOnThisMac() {
+        let full = SidebarAccountIdentity(fullName: "  Alex Kim ", userName: "alex")
+        XCTAssertEqual(full.name, "Alex Kim")
+        XCTAssertEqual(full.initial, "A")
+        let short = SidebarAccountIdentity(fullName: "", userName: "zoe")
+        XCTAssertEqual(short.name, "zoe")
+        XCTAssertEqual(short.initial, "Z")
+        XCTAssertEqual(SidebarAccountIdentity(fullName: "홍길동", userName: "x").initial, "홍")
+        let none = SidebarAccountIdentity(fullName: nil, userName: " ")
+        XCTAssertEqual(none.name, L10n.string("Settings"))
+        XCTAssertEqual(none.initial, "")
+        // A test run (and a visual fixture) names a made-up person, so no render shows whose Mac drew it.
+        XCTAssertEqual(SidebarAccountIdentity.current(), .fixture)
+    }
 
     private static let usage = [
         MenuBarMenu.UsageAccount(harness: .claudeCode, line: "work@example.com",
@@ -264,7 +282,7 @@ final class SidebarShellTests: XCTestCase {
                                                                          size: size) { appearance in
                 HStack(spacing: 0) {
                     SidebarColumn(state: state, windowWidth: nil) {
-                        fixture.sidebar(accountMenu: SidebarAccountMenuContext())
+                        fixture.sidebar(accountMenu: SidebarAccountMenuContext(identity: Self.identity))
                             .environment(\.yardletSendFeedback, YardletSendFeedbackAction { _ in })
                     }
                     ParityTheme.canvas
@@ -278,7 +296,10 @@ final class SidebarShellTests: XCTestCase {
         }
 
         // A staged build ready to install: the strip over the account button.
-        let ready = SidebarAccountMenuContext(update: { .ready(build: "abc1234") })
+        let chosen = Chosen()
+        var feedback: [PrivateFeedbackContext] = []
+        let ready = SidebarAccountMenuContext(identity: Self.identity, update: { .ready(build: "abc1234") },
+                                              onSelect: { chosen.destinations.append($0) })
         let update = try WindowlessRender.hostedInBothAppearances("sidebar-update-240", in: directory,
                                                                    size: NSSize(width: 240 + 1 + 140, height: 820)) { appearance in
             HStack(spacing: 0) {
@@ -293,18 +314,22 @@ final class SidebarShellTests: XCTestCase {
         }
         XCTAssertTrue(update.allSatisfy { WindowlessRender.drawsContent($0.bitmap, step: 6) })
 
-        // What the sidebar exposes: Settings and Feedback, each its own button and neither naming the
-        // person on this Mac, the projects as headings, and "Restart to update" while a staged build is ready.
+        // What the sidebar exposes: the account button by the person's name, Settings and Feedback each
+        // its own button, the projects as headings, and "Restart to update" while a staged build is ready.
         let host = WindowlessRender.Host(
             fixture.sidebar(accountMenu: ready)
-                .environment(\.yardletSendFeedback, YardletSendFeedbackAction { _ in })
+                .environment(\.yardletSendFeedback, YardletSendFeedbackAction { feedback.append($0) })
                 .frame(width: 240, height: 820, alignment: .top),
             size: NSSize(width: 240, height: 820))
         defer { host.close() }
         host.settle()
         let elements = host.accessibilityElements()
-        XCTAssertTrue(elements.contains { $0.label == L10n.string("Settings menu") }, "\(elements)")
-        XCTAssertTrue(elements.contains { $0.label == L10n.string("Send Feedback") }, "\(elements)")
+        XCTAssertTrue(elements.contains { $0.label == L10n.format("Account menu, %@", "Alex Kim") }, "\(elements)")
+        // Settings opens the Settings window itself, not the menu; Feedback opens the note.
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Settings")))
+        XCTAssertEqual(chosen.destinations, [.settings])
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Send Feedback")))
+        XCTAssertEqual(feedback.count, 1)
         XCTAssertFalse(elements.contains { $0.label == L10n.string("Archived tasks") },
                        "Archived tasks moved into the account menu: \(elements)")
         XCTAssertTrue(elements.contains { $0.label == L10n.format("Project %@", "Website") })
@@ -359,13 +384,18 @@ final class SidebarShellTests: XCTestCase {
                 SidebarUpdateStripLabel(line: .ready(build: "abc1234"))
                 SidebarUpdateStripLabel(line: .ready(build: "abc1234"), isHovering: true)
                 SidebarUpdateStripLabel(line: .waiting)
-                HStack(spacing: 2) { SidebarSettingsButtonLabel(); SidebarFeedbackButtonLabel() }
-                HStack(spacing: 2) { SidebarSettingsButtonLabel(isHovering: true); SidebarFeedbackButtonLabel() }
-                HStack(spacing: 2) { SidebarSettingsButtonLabel(); SidebarFeedbackButtonLabel(isHovering: true) }
-                // The footer as the sidebar lays it out, at the standard width and at its narrowest, where
-                // Feedback becomes its bubble alone rather than cutting Settings short.
+                HStack(spacing: 2) {
+                    SidebarAccountButtonLabel(identity: Self.identity, isHovering: true)
+                    SidebarIconButtonLabel(systemName: "gearshape", isHovering: true)
+                    SidebarIconButtonLabel(systemName: "bubble.left", isHovering: true)
+                }
+                // The footer as the sidebar lays it out, at the standard width and at its narrowest, and
+                // with a long name, which is cut short before either icon gives way.
+                SidebarFooter(context: SidebarAccountMenuContext(identity: Self.identity)).frame(width: 232)
+                SidebarFooter(context: SidebarAccountMenuContext(identity: Self.identity)).frame(width: 170)
+                SidebarFooter(context: SidebarAccountMenuContext(identity: SidebarAccountIdentity(
+                    fullName: "Maximilian Alexander Featherstonehaugh-Worthington", userName: nil))).frame(width: 170)
                 SidebarFooter(context: SidebarAccountMenuContext()).frame(width: 232)
-                SidebarFooter(context: SidebarAccountMenuContext()).frame(width: 170)
             }
             .padding(.horizontal, 4)
             .padding(.vertical, 14)
@@ -493,7 +523,7 @@ final class SidebarShellTests: XCTestCase {
             searchText: .constant(""), onNewTask: {}, onActivate: { _ in }, onNewTaskInProject: { _ in },
             projects: projects, onEditProject: { _ in }, onArchiveProjectChats: { _ in }, onRemoveProject: { _ in },
             onTogglePinned: { _ in }, onArchive: { _ in }, onDelete: { _ in }, onRename: { _ in },
-            onMarkRead: { _ in }, accountMenu: SidebarAccountMenuContext())
+            onMarkRead: { _ in }, accountMenu: SidebarAccountMenuContext(identity: Self.identity))
             .background(ParityTheme.sidebar)
     }
 
@@ -589,7 +619,7 @@ final class SidebarShellTests: XCTestCase {
                 onNewTaskInProject: { _ in }, projects: projects, onEditProject: { _ in },
                 onArchiveProjectChats: { _ in }, onRemoveProject: { _ in }, onTogglePinned: { _ in },
                 onArchive: { _ in }, onDelete: { _ in }, onRename: { _ in }, onMarkRead: { _ in },
-                accountMenu: SidebarAccountMenuContext(), disclosure: disclosure)
+                accountMenu: SidebarAccountMenuContext(identity: SidebarShellTests.identity), disclosure: disclosure)
                 .environment(\.taskAttentionDetails, details)
                 .environment(pullRequests)
                 .environment(resources)

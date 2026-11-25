@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// What the sidebar's Settings button opens, after the Claude app's user menu (`UserMenuItems`:
+/// What the sidebar's account button opens, after the Claude app's user menu (`UserMenuItems`:
 /// the person, Settings ⌘, then Usage) and the Codex app's profile menu (`codex.profileDropdown`:
 /// Settings with its shortcut, then Usage with what is left). Yardlet's own app-wide places follow:
 /// the Settings sections reached from elsewhere, archived tasks, task resource usage, importing
@@ -142,8 +142,11 @@ struct SidebarAccountMenu: Equatable {
     }
 }
 
-/// What the sidebar needs to show its Settings button and act on its menu.
+/// What the sidebar needs to show its footer and act on the account menu. The window passes the
+/// person on this Mac (`SidebarAccountIdentity.current()`); left out, as in a test's sidebar, the
+/// account button says "Settings" and names nobody.
 struct SidebarAccountMenuContext {
+    var identity = SidebarAccountIdentity(fullName: nil, userName: nil)
     /// The Settings sections the window offers (`SettingsSection.available`).
     var settingsSections: [SettingsSection] = SettingsSection.available(hasAccounts: true, hasConnectors: false)
     /// The Usage lines, read when the menu opens.
@@ -172,7 +175,8 @@ struct SidebarAccountMenuContext {
     }
 }
 
-/// The Settings menu as an AppKit menu: the items with their symbols and shortcuts, a Usage heading over the account lines with each harness's mark.
+/// The account menu as an AppKit menu: the items with their symbols and shortcuts, a Usage heading over
+/// the account lines with each harness's mark.
 /// Choosing an item calls back once the menu has closed.
 @MainActor
 final class SidebarAccountMenuController: NSObject {
@@ -267,37 +271,70 @@ private struct SidebarAccountMenuAnchorView: NSViewRepresentable {
     }
 }
 
-/// The sidebar's bottom row: Settings, which opens `SidebarAccountMenu` above it as a gear at the bottom
-/// left does in VS Code, and Feedback, which opens Send Feedback (`PrivateFeedbackSheet`). Each is its own
-/// click target; Feedback is left out where nothing can open it.
+/// The sidebar's bottom row: the person on this Mac, which opens `SidebarAccountMenu` above it as the Claude
+/// and Codex apps' profile buttons do, then two icons, Settings, which opens the Settings window, and
+/// Feedback, which opens Send Feedback (`PrivateFeedbackSheet`). Each is its own click target; the name is
+/// cut short before either icon gives way, and Feedback is left out where nothing can open it.
 struct SidebarFooter: View {
     let context: SidebarAccountMenuContext
     @Environment(\.yardletSendFeedback) private var sendFeedback
     @Environment(\.yardletFeedbackSurface) private var surface
 
     var body: some View {
-        if let sendFeedback {
-            let open = { sendFeedback(.feedback(surface: surface)) }
-            // Feedback keeps its title while Settings' whole title still fits beside it, and is its bubble
-            // alone in a narrower sidebar or a longer language.
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 2) {
-                    SidebarSettingsButton(context: context)
-                    SidebarFeedbackButton(action: open)
-                }
-                HStack(spacing: 2) {
-                    SidebarSettingsButton(context: context)
-                    SidebarFeedbackButton(showsTitle: false, action: open)
-                }
+        HStack(spacing: 2) {
+            SidebarAccountButton(context: context)
+            SidebarIconButton(systemName: "gearshape", title: L10n.string("Settings")) {
+                context.onSelect(.settings)
             }
-        } else {
-            SidebarSettingsButton(context: context)
+            if let sendFeedback {
+                SidebarFeedbackButton { sendFeedback(.feedback(surface: surface)) }
+            }
         }
     }
 }
 
-/// Settings, with the gear in the sidebar's gutter, opening the menu of app-wide places above it.
-struct SidebarSettingsButton: View {
+/// Who the sidebar's account button names: the person signed in to this Mac. Yardlet has no
+/// account of its own and holds several provider accounts at once, each task on its own, so the
+/// button names the one person all of them belong to rather than one provider's account. It is read
+/// from macOS, never from a provider.
+struct SidebarAccountIdentity: Equatable, Sendable {
+    /// The full name, else the short user name, else "Settings" as the Codex app's footer says
+    /// when it has no profile (`codex.profileFooter.settingsFallback`).
+    let name: String
+    /// The name's first letter, for the round mark before it; empty without a name.
+    let initial: String
+
+    init(fullName: String?, userName: String?) {
+        let candidates = [fullName, userName].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if let name = candidates.first(where: { !$0.isEmpty }) {
+            self.name = name
+            initial = name.first.map { String($0).uppercased() } ?? ""
+        } else {
+            name = L10n.string("Settings")
+            initial = ""
+        }
+    }
+
+    /// The person signed in to this Mac. A visual fixture (`--ui-fixture…`) or a test run names a
+    /// made-up person instead, so their windows, renders and screenshots never show whose Mac drew
+    /// them.
+    static func current() -> SidebarAccountIdentity {
+#if DEBUG
+        if CommandLine.arguments.contains(where: { $0.hasPrefix("--ui-fixture") }) || NSClassFromString("XCTestCase") != nil {
+            return fixture
+        }
+#endif
+        return SidebarAccountIdentity(fullName: NSFullUserName(), userName: NSUserName())
+    }
+
+#if DEBUG
+    /// The person fixtures and renders show.
+    static let fixture = SidebarAccountIdentity(fullName: "Jordan Park", userName: "jordan")
+#endif
+}
+
+/// The person's initial and name, opening the menu of app-wide places above it.
+struct SidebarAccountButton: View {
     let context: SidebarAccountMenuContext
     @State private var isHovering = false
     @State private var anchor = SidebarAccountMenuAnchor()
@@ -305,17 +342,19 @@ struct SidebarSettingsButton: View {
     /// The row's height; the Claude app's footer button is at least 28 pt (`--df-footer-btn-size`),
     /// the old footer rows here 32.
     static let height: CGFloat = 32
+    /// The round mark with the name's initial (the Claude app's 20 pt mark in its 24 pt slot).
+    static let markSize: CGFloat = 20
 
     var body: some View {
         Button(action: open) {
-            SidebarSettingsButtonLabel(isHovering: isHovering)
+            SidebarAccountButtonLabel(identity: context.identity, isHovering: isHovering)
         }
         .buttonStyle(.plain)
         .background(SidebarAccountMenuAnchorView(anchor: anchor))
         .parityPointer()
         .onHover { isHovering = $0 }
-        .help(L10n.string("Settings, accounts, usage and more"))
-        .accessibilityLabel(L10n.string("Settings menu"))
+        .help(context.identity.name)
+        .accessibilityLabel(L10n.format("Account menu, %@", context.identity.name))
     }
 
     private func open() {
@@ -331,19 +370,18 @@ struct SidebarSettingsButton: View {
     }
 }
 
-/// The Settings button's face: the gear in the gutter, "Settings", and a caret, as the Claude app's
-/// footer button (secondary title, muted caret).
-struct SidebarSettingsButtonLabel: View {
+/// The account button's face: the initial in a round mark in the sidebar's gutter, the name, and a
+/// caret, as the Claude app's `df-user-menu-btn` (secondary name, muted caret).
+struct SidebarAccountButtonLabel: View {
+    let identity: SidebarAccountIdentity
     var isHovering = false
     @Environment(\.yardletInterfaceScale) private var interfaceScale
 
     var body: some View {
         HStack(spacing: 0) {
-            Image(systemName: "gearshape")
-                .font(.system(size: 13 * interfaceScale))
-                .foregroundStyle(.secondary)
+            SidebarAccountMark(initial: identity.initial)
                 .frame(width: SidebarMetrics.gutterWidth)
-            Text(L10n.string("Settings"))
+            Text(identity.name)
                 .font(.system(size: 13 * interfaceScale))
                 .foregroundStyle(isHovering ? .primary : .secondary)
                 .lineLimit(1)
@@ -353,60 +391,87 @@ struct SidebarSettingsButtonLabel: View {
                 .font(.system(size: 9 * interfaceScale, weight: .semibold))
                 .foregroundStyle(.tertiary)
         }
-        .padding(.trailing, 10)
-        .frame(height: SidebarSettingsButton.height * interfaceScale)
+        .padding(.trailing, 8)
+        .frame(height: SidebarAccountButton.height * interfaceScale)
         .contentShape(Rectangle())
         .background(isHovering ? ParityTheme.hoverFill : .clear, in: SidebarMetrics.rowShape())
     }
 }
 
-/// Feedback: a speech bubble and its title, or the bubble alone where the row is a remote Mac's host
-/// name. At least 28 pt wide either way, so it stays its own target at the sidebar's narrowest.
+/// The initial in a round, quiet mark; a person glyph without one.
+struct SidebarAccountMark: View {
+    let initial: String
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
+
+    var body: some View {
+        let size = SidebarAccountButton.markSize * interfaceScale
+        ZStack {
+            Circle().fill(Color.primary.opacity(0.1))
+            if initial.isEmpty {
+                Image(systemName: "person.fill")
+                    .font(.system(size: 10 * interfaceScale, weight: .medium))
+                    .foregroundStyle(.secondary)
+            } else {
+                Text(initial)
+                    .font(.system(size: 10.5 * interfaceScale, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
+/// Feedback's speech bubble, beside the account button or a remote Mac's host name.
 struct SidebarFeedbackButton: View {
-    var showsTitle = true
-    var height: CGFloat = SidebarSettingsButton.height
+    var height: CGFloat = SidebarAccountButton.height
+    let action: () -> Void
+
+    var body: some View {
+        SidebarIconButton(systemName: "bubble.left", title: L10n.string("Send Feedback"), height: height,
+                          action: action)
+    }
+}
+
+/// A symbol alone at the end of the footer, its title as its tooltip and accessibility label. It keeps
+/// its width, at least 28 pt, so it stays its own target at the sidebar's narrowest.
+struct SidebarIconButton: View {
+    let systemName: String
+    let title: String
+    var height: CGFloat = SidebarAccountButton.height
     let action: () -> Void
     @State private var isHovering = false
 
     var body: some View {
         Button(action: action) {
-            SidebarFeedbackButtonLabel(showsTitle: showsTitle, height: height, isHovering: isHovering)
+            SidebarIconButtonLabel(systemName: systemName, height: height, isHovering: isHovering)
         }
         .buttonStyle(.plain)
         .parityPointer()
         .onHover { isHovering = $0 }
-        .help(L10n.string("Send Feedback"))
-        .accessibilityLabel(L10n.string("Send Feedback"))
+        .help(title)
+        .accessibilityLabel(title)
     }
 }
 
-struct SidebarFeedbackButtonLabel: View {
-    var showsTitle = true
-    var height: CGFloat = SidebarSettingsButton.height
+struct SidebarIconButtonLabel: View {
+    let systemName: String
+    var height: CGFloat = SidebarAccountButton.height
     var isHovering = false
     @Environment(\.yardletInterfaceScale) private var interfaceScale
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "bubble.left")
-                .font(.system(size: 13 * interfaceScale))
-                .foregroundStyle(.secondary)
-            if showsTitle {
-                Text(L10n.string("Feedback"))
-                    .font(.system(size: 13 * interfaceScale))
-                    .foregroundStyle(isHovering ? .primary : .secondary)
-                    .lineLimit(1)
-                    .fixedSize()
-            }
-        }
-        .padding(.horizontal, showsTitle ? 10 : 0)
-        .frame(minWidth: 28 * interfaceScale, minHeight: height * interfaceScale, maxHeight: height * interfaceScale)
-        .contentShape(Rectangle())
-        .background(isHovering ? ParityTheme.hoverFill : .clear, in: SidebarMetrics.rowShape())
+        Image(systemName: systemName)
+            .font(.system(size: 13 * interfaceScale))
+            .foregroundStyle(isHovering ? .primary : .secondary)
+            .frame(width: 30 * interfaceScale, height: height * interfaceScale)
+            .contentShape(Rectangle())
+            .background(isHovering ? ParityTheme.hoverFill : .clear, in: SidebarMetrics.rowShape())
+            .fixedSize()
     }
 }
 
-/// "Restart to update" over the Settings button while a staged build is ready to install, as the
+/// "Restart to update" over the account button while a staged build is ready to install, as the
 /// Claude app puts "Relaunch to update" over its account button once an update has downloaded
 /// (`df-update-strip`: a filled pill as high as the footer button, the title in primary text at medium
 /// weight, an arrow at the end that darkens on hover, "Relaunch to update · v1.2.3" as its tooltip).
@@ -461,7 +526,7 @@ struct SidebarUpdateStripLabel: View {
             }
         }
         .padding(.horizontal, 10)
-        .frame(height: SidebarSettingsButton.height * interfaceScale)
+        .frame(height: SidebarAccountButton.height * interfaceScale)
         .contentShape(Rectangle())
         .background(isHovering ? ParityTheme.selectedFill : ParityTheme.hoverFill, in: SidebarMetrics.rowShape())
     }

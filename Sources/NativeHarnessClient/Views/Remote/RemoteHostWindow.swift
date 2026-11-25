@@ -985,7 +985,7 @@ struct RemoteHostFooter: View {
         HStack(spacing: 2) {
             hostMenu
             if let sendFeedback {
-                SidebarFeedbackButton(showsTitle: false, height: 36) { sendFeedback(feedbackContext) }
+                SidebarFeedbackButton(height: 36) { sendFeedback(feedbackContext) }
             }
         }
     }
