@@ -270,6 +270,10 @@ struct ConversationItem: Identifiable, Equatable, Sendable {
     /// Nil when no record names a time for it (a conversation an ACP agent replayed, a Codex item of
     /// a saved turn other than its request and its last message), so no time is made up.
     var recordedAt: Date? = nil
+    /// The person's reply to questions that the questions' card reads as their answers (a Codex reply,
+    /// `CodexAsyncQuestionReply`): still the person's message for what reads the turn (its fold, find, session
+    /// tools, the turn's announcement), but the conversation draws it only on that card, not as a bubble too.
+    var isReadByQuestionCard: Bool = false
 
     /// A message the person wrote, rather than one another task sent (`taskMessage`), a background
     /// command's notice (`backgroundTaskNotice`) or a schedule's prompt (`scheduledTaskMessage`).

@@ -169,6 +169,7 @@ enum RemoteConversationProjection {
         switch item.kind {
         case let .userMessage(text, images):
             result.kind = .user
+            if item.isReadByQuestionCard { result.readByQuestionCard = true }
             setText(&result, text, userLimit)
             if !images.isEmpty { result.imageCount = images.count }
             if let full {

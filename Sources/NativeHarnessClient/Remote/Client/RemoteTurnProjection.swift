@@ -177,6 +177,7 @@ enum RemoteTurnProjection {
         default:
             break
         }
+        sent.isReadByQuestionCard = item.readByQuestionCard == true
         return sent
     }
 

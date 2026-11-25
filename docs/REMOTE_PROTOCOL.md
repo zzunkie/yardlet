@@ -2386,7 +2386,10 @@ The optional snapshot flag `nextSteps: true` advertises `nextStep`. Turn headers
 optional `planToImplement`, `nextQuestions` and `answeredQuestions` in every subscription, the plan cut at 8,000 characters outside full detail as plan items are; each question carries `title`,
 `options`, and the provider's `itemID`. Answered questions additionally carry `answerOptions` and
 `customAnswer`. Full assistant items retain `sentWhileWorking` and `unmarkedAnswer`, so questions
-keep their host position instead of becoming a closing answer. These fields are derived from the host's conversation projection and retained with
+keep their host position instead of becoming a closing answer. A user item whose reply those answered
+questions read carries `readByQuestionCard: true` in every subscription: the client keeps it in the turn
+(its fold reads it as the person's message) and draws it only on the answered questions' card.
+A client that does not know the field draws it as a sent message. These fields are derived from the host's conversation projection and retained with
 its per-turn cache. Up to 32 questions with 32 options each are carried; question and option text
 is capped at 500 characters, custom answers at 8,000 and the offered plan at 200,000. The existing header `options` includes `retry` only when the host offers it.
 

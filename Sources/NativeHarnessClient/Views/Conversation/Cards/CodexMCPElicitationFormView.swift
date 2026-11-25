@@ -39,7 +39,7 @@ struct CodexMCPElicitationFormView: View {
                 .foregroundStyle(.secondary)
             Text(sent ?? L10n.string("Not answered"))
                 .font(.parity(.control, scale: interfaceScale))
-                .foregroundStyle(sent == nil ? .tertiary : .primary)
+                .foregroundStyle(sent == nil ? .secondary : .primary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -93,7 +93,7 @@ struct CodexMCPElicitationFormView: View {
         switch field.kind {
         case .text, .number:
             TextField(CodexMCPElicitationForm.placeholder(field.kind), text: text(field))
-                .textFieldStyle(.roundedBorder)
+                .conversationRequestField()
                 .accessibilityLabel(field.label)
         case .boolean:
             EmptyView()
@@ -117,6 +117,7 @@ struct CodexMCPElicitationFormView: View {
                     HStack(alignment: .firstTextBaseline, spacing: ParitySpace.s8) {
                         Image(systemName: isMultiple ? (isSelected ? "checkmark.square.fill" : "square")
                                                      : (isSelected ? "largecircle.fill.circle" : "circle"))
+                            .font(.parity(.control, scale: interfaceScale))
                             .foregroundStyle(isSelected ? ParityTheme.accent : Color.secondary)
                             .accessibilityHidden(true)
                         Text(option.title)
@@ -132,7 +133,7 @@ struct CodexMCPElicitationFormView: View {
                 }
                 .buttonStyle(.plain)
                 .parityPointer()
-                .onHover { hovered = $0 ? id : (hovered == id ? nil : hovered) }
+                .pointerHover { hovered = $0 ? id : (hovered == id ? nil : hovered) }
                 .accessibilityLabel(option.title)
                 .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
             }

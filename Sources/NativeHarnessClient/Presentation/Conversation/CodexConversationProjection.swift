@@ -36,6 +36,13 @@ enum CodexConversationProjection {
         /// What the person sent first after a turn that ended on questions: the next turn's first
         /// message, which may be the reply to them. Nil for any other turn.
         var nextMessage: String? = nil
+        /// The turn's first message is a reply to questions (`isReadableQuestionReply`), so whether the turn
+        /// before it reads that reply is worth reading.
+        var startsWithQuestionReply = false
+        /// The turn opens with the reply to the questions the turn before it ended on, which that turn's
+        /// card already reads as their answers (`repliesToQuestions(before:)`), so the reply is drawn by
+        /// that card rather than as a message of its own (`ConversationItem.isReadByQuestionCard`).
+        var repliesToQuestionsAbove = false
     }
 
     /// Which items a history result marks.
@@ -77,6 +84,7 @@ enum CodexConversationProjection {
         func input(at index: Int) -> TurnInput {
             let turn = turns[index]
             let asksQuestions = !askedQuestions(in: turn).questions.isEmpty
+            let startsWithQuestionReply = firstUserItem(in: turn).map(isReadableQuestionReply) ?? false
             return TurnInput(
                 turn: turn,
                 workspaceURL: shared.workspaceURL,
@@ -88,7 +96,9 @@ enum CodexConversationProjection {
                 serverRequests: serverRequests(of: turn),
                 history: shared.history,
                 asksQuestions: asksQuestions,
-                nextMessage: asksQuestions ? nextMessage(after: index) : nil
+                nextMessage: asksQuestions ? nextMessage(after: index) : nil,
+                startsWithQuestionReply: startsWithQuestionReply,
+                repliesToQuestionsAbove: startsWithQuestionReply && repliesToQuestions(before: index)
             )
         }
 
@@ -102,6 +112,17 @@ enum CodexConversationProjection {
                 && previous.approvals == approvals(of: turn)
                 && previous.serverRequests == serverRequests(of: turn)
                 && previous.nextMessage == (previous.asksQuestions ? nextMessage(after: index) : nil)
+                // An equal turn opens with the same message, so only a reply looks at the turn before it.
+                && previous.repliesToQuestionsAbove
+                    == (previous.startsWithQuestionReply && repliesToQuestions(before: index))
+        }
+
+        /// The turn at `index` opens with a reply (`CodexAsyncQuestionReply`) to every question it names among
+        /// those the turn before it ended on, with nothing sent after them in that turn: the questions' card reads it.
+        private func repliesToQuestions(before index: Int) -> Bool {
+            guard index > 0, let first = firstUserItem(in: turns[index]) else { return false }
+            let asked = askedQuestions(in: turns[index - 1])
+            return asked.reply == nil && isQuestionReply(first, readBy: asked.questions)
         }
 
         private func approvals(of turn: CodexTurnState) -> [CodexApprovalState] {
@@ -254,11 +275,14 @@ enum CodexConversationProjection {
     /// without projecting the turn's other items: what a running subagent's card says it does.
     static func lastItem(in state: CodexTaskState, workspaceURL: URL) -> ConversationItem? {
         guard case let (turn, items, shown)? = latestWork(in: state, workspaceURL: workspaceURL) else { return nil }
+        // A reply steered into the turn that its question card reads is drawn there, not as the turn's last item.
+        let asked = askedQuestions(in: turn)
+        let readByCard = asked.replyItem.flatMap { isQuestionReply($0, readBy: asked.questions) ? $0.id : nil }
         // The answers go under the work: the closing answer and every proposed plan, in order.
         var lastShown: ConversationItem?
         var closing: (index: Int, item: ConversationItem)?
         for index in items.indices.reversed() {
-            guard let item = shown(items[index]) else { continue }
+            guard items[index].id != readByCard, let item = shown(items[index]) else { continue }
             if lastShown == nil { lastShown = item }
             if ConversationTurnLayout.leavesAnswerLast(item) { continue }
             if case .answer = item.kind, !item.isSentWhileWorking { closing = (index, item) }
@@ -343,13 +367,27 @@ enum CodexConversationProjection {
             )
         )
         let steered = steeredMessageIDs(in: turn)
-        result.prompt = project(layout.userItems.filter { !steered.contains($0.id) })
+        // A reply to questions whose card reads it as their answers stays the person's message for what reads
+        // the turn (folding, find, session tools), marked so the conversation draws it only on the card.
+        let asked = askedQuestions(in: turn)
+        var readByCard: Set<String> = []
+        if input.repliesToQuestionsAbove, let opening = firstUserItem(in: turn) { readByCard.insert(opening.id) }
+        if let reply = asked.replyItem, isQuestionReply(reply, readBy: asked.questions) { readByCard.insert(reply.id) }
+        func marked(_ items: [ConversationItem]) -> [ConversationItem] {
+            guard !readByCard.isEmpty else { return items }
+            return items.map { item in
+                var item = item
+                if readByCard.contains(item.id) { item.isReadByQuestionCard = true }
+                return item
+            }
+        }
+        result.prompt = marked(project(layout.userItems.filter { !steered.contains($0.id) }))
         result.notices = project(layout.noticeItems)
         result.plan = turn.plan.map(plan)
         // Everything after the request in the order Codex wrote it, laid out by the rule every harness
         // shares: only the answer that closes the turn goes under the work.
         let workIDs = Set(layout.workItems.map(\.id)).union(steered)
-        let arranged = ConversationTurnLayout.arrange(project(turn.items.filter { workIDs.contains($0.id) }))
+        let arranged = ConversationTurnLayout.arrange(marked(project(turn.items.filter { workIDs.contains($0.id) })))
         result.answers = arranged.answers
         // A saved turn's items carry no times of their own: its request (the person's, or a
         // schedule's) was sent when the turn started, and the answer that closes it was written
@@ -391,7 +429,6 @@ enum CodexConversationProjection {
         // questions, whose words are the reply's JSON.
         let isReplyTurn = firstMessage(in: turn).map { CodexAsyncQuestionReply.answers(in: $0) != nil } ?? false
         let editDraft = inHeartbeatTurn || isReplyTurn ? nil : turn.userInputDraft
-        let asked = askedQuestions(in: turn)
         let reply = asked.reply ?? input.nextMessage
         let replyAnswers = reply.flatMap { answers(to: asked.questions, in: $0) }
         result.actions = ConversationTurnActions(
@@ -468,20 +505,43 @@ enum CodexConversationProjection {
     }
 
     /// The questions the turn's last message asks, and the first message the person sent after it in
-    /// the turn (steered in while it ran), which may be the reply to them.
-    static func askedQuestions(in turn: CodexTurnState) -> (questions: [CodexAsyncQuestion], reply: String?) {
-        var reply: String?
+    /// the turn (steered in while it ran), which may be the reply to them, with that message's item.
+    static func askedQuestions(in turn: CodexTurnState)
+        -> (questions: [CodexAsyncQuestion], reply: String?, replyItem: CodexItemState?) {
+        var replyItem: CodexItemState?
         for item in turn.items.reversed() {
             switch item.content {
             case let .agentMessage(message):
-                return (message.questions, reply)
-            case let .userMessage(message):
-                reply = message.sentContent.text
+                let reply: String? = if case let .userMessage(sent)? = replyItem?.content { sent.sentContent.text } else { nil }
+                return (message.questions, reply, replyItem)
+            case .userMessage:
+                replyItem = item
             default:
                 continue
             }
         }
-        return ([], nil)
+        return ([], nil, nil)
+    }
+
+    /// The person's message is the Codex app's reply to questions (`CodexAsyncQuestionReply`) and nothing
+    /// else: no image rides with it, which only a message of its own would show.
+    static func isReadableQuestionReply(_ item: CodexItemState) -> Bool {
+        guard case let .userMessage(message) = item.content, message.sentContent.images.isEmpty else { return false }
+        return CodexAsyncQuestionReply.answers(in: message.sentContent.text) != nil
+    }
+
+    /// `item` is a reply (`isReadableQuestionReply`) whose every answer names one of `questions`, so the card that
+    /// asks them reads all of it; a reply to other questions too keeps its own message.
+    static func isQuestionReply(_ item: CodexItemState, readBy questions: [CodexAsyncQuestion]) -> Bool {
+        guard !questions.isEmpty, case let .userMessage(message) = item.content, message.sentContent.images.isEmpty,
+              let replied = CodexAsyncQuestionReply.answers(in: message.sentContent.text) else { return false }
+        let asked = Set(questions.map(\.itemID))
+        return replied.allSatisfy { asked.contains($0.questionItemID) }
+    }
+
+    /// The turn's first message from the person, as an item.
+    static func firstUserItem(in turn: CodexTurnState) -> CodexItemState? {
+        turn.items.first { if case .userMessage = $0.content { true } else { false } }
     }
 
     /// The turn's first message from the person.

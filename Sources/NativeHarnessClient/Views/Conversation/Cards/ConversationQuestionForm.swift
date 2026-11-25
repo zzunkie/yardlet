@@ -82,14 +82,14 @@ struct ConversationQuestionStepsView<Finish: View>: View {
         let pickedPreview = previewUnderPicked ? step.preview(for: input.answer(for: step)) : nil
         let picked = input.answer(for: step)?.options.first
         return VStack(alignment: .leading, spacing: ParitySpace.s4) {
-            ForEach(step.options, id: \.label) { option in
-                optionRow(step, option: option)
+            ForEach(Array(step.options.enumerated()), id: \.element.label) { number, option in
+                optionRow(step, option: option, number: number + 1)
                 if let pickedPreview, option.label == picked {
                     ConversationQuestionPreview(markdown: pickedPreview)
                 }
             }
             if step.allowsCustomAnswer {
-                customAnswerRow(step)
+                customAnswerRow(step, number: step.options.count + 1)
             }
         }
     }
@@ -111,7 +111,18 @@ struct ConversationQuestionStepsView<Finish: View>: View {
         }
     }
 
-    private func optionRow(_ step: ConversationQuestionStep, option: PermissionQuestionOption) -> some View {
+    /// The key that picks the option, at the row's end as the Codex app shows it: 1–9, while the form takes input.
+    @ViewBuilder
+    private func numberHint(_ number: Int) -> some View {
+        if isAnswerable, number <= 9 {
+            Text(verbatim: "\(number)")
+                .font(.parity(.caption, scale: interfaceScale).monospacedDigit())
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private func optionRow(_ step: ConversationQuestionStep, option: PermissionQuestionOption, number: Int) -> some View {
         let isSelected = input.answer(for: step)?.options.contains(option.label) == true
         return Button {
             input.toggle(option.label, for: step)
@@ -119,9 +130,10 @@ struct ConversationQuestionStepsView<Finish: View>: View {
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: ParitySpace.s8) {
                 Image(systemName: Self.indicator(multiple: step.allowsMultipleSelections, isOn: isSelected))
+                    .font(.parity(.control, scale: interfaceScale))
                     .foregroundStyle(isSelected ? ParityTheme.accent : Color.secondary)
                     .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text(option.label)
                         .font(.parity(.control, weight: isSelected ? .medium : .regular, scale: interfaceScale))
                         .fixedSize(horizontal: false, vertical: true)
@@ -129,10 +141,12 @@ struct ConversationQuestionStepsView<Finish: View>: View {
                         Text(description)
                             .font(.parity(.caption, scale: interfaceScale))
                             .foregroundStyle(.secondary)
+                            .lineSpacing(1)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                Spacer(minLength: 0)
+                Spacer(minLength: ParitySpace.s8)
+                numberHint(number)
             }
             .contentShape(Rectangle())
             .padding(.horizontal, ConversationRequestSurface.optionInset)
@@ -142,7 +156,7 @@ struct ConversationQuestionStepsView<Finish: View>: View {
         }
         .buttonStyle(.plain)
         .parityPointer()
-        .onHover { hovered = $0 ? option.label : (hovered == option.label ? nil : hovered) }
+        .pointerHover { hovered = $0 ? option.label : (hovered == option.label ? nil : hovered) }
         .disabled(!isAnswerable)
         .accessibilityLabel(option.label)
         .accessibilityValue(option.description ?? "")
@@ -151,7 +165,7 @@ struct ConversationQuestionStepsView<Finish: View>: View {
 
     /// The person's own answer, as the last option: Claude Code's "Other", the Codex app's field
     /// under the options. Typing chooses it over the options of a question that takes one answer.
-    private func customAnswerRow(_ step: ConversationQuestionStep) -> some View {
+    private func customAnswerRow(_ step: ConversationQuestionStep, number: Int) -> some View {
         let isChosen = input.isCustomAnswerChosen(for: step)
         return HStack(alignment: .firstTextBaseline, spacing: ParitySpace.s8) {
             Button {
@@ -159,6 +173,7 @@ struct ConversationQuestionStepsView<Finish: View>: View {
                 focus = .customAnswer(step.id)
             } label: {
                 Image(systemName: Self.indicator(multiple: step.allowsMultipleSelections, isOn: isChosen))
+                    .font(.parity(.control, scale: interfaceScale))
                     .foregroundStyle(isChosen ? ParityTheme.accent : Color.secondary)
             }
             .buttonStyle(.plain)
@@ -168,6 +183,7 @@ struct ConversationQuestionStepsView<Finish: View>: View {
             textField(step, placeholder: L10n.string("Type your own answer"), isBordered: false)
                 .font(.parity(.control, scale: interfaceScale))
                 .accessibilityLabel(L10n.string("Other"))
+            numberHint(number)
         }
         .padding(.horizontal, ConversationRequestSurface.optionInset)
         .padding(.vertical, ParitySpace.s8)
@@ -200,7 +216,7 @@ struct ConversationQuestionStepsView<Finish: View>: View {
         .focused($focus, equals: .customAnswer(step.id))
         .onSubmit { goOn(from: step) }
         if isBordered {
-            field.textFieldStyle(.roundedBorder)
+            field.conversationRequestField()
         } else {
             field.textFieldStyle(.plain)
         }
@@ -425,29 +441,39 @@ struct ConversationQuestionSummary: View {
         }
     }
 
+    /// The question in the quiet secondary line, and under it the answer in the conversation's own colour after a
+    /// check, or "Not answered" after a dash, so the answers line up down the block.
     private func questionAndAnswer(_ step: ConversationQuestionStep) -> some View {
         // A selection across the conversation takes the question and its answer as they read.
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: ParitySpace.s4) {
             let question = step.text ?? step.header ?? L10n.string("Question")
             Text(question)
-                .font(.parity(.control, scale: interfaceScale))
+                .font(.parity(.caption, scale: interfaceScale))
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
                 .conversationSelectionText(question)
             if let answers {
-                if let answer = answers[step.id], !answer.values.isEmpty {
-                    let text = Self.text(answer, isSecret: step.isSecret)
-                    Text(text)
-                        .font(.parity(.control, weight: .medium, scale: interfaceScale))
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .conversationSelectionText(text)
-                } else {
-                    Text(L10n.string("Not answered"))
-                        .font(.parity(.control, scale: interfaceScale))
-                        .foregroundStyle(.tertiary)
-                        .conversationSelectionText(L10n.string("Not answered"))
+                let answer = answers[step.id].flatMap { $0.values.isEmpty ? nil : $0 }
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: answer == nil ? "minus" : "checkmark")
+                        .font(.parity(.caption, weight: .semibold, scale: interfaceScale))
+                        .foregroundStyle(answer == nil ? Color.secondary : ParityTheme.accent)
+                        .frame(width: 12 * interfaceScale)
+                        .accessibilityHidden(true)
+                    if let answer {
+                        let text = Self.text(answer, isSecret: step.isSecret)
+                        Text(text)
+                            .font(.parity(.control, weight: .medium, scale: interfaceScale))
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .conversationSelectionText(text)
+                    } else {
+                        Text(L10n.string("Not answered"))
+                            .font(.parity(.control, scale: interfaceScale))
+                            .foregroundStyle(.secondary)
+                            .conversationSelectionText(L10n.string("Not answered"))
+                    }
                 }
             }
         }

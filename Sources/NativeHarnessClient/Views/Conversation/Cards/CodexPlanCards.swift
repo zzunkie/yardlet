@@ -147,16 +147,18 @@ struct CodexQuestionOptions: View {
 
     private var steps: [ConversationQuestionStep] { questions.map(ConversationQuestionStep.init) }
 
-    /// Waiting, on a request's panel; answered, as an answered request's questions read: under a thin rule.
+    /// Waiting, on a request's panel; answered, as an answered request's questions read
+    /// (`ConversationAnsweredBlock`). The reply that answered them draws no message of its own.
     var body: some View {
         let steps = steps
         Group {
             if let answered = answers ?? sent.map({ $0.answers(for: steps) }) {
-                ConversationQuestionSummary(steps: steps, answers: answered)
-                    .padding(.leading, 12)
-                    .overlay(alignment: .leading) {
-                        Rectangle().fill(ParityTheme.strongSeparator).frame(width: 2)
-                    }
+                ConversationAnsweredBlock {
+                    ConversationOutcomeLabel(symbol: "checkmark.circle", state: L10n.string("Answered"),
+                                             title: L10n.string("Questions"))
+                } content: {
+                    ConversationQuestionSummary(steps: steps, answers: answered)
+                }
             } else {
                 ConversationQuestionStepsView(
                     steps: steps, input: $input, index: $index, isAnswerable: onAnswer != nil,

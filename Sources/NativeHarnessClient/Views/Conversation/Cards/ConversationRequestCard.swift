@@ -74,7 +74,7 @@ struct ConversationRequestCard: View {
             if let preview = request.preview {
                 PermissionRequestPreviewView(preview: preview, showsDescription: !usesDescriptionAsHeadline)
             } else if let command = request.command {
-                CodexBoundedOutput(text: command, folds: false)
+                CodexBoundedOutput(text: command, folds: false, onRequestPanel: true)
             }
             if showsProviderContext, let context = request.codexContext {
                 providerContext(context)
@@ -84,10 +84,12 @@ struct ConversationRequestCard: View {
             case let .choices(questions):
                 questionForm(ConversationRequestForm.choices(questions).questionSteps, responses: responses)
             case let .planReview(plan):
-                planBody(plan)
+                planBody(plan, onPanel: true)
                 if answersForm(responses) {
-                    TextField(L10n.string("Tell Claude what to change"), text: $input.reason)
-                        .textFieldStyle(.roundedBorder)
+                    TextField(L10n.string("Tell Claude what to change"), text: $input.reason, axis: .vertical)
+                        .lineLimit(1...4)
+                        .wrapsBetweenWords()
+                        .conversationRequestField()
                         .accessibilityLabel(L10n.string("Tell Claude what to change"))
                 }
             case let .freeText(questions):
@@ -113,34 +115,25 @@ struct ConversationRequestCard: View {
     }
 
     /// An answered request as both apps leave one in the conversation: no panel of its own. A question form
-    /// reads as its questions and answers, a plan as the plan under how it ended, anything else as one muted
-    /// line saying how it ended, with the provider's words when it gave any.
+    /// reads as its questions and answers, and a form as the values it sent, under how it ended
+    /// (`ConversationAnsweredBlock`); a plan as the plan under how it ended; anything else as one muted line
+    /// saying how it ended, with the provider's words when it gave any.
     @ViewBuilder
     private var answered: some View {
         switch request.form {
         case .choices, .freeText:
-            VStack(alignment: .leading, spacing: ParitySpace.s8) {
-                outcomeLine
+            ConversationAnsweredBlock { outcomeLine } content: {
                 questionForm(request.form?.questionSteps ?? [], responses: [])
-                    .padding(.leading, ParitySpace.s12)
-                    .overlay(alignment: .leading) {
-                        Rectangle().fill(ParityTheme.strongSeparator).frame(width: 2)
-                    }
             }
         case let .planReview(plan):
             VStack(alignment: .leading, spacing: ParitySpace.s8) {
                 outcomeLine
-                planBody(plan)
+                planBody(plan, onPanel: false)
             }
         case let .mcpForm(form):
             // The form as it was sent, read-only, as an answered question reads as its answers.
-            VStack(alignment: .leading, spacing: ParitySpace.s8) {
-                outcomeLine
+            ConversationAnsweredBlock { outcomeLine } content: {
                 CodexMCPElicitationFormView(form: form, input: $input.fields, isAnswerable: false)
-                    .padding(.leading, ParitySpace.s12)
-                    .overlay(alignment: .leading) {
-                        Rectangle().fill(ParityTheme.strongSeparator).frame(width: 2)
-                    }
             }
         case nil:
             outcomeLine
@@ -150,22 +143,8 @@ struct ConversationRequestCard: View {
     /// How the request ended and what it was about, in the secondary colour, with the provider's message under it.
     private var outcomeLine: some View {
         VStack(alignment: .leading, spacing: ParitySpace.s4) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Image(systemName: outcomeSymbol)
-                    .accessibilityHidden(true)
-                Text(stateTitle)
-                Text(verbatim: "·").foregroundStyle(.tertiary).accessibilityHidden(true)
-                Text(request.title)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if let detail = request.outcomeDetail {
-                    Text(detail)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-            }
-            .font(.parity(.control, scale: interfaceScale))
-            .foregroundStyle(.secondary)
+            ConversationOutcomeLabel(symbol: outcomeSymbol, state: stateTitle, title: request.title,
+                                     detail: request.outcomeDetail)
             stateNote
         }
         .help(request.method ?? "")
@@ -281,7 +260,7 @@ struct ConversationRequestCard: View {
                         .font(.parity(.caption, scale: interfaceScale))
                         .foregroundStyle(.secondary)
                 }
-                CodexBoundedOutput(text: field.text, folds: false)
+                CodexBoundedOutput(text: field.text, folds: false, onRequestPanel: true)
             }
         }
         if context.isEmpty, request.command == nil, let method = request.method {
@@ -327,13 +306,17 @@ struct ConversationRequestCard: View {
         send(response)
     }
 
-    /// The plan exactly as the provider wrote it, in its own markdown.
-    private func planBody(_ plan: String) -> some View {
-        TranscriptMarkdownText(text: plan)
+    /// The plan exactly as the provider wrote it, in its own markdown: on a waiting request's panel in a well
+    /// of the elevated surface, which stands off the panel's shade, and in the conversation on the subtle fill.
+    private func planBody(_ plan: String, onPanel: Bool) -> some View {
+        let shape = RoundedRectangle(cornerRadius: ParityRadius.row)
+        return TranscriptMarkdownText(text: plan)
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(ParitySpace.s12)
-            .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: ParityRadius.row))
+            .padding(.horizontal, ParitySpace.s16)
+            .padding(.vertical, ParitySpace.s12)
+            .background(onPanel ? ParityTheme.elevated : ParityTheme.subtleFill, in: shape)
+            .overlay { if onPanel { shape.strokeBorder(ParityTheme.separator) } }
             .accessibilityLabel(L10n.string("Proposed plan"))
     }
 
@@ -512,5 +495,80 @@ struct ConversationKeyCap: View {
             .overlay { RoundedRectangle(cornerRadius: 4).stroke(.foreground.opacity(0.3)) }
             .opacity(0.85)
             .accessibilityHidden(true)
+    }
+}
+
+/// How a request ended, on one secondary line: the outcome's symbol and words, what the request was, and the
+/// provider's words about it, cut to the line.
+struct ConversationOutcomeLabel: View {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
+    let symbol: String
+    let state: String
+    let title: String
+    var detail: String? = nil
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: symbol)
+                .accessibilityHidden(true)
+            Text(state)
+            Text(verbatim: "·").foregroundStyle(.tertiary).accessibilityHidden(true)
+            Text(title)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            if let detail {
+                Text(detail)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+        .font(.parity(.control, scale: interfaceScale))
+        .foregroundStyle(.secondary)
+    }
+}
+
+/// An answered question or form as it stays in the conversation: one quiet block on the subtle fill, with how
+/// it ended on its first line and what was answered under it, so the questions and their answers read as one
+/// record rather than as more of the conversation.
+struct ConversationAnsweredBlock<Header: View, Content: View>: View {
+    @ViewBuilder let header: () -> Header
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: ParitySpace.s12) {
+            header()
+            content()
+        }
+        .padding(.horizontal, ParitySpace.s16)
+        .padding(.vertical, ParitySpace.s12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: ParityRadius.surface))
+        .accessibilityElement(children: .contain)
+    }
+}
+
+extension View {
+    /// A text field on a waiting request's panel, drawn as the composer draws its own: plain text on the
+    /// input surface with a hairline edge and the row radius, no bezel and no focus ring; the caret shows
+    /// where typing goes (docs/DESIGN_SYSTEM.md, "Semantic colors").
+    func conversationRequestField() -> some View {
+        modifier(ConversationRequestFieldStyle())
+    }
+}
+
+private struct ConversationRequestFieldStyle: ViewModifier {
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: ParityRadius.row)
+        content
+            .textFieldStyle(.plain)
+            .font(.parity(.control, scale: interfaceScale))
+            .padding(.horizontal, ParitySpace.s12)
+            .padding(.vertical, ParitySpace.s8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(ParityTheme.input, in: shape)
+            .overlay { shape.strokeBorder(ParityTheme.strongSeparator) }
+            .focusEffectDisabled()
     }
 }
