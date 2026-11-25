@@ -493,6 +493,7 @@ enum ConversationLineWording {
     /// "github: create issue"; Antigravity's `mcp_yardlet_<8 hex>_browser_navigate` reads
     /// "yardlet: browser navigate"). A server named by an ID alone, as the Claude app names its
     /// claude.ai connectors, says nothing, so the tool's own name stands alone ("slack read channel").
+    /// Antigravity's title for a call without a summary, `Run <tool name>`, reads as the tool's name.
     /// `account` is the account a Yardlet connector's call names, for a tool its service's accounts share.
     static func mcpLabel(_ name: String, account: String? = nil, allowsBareServerPrefix: Bool = false) -> String? {
         if let toolName = ConnectorToolLabels.yardletToolName(fromHarnessTool: name,
@@ -501,6 +502,17 @@ enum ConversationLineWording {
                 return "\(label.connectorName(account: account)): \(ConnectorToolLabels.spaced(label.tool))"
             }
             return "\(AgentToolEnvironment.serverName): \(ConnectorToolLabels.spaced(toolName))"
+        }
+        let name = ConnectorToolLabels.harnessToolName(name)
+        func spaced(_ text: String) -> String {
+            text.replacingOccurrences(of: "_+", with: " ", options: .regularExpression)
+        }
+        // Antigravity joins server and tool with one underscore (`mcp_<server>_<tool>`), so where one ends
+        // is not known; the words read in order ("github create issue").
+        if !name.hasPrefix("mcp__"), name.hasPrefix("mcp_"), name.count > 4,
+           name.unicodeScalars.allSatisfy({ $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "_" || $0 == "-") }) {
+            let words = spaced(String(name.dropFirst(4))).trimmingCharacters(in: .whitespaces)
+            return words.isEmpty ? nil : words
         }
         guard name.hasPrefix("mcp__") else { return nil }
         var rest = String(name.dropFirst(5))
@@ -511,9 +523,6 @@ enum ConversationLineWording {
         let tool = String(rest[split.upperBound...])
         let server = String(rest[..<split.lowerBound]).trimmingCharacters(in: CharacterSet(charactersIn: "_"))
         guard !tool.isEmpty, !server.isEmpty else { return nil }
-        func spaced(_ text: String) -> String {
-            text.replacingOccurrences(of: "_+", with: " ", options: .regularExpression)
-        }
         if UUID(uuidString: server) != nil { return spaced(tool) }
         return "\(spaced(server)): \(spaced(tool))"
     }

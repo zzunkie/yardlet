@@ -1383,10 +1383,14 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
     }
 
     /// Whether a transcript's tool call is one to Yardlet's `tool`: Claude Code's `mcp__yardlet__<tool>`,
+    /// Antigravity's `mcp_yardlet_<hex>_<tool>` (in its kind, or its title `Run mcp_yardlet_<hex>_<tool>`),
     /// or another harness's by the names `ConversationAgentRunProjection` reads.
     static func isSessionToolCall(_ activity: HarnessActivity, named tool: String) -> Bool {
         let names: Set<String> = ["mcp__\(AgentToolEnvironment.serverName)__\(tool)", tool]
-        return [activity.kind, activity.title].contains { names.contains($0) || $0.hasSuffix(": \(tool)") }
+        return [activity.kind, activity.title].contains {
+            names.contains($0) || $0.hasSuffix(": \(tool)")
+                || ConnectorToolLabels.yardletToolName(fromHarnessTool: $0) == tool
+        }
     }
 
     /// Whether the latest turn's last tool call is one to Yardlet's `tool`, in the record

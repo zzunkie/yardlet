@@ -518,6 +518,24 @@ final class ToolRowWordingTests: XCTestCase {
                        "yardlet: browser navigate 사용함")
         XCTAssertEqual(ConversationLineWording.toolAccessibilityLabel(nav), "yardlet: browser navigate")
 
+        // Antigravity's ACP title for a call without a summary is "Run <tool name>", kind "other"; the live
+        // row, the phone and `read_task` all word it from here.
+        let run = ConversationTool(kind: .activity("other"), name: "Run mcp_yardlet_f31bd028_list_tasks")
+        XCTAssertEqual(ConversationLineWording.tool(run, phase: .completed, harness: .antigravityCLI,
+                                                    workspaceURL: nil, localize: en).text,
+                       "Used yardlet: list tasks")
+        XCTAssertEqual(ConversationLineWording.toolAccessibilityLabel(run), "yardlet: list tasks")
+        XCTAssertEqual(ConversationLineWording.mcpLabel("Run mcp_yardlet_read_task"), "yardlet: read task")
+        XCTAssertEqual(ConversationLineWording.mcpLabel("Run mcp__github__create_issue"), "github: create issue")
+        XCTAssertEqual(ConversationLineWording.mcpLabel("Run mcp_linear_create_issue"), "linear create issue")
+        XCTAssertEqual(ConversationLineWording.mcpLabel("mcp_linear_create_issue"), "linear create issue")
+        XCTAssertNil(ConversationLineWording.mcpLabel("Run the unit tests"))
+        XCTAssertNil(ConversationLineWording.mcpLabel("Run mcp_tests.sh --all"))
+        XCTAssertTrue(AppModel.isSessionToolCall(
+            HarnessActivity(id: "c", kind: "other", title: "Run mcp_yardlet_f31bd028_read_task"), named: "read_task"))
+        XCTAssertFalse(AppModel.isSessionToolCall(
+            HarnessActivity(id: "c", kind: "other", title: "Run mcp_yardlet_f31bd028_read_task"), named: "list_tasks"))
+
         // Non-MCP read/search/image rows starting with `yardlet_` stay untouched.
         let readFile = ConversationTool(kind: .activity("read"), name: "yardlet_config.json")
         XCTAssertEqual(ConversationLineWording.tool(readFile, phase: .completed, harness: .antigravityCLI,

@@ -706,7 +706,8 @@ final class ConnectorToolLabels: @unchecked Sendable {
     /// `mcp_yardlet_<8|16|64 hex>_<tool>`, and — only when `allowsBareServerPrefix` is true —
     /// `yardlet_<8|16|64 hex>_<tool>` or `yardlet_<tool>`). Requires valid MCP identifier characters
     /// (`[A-Za-z0-9_-]`) and trims trailing underscores to match `ConversationLineWording.mcpLabel`.
-    static func yardletToolName(fromHarnessTool name: String, allowsBareServerPrefix: Bool = false) -> String? {
+    static func yardletToolName(fromHarnessTool title: String, allowsBareServerPrefix: Bool = false) -> String? {
+        let name = harnessToolName(title)
         let server = AgentToolEnvironment.serverName
         let rest: String
         let allowsHashSuffix: Bool
@@ -738,6 +739,16 @@ final class ConnectorToolLabels: @unchecked Sendable {
                   scalar.isASCII && (CharacterSet.alphanumerics.contains(scalar) || scalar == "_" || scalar == "-")
               }) else { return nil }
         return candidate
+    }
+
+    /// The tool name in a call's title: Antigravity titles a call it gives no summary "Run <tool name>"
+    /// (`Run mcp_yardlet_<hex>_list_tasks`). Any other title is returned as it is.
+    static func harnessToolName(_ title: String) -> String {
+        let run = "Run "
+        guard title.hasPrefix(run) else { return title }
+        let rest = title.dropFirst(run.count)
+        guard rest.hasPrefix("mcp_"), !rest.contains(where: \.isWhitespace) else { return title }
+        return String(rest)
     }
 
     /// The label and Yardlet's name for a tool as a harness names it in its conversation: Claude Code
