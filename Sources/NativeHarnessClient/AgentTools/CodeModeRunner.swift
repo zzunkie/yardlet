@@ -16,9 +16,55 @@ enum CodeModePreference {
 #endif
     }
 
-    static func isOn(in defaults: UserDefaults = .yardlet) -> Bool {
+    /// Settings › General › Tasks › MCP Code Mode. `auto`, the default, decides per task (`isOn`).
+    enum Mode: String, CaseIterable {
+        case auto, on, off
+
+        var title: String {
+            switch self {
+            case .auto: L10n.string("Auto")
+            case .on: L10n.string("On")
+            case .off: L10n.string("Off")
+            }
+        }
+    }
+
+    /// In `auto`, Claude Code tasks use Code Mode from this many connector tools: with fewer, its own
+    /// tool search loads the few it needs in fewer turns.
+    static let claudeCodeConnectorToolThreshold = 30
+
+    /// The chosen mode. Before it had three values the setting was a switch, saved only once the person
+    /// turned it: a saved `true` reads as `on` and a saved `false` as `off`, and no value at all as `auto`.
+    static func mode(in defaults: UserDefaults = .yardlet) -> Mode {
+        switch defaults.object(forKey: key) {
+        case let value as String: Mode(rawValue: value) ?? .auto
+        case let value as Bool: value ? .on : .off
+        default: .auto
+        }
+    }
+
+    /// Saves a switch from before the setting had three values as the mode it reads as, so Settings,
+    /// which reads the value as text, shows it.
+    static func convertSavedSwitch(in defaults: UserDefaults = .yardlet) {
+        guard defaults.object(forKey: key) is Bool else { return }
+        defaults.set(mode(in: defaults).rawValue, forKey: key)
+    }
+
+    /// Whether a task of this harness, offered this many connector tools, gets Code Mode. In `auto`,
+    /// Codex never does (it runs its own code mode); Claude Code does from
+    /// `claudeCodeConnectorToolThreshold` connector tools; Antigravity and the other harnesses do from one.
+    static func isOn(_ mode: Mode, harness: HarnessKind?, connectorToolCount: Int) -> Bool {
         guard isSupported else { return false }
-        return defaults.object(forKey: key) as? Bool ?? false
+        switch mode {
+        case .on: return true
+        case .off: return false
+        case .auto:
+            switch harness {
+            case nil, .codex?: return false
+            case .claudeCode?: return connectorToolCount >= claudeCodeConnectorToolThreshold
+            default: return connectorToolCount > 0
+            }
+        }
     }
 }
 

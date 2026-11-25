@@ -526,8 +526,9 @@ extension YardletSetting {
     static let agentCodeMode = YardletSetting(
         id: "agent_code_mode", section: .general, generalGroup: .tasks, symbol: "chevron.left.forwardslash.chevron.right",
         title: L10n.string("MCP Code Mode (experimental)"),
-        detail: L10n.string("Agents find connector and Yardlet tools with search_yardlet_tools and run several at once in a sandboxed JavaScript run_yardlet_script, so connector tool schemas stay out of the context."),
-        values: .onOff, storage: .flag(key: CodeModePreference.key, defaultValue: false), asksEveryTime: true,
+        detail: L10n.string("Agents find connector and Yardlet tools with search_yardlet_tools and run several in one sandboxed JavaScript run_yardlet_script, keeping connector tool schemas out of the context. Auto uses it in Claude Code tasks with 30 or more connector tools and in other agents' tasks with any, never in Codex."),
+        values: choices(CodeModePreference.Mode.self, title: \.title),
+        storage: .choice(key: CodeModePreference.key, defaultValue: CodeModePreference.Mode.auto.rawValue), asksEveryTime: true,
         offered: { _ in CodeModePreference.isSupported },
         keywords: "MCP, code mode, JavaScript, tokens, context, connectors, tools, script")
 

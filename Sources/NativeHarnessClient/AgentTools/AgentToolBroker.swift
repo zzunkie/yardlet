@@ -159,9 +159,10 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     /// session tools then include `read_terminal`. Read at every list, so a change reaches a running task
     /// once its harness is told the list changed (`toolsMayHaveChanged`).
     var sharesTerminal: @MainActor () -> Bool = { TerminalSharingPreference.isOn() }
-    /// Whether Yardlet's native MCP Code Mode is enabled (`CodeModePreference`): exposes
-    /// `search_yardlet_tools` and `run_yardlet_script` and collapses flat connector schemas.
-    var codeModeEnabled: @MainActor () -> Bool = { CodeModePreference.isOn() }
+    /// The person's MCP Code Mode choice (`CodeModePreference`). Where it is on for a task
+    /// (`codeModeIsOn`), the task gets `search_yardlet_tools` and `run_yardlet_script` in place of its
+    /// connector tools' schemas.
+    var codeModeSetting: @MainActor () -> CodeModePreference.Mode = { CodeModePreference.mode() }
     /// The app, which answers the scheduled-task tools. Nil, as in tests, offers none.
     weak var schedules: (any ScheduleToolHandling)?
     /// The app, which says who made a call and asks the person where Yardlet's own approvals ask
@@ -338,8 +339,9 @@ final class AgentToolBroker: AgentToolLaunchProviding {
 
     private func handle(_ call: AgentToolCall, origin: AgentToolCallOrigin) async -> AgentToolResult {
         guard let sessionID = authorizedSession(call) else { return Self.unrecognizedToken }
-        if CodeModeToolCatalog.definition(named: call.tool) != nil, !codeModeEnabled() {
-            return .failure("MCP Code Mode is off in Yardlet's settings. Turn it on in Settings → General.",
+        if CodeModeToolCatalog.definition(named: call.tool) != nil,
+           !codeModeIsOn(for: sessionID, connectorTools: await filteredConnectorTools(for: sessionID)) {
+            return .failure("MCP Code Mode is off for this task. It is set in Yardlet's Settings → General → Tasks.",
                             .refused, retry: .no)
         }
         // Yardlet's own tools are checked against the schemas they are listed with before they run; a
@@ -509,13 +511,8 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         return await unknownConnectorTool(innerTool, for: sessionID)
     }
 
+    /// Reached only once `handle` found Code Mode on for the task.
     private func handleCodeMode(_ call: AgentToolCall, for sessionID: UUID) async -> AgentToolResult {
-        guard CodeModePreference.isSupported && codeModeEnabled() else {
-            return .failure(
-                "MCP Code Mode is off in Yardlet's settings. Turn it on in Settings → General to use \(call.tool).",
-                .refused, retry: .no
-            )
-        }
         if call.tool == CodeModeToolCatalog.searchTools {
             let all = await searchableToolsForCodeMode(for: sessionID)
             return CodeModeToolCatalog.formatSearch(
@@ -668,6 +665,11 @@ final class AgentToolBroker: AgentToolLaunchProviding {
                         details: ["tool": .string(name), "similar": .array(family.map(ToolJSON.string))])
     }
 
+    private func codeModeIsOn(for sessionID: UUID, connectorTools: [ToolJSON]) -> Bool {
+        CodeModePreference.isOn(codeModeSetting(), harness: connectorScopes[sessionID]?.harness,
+                                connectorToolCount: connectorTools.count)
+    }
+
     private func usesCompactToolSurface(for sessionID: UUID) -> Bool {
         connectorScopes[sessionID]?.harness == .antigravityCLI
     }
@@ -738,10 +740,9 @@ final class AgentToolBroker: AgentToolLaunchProviding {
             + widgetDefinitions + sessionDefinitions + terminalDefinitions + scheduleDefinitions
         let coreTools = compact ? AntigravityCompactTools.compact(coreDefinitions) : coreDefinitions.map(\.json)
 
-        let codeMode = CodeModePreference.isSupported && codeModeEnabled()
-        let codeModeTools = codeMode ? CodeModeToolCatalog.tools.map(\.json) : []
-
         let connectorTools = await filteredConnectorTools(for: sessionID)
+        let codeMode = codeModeIsOn(for: sessionID, connectorTools: connectorTools)
+        let codeModeTools = codeMode ? CodeModeToolCatalog.tools.map(\.json) : []
         let exposedConnectorTools: [ToolJSON]
         if codeMode {
             // In Code Mode, connector tools are discovered via `search_yardlet_tools` and invoked
