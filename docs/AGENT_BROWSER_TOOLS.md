@@ -157,6 +157,11 @@ batch's, with its `action` number and `tool`; a batch that holds a picture keeps
   is not refused; the end of its result states the fact: "The person is using this tab in the browser panel (their last
   input to it was 4 seconds ago), so what you do here happens on the page they are working in. browser_tab_new opens a
   tab of your own; browser_handoff hands this one to them." When the person is not using the panel, nothing changes.
+- **The tab the agent holds:** A tab the agent works in during its turn, after the person's last input there, is held
+  ([BROWSER_HOST](BROWSER_HOST.md) section 3, "The tab the agent holds"): the panel keeps the person's clicks, keys and
+  scrolls from the page, and focusing or watching it does not count as using it, so tools on it carry no person note.
+  The person's Take control makes it theirs, as above; a handoff or anything else the tab waits on from the person lifts
+  the hold while it waits.
 - **New tabs the page opened:** When the page asks for a new window, by a click or the like, a new tab of the task opens
   (in front, or behind for a click in a background tab or while the person uses another of the task's tabs; that tab has `window.opener` like a Chrome
   popup, [BROWSER_HOST](BROWSER_HOST.md) section 3, "New windows"). The end of the next tool result gets

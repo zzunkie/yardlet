@@ -49,6 +49,11 @@ final class BrowserHostPaneController {
     /// error code, until the page loads again.
     private(set) var crash: BrowserTabCrash?
     private(set) var isAgentDriving = false
+    /// The agent holds the shown tab (`BrowserTab.isAgentHolding`): the page keeps the person's clicks, keys and
+    /// scrolls out, and a glow and a Take control pill lie over it (`BrowserAgentHoldOverlay`).
+    private(set) var isAgentHolding = false
+    /// Counts the person's presses and keys the hold kept from the page, for the pill to answer them.
+    private(set) var heldPresses = 0
     /// The screen size the shown tab's page is emulated at, and who chose it (`BrowserTab.emulation`), for the
     /// Viewport menu.
     private(set) var emulation: BrowserViewportEmulation?
@@ -321,6 +326,8 @@ final class BrowserHostPaneController {
         tab.onEmulationChange = nil
         tab.onHandoffChange = nil
         tab.onVaultSetupAskChange = nil
+        tab.onHoldChange = nil
+        showHold(false)
         emulation = nil
         handoff = nil
         releaseVault(tab)
@@ -385,6 +392,12 @@ final class BrowserHostPaneController {
             self.showHandoff(of: tab)
         }
         showHandoff(of: tab)
+        tab.onHoldChange = { [weak self, weak tab] in
+            guard let self, let tab, self.tab === tab else { return }
+            self.showHold(tab.isAgentHolding)
+        }
+        view.onHeldKey = { [weak self] in self?.heldPresses &+= 1 }
+        showHold(tab.isAgentHolding)
         adoptVault(tab, in: view)
         tab.onVaultSetupAskChange = { [weak self, weak tab] in
             guard let self, let tab, self.tab === tab else { return }
@@ -393,7 +406,14 @@ final class BrowserHostPaneController {
         showSetupAsk(of: tab)
         view.tabID = tab.id
         view.isPasswordFieldFocused = tab.isPasswordFieldFocused
-        view.sendCommand = { [weak tab] command in tab?.send(command) }
+        view.sendCommand = { [weak self, weak tab] command in
+            guard let tab else { return }
+            if tab.isAgentHolding, Self.isPageInput(command) {
+                self?.heldInput(command)
+                return
+            }
+            tab.send(command)
+        }
         // A tab shown in a view that has the keyboard focus (another browser tab, one opened again or
         // replaced) gets it, as when the view becomes first responder; before, only that sent it.
         if view.hasKeyboardFocus { tab.send(.focus(tab: tab.id, isFocused: true)) }
@@ -445,6 +465,40 @@ final class BrowserHostPaneController {
         guard let tab, let handoff = tab.handoff else { return }
         tab.answerHandoff(answer)
         MacAgentToolService.shared.broker.handoffs?.handoffEnded(notice: BrowserAgentTools.handoffNotice(handoff.id))
+    }
+
+    // MARK: The tab the agent holds
+
+    /// The person's own input to the page, which a tab the agent holds keeps out: pointer, wheel, keys, text, drags,
+    /// edits but Copy, and a choice from the page's context menu. Focus, size, zoom and the toolbar's commands pass.
+    static func isPageInput(_ command: BrowserHostCommand) -> Bool {
+        switch command {
+        case .mouse, .wheel, .key, .composition, .drag, .contextMenuResult: true
+        case .edit(_, let action): action != .copy
+        default: false
+        }
+    }
+
+    /// A press the hold kept from the page; a key press arrives through the view's `onHeldKey`, so a modifier held
+    /// for a shortcut is none.
+    private func heldInput(_ command: BrowserHostCommand) {
+        if case .mouse(_, let input) = command, input.kind == .down { heldPresses &+= 1 }
+    }
+
+    /// The hold starts or ends on the shown tab; presses counted while it lasted go with it, so the pill does not
+    /// answer them when it shows again.
+    private func showHold(_ held: Bool) {
+        if isAgentHolding != held { isAgentHolding = held }
+        view?.isInputHeld = held
+        if !held, heldPresses != 0 { heldPresses = 0 }
+    }
+
+    /// The pill's Take control: the page takes the person's input again, with the keyboard in it, and the agent's tools
+    /// say the person is using the tab.
+    func takeControl() {
+        guard let tab, tab.isAgentHolding else { return }
+        tab.takeControl()
+        if let view { view.window?.makeFirstResponder(view) }
     }
 
     // MARK: A page that does not respond
@@ -1318,6 +1372,9 @@ struct BrowserHostPane: View {
                                    action: L10n.string("Reload"))
                     } else if let errorMessage = controller.errorMessage {
                         errorState(title: L10n.string("Page unavailable"), message: errorMessage, action: L10n.string("Try again"))
+                    }
+                    if controller.isAgentHolding {
+                        BrowserAgentHoldOverlay(heldPresses: controller.heldPresses) { controller.takeControl() }
                     }
                     if let dialog = controller.javaScriptDialog {
                         BrowserJavaScriptDialogView(dialog: dialog, controller: controller)

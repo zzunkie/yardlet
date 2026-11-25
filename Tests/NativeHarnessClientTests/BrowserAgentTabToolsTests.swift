@@ -316,6 +316,54 @@ final class BrowserAgentTabToolsTests: XCTestCase {
         XCTAssertTrue(client.tab(forSession: task) === own, "once the person stops, the panel follows the agent")
     }
 
+    /// The tab the agent holds (docs/BROWSER_HOST.md, "The tab the agent holds"): the person's keyboard on it alone
+    /// does not make it theirs; what it waits on from the person (a handoff, Chromium's window) lifts the hold until it
+    /// ends; Take control makes it theirs, and keeps it while the page has their keyboard past `personUseWindow`; the end of
+    /// the turn lets it go at once, before the agent's emulation is undone.
+    func testATabTheAgentHoldsStaysItsUntilThePersonTakesControl() async throws {
+        let connection = connection
+        connection.answersDevTools = true
+        let client = BrowserHostClient(personUseWindow: .seconds(1)) { connection }
+        let tools = BrowserAgentTools(usesMacEditingCommands: true, tabs: BrowserAgentTabs { client })
+        let task = task
+        func run(_ tool: String, _ arguments: [String: JSONValue] = [:]) async -> String {
+            text(await tools.run(tool: tool, arguments: .object(arguments), sessionID: task))
+        }
+        let tab = try client.openTab(forSession: task, url: "https://example.com", viewport: .offscreenDefault)
+        client.attachPanel(to: tab)
+        let id = String(tab.id)
+
+        let held = await run(AgentToolCatalog.consoleMessages, ["tabId": .string(id)])
+        XCTAssertTrue(tab.isAgentHolding && !held.contains("The person is using this tab"), held)
+        client.setPanelKeyboard(true, on: tab)
+        XCTAssertNil(client.personUse(of: tab), "the keyboard alone does not take a tab the agent holds")
+        XCTAssertTrue(tab.isAgentHolding)
+
+        let handoff = Task { await run(AgentToolCatalog.handoff, ["reason": .string("Pass the check.")]) }
+        try await waitUntil { tab.handoff != nil }
+        XCTAssertFalse(tab.isAgentHolding, "a handoff lifts the hold")
+        tab.answerHandoff(.done)
+        XCTAssertTrue(tab.isAgentHolding, "the hold is back once the handoff is answered")
+        _ = await handoff.value
+        connection.eventHandler?(.chromiumWindow(isShown: true, titles: ["패스키"], kinds: ["passkey"], ids: [21], tabs: [tab.id]))
+        XCTAssertFalse(tab.isAgentHolding, "Chromium's passkey window lifts the hold")
+        connection.eventHandler?(.chromiumWindow(isShown: false, titles: nil))
+        XCTAssertTrue(tab.isAgentHolding, "the hold is back once the window goes")
+
+        tab.takeControl()
+        XCTAssertTrue(!tab.isAgentHolding && client.personUse(of: tab) != nil)
+        try await Task.sleep(for: .milliseconds(1200))
+        let reading = await run(AgentToolCatalog.consoleMessages, ["tabId": .string(id)])
+        XCTAssertFalse(tab.isAgentHolding, "past personUseWindow, the page still has the keyboard of the person who took it")
+        XCTAssertTrue(reading.contains("The person is using this tab"), reading)
+        client.setPanelKeyboard(false, on: tab)
+        _ = await run(AgentToolCatalog.consoleMessages, ["tabId": .string(id)])
+        XCTAssertTrue(tab.isAgentHolding, "once the person leaves the page, the agent's next call holds it again")
+
+        client.endAgentTurn(forSession: task)
+        XCTAssertFalse(tab.isAgentHolding, "the hold ends with the agent's turn, before its emulation is undone")
+    }
+
     /// A message the person sends the task while a tab waits on them ends the wait as that message
     /// (`AppModel.answerWaits(_:forPersonsMessageIn:)`): the call returns, saying so and where the message is.
     func testAHandoffEndsWhenThePersonSendsAMessageInstead() async throws {

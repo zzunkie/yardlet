@@ -3267,6 +3267,8 @@
 "%@ is waiting for an answer to its dialog" = "%@ is waiting for an answer to its dialog";
 "%@ is waiting for you to choose a file" = "%@ is waiting for you to choose a file";
 "The agent is using this tab" = "The agent is using this tab";
+"Take control" = "Take control";
+"Use this page yourself. The agent is told you are using it." = "Use this page yourself. The agent is told you are using it.";
 "The page asks for a file" = "The page asks for a file";
 "The page asks where to save a file" = "The page asks where to save a file";
 "The agent's action opened it. The agent can answer it, or you can choose." = "The agent's action opened it. The agent can answer it, or you can choose.";

@@ -57,6 +57,17 @@ final class BrowserHostView: NSView, @preconcurrency NSTextInputClient, MouseHis
     /// Escape while the panel picks an element ends picking instead of reaching the page; true when it did.
     var onEscape: (() -> Bool)?
     weak var accessibilitySource: BrowserAccessibilitySource?
+    /// The agent holds the shown tab (`BrowserHostPaneController.isAgentHolding`): a key press goes neither to the input
+    /// method nor to the page, only to `onHeldKey`, and the page refuses drops. Shortcuts still work.
+    var isInputHeld = false {
+        didSet {
+            // Text an input method was composing stays with the person's last use; none builds up while held.
+            guard isInputHeld, !oldValue, hasMarkedText() else { return }
+            inputContext?.discardMarkedText()
+            markedText = ""
+        }
+    }
+    var onHeldKey: (() -> Void)?
 
     /// Holds the page's frames and popups in the page's own points, placed and scaled where the page is drawn
     /// (`pageFrame`): the whole view, or an emulated screen size fit into it.
@@ -547,14 +558,14 @@ final class BrowserHostView: NSView, @preconcurrency NSTextInputClient, MouseHis
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
         let files = (sender.draggingPasteboard.readObjects(forClasses: [NSURL.self],
                                                           options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
-        guard let tabID, !files.isEmpty else { return [] }
+        guard let tabID, !files.isEmpty, !isInputHeld else { return [] }
         dragOperations = .copy
         sendDrag(.enter, sender, files: files.map { $0.path(percentEncoded: false) }, tab: tabID)
         return .copy
     }
 
     override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
-        guard let tabID else { return [] }
+        guard let tabID, !isInputHeld else { return [] }
         sendDrag(.over, sender, files: [], tab: tabID)
         if dragOperations.contains(.copy) { return .copy }
         if dragOperations.contains(.link) { return .link }
@@ -568,7 +579,7 @@ final class BrowserHostView: NSView, @preconcurrency NSTextInputClient, MouseHis
     }
 
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
-        guard let tabID else { return false }
+        guard let tabID, !isInputHeld else { return false }
         sendDrag(.drop, sender, files: [], tab: tabID)
         return true
     }
@@ -639,6 +650,10 @@ final class BrowserHostView: NSView, @preconcurrency NSTextInputClient, MouseHis
         if MacShortcut.browserEscape.matches(MacShortcutEvent(event), in: shortcutPreferences), !hasMarkedText(), onEscape?() == true { return }
         if !hasMarkedText(), !shortcutPreferences.snapshot.overrides.isEmpty,
            performPageShortcut(event, customizedOnly: true) { return }
+        if isInputHeld {
+            onHeldKey?()
+            return
+        }
         keyDown(event) { [self] in
             if inputContext?.handleEvent(event) != true {
                 interpretKeyEvents([event])
