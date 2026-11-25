@@ -881,9 +881,11 @@ final class BrowserAgentTools {
                               on page: BrowserAgentPage, sessionID: UUID?) async throws {
         guard let address, !address.isEmpty, let sessionID else { return }
         let landed = BrowserNavigationTarget(address)
-        guard landed != .blank, !weighed.contains(landed) else { return }
-        // Chromium's own error page is no place the page went.
-        if case .other = landed, BrowserURLPolicy.scheme(of: address) != "data" { return }
+        // Every file is weighed by its own path: one file in the task's folders allows no other.
+        guard landed != .blank, landed == .file || !weighed.contains(landed) else { return }
+        // Chromium's own error page (`chrome-error:`) is no place the page went; any address the browser may open is.
+        if case .other = landed,
+           BrowserURLPolicy.scheme(of: address).map({ !BrowserURLPolicy.allowedSchemes.contains($0) }) ?? true { return }
         let allowed: Bool
         if landed == .file {
             allowed = (try? await allowFile(address, on: page, sessionID: sessionID, shown: true)) != nil
@@ -893,7 +895,7 @@ final class BrowserAgentTools {
             allowed = true
         }
         if allowed {
-            weighed.insert(landed)
+            if landed != .file { weighed.insert(landed) }
             return
         }
         page.clearRefs()
