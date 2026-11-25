@@ -5745,15 +5745,16 @@ final class AppModel {
     }
 
     func shutdown() async {
+        // The quit has written down what was still in line; nothing more begins, and the timers
+        // that would continue a task stop. Before the first suspension, where a start window that
+        // just passed would otherwise begin the next task in line.
+        continuations.shutdown()
         scheduledTasks.stop()
         stopFollowingAccountMoves()
         // Before their runtimes close: the subagents the quit cuts off, kept for their callers.
         interruptAgentRunsForQuit()
         await sessionTools.keptRunWriter.flushed()
         await endSideChatsForQuit()
-        // The quit has written down what was still in line; nothing more begins, and the timers
-        // that would continue a task stop.
-        continuations.shutdown()
         sessionJobReads.values.forEach { $0.cancel() }
         sessionJobReads.removeAll()
         routingEvaluationLoop?.cancel()
