@@ -215,14 +215,19 @@ final class BrowserHostPaneController {
         }
         // Whether the person is using the shown tab: their keyboard is in its page (`BrowserHostClient.personUse`).
         view.onKeyboardChange = { [weak self] hasKeyboard in
-            guard let self, let tab = self.tab else { return }
+            guard let self, let tab = self.tab, tab.panel === self else { return }
             self.client.setPanelKeyboard(hasKeyboard, on: tab)
         }
-        // A chooser the person asked for opens once the panel is in a window.
-        view.onWindowChange = { [weak self] in
-            guard let self, let tab = self.tab else { return }
+        // Back in a window, the panel shows its tab again, or opens it when it has none (the host ended meanwhile, or
+        // the panel followed a tab while out of the window); a chooser the person asked for opens then.
+        view.onWindowChange = { [weak self, weak view] in
+            guard let self, let view else { return }
+            guard let tab = self.tab else {
+                if view.window != nil { self.open() }
+                return
+            }
             self.panelWindowChanged(tab)
-            self.showFileDialog(of: tab)
+            if !self.isPanelParked { self.showFileDialog(of: tab) }
         }
         // The pane follows its tab whoever opens, fronts or closes tabs.
         if tabsObserver == nil {
@@ -267,6 +272,9 @@ final class BrowserHostPaneController {
     /// its address or blank, with the address field ready.
     private func open() {
         guard let view else { return }
+        // Out of every window the panel opens nothing: another panel of the task in a window opens the tab at its size,
+        // with its address field ready, and this one takes the tab once it is in a window.
+        guard view.window != nil else { return tabsChanged() }
         do {
             // Only a blank tab opened here waits for an address; a tab the agent or a page opened is
             // already on its way to its page.
@@ -311,12 +319,6 @@ final class BrowserHostPaneController {
         stopShowing(tab)
         isPanelParked = false
         self.tab = nil
-        // Disconnect the view from this tab before clearing emulation so `emulatedSize`'s
-        // `didSet` cannot send a host-panel resize that overwrites an active remote viewport.
-        view?.tabID = nil
-        view?.sendCommand = nil
-        view?.setEmulation(size: nil, scale: nil)
-        view?.setPopup(nil)
         title = ""
         isLoading = false
         permissionPrompt = nil
@@ -358,6 +360,13 @@ final class BrowserHostPaneController {
         handoff = nil
         releaseVault(tab)
         isPanelOccluded = false
+        // Disconnect the view from this tab before clearing emulation so `emulatedSize`'s `didSet` cannot send a
+        // host-panel resize that overwrites an active remote or agent viewport; a view coming back to a window
+        // reports its size before the panel shows the tab again.
+        view?.tabID = nil
+        view?.sendCommand = nil
+        view?.setEmulation(size: nil, scale: nil)
+        view?.setPopup(nil)
     }
 
     func retry() {
@@ -378,8 +387,6 @@ final class BrowserHostPaneController {
         guard let view else { return }
         self.tab = tab
         clearError()
-        // A tab the host could not open says why, though it failed before this panel showed it.
-        if let failure = tab.openFailure { errorMessage = Self.message(for: failure) }
         findResult = nil
         isFindVisible = false
         alwaysAllowExternalApp = false
@@ -391,6 +398,8 @@ final class BrowserHostPaneController {
     /// panel, also from another panel that showed it before (`BrowserTab.panel`).
     private func present(_ tab: BrowserTab, in view: BrowserHostView) {
         tab.panel = self
+        // A tab the host could not open says why, though it failed before this panel showed it.
+        if let failure = tab.openFailure { errorMessage = Self.message(for: failure) }
         // What the header and toolbar show come from the tab, which kept them while another was shown.
         title = tab.title
         isLoading = tab.isLoading
