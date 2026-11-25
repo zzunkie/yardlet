@@ -40,11 +40,9 @@ struct CodexStatusPanel: View {
         tray.tuck = Self.composerTuck
         return tray
             .padding(.horizontal, 13)
-            .frame(maxWidth: ParityTheme.contentWidth)
-            .padding(.horizontal, 24)
+            .conversationColumn()
             .padding(.top, 6)
             .padding(.bottom, -Self.composerTuck)
-            .frame(maxWidth: .infinity)
     }
 
     @Environment(\.yardletInterfaceScale) private var interfaceScale

@@ -239,6 +239,13 @@ enum ParityTheme {
     static let panelCornerRadius = ParityRadius.surface
     /// Claude Code's conversation gutter (`--chat-gutter`), also the composer's.
     static let conversationInset = ParitySpace.s32
+
+    /// The width of the conversation's column in an area `width` wide: at most `contentWidth`, with
+    /// `conversationInset` inside each side. The turns and everything under and over them (the
+    /// composer, its trays, the request dock, notices and banners) share it, so their edges line up.
+    static func conversationColumnWidth(in width: CGFloat) -> CGFloat {
+        max(0, min(width, contentWidth) - 2 * conversationInset)
+    }
     static func conversationFont(scale: CGFloat) -> Font {
         .parity(.body, scale: scale)
     }
@@ -1036,5 +1043,15 @@ extension View {
                                showsFocusRing: Bool = false, emphasis: ParitySurfaceEmphasis = .standard) -> some View {
         modifier(ParitySurfaceElevation(cornerRadius: cornerRadius, isFocused: isFocused,
                                         accentBorder: accentBorder, showsFocusRing: showsFocusRing, emphasis: emphasis))
+    }
+}
+
+extension View {
+    /// Puts the view in the conversation's column (`ParityTheme.conversationColumnWidth(in:)`),
+    /// centered in the area, `alignment` within the column.
+    func conversationColumn(alignment: Alignment = .center) -> some View {
+        frame(maxWidth: ParityTheme.contentWidth - 2 * ParityTheme.conversationInset, alignment: alignment)
+            .padding(.horizontal, ParityTheme.conversationInset)
+            .frame(maxWidth: .infinity)
     }
 }

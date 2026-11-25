@@ -594,8 +594,7 @@ struct PersonalAgentConversationView: View {
             if let failure = conversation.failure ?? connectionFailure {
                 HStack { Text(failure.message); Spacer(); Button(L10n.string("Try again"), action: refresh) }
                     .font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary)
-                    .frame(maxWidth: ParityTheme.contentWidth)
-                    .padding(.horizontal, ParityTheme.conversationInset).padding(.bottom, 8)
+                    .conversationColumn().padding(.bottom, 8)
             }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: ConversationLayout.turnSpacing) {
@@ -617,11 +616,9 @@ struct PersonalAgentConversationView: View {
                     }
                 }
                 .scrollTargetLayout()
-                .frame(maxWidth: ParityTheme.contentWidth)
-                .padding(.horizontal, ParityTheme.conversationInset)
+                .conversationColumn()
                 .padding(.top, 8)
                 .padding(.bottom, ConversationLayout.bottomPadding)
-                .frame(maxWidth: .infinity)
             }
             .defaultScrollAnchor(.bottom)
             .scrollPosition(id: $conversation.anchor)
@@ -637,9 +634,7 @@ struct PersonalAgentConversationView: View {
             if conversation.optionReply.storageFailed || conversation.optionReply.pending != nil && !showsWaitingQuestion {
                 PersonalAgentOptionAnswerStatus(reply: conversation.optionReply, showsQuestion: showsWaitingQuestion,
                                                 actions: requestActions)
-                    .frame(maxWidth: ParityTheme.contentWidth)
-                    .padding(.horizontal, 24).padding(.top, 6)
-                    .frame(maxWidth: .infinity)
+                    .conversationColumn().padding(.top, 6)
             }
             PersonalAgentReplyArea(conversation: conversation, viewportHeight: historyHeight, actions: replyActions,
                                    rows: PersonalAgentReplyRows(
@@ -652,9 +647,7 @@ struct PersonalAgentConversationView: View {
                                       allowsFiles: conversation.allowsAttachments, focusRequest: focus, replyKeys: keys,
                                       onEscape: escape)
             }
-                .frame(maxWidth: ParityTheme.contentWidth)
-                .padding(.horizontal, 24).padding(.top, 6).padding(.bottom, 16)
-                .frame(maxWidth: .infinity)
+                .conversationColumn().padding(.top, 6).padding(.bottom, 16)
         }
         .background(ParityTheme.canvas)
         .task { dotsApp = original.appLocation() }

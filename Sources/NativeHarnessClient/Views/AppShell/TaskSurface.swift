@@ -292,9 +292,7 @@ struct TaskDetail: View {
                         ? onShowCodexCapabilities : conversationActions.showHarnessSettings
                 )
                 // The composer's column, so the reason sits over the message it kept.
-                .frame(maxWidth: ParityTheme.contentWidth)
-                .padding(.horizontal, 24)
-                .frame(maxWidth: .infinity)
+                .conversationColumn()
                 .clearOfFloatingPanel()
             }
 

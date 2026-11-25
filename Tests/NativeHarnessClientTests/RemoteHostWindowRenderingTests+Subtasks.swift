@@ -90,7 +90,7 @@ extension RemoteHostWindowRenderingTests {
         try await render("local-next-notices", size: NSSize(width: 850, height: 420), titled: false) {
             VStack {
                 TranscriptErrorCard(harness: .claudeCode, message: failure, recoverable: true)
-                    .frame(maxWidth: ParityTheme.contentWidth).padding(.horizontal, 24).frame(maxWidth: .infinity)
+                    .conversationColumn()
                 TaskFolderMissingBanner(notice: TaskFolderMissingNotice(
                     missing: TaskFolderMissing(path: folder.path, worktreeBranch: nil), isRecreating: false, recreateWorktree: {}))
                 ProviderNoticeLines(notices: localNotices)

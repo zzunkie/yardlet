@@ -43,9 +43,7 @@ struct TaskAccountMoveLine: View {
             Spacer(minLength: 0)
         }
         .font(.caption)
-        .frame(maxWidth: ParityTheme.contentWidth, alignment: .leading)
-        .padding(.horizontal, 30)
-        .frame(maxWidth: .infinity)
+        .conversationColumn(alignment: .leading)
     }
 
     private var text: String {

@@ -93,11 +93,9 @@ struct ArchivedTaskNote: View {
             RoundedRectangle(cornerRadius: ParityTheme.composerCornerRadius)
                 .stroke(ParityTheme.separator)
         }
-        .frame(maxWidth: ParityTheme.contentWidth)
-        .padding(.horizontal, 24)
+        .conversationColumn()
         .padding(.top, 6)
         .padding(.bottom, 16)
-        .frame(maxWidth: .infinity)
         .accessibilityElement(children: .contain)
         .accessibilitySortPriority(ParityAccessibility.composer)
     }

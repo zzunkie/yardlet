@@ -55,9 +55,7 @@ struct TaskFolderMissingBanner: View {
                 .strokeBorder(ParityTheme.separator, lineWidth: 1)
         }
         // The composer's column, so the fact sits over the message it keeps.
-        .frame(maxWidth: ParityTheme.contentWidth)
-        .padding(.horizontal, 24)
-        .frame(maxWidth: .infinity)
+        .conversationColumn()
         .accessibilityElement(children: .contain)
     }
 

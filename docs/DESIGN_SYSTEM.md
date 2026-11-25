@@ -183,7 +183,14 @@ Reuse these, return no animation with Reduce Motion, and do not animate new tran
 scroll position as decoration. No new spring or looping motion is proposed.
 
 Keep `sidebarWidth` 240, `titleBarHeight` 50, `windowTabBarHeight` 36, `areaHeaderHeight` 36, `toolbarHeight` 46, `paneToolbarHeight` 40,
-`contentWidth` 768 and `conversationInset` 32 as named component geometry. Resizable surfaces retain
+`contentWidth` 768 and `conversationInset` 32 as named component geometry. They make one conversation
+column (`ParityTheme.conversationColumnWidth(in:)`, `View.conversationColumn`): at most 768 wide and
+centered, with the 32 pt gutter inside each side, so content is at most 704 pt and keeps 32 pt from a
+narrower area's edges. The turns and everything over and under them (the composer and its trays, the
+request dock, the error card, banners and notice lines) use that column, so their edges line up at every
+width. The turn rail floats in the leading gutter and takes no width from the column. Under a floating
+side panel the conversation keeps its minimum width beneath the panel while the composer stops at the
+panel's edge (`clearOfFloatingPanel`), so the leading edges stay aligned. Resizable surfaces retain
 their existing minimums and stored sizes. `ParityAccessibility`'s traversal priorities are behavior,
 not visual tokens, and remain unchanged.
 

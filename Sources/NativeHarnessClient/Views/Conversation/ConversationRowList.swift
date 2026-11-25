@@ -397,7 +397,7 @@ final class ConversationRowListController: NSObject {
 
     /// The column the turns are drawn in, in a row `width` wide: the conversation's width, inset.
     static func columnWidth(in width: CGFloat) -> CGFloat {
-        max(0, min(width, ParityTheme.contentWidth) - 2 * ParityTheme.conversationInset)
+        ParityTheme.conversationColumnWidth(in: width)
     }
 
     override init() {

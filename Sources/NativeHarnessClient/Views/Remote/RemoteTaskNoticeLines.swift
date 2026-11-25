@@ -13,9 +13,7 @@ struct RemoteTaskNoticeLines: View {
         if let error = notices.error {
             TranscriptErrorCard(harness: harness, message: error, recoverable: true)
                 // The composer's column, so the reason sits over the composer, as the local task's card does.
-                .frame(maxWidth: ParityTheme.contentWidth)
-                .padding(.horizontal, 24)
-                .frame(maxWidth: .infinity)
+                .conversationColumn()
         }
         if let path = notices.missingFolder {
             TaskFolderMissingBanner(notice: TaskFolderMissingNotice(

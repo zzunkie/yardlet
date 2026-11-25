@@ -384,11 +384,9 @@ struct PromptComposer: View {
             .padding(.bottom, 9)
         }
         .shadow(color: .black.opacity(paneEmphasis == .unfocused ? 0 : 0.05), radius: 10, y: 3)
-        .frame(maxWidth: ParityTheme.contentWidth)
-        .padding(.horizontal, 24)
+        .conversationColumn()
         .padding(.top, 6)
         .padding(.bottom, 16)
-        .frame(maxWidth: .infinity)
         .task(id: statusRefreshKey) {
             // Detached, this rereads the settings that name the task's model and, for Codex, the
             // saved thread to show; no session or turn starts.

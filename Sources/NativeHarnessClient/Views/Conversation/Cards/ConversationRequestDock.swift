@@ -52,10 +52,8 @@ struct ConversationRequestDock: View {
             .transition(.opacity)
             .animation(ParityMotion.easeOut(reduceMotion: reduceMotion), value: front.id)
             .padding(.top, CGFloat(edges) * Self.edgeStep)
-            .frame(maxWidth: ParityTheme.contentWidth)
-            .padding(.horizontal, 24)
+            .conversationColumn()
             .padding(.bottom, 8)
-            .frame(maxWidth: .infinity)
             .accessibilityElement(children: .contain)
         }
     }

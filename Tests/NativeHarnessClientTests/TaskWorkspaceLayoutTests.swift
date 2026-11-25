@@ -187,6 +187,82 @@ final class TaskWorkspaceLayoutTests: XCTestCase {
         XCTAssertEqual(prose, 0)
         XCTAssertLessThanOrEqual(measured, drawn)
     }
+
+    /// The turns and what the conversation is worked from share one column: at most 768 pt wide and centered,
+    /// with the 32 pt gutter inside each side (docs/DESIGN_SYSTEM.md). Drawn, the turns' outer edges and the
+    /// composer's are the same at every width, and under a floating side panel, which the composer keeps clear
+    /// of, their leading edges are.
+    @MainActor
+    func testTheConversationAndItsComposerShareOneColumn() throws {
+        XCTAssertEqual(ParityTheme.conversationColumnWidth(in: 1_100), 704)
+        XCTAssertEqual(ParityTheme.conversationColumnWidth(in: 816), 704)
+        XCTAssertEqual(ParityTheme.conversationColumnWidth(in: 790), 704)
+        XCTAssertEqual(ParityTheme.conversationColumnWidth(in: 600), 536)
+        XCTAssertEqual(ParityTheme.conversationColumnWidth(in: 50), 0)
+
+        // A sent message stands at the column's trailing edge and a code block spans the column.
+        let entries = [
+            TranscriptEntry(content: .user(text: "Make the parser accept trailing commas.")),
+            TranscriptEntry(content: .assistant(text: "Done.\n\n```swift\nlet values = [1, 2, 3,]\n```", isStreaming: false)),
+            TranscriptEntry(content: .user(text: "Thanks.")),
+            TranscriptEntry(content: .assistant(text: "You're welcome.", isStreaming: false))
+        ]
+        let conversationHeight: CGFloat = 520
+        for (width, cover) in [(1_100.0, 0.0), (790.0, 0.0), (600.0, 0.0), (620.0, 180.0)] {
+            let draft = TaskComposerDraft()
+            draft.text = "Also cover nested arrays"
+            let size = NSSize(width: width, height: conversationHeight + 160)
+            let capture = try WindowlessRender.hosted(
+                VStack(spacing: 0) {
+                    ConversationTimeline(source: .transcript(entries: entries, harness: .claudeCode, status: .ready,
+                                                             latestTurnIsComplete: true))
+                        .frame(height: conversationHeight)
+                    PromptComposer(harness: .claudeCode, composerDraft: draft, isRunning: false).clearOfFloatingPanel()
+                    Spacer(minLength: 0)
+                }
+                .environment(\.conversationTrailingCover, cover)
+                .environment(\.colorScheme, .dark)
+                .background(ParityTheme.canvas)
+                .frame(width: size.width, height: size.height),
+                size: size, appearance: .dark, passes: 10
+            )
+            let bitmap = capture.bitmap
+            let scale = capture.backingScaleFactor
+            let canvas = try XCTUnwrap(bitmap.colorAt(x: bitmap.pixelsWide - 2, y: 2))
+            func drawn(_ x: Int, _ y: Int) -> Bool {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                      let base = canvas.usingColorSpace(.deviceRGB) else { return false }
+                return abs(color.redComponent - base.redComponent) + abs(color.greenComponent - base.greenComponent)
+                    + abs(color.blueComponent - base.blueComponent) > 0.12
+            }
+            /// The outermost drawn points across `rows` (in points from the top), right of the turn rail.
+            func edges(_ rows: StrideThrough<CGFloat>) -> (CGFloat, CGFloat)? {
+                var left = Int.max, right = Int.min
+                for row in rows {
+                    let y = Int(row * scale)
+                    for x in Int(26 * scale)..<bitmap.pixelsWide where drawn(x, y) {
+                        left = min(left, x)
+                        right = max(right, x)
+                    }
+                }
+                return left <= right ? (CGFloat(left) / scale, CGFloat(right + 1) / scale) : nil
+            }
+            let turns = try XCTUnwrap(edges(stride(from: 12, through: conversationHeight - 12, by: 1)), "\(width)")
+            let composer = try XCTUnwrap(edges(stride(from: conversationHeight + 40, through: conversationHeight + 40, by: 1)),
+                                         "\(width)")
+            let column = ParityTheme.conversationColumnWidth(in: width)
+            let leading = ((width - column) / 2).rounded(.down)
+            let clear = ParityTheme.conversationColumnWidth(in: width - cover)
+            XCTAssertEqual(turns.0, leading, accuracy: 0.5, "turns' leading edge at \(width)")
+            XCTAssertEqual(composer.0, leading, accuracy: 0.5, "composer's leading edge at \(width)")
+            if cover == 0 {
+                XCTAssertEqual(turns.1, leading + column, accuracy: 0.5, "turns' trailing edge at \(width)")
+                XCTAssertEqual(composer.1, leading + column, accuracy: 0.5, "composer's trailing edge at \(width)")
+            } else {
+                XCTAssertEqual(composer.1, leading + clear, accuracy: 0.5, "the composer stops at the panel")
+            }
+        }
+    }
 }
 
 @MainActor @Observable
