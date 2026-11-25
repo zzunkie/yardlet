@@ -61,6 +61,9 @@ struct CodexBoundedOutput: View {
     var characterLimit: Int = 2_400
     var monospaced = true
     var folds = true
+    /// Drawn on a waiting request's panel, as what the person approves: primary text in a well of the
+    /// elevated surface with a hairline edge, so it stands off the panel's own shade.
+    var onRequestPanel = false
     @State private var isExpanded = false
 
     var body: some View {
@@ -75,7 +78,7 @@ struct CodexBoundedOutput: View {
                     .font(monospaced ? codeFont.font(ofSize: codeFont.size(11, scale: interfaceScale))
                                      : .system(size: 13.5 * interfaceScale))
                     .fontDesign(monospaced ? nil : theme.font.design)
-                    .foregroundStyle(monospaced ? Color.secondary : Color.primary)
+                    .foregroundStyle(monospaced && !onRequestPanel ? Color.secondary : Color.primary)
                     .lineSpacing(monospaced ? 0 : 3)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -93,12 +96,17 @@ struct CodexBoundedOutput: View {
                 .font(.yardlet(.caption2, scale: interfaceScale))
             }
         }
-        .padding(monospaced ? 8 : 0)
+        .padding(monospaced ? (onRequestPanel ? ParitySpace.s12 : 8) : 0)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            monospaced ? ParityTheme.subtleFill : .clear,
-            in: RoundedRectangle(cornerRadius: 7)
+            monospaced ? (onRequestPanel ? ParityTheme.elevated : ParityTheme.subtleFill) : .clear,
+            in: RoundedRectangle(cornerRadius: onRequestPanel ? ParityRadius.row : 7)
         )
+        .overlay {
+            if monospaced, onRequestPanel {
+                RoundedRectangle(cornerRadius: ParityRadius.row).strokeBorder(ParityTheme.separator)
+            }
+        }
     }
 
 }

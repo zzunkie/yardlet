@@ -21,6 +21,7 @@ struct ConversationRequestDock: View {
 
     @State private var cardHeight: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         if let front = requests.first {
@@ -46,6 +47,8 @@ struct ConversationRequestDock: View {
                         .stroke(ParityTheme.strongSeparator)
                 }
             }
+            // Raised off the conversation as the composer under it is (`PromptComposer`).
+            .shadow(color: .black.opacity(colorScheme == .dark ? 0.28 : 0.06), radius: 12, y: 4)
             .background(alignment: .top) { edgesBehind(edges) }
             // A card of its own for each request: the next one does not take the answered one's input.
             .id(front.id)

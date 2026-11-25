@@ -179,7 +179,7 @@ final class CodexTimelineRenderingTests: XCTestCase {
             + #"","answer":"Download later"}]"# + "\n</send_user_message_question_reply>")
 
         // Once the thread holds the reply, the next turn starts from it: the question turn reads as its
-        // answer, and the reply's bubble as the answer, not its JSON.
+        // answer, and the reply, which that card reads, draws no bubble of its own.
         let answered = thread([
             turn("turn-1", status: "completed", items: [user("u1", "Then let's download it here"), message]),
             turn("turn-2", status: "inProgress", items: [user("u2", reply)])
@@ -189,7 +189,15 @@ final class CodexTimelineRenderingTests: XCTestCase {
         XCTAssertTrue(next.turns.allSatisfy { $0.actions.questionsToAnswer.isEmpty })
         let record = try XCTUnwrap(next.turns.first?.actions.answeredQuestions)
         XCTAssertEqual(record.answers, [#"["request_user_input_async","a1",0]"#: ConversationQuestionAnswer(options: ["Download later"])])
-        XCTAssertEqual(next.turns.last?.prompt.compactMap(\.sentText), ["Download later"])
+        XCTAssertEqual(next.turns.last?.prompt.map(\.id), [], "the question card reads the reply")
+        // A reply to questions no card reads stays the person's message, as the answer, not its JSON.
+        let orphanReply = reply.replacingOccurrences(of: #"\"a1\""#, with: #"\"other\""#)
+        let orphan = CodexConversationProjection.presentation(thread([
+            turn("turn-1", status: "completed", items: [user("u1", "Then let's download it here"), message]),
+            turn("turn-2", status: "inProgress", items: [user("u2", orphanReply)])
+        ]), workspaceURL: URL(filePath: "/Users/me/yardlet"), historySelection: nil)
+        XCTAssertNil(orphan.turns.first?.actions.answeredQuestions)
+        XCTAssertEqual(orphan.turns.last?.prompt.compactMap(\.sentText), ["Download later"])
         XCTAssertNil(next.turns.last?.actions.editDraft, "A reply's JSON goes back in no composer")
         try render(TaskConversationView(
             harness: .codex, workspaceURL: URL(filePath: "/Users/me/yardlet"), entries: [], codexTaskState: answered,

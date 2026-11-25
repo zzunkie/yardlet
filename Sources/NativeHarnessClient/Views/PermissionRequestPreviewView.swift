@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// The change a tool request would make, inside its approval card: a file's edits or new
-/// contents in the file change card's diff box, or a command with its description.
+/// contents in the file change card's diff box, or a command with its description, each in a well of
+/// the elevated surface that stands off the waiting request's panel.
 struct PermissionRequestPreviewView: View {
     @Environment(\.yardletInterfaceScale) private var interfaceScale
     let preview: PermissionRequestPreview
@@ -33,7 +34,7 @@ struct PermissionRequestPreviewView: View {
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                CodexBoundedOutput(text: command.text, folds: false)
+                CodexBoundedOutput(text: command.text, folds: false, onRequestPanel: true)
                 if command.omittedLineCount > 0 {
                     Text(L10n.format("%lld more lines", Int64(command.omittedLineCount)))
                         .font(.parity(.caption, scale: interfaceScale))
@@ -76,7 +77,7 @@ struct PermissionRequestPreviewView: View {
                 notice(L10n.format("%lld more edits", Int64(diff.omittedEditCount)))
             }
         }
-        .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 8))
+        .background(ParityTheme.elevated, in: RoundedRectangle(cornerRadius: 8))
         .overlay { RoundedRectangle(cornerRadius: 8).stroke(ParityTheme.separator) }
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .accessibilityElement(children: .contain)
