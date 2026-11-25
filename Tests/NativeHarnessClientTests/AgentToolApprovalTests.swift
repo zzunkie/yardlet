@@ -180,8 +180,53 @@ final class AgentToolApprovalTests: XCTestCase {
         let once = [L10n.string("Deny"), L10n.string("Allow once")]
         XCTAssertEqual(codexCard(server: "yardlet", tool: ScheduleToolCatalog.delete), once)
         XCTAssertEqual(codexCard(server: "yardlet", tool: CodeModeToolCatalog.runScript), once)
-        XCTAssertEqual(codexCard(server: "yardlet", tool: AgentToolCatalog.click).count, 4)
+        // A browser tool that acts in a page may be allowed for the conversation, never for good.
+        XCTAssertEqual(codexCard(server: "yardlet", tool: AgentToolCatalog.evaluate),
+                       [L10n.string("Deny"), L10n.string("Allow this conversation"), L10n.string("Allow once")])
+        XCTAssertTrue(AgentToolHarnessApproval.allowsOnlyForSession(claudeToolName: "mcp__yardlet__browser_click"))
+        XCTAssertFalse(AgentToolHarnessApproval.allowsOnlyForSession(claudeToolName: "mcp__yardlet__browser_snapshot"))
+        XCTAssertEqual(codexCard(server: "yardlet", tool: SimulatorToolCatalog.tap).count, 4)
         XCTAssertEqual(codexCard(server: "other", tool: ScheduleToolCatalog.delete).count, 4)
+    }
+
+    /// Antigravity's card for a call Yardlet weighs itself is answered at once, so the call has one card, Yardlet's;
+    /// a title Yardlet cannot be sure of (another kind, input the tool does not take) is not.
+    func testAntigravitysCardForACallYardletWeighsIsAnsweredAtOnce() {
+        func tool(_ title: String, kind: String = "other", input: JSONValue? = .object([:])) -> String? {
+            AgentToolHarnessApproval.yardletTool(antigravityTitle: title, kind: kind, input: input)
+        }
+        XCTAssertEqual(tool("Run mcp_yardlet_f31bd028_archive_task",
+                            input: .object(["task_ids": .array([]), "toolSummary": .string("Archive")])),
+                       SessionToolCatalog.archiveTask)
+        XCTAssertEqual(tool("Run mcp_yardlet_create_scheduled_task"), ScheduleToolCatalog.create)
+        XCTAssertNil(tool("Run mcp_yardlet_f31bd028_archive_task", kind: "execute"))
+        XCTAssertNil(tool("Run mcp_yardlet_f31bd028_archive_task", input: .object(["command": .string("rm -rf /")])))
+        XCTAssertNil(tool("Run mcp_github_merge_pull_request"))
+        XCTAssertNil(tool("Archive the finished tasks"))
+        for weighed in [SessionToolCatalog.archiveTask, SettingsToolCatalog.update, SessionToolCatalog.createProject,
+                        ScheduleToolCatalog.create, VaultToolCatalog.fillCredential, AgentToolCatalog.navigate] {
+            XCTAssertTrue(AgentToolHarnessApproval.weighedByYardlet.contains(weighed), weighed)
+        }
+        for asked in [AgentToolCatalog.evaluate, AgentToolCatalog.click, SimulatorToolCatalog.tap] {
+            XCTAssertTrue(AgentToolHarnessApproval.askedByHarness.contains(asked), asked)
+        }
+        // A connector's tool, which Yardlet weighs too, by the arguments its schema takes.
+        let labels = ConnectorToolLabels()
+        labels.update([ConnectorRecord(name: "Linear", slug: "linear", serverURL: URL(string: "https://mcp.linear.test")!,
+                                       tools: [.object(["name": .string("create_issue"), "inputSchema": .object([
+                                           "type": .string("object"),
+                                           "properties": .object(["title": .object(["type": .string("string")])])])])])])
+        XCTAssertEqual(AgentToolHarnessApproval.yardletTool(antigravityTitle: "Run mcp_yardlet_f31bd028_linear_create_issue",
+                                                            kind: "other", input: .object(["title": .string("Bug")]),
+                                                            labels: labels), "linear_create_issue")
+        XCTAssertNil(AgentToolHarnessApproval.yardletTool(antigravityTitle: "Run mcp_yardlet_f31bd028_linear_create_issue",
+                                                          kind: "other", input: .object(["function": .string("() => 1")]),
+                                                          labels: labels))
+        XCTAssertTrue(AgentToolHarnessApproval.isWeighedByYardlet("linear_create_issue", labels: labels))
+        XCTAssertFalse(AgentToolHarnessApproval.isWeighedByYardlet(AgentToolCatalog.evaluate, labels: labels))
+        // A title alone says which tool it is, for taking a lasting allow off its card.
+        XCTAssertEqual(AgentToolHarnessApproval.yardletToolName(antigravityTitle: "Run mcp_yardlet_f31bd028_browser_click"),
+                       AgentToolCatalog.click)
     }
 
     func testDestructiveToolsSaySo() {

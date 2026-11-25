@@ -10,24 +10,23 @@ import YardletAgentTools
 // harness, the folder it came from, its project and account, and its Auto or Bypass permissions (on
 // another harness, its level in that harness's terms, as `create_task` gives a child).
 //
-// Where the Claude app and the Codex app ask before a change, the harness's own approval asks in
-// Yardlet too (Claude Code's request card; Codex as its approval setting and the tool's annotations
-// decide), so a call that arrives here was allowed. A session a schedule started is asked as any task
-// in its permission mode is (the person chose that mode for the schedule's runs, and a card raised
-// while nobody is there would only stop the run), but as the Claude app refuses, it may not run a
-// schedule or delete the one that started it. Yardlet adds a card of its own: `send_message_to_task`'s
-// rule for a schedule whose runs continue another task, since each run is a message into that task.
-// What an agent writes runs as its task's message, never as the person's, and a schedule runs no more
-// freely than the task that made it.
+// In a task that asks the person, every change was asked about on one card before the call came here:
+// Claude Code's CLI card for its direct call in Default or Accept edits, else Yardlet's own
+// (`AgentToolBroker+Approvals`), which names the schedule, where its runs go and the mode they use. So
+// nothing here asks again: a schedule in another project, runs that continue another task, and a
+// change to a schedule whose runs do more without asking than the caller may each went on that card.
+// A session a schedule started is asked as any task in its permission mode is (the person chose that
+// mode for the schedule's runs, and a card raised while nobody is there would only stop the run), but
+// as the Claude app refuses, it may not run a schedule or delete the one that started it. What an
+// agent writes runs as its task's message, never as the person's, and a schedule runs no more freely
+// than the task that made it.
 
 extension AppModel: ScheduleToolHandling {
-    func callScheduleTool(named name: String, arguments: ToolJSON, callerID: UUID,
-                          origin: AgentToolCallOrigin = .direct) async -> AgentToolResult {
+    func callScheduleTool(named name: String, arguments: ToolJSON, callerID: UUID) async -> AgentToolResult {
         let arguments = JSONValue(arguments)
-        guard var caller = sessionToolCaller(callerID) else {
+        guard let caller = sessionToolCaller(callerID) else {
             return .error("Yardlet no longer has the task that made this call.")
         }
-        caller.throughWrapper = origin == .wrapped
         if ScheduleToolCatalog.changingTools.contains(name),
            let refusal = scheduledRunRefusal(name, arguments: arguments, caller: caller) {
             return .error(refusal)
@@ -93,8 +92,7 @@ extension AppModel: ScheduleToolHandling {
         case let .failure(error): return error.result("Nothing was created")
         }
         let name = Self.scheduleName(arguments[Key.name]?.stringValue, prompt: prompt)
-        if let refusal = await scheduleAgentRefusal(destination, previous: nil, promptChanged: true, prompt: prompt,
-                                                    trigger: trigger, name: name, caller: caller) {
+        if let refusal = await scheduleAgentRefusal(destination, previous: nil, promptChanged: true, caller: caller) {
             return .failure("Nothing was created: \(refusal)", .refused, retry: .no)
         }
         scheduledTasks.create(ScheduledTask(name: name, prompt: prompt, trigger: trigger, destination: destination,
@@ -118,7 +116,7 @@ extension AppModel: ScheduleToolHandling {
         // A new task's runs use the schedule's own permission, which may be another harness's.
         let destination = schedule.destination
         let runMode = destination.mode == .newTask
-            ? Self.runModeName(of: destination) : ClaudePermissionMode.displayName(mode) ?? mode
+            ? ScheduleNameDirectory.runModeName(of: destination) : ClaudePermissionMode.displayName(mode) ?? mode
         await systemNotificationCenter.post(SystemNotification(
             title: L10n.format("%@ scheduled a task: “%@”", host.harness.displayName, schedule.name),
             body: L10n.format("Its runs will use %@ mode.", runMode),
@@ -151,62 +149,22 @@ extension AppModel: ScheduleToolHandling {
         return .success(prompt)
     }
 
-    /// Why what an agent makes or changes in a schedule may not stand, asking the person where a session tool
-    /// would, or nil. Each run does what the caller could do itself: a new task's run is a child task it starts
-    /// later (`create_task`'s nesting limit and its card for another project or a folder outside the caller's),
-    /// no freer than the caller; a run that continues another task is a message to it (`send_message_to_task`'s
-    /// card). `previous` is where the runs went before, for a change: only what changed is weighed.
+    /// Why what an agent makes or changes in a schedule may not stand, or nil. Each run does what the caller could do
+    /// itself: a new task's run is a child task it starts later (`create_task`'s nesting limit), no freer than the
+    /// caller. Where the runs go and what they say the person saw on the call's card. `previous` is where the runs
+    /// went before, for a change: only what changed is weighed.
     private func scheduleAgentRefusal(_ destination: ScheduleDestination, previous: ScheduleDestination?,
-                                      promptChanged: Bool, prompt: String, trigger: ScheduleTrigger, name: String,
-                                      caller: SessionToolCaller) async -> String? {
-        let when = ScheduleText.summary(trigger, calendar: scheduledTasks.calendar(), now: scheduledTasks.now())
-        switch destination.mode {
-        case .newTask:
-            let becameNew = previous?.mode != .newTask
-            if becameNew || destination.parentTaskID != previous?.parentTaskID,
-               let refusal = await sessionToolSpawnRefusal(.task(under: destination.parentTaskID), caller: caller) {
-                return refusal
-            }
-            let modeChanged = becameNew || destination.harness != previous?.harness
-                || destination.modelChoice?.permissionMode != previous?.modelChoice?.permissionMode
-            if promptChanged || modeChanged, let refusal = scheduleFreedomRefusal(destination, caller: caller) {
-                return refusal
-            }
-            let placeChanged = becameNew || destination.workspacePath != previous?.workspacePath
-                || destination.projectID != previous?.projectID
-            let project = projects.project(id: destination.projectID)
-            let origin = store.sessions.first { $0.id == caller.hostTaskID }?.originWorkspaceURL
-            guard placeChanged, !harnessAskedBeforeScheduleCall(caller), sessionToolAsksPerson(caller),
-                  sessionToolPlaceReachesPast(folder: destination.workspaceURL, project: project, caller: caller,
-                                              alsoWithin: origin.map { [$0] } ?? []) else { return nil }
-            let place = project?.name ?? destination.workspacePath ?? ""
-            let detail = "“\(name)” · \(when)\n" + L10n.format("%@ → %@", caller.title, place) + "\n\n"
-                + Self.cardPreview(prompt)
-            let allowed = await askPerson(title: L10n.string("Schedule a task in another project"), detail: detail,
-                                          caller: caller)
-            return allowed ? nil : "the person did not approve a scheduled task in another project."
-        case .continueTask:
-            guard promptChanged || destination.targetTaskID != previous?.targetTaskID,
-                  !harnessAskedBeforeScheduleCall(caller), let id = destination.targetTaskID, id != caller.hostTaskID,
-                  let target = store.sessions.first(where: { $0.id == id }),
-                  let reach = sessionToolMessageReach(to: target, caller: caller) else { return nil }
-            let title = reach == .raisesPermission
-                ? L10n.string("Schedule messages to a task that runs without asking")
-                : L10n.string("Schedule messages to another project's task")
-            let detail = "“\(name)” · \(when)\n" + sessionToolMessageDetail(to: target, prompt, caller: caller)
-            let allowed = await askPerson(title: title, detail: detail, caller: caller)
-            return allowed ? nil : "the person did not approve sending its runs to that task."
+                                      promptChanged: Bool, caller: SessionToolCaller) async -> String? {
+        guard destination.mode == .newTask else { return nil }
+        let becameNew = previous?.mode != .newTask
+        if becameNew || destination.parentTaskID != previous?.parentTaskID,
+           let refusal = await sessionToolSpawnRefusal(.task(under: destination.parentTaskID), caller: caller) {
+            return refusal
         }
-    }
-
-    /// Whether the caller's harness asked the person before this call came: Claude Code asks before every
-    /// changing scheduled-task call it makes directly, on a card that names the place or the task each run goes
-    /// to, unless it runs in Auto or Bypass permissions. It never saw a call made inside `run_yardlet_script`.
-    /// Whether another harness asks is its own setting, so Yardlet asks for it where a session tool would.
-    private func harnessAskedBeforeScheduleCall(_ caller: SessionToolCaller) -> Bool {
-        guard !caller.throughWrapper, caller.id == caller.hostTaskID, caller.harness == .claudeCode,
-              let host = store.sessions.first(where: { $0.id == caller.hostTaskID }) else { return false }
-        return Self.unaskedPermissionMode(of: host) == nil
+        let modeChanged = becameNew || destination.harness != previous?.harness
+            || destination.modelChoice?.permissionMode != previous?.modelChoice?.permissionMode
+        guard promptChanged || modeChanged else { return nil }
+        return scheduleFreedomRefusal(destination, caller: caller)
     }
 
     /// Why a new task's runs would do more without asking than the caller may, or nil: a Claude Code run in a
@@ -233,55 +191,6 @@ extension AppModel: ScheduleToolHandling {
             + "change it in Scheduled tasks."
     }
 
-    /// What a call does to a schedule that stands as it is: sets a run off, removes it, or says when its runs
-    /// come and whether they come.
-    private enum FreerScheduleChange {
-        case run, delete, resume
-        case retime(ScheduleTrigger)
-    }
-
-    /// Why a call may not set off, delete, retime or resume a schedule, or nil. A schedule whose runs do more
-    /// without asking than the caller may (`scheduleRunFreedom` over `scheduleModeCeiling`) is the person's to
-    /// start and stop: the caller writes none of its prompt, but it would decide when a freer run happens, so the
-    /// person is asked first unless the caller's harness already asked. A caller that runs without asking has
-    /// nothing above it and is never asked.
-    private func freerScheduleRefusal(_ schedule: ScheduledTask, _ change: FreerScheduleChange,
-                                      caller: SessionToolCaller) async -> String? {
-        // A schedule that continues the calling task sends that task its own messages, however free it is.
-        let continuesCaller = schedule.destination.mode == .continueTask && caller.id == caller.hostTaskID
-            && schedule.destination.targetTaskID == caller.hostTaskID
-        guard !continuesCaller, scheduleRunFreedom(schedule) > scheduleModeCeiling(caller),
-              !harnessAskedBeforeScheduleCall(caller) else { return nil }
-        let title: String
-        var trigger = schedule.trigger
-        switch change {
-        case .run: title = L10n.string("Run a scheduled task with more permissions than this task")
-        case .delete: title = L10n.string("Delete a scheduled task with more permissions than this task")
-        case .resume: title = L10n.string("Resume a scheduled task with more permissions than this task")
-        case let .retime(next):
-            title = L10n.string("Reschedule a scheduled task with more permissions than this task")
-            trigger = next
-        }
-        let when = ScheduleText.summary(trigger, calendar: scheduledTasks.calendar(), now: scheduledTasks.now())
-        var lines = ["“\(schedule.name)” · \(when)"]
-        let destination = schedule.destination
-        switch destination.mode {
-        case .newTask: lines.append(L10n.format("Its runs will use %@ mode.", Self.runModeName(of: destination)))
-        case .continueTask:
-            if let target = destination.targetTaskID.flatMap({ id in store.sessions.first { $0.id == id } }) {
-                lines.append(L10n.format("Task: %@", target.title))
-            }
-        }
-        let allowed = await askPerson(title: title, detail: lines.joined(separator: "\n"), caller: caller)
-        return allowed ? nil : "its runs do more without asking than this task may, and the person did not approve. "
-            + "The person can do it in Scheduled tasks."
-    }
-
-    /// The permission a new task's runs start with, in its harness's words.
-    private static func runModeName(of destination: ScheduleDestination) -> String {
-        (destination.modelChoice ?? NewTaskModelChoice(model: nil)).permissionName(for: destination.harness)
-            ?? (destination.harness == .claudeCode ? L10n.string("Manual") : L10n.string("Default"))
-    }
 
     /// A schedule's name: the one given, on one line, or the prompt's first words.
     static func scheduleName(_ given: String?, prompt: String) -> String {
@@ -441,21 +350,11 @@ extension AppModel: ScheduleToolHandling {
         if promptChanged { edited.agentTaskID = caller.hostTaskID }
         if promptChanged || edited.destination != schedule.destination {
             if let refusal = await scheduleAgentRefusal(edited.destination, previous: schedule.destination,
-                                                        promptChanged: promptChanged, prompt: edited.prompt,
-                                                        trigger: edited.trigger, name: edited.name, caller: caller) {
+                                                        promptChanged: promptChanged, caller: caller) {
                 return .failure("Nothing was updated: \(refusal)", .refused, retry: .no)
             }
         }
-        // When its runs come, and whether they come at all, is the person's to say for a schedule that does more
-        // without asking than the caller may. Pausing one asks nothing.
-        let resumes = enabled == true && (!schedule.isEnabled || schedule.state.stopReason != nil)
-        if edited.trigger != schedule.trigger || resumes {
-            let change: FreerScheduleChange = edited.trigger != schedule.trigger ? .retime(edited.trigger) : .resume
-            if let refusal = await freerScheduleRefusal(schedule, change, caller: caller) {
-                return .failure("Nothing was updated: \(refusal)", .refused, retry: .no)
-            }
-        }
-        // The schedule may have changed or gone while a card waited.
+        // The schedule may have changed or gone meanwhile.
         guard scheduledTasks.schedule(id: schedule.id) == schedule else {
             return .error("Nothing was updated: the schedule changed meanwhile; list it and try again.")
         }
@@ -482,9 +381,6 @@ extension AppModel: ScheduleToolHandling {
         case let .success(value): schedule = value
         case let .failure(error): return error.result("Nothing was deleted")
         }
-        if let refusal = await freerScheduleRefusal(schedule, .delete, caller: caller) {
-            return .failure("Nothing was deleted: \(refusal)", .refused, retry: .no)
-        }
         scheduledTasks.delete([schedule.id])
         return .text("Scheduled task \"\(ScheduleToolCatalog.oneLine(schedule.name))\" (scheduleId: "
             + "\(schedule.id.uuidString)) deleted. It will not run again; the tasks its runs started stay.")
@@ -497,9 +393,6 @@ extension AppModel: ScheduleToolHandling {
         switch scheduleForTool(arguments) {
         case let .success(value): schedule = value
         case let .failure(error): return error.result("Not run")
-        }
-        if let refusal = await freerScheduleRefusal(schedule, .run, caller: caller) {
-            return .failure("Not run: \(refusal)", .refused, retry: .no)
         }
         guard !scheduledTasks.startingIDs.contains(schedule.id) else {
             return .error("Not run: a run of scheduled task \(schedule.id.uuidString) is starting now.")
@@ -890,41 +783,21 @@ extension AppModel {
         return ceiling
     }
 
+    /// A task as a schedule's card names it, the task its runs continue: its title and the mode its turns run in.
+    func scheduleCardTask(_ id: UUID) -> ScheduleToolApproval.ContinuedTask? {
+        guard let session = store.sessions.first(where: { $0.id == id }) else { return nil }
+        let mode = Self.permissionKey(for: session.harness).flatMap { session.providerOptions[$0] }
+        return ScheduleToolApproval.ContinuedTask(
+            title: session.title,
+            mode: ScheduleNameDirectory.modeName(NewTaskModelChoice(model: nil, permissionMode: mode), harness: session.harness))
+    }
+
     /// A permission level on Claude Code's scale: a harness's default edits its folder as acceptEdits does.
     static func freedom(of level: TaskPermissionLevel) -> Int {
         switch level {
         case .readOnly: ClaudePermissionMode.freedom(ClaudePermissionMode.plan)
         case .standard: ClaudePermissionMode.freedom(ClaudePermissionMode.acceptEdits)
         case .elevated: ClaudePermissionMode.freedom(ClaudePermissionMode.bypassPermissions)
-        }
-    }
-
-    /// How much a schedule's runs do without asking, on the same scale: the permission its new tasks start with
-    /// (Claude Code's mode, Codex's permission, Antigravity's mode, any other harness's default), or the permission
-    /// of the task its runs continue, each a message into that task. Codex's Custom counts as the most here, where
-    /// `scheduleModeCeiling` lets it raise nothing: what `config.toml` allows is not known either way.
-    func scheduleRunFreedom(_ schedule: ScheduledTask) -> Int {
-        let destination = schedule.destination
-        switch destination.mode {
-        case .newTask:
-            let choice = destination.modelChoice ?? NewTaskModelChoice(model: nil)
-            switch destination.harness {
-            case .claudeCode: return ClaudePermissionMode.freedom(choice.permissionMode)
-            case .codex: return choice.codexRunLocation.freedom
-            case .antigravityCLI: return AntigravityPermissionMode.freedom(choice.permissionMode)
-            default: return Self.freedom(of: .standard)
-            }
-        case .continueTask:
-            // A run whose task is gone starts nothing.
-            guard let target = destination.targetTaskID.flatMap({ id in store.sessions.first { $0.id == id } }) else {
-                return Self.freedom(of: .readOnly)
-            }
-            switch target.harness {
-            case .claudeCode: return ClaudePermissionMode.freedom(target.providerOptions[ClaudeLaunchOption.permissionMode])
-            case .codex: return CodexRunLocation.restored(from: target.providerOptions).freedom
-            case .antigravityCLI: return AntigravityPermissionMode.freedom(target.providerOptions[AntigravityPermissionMode.optionID])
-            default: return Self.freedom(of: sessionToolPermission(of: target))
-            }
         }
     }
 }

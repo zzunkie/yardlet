@@ -26,7 +26,7 @@ extension AgentToolBroker {
     /// about too, less the ones asked about by nobody (`AgentToolCatalog.unaskedTools`), the handoff, which gives the
     /// tab to the person, the batch itself, whose actions are weighed one by one, and `browser_navigate`, weighed by
     /// where it goes (`allowsNavigation`).
-    static let changingBrowserTools: Set<String> = Set(AgentToolCatalog.browserTools.filter {
+    nonisolated static let changingBrowserTools: Set<String> = Set(AgentToolCatalog.browserTools.filter {
         !$0.readOnly && !AgentToolCatalog.unaskedTools.contains($0.name) && $0.name != AgentToolCatalog.handoff
             && $0.name != AgentToolCatalog.batch && $0.name != AgentToolCatalog.navigate
     }.map(\.name))
@@ -65,8 +65,10 @@ extension AgentToolBroker {
         let request: (title: String, detail: String)?
         if ScheduleToolCatalog.changingTools.contains(tool) {
             guard !harnessAsked else { return nil }
-            request = ScheduleToolApproval.request(toolName: Self.claudeName(tool), input: JSONValue(arguments),
-                                                   asking: .task)
+            let input = JSONValue(arguments)
+            let continued = await ScheduleToolApproval.continuedTask(toolName: Self.claudeName(tool), input: input)
+            request = ScheduleToolApproval.request(toolName: Self.claudeName(tool), input: input, asking: .task,
+                                                   continuing: continued)
         } else if tool == VaultToolCatalog.fillCredential {
             guard !harnessAsked else { return nil }
             let item = arguments["item"]?.stringValue ?? ""
@@ -405,10 +407,80 @@ final class PendingReadApproval {
     }
 }
 
-/// The Yardlet tools a harness's own card asks about each time, offering no allow for the conversation or for
-/// good: a connector's write, a scheduled-task change, a saved sign-in fill, the wrappers, whose calls
-/// Yardlet weighs one by one, and `browser_navigate`, which Yardlet allows by site. A lasting allow on the harness's card would let later such calls go unasked.
+/// Which harness cards Yardlet's tools get (docs/AGENT_BROWSER_TOOLS.md, "Approvals"): none where Yardlet weighs the
+/// call itself, and otherwise the harness's own card, offering no allow for the conversation or for good for a
+/// connector's write, a scheduled-task change, a saved sign-in fill, the wrappers, whose calls Yardlet weighs one by
+/// one, and `browser_navigate`, which Yardlet allows by site. A lasting allow on the harness's card would let later
+/// such calls go unasked.
 enum AgentToolHarnessApproval {
+    /// Yardlet's own tools whose calls need no harness card: the ones Claude Code runs without its CLI's card
+    /// (`AgentToolServerLaunch.claudeAllowedToolNames`), about which Yardlet asks on its own card where that is the
+    /// rule, and the scheduled-task changes and saved sign-in fills, which Yardlet asks about each time unless
+    /// Claude Code's CLI just did. Codex (`AgentToolServerLaunch.codexConfig`) and Antigravity (`ACPAdapter`) ask about
+    /// none of these, nor about a connector's tools, so each call gets one card, Yardlet's.
+    static let weighedByYardlet: Set<String> = Set(AgentToolServerLaunch.claudeAllowedToolNames)
+        .union(ScheduleToolCatalog.changingTools).union([VaultToolCatalog.fillCredential])
+
+    /// Whether Yardlet weighs a call of `tool` itself: one of `weighedByYardlet`, or a connector's tool, whose writes
+    /// it asks about each time and whose first read once per task (`AgentToolBroker.connectorApprovalRefusal`).
+    static func isWeighedByYardlet(_ tool: String, labels: ConnectorToolLabels = .shared) -> Bool {
+        weighedByYardlet.contains(tool)
+            || (AgentToolBroker.ownDefinition(named: tool) == nil && labels.label(forTool: tool) != nil)
+    }
+
+    /// Yardlet's own tools a harness still asks about by its own rule: those that act in a page or on a device.
+    static let askedByHarness: [String] = AgentToolBroker.ownToolNames.filter { !weighedByYardlet.contains($0) }.sorted()
+
+    /// The browser tools that act in a page or on the task's tabs (`AgentToolBroker.changingBrowserTools`): a harness's
+    /// card may allow them for the conversation, never for good, as Yardlet allows a site only for the task.
+    static func allowsOnlyForSession(tool: String) -> Bool {
+        AgentToolBroker.changingBrowserTools.contains(tool)
+    }
+
+    /// The same for Claude Code's name of the tool (`mcp__yardlet__…`); false for any other server's.
+    static func allowsOnlyForSession(claudeToolName: String?) -> Bool {
+        yardletTool(claudeToolName: claudeToolName).map(allowsOnlyForSession(tool:)) ?? false
+    }
+
+    private static func yardletTool(claudeToolName: String?) -> String? {
+        let prefix = "mcp__\(AgentToolEnvironment.serverName)__"
+        guard let claudeToolName, claudeToolName.hasPrefix(prefix) else { return nil }
+        return String(claudeToolName.dropFirst(prefix.count))
+    }
+
+    /// The Yardlet tool an Antigravity permission request's title names: agy titles an MCP call
+    /// "Run mcp_yardlet_<hex>_<tool>" from the tool's own name, whatever summary the model gave (`toolSummary`, which
+    /// goes in its input). Enough to take a lasting allow off the card, whatever else the input holds;
+    /// `yardletTool(antigravityTitle:kind:input:)` is surer, for answering the card.
+    static func yardletToolName(antigravityTitle title: String?) -> String? {
+        guard let title, title.hasPrefix("Run mcp_\(AgentToolEnvironment.serverName)_"),
+              let tool = ConnectorToolLabels.yardletToolName(fromHarnessTool: title),
+              title.hasSuffix("_\(tool)") else { return nil }
+        return tool
+    }
+
+    /// The Yardlet tool an Antigravity permission request asks about, when it names one Yardlet can be sure of enough
+    /// to answer the card for it: one of Yardlet's own tools or a connector's by its title (`yardletToolName`), with
+    /// ACP kind `other`, and an input that holds only what that tool takes, and the summary.
+    static func yardletTool(antigravityTitle title: String?, kind: String?, input: JSONValue?,
+                            labels: ConnectorToolLabels = .shared) -> String? {
+        guard kind == "other", let tool = yardletToolName(antigravityTitle: title) else { return nil }
+        let takes: Set<String>
+        if let definition = AgentToolBroker.ownDefinition(named: tool) {
+            takes = Set(definition.inputSchema["properties"]?.objectValue.map { Array($0.keys) } ?? [])
+        } else if let label = labels.label(forTool: tool) {
+            takes = label.inputs
+        } else {
+            return nil
+        }
+        let allowed = takes.union(["toolSummary"])
+        switch input {
+        case nil, .null?: return tool
+        case let .object(fields)?: return Set(fields.keys).isSubset(of: allowed) ? tool : nil
+        default: return nil
+        }
+    }
+
     /// Yardlet's own tools that a harness's card may offer a lasting allow for.
     private static let ownToolsWithLastingAllow: Set<String> = {
         let catalogs: [[AgentToolDefinition]] = [

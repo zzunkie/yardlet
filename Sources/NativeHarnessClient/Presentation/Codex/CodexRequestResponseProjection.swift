@@ -241,7 +241,7 @@ enum CodexRequestResponseProjection {
 /// `content: {}` and the chosen `_meta.persist`, which Computer Use keeps for the conversation or
 /// for good, so the same app is not asked about again.
 struct CodexMCPToolApproval: Equatable {
-    let persistModes: [String]
+    private(set) var persistModes: [String]
     let isComputerUse: Bool
 
     init?(params: JSONValue?) {
@@ -249,13 +249,18 @@ struct CodexMCPToolApproval: Equatable {
         guard meta?["codex_approval_kind"]?.stringValue == "mcp_tool_call" else { return nil }
         // A Yardlet write, scheduled-task change, sign-in fill or wrapper is allowed once at a time, as Claude
         // Code's card asks about it (`AgentToolHarnessApproval`).
-        let asksEachTime = params?["serverName"]?.stringValue == AgentToolEnvironment.serverName
-            && (meta?["tool_name"]?.stringValue).map { AgentToolHarnessApproval.asksEachTime(tool: $0) } == true
+        let yardletTool = params?["serverName"]?.stringValue == AgentToolEnvironment.serverName
+            ? meta?["tool_name"]?.stringValue : nil
+        let asksEachTime = yardletTool.map { AgentToolHarnessApproval.asksEachTime(tool: $0) } == true
         switch meta?["persist"] {
         case _ where asksEachTime: persistModes = []
         case let .string(mode)?: persistModes = [mode]
         case let .array(modes)?: persistModes = modes.compactMap(\.stringValue)
         default: persistModes = []
+        }
+        // A browser tool that acts in a page may be allowed for the conversation, never for good.
+        if yardletTool.map(AgentToolHarnessApproval.allowsOnlyForSession(tool:)) == true {
+            persistModes.removeAll { $0 == "always" }
         }
         let connector = (meta?["connector_id"]?.stringValue ?? "").lowercased()
             .split { !$0.isLetter && !$0.isNumber }.joined(separator: "-")

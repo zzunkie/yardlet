@@ -629,6 +629,8 @@ final class ConnectorToolLabels: @unchecked Sendable {
         var view: String? = nil
         /// The tool changes nothing (`readOnlyHint`).
         var readOnly = false
+        /// The arguments the tool takes (its input schema's properties).
+        var inputs: Set<String> = []
 
         /// The account a call acts in: the one it names, for a tool its service's accounts share, else
         /// the connector's own (a name from before the accounts shared their tools).
@@ -667,7 +669,7 @@ final class ConnectorToolLabels: @unchecked Sendable {
                     Label(connector: record.name, presetID: record.presetID, tool: original, account: record.account,
                           localService: record.localService, icons: record.iconSources,
                           view: MCPAppTool.viewURI(of: tool),
-                          readOnly: tool["annotations"]?["readOnlyHint"] == .bool(true))
+                          readOnly: tool["annotations"]?["readOnlyHint"] == .bool(true), inputs: Self.inputs(of: tool))
             }
             if let service = record.localService, service.sharesToolsAcrossAccounts, sharedBy[service] == nil {
                 sharedBy[service] = record
@@ -680,7 +682,8 @@ final class ConnectorToolLabels: @unchecked Sendable {
                 next[ConnectorToolNaming.name(slug: prefix, tool: original)] =
                     Label(connector: service.name, presetID: first.presetID, tool: original, localService: service,
                           icons: first.iconSources, takesAccount: true,
-                          readOnly: tool["annotations"]?["readOnlyHint"] == .bool(true))
+                          readOnly: tool["annotations"]?["readOnlyHint"] == .bool(true),
+                          inputs: Self.inputs(of: tool).union([ConnectorToolNaming.accountArgument]))
             }
         }
         lock.withLock {
@@ -688,6 +691,10 @@ final class ConnectorToolLabels: @unchecked Sendable {
             labels = next
             changes += 1
         }
+    }
+
+    private static func inputs(of tool: ToolJSON) -> Set<String> {
+        Set(tool["inputSchema"]?["properties"]?.objectValue.map { Array($0.keys) } ?? [])
     }
 
     /// The label for a tool of the Yardlet server, by its name there (`linear_create_issue`).

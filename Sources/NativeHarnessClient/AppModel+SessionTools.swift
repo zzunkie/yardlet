@@ -29,8 +29,6 @@ struct SessionToolCaller: Equatable {
     /// (`SessionToolPolicy.waitCeiling`): every wait in the call, the person's approval included,
     /// shares it, and a call a script makes shares the script's (`ApprovalWait.callStarted`).
     let deadline: ContinuousClock.Instant
-    /// The call came from inside `run_yardlet_script`, which the caller's harness never showed the person.
-    var throughWrapper = false
 
     /// What is left of the call's time.
     var remaining: Duration {

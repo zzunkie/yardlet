@@ -2195,13 +2195,6 @@
 "Read other projects' tasks" = "ほかのプロジェクトのタスクを読み取る";
 "List every project's tasks" = "すべてのプロジェクトのタスクを一覧表示";
 "Create a task in another project" = "別のプロジェクトにタスクを作成";
-"Schedule messages to a task that runs without asking" = "確認なしで実行するタスクへのメッセージをスケジュール";
-"Schedule messages to another project's task" = "別のプロジェクトのタスクへのメッセージをスケジュール";
-"Schedule a task in another project" = "別のプロジェクトのタスクをスケジュール";
-"Run a scheduled task with more permissions than this task" = "このタスクより高い権限でスケジュールタスクを実行";
-"Delete a scheduled task with more permissions than this task" = "このタスクより高い権限のスケジュールタスクを削除";
-"Resume a scheduled task with more permissions than this task" = "このタスクより高い権限のスケジュールタスクを再開";
-"Reschedule a scheduled task with more permissions than this task" = "このタスクより多くの権限でスケジュールタスクを再スケジュールする";
 "Run a subagent outside this task's folders" = "このタスクのフォルダ外でサブエージェントを実行する";
 "Open a file outside this task's folders?" = "このタスクのフォルダ外のファイルを開きますか？";
 "Archive %lld tasks" = "%lld 件のタスクをアーカイブ";

@@ -43,15 +43,18 @@ struct AgentToolServerLaunch: Equatable, Sendable {
     /// blank one go without a card (`AgentToolCatalog.unaskedTools`), and so does `browser_navigate`, which Yardlet asks
     /// about on its own card by the site it goes to, offering that site for the task rather than the tool for good.
     static var claudeAllowedTools: [String] {
-        ((TaskSuggestionToolCatalog.tools + SessionToolCatalog.tools + SettingsToolCatalog.tools).map(\.name)
+        claudeAllowedToolNames.map { "mcp__\(AgentToolEnvironment.serverName)__\($0)" }
+    }
+
+    /// The same tools under Yardlet's own names.
+    static let claudeAllowedToolNames: [String] =
+        (TaskSuggestionToolCatalog.tools + SessionToolCatalog.tools + SettingsToolCatalog.tools).map(\.name)
             + [TerminalToolCatalog.readTerminal, ScheduleToolCatalog.listRuns, WidgetToolCatalog.showWidget,
                CodeModeToolCatalog.runScript, ConnectorGatewayToolCatalog.callTool, AgentToolCatalog.batch,
                ScheduleToolCatalog.list, CodeModeToolCatalog.searchTools, ConnectorGatewayToolCatalog.listTools,
                SimulatorGatewayToolCatalog.listTools, SimulatorToolCatalog.list, SimulatorToolCatalog.screenshot,
                SimulatorToolCatalog.snapshot]
-            + AgentToolCatalog.unaskedTools + [AgentToolCatalog.navigate])
-            .map { "mcp__\(AgentToolEnvironment.serverName)__\($0)" }
-    }
+            + AgentToolCatalog.unaskedTools + [AgentToolCatalog.navigate]
 
     /// Claude Code's `--mcp-config` document.
     var claudeConfig: JSONValue {
@@ -77,10 +80,12 @@ struct AgentToolServerLaunch: Equatable, Sendable {
     }
 
     /// Codex's per-thread `config` override. Codex merges it into the user's configuration, so
-    /// this adds one `mcp_servers` entry beside the user's own servers. No tool gets an
-    /// `approval_mode` of Yardlet's: whether Codex asks before a call follows the task's own
-    /// approval setting and the tool's annotations, as for any server (decision of 2026-10-22:
-    /// whether approval is skipped follows each harness's own setting).
+    /// this adds one `mcp_servers` entry beside the user's own servers. Yardlet weighs the calls of
+    /// its connectors' tools and of most of its own where they run, on its own card
+    /// (`AgentToolHarnessApproval.weighedByYardlet`), so Codex asks about none of them
+    /// (`default_tools_approval_mode` `approve`) and each call gets one card. The rest of Yardlet's
+    /// own tools, which act in a page or on a device, keep Codex's own rule (`approval_mode` `auto`):
+    /// the task's approval setting and the tool's annotations decide, as for any server.
     ///
     /// Marking the entry `required: true` prevents Codex's lazy stdio startup
     /// (`mcp_lazy_stdio_startup`) from skipping launch and serving a cached tool list with
@@ -93,7 +98,11 @@ struct AgentToolServerLaunch: Equatable, Sendable {
             "args": .array(arguments.map { .string($0) }),
             "env": .object(environment.mapValues { .string($0) }),
             "required": .bool(true),
-            "tool_timeout_sec": .integer(Self.codexToolTimeoutSeconds)
+            "tool_timeout_sec": .integer(Self.codexToolTimeoutSeconds),
+            "default_tools_approval_mode": .string("approve"),
+            "tools": .object(Dictionary(uniqueKeysWithValues: AgentToolHarnessApproval.askedByHarness.map {
+                ($0, JSONValue.object(["approval_mode": .string("auto")]))
+            }))
         ])])])
     }
 

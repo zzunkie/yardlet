@@ -675,6 +675,8 @@ final class AppModel {
         }
         resourceMonitor.request = { [weak self] in self?.taskResourceRequest() ?? TaskResourceRequest() }
         resourceMonitor.describe = { [weak self] in self?.taskResourceDescription($0) }
+        // A schedule's card names the task its runs continue (`ScheduleToolApproval.continuedTask`).
+        ScheduleNameDirectory.shared.describeTask = { [weak self] id in await self?.scheduleCardTask(id) }
         systemNotificationCenter.setResponseHandler { [weak self] response in
             Task { await self?.handleNotificationResponse(response) }
         }

@@ -1035,9 +1035,12 @@ none is sent:
   {address}'s Drive?" with the file ID, the range, what changes ("insertText ×2, updateParagraphStyle") and the first
   600 characters of the inserted text or cell values, and inserting rows or columns states the count, as in "Inserts 2
   rows." Other tools get the CLI's usual card. In bypass permissions mode nothing is asked (the harness's own behavior).
-- Codex: Yardlet does not set `approval_mode` on its server's tools. Codex decides whether to ask from the task's
-  approval settings and the tool annotations.
-- ACP: that harness's MCP approval, as is.
+- Codex: Yardlet's server has `default_tools_approval_mode` `approve`, so Codex asks about no connector's tool, and
+  Yardlet's own card asks before each write and before a task's first read of a service, as in every harness but Claude
+  Code (docs/AGENT_BROWSER_TOOLS.md, "Approvals").
+- Antigravity: its own card for a connector's tool is answered at once when its title and input match that tool, and
+  Yardlet's card asks as for Codex. Its card offers no "always allow" for a tool that changes something. The other ACP
+  agents use their own MCP approval, as is.
 
 ### Your own Google app
 

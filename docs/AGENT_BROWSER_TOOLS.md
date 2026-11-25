@@ -597,8 +597,8 @@ threads the same way, in the workspace sandbox asking on request; `readOnly` and
 - **Claude Code launch arguments:** The 15 session tools also go into `--allowedTools`, with the task suggestion and
   settings tools, `read_terminal`, `list_task_runs` and `show_widget` (`AgentToolServerLaunch.claudeAllowedTools`; no CLI card; for the
   calls that reach further, for `archive_task`, for each change to the sidebar's projects and for a task's first read of
-  the personal agents, the app asks when the calling task runs at a level that asks). Codex gets no per-tool `approval_mode`, so for `archive_task` too, as for
-  other tools that write, Codex may ask first under that task's approval setting.
+  the personal agents, the app asks when the calling task runs at a level that asks). Codex and Antigravity ask about none
+  of them (section 6, "Approvals"), so a call that asks has one card, Yardlet's.
 
 ### Terminal tool
 
@@ -651,9 +651,9 @@ sections take their words from it, so a setting added to Settings is added there
   setting, "‹old› → ‹new›", and Open, which shows its section in Settings), and the row stays when the turn folds. The
   phone shows it as a tool line "Changed setting: ‹title›". Yardlet keeps no separate log: the call and its result stay in
   the task's conversation as its harness records them.
-- **Who else asks:** Claude Code gets both in `--allowedTools`, so the CLI shows no card of its own. Codex has no
-  per-tool `approval_mode` for them, so under an approval policy that asks it may ask before `update_setting`, as before
-  `archive_task`.
+- **Who else asks:** Claude Code gets both in `--allowedTools`, so the CLI shows no card of its own. Codex asks about
+  neither (`default_tools_approval_mode` `approve`), and Antigravity's card for them is answered at once (section 6,
+  "Approvals"), so `update_setting` has one card, Yardlet's.
 
 ### Scheduled-task tools
 
@@ -700,19 +700,14 @@ Times in results are ISO 8601 in the Mac's time zone (with the offset).
   four that change things as for other tools (a request card in Manual and Accept edits, the
   CLI classifier in Auto, no question with bypass permissions). The card for the four that change things is "Allow
   Claude to create the scheduled task “…”?" with the schedule, where it runs (the project or folder and the task the call
-  names), its mode and the instructions, and it offers no "Always allow". Codex asks as the
-  task's own approval setting and the tools' annotations decide. ACP harnesses use that
-  harness's own MCP approval. Yardlet has cards of its own. Where the harness did not ask (Claude Code in Auto, a call
-  inside `run_yardlet_script`, or another harness), each of the four asks first on Yardlet's card ("Allow this task to
-  create the scheduled task “…”?", with the same lines; section 6, "Approvals"). Beyond that card, a schedule an agent
-  makes or changes that continues another task asks as `send_message_to_task`
-  does ("Schedule messages to …"), and one whose new tasks start in another project or a folder outside the caller's
-  asks as `create_task` does ("Schedule a task in another project"); a task that runs without asking is not asked. A
-  schedule whose runs do more without asking than the caller may, measured as above (`scheduleRunFreedom`: the
-  permission its new tasks start with, or that of the task its runs continue), is the person's to start and stop: where
-  the harness did not ask, running it now, deleting it, changing when it runs and resuming it ask with a card ("Run a
-  scheduled task with more permissions than this task", and the like for the other three). Pausing it and renaming it
-  ask nothing beyond the first card. A
+  names), its mode and the instructions, and it offers no "Always allow". Where the CLI did not ask (Claude Code in
+  Auto, a call inside `run_yardlet_script`, Codex, Antigravity and the other harnesses), each of the four asks on
+  Yardlet's card instead ("Allow this task to create the scheduled task “…”?", with the same lines; section 6,
+  "Approvals"): Codex does not ask about them, and Antigravity's own card for them is answered at once. That one card is the call's only one:
+  it names where the runs go (another project or folder, or the task they continue, by its title) and the mode the runs
+  use (its new tasks' mode, or the mode of the task they continue, `ScheduleToolApproval.continuedTask`), so a schedule
+  whose runs do more without asking than the caller may shows that mode before it is made, run, retimed, resumed or
+  deleted. A task that runs without asking is not asked. A
   task a schedule started is asked as any task in its permission mode is: in bypass permissions it creates,
   changes and deletes other schedules without a card, and a schedule it creates gets the notification below. The
   Claude app asks such an `unattended` session in every mode; Yardlet does not, since the person chose that mode for the
@@ -754,7 +749,7 @@ removes the pending record. A successful retry replaces that record with `starte
 | Harness | Path | Form | Evidence |
 |---|---|---|---|
 | Claude Code | The launch argument `--mcp-config <file>` (at the very end, because the option takes several values). Just before it, `--allowedTools` with `mcp__yardlet__spawn_task` and `mcp__yardlet__dismiss_task` (the two tools that only show a chip, without a permission card; the Claude app also puts them in `allowedTools`), the session tools, the settings tools, `read_terminal` (while the terminal is not shared the server does not list it and the name allows nothing), `list_task_runs` and `list_scheduled_tasks` of the scheduled-task tools, `show_widget`, the wrappers `run_yardlet_script`, `call_connector_tool` and `browser_batch`, whose calls Yardlet weighs itself (section 6, "Approvals"), the tool lists `search_yardlet_tools`, `list_connector_tools` and `list_simulator_tools`, and `simulator_list`, `simulator_screenshot` and `simulator_snapshot`, which see only a device the person let the task use (docs/SIMULATOR.md, "Agent tools"), the browser tools that read, scroll, resize or open a blank tab, and `browser_navigate`, which Yardlet asks about by site (section 6, "Approvals") (`AgentToolServerLaunch.claudeAllowedTools`) | `{"mcpServers":{"yardlet":{"type":"stdio","command","args","env"}}}`. The file is a 0600 file in a 0700 folder (so the token does not show in the process list). `--strict-mcp-config` is not used, so the user's servers stay as they are | `--mcp-config <configs...>` and `--strict-mcp-config` are in the CLI's `--help`. The control request `mcp_status` reports `yardlet: connected`, and `mcp_call` calls a tool (section 7) |
-| Codex | `config` of `thread/start`, `thread/resume` and `thread/fork` | `{"mcp_servers":{"yardlet":{"command","args","env","tool_timeout_sec":1800}}}`. No tool gets an `approval_mode` of Yardlet's: whether Codex asks before a call follows the task's own approval setting and the tool's annotations. A fork gets the new task's token | In the App Server's schema (`app-server generate-json-schema --experimental`) all three requests take `config` (`additionalProperties: true`). Codex merges it into the user's configuration, so a user server in the same home stays connected beside `yardlet` (`mcpServerStatus/list`; a nested object and the dot notation `mcp_servers.yardlet` behave the same), and `mcpServer/tool/call` calls a tool (section 7). `thread/resume` was checked only by its request body, because a thread with no turn has no rollout |
+| Codex | `config` of `thread/start`, `thread/resume` and `thread/fork` | `{"mcp_servers":{"yardlet":{"command","args","env","tool_timeout_sec":1800,"default_tools_approval_mode":"approve","tools":{…}}}}`. Yardlet weighs its connectors' calls and most of its own tools' calls itself (section 6, "Approvals"), so Codex asks about none of them (`approve`); the tools that act in a page or on a device keep Codex's own rule (`tools.<name>.approval_mode` `auto`): the task's approval setting and the tool's annotations decide (`AgentToolHarnessApproval.askedByHarness`). A fork gets the new task's token | In the App Server's schema (`app-server generate-json-schema --experimental`) all three requests take `config` (`additionalProperties: true`). Codex merges it into the user's configuration, so a user server in the same home stays connected beside `yardlet` (`mcpServerStatus/list`; a nested object and the dot notation `mcp_servers.yardlet` behave the same), and `mcpServer/tool/call` calls a tool (section 7). `thread/resume` was checked only by its request body, because a thread with no turn has no rollout |
 | ACP (OpenCode, Antigravity, Kimi, Grok, Hermes, Kiro) | `mcpServers` of `session/new` and `session/load` | `{"name":"yardlet","command","args":[],"env":[{"name","value"}]}` | ACP makes stdio MCP mandatory. The server is not added when `agentCapabilities.mcpCapabilities` of `initialize` has `stdio: false` or is `false`. OpenCode starts the server through `session/new` and sends `initialize` and `tools/list`. Antigravity (`agy acp`, which Yardlet runs from 1.4.11, `AntigravityTransport.acpMinimum`) does the same after a `server/discover` request; it does not save the server in `mcp_config.json`, but keeps each tool's schema under `~/.gemini/antigravity-cli/mcp/<server>/` as it does for its own servers |
 | Muse, Pi, Cursor | none | Not added (no route: `AgentToolInjectionRoute` is nil), and no token is issued | MSP, Pi RPC and headless stream-json have no per-session MCP field. If needed, the next step is to register it with that harness's `mcp add`, with the user's approval |
 
@@ -891,6 +886,17 @@ direct call would be.
   asks about the wrapper before Yardlet asks about what it does. So are the eight tools that ask nothing and
   `browser_navigate` (`AgentToolDefinition.weighedByYardlet`), so every harness shows the same one card, Yardlet's, for
   a navigation; a harness card that still asks about `browser_navigate` offers no lasting allow.
+- **One card per call.** The tools Claude Code runs without its CLI's card, the scheduled-task changes and
+  `browser_fill_credential` are weighed by Yardlet, and so are a connector's tools
+  (`AgentToolHarnessApproval.weighedByYardlet`). Codex is told not to ask about them (section 3), and Antigravity's own
+  card for such a call is answered at once with its narrowest allow, so the call has one card, Yardlet's, where it
+  needs one. Antigravity names the tool in its card's title from the tool's own name (`Run mcp_yardlet_<hex>_<tool>`,
+  ACP kind `other`); a title that is not that, or a call whose input holds anything the tool does not take beside
+  `toolSummary`, keeps Antigravity's card.
+- **Browser tools that act in a page** (`click`, `type`, `press_key`, `select_option`, `evaluate`, `handle_dialog`,
+  `file_upload`, `tab_select`, `tab_close`) still ask on the harness's card, which may allow them for the session or
+  conversation but never for good: Claude Code's CLI rule is kept for the session instead of in a settings file, Codex
+  offers "Allow this conversation" but no "Always allow", and Antigravity's card offers no `allow_always`.
 
 ### Where the browser goes
 

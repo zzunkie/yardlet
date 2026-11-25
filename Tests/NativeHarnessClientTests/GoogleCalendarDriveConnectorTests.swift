@@ -746,7 +746,7 @@ final class GoogleCalendarDriveConnectorTests: XCTestCase {
         // Claude Code: none is allowed up front, so the CLI asks before each.
         XCTAssertFalse(AgentToolServerLaunch.claudeAllowedTools.contains { $0.contains("calendar") || $0.contains("drive") })
 
-        // Codex: the writes ask every time; reading does not.
+        // Codex: Yardlet's card asks before each write and before the first read, so Codex asks about none of them.
         let broker = AgentToolBroker(
             environment: AgentToolBroker.Environment(executableURL: try makeExecutable(), endpoint: "/tmp/unused.sock",
                                                      privateDirectory: FileManager.default.temporaryDirectory,
@@ -755,8 +755,9 @@ final class GoogleCalendarDriveConnectorTests: XCTestCase {
         broker.connectors = center
         let launch = try XCTUnwrap(broker.agentToolServer(for: UUID(), workspaceRoots: [],
                                                           connectorScope: ConnectorTaskScope(harness: .codex)))
-        // Codex asks as the task's approval setting has it (2026-10-22): no per-tool mode of Yardlet's.
-        XCTAssertNil(launch.codexConfig["mcp_servers"]?["yardlet"]?["tools"])
+        let codex = launch.codexConfig["mcp_servers"]?["yardlet"]
+        XCTAssertEqual(codex?["default_tools_approval_mode"], .string("approve"))
+        XCTAssertFalse(codex?["tools"]?.objectValue?.keys.contains { $0.contains("calendar") || $0.contains("drive") } ?? true)
 
         // Claude Code's card: the account and what the call would do, with no "always allow".
         let create = try XCTUnwrap(GoogleToolApproval.request(toolName: "mcp__yardlet__calendar_create_event", input: .object(["account": .string("person@example.test"), 

@@ -213,6 +213,22 @@ enum ClaudePermissionSuggestions {
         ]
     }
 
+    /// The offer with each rule a settings file would keep kept for the session instead, so it reads "Allow for
+    /// session": for a tool that may be allowed for a while, never for good
+    /// (`AgentToolHarnessApproval.allowsOnlyForSession`).
+    static func sessionOffer(from request: JSONValue) -> ClaudePermissionSuggestionOffer? {
+        guard case var .object(fields) = request, let updates = request["permission_suggestions"]?.arrayValue else {
+            return offer(from: request)
+        }
+        fields["permission_suggestions"] = .array(updates.map { update in
+            guard case var .object(rule) = update, let destination = rule["destination"]?.stringValue,
+                  settingsDestinations.contains(destination) else { return update }
+            rule["destination"] = .string("session")
+            return .object(rule)
+        })
+        return offer(from: .object(fields))
+    }
+
     /// Reads the offer from the `can_use_tool` request. There is none when the request carried no
     /// suggestion, when the CLI asked hosts to omit the persistent choice
     /// (`suppress_always_allow_rule`), when a safety check requires manual approval
