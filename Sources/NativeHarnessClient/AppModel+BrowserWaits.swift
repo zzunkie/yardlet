@@ -28,31 +28,22 @@ extension AppModel {
         refreshBrowserWaits()
     }
 
-    /// A task's tab reported a download. One the agent's act started from a site not allowed for the task asks the
-    /// person first (`AgentToolBroker.allowsAgentDownload`, docs/AGENT_BROWSER_TOOLS.md, "Where the browser goes"); it
-    /// goes on meanwhile, and is cancelled if they say no, or moved to the Trash if it had already finished.
+    /// A task's tab reported a download. One the agent's act started (`BrowserTab.downloadsAreAgents`) from a site not
+    /// allowed for the task asks the person first (`AgentToolBroker.allowsAgentDownload`, docs/AGENT_BROWSER_TOOLS.md,
+    /// "Where the browser goes"); it goes on meanwhile, and is cancelled if they say no, or moved to the Trash once it
+    /// has finished (`AgentDownloadChecks`).
     func noteBrowserDownload(_ download: BrowserDownload, in tab: BrowserTab) {
-        let key = "\(tab.id)-\(download.id)"
-        if agentDownloadsAsked[key] != nil {
-            agentDownloadsAsked[key] = download
-            return
-        }
-        guard download.state == .started, let session = tab.session, tab.isDrivenByAgent, let agentTools else { return }
-        agentDownloadsAsked[key] = download
-        let address = tab.agentDownloadAddress
-        Task { [weak self, weak tab] in
-            let allowed = await agentTools.allowsAgentDownload(from: address, fileName: download.fileName,
-                                                               sessionID: session)
-            guard let self, let latest = self.agentDownloadsAsked.removeValue(forKey: key), !allowed else { return }
-            switch latest.state {
-            case .started, .inProgress:
-                tab?.send(.cancelDownload(tab: tab?.id ?? 0, download: latest.id))
-            case .completed:
-                try? Trash.move(URL(filePath: latest.path))
-            case .cancelled, .interrupted:
-                break
-            }
-        }
+        let session = tab.session
+        let source = download.url.flatMap { $0.isEmpty ? nil : $0 } ?? tab.agentDownloadAddress
+        agentDownloadChecks.note(
+            download, key: "\(tab.id)-\(download.id)",
+            isAgents: session != nil && tab.downloadsAreAgents && agentTools != nil,
+            ask: { [weak self] in
+                guard let session, let agentTools = self?.agentTools else { return true }
+                return await agentTools.allowsAgentDownload(from: source, fileName: download.fileName, sessionID: session)
+            },
+            cancel: { [weak tab] in tab?.send(.cancelDownload(tab: tab?.id ?? 0, download: download.id)) },
+            trash: { try? Trash.move(URL(filePath: $0)) })
     }
 
     /// Reads every task's browser waits again, and marks, tells and withdraws what changed. The mailbox's panel is
@@ -123,5 +114,60 @@ extension AppModel {
             // The wait may have ended while the notification was on its way.
             if browserWaits[session] != wait { systemNotificationCenter.removeNotifications(identifiers: [notice]) }
         }
+    }
+}
+
+/// The downloads the agent's acts started that wait on the person's answer, and the ones they declined until each ends: a
+/// declined download is cancelled, and one that finished before the cancel reached the host, or before the answer came,
+/// goes to the Trash.
+@MainActor
+final class AgentDownloadChecks {
+    private enum Check {
+        /// Asked about; the download as last reported.
+        case asking(BrowserDownload)
+        /// Declined and cancelled; it goes when its end is reported.
+        case declined
+    }
+
+    private var checks: [String: Check] = [:]
+
+    /// A report of a download, by its tab and download (`key`). A new one the agent's act started (`isAgents`) is asked
+    /// about with `ask`; what follows a no goes through `cancel` and `trash` (its path).
+    func note(_ download: BrowserDownload, key: String, isAgents: Bool, ask: @escaping @MainActor () async -> Bool,
+              cancel: @escaping @MainActor () -> Void, trash: @escaping @MainActor (String) -> Void) {
+        switch checks[key] {
+        case .asking?:
+            checks[key] = .asking(download)
+            return
+        case .declined?:
+            if download.state != .started, download.state != .inProgress { end(download, key: key, trash: trash) }
+            return
+        case nil:
+            break
+        }
+        guard download.state == .started, isAgents else { return }
+        checks[key] = .asking(download)
+        Task { @MainActor [weak self] in
+            let allowed = await ask()
+            guard let self, case let .asking(latest)? = self.checks[key] else { return }
+            guard !allowed else {
+                self.checks[key] = nil
+                return
+            }
+            self.checks[key] = .declined
+            if latest.state == .started || latest.state == .inProgress {
+                cancel()
+            } else {
+                self.end(latest, key: key, trash: trash)
+            }
+        }
+    }
+
+    /// Whether a download is asked about or declined and not ended yet.
+    func isChecking(_ key: String) -> Bool { checks[key] != nil }
+
+    private func end(_ download: BrowserDownload, key: String, trash: (String) -> Void) {
+        checks[key] = nil
+        if download.state == .completed, !download.path.isEmpty { trash(download.path) }
     }
 }

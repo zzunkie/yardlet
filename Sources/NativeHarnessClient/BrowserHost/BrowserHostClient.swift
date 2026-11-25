@@ -1772,6 +1772,7 @@ final class BrowserTab {
         let now = ContinuousClock.now
         lastPersonInput = now
         lastPersonUse = now
+        agentOpened = nil
         if remote { lastRemoteInput = now }
         if edits { hadPersonEdits = true }
         tellDownloads()
@@ -1799,14 +1800,28 @@ final class BrowserTab {
         agentOpened = (address, .now)
     }
 
-    /// The address the agent's `browser_navigate` last opened here, and when.
+    /// The address the agent's `browser_navigate` last opened here, and when, until the tab shows another page or the
+    /// person uses it.
     private var agentOpened: (address: String, at: ContinuousClock.Instant)?
 
-    /// Where a download the agent's latest act started comes from: the address its `browser_navigate` opened when that
-    /// was its latest act, since an address that downloads a file shows no page of its own, else the page the tab shows.
+    private func forgetAgentOpened(unless address: String) {
+        if let agentOpened, !BrowserURLPolicy.sameAddress(agentOpened.address, address) { self.agentOpened = nil }
+    }
+
+    /// Where a download the agent's latest act started comes from, when the host did not say
+    /// (`BrowserDownload.url`): the address its `browser_navigate` opened when that was its latest act, since an
+    /// address that downloads a file shows no page of its own, else the page the tab shows.
     var agentDownloadAddress: String? {
         if let agentOpened, lastAgentInput.map({ agentOpened.at >= $0 }) ?? true { return agentOpened.address }
         return currentURL
+    }
+
+    /// Whether a download that starts now is the agent's: its act (a click, typing, a navigation, a script), not a read,
+    /// came after the person's last input, or the agent opened the tab and no one has used it since. The agent reading
+    /// the page after the person clicked leaves the person's download theirs.
+    var downloadsAreAgents: Bool {
+        if let agent = lastAgentInput { return lastPersonInput.map { agent > $0 } ?? true }
+        return openedByAgent && lastPersonInput == nil
     }
 
     /// `address` is the `file:` page the agent last opened in this tab, by its real path now.
@@ -2332,6 +2347,7 @@ final class BrowserTab {
             client?.reportsNavigationRequests = true
         case .address(_, let url):
             currentURL = url
+            forgetAgentOpened(unless: url)
             navigations += 1
             invalidateSurfaceSequence()
             if !url.isEmpty, url != "about:blank", client?.carriesFilledValue(url) != true { lastPageURL = url }
@@ -2425,7 +2441,8 @@ final class BrowserTab {
             openingBlockedPopups.remove(popupTab)
         case .popupPermission(_, let allowed):
             popupsAllowed = allowed
-        case .newDocument:
+        case .newDocument(_, let url):
+            forgetAgentOpened(unless: url)
             navigations += 1
             invalidateSurfaceSequence()
             blockedPopupRequests = []

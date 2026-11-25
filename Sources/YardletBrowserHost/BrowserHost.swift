@@ -786,7 +786,7 @@ final class BrowserHost {
         return candidate.path(percentEncoded: false)
     }
 
-    func download(tab: Int, id: Int32, state: Int32, path: String, received: Int64, total: Int64) {
+    func download(tab: Int, id: Int32, state: Int32, path: String, received: Int64, total: Int64, url: String) {
         // A refused download (`downloadPath`) is not the panel's: it says only that it was not downloaded. One whose
         // first report comes before its path was asked for is refused by the tab it starts in; one the panel already
         // showed goes on to its end there.
@@ -813,7 +813,7 @@ final class BrowserHost {
         }
         send(["download": ["tab": tab, "download": [
             "id": Int(id), "state": stateName, "fileName": (path as NSString).lastPathComponent, "path": path,
-            "receivedBytes": received, "totalBytes": total
+            "receivedBytes": received, "totalBytes": total, "url": url
         ] as [String: Any]]])
     }
 

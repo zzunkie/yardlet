@@ -10,7 +10,17 @@ struct BrowserSite: Hashable, Sendable {
     let port: Int
 
     init?(_ address: String) {
+        // Chromium reads an address by the WHATWG URL rules and Foundation by RFC 3986, which disagree on a backslash
+        // (`http://a.test\@localhost:3000` goes to a.test), on a user name, on control characters, which Chromium drops,
+        // and on escapes and other characters in a host. An address whose authority holds any of these, or that does not
+        // start `scheme://`, names no site here: it is asked about each time and can be allowed for no task.
+        guard let colon = address.firstIndex(of: ":"), address[colon...].hasPrefix("://"),
+              !address.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }) else { return nil }
+        let authority = address[address.index(colon, offsetBy: 3)...].prefix { !"/?#".contains($0) }
+        guard !authority.isEmpty, authority.unicodeScalars.allSatisfy({ $0.isASCII && !"\\@%".unicodeScalars.contains($0) })
+        else { return nil }
         guard let components = URLComponents(string: address),
+              components.percentEncodedUser == nil, components.percentEncodedPassword == nil,
               let scheme = components.scheme?.lowercased(), scheme == "http" || scheme == "https",
               var host = components.host?.lowercased(), !host.isEmpty else { return nil }
         if host.hasPrefix("["), host.hasSuffix("]") { host = String(host.dropFirst().dropLast()) }

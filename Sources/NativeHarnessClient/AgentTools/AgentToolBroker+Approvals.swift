@@ -178,34 +178,53 @@ extension AgentToolBroker {
     /// Whether a download the agent's act started may stay in the Downloads folder, having asked the person where that
     /// is the rule: one from a site the task already downloaded from with the person's leave, from a server the task
     /// itself listens on, or from a file goes; the first from any other site asks once for the task, and one from no
-    /// site (a `data:` page) asks each time. `address` is where it came from (`BrowserTab.agentDownloadAddress`).
+    /// site (a `data:` page, an address Yardlet does not read as a site) asks each time. `address` is where it came from
+    /// (`BrowserDownload.url`, else `BrowserTab.agentDownloadAddress`); a `blob:` address is its page's site's.
     func allowsAgentDownload(from address: String?, fileName: String, sessionID: UUID) async -> Bool {
         guard let approvals, let policy = approvals.agentToolPolicy(callerID: sessionID), policy.asksPerson else {
             return true
         }
-        let target = BrowserNavigationTarget(address ?? "")
+        var address = address ?? ""
+        if address.lowercased().hasPrefix("blob:") { address = String(address.dropFirst(5)) }
+        let target = BrowserNavigationTarget(address)
         let detail = L10n.format("File: %@", fileName) + "\n" + L10n.string("It is saving to the Downloads folder.")
+        let site: BrowserSite
         switch target {
         case .blank, .file:
             return true
         case .other:
-            return await approvals.askPerson(title: L10n.string("Allow this task's download?"), detail: detail,
-                                             callerID: sessionID)
-        case let .site(site):
-            let host = policy.hostTaskID
-            if allowedDownloadSites[host]?.contains(site) == true { return true }
-            if site.isLoopbackName, await approvals.taskListens(on: site.port, callerID: sessionID) { return true }
-            let key = "\(host.uuidString)|\(site.text)"
-            let question = pendingDownloadApprovals[key] ?? Task {
-                await approvals.askPerson(title: L10n.format("Allow downloads from %@ in this task?", site.text),
-                                          detail: detail, callerID: sessionID)
-            }
-            pendingDownloadApprovals[key] = question
-            let allowed = await question.value
-            pendingDownloadApprovals[key] = nil
-            if allowed { allowedDownloadSites[host, default: []].insert(site) }
-            return allowed
+            let allowed = await approvals.askPerson(title: L10n.string("Allow this task's download?"), detail: detail,
+                                                    callerID: sessionID)
+            return allowed && !Task.isCancelled
+        case let .site(found):
+            site = found
         }
+        let host = policy.hostTaskID
+        if allowedDownloadSites[host]?.contains(site) == true { return true }
+        if site.isLoopbackName, await approvals.taskListens(on: site.port, callerID: sessionID) { return true }
+        // The person may have allowed the site meanwhile.
+        if allowedDownloadSites[host]?.contains(site) == true { return true }
+        let key = "\(host.uuidString)|\(site.text)"
+        let question: PendingReadApproval
+        // A question just withdrawn is not joined: it answers no.
+        if let pending = pendingDownloadApprovals[key], !pending.answer.isCancelled {
+            question = pending
+        } else {
+            let title = L10n.format("Allow downloads from %@ in this task?", site.text)
+            question = PendingReadApproval(Task { await approvals.askPerson(title: title, detail: detail,
+                                                                            callerID: sessionID) })
+            pendingDownloadApprovals[key] = question
+        }
+        question.waiters += 1
+        let allowed = await withTaskCancellationHandler {
+            await question.answer.value
+        } onCancel: {
+            Task { @MainActor in question.leave() }
+        }
+        // Only the question this call waited on is cleared: a later one may stand in its place already.
+        if pendingDownloadApprovals[key] === question { pendingDownloadApprovals[key] = nil }
+        if allowed { allowedDownloadSites[host, default: []].insert(site) }
+        return allowed && !Task.isCancelled
     }
 
     /// Why a connector's tool may not run for this caller, or nil to run it (also when no connector has a tool

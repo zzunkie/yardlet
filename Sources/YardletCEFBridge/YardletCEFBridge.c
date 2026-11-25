@@ -1820,8 +1820,12 @@ static void CEF_CALLBACK download_on_download_updated(cef_download_handler_t *se
         cef_string_userfree_t full_path = item->get_full_path(item);
         char *path = full_path ? copy_string(full_path) : strdup("");
         if (full_path) p_cef_string_userfree_utf16_free(full_path);
+        cef_string_userfree_t source = item->get_url(item);
+        char *url = source ? copy_string(source) : strdup("");
+        if (source) p_cef_string_userfree_utf16_free(source);
         g_callbacks.download(tab_of(browser), id, state, path, item->get_received_bytes(item),
-                             item->get_total_bytes(item));
+                             item->get_total_bytes(item), url);
+        free(url);
         free(path);
     }
     YARDLET_RELEASE(callback);

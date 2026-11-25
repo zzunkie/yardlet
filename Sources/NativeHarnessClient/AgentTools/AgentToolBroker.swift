@@ -192,7 +192,7 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     var allowedSites: [UUID: Set<BrowserSite>] = [:]
     var allowedDownloadSites: [UUID: Set<BrowserSite>] = [:]
     /// A first download's question that downloads from the same task and site wait on together.
-    var pendingDownloadApprovals: [String: Task<Bool, Never>] = [:]
+    var pendingDownloadApprovals: [String: PendingReadApproval] = [:]
     /// The app, which answers the simulator tools. Nil, as in tests and on other platforms, offers none.
     weak var simulators: (any SimulatorToolHandling)?
     /// The vault for agents. A task with the browser tools also gets `browser_fill_credential` while

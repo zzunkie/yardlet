@@ -895,15 +895,24 @@ direct call would be.
   `data:` address. The card, "Allow this task to open ‹site›?", offers Deny, Allow once and, for a web site, "Allow
   ‹site› in this task". A site is its scheme, host and port together (`BrowserSite`): allowing
   `https://docs.stripe.com` lets the task go anywhere on it without asking, and not to another port or to `http:`. What
-  the person allowed lasts until the task is archived or deleted, and is kept in memory only.
-- **Redirects:** when the page lands on another site than the one asked for, that site is weighed as a navigation there,
-  with "The page went on to ‹site›" on its card. Declined, the tab goes to `about:blank` and the call fails. The request
-  to the redirect's target has gone out by then; only the page it shows is kept from the agent.
-- **Downloads:** a download the agent's act starts (`BrowserTab.isDrivenByAgent`) from a site asks once per site for
-  the task, "Allow downloads from ‹site› in this task?", with the file's name (`AppModel.noteBrowserDownload`). It comes
-  from the address the agent's last `browser_navigate` opened when that was its latest act, else from the page the tab
-  shows. One from a server the task listens on or from a file goes; one from no site (a `data:` page) asks each time.
-  The download goes on while the card waits; declined, it is cancelled, or moved to the Trash if it already finished.
+  the person allowed lasts until the task is archived or deleted, and is kept in memory only. An address Chromium could
+  read as another host than Foundation does (a backslash, a user name, `%` or a character outside ASCII before the
+  path, a control character anywhere, or no `//` after the scheme) names no site: it asks each time and cannot be
+  allowed for the task.
+- **Redirects:** when the page lands somewhere other than the site asked for (another site, a `data:` address, or a file,
+  weighed by the task's folders), that place is weighed as a navigation there, with "The page went on to ‹site›" on its
+  card. Where it landed is read first from the browser's history (`Page.getNavigationHistory`), which answers while a
+  dialog the page opened holds it, and again from the page once it loaded. Declined, a dialog it opened is dismissed, the
+  tab goes to `about:blank` and the call fails. The request to the redirect's target has gone out by then; only the page
+  it shows is kept from the agent.
+- **Downloads:** a download the agent's act starts (`BrowserTab.downloadsAreAgents`: a click, typing, a navigation or
+  a script after the person's last input, not a read) from a site asks once per site for the task, "Allow downloads
+  from ‹site› in this task?", with the file's name (`AppModel.noteBrowserDownload`). Its site is the address the host
+  reports the file came from after redirects (`BrowserDownload.url`, CEF's `GetURL`; a `blob:` address is its page's
+  site), else the address the agent's last `browser_navigate` opened while the tab still shows it and the person has
+  not used it, else the page the tab shows. One from a server the task listens on or from a file goes; one from no
+  site (a `data:` page) asks each time. The download goes on while the card waits; declined, it is cancelled, and one
+  that finished before the answer or before the cancel reached the host is moved to the Trash (`AgentDownloadChecks`).
   Allowing a site to be opened does not allow its downloads.
 - A task that runs without asking is asked none of these.
 - `archive_task`, `delete_scheduled_task` and `browser_tab_close` are listed with `destructiveHint: true`.

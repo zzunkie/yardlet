@@ -116,10 +116,11 @@ var callbacks = YardletCEFCallbacks(
         let path = MainActor.assumeIsolated { BrowserHost.shared.downloadPath(tab: Int(tab), id: id, suggestedName: name) }
         return path.map { strdup($0) }
     },
-    download: { tab, id, state, path, received, total in
-        let path = string(path) ?? ""
+    download: { tab, id, state, path, received, total, url in
+        let path = string(path) ?? "", url = string(url) ?? ""
         MainActor.assumeIsolated {
-            BrowserHost.shared.download(tab: Int(tab), id: id, state: state, path: path, received: received, total: total)
+            BrowserHost.shared.download(tab: Int(tab), id: id, state: state, path: path, received: received, total: total,
+                                        url: url)
         }
     },
     findResult: { tab, matches, active, isFinal in

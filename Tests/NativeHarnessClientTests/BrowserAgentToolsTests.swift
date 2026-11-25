@@ -186,6 +186,18 @@ final class BrowserAgentToolsTests: XCTestCase {
         XCTAssertEqual(asked.last?.1, "https://docs.example.test/go")
         XCTAssertEqual(cdp.params(of: "Page.navigate").last?["url"], .string("about:blank"),
                        "The page the person did not allow goes")
+
+        // Where the browser's history says the page landed is weighed first, before a page script could answer, and a
+        // data: address is weighed too.
+        cdp.responders["Page.getNavigationHistory"] = { _ in
+            .object(["currentIndex": .integer(0), "entries": .array([.object(["url": .string("data:text/html,x")])])])
+        }
+        cdp.pageURL = "https://docs.example.test/start"
+        answers = [true, false]
+        let scripted = await run(AgentToolCatalog.navigate, ["url": .string("https://docs.example.test")])
+        XCTAssertTrue(scripted.isError)
+        XCTAssertEqual(asked.last?.0, "data:text/html,x")
+        XCTAssertEqual(cdp.params(of: "Page.navigate").last?["url"], .string("about:blank"))
     }
 
     func testNavigateReportsAFailedLoadAndRefusesAddressesOutsideThePolicy() async {

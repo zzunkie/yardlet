@@ -457,6 +457,130 @@ final class AgentToolApprovalTests: XCTestCase {
         XCTAssertEqual(approvals.titles.count, 3)
     }
 
+    func testAnAddressChromiumReadsAsAnotherSiteNamesNoSite() {
+        // Chromium reads a backslash as a slash and drops control characters; Foundation reads them otherwise.
+        for address in ["http://169.254.169.254\\@localhost:3000/", "https://evil.test\\exfil=1@docs.stripe.com/",
+                        "https://user:pass@docs.stripe.com/", "https://evil.test@docs.stripe.com/",
+                        "http://local\thost:3000/", "http://localhost\n:3000/", "http://loc%61lhost:3000/",
+                        "https:docs.stripe.com/", "http:/localhost:3000", "https://ｌｏｃａｌｈｏｓｔ:3000/"] {
+            XCTAssertNil(BrowserSite(address), address)
+            guard case .other = BrowserNavigationTarget(address) else { return XCTFail(address) }
+        }
+        XCTAssertEqual(BrowserSite("https://docs.stripe.com/a\\b?q=@x#@y")?.text, "https://docs.stripe.com",
+                       "Past the host, such characters are the page's")
+        XCTAssertEqual(BrowserSite("http://[::1]:3000/")?.isLoopbackName, true)
+    }
+
+    func testACardWithSeveralAllowsReportsTheOneChosen() async throws {
+        let center = SessionToolCenter(defaults: try XCTUnwrap(UserDefaults(suiteName: "approvals-\(UUID().uuidString)")))
+        let task = UUID()
+        let actions = BrowserNavigationAnswer.actions(site: "https://docs.example.test")
+        func ask(timeout: Duration = .seconds(60)) -> Task<String?, Never> {
+            Task { await center.choose(PermissionRequest(id: UUID().uuidString, title: "t", detail: "d", command: nil,
+                                                         actions: actions), in: task, timeout: timeout, onChange: {}) }
+        }
+        func card() async throws -> SessionToolApproval {
+            try await waitUntil { !center.approvals(for: task).isEmpty }
+            return try XCTUnwrap(center.approvals(for: task).first)
+        }
+        let site = ask()
+        center.answer(try await card().id, allow: true, actionID: BrowserNavigationAnswer.siteID)
+        let chosen = await site.value
+        XCTAssertEqual(chosen, BrowserNavigationAnswer.siteID)
+        // An allow that names none (a notification) takes the narrowest; a no, a cancel and a timeout answer nil.
+        let plain = ask()
+        center.answer(try await card().id, allow: true)
+        let narrowest = await plain.value
+        XCTAssertEqual(narrowest, BrowserNavigationAnswer.onceID)
+        let denied = ask()
+        center.answer(try await card().id, allow: false, actionID: BrowserNavigationAnswer.siteID)
+        let no = await denied.value
+        XCTAssertNil(no)
+        let cancelled = ask()
+        _ = try await card()
+        cancelled.cancel()
+        let gone = await cancelled.value
+        XCTAssertNil(gone)
+        try await waitUntil { center.approvals(for: task).isEmpty }
+        let late = await ask(timeout: .milliseconds(50)).value
+        XCTAssertNil(late)
+        XCTAssertTrue(center.approvals(for: task).isEmpty)
+    }
+
+    func testADeclinedDownloadIsCancelledOrTrashedWhateverArrivesFirst() async throws {
+        let checks = AgentDownloadChecks()
+        var cancels = 0
+        var trashed: [String] = []
+        var answer: CheckedContinuation<Bool, Never>?
+        func download(_ state: BrowserDownload.State) -> BrowserDownload {
+            BrowserDownload(id: 1, state: state, fileName: "a.zip", path: "/tmp/a.zip", receivedBytes: 1, totalBytes: 2)
+        }
+        func note(_ state: BrowserDownload.State, key: String = "t-1", isAgents: Bool = true) {
+            checks.note(download(state), key: key, isAgents: isAgents,
+                        ask: { await withCheckedContinuation { answer = $0 } },
+                        cancel: { cancels += 1 }, trash: { trashed.append($0) })
+        }
+        // Declined while it runs: cancelled; its completion, reported before the cancel reached the host, is trashed.
+        note(.started)
+        try await waitUntil { answer != nil }
+        answer?.resume(returning: false)
+        answer = nil
+        try await waitUntil { cancels == 1 }
+        note(.inProgress)
+        note(.completed)
+        XCTAssertEqual(trashed, ["/tmp/a.zip"])
+        XCTAssertFalse(checks.isChecking("t-1"))
+
+        // Finished before the answer came: trashed once the person declines.
+        note(.started, key: "t-2")
+        try await waitUntil { answer != nil }
+        note(.completed, key: "t-2")
+        answer?.resume(returning: false)
+        answer = nil
+        try await waitUntil { trashed.count == 2 }
+        XCTAssertEqual(cancels, 1)
+
+        // Allowed, or not the agent's: nothing is touched.
+        note(.started, key: "t-3")
+        try await waitUntil { answer != nil }
+        answer?.resume(returning: true)
+        answer = nil
+        try await waitUntil { !checks.isChecking("t-3") }
+        note(.completed, key: "t-3")
+        note(.started, key: "t-4", isAgents: false)
+        XCTAssertFalse(checks.isChecking("t-4"))
+        XCTAssertEqual(trashed.count, 2)
+        XCTAssertEqual(cancels, 1)
+    }
+
+    func testOnlyTheAgentsActMakesADownloadItsOwn() throws {
+        final class Connection: BrowserHostConnection {
+            var eventHandler: ((BrowserHostEvent) -> Void)?
+            func send(_ command: BrowserHostCommand) {}
+            func terminate() {}
+        }
+        let connection = Connection()
+        let client = BrowserHostClient(idleGrace: .seconds(60)) { connection }
+        let tab = try client.openTab(forSession: UUID(), url: "about:blank", viewport: .offscreenDefault)
+        tab.noteAgentInput()
+        XCTAssertTrue(tab.downloadsAreAgents)
+        // The person clicks a download; the agent then only reads the page.
+        tab.notePersonInput()
+        client.noteAgentActivity(on: tab)
+        XCTAssertTrue(tab.isDrivenByAgent)
+        XCTAssertFalse(tab.downloadsAreAgents, "A read leaves the person's download theirs")
+
+        // Where the agent's download comes from: what it opened, until the tab shows another page.
+        tab.noteAgentInput()
+        tab.noteAgentOpened("http://localhost:3000/export")
+        XCTAssertEqual(tab.agentDownloadAddress, "http://localhost:3000/export")
+        connection.eventHandler?(.address(tab: tab.id, url: "https://untrusted.example.test/"))
+        XCTAssertEqual(tab.agentDownloadAddress, "https://untrusted.example.test/")
+        tab.noteAgentOpened("http://localhost:3000/export")
+        tab.notePersonInput()
+        XCTAssertNotEqual(tab.agentDownloadAddress, "http://localhost:3000/export")
+    }
+
     func testAToolNotKnownToReadGetsNoLastingAllow() {
         let labels = ConnectorToolLabels()
         XCTAssertTrue(AgentToolHarnessApproval.asksEachTime(tool: "slack_post_message", labels: labels),
