@@ -47,8 +47,14 @@ struct ConversationRequestDock: View {
                         .stroke(ParityTheme.strongSeparator)
                 }
             }
-            // Raised off the conversation as the composer under it is (`PromptComposer`).
-            .shadow(color: .black.opacity(colorScheme == .dark ? 0.28 : 0.06), radius: 12, y: 4)
+            // Raised off the conversation as the composer under it is (`PromptComposer`): the shadow is drawn from a
+            // plain shape behind the panel, as `floatingSurface()` draws its own, so the scrolling card is not
+            // composited offscreen for it.
+            .background {
+                RoundedRectangle(cornerRadius: ParityTheme.panelCornerRadius)
+                    .fill(ParityTheme.elevated)
+                    .shadow(color: .black.opacity(colorScheme == .dark ? 0.28 : 0.06), radius: 12, y: 4)
+            }
             .background(alignment: .top) { edgesBehind(edges) }
             // A card of its own for each request: the next one does not take the answered one's input.
             .id(front.id)

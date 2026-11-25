@@ -393,6 +393,16 @@ struct ConversationTurnView: View, Equatable {
     /// item card.
     @ViewBuilder
     private func itemView(_ item: ConversationItem) -> some View {
+        if item.isReadByQuestionCard {
+            // Its question card draws it (`CodexQuestionOptions`).
+            EmptyView()
+        } else {
+            itemContent(item)
+        }
+    }
+
+    @ViewBuilder
+    private func itemContent(_ item: ConversationItem) -> some View {
         switch item.kind {
         case let .request(request):
             ConversationRequestCard(request: request, actions: context.actions)

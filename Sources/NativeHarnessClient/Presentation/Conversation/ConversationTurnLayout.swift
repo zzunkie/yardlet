@@ -262,6 +262,8 @@ extension ConversationTurn {
         // command the provider went on past, which the person stops from its line.
         if status == .running, item.phase == .running, ConversationWorkSummary.category(of: item) != nil { return true }
         if item.wasRefusedForApproval { return true }
+        // Drawn on its question card, it neither stays in view nor parts the fold.
+        if item.isReadByQuestionCard { return false }
         switch item.kind {
         case .answer:
             return ConversationTurnLayout.isAnswer(item)

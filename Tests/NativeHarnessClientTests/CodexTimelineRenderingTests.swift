@@ -135,7 +135,8 @@ final class CodexTimelineRenderingTests: XCTestCase {
     /// A Codex message that asks with options (`request_user_input_async`) reads as its question, and
     /// its options are the question card's, as the Codex app asks it, not a list in the answer. The
     /// card sends the Codex app's reply message, and once the thread holds it the question turn reads
-    /// as what was answered, the reply's bubble as the answer rather than its JSON.
+    /// as what was answered; the reply draws no bubble of its own, and one no card reads reads as the
+    /// answer rather than its JSON.
     func testAnAsyncQuestionReadsAsItsTitleAndAnswersWithItsOptions() throws {
         let title = "The 1.03GB archive is ready, but Google asks to confirm the password right before the download. Tell me once you have signed in."
         let message: JSONValue = .object([
@@ -189,7 +190,7 @@ final class CodexTimelineRenderingTests: XCTestCase {
         XCTAssertTrue(next.turns.allSatisfy { $0.actions.questionsToAnswer.isEmpty })
         let record = try XCTUnwrap(next.turns.first?.actions.answeredQuestions)
         XCTAssertEqual(record.answers, [#"["request_user_input_async","a1",0]"#: ConversationQuestionAnswer(options: ["Download later"])])
-        XCTAssertEqual(next.turns.last?.prompt.map(\.id), [], "the question card reads the reply")
+        XCTAssertEqual(next.turns.last?.prompt.map(\.isReadByQuestionCard), [true], "the question card reads the reply")
         // A reply to questions no card reads stays the person's message, as the answer, not its JSON.
         let orphanReply = reply.replacingOccurrences(of: #"\"a1\""#, with: #"\"other\""#)
         let orphan = CodexConversationProjection.presentation(thread([
@@ -247,6 +248,62 @@ final class CodexTimelineRenderingTests: XCTestCase {
                     ConversationItemView(item: item, isTurnFinished: turn.status.isTerminal, context: context)
                 }
             }
+        }
+    }
+
+    /// A reply the question card reads stays the person's message in its turn, so the turn folds its work under the
+    /// answer it ends with and is announced; the conversation draws it only on the card.
+    /// A reply steered into the running turn is read the same way. A reply with an image, or one that also answers
+    /// questions the card does not ask, keeps its own message.
+    func testAReplyTheQuestionCardReadsStaysInItsTurnButDrawsOnlyOnTheCard() throws {
+        let asks: JSONValue = .object([
+            "id": .string("a1"), "type": .string("agentMessage"), "phase": .string("final_answer"), "delivery": .string("async"),
+            "text": .string("Download now?"),
+            "questions": .array([.object(["title": .string("Download now?"), "options": .array([.string("Now"), .string("Later")])])])
+        ])
+        let questionID = CodexAsyncQuestionReply.itemID(messageID: "a1", index: 0)
+        let reply = CodexAsyncQuestionReply.message([.init(questionItemID: questionID, question: "Download now?", answer: "Later")])
+        let call: JSONValue = .object(["id": .string("t2"), "type": .string("mcpToolCall"), "server": .string("files"),
+                                       "tool": .string("download"), "status": .string("completed"),
+                                       "arguments": .object([:]), "result": .null, "error": .null])
+        func presentation(_ turns: [CodexTurnState]) -> ConversationPresentation {
+            CodexConversationProjection.presentation(thread(turns), workspaceURL: URL(filePath: "/Users/me/yardlet"),
+                                                     historySelection: nil)
+        }
+        let asking = turn("turn-1", status: "completed", items: [user("u1", "Get the archive"), asks])
+
+        // The next turn opens with the reply, works, and answers.
+        let opened = presentation([asking, turn("turn-2", status: "completed", items: [
+            user("u2", reply), call, answer("m2", "Downloading it later.")
+        ])])
+        let replying = try XCTUnwrap(opened.turns.last)
+        XCTAssertEqual(replying.prompt.map(\.id), ["u2"])
+        XCTAssertEqual(replying.prompt.map(\.isReadByQuestionCard), [true])
+        XCTAssertTrue(replying.foldsWork, "the turn still folds its work under its answer")
+        XCTAssertEqual(replying.answers.map(\.id), ["m2"])
+        XCTAssertTrue(TurnCompletionAnnouncement.answersPerson(opened.turns), "the person's reply opened it")
+
+        // Steered into the turn that asked, while it still runs.
+        let steered = presentation([turn("turn-1", status: "inProgress", items: [
+            user("u1", "Get the archive"), asks, user("u2", reply)
+        ])])
+        let running = try XCTUnwrap(steered.turns.first)
+        XCTAssertEqual(running.actions.answeredQuestions?.answers[questionID], ConversationQuestionAnswer(options: ["Later"]))
+        XCTAssertEqual(running.work.first { $0.id == "u2" }?.isReadByQuestionCard, true)
+        XCTAssertFalse(running.workKeptWhenFolded.contains { $0.id == "u2" }, "it does not part the fold")
+
+        // A reply with an image, or one that also answers another question, keeps its bubble.
+        let withImage: JSONValue = .object(["id": .string("u2"), "type": .string("userMessage"), "content": .array([
+            .object(["type": .string("text"), "text": .string(reply)]),
+            .object(["type": .string("localImage"), "path": .string("/tmp/archive.png")])
+        ])])
+        let partial = CodexAsyncQuestionReply.message([
+            .init(questionItemID: questionID, question: "Download now?", answer: "Later"),
+            .init(questionItemID: CodexAsyncQuestionReply.itemID(messageID: "other", index: 0), question: "Keep it?", answer: "Yes")
+        ])
+        for (name, message) in [("image", withImage), ("partial", user("u2", partial))] {
+            let kept = presentation([asking, turn("turn-2", status: "completed", items: [message, answer("m2", "Done.")])])
+            XCTAssertEqual(kept.turns.last?.prompt.map(\.isReadByQuestionCard), [false], name)
         }
     }
 

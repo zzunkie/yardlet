@@ -125,6 +125,8 @@ final class ConversationTurnElement {
     /// An item of the turn: an answered request by its card, an earlier error by its card, a compaction by its
     /// marker, a call by its line, a message by its card; the message the turn was sent with offers its edit.
     private func add(_ item: ConversationItem, offersEdit: Bool = false) {
+        // Its question card draws it (`ConversationItem.isReadByQuestionCard`).
+        guard !item.isReadByQuestionCard else { return }
         switch item.kind {
         case let .request(request):
             context.card(request, turn).place(in: view)

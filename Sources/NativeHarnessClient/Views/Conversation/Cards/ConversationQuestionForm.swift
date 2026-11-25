@@ -173,6 +173,7 @@ struct ConversationQuestionStepsView<Finish: View>: View {
                 focus = .customAnswer(step.id)
             } label: {
                 Image(systemName: Self.indicator(multiple: step.allowsMultipleSelections, isOn: isChosen))
+                    .font(.parity(.control, scale: interfaceScale))
                     .foregroundStyle(isChosen ? ParityTheme.accent : Color.secondary)
             }
             .buttonStyle(.plain)

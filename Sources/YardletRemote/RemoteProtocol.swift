@@ -535,6 +535,9 @@ public struct RemoteItem: Codable, Equatable, Sendable {
     public var answeredQuestions: [RemoteNextQuestion]?
     public var sentWhileWorking: Bool?
     public var unmarkedAnswer: Bool?
+    /// A user item the turn's answered questions read as their answers, which the client draws on that card
+    /// rather than as a message of its own (§15.31).
+    public var readByQuestionCard: Bool?
     public var nextQuestions: [RemoteNextQuestion]?
     public var planToImplement: String?
     public var autoContinue: Bool?

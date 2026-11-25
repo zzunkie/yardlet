@@ -90,7 +90,7 @@ enum ConversationFindSource: Equatable, Sendable {
         // A Codex message draws its directives (`CodexMessageDirectives`); find reads what is drawn.
         let dialect = TranscriptMarkdownDialect(messagesOf: presentation.harness)
         for turn in presentation.turns {
-            for item in turn.prompt {
+            for item in turn.prompt where !item.isReadByQuestionCard {
                 if let text = item.sentText, !text.isEmpty {
                     units.append(.init(id: item.id, scrollID: turn.id, revealID: nil, body: .plain(text)))
                 }
@@ -102,6 +102,9 @@ enum ConversationFindSource: Equatable, Sendable {
                 case let .commentary(text, _), let .answer(text, _):
                     units.append(.init(id: item.id, scrollID: turn.id, revealID: revealID,
                                        body: .markdown(text, dialect: dialect)))
+                case .userMessage where item.isReadByQuestionCard:
+                    // The question card above draws it (`ConversationQuestionSummary`).
+                    break
                 case .userMessage, .scheduledTaskMessage:
                     if let text = item.sentText, !text.isEmpty {
                         units.append(.init(id: item.id, scrollID: turn.id, revealID: revealID, body: .plain(text)))
