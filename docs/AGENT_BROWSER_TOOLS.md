@@ -71,7 +71,7 @@ batch's, with its `action` number and `tool`; a batch that holds a picture keeps
 
 | Tool | Arguments | Behavior |
 |---|---|---|
-| `browser_navigate` | `url` | Resolves the address with the same rules as the panel's address field (`BrowserURLPolicy`: http, https, file, data and about; a bare host name gets https), runs `Page.navigate` and waits for `Page.loadEventFired` (30 seconds). An error when the host blocks it (`navigationBlocked`). Chromium answers `Page.navigate` once the navigation is ready to commit (the response is in) or has ended (failed, or replaced by another); before the request goes out it runs the beforeunload handlers of the page's frames, and while DevTools is attached, as it always is here, it waits for them without limit, where Chrome goes on after half a second. When no answer comes within 30 seconds, the error says so, with what the tab shows and the navigation still under way (below, "Calls that run out of time"). A `file:` address is resolved the way Chromium reads it and then taken as its real path, with `..` and symbolic links resolved: inside the task's folders (the main folder and the other roots) it opens as is. Outside them, a task that runs without asking (Claude Code bypassing permissions, Codex full access, Antigravity bypass; the same judgment as the session tools' `sessionToolAsksPerson`) opens it as is, and any other permission asks with the task's approval card ("Open a file outside this task's folders?", with the path as the body). When the person declines, the call fails with "The person did not allow opening ‹path›.", and a path allowed once is not asked again in that task (`AppModel.allowsBrowserFile`). A `file:` address the person types in the panel's address field is unchanged |
+| `browser_navigate` | `url` | Resolves the address with the same rules as the panel's address field (`BrowserURLPolicy`: http, https, file, data and about; a bare host name gets https), runs `Page.navigate` and waits for `Page.loadEventFired` (30 seconds). An error when the host blocks it (`navigationBlocked`). Chromium answers `Page.navigate` once the navigation is ready to commit (the response is in) or has ended (failed, or replaced by another); before the request goes out it runs the beforeunload handlers of the page's frames, and while DevTools is attached, as it always is here, it waits for them without limit, where Chrome goes on after half a second. When no answer comes within 30 seconds, the error says so, with what the tab shows and the navigation still under way (below, "Calls that run out of time"). A `file:` address is resolved the way Chromium reads it and then taken as its real path, with `..` and symbolic links resolved: inside the task's folders (the main folder and the other roots) it opens as is. Outside them, a task that runs without asking (Claude Code bypassing permissions, Codex full access, Antigravity bypass; the same judgment as the session tools' `sessionToolAsksPerson`) opens it as is, and any other permission asks with the task's approval card ("Open a file outside this task's folders?", with the path as the body). When the person declines, the call fails with "The person did not allow opening ‹path›.", and a path allowed once is not asked again in that task (`AppModel.allowsBrowserFile`). A `file:` address the person types in the panel's address field is unchanged. Any other address is weighed by its site, and a redirect by the site it lands on (section 6, "Where the browser goes") |
 | `browser_snapshot` | `ref`, `query`, `maxResults` | `Accessibility.getFullAXTree` as indented text. Skips unnamed grouping elements, and gives references such as `@e3` only to elements you can act on (interactive roles, focusable elements, editable fields, headings) and to the containers a part can be read by: the landmarks (`main`, `navigation`, `banner`, `contentinfo`, `complementary`, `search`, and `region` when it has a name), `form`, `dialog`, `alertdialog`, `table`, `grid`, `article`, `tabpanel`, `menu` and `toolbar`, not lists. Numbers follow page order, a container before what it holds; one that shows nothing is left out with its reference, and its number goes to the next element. It also reads inside iframes: frames in the same process by `frameId`, and frames of other sites from that frame's DevTools session (`Target.setAutoAttach`, flatten); it puts each tree under its iframe line and adds `[origin=…]` to the line of an iframe from another origin. Same-site links show only their path (scrubbed before truncating), text made only of separators and container names built from their own text are left out, and adjacent text goes on one line (section 6 below). Cuts at 60,000 characters. With `ref`, it reads the page the same way and returns only that element and what it holds, frames included, starting at no indent under the header "Snapshot ‹n› of tab ‹id›, only ‹ref› and what it holds" (and cut at 60,000 characters of its own). Every reference on the page is what a full snapshot gives, so new elements on either side of the part are numbered in page order and the references outside it go on as after a full snapshot. With `query`, it renders the page (or `ref` subtree) past the 60,000-character display cap (up to 2,000,000 characters), scrubs the assembled text before matching so redacted secrets cannot be probed, and returns only case-insensitive matching lines with their ancestor containers and immediate sibling context (capped by `maxResults`, default 20, 1 to 100, and by the 60,000-character output cap), using the same `@eN` references. A reference the tools cannot place gives the errors the other tools give, pointing to `browser_snapshot` without `ref`, and one whose element left the page since the latest snapshot says so; neither counts as a snapshot |
 | `browser_click` | `ref` or `x` and `y`, `button`, `doubleClick`, `modifiers` | For a reference, `DOM.scrollIntoViewIfNeeded` → the center point of `DOM.getContentQuads` |
 | `browser_type` | `ref`, `text`, `submit` | `DOM.focus`, selects the existing content, `Input.insertText`, and Enter when asked. An error for an element that cannot be edited |
@@ -752,7 +752,7 @@ removes the pending record. A successful retry replaces that record with `starte
 
 | Harness | Path | Form | Evidence |
 |---|---|---|---|
-| Claude Code | The launch argument `--mcp-config <file>` (at the very end, because the option takes several values). Just before it, `--allowedTools` with `mcp__yardlet__spawn_task` and `mcp__yardlet__dismiss_task` (the two tools that only show a chip, without a permission card; the Claude app also puts them in `allowedTools`), the session tools, the settings tools, `read_terminal` (while the terminal is not shared the server does not list it and the name allows nothing), `list_task_runs` and `list_scheduled_tasks` of the scheduled-task tools, `show_widget`, the wrappers `run_yardlet_script`, `call_connector_tool` and `browser_batch`, whose calls Yardlet weighs itself (section 6, "Approvals"), the tool lists `search_yardlet_tools`, `list_connector_tools` and `list_simulator_tools`, and `simulator_list`, `simulator_screenshot` and `simulator_snapshot`, which see only a device the person let the task use (docs/SIMULATOR.md, "Agent tools") (`AgentToolServerLaunch.claudeAllowedTools`) | `{"mcpServers":{"yardlet":{"type":"stdio","command","args","env"}}}`. The file is a 0600 file in a 0700 folder (so the token does not show in the process list). `--strict-mcp-config` is not used, so the user's servers stay as they are | `--mcp-config <configs...>` and `--strict-mcp-config` are in the CLI's `--help`. The control request `mcp_status` reports `yardlet: connected`, and `mcp_call` calls a tool (section 7) |
+| Claude Code | The launch argument `--mcp-config <file>` (at the very end, because the option takes several values). Just before it, `--allowedTools` with `mcp__yardlet__spawn_task` and `mcp__yardlet__dismiss_task` (the two tools that only show a chip, without a permission card; the Claude app also puts them in `allowedTools`), the session tools, the settings tools, `read_terminal` (while the terminal is not shared the server does not list it and the name allows nothing), `list_task_runs` and `list_scheduled_tasks` of the scheduled-task tools, `show_widget`, the wrappers `run_yardlet_script`, `call_connector_tool` and `browser_batch`, whose calls Yardlet weighs itself (section 6, "Approvals"), the tool lists `search_yardlet_tools`, `list_connector_tools` and `list_simulator_tools`, and `simulator_list`, `simulator_screenshot` and `simulator_snapshot`, which see only a device the person let the task use (docs/SIMULATOR.md, "Agent tools"), the browser tools that read, scroll, resize or open a blank tab, and `browser_navigate`, which Yardlet asks about by site (section 6, "Approvals") (`AgentToolServerLaunch.claudeAllowedTools`) | `{"mcpServers":{"yardlet":{"type":"stdio","command","args","env"}}}`. The file is a 0600 file in a 0700 folder (so the token does not show in the process list). `--strict-mcp-config` is not used, so the user's servers stay as they are | `--mcp-config <configs...>` and `--strict-mcp-config` are in the CLI's `--help`. The control request `mcp_status` reports `yardlet: connected`, and `mcp_call` calls a tool (section 7) |
 | Codex | `config` of `thread/start`, `thread/resume` and `thread/fork` | `{"mcp_servers":{"yardlet":{"command","args","env","tool_timeout_sec":1800}}}`. No tool gets an `approval_mode` of Yardlet's: whether Codex asks before a call follows the task's own approval setting and the tool's annotations. A fork gets the new task's token | In the App Server's schema (`app-server generate-json-schema --experimental`) all three requests take `config` (`additionalProperties: true`). Codex merges it into the user's configuration, so a user server in the same home stays connected beside `yardlet` (`mcpServerStatus/list`; a nested object and the dot notation `mcp_servers.yardlet` behave the same), and `mcpServer/tool/call` calls a tool (section 7). `thread/resume` was checked only by its request body, because a thread with no turn has no rollout |
 | ACP (OpenCode, Antigravity, Kimi, Grok, Hermes, Kiro) | `mcpServers` of `session/new` and `session/load` | `{"name":"yardlet","command","args":[],"env":[{"name","value"}]}` | ACP makes stdio MCP mandatory. The server is not added when `agentCapabilities.mcpCapabilities` of `initialize` has `stdio: false` or is `false`. OpenCode starts the server through `session/new` and sends `initialize` and `tools/list`. Antigravity (`agy acp`, which Yardlet runs from 1.4.11, `AntigravityTransport.acpMinimum`) does the same after a `server/discover` request; it does not save the server in `mcp_config.json`, but keeps each tool's schema under `~/.gemini/antigravity-cli/mcp/<server>/` as it does for its own servers |
 | Muse, Pi, Cursor | none | Not added (no route: `AgentToolInjectionRoute` is nil), and no token is issued | MSP, Pi RPC and headless stream-json have no per-session MCP field. If needed, the next step is to register it with that harness's `mcp add`, with the user's approval |
@@ -841,8 +841,13 @@ direct call would be.
 
 - **Read-only tasks** (Claude Code's and Antigravity's Plan, Codex's read-only) run only what changes nothing: the
   read-only tools, `browser_scroll` and `browser_resize`, `run_agent` and `create_task` (which run read-only too), and
-  the wrappers, whose calls are weighed one by one. Anything else, including every connector tool not marked
-  `readOnlyHint: true`, is refused.
+  the wrappers, whose calls are weighed one by one. Anything else, including `browser_navigate`, `browser_tab_new` and
+  every connector tool not marked `readOnlyHint: true`, is refused.
+- **Reading and viewing the task's own tabs** asks nothing in any task: `browser_tab_list`, `browser_snapshot`,
+  `browser_screenshot`, `browser_console_messages` and `browser_wait_for`, and `browser_scroll`, `browser_resize` and
+  `browser_tab_new` (`AgentToolCatalog.unaskedTools`). Where a tab goes is asked about instead (below), and the tab the
+  person is using, the agent's hold on a tab (docs/BROWSER_HOST.md) and the vault's masking of filled values stay as
+  they are.
 - **Tasks that ask** (every level below Bypass permissions, Full access or Antigravity's bypass; Claude Code's Auto
   included):
   - A connector's read asks once per service for the task ("Allow this task to read from Gmail?"); later reads from
@@ -854,11 +859,14 @@ direct call would be.
     offers no "Always allow" either; Codex's card for these tools offers only "Allow once". A tool name
     Yardlet does not know to be read-only (a connector whose tools it has not listed yet) gets no lasting allow
     either. A Claude Code task in Don't ask is asked on Yardlet's card, since its CLI shows none.
-  - A `browser_batch` holding any browser tool not marked read-only, other than `browser_scroll` and
-    `browser_resize` (so `navigate`, `click`, `type`, `press_key`, `select_option`, `evaluate`, `handle_dialog`,
-    `file_upload` and the tab tools `tab_new`, `tab_select` and `tab_close`), asks once, on one card listing those
-    actions; a batch of the others runs at once. One of those tools inside `run_yardlet_script` asks as the harness
-    would for the direct call.
+  - A `browser_batch` holding any browser tool not marked read-only, other than the ones above that ask nothing and
+    `browser_navigate` (so `click`, `type`, `press_key`, `select_option`, `evaluate`, `handle_dialog`, `file_upload`
+    and the tab tools `tab_select` and `tab_close`), or a `browser_navigate` to a place not allowed yet, asks once, on
+    one card listing those actions and, under "Not allowed in this task yet:", the places it goes. When every such
+    place is a web site the card also offers to allow them for the task. A batch of the others runs at once, and its
+    navigations that card let through ask nothing more while it runs. One of those tools inside `run_yardlet_script`
+    asks as the harness would for the direct call.
+  - Where the browser goes, and its downloads: see "Where the browser goes" below.
   - A task's first read of the person's personal agents (`list_personal_agents`, `read_personal_agent`,
     `read_personal_agent_thread`) asks once ("Allow this task to read your personal agents?"), a read-only task
     included; later reads go without a card. Calls made while a first read's card waits wait on it.
@@ -869,7 +877,44 @@ direct call would be.
   - A write's card leads with the account it acts in. A call that is cancelled while its card waits (a script that
     ran out of time, a stopped turn) takes the card away and does nothing, whatever the answer.
 - The wrappers themselves are in Claude Code's `--allowedTools` and are listed with `readOnlyHint: true`, so no harness
-  asks about the wrapper before Yardlet asks about what it does.
+  asks about the wrapper before Yardlet asks about what it does. So are the eight tools that ask nothing and
+  `browser_navigate` (`AgentToolDefinition.weighedByYardlet`), so every harness shows the same one card, Yardlet's, for
+  a navigation; a harness card that still asks about `browser_navigate` offers no lasting allow.
+
+### Where the browser goes
+
+`browser_navigate` is weighed by where it goes, direct or inside a wrapper (`AgentToolBroker.allowsNavigation`,
+`BrowserNavigationTarget`), in a task that asks:
+
+- **Goes without a card:** `about:blank`; a `file:` address (one outside the task's folders asks on its own card, as
+  section 2 says); a server the task itself listens on, at `http(s)://localhost:<port>`, `127.0.0.1:<port>` or
+  `[::1]:<port>`, where a process of the task (or of the task a subagent runs for) listens on that port
+  (`TaskResourceMonitor.servers(of:)`, sampled again once when the port is not there yet); and a site the person
+  allowed for the task.
+- **Asks:** any other web site, a local port no process of the task listens on, an address on the local network, and a
+  `data:` address. The card, "Allow this task to open ‹site›?", offers Deny, Allow once and, for a web site, "Allow
+  ‹site› in this task". A site is its scheme, host and port together (`BrowserSite`): allowing
+  `https://docs.stripe.com` lets the task go anywhere on it without asking, and not to another port or to `http:`. What
+  the person allowed lasts until the task is archived or deleted, and is kept in memory only. An address Chromium could
+  read as another host than Foundation does (a backslash, a user name, `%` or a character outside ASCII before the
+  path, a control character anywhere, or no `//` after the scheme) names no site: it asks each time and cannot be
+  allowed for the task.
+- **Redirects:** when the page lands somewhere other than the site asked for (another site, a `data:` address, or a file,
+  weighed by the task's folders), that place is weighed as a navigation there, with "The page went on to ‹site›" on its
+  card. Where it landed is read first from the browser's history (`Page.getNavigationHistory`), which answers while a
+  dialog the page opened holds it, and again from the page once it loaded. Declined, a dialog it opened is dismissed, the
+  tab goes to `about:blank` and the call fails. The request to the redirect's target has gone out by then; only the page
+  it shows is kept from the agent.
+- **Downloads:** a download the agent's act starts (`BrowserTab.downloadsAreAgents`: a click, typing, a navigation or
+  a script after the person's last input, not a read) from a site asks once per site for the task, "Allow downloads
+  from ‹site› in this task?", with the file's name (`AppModel.noteBrowserDownload`). Its site is the address the host
+  reports the file came from after redirects (`BrowserDownload.url`, CEF's `GetURL`; a `blob:` address is its page's
+  site), else the address the agent's last `browser_navigate` opened while the tab still shows it and the person has
+  not used it, else the page the tab shows. One from a server the task listens on or from a file goes; one from no
+  site (a `data:` page) asks each time. The download goes on while the card waits; declined, it is cancelled, and one
+  that finished before the answer or before the cancel reached the host is moved to the Trash (`AgentDownloadChecks`).
+  Allowing a site to be opened does not allow its downloads.
+- A task that runs without asking is asked none of these.
 - `archive_task`, `delete_scheduled_task` and `browser_tab_close` are listed with `destructiveHint: true`.
 - `browser_evaluate` runs arbitrary JS in the page. There is no resident REPL like the Codex app's.
 - The snapshot reads iframes (including those of other sites and the ones inside them) and shadow DOM (open and

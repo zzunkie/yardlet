@@ -12,17 +12,23 @@ import YardletAgentTools
 // - In a task that asks the person, a connector's reads ask once per service for the task, and so do the reads of
 //   the person's personal agents, once for all three tools; every connector
 //   write, scheduled-task change and saved sign-in fill asks each time, unless Claude Code's CLI just asked on
-//   its own card for that direct call. A browser batch that clicks, types, navigates or runs script asks once,
-//   on one card listing those actions, and a script's browser action asks as the harness would for a direct one.
+//   its own card for that direct call. A browser batch that clicks, types, runs script or goes to a site not
+//   allowed yet asks once, on one card listing those actions, and a script's browser action asks as the harness
+//   would for a direct one.
+// - Reading the task's own tabs, scrolling, resizing and opening a blank tab ask nothing (`AgentToolCatalog
+//   .unaskedTools`). Where a tab goes is weighed by its site, wherever the call came from (`allowsNavigation`): a
+//   blank page, a file in the task's folders and a server the task itself listens on go freely, and any other site
+//   asks once, or once for the task; a download the agent's act starts from a site asks once for the task.
 // - A task that runs without asking (Bypass permissions, Full access) is not asked.
 
 extension AgentToolBroker {
     /// The browser tools a batch or a script asks about: every one not marked read-only, so a new one is asked
-    /// about too, less scrolling and resizing the tab (`readOnlyTaskAlsoRuns`), the handoff, which gives the tab
-    /// to the person, and the batch itself, whose actions are weighed one by one.
+    /// about too, less the ones asked about by nobody (`AgentToolCatalog.unaskedTools`), the handoff, which gives the
+    /// tab to the person, the batch itself, whose actions are weighed one by one, and `browser_navigate`, weighed by
+    /// where it goes (`allowsNavigation`).
     static let changingBrowserTools: Set<String> = Set(AgentToolCatalog.browserTools.filter {
-        !$0.readOnly && !readOnlyTaskAlsoRuns.contains($0.name) && $0.name != AgentToolCatalog.handoff
-            && $0.name != AgentToolCatalog.batch
+        !$0.readOnly && !AgentToolCatalog.unaskedTools.contains($0.name) && $0.name != AgentToolCatalog.handoff
+            && $0.name != AgentToolCatalog.batch && $0.name != AgentToolCatalog.navigate
     }.map(\.name))
 
     /// Tools a read-only task may run beside the read-only ones: scrolling and resizing its own tab change only
@@ -35,6 +41,14 @@ extension AgentToolBroker {
     /// where that is the rule.
     func approvalRefusal(tool: String, arguments: ToolJSON, sessionID: UUID,
                          origin: AgentToolCallOrigin) async -> AgentToolResult? {
+        var pass: Set<String> = []
+        return await approvalRefusal(tool: tool, arguments: arguments, sessionID: sessionID, origin: origin,
+                                     navigationPass: &pass)
+    }
+
+    /// The same, and for a `browser_batch` the addresses its card let its navigations go to (`BrowserNavigationPass`).
+    func approvalRefusal(tool: String, arguments: ToolJSON, sessionID: UUID, origin: AgentToolCallOrigin,
+                         navigationPass: inout Set<String>) async -> AgentToolResult? {
         guard let approvals, let policy = approvals.agentToolPolicy(callerID: sessionID) else { return nil }
         let actions = tool == AgentToolCatalog.batch ? Self.batchActions(arguments) : []
         if policy.readOnly {
@@ -59,10 +73,8 @@ extension AgentToolBroker {
             request = (L10n.string("Allow this task to fill a saved sign-in?"),
                        item.isEmpty ? "" : L10n.format("Item: %@", item))
         } else if tool == AgentToolCatalog.batch {
-            let changing = actions.filter { Self.changingBrowserTools.contains($0.name) }
-            guard !changing.isEmpty else { return nil }
-            request = (L10n.string("Allow this task to run these browser actions?"),
-                       changing.map { Self.browserActionLine($0.name, $0.input) }.joined(separator: "\n"))
+            return await batchRefusal(actions, sessionID: sessionID, approvals: approvals, policy: policy,
+                                      navigationPass: &navigationPass)
         } else if origin == .wrapped, Self.changingBrowserTools.contains(tool) {
             request = (L10n.string("Allow this task to run this browser action?"),
                        Self.browserActionLine(tool, arguments))
@@ -81,6 +93,138 @@ extension AgentToolBroker {
         let allowed = await approvals.askPerson(title: request.title, detail: request.detail, callerID: sessionID)
         // A call cancelled while it waited (a script out of time) does nothing, whatever the answer.
         return allowed && !Task.isCancelled ? nil : Self.declined(tool)
+    }
+
+    /// Whether a browser batch may run, having asked the person on one card about its acting steps and the places it
+    /// goes that are not allowed yet; the places that card let through go in `navigationPass`.
+    private func batchRefusal(_ actions: [(name: String, input: ToolJSON)], sessionID: UUID,
+                              approvals: any AgentToolApprovalHandling, policy: AgentToolCallerPolicy,
+                              navigationPass: inout Set<String>) async -> AgentToolResult? {
+        var lines: [String] = []
+        var asked: [BrowserNavigationTarget] = []
+        for action in actions {
+            if action.name == AgentToolCatalog.navigate {
+                guard let address = action.input["url"]?.stringValue,
+                      let url = try? BrowserURLPolicy.resolve(address) else { continue }
+                let target = BrowserNavigationTarget(url)
+                guard await !navigationGoesUnasked(target, sessionID: sessionID, policy: policy) else { continue }
+                if !asked.contains(target) { asked.append(target) }
+                lines.append(Self.browserActionLine(action.name, action.input))
+            } else if Self.changingBrowserTools.contains(action.name) {
+                lines.append(Self.browserActionLine(action.name, action.input))
+            }
+        }
+        guard !lines.isEmpty else { return nil }
+        var detail = lines.joined(separator: "\n")
+        if !asked.isEmpty {
+            detail += "\n\n" + L10n.format("Not allowed in this task yet: %@", asked.map(\.cardText).joined(separator: ", "))
+        }
+        let sites = asked.compactMap { if case let .site(site) = $0 { site } else { nil } }
+        // The sites' answer only where every place it goes is a site: a data: address is allowed once.
+        let offersSites = !sites.isEmpty && sites.count == asked.count
+        let answer = await approvals.askPerson(
+            title: L10n.string("Allow this task to run these browser actions?"), detail: detail,
+            actions: BrowserNavigationAnswer.actions(site: offersSites ? sites.map(\.text).joined(separator: ", ") : nil),
+            callerID: sessionID)
+        guard answer != nil, !Task.isCancelled else { return Self.declined(AgentToolCatalog.batch) }
+        if BrowserNavigationAnswer(actionID: answer) == .site {
+            allowedSites[policy.hostTaskID, default: []].formUnion(sites)
+        }
+        navigationPass = Set(asked.map(\.passKey))
+        return nil
+    }
+
+    /// Whether the task's browser may go to `address`, having asked the person where that is the rule: a blank page and a
+    /// file go (files outside the task's folders ask on their own card, `BrowserAgentTools.allowFile`), as do a site the
+    /// person allowed for the task, a server the task itself listens on, and a place a batch's card let through; any
+    /// other site, a local port no process of the task listens on, an address on the local network and a `data:`
+    /// address ask. A read-only task never gets here: its navigations are refused before they run.
+    func allowsNavigation(to address: String, redirectedFrom: String?, sessionID: UUID) async -> Bool {
+        guard let approvals, let policy = approvals.agentToolPolicy(callerID: sessionID) else { return true }
+        let target = BrowserNavigationTarget(address)
+        if await navigationGoesUnasked(target, sessionID: sessionID, policy: policy) { return true }
+        let site: BrowserSite? = if case let .site(site) = target { site } else { nil }
+        let title = redirectedFrom == nil
+            ? L10n.format("Allow this task to open %@?", target.cardText)
+            : L10n.format("The page went on to %@. Allow this task to open it?", target.cardText)
+        var detail = address.count > 300 ? String(address.prefix(300)) + "…" : address
+        if let redirectedFrom { detail += "\n" + L10n.format("Redirected from %@", redirectedFrom) }
+        let answer = await approvals.askPerson(title: title, detail: detail,
+                                               actions: BrowserNavigationAnswer.actions(site: site?.text),
+                                               callerID: sessionID)
+        guard answer != nil, !Task.isCancelled else { return false }
+        if BrowserNavigationAnswer(actionID: answer) == .site, let site {
+            allowedSites[policy.hostTaskID, default: []].insert(site)
+        }
+        return true
+    }
+
+    /// Whether going to `target` needs no card for this caller.
+    private func navigationGoesUnasked(_ target: BrowserNavigationTarget, sessionID: UUID,
+                                       policy: AgentToolCallerPolicy) async -> Bool {
+        guard policy.asksPerson else { return true }
+        if BrowserNavigationPass.allowed.contains(target.passKey) { return true }
+        switch target {
+        case .blank, .file:
+            return true
+        case let .site(site):
+            if allowedSites[policy.hostTaskID]?.contains(site) == true { return true }
+            return site.isLoopbackName ? await approvals?.taskListens(on: site.port, callerID: sessionID) == true : false
+        case .other:
+            return false
+        }
+    }
+
+    /// Whether a download the agent's act started may stay in the Downloads folder, having asked the person where that
+    /// is the rule: one from a site the task already downloaded from with the person's leave, from a server the task
+    /// itself listens on, or from a file goes; the first from any other site asks once for the task, and one from no
+    /// site (a `data:` page, an address Yardlet does not read as a site) asks each time. `address` is where it came from
+    /// (`BrowserDownload.url`, else `BrowserTab.agentDownloadAddress`); a `blob:` address is its page's site's.
+    func allowsAgentDownload(from address: String?, fileName: String, sessionID: UUID) async -> Bool {
+        guard let approvals, let policy = approvals.agentToolPolicy(callerID: sessionID), policy.asksPerson else {
+            return true
+        }
+        var address = address ?? ""
+        if address.lowercased().hasPrefix("blob:") { address = String(address.dropFirst(5)) }
+        let target = BrowserNavigationTarget(address)
+        let detail = L10n.format("File: %@", fileName) + "\n" + L10n.string("It is saving to the Downloads folder.")
+        let site: BrowserSite
+        switch target {
+        case .blank, .file:
+            return true
+        case .other:
+            let allowed = await approvals.askPerson(title: L10n.string("Allow this task's download?"), detail: detail,
+                                                    callerID: sessionID)
+            return allowed && !Task.isCancelled
+        case let .site(found):
+            site = found
+        }
+        let host = policy.hostTaskID
+        if allowedDownloadSites[host]?.contains(site) == true { return true }
+        if site.isLoopbackName, await approvals.taskListens(on: site.port, callerID: sessionID) { return true }
+        // The person may have allowed the site meanwhile.
+        if allowedDownloadSites[host]?.contains(site) == true { return true }
+        let key = "\(host.uuidString)|\(site.text)"
+        let question: PendingReadApproval
+        // A question just withdrawn is not joined: it answers no.
+        if let pending = pendingDownloadApprovals[key], !pending.answer.isCancelled {
+            question = pending
+        } else {
+            let title = L10n.format("Allow downloads from %@ in this task?", site.text)
+            question = PendingReadApproval(Task { await approvals.askPerson(title: title, detail: detail,
+                                                                            callerID: sessionID) })
+            pendingDownloadApprovals[key] = question
+        }
+        question.waiters += 1
+        let allowed = await withTaskCancellationHandler {
+            await question.answer.value
+        } onCancel: {
+            Task { @MainActor in question.leave() }
+        }
+        // Only the question this call waited on is cleared: a later one may stand in its place already.
+        if pendingDownloadApprovals[key] === question { pendingDownloadApprovals[key] = nil }
+        if allowed { allowedDownloadSites[host, default: []].insert(site) }
+        return allowed && !Task.isCancelled
     }
 
     /// Why a connector's tool may not run for this caller, or nil to run it (also when no connector has a tool
@@ -230,8 +374,8 @@ final class PendingReadApproval {
 }
 
 /// The Yardlet tools a harness's own card asks about each time, offering no allow for the conversation or for
-/// good: a connector's write, a scheduled-task change, a saved sign-in fill, and the wrappers, whose calls
-/// Yardlet weighs one by one. A lasting allow on the harness's card would let later such calls go unasked.
+/// good: a connector's write, a scheduled-task change, a saved sign-in fill, the wrappers, whose calls
+/// Yardlet weighs one by one, and `browser_navigate`, which Yardlet allows by site. A lasting allow on the harness's card would let later such calls go unasked.
 enum AgentToolHarnessApproval {
     /// Yardlet's own tools that a harness's card may offer a lasting allow for.
     private static let ownToolsWithLastingAllow: Set<String> = {
@@ -243,7 +387,7 @@ enum AgentToolHarnessApproval {
         ]
         let asked: Set<String> = ScheduleToolCatalog.changingTools.union([
             VaultToolCatalog.fillCredential, CodeModeToolCatalog.runScript, ConnectorGatewayToolCatalog.callTool,
-            SimulatorGatewayToolCatalog.callTool, AgentToolCatalog.batch
+            SimulatorGatewayToolCatalog.callTool, AgentToolCatalog.batch, AgentToolCatalog.navigate
         ])
         return Set(catalogs.joined().map(\.name)).subtracting(asked)
     }()

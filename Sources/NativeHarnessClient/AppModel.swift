@@ -365,6 +365,8 @@ final class AppModel {
     /// The browser whose tabs' waits on the person the tasks show (`followBrowserWaits(of:)`), and each task's wait.
     @ObservationIgnored weak var browserWaitSource: BrowserHostClient?
     @ObservationIgnored var browserWaits: [UUID: BrowserTaskWait] = [:]
+    /// Downloads the agent's acts started that wait on the person's answer, or that they declined (`noteBrowserDownload`).
+    @ObservationIgnored let agentDownloadChecks = AgentDownloadChecks()
 #if DEBUG
     /// The browser waits announced, by their notification's identifier, for QA (notifications are not delivered there).
     @ObservationIgnored var browserWaitAnnouncements: [String] = []

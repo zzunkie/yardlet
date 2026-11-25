@@ -4487,3 +4487,12 @@
 "Settings menu" = "Settings menu";
 "Feedback" = "Feedback";
 "Send Feedback…" = "Send Feedback…";
+"Allow %@ in this task" = "Allow %@ in this task";
+"Not allowed in this task yet: %@" = "Not allowed in this task yet: %@";
+"Allow this task to open %@?" = "Allow this task to open %@?";
+"The page went on to %@. Allow this task to open it?" = "The page went on to %@. Allow this task to open it?";
+"Redirected from %@" = "Redirected from %@";
+"File: %@" = "File: %@";
+"It is saving to the Downloads folder." = "It is saving to the Downloads folder.";
+"Allow this task's download?" = "Allow this task's download?";
+"Allow downloads from %@ in this task?" = "Allow downloads from %@ in this task?";

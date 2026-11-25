@@ -159,6 +159,56 @@ final class BrowserAgentToolsTests: XCTestCase {
         XCTAssertEqual(cdp.params(of: "Page.navigate").first?["url"], .string("https://example.com"))
     }
 
+    func testNavigateAsksWhereItGoesAndWhereARedirectLeads() async {
+        cdp.responders["Page.navigate"] = { _ in .object(["frameId": .string("F"), "loaderId": .string("L")]) }
+        cdp.eventsAfter["Page.navigate"] = [("Page.loadEventFired", .object(["timestamp": .number(1)]))]
+        var asked: [(String, String?)] = []
+        var answers: [Bool] = []
+        tools.allowsNavigation = { _, address, from in
+            asked.append((address, from))
+            return answers.isEmpty ? true : answers.removeFirst()
+        }
+        // Declined: nothing reaches the browser.
+        answers = [false]
+        let declined = await run(AgentToolCatalog.navigate, ["url": .string("https://docs.example.test")])
+        XCTAssertEqual(declined.structuredContent?["error"]?["kind"]?.stringValue, AgentToolFailure.Kind.refused.rawValue)
+        XCTAssertEqual(cdp.params(of: "Page.navigate").count, 0)
+
+        // A page that lands on its own site is not asked about again; one that lands on another is.
+        cdp.pageURL = "https://docs.example.test/start"
+        _ = await run(AgentToolCatalog.navigate, ["url": .string("https://docs.example.test")])
+        XCTAssertEqual(asked.count, 2)
+        cdp.pageURL = "https://elsewhere.example.test/landing"
+        answers = [true, false]
+        let redirected = await run(AgentToolCatalog.navigate, ["url": .string("https://docs.example.test/go")])
+        XCTAssertTrue(redirected.isError)
+        XCTAssertEqual(asked.last?.0, "https://elsewhere.example.test/landing")
+        XCTAssertEqual(asked.last?.1, "https://docs.example.test/go")
+        XCTAssertEqual(cdp.params(of: "Page.navigate").last?["url"], .string("about:blank"),
+                       "The page the person did not allow goes")
+
+        // Where the browser's history says the page landed is weighed first, before a page script could answer, and a
+        // data: address is weighed too.
+        cdp.responders["Page.getNavigationHistory"] = { _ in
+            .object(["currentIndex": .integer(0), "entries": .array([.object(["url": .string("data:text/html,x")])])])
+        }
+        cdp.pageURL = "https://docs.example.test/start"
+        answers = [true, false]
+        let scripted = await run(AgentToolCatalog.navigate, ["url": .string("https://docs.example.test")])
+        XCTAssertTrue(scripted.isError)
+        XCTAssertEqual(asked.last?.0, "data:text/html,x")
+        XCTAssertEqual(cdp.params(of: "Page.navigate").last?["url"], .string("about:blank"))
+
+        // An address that names no site, one with a user name, is still weighed where the page lands.
+        cdp.responders["Page.getNavigationHistory"] = nil
+        cdp.pageURL = "https://x@elsewhere.example.test/"
+        answers = [true, false]
+        let disguised = await run(AgentToolCatalog.navigate, ["url": .string("https://docs.example.test")])
+        XCTAssertTrue(disguised.isError)
+        XCTAssertEqual(asked.last?.0, "https://x@elsewhere.example.test/")
+        XCTAssertEqual(cdp.params(of: "Page.navigate").last?["url"], .string("about:blank"))
+    }
+
     func testNavigateReportsAFailedLoadAndRefusesAddressesOutsideThePolicy() async {
         cdp.responders["Page.getFrameTree"] = { _ in .object(["frameTree": .object(["frame": .object(["id": .string("F")])])]) }
         cdp.responders["Page.navigate"] = { _ in .object(["frameId": .string("F"), "errorText": .string("net::ERR_NAME_NOT_RESOLVED")]) }
@@ -284,6 +334,17 @@ final class BrowserAgentToolsTests: XCTestCase {
         XCTAssertFalse(moved.isError, moved.text)
         XCTAssertEqual(askedFiles.count, 6)
         XCTAssertNil(BrowserAgentWorkspaceFile.realPath(ofFileAddress: "https://example.com/"))
+
+        // A file in the task's folders that goes on to a file outside them is asked about there.
+        cdp.responders["Page.navigate"] = { _ in .object(["frameId": .string("F"), "loaderId": .string("L")]) }
+        cdp.eventsAfter["Page.navigate"] = [("Page.loadEventFired", .object(["timestamp": .number(1)]))]
+        cdp.responders["Page.getNavigationHistory"] = { _ in
+            .object(["currentIndex": .integer(0), "entries": .array([.object(["url": .string(URL(filePath: other).absoluteString)])])])
+        }
+        let redirected = await run(AgentToolCatalog.navigate, ["url": .string(root.appending(path: "page.html").absoluteString)])
+        XCTAssertEqual(redirected.failure?.kind, .refused, redirected.text)
+        XCTAssertEqual(askedFiles.last, other)
+        XCTAssertEqual(cdp.params(of: "Page.navigate").last?["url"], .string("about:blank"))
     }
 
     /// The host checks every navigation, the agent's included, and says so with an event.

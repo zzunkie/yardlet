@@ -85,6 +85,10 @@ final class BrowserAgentTools {
     /// for a task that runs without asking, whose shell reads the file anyway, and asks the person on the
     /// task's request card otherwise (`AppModel.allowsBrowserFile`). Without the app (tests) it is refused.
     var allowsFileOutsideFolders: @MainActor (UUID, String) async -> Bool = { _, _ in false }
+    /// Whether the task's browser may go to an address, and where it came from when a redirect led there: the broker
+    /// weighs it by its site and asks the person where that is the rule (`AgentToolBroker.allowsNavigation`). Nil
+    /// (tests) goes anywhere the address policy lets it.
+    var allowsNavigation: (@MainActor (UUID, String, String?) async -> Bool)?
     /// The files outside its folders each task was let open, so a page that shows one asks once.
     private var openedOutsideFolders: [UUID: Set<String>] = [:]
     /// Where the copies of uploaded files go (`BrowserAgentWorkspaceFile.privateCopy`): the broker's private
@@ -144,7 +148,7 @@ final class BrowserAgentTools {
     /// The tools that act on the page rather than read it: what the page downloads after one is the agent's.
     private static let actingTools: Set<String> = Set(inputTools.keys).union([
         AgentToolCatalog.navigate, AgentToolCatalog.selectOption, AgentToolCatalog.fileUpload, AgentToolCatalog.handleDialog,
-        VaultToolCatalog.fillCredential
+        AgentToolCatalog.evaluate, VaultToolCatalog.fillCredential
     ])
 
     /// The tools over a task's tab directory (the app's `BrowserAgentTabs`).
@@ -790,6 +794,12 @@ final class BrowserAgentTools {
         }
         // A file outside the task's folders, after `..` and symbolic links, opens only as the task's shell could read it.
         try await allowFile(url, on: page, sessionID: sessionID)
+        // Any other place by its site: a site not allowed for the task asks first.
+        let target = BrowserNavigationTarget(url)
+        if let sessionID, let allowsNavigation, await !allowsNavigation(sessionID, url, nil) {
+            throw BrowserAgentToolError("The person did not allow this task to open \(target.cardText), so the tab did "
+                + "not go there. Do not open it again unless they ask for it.", AgentToolFailure(.refused, retry: .no))
+        }
         // A file the agent opens here, the person allowing it where it lies outside the task's folders, is one a remote
         // device may see in this tab.
         page.agentOpens(url)
@@ -839,11 +849,60 @@ final class BrowserAgentTools {
                 throw BrowserAgentToolError("The browser's address policy blocked "
                     + page.takeBlockedNavigations().joined(separator: ", ") + ".")
             }
+            // Where the page landed is weighed before anything else, a dialog it opened included: the browser reads its
+            // history while a dialog holds the page.
+            var weighed: Set<BrowserNavigationTarget> = [target]
+            try await weighLanding(await committedAddress(page), of: url, weighed: &weighed, on: page, sessionID: sessionID)
             if page.dialog != nil { throw BrowserAgentDialogOpened() }
             if !loaded { note = "\nThe page is still loading." }
+            let location = try await pageLocation(page)
+            try await weighLanding(location.url, of: url, weighed: &weighed, on: page, sessionID: sessionID)
+            return .text("Loaded \(location.url)\nTitle: \(location.title)\(note)")
         }
         let location = try await pageLocation(page)
         return .text("Loaded \(location.url)\nTitle: \(location.title)\(note)")
+    }
+
+    /// The address the tab's page committed at, from the browser's own history, which it answers while a dialog holds
+    /// the page; nil when it does not say.
+    private func committedAddress(_ page: BrowserAgentPage) async -> String? {
+        guard let history = try? await page.cdp.send("Page.getNavigationHistory", [:],
+                                                     timeout: min(commandTimeout, Self.tabStateTimeout)),
+              let index = history["currentIndex"]?.integerValue, let entries = history["entries"]?.arrayValue,
+              entries.indices.contains(Int(index)) else { return nil }
+        return entries[Int(index)]["url"]?.stringValue
+    }
+
+    /// A navigation that landed somewhere other than where it was allowed to go (a redirect, a script of the page) is
+    /// weighed as one there: a site or a `data:` address by `allowsNavigation`, a file by the task's folders. Declined,
+    /// the page goes: a dialog it opened is dismissed and the tab shows a blank page. `weighed` holds what this call
+    /// already let through.
+    private func weighLanding(_ address: String?, of url: String, weighed: inout Set<BrowserNavigationTarget>,
+                              on page: BrowserAgentPage, sessionID: UUID?) async throws {
+        guard let address, !address.isEmpty, let sessionID else { return }
+        let landed = BrowserNavigationTarget(address)
+        // Every file is weighed by its own path: one file in the task's folders allows no other.
+        guard landed != .blank, landed == .file || !weighed.contains(landed) else { return }
+        // Chromium's own error page (`chrome-error:`) is no place the page went; any address the browser may open is.
+        if case .other = landed,
+           BrowserURLPolicy.scheme(of: address).map({ !BrowserURLPolicy.allowedSchemes.contains($0) }) ?? true { return }
+        let allowed: Bool
+        if landed == .file {
+            allowed = (try? await allowFile(address, on: page, sessionID: sessionID, shown: true)) != nil
+        } else if let allowsNavigation {
+            allowed = await allowsNavigation(sessionID, address, url)
+        } else {
+            allowed = true
+        }
+        if allowed {
+            if landed != .file { weighed.insert(landed) }
+            return
+        }
+        page.clearRefs()
+        _ = page.answerDialog(accept: false, text: nil)
+        _ = try? await send(page, "Page.navigate", ["url": .string("about:blank")], timeout: loadTimeout)
+        throw BrowserAgentToolError("\(url) led to \(landed.cardText), which the person did not allow this task to open, "
+            + "so the tab now shows a blank page.", AgentToolFailure(.refused, retry: .no))
     }
 
     /// The page as an accessibility tree, or with a reference the part of it under that element. A part reads the whole

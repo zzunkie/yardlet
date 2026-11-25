@@ -1997,6 +1997,29 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
         return await askPerson(title: title, detail: detail, caller: caller)
     }
 
+    func askPerson(title: String, detail: String, actions: [PermissionRequestAction], callerID: UUID) async -> String? {
+        guard let caller = sessionToolCaller(callerID) else { return nil }
+        let host = caller.hostTaskID
+        let request = PermissionRequest(
+            id: SessionToolApproval.idPrefix + UUID().uuidString.lowercased(), title: title, detail: detail,
+            command: nil, actions: actions)
+        return await sessionTools.choose(request, in: host,
+                                         timeout: min(SessionToolPolicy.approvalTimeout, caller.remaining)) { [weak self] in
+            self?.sessionToolApprovalsChanged(in: host)
+        }
+    }
+
+    /// Whether a process of the caller's task, or of the task a subagent runs for, listens on the port. A server the
+    /// task started a moment ago may not be in the latest sample yet, so one not found is looked for once more.
+    func taskListens(on port: Int, callerID: UUID) async -> Bool {
+        guard let caller = sessionToolCaller(callerID) else { return false }
+        let owners = [caller.id, caller.hostTaskID]
+        let listens = { [resourceMonitor] in owners.contains { resourceMonitor.servers(of: $0).contains { $0.port == port } } }
+        if listens() { return true }
+        await resourceMonitor.refresh()
+        return listens()
+    }
+
     /// Whether a task's browser tools may open a file outside its folders, given its real path
     /// (docs/AGENT_BROWSER_TOOLS.md, `browser_navigate`): a task that runs without asking may, since its
     /// shell reads the file anyway; any other asks the person, as a session tool reaching past the task does.
@@ -2069,7 +2092,7 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
                                   answer: PermissionStructuredAnswer?, decision: PermissionDecision,
                                   in taskID: UUID) async -> Bool {
         if sessionTools.approval(requestID) != nil {
-            sessionTools.answer(requestID, allow: decision == .allow)
+            sessionTools.answer(requestID, allow: decision == .allow, actionID: action?.id)
             return true
         }
         guard let run = sessionTools.runs(hostedBy: taskID).first(where: { run in

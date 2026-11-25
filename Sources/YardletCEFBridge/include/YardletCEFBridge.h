@@ -163,9 +163,10 @@ typedef struct {
                        const char *const *extensions, int extensionCount);
     /// Returns a malloc'd absolute path for a new download; the bridge frees it.
     char *(*downloadPath)(int tab, int downloadID, const char *suggestedName);
-    /// state: 0 started, 1 in progress, 2 completed, 3 cancelled, 4 interrupted.
+    /// state: 0 started, 1 in progress, 2 completed, 3 cancelled, 4 interrupted. url is the address the file
+    /// comes from, after redirects (`GetURL`).
     void (*download)(int tab, int downloadID, int state, const char *path, int64_t received,
-                     int64_t total);
+                     int64_t total, const char *url);
     void (*findResult)(int tab, int matches, int activeMatch, int isFinal);
     /// CEF's accessibility value written as JSON (UTF-8, not terminated). kind: 0 tree change,
     /// 1 location change. Arrives only while the tab's accessibility is enabled.

@@ -100,7 +100,7 @@ final class AgentToolInjectionTests: XCTestCase {
             providerSessionID: "s", workspaceURL: workspace, resumesExistingSession: true, chromeIntegration: true,
             agentToolConfigPath: file.path(percentEncoded: false)
         ))
-        XCTAssertEqual(Array(with.suffix(36)), ["--chrome", "--allowedTools", "mcp__yardlet__spawn_task",
+        XCTAssertEqual(Array(with.suffix(45)), ["--chrome", "--allowedTools", "mcp__yardlet__spawn_task",
                                                "mcp__yardlet__dismiss_task", "mcp__yardlet__list_tasks",
                                                "mcp__yardlet__read_task", "mcp__yardlet__send_message_to_task",
                                                "mcp__yardlet__wait_tasks", "mcp__yardlet__create_task",
@@ -117,6 +117,11 @@ final class AgentToolInjectionTests: XCTestCase {
                                                "mcp__yardlet__search_yardlet_tools", "mcp__yardlet__list_connector_tools",
                                                "mcp__yardlet__list_simulator_tools", "mcp__yardlet__simulator_list",
                                                "mcp__yardlet__simulator_screenshot", "mcp__yardlet__simulator_snapshot",
+                                               "mcp__yardlet__browser_tab_list", "mcp__yardlet__browser_snapshot",
+                                               "mcp__yardlet__browser_screenshot",
+                                               "mcp__yardlet__browser_console_messages", "mcp__yardlet__browser_wait_for",
+                                               "mcp__yardlet__browser_scroll", "mcp__yardlet__browser_resize",
+                                               "mcp__yardlet__browser_tab_new", "mcp__yardlet__browser_navigate",
                                                "--mcp-config", file.path(percentEncoded: false)],
                        "The variadic flag goes last so nothing else is read as a config; the chip tools run unasked, "
                            + "and of the scheduled-task tools only the two that list")

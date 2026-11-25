@@ -14,6 +14,11 @@ package struct AgentToolDefinition: Equatable, Sendable {
     /// The tool reaches beyond Yardlet: a web page for the browser tools. The task suggestion
     /// tools stay inside Yardlet.
     package var openWorld = true
+    /// Yardlet weighs every call of the tool itself, where it runs (docs/AGENT_BROWSER_TOOLS.md, "Approvals"), so it is
+    /// listed read-only (`readOnlyHint`) and no harness asks before it: scrolling, resizing and opening a blank tab ask
+    /// nothing, and `browser_navigate` asks on Yardlet's card by where it goes. `readOnly` still says whether it changes
+    /// anything, which a read-only task's refusal reads.
+    package var weighedByYardlet = false
     /// Claude Code and Antigravity keep the tool in the prompt instead of behind their tool search
     /// (`_meta` `anthropic/alwaysLoad` and `antigravity/alwaysLoad`), as the Claude app loads its own
     /// `spawn_task`.
@@ -27,7 +32,7 @@ package struct AgentToolDefinition: Equatable, Sendable {
             "inputSchema": inputSchema,
             "annotations": .object([
                 "title": .string(title),
-                "readOnlyHint": .bool(readOnly),
+                "readOnlyHint": .bool(readOnly || weighedByYardlet),
                 "destructiveHint": .bool(destructive),
                 "openWorldHint": .bool(openWorld)
             ])
@@ -64,6 +69,12 @@ package enum AgentToolCatalog {
     package static let tabNew = "browser_tab_new"
     package static let tabSelect = "browser_tab_select"
     package static let tabClose = "browser_tab_close"
+    /// The tools that read the task's own tabs, and the ones that change only what the agent sees there (where the page is
+    /// scrolled, the screen size, a blank tab): neither a harness nor Yardlet asks before them, since where a tab goes
+    /// (`browser_navigate`) and what is done in a page are asked about (docs/AGENT_BROWSER_TOOLS.md, "Approvals").
+    package static let unaskedTools: [String] = [
+        tabList, snapshot, screenshot, consoleMessages, waitFor, scroll, resize, tabNew
+    ]
     /// The tools that manage the task's tabs rather than act on a page.
     package static let tabToolNames: Set<String> = [tabList, tabNew, tabSelect, tabClose]
 
@@ -158,7 +169,8 @@ package enum AgentToolCatalog {
             description: "Load a URL in this task's browser tab and wait for the page to load. Accepts http, https, "
                 + "file, data, and about addresses; a bare host name gets https. Returns the loaded address and title.",
             inputSchema: pageInput(["url": property("string", "The address to load.")], required: ["url"]),
-            readOnly: false
+            readOnly: false,
+            weighedByYardlet: true
         ),
         AgentToolDefinition(
             name: snapshot,
@@ -240,7 +252,8 @@ package enum AgentToolCatalog {
                 "x": property("number", "Where to scroll, in CSS pixels."),
                 "y": property("number", "Where to scroll, in CSS pixels.")
             ]),
-            readOnly: false
+            readOnly: false,
+            weighedByYardlet: true
         ),
         AgentToolDefinition(
             name: selectOption,
@@ -354,7 +367,8 @@ package enum AgentToolCatalog {
                 "height": property("number", "Custom height in CSS pixels, with width."),
                 "colorScheme": enumeration(["light", "dark"], "The prefers-color-scheme the page sees.")
             ]),
-            readOnly: false
+            readOnly: false,
+            weighedByYardlet: true
         ),
         AgentToolDefinition(
             name: handoff,
@@ -425,7 +439,8 @@ package enum AgentToolCatalog {
                 "foreground": property("boolean", "Make the new tab the active one, which the panel shows unless the "
                     + "person is using another tab there.")
             ]),
-            readOnly: false
+            readOnly: false,
+            weighedByYardlet: true
         ),
         AgentToolDefinition(
             name: tabSelect,

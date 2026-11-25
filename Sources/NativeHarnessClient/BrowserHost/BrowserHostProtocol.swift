@@ -230,6 +230,8 @@ struct BrowserDownload: Codable, Equatable, Sendable {
     var receivedBytes: Int64
     /// -1 when the server did not say.
     var totalBytes: Int64
+    /// The address the file comes from, after redirects; nil from a host that does not say.
+    var url: String? = nil
 }
 
 struct BrowserFindResult: Codable, Equatable, Sendable {
