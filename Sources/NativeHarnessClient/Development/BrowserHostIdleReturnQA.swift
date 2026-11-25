@@ -7,8 +7,9 @@ import SwiftUI
 
 /// QA for a tab shown again after it was hidden (docs/BROWSER_HOST.md §3 "Drawing (power)" and "Memory saver"),
 /// against the real browser host and the real panel, run by `run-check.sh … --ui-fixture-browser-check-only=idle-return`.
-/// The task's panel shows a page striped edge to edge on a white page (`/idle`), and the page is hidden and shown again the ways
-/// an idle panel is: its window covered (the view hidden), resized meanwhile, the panel closed and opened again with a
+/// The task's panel shows a page striped edge to edge on a white page (`/idle`), and first goes back and forth to a second tab
+/// (the person's new tab, a tab the page opens, the same with the task's views also kept out of the window, an agent's tab)
+/// and closes it. Then the page is hidden and shown again the ways an idle panel is: its window covered (the view hidden), resized meanwhile, the panel closed and opened again with a
 /// new view (the side panel showed another tab, or the task's views were built anew), at another size, the tab
 /// discarded by the memory saver meanwhile, the task's views out of the window while another task shows (and back
 /// before the window is on screen), Chromium's GPU process ended and started again (as after the Mac sleeps), and last
@@ -58,6 +59,7 @@ final class BrowserHostIdleReturnQA {
             return await finish()
         }
 
+        await switchTabs(controller, tab)
         await occludeAndReturn(controller, tab)
         await resizeWhileHidden(controller, tab)
         await reopen(tab, step: "reopened", discarding: false)
@@ -72,6 +74,105 @@ final class BrowserHostIdleReturnQA {
     }
 
     // MARK: Steps
+
+    /// A second tab opens in the same panel, the person's new tab and then a tab the page opens (`window.open`), and
+    /// the person goes back and forth between the two and closes the second: each time the panel must paint the tab it
+    /// shows (the second tab's page is green), not keep the other tab's page or go white.
+    private func switchTabs(_ controller: BrowserHostPaneController, _ first: BrowserTab) async {
+        let firstKey = controller.key
+        controller.onNewTab?()
+        if await waitUntil(.seconds(5), { controller.key != firstKey && controller.tab != nil }) {
+            controller.isEditingAddress = false
+            controller.addressInput = base + "idle?n=2"
+            controller.submitAddress()
+            await exchangeTabs(controller, first, firstKey: firstKey, step: "new tab")
+        } else {
+            check("new tab: a second tab opens in the panel", false, describe(controller))
+        }
+        let before = client.tabs(forSession: session).count
+        _ = try? await first.devTools.send("Runtime.evaluate", [
+            "expression": .string("window.open('/idle?n=2') ? 1 : 0"), "userGesture": .bool(true)
+        ], timeout: .seconds(10))
+        if await waitUntil(.seconds(10), { self.client.tabs(forSession: self.session).count > before
+                && controller.key != firstKey && controller.tab != nil }) {
+            await exchangeTabs(controller, first, firstKey: firstKey, step: "page's tab")
+        } else {
+            check("page's tab: the page's new tab shows in the panel", false, describe(controller))
+        }
+        // The same task drawn twice: views the window keeps out of it (the task shown alone before its split view's
+        // pane showed it) follow the panel too, and must leave the shown panel the tabs' frames.
+        let kept = BrowserHostPaneController(session: session, key: controller.key, workspace: controller.workspace,
+                                             client: client)
+        let keptView = BrowserHostView(frame: NSRect(x: 0, y: 0, width: 400, height: 600))
+        kept.attach(keptView)
+        BrowserHostPaneController.current = controller
+        controller.onNewTab?()
+        if await waitUntil(.seconds(5), { controller.key != firstKey && controller.tab != nil }) {
+            controller.isEditingAddress = false
+            controller.addressInput = base + "idle?n=2"
+            controller.submitAddress()
+            await exchangeTabs(controller, first, firstKey: firstKey, step: "kept views")
+        } else {
+            check("kept views: a second tab opens in the panel", false, describe(controller))
+        }
+        kept.detach()
+        // The agent's tab: the agent sizes the second tab as a phone and takes a full-page picture, and its turn ends
+        // while the person shows the first tab.
+        controller.onNewTab?()
+        if await waitUntil(.seconds(5), { controller.key != firstKey && controller.tab != nil }) {
+            controller.isEditingAddress = false
+            controller.addressInput = base + "idle?n=2"
+            controller.submitAddress()
+            await exchangeTabs(controller, first, firstKey: firstKey, step: "agent's tab", agentUse: true)
+        } else {
+            check("agent's tab: a second tab opens in the panel", false, describe(controller))
+        }
+    }
+
+    private func exchangeTabs(_ controller: BrowserHostPaneController, _ first: BrowserTab, firstKey: UUID, step: String,
+                              agentUse: Bool = false) async {
+        guard let view = controller.view, let second = controller.tab else { return }
+        let secondKey = controller.key
+        let file = step.replacingOccurrences(of: " ", with: "-").replacingOccurrences(of: "'", with: "")
+        _ = await waitUntil(.seconds(15)) { second.title == "Idle 2" && !second.isLoading }
+        _ = try? await second.devTools.send("Runtime.evaluate", [
+            "expression": .string("document.querySelector('main').style.background = 'rgb(40,170,70)'; 1")
+        ], timeout: .seconds(10))
+        let opened = await waitUntil(.seconds(10)) { Self.showsSecond(view) }
+        check("\(step): the second tab paints in the panel", opened, describe(controller))
+        save(view, as: "\(file)-second")
+
+        if agentUse {
+            client.noteAgentActivity(on: second)
+            try? await second.emulate(BrowserViewportEmulation(width: 375, height: 812, owner: .agent))
+            _ = try? await second.devTools.send("Page.captureScreenshot", [
+                "format": .string("png"), "captureBeyondViewport": .bool(true)
+            ], timeout: .seconds(15))
+        }
+        for round in 1...3 {
+            for (key, tab, name) in [(firstKey, first, "first"), (secondKey, second, "second")] {
+                let before = frames.count
+                controller.onShowTab?(key)
+                if agentUse, round == 1, tab === first {
+                    _ = await waitUntil(.seconds(5)) { !second.isShown }
+                    await second.endAgentEmulation()
+                }
+                let shown = await waitUntil(.seconds(5)) {
+                    controller.tab === tab && (tab === first ? Self.showsPage(view) : Self.showsSecond(view))
+                }
+                check("\(step) \(round): the panel paints the \(name) tab", shown, describe(controller, framesSince: before))
+                if !shown { save(view, as: "\(file)-\(round)-\(name)") }
+                // Long enough for the tab left behind to be hidden, as when the person reads a while.
+                try? await Task.sleep(for: .milliseconds(round == 2 ? 1_500 : 300))
+            }
+        }
+
+        let before = frames.count
+        controller.onCloseTab?(secondKey)
+        let back = await waitUntil(.seconds(5)) { controller.tab === first && Self.showsPage(view) }
+        check("\(step): closing the second tab paints the first again", back, describe(controller, framesSince: before))
+        save(view, as: "\(file)-closed")
+    }
 
     /// The window is covered, miniaturized or on another space while the Mac idles: the tab hides and Chromium drops its
     /// drawing; back on screen, the panel paints the page again.
@@ -324,6 +425,12 @@ final class BrowserHostIdleReturnQA {
     private static func showsPage(_ view: BrowserHostView?) -> Bool {
         guard let color = color(view) else { return false }
         return color.blue > 140 && color.red < 110 && color.green < 170
+    }
+
+    /// The panel shows the second tab's green, not white or the first tab's blue.
+    private static func showsSecond(_ view: BrowserHostView?) -> Bool {
+        guard let color = color(view) else { return false }
+        return color.green > 130 && color.red < 90 && color.blue < 110
     }
 
     private func describe(_ controller: BrowserHostPaneController, framesSince before: Int? = nil) -> String {

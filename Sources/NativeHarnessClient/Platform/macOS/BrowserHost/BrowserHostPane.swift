@@ -153,8 +153,9 @@ final class BrowserHostPaneController {
     @ObservationIgnored private(set) weak var view: BrowserHostView?
     /// The panel told the lifetime manager it is off screen (`BrowserHostClient.setPanelOccluded`).
     @ObservationIgnored private var isPanelOccluded = false
-    /// The view is in no window: its task's views are kept while another task shows (`TaskSurfaceHostings`), and the
-    /// panel holds no tab until the view is in a window again (`panelWindowChanged`).
+    /// The view is in no window: its task's views are kept while another task, or a split view's pane with this task,
+    /// shows (`TaskSurfaceHostings`). The panel keeps its tab but does not show it, leaving the tab's frames and events
+    /// to a panel in a window, until the view is in a window again (`panelWindowChanged`).
     @ObservationIgnored private var isPanelParked = false
     @ObservationIgnored private var agentIndicatorTask: Task<Void, Never>?
     @ObservationIgnored private var noticeTask: Task<Void, Never>?
@@ -214,14 +215,19 @@ final class BrowserHostPaneController {
         }
         // Whether the person is using the shown tab: their keyboard is in its page (`BrowserHostClient.personUse`).
         view.onKeyboardChange = { [weak self] hasKeyboard in
-            guard let self, let tab = self.tab else { return }
+            guard let self, let tab = self.tab, tab.panel === self else { return }
             self.client.setPanelKeyboard(hasKeyboard, on: tab)
         }
-        // A chooser the person asked for opens once the panel is in a window.
-        view.onWindowChange = { [weak self] in
-            guard let self, let tab = self.tab else { return }
+        // Back in a window, the panel shows its tab again, or opens it when it has none (the host ended meanwhile, or
+        // the panel followed a tab while out of the window); a chooser the person asked for opens then.
+        view.onWindowChange = { [weak self, weak view] in
+            guard let self, let view else { return }
+            guard let tab = self.tab else {
+                if view.window != nil { self.open() }
+                return
+            }
             self.panelWindowChanged(tab)
-            self.showFileDialog(of: tab)
+            if !self.isPanelParked { self.showFileDialog(of: tab) }
         }
         // The pane follows its tab whoever opens, fronts or closes tabs.
         if tabsObserver == nil {
@@ -266,6 +272,9 @@ final class BrowserHostPaneController {
     /// its address or blank, with the address field ready.
     private func open() {
         guard let view else { return }
+        // Out of every window the panel opens nothing: another panel of the task in a window opens the tab at its size,
+        // with its address field ready, and this one takes the tab once it is in a window.
+        guard view.window != nil else { return tabsChanged() }
         do {
             // Only a blank tab opened here waits for an address; a tab the agent or a page opened is
             // already on its way to its page.
@@ -305,47 +314,59 @@ final class BrowserHostPaneController {
         agentIndicatorTask?.cancel()
     }
 
-    /// Stops showing a tab: its dialogs, accessibility, frames and events go back to nobody.
+    /// Lets go of a tab: stops showing it, and the panel's own state of it is cleared.
     private func release(_ tab: BrowserTab) {
-        stopPickingElement()
-        // The tab's dialog and file chooser stay with it, waiting for the next panel that shows it.
-        javaScriptDialog = nil
-        fileDialog = nil
-        fileChooser.dismiss()
-        client.setPanelKeyboard(false, on: tab)
-        stopAccessibility(sendingDisable: true)
-        // The keyboard focus stays with the view for the next tab; this page no longer has it.
-        if view?.hasKeyboardFocus == true { tab.send(.focus(tab: tab.id, isFocused: false)) }
-        if let view {
-            MacBrowserHost.shared.stopShowingFrames(of: tab.id, in: view.frameDisplay)
-            MacBrowserHost.shared.panelStopsShowing(tab.id, in: view)
-        }
-        if !isPanelParked { client.detachPanel(from: tab, occluded: isPanelOccluded) }
-        tab.eventHandler = nil
-        tab.onAgentActivity = nil
-        tab.onEmulationChange = nil
-        tab.onHandoffChange = nil
-        tab.onVaultSetupAskChange = nil
-        tab.onHoldChange = nil
-        showHold(false)
-        emulation = nil
-        handoff = nil
-        releaseVault(tab)
-        isPanelOccluded = false
+        stopShowing(tab)
         isPanelParked = false
         self.tab = nil
-        // Disconnect the view from this tab before clearing emulation so `emulatedSize`'s
-        // `didSet` cannot send a host-panel resize that overwrites an active remote viewport.
-        view?.tabID = nil
-        view?.sendCommand = nil
-        view?.setEmulation(size: nil, scale: nil)
-        view?.setPopup(nil)
         title = ""
         isLoading = false
         permissionPrompt = nil
         externalAppQuestion = nil
         blockedPopupRequests = []
         popupsAllowed = false
+    }
+
+    /// Stops showing the tab: its dialogs, accessibility, frames and events go back to nobody, unless another panel
+    /// took them since (`BrowserTab.panel`).
+    private func stopShowing(_ tab: BrowserTab) {
+        guard !isPanelParked else { return }
+        stopPickingElement()
+        // The tab's dialog and file chooser stay with it, waiting for the next panel that shows it.
+        javaScriptDialog = nil
+        fileDialog = nil
+        fileChooser.dismiss()
+        let owns = tab.panel === self
+        if owns {
+            client.setPanelKeyboard(false, on: tab)
+            // The keyboard focus stays with the view for the next tab; this page no longer has it.
+            if view?.hasKeyboardFocus == true { tab.send(.focus(tab: tab.id, isFocused: false)) }
+            tab.panel = nil
+            tab.eventHandler = nil
+            tab.onAgentActivity = nil
+            tab.onEmulationChange = nil
+            tab.onHandoffChange = nil
+            tab.onVaultSetupAskChange = nil
+            tab.onHoldChange = nil
+        }
+        stopAccessibility(sendingDisable: owns)
+        if let view {
+            MacBrowserHost.shared.stopShowingFrames(of: tab.id, in: view.frameDisplay)
+            MacBrowserHost.shared.panelStopsShowing(tab.id, in: view)
+        }
+        client.detachPanel(from: tab, occluded: isPanelOccluded)
+        showHold(false)
+        emulation = nil
+        handoff = nil
+        releaseVault(tab)
+        isPanelOccluded = false
+        // Disconnect the view from this tab before clearing emulation so `emulatedSize`'s `didSet` cannot send a
+        // host-panel resize that overwrites an active remote or agent viewport; a view coming back to a window
+        // reports its size before the panel shows the tab again.
+        view?.tabID = nil
+        view?.sendCommand = nil
+        view?.setEmulation(size: nil, scale: nil)
+        view?.setPopup(nil)
     }
 
     func retry() {
@@ -365,6 +386,20 @@ final class BrowserHostPaneController {
     private func adopt(_ tab: BrowserTab) {
         guard let view else { return }
         self.tab = tab
+        clearError()
+        findResult = nil
+        isFindVisible = false
+        alwaysAllowExternalApp = false
+        isPanelParked = view.window == nil
+        if !isPanelParked { present(tab, in: view) }
+    }
+
+    /// Shows the tab in the view, in a window: the tab's frames, events and Chromium's windows over it come to this
+    /// panel, also from another panel that showed it before (`BrowserTab.panel`).
+    private func present(_ tab: BrowserTab, in view: BrowserHostView) {
+        tab.panel = self
+        // A tab the host could not open says why, though it failed before this panel showed it.
+        if let failure = tab.openFailure { errorMessage = Self.message(for: failure) }
         // What the header and toolbar show come from the tab, which kept them while another was shown.
         title = tab.title
         isLoading = tab.isLoading
@@ -372,14 +407,8 @@ final class BrowserHostPaneController {
         canGoForward = tab.canGoForward
         permissionPrompt = tab.permissionPrompt
         externalAppQuestion = tab.externalAppQuestion
-        alwaysAllowExternalApp = false
         blockedPopupRequests = tab.blockedPopupRequests
         popupsAllowed = tab.popupsAllowed
-        clearError()
-        // A tab the host could not open says why, though it failed before this panel showed it.
-        if let failure = tab.openFailure { errorMessage = Self.message(for: failure) }
-        findResult = nil
-        isFindVisible = false
         tab.eventHandler = { [weak self] event in self?.handle(event) }
         tab.onAgentActivity = { [weak self] in self?.agentUsedBrowser() }
         tab.onEmulationChange = { [weak self, weak tab] in
@@ -423,8 +452,7 @@ final class BrowserHostPaneController {
         // earlier panel (or opened by the agent) paints again now. A panel off screen attaches as one:
         // the tab neither paints nor counts as seen by the person (the memory saver).
         isPanelOccluded = view.isOccluded
-        isPanelParked = view.window == nil
-        if !isPanelParked { client.attachPanel(to: tab, occluded: isPanelOccluded) }
+        client.attachPanel(to: tab, occluded: isPanelOccluded)
         // Chromium's window over this tab (a passkey dialog) shows over this panel.
         MacBrowserHost.shared.panelShows(tab.id, in: view)
         view.resendViewport()
@@ -582,15 +610,15 @@ final class BrowserHostPaneController {
     /// The view left every window, its task's views kept while another task shows, or is in one again. Out of every
     /// window the panel shows nothing, as when its task's views were let go: the tab goes on as one no panel shows,
     /// hidden and discarded in the memory saver's time (an off-screen panel in a window keeps it, as Chrome keeps a
-    /// window's front tab), and back in a window the panel takes it again, its page loading again if it was discarded.
+    /// window's front tab), or another panel of the task shows it; back in a window the panel takes it again, its page
+    /// loading again if it was discarded.
     private func panelWindowChanged(_ tab: BrowserTab) {
         guard let view, (view.window == nil) != isPanelParked else { return }
         if isPanelParked {
             isPanelParked = false
-            isPanelOccluded = view.isOccluded
-            client.attachPanel(to: tab, occluded: isPanelOccluded)
+            present(tab, in: view)
         } else {
-            client.detachPanel(from: tab, occluded: isPanelOccluded)
+            stopShowing(tab)
             isPanelParked = true
         }
     }

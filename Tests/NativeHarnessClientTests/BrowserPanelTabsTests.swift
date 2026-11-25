@@ -536,6 +536,166 @@ final class BrowserPanelTabsTests: XCTestCase {
         XCTAssertFalse(tab.isPanelAttached)
     }
 
+    /// The same task's views drawn twice, as the app does: kept out of the window (the task shown alone before, made
+    /// first) while a split view's pane shows the task. Both panels follow the side panel; only the one in the window
+    /// opens and shows the tabs. Before, the kept panel took each tab's handlers and frames, so the shown panel kept
+    /// the previous tab's picture and went white when a tab closed, and it opened new tabs itself.
+    func testAKeptPanelLeavesTheShownPanelItsTabs() async throws {
+        let client = makeClient()
+        let task = UUID()
+        let workspace = TaskWorkspaceStore(browserClient: { client }).state(for: task)
+        let first = try XCTUnwrap(workspace.openBrowserTab(address: "https://a.test/"))
+        let kept = BrowserHostPaneController(session: task, key: first, workspace: workspace, client: client)
+        let keptView = BrowserHostView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        kept.attach(keptView)
+        XCTAssertNil(client.tab(key: first, forSession: task), "the kept panel opens nothing")
+        let shown = BrowserHostPaneController(session: task, key: first, workspace: workspace, client: client)
+        let view = BrowserHostView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        let window = NSWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = view
+        defer { withExtendedLifetime(window) {} }
+        shown.attach(view)
+        let firstTab = try XCTUnwrap(client.tab(key: first, forSession: task))
+        try await waitUntil { kept.tab === firstTab }
+        XCTAssertTrue(firstTab.panel === shown)
+
+        // A new tab (+ or ⌘T): the shown panel opens it at its own size, its address field ready.
+        let second = try XCTUnwrap(workspace.openBrowserTab())
+        try await waitUntil { shown.key == second && kept.key == second && shown.tab != nil }
+        let secondTab = try XCTUnwrap(shown.tab)
+        XCTAssertTrue(secondTab.panel === shown)
+        XCTAssertTrue(shown.isEditingAddress, "the shown panel's address field is ready")
+        XCTAssertFalse(kept.isEditingAddress)
+        let opened = connection.sent.compactMap { command -> BrowserViewport? in
+            if case .open(secondTab.id, _, let viewport, _) = command { return viewport }
+            return nil
+        }
+        XCTAssertEqual(opened.map(\.width), [800], "opened at the shown panel's size")
+
+        // Back and forth: the tab shown is the shown panel's each time.
+        for (key, tab) in [(first, firstTab), (second, secondTab), (first, firstTab)] {
+            workspace.setPanels(Navigation.showing(id(key), in: workspace.panels))
+            try await waitUntil { shown.tab === tab && kept.tab === tab }
+            XCTAssertTrue(tab.panel === shown)
+            XCTAssertNotNil(tab.eventHandler)
+            XCTAssertEqual(view.tabID, tab.id)
+            XCTAssertNil(keptView.tabID)
+        }
+
+        // The second tab closes from the panel: the shown panel shows the first again.
+        workspace.setPanels(Navigation.showing(id(second), in: workspace.panels))
+        try await waitUntil { shown.tab === secondTab }
+        workspace.closeSidePanelTabs([id(second)])
+        try await waitUntil { shown.tab === firstTab && kept.tab === firstTab }
+        XCTAssertTrue(firstTab.panel === shown)
+        XCTAssertNotNil(firstTab.eventHandler)
+        XCTAssertEqual(view.tabID, firstTab.id)
+    }
+
+    /// A panel that does not show the tab (kept out of the window) leaves the shown panel's handlers and keyboard alone
+    /// when it lets the tab go or its view's keyboard changes.
+    func testAPanelThatDoesNotShowTheTabLeavesItsHandlers() async throws {
+        let client = makeClient()
+        let task = UUID()
+        let workspace = TaskWorkspaceStore(browserClient: { client }).state(for: task)
+        let key = try XCTUnwrap(workspace.openBrowserTab(address: "https://a.test/"))
+        let shown = BrowserHostPaneController(session: task, key: key, workspace: workspace, client: client)
+        let view = BrowserHostView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        let window = NSWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = view
+        defer { withExtendedLifetime(window) {} }
+        shown.attach(view)
+        let tab = try XCTUnwrap(client.tab(key: key, forSession: task))
+        client.setPanelKeyboard(true, on: tab)
+
+        // A second panel of the task shows it, then leaves the window: the first takes it again from its window.
+        let other = BrowserHostPaneController(session: task, key: key, workspace: workspace, client: client)
+        let otherView = BrowserHostView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        let otherWindow = NSWindow(contentRect: otherView.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        otherWindow.contentView = otherView
+        defer { withExtendedLifetime(otherWindow) {} }
+        other.attach(otherView)
+        XCTAssertTrue(tab.panel === other, "the panel shown last takes the tab")
+        otherWindow.contentView = nil
+        view.removeFromSuperview()
+        window.contentView = view
+        XCTAssertTrue(tab.panel === shown)
+        client.setPanelKeyboard(true, on: tab)
+
+        otherView.onKeyboardChange?(false)
+        XCTAssertTrue(tab.hasPanelKeyboard, "the other panel's view does not speak for the tab")
+        other.detach()
+        XCTAssertTrue(tab.panel === shown)
+        XCTAssertNotNil(tab.eventHandler)
+        XCTAssertTrue(tab.hasPanelKeyboard)
+        XCTAssertEqual(view.tabID, tab.id)
+    }
+
+    /// The host ends while the task's views are out of the window: back in it, the panel opens its tab again, not an
+    /// empty page with nothing to retry.
+    func testAPanelBackInTheWindowOpensATabTheHostLost() async throws {
+        let client = makeClient()
+        let task = UUID()
+        let workspace = TaskWorkspaceStore(browserClient: { client }).state(for: task)
+        let key = try XCTUnwrap(workspace.openBrowserTab(address: "https://a.test/"))
+        let controller = BrowserHostPaneController(session: task, key: key, workspace: workspace, client: client)
+        let view = BrowserHostView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        let window = NSWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        let content = NSView(frame: view.frame)
+        window.contentView = content
+        content.addSubview(view)
+        defer { withExtendedLifetime(window) {} }
+        controller.attach(view)
+        let lost = try XCTUnwrap(controller.tab)
+
+        view.removeFromSuperview()
+        connection.terminate()
+        XCTAssertNil(controller.tab)
+
+        content.addSubview(view)
+        try await waitUntil { controller.tab != nil && controller.tab !== lost }
+        let tab = try XCTUnwrap(controller.tab)
+        XCTAssertTrue(tab.panel === controller)
+        XCTAssertTrue(tab.isPanelAttached)
+        XCTAssertTrue(connection.sent.contains { if case .open(tab.id, _, _, _) = $0 { true } else { false } })
+    }
+
+    /// A tab a remote device sized while its panel's view was out of the window keeps that size when the view comes back
+    /// to a window resized meanwhile: the view reports its new size before the panel shows the tab again, and no resize
+    /// to the view's size goes.
+    func testAPanelBackInTheWindowKeepsAnEmulatedViewport() async throws {
+        let answering = AnsweringHostConnection()
+        let client = BrowserHostClient(idleGrace: .seconds(60)) { answering }
+        let task = UUID()
+        let workspace = TaskWorkspaceStore(browserClient: { client }).state(for: task)
+        let key = try XCTUnwrap(workspace.openBrowserTab(address: "https://a.test/"))
+        let controller = BrowserHostPaneController(session: task, key: key, workspace: workspace, client: client)
+        let view = BrowserHostView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        let window = NSWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        let content = NSView(frame: view.frame)
+        window.contentView = content
+        content.addSubview(view)
+        defer { withExtendedLifetime(window) {} }
+        controller.attach(view)
+        let tab = try XCTUnwrap(client.tab(key: key, forSession: task))
+
+        // While the task's views are out of the window, a remote device sizes the tab and the window is resized.
+        view.removeFromSuperview()
+        tab.sizeForRemote(BrowserViewportEmulation(width: 390, height: 844, mobile: true, owner: .remote))
+        await tab.waitForEmulation()
+        XCTAssertEqual(tab.viewport?.width, 390)
+        view.frame = NSRect(x: 0, y: 0, width: 900, height: 600)
+        let sentBefore = answering.sent.count
+        content.addSubview(view)
+        let resizes = answering.sent.dropFirst(sentBefore).compactMap { command -> BrowserViewport? in
+            if case let .resize(id, viewport) = command, id == tab.id { return viewport }
+            return nil
+        }
+        XCTAssertTrue(resizes.allSatisfy { $0.width == 390 }, "a resize to the view's size: \(resizes)")
+        XCTAssertTrue(tab.panel === controller)
+        XCTAssertEqual(tab.viewport?.width, 390)
+    }
+
     func testReleasingAnEmulatedPanelDoesNotOverwriteRemoteViewport() async throws {
         let answering = AnsweringHostConnection()
         let client = BrowserHostClient(idleGrace: .seconds(60)) { answering }
