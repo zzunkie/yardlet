@@ -17,6 +17,11 @@ const PHONE_ANSWER_MS = 15_000;
 const MAX_PHONE_FRAME = 65_535;
 const AUTH_TIMEOUT_MS = 10_000;
 const PHONE_IDLE_MS = 120_000;
+/** How long a Mac may send nothing, not even the `ping` it sends every 15 s, before its socket counts as dead. The
+ * Mac gives up on a relay that sent nothing for as long (§14.2). */
+const MAC_SILENCE_MS = 45_000;
+/** How far behind the Mac's last frame `heardAt` may be, so that not every frame writes the attachment. */
+const HEARD_STEP_MS = 5_000;
 const PUSH_WINDOW_MS = 60_000;
 const PUSH_LIMIT = 60;
 /** The push targets a room keeps, and how long one may go unregistered and unpushed (§14.5). */
@@ -37,6 +42,9 @@ interface MacState {
   deadline: number;
   ready: boolean;
   closed: boolean;
+  /** When it authenticated or last sent a frame, to within `HEARD_STEP_MS`. Absent on sockets from before it was
+   * kept. Pings are not in it: the runtime answers them without waking the room and keeps their time itself. */
+  heardAt?: number;
   /** The next phone connection number. */
   next: number;
   pushWindowStart: number;
@@ -112,7 +120,11 @@ export class Room extends DurableObject<Env> {
   }
 
   private async acceptPhone(address: string): Promise<Response> {
-    const mac = this.readyMac();
+    let mac = this.readyMac();
+    if (mac && this.isSilent(mac, Date.now())) {
+      this.dropMac(mac);
+      mac = undefined;
+    }
     if (!mac) {
       this.count("relay.client", ["noHost"]);
       return new Response("no Mac holds this room", { status: 404 });
@@ -180,6 +192,9 @@ export class Room extends DurableObject<Env> {
         this.dropPhone(ws, state, 4408, "idle");
       } else if (state.role === "phone" && !isAnswered(state) && (state.openedAt ?? 0) + PHONE_ANSWER_MS <= now) {
         this.dropPhone(ws, state, 4408, "no answer from the Mac");
+        // Only a Mac that sends nothing at all goes: a phone that says nothing is not answered by any Mac.
+        const mac = this.readyMac();
+        if (mac && this.isSilent(mac, now)) this.dropMac(mac);
       }
     }
     await this.scheduleAlarm();
@@ -222,6 +237,7 @@ export class Room extends DurableObject<Env> {
       for (const phone of this.phones()) this.close(phone.ws, phone.state, 4409, "the Mac reconnected");
     }
     current.ready = true;
+    current.heardAt = Date.now();
     ws.serializeAttachment(current);
     this.count("relay.host", ["ready"]);
     ws.send(JSON.stringify({ t: "ready" }));
@@ -320,6 +336,11 @@ export class Room extends DurableObject<Env> {
   }
 
   private async fromMac(ws: WebSocket, state: MacState, message: string | ArrayBuffer): Promise<void> {
+    const now = Date.now();
+    if (now - (state.heardAt ?? 0) >= HEARD_STEP_MS) {
+      state.heardAt = now;
+      ws.serializeAttachment(state);
+    }
     if (typeof message !== "string") {
       if (message.byteLength < 4) return;
       const phone = this.phone(new DataView(message).getUint32(0));
@@ -404,6 +425,22 @@ export class Room extends DurableObject<Env> {
     this.close(ws, state, code, reason);
     const mac = this.readyMac();
     if (mac) trySend(mac.ws, JSON.stringify({ t: "closed", c: state.c, code }));
+  }
+
+  /** Whether the Mac sent neither a frame nor a `ping` for `MAC_SILENCE_MS`. Judged by this socket alone, so a Mac
+   * that just connected is never silent because of the socket it replaced. */
+  private isSilent(mac: Held<MacState>, now: number): boolean {
+    const pingedAt = this.ctx.getWebSocketAutoResponseTimestamp(mac.ws)?.getTime();
+    const heardAt = Math.max(mac.state.heardAt ?? 0, pingedAt ?? 0);
+    // Nothing known about a socket from before `heardAt` was kept.
+    if (mac.state.heardAt === undefined && pingedAt === undefined) return false;
+    return now - heardAt >= MAC_SILENCE_MS;
+  }
+
+  /** Closes a Mac that stopped answering, and every phone of the room, which could not reach it. */
+  private dropMac(mac: Held<MacState>): void {
+    this.close(mac.ws, mac.state, 4408, "nothing from the Mac");
+    for (const phone of this.phones()) this.close(phone.ws, phone.state, 4404, "the Mac left");
   }
 
   /** Closes a socket the relay ends itself. */
