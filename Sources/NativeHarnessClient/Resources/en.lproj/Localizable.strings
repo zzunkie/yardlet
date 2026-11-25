@@ -2620,6 +2620,14 @@
 "Allow this task to use %@ in %@?" = "Allow this task to use %@ in %@?";
 "Allow this task to read from %@?" = "Allow this task to read from %@?";
 "First read: %@. Its later reads from %@ go without asking." = "First read: %@. Its later reads from %@ go without asking.";
+"Allow this task to read your personal agents?" = "Allow this task to read your personal agents?";
+"First read: %@. Its later reads of your personal agents go without asking." = "First read: %@. Its later reads of your personal agents go without asking.";
+"Add a project to the sidebar?" = "Add a project to the sidebar?";
+"Show a hidden project in the sidebar again?" = "Show a hidden project in the sidebar again?";
+"Hide a project from the sidebar?" = "Hide a project from the sidebar?";
+"Project: %@" = "Project: %@";
+"Folder: %@" = "Folder: %@";
+"Read another project's scheduled task" = "Read another project's scheduled task";
 
 /* Gmail (Yardlet's own server) and the Google OAuth app */
 "The sign-in is no longer valid: %@" = "The sign-in is no longer valid: %@";

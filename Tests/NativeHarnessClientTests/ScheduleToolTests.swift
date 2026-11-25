@@ -85,12 +85,11 @@ final class ScheduleToolTests: XCTestCase {
     // MARK: - Who asks
 
     func testEachHarnessAsksBeforeAChangeAsItsAppHasItAsk() async throws {
-        // Claude Code: only list_task_runs is allowed up front, as the Claude app allows only its own;
-        // the CLI asks before the others as before any tool.
+        // Claude Code: the two that list are allowed up front; the CLI asks before the others as before any tool.
         let allowed = Set(AgentToolServerLaunch.claudeAllowedTools)
         XCTAssertTrue(allowed.contains("mcp__yardlet__list_task_runs"))
-        for name in ["create_scheduled_task", "list_scheduled_tasks", "update_scheduled_task", "delete_scheduled_task",
-                     "run_scheduled_task"] {
+        XCTAssertTrue(allowed.contains("mcp__yardlet__list_scheduled_tasks"))
+        for name in ["create_scheduled_task", "update_scheduled_task", "delete_scheduled_task", "run_scheduled_task"] {
             XCTAssertFalse(allowed.contains("mcp__yardlet__\(name)"), name)
         }
         for name in (TaskSuggestionToolCatalog.tools + SessionToolCatalog.tools).map(\.name) {
@@ -298,7 +297,8 @@ final class ScheduleToolTests: XCTestCase {
     func testTheListGivesWhatRunsFirstAndLeavesOutTheOneOffsThatRanUnlessAsked() async throws {
         func schedule(_ name: String, _ trigger: ScheduleTrigger, prompt: String? = nil) -> ScheduledTask {
             ScheduledTask(name: name, prompt: prompt ?? "\(name).", trigger: trigger,
-                          destination: ScheduleDestination(harness: .openCode, workspacePath: root.path), createdAt: date(17, 20))
+                          destination: ScheduleDestination(harness: .openCode, workspacePath: root.appending(path: "app").path),
+                          createdAt: date(17, 20))
         }
         let long = String(repeating: "Read the failing job's log and say what broke. ", count: 20)
         let digest = schedule("Digest", .daily(ScheduleTime(hour: 9, minute: 0)), prompt: long)
@@ -337,6 +337,45 @@ final class ScheduleToolTests: XCTestCase {
         XCTAssertEqual(finished.scheduledTasks.map(\.name), ["Check CI earlier"], "Named by its id, a finished one is given")
         let unknown = await call(model, "list_scheduled_tasks", ["scheduleId": UUID().uuidString], from: fixture.caller)
         XCTAssertTrue(unknown.isError, unknown.text)
+        XCTAssertTrue(model.sessionTools.approvals(for: fixture.caller.id).isEmpty, "The caller's own project asks nothing")
+        await model.shutdown()
+    }
+
+    /// Claude Code lists schedules without its CLI's card, so in a task that asks, another project's prompt is left
+    /// out of a listing and read by its id only once the person allows it, as `read_task` reads another project's task.
+    func testAnotherProjectsScheduleIsListedWithoutItsPromptUntilThePersonAllows() async throws {
+        let site = ScheduledTask(name: "Site deploy", prompt: "Deploy the site with the staging keys.",
+                                 trigger: .daily(ScheduleTime(hour: 9, minute: 0)),
+                                 destination: ScheduleDestination(harness: .openCode,
+                                                                  workspacePath: root.appending(path: "site").path),
+                                 createdAt: date(17, 20))
+        let fixture = try Fixture(root: root, calendar: seoul, now: date(17, 20), repository: InMemoryScheduledTaskRepository(
+            snapshot: ScheduleSnapshot(schedules: [site])))
+        let model = fixture.model
+        let listed = try JSONDecoder().decode(Listing.self, from: Data(
+            await call(model, "list_scheduled_tasks", [:], from: fixture.caller).text.utf8))
+        XCTAssertEqual(listed.scheduledTasks.map(\.name), ["Site deploy"])
+        XCTAssertNil(listed.scheduledTasks.first?.prompt)
+        XCTAssertTrue(listed.note?.contains("without its prompt") == true, listed.note ?? "")
+        XCTAssertTrue(model.sessionTools.approvals(for: fixture.caller.id).isEmpty, "A listing asks nothing")
+
+        let declining = Task { await self.call(model, "list_scheduled_tasks", ["scheduleId": site.id.uuidString],
+                                               from: fixture.caller) }
+        let card = try await waitForApproval(in: fixture.caller.id, model: model)
+        XCTAssertEqual(card.request.title, L10n.string("Read another project's scheduled task"))
+        XCTAssertEqual(card.request.detail, "“Site deploy” · site")
+        XCTAssertTrue(model.sessionTools.answer(card.id, allow: false))
+        let declined = await declining.value
+        XCTAssertEqual(declined.failure?.kind, .refused, declined.text)
+        XCTAssertFalse(declined.text.contains("staging keys"))
+
+        let allowing = Task { await self.call(model, "list_scheduled_tasks", ["scheduleId": site.id.uuidString],
+                                              from: fixture.caller) }
+        let allowCard = try await waitForApproval(in: fixture.caller.id, model: model)
+        XCTAssertTrue(model.sessionTools.answer(allowCard.id, allow: true))
+        let allowed = await allowing.value
+        let one = try JSONDecoder().decode(Listing.self, from: Data(allowed.text.utf8))
+        XCTAssertEqual(one.scheduledTasks.map(\.prompt), ["Deploy the site with the staging keys."])
         await model.shutdown()
     }
 
@@ -966,7 +1005,7 @@ final class ScheduleToolTests: XCTestCase {
         var nextRunAt: String?
         var enabled: Bool
         var stoppedBecause: String?
-        var prompt: String = ""
+        var prompt: String?
     }
 
     private struct Listing: Decodable {

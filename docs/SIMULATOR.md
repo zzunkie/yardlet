@@ -344,6 +344,9 @@ declined when the turn stops, or after ten minutes. Declined, the call is `refus
   its screen are sent to the model's provider.
 - "Revoke Agent Access" in the device menu takes an approval back in every task; the next tool on the device asks
   again.
+- This card is the one that guards what an agent sees on a device, so `simulator_list`, `simulator_screenshot` and
+  `simulator_snapshot` are listed with `readOnlyHint: true` and `openWorldHint: false` and go in Claude Code's
+  `--allowedTools`: the harness does not ask again before the card.
 
 **What the code holds the agent to.**
 

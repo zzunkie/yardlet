@@ -253,6 +253,37 @@ final class AgentToolApprovalTests: XCTestCase {
         XCTAssertEqual(connectors.calls, ["gmail_search"])
     }
 
+    /// The person's personal agents are read once per task after one card, shared by calls made while it waits, in
+    /// every task that asks (a read-only one included) and through a script as directly.
+    func testPersonalAgentsAreReadAfterOneCardPerTask() async throws {
+        let (broker, session, token, _, approvals) = try makeBroker(policy: policy(readOnly: true))
+        let center = SessionToolCenter(defaults: try XCTUnwrap(UserDefaults(suiteName: "approvals-\(UUID().uuidString)")))
+        approvals.center = center
+        let host = approvals.hostTaskID
+        let first = Task { await self.direct(SessionToolCatalog.listPersonalAgents, broker, session, token) }
+        let second = Task { await self.direct(SessionToolCatalog.listPersonalAgents, broker, session, token) }
+        try await waitUntil { broker.pendingReadApprovals.first?.value.waiters == 2 }
+        XCTAssertEqual(center.approvals(for: host).count, 1)
+        XCTAssertEqual(approvals.titles, [L10n.string("Allow this task to read your personal agents?")])
+        XCTAssertTrue(center.answer(try XCTUnwrap(center.approvals(for: host).first).id, allow: true))
+        for call in [first, second] {
+            let result = await call.value
+            XCTAssertNotEqual(result.structuredContent?["error"]?["kind"]?.stringValue,
+                              AgentToolFailure.Kind.refused.rawValue, text(result))
+        }
+        _ = await direct(SessionToolCatalog.listPersonalAgents, broker, session, token)
+        _ = await script(#"callTool("read_personal_agent", {agent: "dot"}); return 1;"#, broker, session, token)
+        XCTAssertEqual(approvals.titles.count, 1, "Later reads, direct or wrapped, ask nothing")
+
+        // A task that runs without asking is not asked; a declined card reads nothing.
+        let (unasked, unaskedSession, unaskedToken, _, unaskedApprovals) = try makeBroker(policy: policy(asks: false))
+        _ = await direct(SessionToolCatalog.listPersonalAgents, unasked, unaskedSession, unaskedToken)
+        XCTAssertEqual(unaskedApprovals.titles, [])
+        let (declining, declinedSession, declinedToken, _, _) = try makeBroker(policy: policy(), answer: false)
+        let declined = await direct(SessionToolCatalog.listPersonalAgents, declining, declinedSession, declinedToken)
+        XCTAssertEqual(declined.structuredContent?["error"]?["kind"]?.stringValue, AgentToolFailure.Kind.refused.rawValue)
+    }
+
     func testAWriteCardNamesItsAccount() async throws {
         let (broker, session, token, _, approvals) = try makeBroker(policy: policy())
         _ = await direct("gmail_send", broker, session, token)

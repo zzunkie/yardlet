@@ -90,7 +90,8 @@ package enum SimulatorToolCatalog {
                 + "whether another task's agent uses it (that task's title), whether Yardlet started it, and whether a "
                 + "Simulator tab shows it. The other simulator tools act only on devices this task attached.",
             inputSchema: object([:]),
-            readOnly: true
+            readOnly: true,
+            openWorld: false
         ),
         AgentToolDefinition(
             name: attach,
@@ -133,7 +134,8 @@ package enum SimulatorToolCatalog {
             inputSchema: object(onDevice([
                 "format": enumeration(["png", "jpeg"], "Image format. Defaults to png.")
             ])),
-            readOnly: true
+            readOnly: true,
+            openWorld: false
         ),
         AgentToolDefinition(
             name: snapshot,
@@ -144,7 +146,8 @@ package enum SimulatorToolCatalog {
                 + "another once the screen changes. Text that looks like a key or token is hidden. References are the "
                 + "tools' own and the user never sees them: name an element to the user by its label.",
             inputSchema: object(onDevice([:])),
-            readOnly: true
+            readOnly: true,
+            openWorld: false
         ),
         AgentToolDefinition(
             name: tap,

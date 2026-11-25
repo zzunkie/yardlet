@@ -167,7 +167,8 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     /// The app, which says who made a call and asks the person where Yardlet's own approvals ask
     /// (`AgentToolBroker+Approvals`). Nil, as in tests, asks nothing.
     weak var approvals: (any AgentToolApprovalHandling)?
-    /// The services each task's person allowed it to read from, by task (`AgentToolCallerPolicy.hostTaskID`).
+    /// The services each task's person allowed it to read from, by task (`AgentToolCallerPolicy.hostTaskID`), and
+    /// `personalAgentReads` once they allowed it to read their personal agents.
     var approvedReadServices: [UUID: Set<String>] = [:]
     /// A first read's question in flight, by task and service, which calls made meanwhile wait on.
     var pendingReadApprovals: [String: PendingReadApproval] = [:]

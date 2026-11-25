@@ -302,6 +302,9 @@ person should open Personal agents. They only read: nothing is sent, answered,
 uploaded or marked read, the unread marks stay, and no turn starts. A thread is read
 only after the transport itself listed it for that dot and account, in its Activity
 or its bound threads; any other thread is refused before anything is asked.
+In a task that asks the person, its first read of the three asks once on Yardlet's
+card ("Allow this task to read your personal agents?"); its later reads go without
+one (docs/AGENT_BROWSER_TOOLS.md, "Approvals").
 
 ## What the dot is doing
 

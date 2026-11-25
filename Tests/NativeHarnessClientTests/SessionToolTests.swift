@@ -56,12 +56,16 @@ final class SessionToolTests: XCTestCase {
         XCTAssertEqual(AgentToolCatalog.builtInTools.map(\.name).filter {
             !browserNames.contains($0) && $0.hasPrefix(AgentToolCatalog.browserToolPrefix)
         }, [], "yardlet-mcp refuses an unknown browser_ name itself, so only a browser tool starts with it")
-        XCTAssertEqual(Array(AgentToolServerLaunch.claudeAllowedTools.dropLast(8).suffix(names.count)), names.map { "mcp__yardlet__\($0)" },
+        XCTAssertEqual(Array(AgentToolServerLaunch.claudeAllowedTools.dropLast(15).suffix(names.count)), names.map { "mcp__yardlet__\($0)" },
                        "A Claude task runs them without the CLI's card; the app asks the person where it should")
-        XCTAssertEqual(Array(AgentToolServerLaunch.claudeAllowedTools.suffix(8)),
+        XCTAssertEqual(Array(AgentToolServerLaunch.claudeAllowedTools.suffix(15)),
                        ["mcp__yardlet__list_settings", "mcp__yardlet__update_setting", "mcp__yardlet__read_terminal",
                         "mcp__yardlet__list_task_runs", "mcp__yardlet__show_widget", "mcp__yardlet__run_yardlet_script",
-                        "mcp__yardlet__call_connector_tool", "mcp__yardlet__browser_batch"])
+                        "mcp__yardlet__call_connector_tool", "mcp__yardlet__browser_batch",
+                        "mcp__yardlet__list_scheduled_tasks", "mcp__yardlet__search_yardlet_tools",
+                        "mcp__yardlet__list_connector_tools", "mcp__yardlet__list_simulator_tools",
+                        "mcp__yardlet__simulator_list", "mcp__yardlet__simulator_screenshot",
+                        "mcp__yardlet__simulator_snapshot"])
         XCTAssertEqual(AgentToolServerLaunch.codexToolTimeoutSeconds, 1_800, "Codex lets a call wait 30 minutes")
         let invoker = UnixSocketToolInvoker(environment: [:])
         XCTAssertEqual(invoker.timeout, 180)
@@ -3145,9 +3149,9 @@ final class SessionToolTests: XCTestCase {
     /// The sidebar's Add project, Remove project and its way back, for an agent: the list shows hidden
     /// projects too, a name, folder or projectId finds one (a name the one to hide or to show), hiding
     /// changes only whether the sidebar shows the project and its tasks, and adding takes a folder that is
-    /// there, once.
+    /// there, once. The caller runs without asking here; the cards are below.
     func testProjectsListHiddenOnesAndHideAndShowAsTheSidebarDoes() async throws {
-        let fixture = try Fixture()
+        let fixture = try Fixture(callerOptions: [ClaudeLaunchOption.permissionMode: ClaudePermissionMode.bypassPermissions])
         defer { fixture.tearDown() }
         let model = fixture.model
         let listed = try decode(ProjectListing.self, await call(model, "list_projects", [:], from: fixture.caller).text)
@@ -3166,7 +3170,7 @@ final class SessionToolTests: XCTestCase {
         XCTAssertEqual(model.projects.project(id: fixture.site.id)?.isHidden, true)
         XCTAssertFalse(model.sidebarSessions.contains { $0.id == fixture.other.id }, "Its tasks leave the sidebar with it")
         XCTAssertTrue(model.store.sessions.contains { $0.id == fixture.other.id }, "and stay in Yardlet")
-        XCTAssertTrue(model.approvalsAreEmpty(in: fixture.caller.id), "The sidebar's reversible change asks no one")
+        XCTAssertTrue(model.approvalsAreEmpty(in: fixture.caller.id), "A task that runs without asking is not asked")
         let afterHiding = try decode(ProjectListing.self, await call(model, "list_projects", [:], from: fixture.caller).text)
         XCTAssertEqual(afterHiding.projects.map(\.name), ["app", "site"], "Hidden projects follow the sidebar's")
         XCTAssertEqual(afterHiding.projects.last?.hidden, true)
@@ -3211,7 +3215,7 @@ final class SessionToolTests: XCTestCase {
         XCTAssertEqual(docs.name, "docs", "Named after its folder, as the sidebar's Add project names it")
         XCTAssertFalse(docs.isHidden)
         XCTAssertTrue(!added.isError && added.text.contains("(projectId: \(docs.id.uuidString)) is added"), added.text)
-        XCTAssertTrue(model.approvalsAreEmpty(in: fixture.caller.id), "Adding to the sidebar asks no one, as hiding")
+        XCTAssertTrue(model.approvalsAreEmpty(in: fixture.caller.id), "Nor for adding")
         let projectCount = model.projects.projects.count
         let addedAgain = await call(model, "create_project", ["folder": docsFolder.path(percentEncoded: false) + "/"],
                                from: fixture.caller)
@@ -3233,6 +3237,54 @@ final class SessionToolTests: XCTestCase {
         }
         XCTAssertFalse(FileManager.default.fileExists(atPath: missing.path(percentEncoded: false)), "It makes no folder")
         XCTAssertEqual(model.projects.projects.count, projectCount)
+        await model.shutdown()
+    }
+
+    /// In a task that asks, each change to the sidebar asks on Yardlet's card, naming the project and its folder; a
+    /// call that would change nothing asks nothing, and a declined card changes nothing.
+    func testEachProjectChangeAsksInATaskThatAsks() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let model = fixture.model
+        let siteFolder = ProjectSidebarPresentation.normalizedPath(for: fixture.site.primaryRoot)
+
+        let declining = Task { await self.call(model, "hide_project", ["project": "site"], from: fixture.caller) }
+        let card = try await waitForApproval(in: fixture.caller.id, model: model)
+        XCTAssertEqual(card.request.title, L10n.string("Hide a project from the sidebar?"))
+        XCTAssertEqual(card.request.detail, L10n.format("Project: %@", "site") + "\n" + L10n.format("Folder: %@", siteFolder))
+        await model.respond(to: card.id, decision: .deny, in: fixture.caller)
+        let declined = await declining.value
+        XCTAssertEqual(declined.failure?.kind, .refused, declined.text)
+        XCTAssertEqual(model.projects.project(id: fixture.site.id)?.isHidden, false)
+
+        let hidden = try await callAllowing(model, "hide_project", ["project": "site"], from: fixture.caller)
+        XCTAssertFalse(hidden.isError, hidden.text)
+        XCTAssertEqual(model.projects.project(id: fixture.site.id)?.isHidden, true)
+        let again = await call(model, "hide_project", ["project": "site"], from: fixture.caller)
+        XCTAssertTrue(again.text.contains("already hidden") && model.approvalsAreEmpty(in: fixture.caller.id), again.text)
+
+        let showing = Task { await self.call(model, "show_project", ["project": "site"], from: fixture.caller) }
+        let showCard = try await waitForApproval(in: fixture.caller.id, model: model)
+        XCTAssertEqual(showCard.request.title, L10n.string("Show a hidden project in the sidebar again?"))
+        await model.respond(to: showCard.id, decision: .allow, in: fixture.caller)
+        _ = await showing.value
+        XCTAssertEqual(model.projects.project(id: fixture.site.id)?.isHidden, false)
+
+        let docsFolder = fixture.root.appending(path: "docs", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: docsFolder, withIntermediateDirectories: true)
+        let adding = Task {
+            await self.call(model, "create_project", ["folder": docsFolder.path(percentEncoded: false)], from: fixture.caller)
+        }
+        let addCard = try await waitForApproval(in: fixture.caller.id, model: model)
+        XCTAssertEqual(addCard.request.title, L10n.string("Add a project to the sidebar?"))
+        XCTAssertEqual(addCard.request.detail,
+                       L10n.format("Folder: %@", ProjectSidebarPresentation.normalizedPath(for: docsFolder)))
+        await model.respond(to: addCard.id, decision: .deny, in: fixture.caller)
+        _ = await adding.value
+        XCTAssertNil(model.projects.project(containingRoot: docsFolder), "Declined, nothing is added")
+        let existing = await call(model, "create_project", ["folder": siteFolder], from: fixture.caller)
+        XCTAssertTrue(existing.text.contains("already holds this folder") && model.approvalsAreEmpty(in: fixture.caller.id),
+                      existing.text)
         await model.shutdown()
     }
 

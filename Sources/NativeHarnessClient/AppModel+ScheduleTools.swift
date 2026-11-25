@@ -34,7 +34,7 @@ extension AppModel: ScheduleToolHandling {
         }
         switch name {
         case ScheduleToolCatalog.create: return await createScheduleFromTool(arguments, caller: caller)
-        case ScheduleToolCatalog.list: return listSchedulesForTool(arguments)
+        case ScheduleToolCatalog.list: return await listSchedulesForTool(arguments, caller: caller)
         case ScheduleToolCatalog.update: return await updateScheduleFromTool(arguments, caller: caller)
         case ScheduleToolCatalog.delete: return await deleteScheduleFromTool(arguments, caller: caller)
         case ScheduleToolCatalog.run: return await runScheduleFromTool(arguments, caller: caller)
@@ -293,28 +293,89 @@ extension AppModel: ScheduleToolHandling {
     // MARK: - list_scheduled_tasks
 
     /// In Scheduled tasks' order. Listing several gives the start of each prompt and leaves out the one-offs
-    /// that ran unless asked: whole prompts of every schedule agents left made a listing too long to read.
-    private func listSchedulesForTool(_ arguments: JSONValue) -> AgentToolResult {
+    /// that ran unless asked: whole prompts of every schedule agents left made a listing too long to read. Claude
+    /// Code runs it without its CLI's card (`claudeAllowedTools`), so in a task that asks the person, a listing gives
+    /// no prompt of another project's schedule, and reading one by its id asks first, as `read_task` does for
+    /// another project's task.
+    private func listSchedulesForTool(_ arguments: JSONValue, caller: SessionToolCaller) async -> AgentToolResult {
+        let asks = sessionToolAsksPerson(caller)
         if arguments[ScheduleToolCatalog.Key.scheduleID] != nil {
+            let schedule: ScheduledTask
             switch scheduleForTool(arguments) {
-            case let .success(schedule):
-                return .text(SessionToolText.json(ScheduleToolListing(scheduledTasks: [scheduleToolEntry(schedule)])))
+            case let .success(value): schedule = value
             case let .failure(error): return .error(error.message)
             }
+            if asks, scheduleIsPastProject(schedule, caller: caller) {
+                let destination = schedule.destination
+                let place = scheduleProject(schedule)?.name ?? destination.workspacePath
+                    ?? destination.targetTaskID.flatMap { id in store.sessions.first { $0.id == id }?.title }
+                let detail = "“\(ScheduleToolCatalog.oneLine(schedule.name))”" + (place.map { " · \($0)" } ?? "")
+                guard await askPerson(title: L10n.string("Read another project's scheduled task"), detail: detail,
+                                      caller: caller), !Task.isCancelled else {
+                    return .failure("The person did not approve reading another project's scheduled task, so it was "
+                        + "not read. Do not call it again unless they ask for it.", .refused, retry: .no)
+                }
+            }
+            return .text(SessionToolText.json(ScheduleToolListing(scheduledTasks: [scheduleToolEntry(schedule)])))
         }
         guard !scheduledTasks.schedules.isEmpty else { return .text("No scheduled tasks in Yardlet.") }
         let sections = scheduledTasks.sections
         let includesFinished = Self.bool(arguments[ScheduleToolCatalog.Key.includeFinished]) == true
-        let listed = sections.upcoming + sections.off + (includesFinished ? sections.finished : [])
+        let listed = (sections.upcoming + sections.off + (includesFinished ? sections.finished : [])).map(\.schedule)
         let length = ScheduleToolCatalog.listedPromptLength
-        let entries = listed.map { scheduleToolEntry($0.schedule, promptLength: length) }
-        let isCut = listed.contains { $0.schedule.prompt.count > length }
+        var withheld = false
+        let entries = listed.map { schedule in
+            var entry = scheduleToolEntry(schedule, promptLength: length)
+            if asks, scheduleIsPastProject(schedule, caller: caller) {
+                entry.prompt = nil
+                withheld = true
+            }
+            return entry
+        }
+        let isCut = zip(listed, entries).contains { $1.prompt != nil && $0.prompt.count > length }
+        var notes: [String] = []
+        if isCut {
+            notes.append("A prompt longer than \(length) characters is cut and ends in \"…\"; list_scheduled_tasks with "
+                + "its scheduleId gives it whole. Do not send a cut prompt back in update_scheduled_task.")
+        }
+        if withheld {
+            notes.append("Another project's schedule is listed without its prompt; list_scheduled_tasks with its "
+                + "scheduleId gives it once the person allows it.")
+        }
         return .text(SessionToolText.json(ScheduleToolListing(
             scheduledTasks: entries,
             finishedNotListed: includesFinished || sections.finished.isEmpty ? nil : sections.finished.count,
-            note: isCut ? "A prompt longer than \(length) characters is cut and ends "
-                + "in \"…\"; list_scheduled_tasks with its scheduleId gives it whole. Do not send a cut prompt back "
-                + "in update_scheduled_task." : nil)))
+            note: notes.isEmpty ? nil : notes.joined(separator: " "))))
+    }
+
+    /// The project a schedule's runs belong to: its new tasks' project or the one holding their folder, or the
+    /// project of the task its runs continue.
+    private func scheduleProject(_ schedule: ScheduledTask) -> Project? {
+        let destination = schedule.destination
+        switch destination.mode {
+        case .newTask:
+            return projects.project(id: destination.projectID)
+                ?? destination.workspaceURL.flatMap { projects.project(containingRoot: $0) }
+        case .continueTask:
+            return destination.targetTaskID.flatMap { id in store.sessions.first { $0.id == id } }
+                .flatMap { project(for: $0) }
+        }
+    }
+
+    /// Whether a schedule's runs go past the caller's own project: new tasks in another project's folder, or
+    /// messages into another project's task. A schedule of chats, or of a task no longer there, is no project's.
+    func scheduleIsPastProject(_ schedule: ScheduledTask, caller: SessionToolCaller) -> Bool {
+        let destination = schedule.destination
+        switch destination.mode {
+        case .newTask:
+            guard let folder = destination.workspaceURL else { return false }
+            return sessionToolPlaceReachesPast(folder: folder, project: scheduleProject(schedule), caller: caller)
+        case .continueTask:
+            guard let id = destination.targetTaskID, let target = store.sessions.first(where: { $0.id == id }) else {
+                return false
+            }
+            return sessionToolReadsPastProject(target, caller: caller)
+        }
     }
 
     // MARK: - update_scheduled_task
@@ -505,7 +566,8 @@ extension AppModel: ScheduleToolHandling {
         var model: String?
         var effort: String?
         var permissionMode: String?
-        var prompt: String
+        /// Left out of a listing for another project's schedule, in a task that asks the person.
+        var prompt: String?
     }
 
     struct ScheduleToolListing: Encodable, Equatable {

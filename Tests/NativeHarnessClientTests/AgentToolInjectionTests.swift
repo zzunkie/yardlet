@@ -100,7 +100,7 @@ final class AgentToolInjectionTests: XCTestCase {
             providerSessionID: "s", workspaceURL: workspace, resumesExistingSession: true, chromeIntegration: true,
             agentToolConfigPath: file.path(percentEncoded: false)
         ))
-        XCTAssertEqual(Array(with.suffix(29)), ["--chrome", "--allowedTools", "mcp__yardlet__spawn_task",
+        XCTAssertEqual(Array(with.suffix(36)), ["--chrome", "--allowedTools", "mcp__yardlet__spawn_task",
                                                "mcp__yardlet__dismiss_task", "mcp__yardlet__list_tasks",
                                                "mcp__yardlet__read_task", "mcp__yardlet__send_message_to_task",
                                                "mcp__yardlet__wait_tasks", "mcp__yardlet__create_task",
@@ -113,10 +113,13 @@ final class AgentToolInjectionTests: XCTestCase {
                                                "mcp__yardlet__read_terminal", "mcp__yardlet__list_task_runs",
                                                "mcp__yardlet__show_widget",
                                                "mcp__yardlet__run_yardlet_script", "mcp__yardlet__call_connector_tool",
-                                               "mcp__yardlet__browser_batch",
+                                               "mcp__yardlet__browser_batch", "mcp__yardlet__list_scheduled_tasks",
+                                               "mcp__yardlet__search_yardlet_tools", "mcp__yardlet__list_connector_tools",
+                                               "mcp__yardlet__list_simulator_tools", "mcp__yardlet__simulator_list",
+                                               "mcp__yardlet__simulator_screenshot", "mcp__yardlet__simulator_snapshot",
                                                "--mcp-config", file.path(percentEncoded: false)],
                        "The variadic flag goes last so nothing else is read as a config; the chip tools run unasked, "
-                           + "and of the scheduled-task tools only list_task_runs, as in the Claude app")
+                           + "and of the scheduled-task tools only the two that list")
         XCTAssertFalse(without.contains("--allowedTools"), "Without the server nothing is allowed ahead")
         XCTAssertFalse(with.contains("--strict-mcp-config"), "The user's own MCP servers keep loading")
         XCTAssertFalse(with.contains { $0.contains(server.environment[AgentToolEnvironment.token]!) },
