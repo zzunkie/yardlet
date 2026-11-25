@@ -330,11 +330,9 @@ final class CodexStatusPanelTests: XCTestCase {
             .fill(ParityTheme.input)
             .overlay { RoundedRectangle(cornerRadius: ParityTheme.composerCornerRadius).stroke(ParityTheme.separator) }
             .frame(height: 96)
-            .frame(maxWidth: ParityTheme.contentWidth)
-            .padding(.horizontal, 24)
+            .conversationColumn()
             .padding(.top, 6)
             .padding(.bottom, 16)
-            .frame(maxWidth: .infinity)
     }
 
     private func snapshot<Content: View>(_ content: Content, size: CGSize, appearance: NSAppearance.Name, name: String) throws {

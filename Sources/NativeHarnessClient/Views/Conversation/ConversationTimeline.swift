@@ -145,32 +145,7 @@ struct ConversationTimeline: View {
             holds: { id in loaded.whole.turns.contains { $0.id == id } },
             isRenamed: { loaded.anchors.isRenamed($0, as: $1) })
         VStack(spacing: 0) {
-            // The turn rail floats in the conversation's leading gutter rather than taking width from it,
-            // so the column stays centered on the same line as the composer under it.
-            ZStack(alignment: .leading) {
-                if railTurns.count > 1 || hasEarlierTurns {
-                    ConversationReadingRail(
-                        marks: CodexTurnRail.marks(for: railTurns), isFollowing: scrollState.isFollowing, focus: focus, tracker: readingTracker,
-                        turnID: { loaded.rows.turnID(of: $0) },
-                        onFocus: { turnID in
-                            readingTracker.cancelRestoration()
-                            focus.turnID = turnID
-                            scrollState.isFollowing = false
-                            // A turn whose start the window leaves out is drawn from its start, then gone to.
-                            if let window, window.hides(turnID, in: loaded.whole) { earliestReadTurnID = turnID }
-                            turnFocusRequest += 1
-                        },
-                        hasMoreTurns: hasEarlierTurns,
-                        moreTurns: "\(presentation.earlier)",
-                        onLoadMore: {
-                            loadEarlierTurns(windowed.earlier, loadedTurnCount: loaded.whole.turns.count,
-                                             before: windowed.turns.first?.id, revealing: revealed.progress, asksForMore: true)
-                        }
-                    )
-                    .accessibilitySortPriority(ParityAccessibility.surfacePicker - 1)
-                    .zIndex(1)
-                }
-
+            Group {
                 if ConversationRowListSwitch.isOn {
                     // The AppKit row list (`ConversationRowList`), in place of the stack below.
                     ConversationRowList(
@@ -373,10 +348,37 @@ struct ConversationTimeline: View {
                     .takesOfferedSize()
                 }
             }
+            // The turn rail floats over the conversation's leading gutter rather than taking width from
+            // it, so the column stays centered on the composer's line. As an overlay it stays above the
+            // row list's AppKit view, as the "latest" button does.
+            .overlay(alignment: .leading) {
+                if railTurns.count > 1 || hasEarlierTurns {
+                    ConversationReadingRail(
+                        marks: CodexTurnRail.marks(for: railTurns), isFollowing: scrollState.isFollowing, focus: focus, tracker: readingTracker,
+                        turnID: { loaded.rows.turnID(of: $0) },
+                        onFocus: { turnID in
+                            readingTracker.cancelRestoration()
+                            focus.turnID = turnID
+                            scrollState.isFollowing = false
+                            // A turn whose start the window leaves out is drawn from its start, then gone to.
+                            if let window, window.hides(turnID, in: loaded.whole) { earliestReadTurnID = turnID }
+                            turnFocusRequest += 1
+                        },
+                        hasMoreTurns: hasEarlierTurns,
+                        moreTurns: "\(presentation.earlier)",
+                        onLoadMore: {
+                            loadEarlierTurns(windowed.earlier, loadedTurnCount: loaded.whole.turns.count,
+                                             before: windowed.turns.first?.id, revealing: revealed.progress, asksForMore: true)
+                        }
+                    )
+                    .accessibilitySortPriority(ParityAccessibility.surfacePicker - 1)
+                }
+            }
             // The requests the task waits on, right above its composer (`ConversationRequestDock`).
             if docksRequests, !dockedRequests.isEmpty {
                 ConversationRequestDock(requests: dockedRequests, actions: actions,
                                         maximumHeight: conversationHeight * ConversationRequestDock.heightShare)
+                    .clearOfFloatingPanel()
             }
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { conversationHeight = $0 }
@@ -734,9 +736,8 @@ private struct ConversationReadingRail: View {
 
 /// The conversation's column takes the size it is offered without measuring its turns, as its scroll
 /// view would answer after measuring them: the window measures its smallest size on every update
-/// (`NSHostingView.minSize`), and the turn rail's stack measures the column with no room and with all of
-/// it. Each turn measured there laid its long messages out whole at widths they never show at, and again
-/// at their own. Asked its ideal size, it asks its content as before.
+/// (`NSHostingView.minSize`), asking the column for its size with no room and with all of it. Each turn
+/// measured there laid its long messages out whole at widths they never show at, and again at their own. Asked its ideal size, it asks its content as before.
 private struct OfferedSizeLayout: Layout {
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         if let width = proposal.width, let height = proposal.height { return CGSize(width: width, height: height) }

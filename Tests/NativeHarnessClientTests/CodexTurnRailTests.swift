@@ -41,6 +41,34 @@ final class CodexTurnRailTests: XCTestCase {
                        "The rail draws a focus ring")
     }
 
+    /// Over a conversation the rail floats in the column's leading gutter, above the row list's AppKit view
+    /// (`ConversationRowList`), so a click on a mark reaches the rail and goes to its turn.
+    func testAMarkOverTheConversationTakesTheClick() async throws {
+        let entries = LongConversationFixture.claude(turns: 4, seed: "rail-over-conversation")
+        let size = NSSize(width: 700, height: 520)
+        let host = WindowlessRender.Host(
+            ConversationTimeline(source: .transcript(entries: entries, harness: .claudeCode, status: .ready,
+                                                     latestTurnIsComplete: true))
+                .frame(width: size.width, height: size.height),
+            size: size, appearance: .light)
+        defer { host.close() }
+        host.window.alphaValue = 0
+        host.window.setFrameOrigin(NSPoint(x: -30_000, y: -30_000))
+        host.window.orderFrontRegardless()
+        XCTAssertFalse(NSApplication.shared.isActive)
+        host.settle(passes: 10)
+
+        let label = L10n.format("Turn %lld of %lld", Int64(1), Int64(4))
+        let point = try center(of: label, in: host)
+        XCTAssertLessThan(point.x, ParityTheme.conversationInset, "the mark stands in the column's gutter")
+        XCTAssertFalse(selected(label, in: host))
+        try click(point, in: host)
+        try await waitUntil(message: "the click reached the rail") {
+            host.settle(passes: 1, interval: 0.02)
+            return selected(label, in: host)
+        }
+    }
+
     /// The rail in a window the window server has, so clicks and keys reach it: transparent, far off every screen,
     /// and the test app is never activated, so nothing comes to the front or takes the keyboard.
     private func makeHost(focusedTurnID: String?, onFocus: @escaping (String) -> Void)
@@ -60,21 +88,34 @@ final class CodexTurnRailTests: XCTestCase {
 
     /// The middle of the mark of turn `index + 1`, from the window's lower left, where a click is placed.
     private func center(ofMark index: Int, in host: WindowlessRender.Host<some View>) throws -> NSPoint {
-        let label = L10n.format("Turn %lld of %lld", Int64(index + 1), Int64(marks.count))
+        try center(of: L10n.format("Turn %lld of %lld", Int64(index + 1), Int64(marks.count)), in: host)
+    }
+
+    /// The middle of the element labelled `label`, from the window's lower left.
+    private func center(of label: String, in host: WindowlessRender.Host<some View>) throws -> NSPoint {
+        let frame = try XCTUnwrap(element(label, in: host)?.accessibilityFrame?(), label)
+        return NSPoint(x: frame.midX - host.window.frame.minX, y: frame.midY - host.window.frame.minY)
+    }
+
+    /// Whether the mark labelled `label` shows its turn as the one being read.
+    private func selected(_ label: String, in host: WindowlessRender.Host<some View>) -> Bool {
+        WindowlessRender.withAccessibilityTree {
+            element(label, in: host)?.isAccessibilitySelected?() ?? false
+        }
+    }
+
+    private func element(_ label: String, in host: WindowlessRender.Host<some View>) -> AnyObject? {
         host.hosting.layoutSubtreeIfNeeded()
-        let frame = try XCTUnwrap(WindowlessRender.withAccessibilityTree { () -> NSRect? in
-            func visit(_ node: AnyObject) -> NSRect? {
+        return WindowlessRender.withAccessibilityTree { () -> AnyObject? in
+            func visit(_ node: AnyObject) -> AnyObject? {
                 for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
-                    if (child.accessibilityLabel?() ?? nil) == label, let frame = child.accessibilityFrame?() {
-                        return frame
-                    }
+                    if (child.accessibilityLabel?() ?? nil) == label { return child }
                     if let found = visit(child) { return found }
                 }
                 return nil
             }
             return visit(host.hosting)
-        }, label)
-        return NSPoint(x: frame.midX - host.window.frame.minX, y: frame.midY - host.window.frame.minY)
+        }
     }
 
     /// A click at `point`, from the window's lower left, sent to the window as the window server would.

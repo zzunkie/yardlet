@@ -1794,8 +1794,8 @@ final class RestartResumeTests: XCTestCase {
                     ProviderNoticeLines(notices: shown)
                     RoundedRectangle(cornerRadius: ParityTheme.composerCornerRadius)
                         .fill(ParityTheme.input)
-                        .frame(maxWidth: ParityTheme.contentWidth, minHeight: 36, maxHeight: 36)
-                        .padding(.horizontal, 30)
+                        .frame(minHeight: 36, maxHeight: 36)
+                        .conversationColumn()
                 }
                 .padding(.vertical, 8)
                 .frame(width: 820, height: 70)
