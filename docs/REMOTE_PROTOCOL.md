@@ -918,6 +918,11 @@ A socket the Mac has not yet sent a frame to is waiting. The relay keeps at most
 address and 8 in a room; a new one closes the oldest of them (4503). A socket still waiting after 15 s is closed
 (4408).
 
+A Mac that stopped (asleep or frozen, say) can leave its socket open. When a phone connects, or a waiting socket is
+closed after 15 s, and the Mac's socket has sent nothing for 45 s, neither a frame nor a `ping` (§14.2), the relay
+closes it (4408) and the room's phones (4404); a phone connecting then gets `404`. A Mac that still sends pings keeps
+its socket however many phones time out, since a phone that sends nothing is not answered by any Mac.
+
 ### 14.4 Accounts
 
 Optional (the QR stays the way to pair without one). The account lists the person's Macs and authorizes device enrollment (§12.1).

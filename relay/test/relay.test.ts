@@ -7,6 +7,27 @@ import { Peer, RELAY, connect, macFrame, macKey, openMac, openPhone, upgrade } f
 
 const bytes = (...values: number[]) => new Uint8Array(values);
 
+/** Makes the room's Mac sockets look as if their last frame came long ago, rather than waiting. */
+async function silence(room: string): Promise<void> {
+  await runInDurableObject(env.ROOM.get(env.ROOM.idFromName(roomObjectName(room))), (_, state) => {
+    for (const ws of state.getWebSockets("mac")) {
+      ws.serializeAttachment({ ...(ws.deserializeAttachment() as object), heardAt: 0 });
+    }
+  });
+}
+
+/** Ends a phone's wait for the Mac's first frame now, rather than after 15 s. */
+async function endWait(room: string, c: number): Promise<void> {
+  const stub = env.ROOM.get(env.ROOM.idFromName(roomObjectName(room)));
+  await runInDurableObject(stub, (_, ctx) => {
+    for (const ws of ctx.getWebSockets(`c${c}`)) {
+      ws.serializeAttachment({ ...(ws.deserializeAttachment() as object), openedAt: 0 });
+    }
+  });
+  await runInDurableObject(stub, (_, ctx) => ctx.storage.setAlarm(Date.now() + 60_000));
+  expect(await runDurableObjectAlarm(stub)).toBe(true);
+}
+
 describe("routes", () => {
   it("answers health", async () => {
     const response = await exports.default.fetch(`${RELAY}/v1/health`);
@@ -206,6 +227,77 @@ describe("a phone's socket", () => {
     // The answered one stays.
     mac.ws.send(macFrame(third.c, bytes(2)));
     expect(await third.phone.binary()).toEqual(bytes(2));
+  });
+
+  it("closes a Mac that went silent when a phone's wait for it ends", async () => {
+    const { mac, key } = await openMac();
+    const answered = await openPhone(key.room, mac);
+    mac.ws.send(macFrame(answered.c, bytes(1)));
+    await answered.phone.binary();
+    const { phone, c } = await openPhone(key.room, mac);
+    await silence(key.room);
+    await endWait(key.room, c);
+    expect(await phone.closeCode()).toBe(4408);
+    expect(await mac.closeCode()).toBe(4408);
+    expect(await answered.phone.closeCode()).toBe(4404);
+    expect((await upgrade(`/v1/rooms/${key.room}/connect`)).status).toBe(404);
+
+    // The Mac comes back, and its room works.
+    const { mac: again } = await openMac(key);
+    const next = await openPhone(key.room, again);
+    again.ws.send(macFrame(next.c, bytes(2)));
+    expect(await next.phone.binary()).toEqual(bytes(2));
+  });
+
+  it("gets 404 from a Mac that went silent, which is closed", async () => {
+    const { mac, key } = await openMac();
+    await silence(key.room);
+    expect((await upgrade(`/v1/rooms/${key.room}/connect`)).status).toBe(404);
+    expect(await mac.closeCode()).toBe(4408);
+    const { mac: again } = await openMac(key);
+    await openPhone(key.room, again);
+  });
+
+  it("does not close a Mac that pings or sends frames because a phone's wait ended", async () => {
+    const { mac, key } = await openMac();
+    await silence(key.room);
+    mac.ws.send("ping");
+    expect(await mac.next()).toBe("pong");
+    // The ping's time outlives the room's memory.
+    await evictDurableObject(env.ROOM.get(env.ROOM.idFromName(roomObjectName(key.room))));
+    const first = await openPhone(key.room, mac);
+    await endWait(key.room, first.c);
+    expect(await first.phone.closeCode()).toBe(4408);
+    expect(await mac.json()).toEqual({ t: "closed", c: first.c, code: 4408 });
+
+    // Frames alone count too: this Mac never pinged.
+    const { mac: other, key: otherKey } = await openMac();
+    const busy = await openPhone(otherKey.room, other);
+    const second = await openPhone(otherKey.room, other);
+    await silence(otherKey.room);
+    other.ws.send(macFrame(busy.c, bytes(1)));
+    await busy.phone.binary();
+    await endWait(otherKey.room, second.c);
+    expect(await second.phone.closeCode()).toBe(4408);
+    other.ws.send(macFrame(busy.c, bytes(2)));
+    expect(await busy.phone.binary()).toEqual(bytes(2));
+  });
+
+  it("does not close the Mac that replaced a silent one when an old wait ends", async () => {
+    const { mac: older, key } = await openMac();
+    const { phone } = await openPhone(key.room, older);
+    await silence(key.room);
+    const { mac: newer } = await openMac(key);
+    expect(await older.closeCode()).toBe(4409);
+    expect(await phone.closeCode()).toBe(4409);
+    // A wait that began before the new Mac's socket ends: that socket is judged by itself.
+    const old = await openPhone(key.room, newer);
+    await endWait(key.room, old.c);
+    expect(await old.phone.closeCode()).toBe(4408);
+    expect(await newer.json()).toEqual({ t: "closed", c: old.c, code: 4408 });
+    const next = await openPhone(key.room, newer);
+    newer.ws.send(macFrame(next.c, bytes(3)));
+    expect(await next.phone.binary()).toEqual(bytes(3));
   });
 
   it("closes a phone that sends text (1003) or an oversized frame (1009)", async () => {
