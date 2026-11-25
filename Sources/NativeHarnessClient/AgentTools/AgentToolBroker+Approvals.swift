@@ -169,7 +169,7 @@ extension AgentToolBroker {
             return true
         case let .site(site):
             if allowedSites[policy.hostTaskID]?.contains(site) == true { return true }
-            return site.isLoopbackName ? await approvals?.taskListens(on: site.port, callerID: sessionID) == true : false
+            return site.namesThisMac ? await approvals?.taskListens(on: site.port, callerID: sessionID) == true : false
         case .other:
             return false
         }
@@ -201,7 +201,7 @@ extension AgentToolBroker {
         }
         let host = policy.hostTaskID
         if allowedDownloadSites[host]?.contains(site) == true { return true }
-        if site.isLoopbackName, await approvals.taskListens(on: site.port, callerID: sessionID) { return true }
+        if site.namesThisMac, await approvals.taskListens(on: site.port, callerID: sessionID) { return true }
         // The person may have allowed the site meanwhile.
         if allowedDownloadSites[host]?.contains(site) == true { return true }
         let key = "\(host.uuidString)|\(site.text)"

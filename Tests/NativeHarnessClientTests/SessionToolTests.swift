@@ -653,6 +653,19 @@ final class SessionToolTests: XCTestCase {
             XCTAssertTrue(read.text.contains(other), read.text)
         }
 
+        // A subagent another project's task runs is read as that task is, as its ID from read_task allows no more.
+        _ = await call(model, "run_agent", ["harness": "claude-code", "prompt": "Other's agent", "background": true],
+                       callerID: fixture.other.id)
+        let othersAgent = try XCTUnwrap(model.sessionTools.runs(hostedBy: fixture.other.id).first)
+        let unseen = Task { await self.call(model, "wait_tasks", ["ids": [othersAgent.id.uuidString], "timeout_seconds": 0],
+                                            from: fixture.caller) }
+        let agentCard = try await waitForApproval(in: fixture.caller.id, model: model)
+        XCTAssertEqual(agentCard.request.title, L10n.string("Read another project's task"))
+        await model.respond(to: agentCard.id, decision: .deny, in: fixture.caller)
+        let unseenResult = await unseen.value
+        XCTAssertEqual(unseenResult.failure?.kind, .refused, unseenResult.text)
+        XCTAssertFalse(unseenResult.text.contains("agent"), unseenResult.text)
+
         // The caller's own project, its split neighbour (another project's, beside it) and itself.
         let near = [fixture.sibling, fixture.neighbor].map(\.id.uuidString)
         for (tool, arguments) in [("read_task", ["task_id": near[0]]), ("read_task", ["task_id": near[1]]),
@@ -1827,6 +1840,22 @@ final class SessionToolTests: XCTestCase {
         try await waitUntil { run.state == .waitingForApproval }
         XCTAssertTrue(model.sessionToolRequests(in: fixture.caller.id).contains { $0.id == "perm-1" })
         XCTAssertEqual(model.taskAttentionDetails[fixture.caller.id]?.pendingRequest, .approval)
+        // A step its harness goes on with meanwhile leaves it waiting, and its caller reads where the card is
+        // and what it asks.
+        await fixture.adapter.emit(.sessionStatusChanged(.running), for: run.id)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(run.state, .waitingForApproval)
+        let waited = try decode([Outcome].self, await call(model, "wait_tasks", ["ids": [run.id.uuidString],
+                                                                                "timeout_seconds": 0], from: fixture.caller).text)
+        XCTAssertEqual(waited.first?.state, "waiting for the person's approval")
+        XCTAssertEqual(waited.first?.approvalIn, SessionToolText.link(title: fixture.caller.title, taskID: fixture.caller.id))
+        XCTAssertEqual(waited.first?.asks?.count, 1)
+        XCTAssertTrue(waited.first?.asks?.first?.hasSuffix("Run swift build") == true, "\(waited)")
+        let read = await call(model, "read_task", ["task_id": "self"], from: fixture.caller)
+        XCTAssertTrue(read.text.contains(#""agentId":"\#(run.id.uuidString)""#), read.text)
+        XCTAssertTrue(read.text.contains("Run swift build"), read.text)
+        XCTAssertTrue(AppModel.agentRunResultText(run, approvalIn: "[Caller](#x)")
+            .contains("It waits for the person's approval on a card in [Caller](#x)"))
         await model.respond(to: "perm-1", decision: .allow, in: fixture.caller)
         let decisions = await fixture.adapter.decisions
         XCTAssertEqual(decisions["perm-1"], .allow, "Answered in the subagent's own session")
@@ -3629,6 +3658,8 @@ final class SessionToolTests: XCTestCase {
         var state: String
         var ended: Bool
         var answer: String?
+        var approvalIn: String?
+        var asks: [String]?
     }
 
     // MARK: - Personal agents

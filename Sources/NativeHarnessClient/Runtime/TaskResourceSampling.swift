@@ -12,6 +12,10 @@ enum TaskResourceOwner: Hashable, Sendable {
     case task(UUID)
     /// A Codex App Server Yardlet runs for one account. Many tasks share it, so it is its own row.
     case codexAppServer(CodexAppServerIdentity)
+    /// An ACP agent's process Yardlet runs (`ACPProcessLane`), which the agent's open tasks share: Antigravity's,
+    /// whose commands name their conversation. It is followed for the servers the tasks' commands start
+    /// (`TaskServerFinder`) and has no row of its own.
+    case agentProcess(HarnessKind)
 
     var taskID: UUID? {
         if case let .task(id) = self { return id }
@@ -482,6 +486,8 @@ struct TaskResourceRequest: Sendable {
     var findsServers = false
     /// Each Codex task by its thread, for the servers a shared App Server runs for it.
     var codexThreads: [String: UUID] = [:]
+    /// Each Antigravity task by its conversation, for the servers a shared `agy acp` runs for it.
+    var antigravityConversations: [String: UUID] = [:]
 }
 
 /// One sample: each owner's use, and the servers each task's processes run.
@@ -534,7 +540,8 @@ actor TaskResourceEngine {
             sample.servers = serverFinder.servers(
                 descendants: sampler.yardletDescendants, entries: roots.isEmpty ? table.entries() : sampler.lastEntries,
                 claimed: sampler.claimedProcessIDs, table: table,
-                claudeSessions: claudeTasks, codexThreads: request.codexThreads)
+                claudeSessions: claudeTasks, codexThreads: request.codexThreads,
+                antigravityConversations: request.antigravityConversations)
         }
         return sample
     }

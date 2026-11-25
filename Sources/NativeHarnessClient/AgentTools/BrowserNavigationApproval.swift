@@ -36,8 +36,9 @@ struct BrowserSite: Hashable, Sendable {
         return "\(scheme)://\(name)" + (port == Self.defaultPort(scheme) ? "" : ":\(port)")
     }
 
-    /// `localhost`, `127.0.0.1` or `::1`: a server on this Mac, which a task may open freely where it listens itself.
-    var isLoopbackName: Bool { ["localhost", "127.0.0.1", "::1"].contains(host) }
+    /// `localhost`, `127.0.0.1` or `::1`, or `0.0.0.0` or `::`, which reach this Mac too (a dev server listening on
+    /// every address prints them): a server on this Mac, which a task may open freely where it listens itself.
+    var namesThisMac: Bool { ["localhost", "127.0.0.1", "::1", "0.0.0.0", "::"].contains(host) }
 
     private static func defaultPort(_ scheme: String) -> Int { scheme == "https" ? 443 : 80 }
 }

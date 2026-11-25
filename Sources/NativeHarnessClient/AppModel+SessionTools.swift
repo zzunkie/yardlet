@@ -350,6 +350,12 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
         let servers = isArchived ? [] : resourceMonitor.servers(of: session.id).map {
             ReadTaskDetails.Server(url: $0.url.absoluteString, process: $0.processName)
         }
+        let hosted = isArchived ? [] : sessionTools.runs(hostedBy: session.id).filter { !$0.state.isFinished }
+        let subagents = hosted.map { run in
+            let asks = run.pendingRequests.map(\.title)
+            return ReadTaskDetails.Subagent(agentId: run.id.uuidString, harness: run.harness.rawValue,
+                                            state: run.state.word, asks: asks.isEmpty ? nil : asks)
+        }
         var head = SessionToolText.json(ReadTaskDetails(
             task: details, folder: session.workspaceURL.path(percentEncoded: false),
             createdAt: SessionToolText.iso(session.createdAt),
@@ -357,6 +363,7 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
             childTaskIds: children.isEmpty ? nil : children,
             queuedMessages: isArchived ? 0 : followUps.queue(for: session.id).count,
             servers: servers.isEmpty ? nil : servers,
+            subagents: subagents.isEmpty ? nil : subagents,
             account: accountAssignments.assignment(for: session.id)?.toolLine))
         head += "\n\nShowing \(conversation.shownTurns) of \(conversation.totalTurns) loaded turns."
         if let next = conversation.cursor { head += " Pass cursor \"\(next)\" for earlier turns." }
@@ -376,12 +383,23 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
         var queuedMessages: Int
         /// The servers the task's processes listen on now, as its header shows them.
         var servers: [Server]?
+        /// The `run_agent` subagents whose requests this task's conversation shows, while they last: one
+        /// that waits for the person waits on a card in this task.
+        var subagents: [Subagent]?
         /// The account an agent's start put it on, and why.
         var account: String?
 
         struct Server: Encodable {
             var url: String
             var process: String
+        }
+
+        struct Subagent: Encodable {
+            var agentId: String
+            var harness: String
+            var state: String
+            /// What each of its cards asks, while it waits for the person.
+            var asks: [String]?
         }
     }
 
@@ -707,7 +725,15 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
         var ids: [UUID] = []
         var tasks: [SessionRecord] = []
         for reference in references {
-            if let id = UUID(uuidString: reference), sessionTools.run(id) != nil {
+            if let id = UUID(uuidString: reference), let run = sessionTools.run(id) {
+                // Another task's subagent is read as that task is: one of another project asks first, and one whose
+                // task is gone is not read.
+                if run.hostTaskID != caller.hostTaskID {
+                    guard let host = store.sessions.first(where: { $0.id == run.hostTaskID }) else {
+                        return .failure("Not waited for: the task that runs \(reference) is gone.", .refused, retry: .no)
+                    }
+                    if !tasks.contains(where: { $0.id == host.id }) { tasks.append(host) }
+                }
                 ids.append(id)
                 continue
             }
@@ -769,14 +795,20 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
         var state: String
         var ended: Bool
         var answer: String?
+        /// While a subagent waits for the person: the task whose conversation shows its cards, as a link
+        /// (`agentRunApprovalPlace`), and what each card asks.
+        var approvalIn: String?
+        var asks: [String]?
     }
 
     /// Where a task or a subagent stands, and its latest answer.
     func sessionToolOutcome(of id: UUID) -> SessionToolOutcome {
         if let run = sessionTools.run(id) {
+            let asks = run.pendingRequests.map(\.title)
             return SessionToolOutcome(
                 id: id.uuidString, kind: "agent", title: run.harness.displayName, state: run.state.word,
-                ended: run.state.isFinished, answer: run.currentAnswer.map(Self.answerExcerpt))
+                ended: run.state.isFinished, answer: run.currentAnswer.map(Self.answerExcerpt),
+                approvalIn: agentRunApprovalPlace(run), asks: asks.isEmpty ? nil : asks)
         }
         guard let session = store.sessions.first(where: { $0.id == id }) else {
             return SessionToolOutcome(id: id.uuidString, kind: "task", state: "gone", ended: true)

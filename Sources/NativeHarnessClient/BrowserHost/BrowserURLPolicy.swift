@@ -29,7 +29,8 @@ enum BrowserURLPolicy {
     }
 
     /// Turns address-field input into a URL: explicit allowed schemes pass through, paths become
-    /// file URLs, loopback hosts use http and other host names use https.
+    /// file URLs, loopback hosts and the addresses that reach this Mac as one (`0.0.0.0`, `[::]`) use http,
+    /// and other host names use https.
     static func resolve(_ input: String) throws -> String {
         let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { throw AddressError.empty }
@@ -45,7 +46,7 @@ enum BrowserURLPolicy {
         }
         guard !value.contains(where: \.isWhitespace) else { throw AddressError.invalid }
         let host = value.split(separator: "/", maxSplits: 1).first.map(String.init) ?? value
-        let candidate = (isLoopback(host) ? "http://" : "https://") + value
+        let candidate = (isLoopback(host) || isUnspecified(host) ? "http://" : "https://") + value
         guard let components = URLComponents(string: candidate), components.host?.isEmpty == false else {
             throw AddressError.invalid
         }
@@ -102,7 +103,7 @@ enum BrowserURLPolicy {
         if value.contains(where: \.isWhitespace) { return false }
         if scheme(of: value) != nil { return true }
         let host = value.prefix { !"/?#".contains($0) }.lowercased()
-        if isLoopback(host) || looksLikeHostWithPort(host) { return true }
+        if isLoopback(host) || isUnspecified(host) || looksLikeHostWithPort(host) { return true }
         let labels = host.split(separator: ".", omittingEmptySubsequences: false)
         guard labels.count >= 2, labels.allSatisfy({ !$0.isEmpty }), let last = labels.last else { return false }
         if labels.count == 4, labels.allSatisfy({ UInt8($0) != nil }) { return true }
@@ -115,6 +116,12 @@ enum BrowserURLPolicy {
         let rest = value[value.index(after: colon)...]
         let port = rest.prefix { $0 != "/" }
         return !port.isEmpty && port.allSatisfy(\.isNumber)
+    }
+
+    /// `0.0.0.0` or `[::]`, with or without a port: every address of this Mac, which a connection reaches as its own.
+    private static func isUnspecified(_ hostAndPort: String) -> Bool {
+        let value = hostAndPort.lowercased()
+        return value == "0.0.0.0" || value.hasPrefix("0.0.0.0:") || value == "[::]" || value.hasPrefix("[::]:")
     }
 
     static func isLoopback(_ hostAndPort: String) -> Bool {

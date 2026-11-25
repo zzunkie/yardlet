@@ -129,7 +129,11 @@ actor ACPAdapter:
         self.schemaCopies = schemaCopies
         self.conversationStore = conversationStore
         self.agentTurnReadInterval = agentTurnReadInterval
-        self.transportFactory = transportFactory ?? { ACPProcessTransport(executableURL: executableURL) }
+        // Antigravity names the conversation that ran each command, so Yardlet follows its process for the tasks'
+        // servers (`TaskServerFinder`); the other agents name none, and theirs are not followed.
+        let resourceOwner: TaskResourceOwner? = kind == .antigravityCLI ? .agentProcess(kind) : nil
+        self.transportFactory = transportFactory
+            ?? { ACPProcessTransport(executableURL: executableURL, resourceOwner: resourceOwner) }
     }
 
     /// Antigravity's saved permission mode, before its session starts, so a session in Bypass

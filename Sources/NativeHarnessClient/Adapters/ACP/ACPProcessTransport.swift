@@ -39,6 +39,7 @@ actor ACPProcessTransport: ACPTransport {
 
     private let executableURL: URL
     private let requestTimeout: Duration
+    private let resourceOwner: TaskResourceOwner?
     private let codec = ACPWireCodec()
     private let messageStream: AsyncStream<ACPRawFrame>
     private let messageContinuation: AsyncStream<ACPRawFrame>.Continuation
@@ -48,9 +49,10 @@ actor ACPProcessTransport: ACPTransport {
     private var pending: [Int64: PendingRequest] = [:]
     private var stopped = false
 
-    init(executableURL: URL, requestTimeout: Duration = .seconds(300)) {
+    init(executableURL: URL, requestTimeout: Duration = .seconds(300), resourceOwner: TaskResourceOwner? = nil) {
         self.executableURL = executableURL.standardizedFileURL
         self.requestTimeout = requestTimeout
+        self.resourceOwner = resourceOwner
         let messages = AsyncStream<ACPRawFrame>.makeStream()
         self.messageStream = messages.stream
         self.messageContinuation = messages.continuation
@@ -74,7 +76,8 @@ actor ACPProcessTransport: ACPTransport {
             .init(executableURL: executableURL,
                   arguments: configuration.arguments,
                   currentDirectoryURL: configuration.workspaceURL.standardizedFileURL,
-                  environment: RuntimeProcessEnvironment.accountScoped(environment)),
+                  environment: RuntimeProcessEnvironment.accountScoped(environment),
+                  resourceOwner: resourceOwner),
             stderrLimit: 64 * 1024
         )
         self.channel = channel
