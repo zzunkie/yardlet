@@ -596,8 +596,8 @@ threads the same way, in the workspace sandbox asking on request; `readOnly` and
 - **Claude Code launch arguments:** The 15 session tools also go into `--allowedTools`, with the task suggestion and
   settings tools, `read_terminal`, `list_task_runs` and `show_widget` (`AgentToolServerLaunch.claudeAllowedTools`; no CLI card; for the
   calls that reach further, for `archive_task`, for each change to the sidebar's projects and for a task's first read of
-  the personal agents, the app asks when the calling task runs at a level that asks). Codex gets no per-tool `approval_mode`, so for `archive_task` too, as for
-  other tools that write, Codex may ask first under that task's approval setting.
+  the personal agents, the app asks when the calling task runs at a level that asks). Codex and Antigravity ask about none
+  of them (section 6, "Approvals"), so a call that asks has one card, Yardlet's.
 
 ### Terminal tool
 
@@ -650,9 +650,9 @@ sections take their words from it, so a setting added to Settings is added there
   setting, "‹old› → ‹new›", and Open, which shows its section in Settings), and the row stays when the turn folds. The
   phone shows it as a tool line "Changed setting: ‹title›". Yardlet keeps no separate log: the call and its result stay in
   the task's conversation as its harness records them.
-- **Who else asks:** Claude Code gets both in `--allowedTools`, so the CLI shows no card of its own. Codex has no
-  per-tool `approval_mode` for them, so under an approval policy that asks it may ask before `update_setting`, as before
-  `archive_task`.
+- **Who else asks:** Claude Code gets both in `--allowedTools`, so the CLI shows no card of its own. Codex asks about
+  neither (`default_tools_approval_mode` `approve`), and Antigravity's card for them is answered at once (section 6,
+  "Approvals"), so `update_setting` has one card, Yardlet's.
 
 ### Scheduled-task tools
 
@@ -703,9 +703,10 @@ Times in results are ISO 8601 in the Mac's time zone (with the offset).
   Auto, a call inside `run_yardlet_script`, Codex, Antigravity and the other harnesses), each of the four asks on
   Yardlet's card instead ("Allow this task to create the scheduled task “…”?", with the same lines; section 6,
   "Approvals"): Codex does not ask about them, and Antigravity's own card for them is answered at once. That one card is the call's only one:
-  it names where the runs go (another project or folder, or the task they continue) and, for a schedule that stands,
-  the mode its new tasks' runs use, so a schedule whose runs do more without asking than the caller may shows that
-  mode before it is run, retimed, resumed or deleted. A task that runs without asking is not asked. A
+  it names where the runs go (another project or folder, or the task they continue, by its title) and the mode the runs
+  use (its new tasks' mode, or the mode of the task they continue, `ScheduleToolApproval.continuedTask`), so a schedule
+  whose runs do more without asking than the caller may shows that mode before it is made, run, retimed, resumed or
+  deleted. A task that runs without asking is not asked. A
   task a schedule started is asked as any task in its permission mode is: in bypass permissions it creates,
   changes and deletes other schedules without a card, and a schedule it creates gets the notification below. The
   Claude app asks such an `unattended` session in every mode; Yardlet does not, since the person chose that mode for the

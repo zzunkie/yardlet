@@ -1000,6 +1000,14 @@ final class ACPAdapterTests: XCTestCase {
         try await waitUntil { await cards().count == 2 }
         let evaluateCard = await cards().last
         XCTAssertEqual(evaluateCard?.actions.map(\.kind), ["allow_once", "reject_once"])
+        // An input with more than the tool takes keeps the card, still with no allow for good: the title says which
+        // tool it is. So does a tool of a connector whose tools Yardlet has not read yet.
+        await askTool("evaluate-2", "Run mcp_yardlet_f31bd028_browser_evaluate",
+                      .object(["function": .string("() => 1"), "reason": .string("read")]))
+        await askTool("post-1", "Run mcp_yardlet_f31bd028_examplechat_post_message", .object(["text": .string("hi")]))
+        try await waitUntil { await cards().count == 4 }
+        let laterCards = await cards().suffix(2).map { $0.actions.map(\.kind) }
+        XCTAssertEqual(laterCards, [["allow_once", "reject_once"], ["allow_once", "reject_once"]])
         // Auto is set in the session on the same process; what the CLI still asks is shown as before.
         let auto = try await adapter.setProviderOption(id: AntigravityPermissionMode.optionID,
                                                        value: AntigravityPermissionMode.auto, in: handle)

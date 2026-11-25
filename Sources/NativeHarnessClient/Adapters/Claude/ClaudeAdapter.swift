@@ -1082,7 +1082,8 @@ actor ClaudeAdapter:
             if GmailToolApproval.readsDraft(toolName: toolName) {
                 mailDraft = await GmailToolApproval.draft(toolName: toolName, input: input)
             }
-            let schedule = ScheduleToolApproval.request(toolName: toolName, input: input)
+            let continued = await ScheduleToolApproval.continuedTask(toolName: toolName, input: input)
+            let schedule = ScheduleToolApproval.request(toolName: toolName, input: input, continuing: continued)
                 ?? GoogleToolApproval.request(toolName: toolName, input: input, mailDraft: mailDraft)
             // Any other Yardlet write (a remote connector's, a draft, a saved sign-in fill) is asked each time
             // too: Yardlet takes this card as the person's answer for the call (`AgentToolBroker+Approvals`).

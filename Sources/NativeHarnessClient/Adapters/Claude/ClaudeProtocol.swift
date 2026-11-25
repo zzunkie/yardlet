@@ -213,11 +213,6 @@ enum ClaudePermissionSuggestions {
         ]
     }
 
-    /// Reads the offer from the `can_use_tool` request. There is none when the request carried no
-    /// suggestion, when the CLI asked hosts to omit the persistent choice
-    /// (`suppress_always_allow_rule`), when a safety check requires manual approval
-    /// (`classifier_approvable: false`, where the native dialog narrows the list itself), or when
-    /// an update is one whose effect a single scope label would misstate.
     /// The offer with each rule a settings file would keep kept for the session instead, so it reads "Allow for
     /// session": for a tool that may be allowed for a while, never for good
     /// (`AgentToolHarnessApproval.allowsOnlyForSession`).
@@ -234,6 +229,11 @@ enum ClaudePermissionSuggestions {
         return offer(from: .object(fields))
     }
 
+    /// Reads the offer from the `can_use_tool` request. There is none when the request carried no
+    /// suggestion, when the CLI asked hosts to omit the persistent choice
+    /// (`suppress_always_allow_rule`), when a safety check requires manual approval
+    /// (`classifier_approvable: false`, where the native dialog narrows the list itself), or when
+    /// an update is one whose effect a single scope label would misstate.
     static func offer(from request: JSONValue) -> ClaudePermissionSuggestionOffer? {
         guard request["suppress_always_allow_rule"]?.boolValue != true,
               request["classifier_approvable"]?.boolValue != false,

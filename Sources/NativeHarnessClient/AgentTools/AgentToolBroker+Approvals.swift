@@ -65,8 +65,10 @@ extension AgentToolBroker {
         let request: (title: String, detail: String)?
         if ScheduleToolCatalog.changingTools.contains(tool) {
             guard !harnessAsked else { return nil }
-            request = ScheduleToolApproval.request(toolName: Self.claudeName(tool), input: JSONValue(arguments),
-                                                   asking: .task)
+            let input = JSONValue(arguments)
+            let continued = await ScheduleToolApproval.continuedTask(toolName: Self.claudeName(tool), input: input)
+            request = ScheduleToolApproval.request(toolName: Self.claudeName(tool), input: input, asking: .task,
+                                                   continuing: continued)
         } else if tool == VaultToolCatalog.fillCredential {
             guard !harnessAsked else { return nil }
             let item = arguments["item"]?.stringValue ?? ""
@@ -387,6 +389,13 @@ enum AgentToolHarnessApproval {
     static let weighedByYardlet: Set<String> = Set(AgentToolServerLaunch.claudeAllowedToolNames)
         .union(ScheduleToolCatalog.changingTools).union([VaultToolCatalog.fillCredential])
 
+    /// Whether Yardlet weighs a call of `tool` itself: one of `weighedByYardlet`, or a connector's tool, whose writes
+    /// it asks about each time and whose first read once per task (`AgentToolBroker.connectorApprovalRefusal`).
+    static func isWeighedByYardlet(_ tool: String, labels: ConnectorToolLabels = .shared) -> Bool {
+        weighedByYardlet.contains(tool)
+            || (AgentToolBroker.ownDefinition(named: tool) == nil && labels.label(forTool: tool) != nil)
+    }
+
     /// Yardlet's own tools a harness still asks about by its own rule: those that act in a page or on a device.
     static let askedByHarness: [String] = AgentToolBroker.ownToolNames.filter { !weighedByYardlet.contains($0) }.sorted()
 
@@ -407,19 +416,35 @@ enum AgentToolHarnessApproval {
         return String(claudeToolName.dropFirst(prefix.count))
     }
 
-    /// The Yardlet tool an Antigravity permission request asks about, when it names one Yardlet can be sure of: agy
-    /// titles an MCP call "Run mcp_yardlet_<hex>_<tool>" from the tool's own name, with ACP kind `other`, whatever
-    /// summary the model gave (`toolSummary`, which goes in its input). The input holds only what that tool takes,
-    /// and the summary.
-    static func yardletTool(antigravityTitle title: String?, kind: String?, input: JSONValue?) -> String? {
-        guard kind == "other", let title, title.hasPrefix("Run mcp_\(AgentToolEnvironment.serverName)_"),
+    /// The Yardlet tool an Antigravity permission request's title names: agy titles an MCP call
+    /// "Run mcp_yardlet_<hex>_<tool>" from the tool's own name, whatever summary the model gave (`toolSummary`, which
+    /// goes in its input). Enough to take a lasting allow off the card, whatever else the input holds;
+    /// `yardletTool(antigravityTitle:kind:input:)` is surer, for answering the card.
+    static func yardletToolName(antigravityTitle title: String?) -> String? {
+        guard let title, title.hasPrefix("Run mcp_\(AgentToolEnvironment.serverName)_"),
               let tool = ConnectorToolLabels.yardletToolName(fromHarnessTool: title),
-              title.hasSuffix("_\(tool)"),
-              let definition = AgentToolBroker.ownDefinition(named: tool) else { return nil }
-        let takes = Set(definition.inputSchema["properties"]?.objectValue.map { Array($0.keys) } ?? []).union(["toolSummary"])
+              title.hasSuffix("_\(tool)") else { return nil }
+        return tool
+    }
+
+    /// The Yardlet tool an Antigravity permission request asks about, when it names one Yardlet can be sure of enough
+    /// to answer the card for it: one of Yardlet's own tools or a connector's by its title (`yardletToolName`), with
+    /// ACP kind `other`, and an input that holds only what that tool takes, and the summary.
+    static func yardletTool(antigravityTitle title: String?, kind: String?, input: JSONValue?,
+                            labels: ConnectorToolLabels = .shared) -> String? {
+        guard kind == "other", let tool = yardletToolName(antigravityTitle: title) else { return nil }
+        let takes: Set<String>
+        if let definition = AgentToolBroker.ownDefinition(named: tool) {
+            takes = Set(definition.inputSchema["properties"]?.objectValue.map { Array($0.keys) } ?? [])
+        } else if let label = labels.label(forTool: tool) {
+            takes = label.inputs
+        } else {
+            return nil
+        }
+        let allowed = takes.union(["toolSummary"])
         switch input {
         case nil, .null?: return tool
-        case let .object(fields)?: return Set(fields.keys).isSubset(of: takes) ? tool : nil
+        case let .object(fields)?: return Set(fields.keys).isSubset(of: allowed) ? tool : nil
         default: return nil
         }
     }

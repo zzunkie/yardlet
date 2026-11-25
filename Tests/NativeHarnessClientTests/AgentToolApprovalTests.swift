@@ -210,6 +210,23 @@ final class AgentToolApprovalTests: XCTestCase {
         for asked in [AgentToolCatalog.evaluate, AgentToolCatalog.click, SimulatorToolCatalog.tap] {
             XCTAssertTrue(AgentToolHarnessApproval.askedByHarness.contains(asked), asked)
         }
+        // A connector's tool, which Yardlet weighs too, by the arguments its schema takes.
+        let labels = ConnectorToolLabels()
+        labels.update([ConnectorRecord(name: "Linear", slug: "linear", serverURL: URL(string: "https://mcp.linear.test")!,
+                                       tools: [.object(["name": .string("create_issue"), "inputSchema": .object([
+                                           "type": .string("object"),
+                                           "properties": .object(["title": .object(["type": .string("string")])])])])])])
+        XCTAssertEqual(AgentToolHarnessApproval.yardletTool(antigravityTitle: "Run mcp_yardlet_f31bd028_linear_create_issue",
+                                                            kind: "other", input: .object(["title": .string("Bug")]),
+                                                            labels: labels), "linear_create_issue")
+        XCTAssertNil(AgentToolHarnessApproval.yardletTool(antigravityTitle: "Run mcp_yardlet_f31bd028_linear_create_issue",
+                                                          kind: "other", input: .object(["function": .string("() => 1")]),
+                                                          labels: labels))
+        XCTAssertTrue(AgentToolHarnessApproval.isWeighedByYardlet("linear_create_issue", labels: labels))
+        XCTAssertFalse(AgentToolHarnessApproval.isWeighedByYardlet(AgentToolCatalog.evaluate, labels: labels))
+        // A title alone says which tool it is, for taking a lasting allow off its card.
+        XCTAssertEqual(AgentToolHarnessApproval.yardletToolName(antigravityTitle: "Run mcp_yardlet_f31bd028_browser_click"),
+                       AgentToolCatalog.click)
     }
 
     func testDestructiveToolsSaySo() {

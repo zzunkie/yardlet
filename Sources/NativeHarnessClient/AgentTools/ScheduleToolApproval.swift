@@ -19,7 +19,34 @@ enum ScheduleToolApproval {
     /// (`AgentToolBroker+Approvals`), which names the task rather than Claude.
     enum Asker { case claude, task }
 
+    /// A task a schedule's runs continue, as its card names it.
+    struct ContinuedTask: Equatable, Sendable {
+        let title: String
+        /// The mode its turns run in, in its harness's words: each run is one of them.
+        let mode: String
+    }
+
+    /// The task a call's runs continue, for its card: the one `continueTaskId` names (other than `self`, which the
+    /// card says as the caller), else, for a schedule whose destination the call leaves, the task it continues. Nil for
+    /// none, or one the app does not list. Read where the card is made (`ScheduleNameDirectory.describeTask`).
+    static func continuedTask(toolName: String?, input: JSONValue,
+                              directory: ScheduleNameDirectory = .shared) async -> ContinuedTask? {
+        typealias Key = ScheduleToolCatalog.Key
+        guard tool(named: toolName) != nil else { return nil }
+        let id: UUID?
+        if let named = input[Key.continueTaskID]?.stringValue {
+            id = UUID(uuidString: named)
+        } else if !Key.destination.contains(where: { input[$0] != nil }) {
+            id = input[Key.scheduleID]?.stringValue.flatMap(UUID.init(uuidString:)).flatMap(directory.target(of:))
+        } else {
+            id = nil
+        }
+        guard let id else { return nil }
+        return await directory.describeTask(id)
+    }
+
     static func request(toolName: String?, input: JSONValue, asking asker: Asker = .claude,
+                        continuing continued: ContinuedTask? = nil,
                         calendar: Calendar = .autoupdatingCurrent, now: Date = Date(),
                         name lookup: (UUID) -> String? = { ScheduleNameDirectory.shared.name(of: $0) },
                         mode modeLookup: (UUID) -> String? = { ScheduleNameDirectory.shared.mode(of: $0) })
@@ -42,7 +69,7 @@ enum ScheduleToolApproval {
                 : L10n.format("Allow this task to create the scheduled task “%@”?", name)
             lines.append(input[Key.continueTaskID] == nil
                          ? L10n.string("Each run starts a new task.") : L10n.string("Each run continues a task."))
-            lines += placeLines(input)
+            lines += placeLines(input, continued: continued)
         case ScheduleToolCatalog.update:
             title = asker == .claude
                 ? existing.map { L10n.format("Allow Claude to update the scheduled task “%@”?", $0) }
@@ -55,7 +82,7 @@ enum ScheduleToolApproval {
             }
             if Key.destination.contains(where: { input[$0] != nil }) {
                 lines.append(L10n.string("Changes where each run goes."))
-                lines += placeLines(input)
+                lines += placeLines(input, continued: continued)
             }
         case ScheduleToolCatalog.delete:
             title = asker == .claude
@@ -72,12 +99,19 @@ enum ScheduleToolApproval {
                     ?? L10n.string("Allow this task to run a scheduled task now?")
             lines.append(L10n.string("It starts now with the schedule's own settings."))
         }
+        // A schedule that stands and continues a task: the task, unless the call already named it.
+        if tool != ScheduleToolCatalog.create, input[Key.continueTaskID] == nil, let continued {
+            lines.append(L10n.format("Task: %@", continued.title))
+        }
         if let mode = input[Key.permissionMode]?.stringValue, !mode.isEmpty {
             // In the words of the harness the runs start on: the caller's (Claude Code's) unless the call names another.
             let harness = input[Key.harness]?.stringValue.flatMap(HarnessCatalog.harness(named:)) ?? .claudeCode
             let name = NewTaskModelChoice.permission(fromTool: mode, harness: harness)
                 .map { $0.permissionName(for: harness) ?? L10n.string("Default") }
             lines.append(L10n.format("Its runs will use %@ mode.", name ?? mode))
+        } else if let continued {
+            // Each run is a turn of the task it continues, in that task's mode.
+            lines.append(L10n.format("Its runs will use %@ mode.", continued.mode))
         } else if let mode = id.flatMap(modeLookup) {
             // A schedule that stands: the mode its runs keep, which may do more without asking than the caller may.
             lines.append(L10n.format("Its runs will use %@ mode.", mode))
@@ -91,12 +125,13 @@ enum ScheduleToolApproval {
         return (title, detail)
     }
 
-    /// The project or folder, or the task, each run goes to, as the call names them.
-    private static func placeLines(_ input: JSONValue) -> [String] {
+    /// The project or folder, or the task, each run goes to, as the call names them: a task by its title where the
+    /// app lists it.
+    private static func placeLines(_ input: JSONValue, continued: ContinuedTask?) -> [String] {
         typealias Key = ScheduleToolCatalog.Key
         var lines: [String] = []
         if let task = input[Key.continueTaskID]?.stringValue, !task.isEmpty, task != SessionToolCatalog.selfReference {
-            lines.append(L10n.format("Task: %@", task))
+            lines.append(L10n.format("Task: %@", continued?.title ?? task))
         }
         if let place = input[Key.project]?.stringValue, !place.isEmpty {
             lines.append(L10n.format("Project or folder: %@", place))
@@ -126,16 +161,34 @@ final class ScheduleNameDirectory: @unchecked Sendable {
     private let lock = NSLock()
     private var names: [UUID: String] = [:]
     private var modes: [UUID: String] = [:]
+    private var targets: [UUID: UUID] = [:]
+    private var describer: @Sendable (UUID) async -> ScheduleToolApproval.ContinuedTask? = { _ in nil }
 
     func update(_ schedules: [ScheduledTask]) {
         let next = Dictionary(schedules.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
         let nextModes = Dictionary(schedules.compactMap { schedule in
             schedule.destination.mode == .newTask ? (schedule.id, Self.runModeName(of: schedule.destination)) : nil
         }, uniquingKeysWith: { first, _ in first })
+        let nextTargets = Dictionary(schedules.compactMap { schedule in
+            schedule.destination.mode == .continueTask ? schedule.destination.targetTaskID.map { (schedule.id, $0) } : nil
+        }, uniquingKeysWith: { first, _ in first })
         lock.withLock {
             names = next
             modes = nextModes
+            targets = nextTargets
         }
+    }
+
+    /// The task a schedule's runs continue.
+    func target(of id: UUID) -> UUID? {
+        lock.withLock { targets[id] }
+    }
+
+    /// Names a task for a card made off the main actor: its title and mode, read where the app keeps them. The app
+    /// sets it (`AppModel.scheduleCardTask`); nil for a task it does not list.
+    var describeTask: @Sendable (UUID) async -> ScheduleToolApproval.ContinuedTask? {
+        get { lock.withLock { describer } }
+        set { lock.withLock { describer = newValue } }
     }
 
     func name(of id: UUID) -> String? {
@@ -149,7 +202,12 @@ final class ScheduleNameDirectory: @unchecked Sendable {
 
     /// The permission a new task's runs start with, in its harness's words.
     static func runModeName(of destination: ScheduleDestination) -> String {
-        (destination.modelChoice ?? NewTaskModelChoice(model: nil)).permissionName(for: destination.harness)
-            ?? (destination.harness == .claudeCode ? L10n.string("Manual") : L10n.string("Default"))
+        modeName(destination.modelChoice, harness: destination.harness)
+    }
+
+    /// A permission choice in its harness's words; none is the harness's default.
+    static func modeName(_ choice: NewTaskModelChoice?, harness: HarnessKind) -> String {
+        (choice ?? NewTaskModelChoice(model: nil)).permissionName(for: harness)
+            ?? (harness == .claudeCode ? L10n.string("Manual") : L10n.string("Default"))
     }
 }

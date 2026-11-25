@@ -1012,13 +1012,16 @@ actor ACPAdapter:
         }
         let options = value["params"]?["options"]?.arrayValue ?? []
         let toolCall = value["params"]?["toolCall"] ?? .object([:])
-        let yardletTool = kind == .antigravityCLI ? AgentToolHarnessApproval.yardletTool(
+        let titled = kind == .antigravityCLI
+            ? AgentToolHarnessApproval.yardletToolName(antigravityTitle: toolCall["title"]?.stringValue) : nil
+        let yardletTool = titled == nil ? nil : AgentToolHarnessApproval.yardletTool(
             antigravityTitle: toolCall["title"]?.stringValue, kind: toolCall["kind"]?.stringValue,
-            input: toolCall["rawInput"]) : nil
+            input: toolCall["rawInput"])
         var actions = permissionActions(from: options)
-        // A Yardlet tool's card offers no allow for good where Yardlet asks each time or allows only for a while.
-        if let yardletTool, AgentToolHarnessApproval.asksEachTime(tool: yardletTool)
-            || AgentToolHarnessApproval.allowsOnlyForSession(tool: yardletTool) {
+        // A Yardlet tool's card offers no allow for good where Yardlet asks each time or allows only for a while,
+        // by its title alone: what else the call's input holds does not bring that allow back.
+        if let titled, AgentToolHarnessApproval.asksEachTime(tool: titled)
+            || AgentToolHarnessApproval.allowsOnlyForSession(tool: titled) {
             actions.removeAll { $0.kind == "allow_always" }
         }
         // A plain allow or deny takes the narrowest option the provider offered, never the
@@ -1040,8 +1043,8 @@ actor ACPAdapter:
             }
         }
         // Yardlet weighs this call where it runs, on its own card where it needs one, so Antigravity's card is
-        // answered at once and the call has one card (`AgentToolHarnessApproval.weighedByYardlet`).
-        if let yardletTool, AgentToolHarnessApproval.weighedByYardlet.contains(yardletTool), let allow {
+        // answered at once and the call has one card (`AgentToolHarnessApproval.isWeighedByYardlet`).
+        if let yardletTool, AgentToolHarnessApproval.isWeighedByYardlet(yardletTool), let allow {
             try? await transport.send(ACPProtocol.permissionResponse(id: rpcID, optionID: allow))
             return
         }

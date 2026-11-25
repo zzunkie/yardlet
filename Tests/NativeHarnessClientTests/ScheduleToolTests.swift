@@ -606,6 +606,18 @@ final class ScheduleToolTests: XCTestCase {
         ], from: fixture.caller)
         XCTAssertFalse(into.isError, into.text)
         XCTAssertTrue(model.approvalsAreEmpty(in: fixture.caller.id), "No second card")
+        // That card, and the card for running the schedule after, name the task by its title and its mode.
+        let continuing = try XCTUnwrap(model.scheduledTasks.schedules.last { $0.destination.targetTaskID == fixture.claude.id })
+        for input: JSONValue in [.object(["prompt": .string("Deploy now."), "continueTaskId": .string(fixture.claude.id.uuidString)]),
+                                 .object(["scheduleId": .string(continuing.id.uuidString)])] {
+            let tool = input["scheduleId"] == nil ? "create_scheduled_task" : "run_scheduled_task"
+            let continued = await ScheduleToolApproval.continuedTask(toolName: "mcp__yardlet__\(tool)", input: input)
+            let card = try XCTUnwrap(ScheduleToolApproval.request(toolName: "mcp__yardlet__\(tool)", input: input,
+                                                                  asking: .task, continuing: continued))
+            XCTAssertTrue(card.detail.contains(L10n.format("Task: %@", fixture.claude.title)), card.detail)
+            XCTAssertTrue(card.detail.contains(L10n.format("Its runs will use %@ mode.", L10n.string("Bypass permissions"))),
+                          card.detail)
+        }
 
         // The person's own Bypass schedule: an agent that asks may not put its words into it, and a change of name
         // alone leaves the person's prompt theirs.

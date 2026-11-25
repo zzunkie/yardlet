@@ -782,41 +782,21 @@ extension AppModel {
         return ceiling
     }
 
+    /// A task as a schedule's card names it, the task its runs continue: its title and the mode its turns run in.
+    func scheduleCardTask(_ id: UUID) -> ScheduleToolApproval.ContinuedTask? {
+        guard let session = store.sessions.first(where: { $0.id == id }) else { return nil }
+        let mode = Self.permissionKey(for: session.harness).flatMap { session.providerOptions[$0] }
+        return ScheduleToolApproval.ContinuedTask(
+            title: session.title,
+            mode: ScheduleNameDirectory.modeName(NewTaskModelChoice(model: nil, permissionMode: mode), harness: session.harness))
+    }
+
     /// A permission level on Claude Code's scale: a harness's default edits its folder as acceptEdits does.
     static func freedom(of level: TaskPermissionLevel) -> Int {
         switch level {
         case .readOnly: ClaudePermissionMode.freedom(ClaudePermissionMode.plan)
         case .standard: ClaudePermissionMode.freedom(ClaudePermissionMode.acceptEdits)
         case .elevated: ClaudePermissionMode.freedom(ClaudePermissionMode.bypassPermissions)
-        }
-    }
-
-    /// How much a schedule's runs do without asking, on the same scale: the permission its new tasks start with
-    /// (Claude Code's mode, Codex's permission, Antigravity's mode, any other harness's default), or the permission
-    /// of the task its runs continue, each a message into that task. Codex's Custom counts as the most here, where
-    /// `scheduleModeCeiling` lets it raise nothing: what `config.toml` allows is not known either way.
-    func scheduleRunFreedom(_ schedule: ScheduledTask) -> Int {
-        let destination = schedule.destination
-        switch destination.mode {
-        case .newTask:
-            let choice = destination.modelChoice ?? NewTaskModelChoice(model: nil)
-            switch destination.harness {
-            case .claudeCode: return ClaudePermissionMode.freedom(choice.permissionMode)
-            case .codex: return choice.codexRunLocation.freedom
-            case .antigravityCLI: return AntigravityPermissionMode.freedom(choice.permissionMode)
-            default: return Self.freedom(of: .standard)
-            }
-        case .continueTask:
-            // A run whose task is gone starts nothing.
-            guard let target = destination.targetTaskID.flatMap({ id in store.sessions.first { $0.id == id } }) else {
-                return Self.freedom(of: .readOnly)
-            }
-            switch target.harness {
-            case .claudeCode: return ClaudePermissionMode.freedom(target.providerOptions[ClaudeLaunchOption.permissionMode])
-            case .codex: return CodexRunLocation.restored(from: target.providerOptions).freedom
-            case .antigravityCLI: return AntigravityPermissionMode.freedom(target.providerOptions[AntigravityPermissionMode.optionID])
-            default: return Self.freedom(of: sessionToolPermission(of: target))
-            }
         }
     }
 }
