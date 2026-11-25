@@ -314,6 +314,20 @@ final class BrowserAgentTabToolsTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(2300))
         _ = await run(AgentToolCatalog.tabSelect, ["tabId": .string(String(own.id))])
         XCTAssertTrue(client.tab(forSession: task) === own, "once the person stops, the panel follows the agent")
+
+        // The agent works in the tab again: it holds it, and a person who only watches it, the page's keyboard theirs
+        // or not, leaves it to the agent, until they take control (docs/BROWSER_HOST.md, "The tab the agent holds").
+        let held = await run(AgentToolCatalog.consoleMessages, ["tabId": .string(String(person.id))])
+        XCTAssertTrue(person.isAgentHolding && !held.contains("The person is using this tab"), held)
+        client.setPanelKeyboard(true, on: person)
+        XCTAssertNil(client.personUse(of: person), "the keyboard alone does not take a tab the agent holds")
+        person.takeControl()
+        XCTAssertFalse(person.isAgentHolding)
+        XCTAssertNotNil(client.personUse(of: person))
+        let taken = await run(AgentToolCatalog.consoleMessages, ["tabId": .string(String(person.id))])
+        XCTAssertTrue(!person.isAgentHolding && taken.contains("The person is using this tab"), taken)
+        await tools.taskTurnEnded(task)
+        XCTAssertFalse(person.isAgentHolding, "the hold ends with the agent's turn")
     }
 
     /// A message the person sends the task while a tab waits on them ends the wait as that message

@@ -245,7 +245,69 @@ final class BrowserHostPersonFirstQA {
         let follows = await waitUntil(.seconds(5)) { controller.tab === own }
         check("person's tab: once the person stops, the agent's choice shows in the panel, as before", follows,
               "panel on \(controller.tab?.id ?? -1); " + selected.text)
+        await exerciseTheAgentsHold(controller, view)
         broker.taskTurnEnded(session)
+        let released = await waitUntil(.seconds(5)) { !controller.isAgentHolding }
+        check("agent's hold: the hold ends with the agent's turn", released, "holding \(controller.isAgentHolding)")
+    }
+
+    // MARK: The tab the agent holds
+
+    /// The agent works in the panel's tab: a glow and a Take control pill lie over the page, the person's click and
+    /// keyboard there neither reach the page nor make the tab theirs; a handoff lifts the hold; Take control gives the
+    /// page back to the person, and the agent's tools then say the person is using it. Captured light and dark, wide
+    /// and narrow, held and taken.
+    private func exerciseTheAgentsHold(_ controller: BrowserHostPaneController, _ view: BrowserHostView) async {
+        guard let tab = controller.tab, let window = view.window else { return check("agent's hold: the panel shows a tab", false, "none") }
+        _ = await call(AgentToolCatalog.snapshot, ["tabId": .string(String(tab.id))])
+        let held = await waitUntil(.seconds(5)) { controller.isAgentHolding }
+        check("agent's hold: the tab the agent works in is held", held, "holding \(controller.isAgentHolding)")
+        let original = window.frame
+        for (width, size) in [(1500.0, "wide"), (1000.0, "narrow")] {
+            var frame = original
+            frame.size = NSSize(width: width, height: 860)
+            window.setFrame(frame, display: true)
+            for (appearance, scheme) in [(NSAppearance.Name.aqua, "light"), (.darkAqua, "dark")] {
+                NSApp.appearance = NSAppearance(named: appearance)
+                try? await Task.sleep(for: .milliseconds(700))
+                capture(view, named: "agent-hold-\(size)-\(scheme).png")
+            }
+        }
+        NSApp.appearance = nil
+        window.setFrame(original, display: true)
+        try? await Task.sleep(for: .milliseconds(500))
+
+        let pressesBefore = controller.heldPresses
+        click(view, at: NSPoint(x: 100, y: 140))
+        try? await Task.sleep(for: .milliseconds(400))
+        let focused = await value(tab, "String(document.activeElement && document.activeElement.id)")
+        check("agent's hold: the person's click and keyboard focus neither reach the page nor make the tab theirs",
+              controller.isAgentHolding && client.personUse(of: tab) == nil && focused != "note"
+                && controller.heldPresses > pressesBefore && view.hasKeyboardFocus,
+              "holding \(controller.isAgentHolding), use \(String(describing: client.personUse(of: tab))), focused \(focused), "
+                + "presses \(controller.heldPresses), keyboard \(view.hasKeyboardFocus)")
+
+        let handoff = Task { await self.call(AgentToolCatalog.handoff, ["reason": .string("Check the page"), "timeout": .integer(30)]) }
+        let lifted = await waitUntil(.seconds(5)) { controller.handoff != nil && !controller.isAgentHolding }
+        capture(view, named: "agent-hold-handoff.png")
+        check("agent's hold: a handoff lifts the hold", lifted, "handoff \(controller.handoff != nil), holding \(controller.isAgentHolding)")
+        controller.answerHandoff(.done)
+        _ = await handoff.value
+        _ = await call(AgentToolCatalog.snapshot, ["tabId": .string(String(tab.id))])
+        let heldAgain = await waitUntil(.seconds(5)) { controller.isAgentHolding }
+        check("agent's hold: the agent's next call holds the tab again", heldAgain, "holding \(controller.isAgentHolding)")
+
+        controller.takeControl()
+        let taken = !controller.isAgentHolding && client.personUse(of: tab) != nil
+        try? await Task.sleep(for: .milliseconds(400))
+        capture(view, named: "agent-hold-taken.png")
+        click(view, at: NSPoint(x: 100, y: 140))
+        try? await Task.sleep(for: .milliseconds(400))
+        let focusedAfter = await value(tab, "String(document.activeElement && document.activeElement.id)")
+        let told = await call(AgentToolCatalog.snapshot, ["tabId": .string(String(tab.id))])
+        check("agent's hold: Take control gives the page to the person and the agent's tools say so",
+              taken && focusedAfter == "note" && !controller.isAgentHolding && told.text.contains("The person is using this tab"),
+              "taken \(taken), focused \(focusedAfter), holding \(controller.isAgentHolding); " + told.text.suffix(240))
     }
 
     // MARK: Panel and page
