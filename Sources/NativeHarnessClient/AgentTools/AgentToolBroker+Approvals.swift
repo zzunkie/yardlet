@@ -9,7 +9,8 @@ import YardletAgentTools
 // - A read-only task (Plan, Codex's read-only) runs only what changes nothing: the read-only tools, scrolling
 //   and resizing its own tab, a child task or subagent (which inherit read-only), and the wrappers, whose calls
 //   are weighed one by one. Anything else is refused.
-// - In a task that asks the person, a connector's reads ask once per service for the task, and every connector
+// - In a task that asks the person, a connector's reads ask once per service for the task, and so do the reads of
+//   the person's personal agents, once for all three tools; every connector
 //   write, scheduled-task change and saved sign-in fill asks each time, unless Claude Code's CLI just asked on
 //   its own card for that direct call. A browser batch that clicks, types, navigates or runs script asks once,
 //   on one card listing those actions, and a script's browser action asks as the harness would for a direct one.
@@ -65,6 +66,14 @@ extension AgentToolBroker {
         } else if origin == .wrapped, Self.changingBrowserTools.contains(tool) {
             request = (L10n.string("Allow this task to run this browser action?"),
                        Self.browserActionLine(tool, arguments))
+        } else if Self.personalAgentTools.contains(tool) {
+            // Claude Code's CLI never asks about these (`claudeAllowedTools`), so Yardlet's card is the only one.
+            let title = SessionToolCatalog.definition(named: tool)?.title ?? tool
+            return await firstReadRefusal(
+                Self.personalAgentReads, tool: tool, sessionID: sessionID, host: policy.hostTaskID, harnessAsked: false,
+                title: L10n.string("Allow this task to read your personal agents?"),
+                detail: L10n.format("First read: %@. Its later reads of your personal agents go without asking.",
+                                    title))
         } else {
             request = nil
         }
@@ -101,22 +110,39 @@ extension AgentToolBroker {
                 callerID: sessionID)
             return allowed && !Task.isCancelled ? nil : Self.declined(tool)
         }
-        let host = policy.hostTaskID
-        if approvedReadServices[host]?.contains(facts.service) == true { return nil }
+        return await firstReadRefusal(facts.service, tool: tool, sessionID: sessionID, host: policy.hostTaskID,
+                                      harnessAsked: harnessAsked,
+                                      title: L10n.format("Allow this task to read from %@?", facts.service),
+                                      detail: L10n.format("First read: %@. Its later reads from %@ go without asking.",
+                                                          facts.title, facts.service))
+    }
+
+    /// The tools that read the person's personal agents, asked about together once per task.
+    static let personalAgentTools: Set<String> = [
+        SessionToolCatalog.listPersonalAgents, SessionToolCatalog.readPersonalAgent,
+        SessionToolCatalog.readPersonalAgentThread
+    ]
+
+    /// The key the personal agents' reads are allowed under, beside the connectors' services; no service is named so.
+    static let personalAgentReads = "\u{1}personal agents"
+
+    /// Asks once per task before its first read of `scope` (a connector's service, or the personal agents), or nil
+    /// when the person allowed it already. Calls made while the question waits wait on the same card.
+    private func firstReadRefusal(_ scope: String, tool: String, sessionID: UUID, host: UUID, harnessAsked: Bool,
+                                  title: String, detail: String) async -> AgentToolResult? {
+        guard let approvals else { return nil }
+        if approvedReadServices[host]?.contains(scope) == true { return nil }
         if harnessAsked {
             // The person just allowed this read on the CLI's card: the task's other reads there need no other.
-            approvedReadServices[host, default: []].insert(facts.service)
+            approvedReadServices[host, default: []].insert(scope)
             return nil
         }
-        let key = "\(host.uuidString)|\(facts.service)"
+        let key = "\(host.uuidString)|\(scope)"
         let question: PendingReadApproval
         // A question just withdrawn is not joined: it answers no.
         if let pending = pendingReadApprovals[key], !pending.answer.isCancelled {
             question = pending
         } else {
-            let title = L10n.format("Allow this task to read from %@?", facts.service)
-            let detail = L10n.format("First read: %@. Its later reads from %@ go without asking.", facts.title,
-                                     facts.service)
             question = PendingReadApproval(Task { await approvals.askPerson(title: title, detail: detail,
                                                                             callerID: sessionID) })
             pendingReadApprovals[key] = question
@@ -130,7 +156,10 @@ extension AgentToolBroker {
         }
         // Only the question this call waited on is cleared: a later one may stand in its place already.
         if pendingReadApprovals[key] === question { pendingReadApprovals[key] = nil }
-        if allowed { approvedReadServices[host, default: []].insert(facts.service) }
+        // A task released meanwhile (archived, deleted) keeps no allow: its question was withdrawn.
+        if allowed, !question.answer.isCancelled, tokens[host] != nil {
+            approvedReadServices[host, default: []].insert(scope)
+        }
         return allowed && !Task.isCancelled ? nil : Self.declined(tool)
     }
 

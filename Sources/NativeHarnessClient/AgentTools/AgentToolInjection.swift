@@ -22,23 +22,31 @@ struct AgentToolServerLaunch: Equatable, Sendable {
     static let codexToolTimeoutSeconds: Int64 = 1_800
 
     /// The task suggestion and session tools under Claude Code's names, and `list_task_runs`. A
-    /// chip, a read of the person's own tasks and projects, a message, child task or subagent in the
-    /// same project, and adding, hiding or showing a project the person asked about need no card (the Claude
-    /// app runs its `spawn_task` and session tools so too, `allowedTools`); anything further, and every
-    /// `archive_task`, the app itself asks the person about on one card, unless
-    /// the task runs without asking.
-    /// Of the scheduled-task tools only `list_task_runs` goes without asking, as the Claude app
-    /// allows only its own; the CLI asks before the others as it asks before any tool.
+    /// chip, a read of the person's own tasks and projects, and a message, child task or subagent in the
+    /// same project need no card (the Claude app runs its `spawn_task` and session tools so too,
+    /// `allowedTools`); anything further, every `archive_task`, a task's first read of the person's personal
+    /// agents and each change to the sidebar's projects, the app itself asks the person about on one card,
+    /// unless the task runs without asking.
+    /// Of the scheduled-task tools `list_task_runs` and `list_scheduled_tasks` go without asking: they change
+    /// nothing, and the app asks before giving another project's schedule whole. The CLI asks before the others
+    /// as it asks before any tool.
     /// `read_terminal` goes without asking too, as the Claude app's `read_terminal` runs nothing; while the
     /// terminal is not shared the server does not list it and the name allows nothing. The settings tools go
     /// without the CLI's card as well: the app asks on its own card for the changes that ask.
     /// The wrappers (`run_yardlet_script`, `call_connector_tool`, `browser_batch`) go without the CLI's card too:
     /// the CLI cannot see the calls they make, so Yardlet weighs and asks about each of those itself
     /// (`AgentToolBroker+Approvals`), and a card for the wrapper would only come before that one.
+    /// So do the tools that only list Yardlet's own tools (`search_yardlet_tools`, `list_connector_tools`,
+    /// `list_simulator_tools`) and the simulator tools that only look: `simulator_list` reads this Mac's device
+    /// list, and a screenshot or snapshot acts only on a device the person let the task use (`SimulatorApprovals`
+    /// asks on the app's own card first).
     static var claudeAllowedTools: [String] {
         ((TaskSuggestionToolCatalog.tools + SessionToolCatalog.tools + SettingsToolCatalog.tools).map(\.name)
             + [TerminalToolCatalog.readTerminal, ScheduleToolCatalog.listRuns, WidgetToolCatalog.showWidget,
-               CodeModeToolCatalog.runScript, ConnectorGatewayToolCatalog.callTool, AgentToolCatalog.batch])
+               CodeModeToolCatalog.runScript, ConnectorGatewayToolCatalog.callTool, AgentToolCatalog.batch,
+               ScheduleToolCatalog.list, CodeModeToolCatalog.searchTools, ConnectorGatewayToolCatalog.listTools,
+               SimulatorGatewayToolCatalog.listTools, SimulatorToolCatalog.list, SimulatorToolCatalog.screenshot,
+               SimulatorToolCatalog.snapshot])
             .map { "mcp__\(AgentToolEnvironment.serverName)__\($0)" }
     }
 

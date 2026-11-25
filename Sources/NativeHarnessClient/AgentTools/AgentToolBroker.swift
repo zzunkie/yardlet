@@ -143,7 +143,7 @@ final class AgentToolBroker: AgentToolLaunchProviding {
 
     private let environment: Environment
     private let tools: BrowserAgentTools
-    private var tokens: [UUID: String] = [:]
+    private(set) var tokens: [UUID: String] = [:]
     private var workspaceRoots: [UUID: [URL]] = [:]
     private var browserToolsByTask: [UUID: Bool] = [:]
     /// Whether the Simulator switch was on when each task was injected.
@@ -168,7 +168,8 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     /// The app, which says who made a call and asks the person where Yardlet's own approvals ask
     /// (`AgentToolBroker+Approvals`). Nil, as in tests, asks nothing.
     weak var approvals: (any AgentToolApprovalHandling)?
-    /// The services each task's person allowed it to read from, by task (`AgentToolCallerPolicy.hostTaskID`).
+    /// The services each task's person allowed it to read from, by task (`AgentToolCallerPolicy.hostTaskID`), and
+    /// `personalAgentReads` once they allowed it to read their personal agents.
     var approvedReadServices: [UUID: Set<String>] = [:]
     /// A first read's question in flight, by task and service, which calls made meanwhile wait on.
     var pendingReadApprovals: [String: PendingReadApproval] = [:]
@@ -304,6 +305,11 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         simulatorToolsByTask.removeValue(forKey: localSessionID)
         connectorScopes.removeValue(forKey: localSessionID)
         approvedReadServices.removeValue(forKey: localSessionID)
+        // A first read's question still waiting is withdrawn: its answer no longer allows anything.
+        let prefix = localSessionID.uuidString + "|"
+        for key in pendingReadApprovals.keys.filter({ $0.hasPrefix(prefix) }) {
+            pendingReadApprovals.removeValue(forKey: key)?.answer.cancel()
+        }
         tools.closeTab(for: localSessionID)
     }
 

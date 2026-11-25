@@ -80,9 +80,9 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
         case SessionToolCatalog.runAgent: return await runAgent(arguments, caller: caller)
         case SessionToolCatalog.archiveTask: return await archiveTasks(arguments, caller: caller)
         case SessionToolCatalog.listProjects: return listProjects(caller: caller)
-        case SessionToolCatalog.createProject: return createProject(arguments)
-        case SessionToolCatalog.hideProject: return hideProject(arguments)
-        case SessionToolCatalog.showProject: return showProject(arguments)
+        case SessionToolCatalog.createProject: return await createProject(arguments, caller: caller)
+        case SessionToolCatalog.hideProject: return await hideProject(arguments, caller: caller)
+        case SessionToolCatalog.showProject: return await showProject(arguments, caller: caller)
         case SessionToolCatalog.listAccounts: return await listAccounts(arguments, caller: caller)
         case SessionToolCatalog.listPersonalAgents, SessionToolCatalog.readPersonalAgent,
              SessionToolCatalog.readPersonalAgentThread:
