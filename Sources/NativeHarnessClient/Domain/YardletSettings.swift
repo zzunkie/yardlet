@@ -292,6 +292,9 @@ struct YardletSetting: Identifiable {
         switch storage {
         case let .flag(key, defaultValue):
             return Self.onOff(context.defaults.object(forKey: key) as? Bool ?? defaultValue)
+        case let .choice(key, _) where key == CodeModePreference.key:
+            // Also where the switch it was before is still saved, which reads as "1" or "0" as text.
+            return CodeModePreference.mode(in: context.defaults).rawValue
         case let .choice(key, defaultValue):
             let stored = context.defaults.string(forKey: key)
             return stored.flatMap { value in choices.contains { $0.value == value } ? value : nil } ?? defaultValue
@@ -526,8 +529,10 @@ extension YardletSetting {
     static let agentCodeMode = YardletSetting(
         id: "agent_code_mode", section: .general, generalGroup: .tasks, symbol: "chevron.left.forwardslash.chevron.right",
         title: L10n.string("MCP Code Mode (experimental)"),
-        detail: L10n.string("Agents find connector and Yardlet tools with search_yardlet_tools and run several at once in a sandboxed JavaScript run_yardlet_script, so connector tool schemas stay out of the context."),
-        values: .onOff, storage: .flag(key: CodeModePreference.key, defaultValue: false), asksEveryTime: true,
+        detail: L10n.string("Agents look up connector tools when they need them and run several in one sandboxed script, so their schemas stay out of the context."),
+        hint: L10n.string("Auto uses it in Claude Code tasks with 30 or more connector tools and in other agents' tasks with any connector tool, never in Codex, which has its own"),
+        values: choices(CodeModePreference.Mode.self, title: \.title),
+        storage: .choice(key: CodeModePreference.key, defaultValue: CodeModePreference.Mode.auto.rawValue), asksEveryTime: true,
         offered: { _ in CodeModePreference.isSupported },
         keywords: "MCP, code mode, JavaScript, tokens, context, connectors, tools, script")
 

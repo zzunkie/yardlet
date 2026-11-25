@@ -6,7 +6,8 @@ import Foundation
 /// (`search_yardlet_tools`) and chain/filter multiple tool calls inside a single sandboxed script
 /// (`run_yardlet_script`), keeping large intermediate payloads and unused tool schemas out of the
 /// model's context window while every underlying call still runs through `AgentToolBroker`'s
-/// authentication, argument validation, approvals, and credential scrubbing.
+/// authentication, argument validation, approvals, and credential scrubbing. Both load with the prompt
+/// (`alwaysLoad`), so Claude Code does not first look them up with its own tool search.
 package enum CodeModeToolCatalog {
     package static let searchTools = "search_yardlet_tools"
     package static let runScript = "run_yardlet_script"
@@ -18,7 +19,7 @@ package enum CodeModeToolCatalog {
         AgentToolDefinition(
             name: searchTools,
             title: "Search Yardlet tools",
-            description: "Search available Yardlet and connected connector tools with their parameter schemas. Pass query, category, or exact tool name before calling \(runScript).",
+            description: "Search available Yardlet and connected connector tools. Returns JSON {count, groups, tools: [{name, category, description, inputSchema?}]}, with inputSchema when \(detailedSchemaLimit) or fewer match; pass tool for one tool's [{name, description, inputSchema}]. Use before calling \(runScript).",
             inputSchema: .object([
                 "type": .string("object"),
                 "additionalProperties": .bool(false),
@@ -38,7 +39,8 @@ package enum CodeModeToolCatalog {
                 ])
             ]),
             readOnly: true,
-            openWorld: false
+            openWorld: false,
+            alwaysLoad: true
         ),
         AgentToolDefinition(
             name: runScript,
@@ -62,7 +64,8 @@ package enum CodeModeToolCatalog {
             // It changes nothing itself: Yardlet checks and, where the task asks, asks the person about each
             // call it makes as about a direct one (`AgentToolBroker`), so a harness need not ask about it first.
             readOnly: true,
-            openWorld: true
+            openWorld: true,
+            alwaysLoad: true
         )
     ]
 
@@ -76,9 +79,6 @@ package enum CodeModeToolCatalog {
         category: String?,
         exactTool: String?
     ) -> AgentToolResult {
-        guard !tools.isEmpty else {
-            return .text("No Yardlet tools are available for this task.")
-        }
         let exact = exactTool?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let exact, !exact.isEmpty {
             if let match = tools.first(where: { $0["name"]?.stringValue == exact }) {
@@ -114,42 +114,53 @@ package enum CodeModeToolCatalog {
             return true
         }
 
-        if filtered.isEmpty {
-            return .text("No Yardlet tools matched. Available groups: \(groupSummary(of: tools)).")
-        }
-
-        if filtered.count <= detailedSchemaLimit {
-            return .text(encodeDetailed(filtered))
-        }
-
-        var lines: [String] = [
-            "Matched \(filtered.count) tools (\(groupSummary(of: filtered))). Narrow with query/category or pass exact tool for full inputSchema:"
+        // JSON either way, so a script's `callTool` gets an object to filter. Groups always count the
+        // matches, or every tool when nothing matched, so the model can narrow or widen its next search.
+        let detailed = !filtered.isEmpty && filtered.count <= detailedSchemaLimit
+        var fields: [String: ToolJSON] = [
+            "count": .integer(Int64(filtered.count)),
+            "groups": groups(of: filtered.isEmpty ? tools : filtered),
+            "tools": .array(filtered.compactMap { listed($0, detailed: detailed) })
         ]
-        for entry in filtered {
-            guard let name = entry["name"]?.stringValue else { continue }
-            let firstLine = (entry["description"]?.stringValue ?? "")
-                .split(whereSeparator: \.isNewline)
-                .first
-                .map(String.init)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let short = firstLine.count > 100 ? String(firstLine.prefix(100)) + "…" : firstLine
-            lines.append(short.isEmpty ? "- \(name)" : "- \(name): \(short)")
+        if !filtered.isEmpty, !detailed {
+            fields["hint"] = .string("Narrow with query or category, or pass tool for one tool's inputSchema.")
         }
-        return .text(lines.joined(separator: "\n"))
+        return .text(encode(.object(fields)))
     }
 
-    private static func groupSummary(of tools: [ToolJSON]) -> String {
-        var counts: [(prefix: String, count: Int)] = []
+    /// The part of a tool name before its first underscore: a connector's service, or a Yardlet family.
+    private static func category(of name: String) -> String {
+        name.firstIndex(of: "_").map { String(name[..<$0]) } ?? name
+    }
+
+    private static func groups(of tools: [ToolJSON]) -> ToolJSON {
+        var counts: [(category: String, count: Int)] = []
         for entry in tools {
             guard let name = entry["name"]?.stringValue else { continue }
-            let prefix = name.firstIndex(of: "_").map { String(name[..<$0]) } ?? name
-            if let index = counts.firstIndex(where: { $0.prefix == prefix }) {
+            let category = category(of: name)
+            if let index = counts.firstIndex(where: { $0.category == category }) {
                 counts[index].count += 1
             } else {
-                counts.append((prefix, 1))
+                counts.append((category, 1))
             }
         }
-        return counts.map { "\($0.prefix) (\($0.count))" }.joined(separator: ", ")
+        return .array(counts.map { .object(["category": .string($0.category), "count": .integer(Int64($0.count))]) })
+    }
+
+    /// A matched tool: its whole description and inputSchema when few matched, else its first line.
+    private static func listed(_ entry: ToolJSON, detailed: Bool) -> ToolJSON? {
+        guard let name = entry["name"]?.stringValue else { return nil }
+        let description = entry["description"]?.stringValue ?? ""
+        var fields: [String: ToolJSON] = ["name": .string(name), "category": .string(category(of: name))]
+        if detailed {
+            fields["description"] = .string(description)
+            if let schema = entry["inputSchema"] { fields["inputSchema"] = schema }
+        } else {
+            let firstLine = description.split(whereSeparator: \.isNewline).first
+                .map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
+            fields["description"] = .string(firstLine.count > 100 ? String(firstLine.prefix(100)) + "…" : firstLine)
+        }
+        return .object(fields)
     }
 
     private static func encodeDetailed(_ tools: [ToolJSON]) -> String {
@@ -160,11 +171,14 @@ package enum CodeModeToolCatalog {
             if let schema = entry["inputSchema"] { fields["inputSchema"] = schema }
             return .object(fields)
         }
+        return encode(.array(trimmed))
+    }
+
+    private static func encode(_ value: ToolJSON) -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        guard let data = try? encoder.encode(ToolJSON.array(trimmed)),
-              let text = String(data: data, encoding: .utf8) else {
-            return "[]"
+        guard let data = try? encoder.encode(value), let text = String(data: data, encoding: .utf8) else {
+            return "{}"
         }
         return text
     }

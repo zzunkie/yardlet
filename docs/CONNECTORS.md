@@ -575,6 +575,31 @@ the mutable `YARDLET_TOOLS_SERVICES` variable so a task's `mcpServers` spec stay
 Yardlet run, and any stale `yardlet-mcp` server restored by `agy` from a previous Yardlet run (`YARDLET_TOOLS_APP_PID`
 no longer running) or a released token omits duplicate instructions, returns an empty `tools/list`, and exits cleanly.
 
+### MCP Code Mode
+
+Settings › General › Tasks › MCP Code Mode (`CodeModePreference`) is `Auto` (the default), `On` or `Off`. Where it is
+on for a task, `AgentToolBroker` lists two tools (`CodeModeToolCatalog`) in place of the task's connector tools and, for
+Antigravity, of its connector gateway: `search_yardlet_tools` and `run_yardlet_script`. Yardlet's own tools stay listed
+as before. Both carry `alwaysLoad`, so Claude Code loads them with the prompt rather than behind its tool search.
+
+- `search_yardlet_tools` answers in JSON. With `query` or `category`, or neither, it returns
+  `{count, groups, tools}`: `groups` counts the matches by category (the part of the name before the first underscore),
+  or every tool when none matched, and each entry of `tools` has `name`, `category` and `description`, with the whole
+  description and `inputSchema` when ten or fewer matched and the first line of the description otherwise. With `tool`,
+  it returns that one tool as `[{name, description, inputSchema}]`.
+- `run_yardlet_script` runs a JavaScript function body in JavaScriptCore, with no file system, network or timers, whose
+  `callTool(name, arguments)` calls a connector or Yardlet tool, up to 20 calls in 30 seconds by default (60 at most).
+  Each call is checked and, where the task asks, asked about as a direct call is, and the script's result has keys and
+  tokens hidden.
+
+`Auto` decides per task, from its harness and the number of connector tools it is offered: never in Codex, which runs
+its own code mode; in Claude Code from 30 connector tools (`CodeModePreference.claudeCodeConnectorToolThreshold`), since
+with fewer its tool search loads the few it needs in fewer turns; in Antigravity and the other harnesses from one. The
+list changes when the setting or the connectors do (the "Tool lists of running tasks" section). The setting was a
+switch before it had three values and saved a value only once turned: a saved `true` stays `On` and a saved `false`
+stays `Off`, converted to the new values when the app starts. Windows and Linux have no JavaScriptCore and do not offer
+it.
+
 ## 7. UI
 
 - **Settings → Connectors:** a one-paragraph introduction (every harness and account) → "Your

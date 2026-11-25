@@ -18,7 +18,7 @@ final class MacAgentToolService: NativeSurfaceResource {
     private let directory: URL
     private var listener: UnixSocketListener?
     private var sharesTerminal = true
-    private var codeModeEnabled = false
+    private var codeModeSetting = CodeModePreference.Mode.auto
     private var terminalSharingObserver: NSObjectProtocol?
 
     /// The connector settings on their way to the service, read off the main thread: the file holds
@@ -128,7 +128,8 @@ final class MacAgentToolService: NativeSurfaceResource {
         // Observe off the main queue so a background UserDefaults write cannot deadlock with a
         // main-thread flush on the same writer queue.
         sharesTerminal = TerminalSharingPreference.isOn()
-        codeModeEnabled = CodeModePreference.isOn()
+        CodeModePreference.convertSavedSwitch() // Already done at launch (`AppModel.live`); a no-op then.
+        codeModeSetting = CodeModePreference.mode()
         terminalSharingObserver = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification, object: UserDefaults.yardlet, queue: nil
         ) { [weak self] _ in
@@ -140,10 +141,10 @@ final class MacAgentToolService: NativeSurfaceResource {
 
     private func toolPreferencesMayHaveChanged() {
         let shares = TerminalSharingPreference.isOn()
-        let codeMode = CodeModePreference.isOn()
-        guard shares != sharesTerminal || codeMode != codeModeEnabled else { return }
+        let codeMode = CodeModePreference.mode()
+        guard shares != sharesTerminal || codeMode != codeModeSetting else { return }
         sharesTerminal = shares
-        codeModeEnabled = codeMode
+        codeModeSetting = codeMode
         broker.toolsMayHaveChanged()
     }
 

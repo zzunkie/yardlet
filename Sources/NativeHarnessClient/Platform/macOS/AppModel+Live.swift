@@ -20,7 +20,9 @@ extension AppModel {
         // Preferences saved under their earlier keys are copied to their keys first
         // (`PreferenceKeyCarryOver`), and what Yardlet kept of addresses that carried a vault password
         // goes before the task workspaces and the browser host read it (`BrowserFilledValueCleanup`).
+        // MCP Code Mode's switch from before it had three values is saved as its mode before Settings reads it.
         PreferenceKeyCarryOver.run()
+        CodeModePreference.convertSavedSwitch()
         MacAgentToolService.startPreparing()
         BrowserFilledValueCleanup.runAtLaunch()
         LoginShellPath.startReading(shell: ShellLaunchEnvironment.loginShellPath())

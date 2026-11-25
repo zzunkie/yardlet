@@ -18,7 +18,7 @@ final class AgentToolApprovalTests: XCTestCase {
                                privateDirectory: dir, isEnabled: { false }),
             tools: BrowserAgentTools(usesMacEditingCommands: true, pages: { _ in BrowserAgentPage(cdp: ScriptedCDP()) })
         )
-        broker.codeModeEnabled = { true }
+        broker.codeModeSetting = { .on }
         broker.simulators = simulators
         let connectors = ApprovalConnectors()
         broker.connectors = connectors
