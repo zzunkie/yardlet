@@ -415,7 +415,7 @@ enum ClaudeProtocol {
             ]),
             "parent_tool_use_id": .null,
             "session_id": .string(sessionID)
-        ]), uuid: uuid, priority: priority)
+        ]), text: prompt, uuid: uuid, priority: priority)
     }
 
     /// The Claude app's message after a quit or a lost connection cut a turn off
@@ -469,22 +469,31 @@ enum ClaudeProtocol {
             ]),
             "parent_tool_use_id": .null,
             "session_id": .string(sessionID)
-        ]), uuid: uuid, priority: priority)
+        ]), text: text, uuid: uuid, priority: priority)
     }
 
-    /// A follow-up is something the user typed, so it is stamped `origin: {kind: "human"}`, as the
-    /// CLI asks of a host wrapping keyboard input. Without it the CLI counts the message as
-    /// unattributed, and its Send now stops the running turn instead of moving a running command
-    /// to the background.
+    /// A follow-up says who wrote it. One the person typed is stamped `origin: {kind: "human"}`, as
+    /// the CLI asks of a host wrapping keyboard input: without it the CLI counts the message as
+    /// unattributed, and its Send now stops the running turn instead of moving a running command to
+    /// the background. Another task's message (`TaskMessage`) is relayed text, which the CLI asks a
+    /// host to mark `isSynthetic: true` and which then carries no origin: the CLI ignores a declared
+    /// origin on a synthetic message, files it as `{kind: "unclassified"}`, and frames it for the
+    /// model as a message from a non-user source (2.1.332). Unmarked, a mid-turn message counts as
+    /// the person's wherever the CLI has no feature flags, as with telemetry off.
     private static func followUp(
         _ message: JSONValue,
+        text: String,
         uuid: String?,
         priority: HarnessFollowUpPriority?
     ) -> JSONValue {
         guard var object = message.objectValue, uuid != nil || priority != nil else { return message }
         if let uuid { object["uuid"] = .string(uuid) }
         if let priority { object["priority"] = .string(priority.rawValue) }
-        object["origin"] = .object(["kind": .string("human")])
+        if TaskMessage.parse(text) != nil {
+            object["isSynthetic"] = .bool(true)
+        } else {
+            object["origin"] = .object(["kind": .string("human")])
+        }
         return .object(object)
     }
 

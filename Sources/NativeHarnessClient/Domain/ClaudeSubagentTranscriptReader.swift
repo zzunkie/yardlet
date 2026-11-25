@@ -1006,18 +1006,24 @@ struct ClaudeSubagentTranscriptReader: Sendable {
         return ended
     }
 
-    /// The text of a message a person sent while a turn ran, from the `queued_command` record
-    /// Claude saves when it reads one into the turn. Commands Claude queued itself (a finished
-    /// background task's notice, a bash command) are not messages and return nil.
+    /// The text of a message sent while a turn ran, from the `queued_command` record Claude saves
+    /// when it reads one into the turn: the person's, or another task's (`TaskMessage`), which Yardlet
+    /// sends marked `isSynthetic` and Claude files as `{kind: "unclassified"}`. Commands Claude queued
+    /// itself (a finished background task's notice, a bash command, a forwarded earlier request) are
+    /// not messages and return nil.
     static func messageReadIntoTurn(_ attachment: JSONValue?) -> String? {
         guard let attachment, attachment["type"]?.stringValue == "queued_command",
-              (attachment["commandMode"]?.stringValue ?? "prompt") == "prompt",
-              (attachment["origin"]?["kind"]?.stringValue ?? "human") == "human" else { return nil }
+              (attachment["commandMode"]?.stringValue ?? "prompt") == "prompt" else { return nil }
         let prompt = attachment["prompt"]
         let text = prompt?.stringValue ?? prompt?.arrayValue?.compactMap {
             $0["type"]?.stringValue == "text" ? $0["text"]?.stringValue : nil
         }.joined(separator: "\n") ?? ""
-        return text.isEmpty ? nil : text
+        guard !text.isEmpty else { return nil }
+        switch attachment["origin"]?["kind"]?.stringValue ?? "human" {
+        case "human": return text
+        case "unclassified": return TaskMessage.parse(text) != nil ? text : nil
+        default: return nil
+        }
     }
 
     private func empty() -> HarnessSubtaskTranscript { .init(entries: [], isTruncated: false) }

@@ -33,6 +33,16 @@ final class ClaudeFollowUpQueueTests: XCTestCase {
         XCTAssertEqual(withImage["uuid"]?.stringValue, id)
         XCTAssertEqual(withImage["priority"]?.stringValue, "now")
         XCTAssertEqual(withImage["origin"]?["kind"]?.stringValue, "human")
+        XCTAssertNil(withImage["isSynthetic"])
+        // Another task's message is relayed text: marked synthetic with no origin, so Claude Code 2.1.332
+        // does not count it as the person's in the running turn.
+        let relayed = TaskMessage(senderID: "9A3E0C55-7B21-4D2F-8E6A-1C4B5D6E7F80", senderName: "Coordinator",
+                                  body: "Merge it.").text(in: .yardlet)
+        let relay = ClaudeProtocol.userMessage(text: relayed, images: [], sessionID: sessionID, uuid: id, priority: .next)
+        XCTAssertEqual(relay["isSynthetic"]?.boolValue, true)
+        XCTAssertNil(relay["origin"])
+        XCTAssertEqual(relay["message"]?["content"]?.stringValue, relayed)
+        XCTAssertEqual(relay["priority"]?.stringValue, "next")
 
         let cancel = ClaudeProtocol.cancelAsyncMessage(id: "nhc-cancel-message-7", messageUUID: id)
         XCTAssertEqual(
