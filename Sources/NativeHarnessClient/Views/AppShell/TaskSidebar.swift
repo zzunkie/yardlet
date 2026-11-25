@@ -273,10 +273,10 @@ struct TaskSidebar: View {
     var onRemoteProjectPin: ((WorkspaceGroup) -> Void)? = nil
     var canArchiveRemoteProject = false
     var remoteProjectMoveOptions: ((SessionRecord) -> TaskProjectMove.Options)? = nil
-    /// What the sidebar ends with in place of Settings and Feedback: another Mac's window names its host there.
+    /// What the sidebar ends with in place of its footer: another Mac's window names its host there.
     var footer: AnyView? = nil
     var splitActions = SidebarSplitActions()
-    /// The Settings button at the bottom and the app-wide places its menu opens.
+    /// The footer's account button, Settings and Feedback, and the app-wide places the account menu opens.
     var accountMenu = SidebarAccountMenuContext()
     /// Collapsed projects and "Show more"; the layout above already reflects it.
     var disclosure: SidebarDisclosureStore? = nil
@@ -497,8 +497,8 @@ struct TaskSidebar: View {
                     .padding(.horizontal, 4)
                     .padding(.top, 6)
             }
-            // Settings, whose menu holds the accounts, archived tasks and the other app-wide places,
-            // beside Feedback.
+            // The person on this Mac, whose menu holds Settings, the accounts, archived tasks and the
+            // other app-wide places, then Settings and Feedback as icons.
             Group {
                 if let footer {
                     footer

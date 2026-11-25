@@ -4483,9 +4483,7 @@
 "Send Again" = "Send Again";
 "Send problem report" = "Send problem report";
 "Tell the Yardlet team privately what happened" = "Tell the Yardlet team privately what happened";
-"Settings, accounts, usage and more" = "Settings, accounts, usage and more";
-"Settings menu" = "Settings menu";
-"Feedback" = "Feedback";
+"Account menu, %@" = "Account menu, %@";
 "Send Feedback…" = "Send Feedback…";
 "Allow %@ in this task" = "Allow %@ in this task";
 "Not allowed in this task yet: %@" = "Not allowed in this task yet: %@";
