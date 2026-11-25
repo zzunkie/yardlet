@@ -187,7 +187,8 @@ struct RemoteNewTaskView: View {
                 } trailing: {
                     if model.composerExtensions {
                         ComposerSessionControls(options: form.sessionOptions, placement: .trailing,
-                            isDisabled: form.isStarting, onChoose: form.choose, onPrepare: form.readOptions)
+                            isDisabled: form.isStarting, onChoose: form.choose, onPrepare: form.readOptions,
+                            shortensModelToFit: true)
                     }
                     NewTaskStartControl(canStart: form.canStart, isStarting: form.isStarting,
                         commandMenuOpen: showsCommands || showsTypedCommands, onStart: form.start)

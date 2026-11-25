@@ -823,7 +823,8 @@ private struct NewTaskComposer: View {
                 onPrepare: {
                     guard let models, let runtimeURL = runtimeSelections.selectedURL(for: harness) else { return }
                     await models.load(harness, runtimeURL, selectedConnection, draft.workspaceURL)
-                })
+                },
+                shortensModelToFit: true)
         }
     }
 
