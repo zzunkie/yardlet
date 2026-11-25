@@ -1202,9 +1202,10 @@ final class PersonalAgentRenderingTests: XCTestCase {
         }
     }
 
-    /// Every message a dot sends says when it was sent, also one that follows another of the dot's, in the
-    /// room and in its Replies: just above the words, with its day including today, and nothing
-    /// when the provider gave no time. The dot's name and picture stay on the first of a run.
+    /// Every message says when it was sent, also one that follows another of the dot's, in the room and in
+    /// its Replies: with its actions under its words, as a task's messages show theirs, and nothing when
+    /// the provider gave no time. A new day starts under its own divider, and the dot's name and picture
+    /// stay on the first of a run.
     func testEachMessageOfADotSaysWhenItWasSentInTheRoomAndInReplies() async throws {
         let (model, _) = try makeWindowModel()
         let agent = PersonalAgent(id: .init(accountID: "example", userID: "person", agentID: "dot", roomID: "room"),
@@ -1232,18 +1233,18 @@ final class PersonalAgentRenderingTests: XCTestCase {
             message("r3", .agent, "This reply came without a time.", nil, parent: "r2"),
             message("p2", .person, "Thanks.", at(9 * 60 + 10))
         ]
-        func time(_ minutes: Int) -> String {
-            let date = at(minutes)
-            return Calendar.current.isDateInToday(date)
-                ? L10n.format("Today %@", date.formatted(date: .omitted, time: .shortened))
-                : date.formatted(date: .abbreviated, time: .shortened)
-        }
+        // As assistive apps read them: a time with its whole date, a day by its date.
+        func time(_ minutes: Int) -> String { at(minutes).formatted(date: .complete, time: .shortened) }
+        func day(_ minutes: Int) -> String { at(minutes).formatted(date: .complete, time: .omitted) }
+        let times = Set([-120, 9 * 60, 9 * 60 + 2, 9 * 60 + 3, 9 * 60 + 5, 9 * 60 + 7, 9 * 60 + 10].map(time))
         let directory = try WindowlessRender.directory("dots-message-times-qa")
         for size in [NSSize(width: 1280, height: 920), NSSize(width: 920, height: 680)] {
             for appearance in WindowlessRender.Appearance.allCases {
                 let reader = RenderedPersonalAgentReader(agents: [agent], messages: messages)
+                // The actions show as under the pointer, so their times can be read.
                 let window = MainWindow(model: model) { reader }
                     .environment(\.colorScheme, appearance.colorScheme)
+                    .environment(\.revealsSentMessageActions, true)
                     .frame(width: size.width, height: size.height)
                 let host = WindowlessRender.Host(window, size: size, appearance: appearance)
                 defer { host.close() }
@@ -1256,25 +1257,30 @@ final class PersonalAgentRenderingTests: XCTestCase {
                 let name = "\(Int(size.width))-\(appearance.suffix).png"
                 try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "room-\(name)"))
 
-                // The room: d1 and r1 start a run; q (on a new day), d2 and r2 follow and keep their own time,
-                // each between the message before and its own words.
+                // The room: yesterday's message under its day, today's under Today; d1 and q start a run (q on
+                // a new day), d2 and r2 follow and keep their own time, each between its words and the next
+                // message's.
                 let room = try XCTUnwrap(Self.scrollViews(in: host.hosting).max {
                     ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0)
                 })
                 var rows = Self.texts(in: room, of: host.window)
-                let sent: [(previous: String, text: String, time: String)] = [
-                    ("I read the contract draft", "Which clause should I raise", time(9 * 60)),
-                    ("Start with the deposit.", "The deposit clause comes first", time(9 * 60 + 3)),
-                    ("The deposit clause comes first", "The deposit clause asks", time(9 * 60 + 5)),
-                    ("This note came without a time.", "I will draft the deposit question", time(9 * 60 + 7))
+                XCTAssertTrue(rows.contains { $0.text == day(-120) }, "Yesterday's divider at \(size)")
+                try Self.assertTime(day(9 * 60), between: "I read the contract draft", and: "Which clause should I raise",
+                                    in: rows, at: size)
+                let sent: [(text: String, next: String, time: String)] = [
+                    ("I read the contract draft", "Which clause should I raise", time(-120)),
+                    ("Which clause should I raise", "Start with the deposit.", time(9 * 60)),
+                    ("The deposit clause comes first", "The deposit clause asks", time(9 * 60 + 3)),
+                    ("The deposit clause asks", "This note came without a time.", time(9 * 60 + 5)),
+                    ("I will draft the deposit question", "This reply came without a time.", time(9 * 60 + 7))
                 ]
-                XCTAssertTrue(rows.contains { $0.text == time(-120) }, "Yesterday's message shows its day at \(size)")
-                for (previous, text, label) in sent {
-                    try Self.assertTime(label, between: previous, and: text, in: rows, at: size)
+                for (text, next, label) in sent {
+                    try Self.assertTime(label, between: text, and: next, in: rows, at: size)
                 }
-                try Self.assertNothing(between: "The deposit clause asks", and: "This note came without a time.", in: rows)
-                try Self.assertNothing(between: "I will draft the deposit question", and: "This reply came without a time.",
-                                       in: rows)
+                try Self.assertNoTime(times, between: "This note came without a time.", and: "I will draft the deposit question",
+                                      in: rows)
+                try Self.assertNothing(between: "The deposit clause comes first", and: "The deposit clause asks",
+                                       except: Self.actionWords.union([time(9 * 60 + 3)]), in: rows)
 
                 // Replies draws the thread with the same rows: q starts it, r1 and r2 follow with their times.
                 XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: count))
@@ -1289,12 +1295,13 @@ final class PersonalAgentRenderingTests: XCTestCase {
                 try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "replies-\(name)"))
                 let table = try XCTUnwrap(Self.views(PersonalAgentReplyTableView.self, in: host.hosting).first)
                 rows = Self.texts(in: table, of: host.window)
-                try Self.assertTime(time(9 * 60 + 3), between: "Which clause should I raise",
-                                    and: "The deposit clause comes first", in: rows, at: size)
-                try Self.assertTime(time(9 * 60 + 7), between: "The deposit clause comes first",
+                try Self.assertTime(time(9 * 60 + 3), between: "The deposit clause comes first",
                                     and: "I will draft the deposit question", in: rows, at: size)
-                try Self.assertNothing(between: "I will draft the deposit question", and: "This reply came without a time.",
-                                       in: rows)
+                try Self.assertTime(time(9 * 60 + 7), between: "I will draft the deposit question",
+                                    and: "This reply came without a time.", in: rows, at: size)
+                XCTAssertFalse(rows.contains { $0.text == L10n.string("Reply") }, "No reply nests inside a thread")
+                XCTAssertEqual(PersonalAgentDayDivider.text(for: at(9 * 60), now: at(9 * 60 + 10)), L10n.string("Today"))
+                XCTAssertEqual(PersonalAgentDayDivider.text(for: at(-120), now: at(9 * 60 + 10)), L10n.string("Yesterday"))
             }
         }
     }
@@ -1330,13 +1337,28 @@ final class PersonalAgentRenderingTests: XCTestCase {
                       "\(time) above “\(text)” at \(size): \(rows.map(\.text))", line: line)
     }
 
-    /// No text lies between the words that start with `upper` and those that start with `lower`.
-    private static func assertNothing(between upper: String, and lower: String, in rows: [(text: String, frame: NSRect)],
-                                      line: UInt = #line) throws {
+    /// The words of a message's actions (`PersonalAgentMessageActions`).
+    private static let actionWords: Set<String> = [L10n.string("Copy message"), L10n.string("Reply")]
+
+    /// No text lies between the words that start with `upper` and those that start with `lower`, but `except`.
+    private static func assertNothing(between upper: String, and lower: String, except: Set<String> = [],
+                                      in rows: [(text: String, frame: NSRect)], line: UInt = #line) throws {
+        let top = try XCTUnwrap(rows.first { $0.text.hasPrefix(upper) }, line: line)
+        let bottom = try XCTUnwrap(rows.first { $0.text.hasPrefix(lower) }, line: line)
+        let between = rows.filter {
+            $0.frame.minY >= top.frame.maxY - 1 && $0.frame.maxY <= bottom.frame.minY + 1 && !except.contains($0.text)
+        }
+        XCTAssertTrue(between.isEmpty, "Nothing above “\(lower)”: \(between.map(\.text))", line: line)
+    }
+
+    /// None of `times` lies between the words that start with `upper` and those that start with `lower`.
+    private static func assertNoTime(_ times: Set<String>, between upper: String, and lower: String,
+                                     in rows: [(text: String, frame: NSRect)], line: UInt = #line) throws {
         let top = try XCTUnwrap(rows.first { $0.text.hasPrefix(upper) }, line: line)
         let bottom = try XCTUnwrap(rows.first { $0.text.hasPrefix(lower) }, line: line)
         let between = rows.filter { $0.frame.minY >= top.frame.maxY - 1 && $0.frame.maxY <= bottom.frame.minY + 1 }
-        XCTAssertTrue(between.isEmpty, "Nothing above “\(lower)”: \(between.map(\.text))", line: line)
+        XCTAssertFalse(between.contains { times.contains($0.text) }, "No time under “\(upper)”: \(between.map(\.text))",
+                       line: line)
     }
 
     /// A long thread opens at its end and reads nothing earlier until its top is scrolled into view, then

@@ -15,9 +15,14 @@ account, user, profile, messaging room and root coding thread are separate ident
 
 ## Reading
 
-The native conversation shows text and attachments, with the dot's picture. Each
-message from the dot shows its sent time, including consecutive messages: today's
-times say **Today**, and other days include the date. Missing times stay absent.
+The native conversation shows text and attachments, with the dot's picture, in the
+look of a task's conversation. The first message of an author's run carries the
+author's picture and name; the ones after it follow closely without them. Under every
+message, as under a task's, its actions show on hover or keyboard focus: **Copy
+message**, **Reply** where the room takes replies, and its sent time (the time alone
+for today's, the date too for an earlier day). A divider names each new day
+(**Today**, **Yesterday** or the date). Missing times stay absent. Files and links show
+as chips, and failures above the history or the composer as notices with their action.
 In the
 agent list, the conversation's header and the dot's details, the picture is the
 dot's pet moving as it does in the provider's app: the pet its profile names, read
@@ -83,8 +88,9 @@ picture, name, account and whether it is paused; its **Activity**; its **Codex
 tasks** (below); its **Scheduled** tasks; the **Computers** its root thread can use; and its **Outputs**
 (below). In a narrower window
 the conversation keeps its width and the details button in its header raises them
-over it, below the header; their close button, the same header button or Escape
-hides them again. Each part loads and fails on its own, so a part that cannot be read never
+over it, below the header, as a floating card the way a task's rail is raised; their
+close button, the same header button, a click outside or Escape hides them again. Each
+part is a card in the look of a task's rail cards. Each part loads and fails on its own, so a part that cannot be read never
 holds up the conversation; a changed account clears them all.
 
 These parts only read. Activity is the dot's own task list, empty until it has

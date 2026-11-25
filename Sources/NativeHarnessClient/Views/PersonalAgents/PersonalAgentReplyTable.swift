@@ -101,8 +101,9 @@ final class PersonalAgentReplyTableController: NSObject, NSTableViewDataSource, 
     static let topDistance: CGFloat = 160
     /// The earlier replies' row, as the dialog draws it.
     static let earlierHeight: CGFloat = 28
-    /// How much of a message read partway stays in view, at most, when it becomes shorter.
-    static let keptInView: CGFloat = 48
+    /// How much of a message read partway stays in view, at most, when it becomes shorter: a short
+    /// message with its actions' row under it.
+    static let keptInView: CGFloat = 80
 
     let state: PersonalAgentReplyTableState
     let scrollView = NSScrollView()
