@@ -1682,7 +1682,15 @@ final class AppModel {
     /// message starts the next turn as soon as the cancelled turn finishes.
     private func sendFollowUpNow(_ itemID: UUID, into target: FollowUpTarget, in session: SessionRecord) async {
         guard let item = followUps.item(itemID, in: session.id) else { return }
-        if !target.delivery.policy.steers {
+        if target.delivery.policy.stopsTurnToSendNow {
+            // A message the hook still holds comes back first, so the next turn does not read it twice.
+            if item.state == .sent {
+                guard followUps.claim(itemID) else { return }
+                let withdrawn = await withdrawFollowUp(item, in: session)
+                if withdrawn { followUps.hold(itemID, in: session.id) }
+                followUps.finish(itemID)
+                guard withdrawn else { return }
+            }
             await stopAndSendAfterTurn(itemID, in: session, policy: target.delivery.policy)
             return
         }
@@ -1888,6 +1896,10 @@ final class AppModel {
             try await target.delivery.steer(item, into: target.turn, priority: priority)
             guard !holds, store.sessions.contains(where: { $0.id == sessionID }) else { return }
             followUps.remove(itemID, from: sessionID)
+        } catch is HarnessFollowUpNotNow {
+            // It waits in Yardlet for the turn's end, as a queued message does.
+            guard store.sessions.contains(where: { $0.id == sessionID }) else { return }
+            followUps.hold(itemID, in: sessionID)
         } catch {
             guard store.sessions.contains(where: { $0.id == sessionID }) else { return }
             markFollowUpFailed(itemID, message: error.localizedDescription, in: sessionID)
@@ -2060,6 +2072,10 @@ final class AppModel {
             }
         case .dropped:
             markFollowUpFailed(item.id, message: policy.droppedMessage, in: sessionID)
+        case .returned:
+            // The turn ended before reading it: once it has, the message starts the next turn, ahead of
+            // the rest (the turn's end drains the queue).
+            followUps.holdAgain(item.id, in: sessionID)
         }
     }
 

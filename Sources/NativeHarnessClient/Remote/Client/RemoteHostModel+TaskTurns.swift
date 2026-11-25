@@ -54,7 +54,8 @@ extension RemoteHostModel {
     /// to the running task, Claude Code delivers it at its next step, any other harness when the turn ends.
     func followUpPolicy(_ taskID: String) -> FollowUpPolicy {
         guard let task = task(taskID), task.steers == true,
-              let policy = FollowUpPolicy(harness: HarnessKind(rawValue: task.harness)) else { return .afterTurn }
+              let policy = FollowUpPolicy(harness: HarnessKind(rawValue: task.harness), antigravitySteers: true)
+        else { return .afterTurn }
         return policy
     }
 

@@ -255,6 +255,11 @@ struct YardletSetting: Identifiable {
     /// Other words Settings search finds it by, an English key with its translation (`SettingsSearch.words`).
     var keywords: String?
 
+    /// An on/off switch, whatever keeps its value.
+    var isSwitch: Bool {
+        if case .onOff = values { true } else { false }
+    }
+
     /// Its help as one text: the lines under the title, then the tooltip.
     var help: String {
         [detail, note, hint(keys: .current())].compactMap(\.self).joined(separator: " ")
@@ -531,6 +536,19 @@ extension YardletSetting {
         offered: { _ in CodeModePreference.isSupported },
         keywords: "MCP, code mode, JavaScript, tokens, context, connectors, tools, script")
 
+    /// Writes into Antigravity's own configuration folder, which Antigravity outside Yardlet reads too,
+    /// so an agent's change asks the person.
+    static let antigravityLiveSteer = YardletSetting(
+        id: "antigravity_live_steer", section: .general, generalGroup: .tasks, symbol: "arrow.turn.down.right",
+        title: L10n.string("Steer Antigravity turns (experimental)"),
+        detail: L10n.string("A message sent while an Antigravity task works reaches it at its next step, as with Claude Code, instead of after the turn. Adds a small Antigravity plugin to ~/.gemini/config/plugins, which Antigravity outside Yardlet also runs and which does nothing there. Turning this off removes it."),
+        values: .onOff,
+        storage: appSwitch({ AntigravityLiveSteer.isEnabled(in: $0.defaults) },
+                           { context, isOn in AntigravityLiveSteer.setEnabled(isOn, in: context.defaults) }),
+        asksEveryTime: true,
+        offered: { _ in AntigravityLiveSteer.isSupported },
+        keywords: "Antigravity, agy, steer, hook, plugin, message while running")
+
     static let autoFixFailingCI = YardletSetting(
         id: "auto_fix_failing_ci", section: .general, generalGroup: .tasks, symbol: "wrench.and.screwdriver",
         title: L10n.string("Auto-fix failing CI"),
@@ -796,7 +814,7 @@ extension YardletSetting {
 enum YardletSettingCatalog {
     static let all: [YardletSetting] = [
         .language, .showInMenuBar, .launchAtLogin, .mailbox, .calendar, .simulator, .checkForUpdates,
-        .sendShortcut, .followUpBehavior, .nextMessageSuggestions, .claudeContextLimit, .idleCompaction, .agentCodeMode, .autoFixFailingCI, .showTaskServers, .continueAfterRestart,
+        .sendShortcut, .followUpBehavior, .antigravityLiveSteer, .nextMessageSuggestions, .claudeContextLimit, .idleCompaction, .agentCodeMode, .autoFixFailingCI, .showTaskServers, .continueAfterRestart,
         .keepScreenUnlocked, .keepWorkingWithLidClosed,
         .shareTerminal, .terminalLocation,
     ] + PlatformAppearanceSettings.all + [

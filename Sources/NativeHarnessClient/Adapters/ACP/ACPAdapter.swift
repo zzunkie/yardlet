@@ -10,7 +10,8 @@ actor ACPAdapter:
     HarnessYardletInstructionsConfiguring,
     HarnessModelCatalogReporting,
     HarnessInterruptedTurnContinuing,
-    HarnessLaunchOptionConfiguring {
+    HarnessLaunchOptionConfiguring,
+    HarnessFollowUpQueueing {
     private struct PermissionContext: Sendable {
         let localSessionID: UUID
         /// The process that asked, which takes the answer.
@@ -92,6 +93,10 @@ actor ACPAdapter:
     /// the agent did has followed it. A prompt that ends there failed with its words; a step after it
     /// shows it as the words it was.
     private var heldNotices: [UUID: HeldNotice] = [:]
+    /// Antigravity with "Steer Antigravity turns" on: where its hook finds messages for a running turn
+    /// (`AntigravityLiveSteer`), and what each task's running prompt was left; nil for the other agents.
+    private let liveSteer: AntigravityLiveSteer?
+    private var steerLedgers: [UUID: AntigravitySteerLedger] = [:]
 
     private struct HeldNotice {
         let chunk: String
@@ -107,8 +112,10 @@ actor ACPAdapter:
         schemaCopies: AntigravitySchemaCopies? = nil,
         conversationStore: AntigravityConversationStore? = nil,
         agentTurnReadInterval: Duration = .seconds(2),
+        liveSteer: AntigravityLiveSteer? = nil,
         transportFactory: (@Sendable () -> any ACPTransport)? = nil
     ) {
+        self.liveSteer = kind == .antigravityCLI ? liveSteer : nil
         self.kind = kind
         self.executableURL = executableURL.standardizedFileURL
         self.launchArguments = launchArguments
@@ -345,6 +352,8 @@ actor ACPAdapter:
         // and finalized when the new request was appended; drop it so it cannot flush into the new turn.
         heldNotices.removeValue(forKey: session.localSessionID)
         assistantStreamByLocalSessionID.removeValue(forKey: session.localSessionID)
+        // What a process that ended under its turn was left goes unread; Yardlet holds it again.
+        discardSteers(of: session)
         emit(.sessionStatusChanged(.running), for: session.localSessionID)
         let id = takeRequestID()
         let transport = transport(of: session.localSessionID)
@@ -623,6 +632,7 @@ actor ACPAdapter:
 
     /// Drops what the adapter holds for `session`, and returns whether it was open.
     private func forget(_ session: HarnessSessionHandle) -> Bool {
+        discardSteers(of: session)
         let wasOpen = handles.removeValue(forKey: session.localSessionID) != nil
         laneByLocalSessionID.removeValue(forKey: session.localSessionID)
         localSessionIDByProviderID.removeValue(forKey: session.providerSessionID)
@@ -842,6 +852,19 @@ actor ACPAdapter:
             return
         }
         if redeliveries[localSessionID]?.absorbs(update) == true { return }
+        if updateKind == "user_message_chunk", promptTasks[localSessionID] != nil,
+           var ledger = steerLedgers[localSessionID] {
+            let read = ledger.read(chunk: update["content"]?["text"]?.stringValue ?? "")
+            steerLedgers[localSessionID] = ledger
+            if let read {
+                // The message joins the turn here, between what the agent said before and after it.
+                releaseHeldNotice(of: localSessionID, rawData: frame.data)
+                completeAssistantIfNeeded(for: localSessionID, rawData: frame.data)
+                emit(.followUpDelivery(.init(messageID: read, state: .read, joinsRunningTurn: true)),
+                     for: localSessionID, rawData: frame.data)
+            }
+            return
+        }
         if promptTasks[localSessionID] == nil,
            ACPReplayTranscript.conversationUpdates.contains(updateKind ?? ""),
            updateKind != "user_message_chunk",
@@ -1051,6 +1074,7 @@ actor ACPAdapter:
         guard !Task.isCancelled else { return }
         let localSessionID = session.localSessionID
         promptTasks.removeValue(forKey: localSessionID)
+        settleSteers(of: session)
         pruneTerminalActivities(for: localSessionID)
         followAgentTurns(of: localSessionID)
         if stopReason == "end_turn", let notice = heldNotices.removeValue(forKey: localSessionID) {
@@ -1073,6 +1097,7 @@ actor ACPAdapter:
         guard !Task.isCancelled else { return }
         let localSessionID = session.localSessionID
         promptTasks.removeValue(forKey: localSessionID)
+        settleSteers(of: session)
         pruneTerminalActivities(for: localSessionID)
         followAgentTurns(of: localSessionID)
         releaseHeldNotice(of: localSessionID)
@@ -1155,6 +1180,86 @@ actor ACPAdapter:
     private func stopFollowingAgentTurns(of localSessionID: UUID) {
         agentTurnReadTasks.removeValue(forKey: localSessionID)?.cancel()
         redeliveries[localSessionID] = agentTurnFollowers.removeValue(forKey: localSessionID)?.redelivery
+    }
+
+    // MARK: Messages for the running turn (Antigravity's live steer)
+
+    /// Leaves a message for the running prompt's next model call, beside any left before it. A turn
+    /// this process does not stream (the agent's own, between prompts) and a message with images wait
+    /// for the turn's end instead.
+    func sendFollowUp(
+        _ input: HarnessUserInput,
+        messageID: String,
+        priority: HarnessFollowUpPriority,
+        to session: HarnessSessionHandle
+    ) async throws {
+        try requireRegistered(session)
+        guard let liveSteer, liveSteer.isEnabled(), priority == .next, input.images.isEmpty,
+              promptTasks[session.localSessionID] != nil else { throw HarnessFollowUpNotNow() }
+        var ledger = steerLedgers[session.localSessionID] ?? AntigravitySteerLedger()
+        let before = ledger
+        if liveSteer.takeBack(for: session.providerSessionID) == nil { ledger.hookTookWaiting() }
+        ledger.add(.init(messageID: messageID, text: input.promptText))
+        do {
+            try liveSteer.leave(ledger.waiting.map(\.text), for: session.providerSessionID)
+        } catch {
+            ledger = before
+            if ledger.waiting.isEmpty || (try? liveSteer.leave(ledger.waiting.map(\.text), for: session.providerSessionID)) != nil {
+                steerLedgers[session.localSessionID] = ledger
+            } else {
+                returnWaiting(of: &ledger, for: session.localSessionID)
+            }
+            throw error
+        }
+        steerLedgers[session.localSessionID] = ledger
+    }
+
+    /// Takes a message back unread. False when the hook has already handed it to the agent.
+    func cancelFollowUp(messageID: String, in session: HarnessSessionHandle) async throws -> Bool {
+        guard let liveSteer, var ledger = steerLedgers[session.localSessionID], ledger.holds(messageID) else { return true }
+        if liveSteer.takeBack(for: session.providerSessionID) == nil { ledger.hookTookWaiting() }
+        let withdrawn = ledger.withdraw(messageID)
+        if !ledger.waiting.isEmpty,
+           (try? liveSteer.leave(ledger.waiting.map(\.text), for: session.providerSessionID)) == nil {
+            returnWaiting(of: &ledger, for: session.localSessionID)
+        }
+        steerLedgers[session.localSessionID] = ledger
+        return withdrawn
+    }
+
+    func canSendFollowUpNow(in session: HarnessSessionHandle) async -> Bool { false }
+
+    func sendFollowUpNow(messageID: String, in session: HarnessSessionHandle) async throws -> HarnessFollowUpSendNow? { nil }
+
+    /// Messages that could not be left again go back to Yardlet, which holds them for the turn's end.
+    private func returnWaiting(of ledger: inout AntigravitySteerLedger, for localSessionID: UUID) {
+        for entry in ledger.waiting {
+            _ = ledger.withdraw(entry.messageID)
+            emit(.followUpDelivery(.init(messageID: entry.messageID, state: .returned)), for: localSessionID)
+        }
+    }
+
+    /// The prompt ended: what the hook handed over was read in it, and what is still in the file goes
+    /// back to Yardlet, which starts the next turn with it.
+    private func settleSteers(of session: HarnessSessionHandle) {
+        guard let liveSteer, var ledger = steerLedgers.removeValue(forKey: session.localSessionID),
+              !ledger.isEmpty else { return }
+        let fileHadMessages = liveSteer.takeBack(for: session.providerSessionID) != nil
+        let settled = ledger.settle(fileHadMessages: fileHadMessages, hookPresent: liveSteer.isInstalled)
+        if !settled.read.isEmpty { completeAssistantIfNeeded(for: session.localSessionID) }
+        for messageID in settled.read {
+            emit(.followUpDelivery(.init(messageID: messageID, state: .read, joinsRunningTurn: true)), for: session.localSessionID)
+        }
+        for messageID in settled.returned {
+            emit(.followUpDelivery(.init(messageID: messageID, state: .returned)), for: session.localSessionID)
+        }
+    }
+
+    /// Drops what a session was left without a word: its task holds those messages again itself.
+    private func discardSteers(of session: HarnessSessionHandle) {
+        guard let liveSteer else { return }
+        steerLedgers.removeValue(forKey: session.localSessionID)
+        _ = liveSteer.takeBack(for: session.providerSessionID)
     }
 
     private func requireRegistered(_ session: HarnessSessionHandle) throws {

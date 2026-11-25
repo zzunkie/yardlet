@@ -225,17 +225,22 @@ enum FollowUpPolicy: Equatable, Sendable {
     /// A steered message is written to Claude Code to read at its next step (`next`); Claude Code
     /// holds it until it reads it. Only "Stop and send" asks it to stop the turn for one.
     case claudeCode
-    /// The harness takes one message per turn and nothing while it runs (Antigravity's `agy`, the
-    /// ACP and other headless harnesses): every message sent meanwhile waits in Yardlet and starts
-    /// the next turn when this one ends.
+    /// With "Steer Antigravity turns" on (`AntigravityLiveSteer`), a steered message is left for
+    /// Antigravity's hook, which hands it to the running turn before its next model call. Until then
+    /// Yardlet can take it back; one the turn ended without reading starts the next turn.
+    case antigravity
+    /// The harness takes one message per turn and nothing while it runs (Antigravity's `agy` with
+    /// that setting off, the ACP and other headless harnesses): every message sent meanwhile waits
+    /// in Yardlet and starts the next turn when this one ends.
     case afterTurn
 
-    /// Every harness keeps a follow-up queue: Codex and Claude Code their own ways, the others
-    /// until the turn ends.
-    init?(harness: HarnessKind) {
+    /// Every harness keeps a follow-up queue: Codex and Claude Code their own ways, Antigravity its
+    /// hook's way while `antigravitySteers` (its setting on this Mac), the others until the turn ends.
+    init?(harness: HarnessKind, antigravitySteers: Bool = AntigravityLiveSteer.isEnabled()) {
         switch harness {
         case .codex: self = .codex
         case .claudeCode: self = .claudeCode
+        case .antigravityCLI where antigravitySteers: self = .antigravity
         default: self = .afterTurn
         }
     }
@@ -246,7 +251,11 @@ enum FollowUpPolicy: Equatable, Sendable {
     /// The provider keeps what Yardlet writes it in a queue of its own until it reads it
     /// (`QueuedFollowUpState.sent`). Yardlet takes such a message back before changing it, and holds
     /// it again when the runtime that had it ends.
-    var holdsSentMessages: Bool { self == .claudeCode }
+    var holdsSentMessages: Bool { self == .claudeCode || self == .antigravity }
+
+    /// Stop and send cancels the running turn so the message starts the next one, rather than asking
+    /// the provider to read it at once.
+    var stopsTurnToSendNow: Bool { self == .afterTurn || self == .antigravity }
 
     /// Whether a message the provider holds can change places. Claude Code reads what it holds in
     /// order, so those stay ahead of the messages Yardlet holds.
@@ -261,7 +270,7 @@ enum FollowUpPolicy: Equatable, Sendable {
     var steerPhrase: String? {
         switch self {
         case .codex: L10n.string("Add to the running task")
-        case .claudeCode: L10n.string("Deliver at the next step")
+        case .claudeCode, .antigravity: L10n.string("Deliver at the next step")
         case .afterTurn: nil
         }
     }
@@ -290,6 +299,7 @@ enum FollowUpPolicy: Equatable, Sendable {
         switch self {
         case .codex: L10n.string("Send now: add it to the running task without stopping it")
         case .claudeCode: L10n.string("Send now: Claude reads it at its next step without stopping")
+        case .antigravity: L10n.string("Send now: Antigravity reads it at its next step without stopping")
         case .afterTurn: nil
         }
     }
@@ -299,14 +309,17 @@ enum FollowUpPolicy: Equatable, Sendable {
     /// Codex, whose Steer never stops the turn.
     var stopAndSendLabel: String? {
         switch self {
-        case .claudeCode, .afterTurn: L10n.string("Stop and send")
+        case .claudeCode, .antigravity, .afterTurn: L10n.string("Stop and send")
         case .codex: nil
         }
     }
 
     /// What a message the provider holds says about itself: it is delivered now, and Claude Code
     /// reads it at its next step.
-    var heldStatus: String { L10n.string("Delivered · Claude reads it at its next step") }
+    var heldStatus: String {
+        self == .antigravity ? L10n.string("Delivered · Antigravity reads it at its next step")
+            : L10n.string("Delivered · Claude reads it at its next step")
+    }
 
     /// The hint on a message Yardlet holds: it goes when the turn ends.
     var pendingHelp: String { Self.afterTurnPhrase }
@@ -314,7 +327,7 @@ enum FollowUpPolicy: Equatable, Sendable {
     var removeLabel: String {
         switch self {
         case .codex: L10n.string("Delete queued message")
-        case .claudeCode, .afterTurn: L10n.string("Remove from queue")
+        case .claudeCode, .antigravity, .afterTurn: L10n.string("Remove from queue")
         }
     }
 
@@ -341,7 +354,10 @@ enum FollowUpPolicy: Equatable, Sendable {
     }
 
     /// Why a message the provider let go unread failed.
-    var droppedMessage: String { L10n.string("Claude Code did not take this message.") }
+    var droppedMessage: String {
+        self == .antigravity ? L10n.string("Antigravity did not take this message.")
+            : L10n.string("Claude Code did not take this message.")
+    }
 
     /// Whether a queued message is already in the conversation. Codex's conversation records
     /// every submitted draft, queued or not; the others show a message once the provider has it.
@@ -354,6 +370,9 @@ enum FollowUpPolicy: Equatable, Sendable {
         switch self {
         case .codex: CodexFollowUpDelivery(adapter: adapter, handle: handle)
         case .claudeCode: ClaudeFollowUpDelivery(adapter: adapter, handle: handle)
+        case .antigravity:
+            ClaudeFollowUpDelivery(adapter: adapter, handle: handle, policy: .antigravity)
+                ?? TurnByTurnFollowUpDelivery(adapter: adapter, handle: handle)
         case .afterTurn: TurnByTurnFollowUpDelivery(adapter: adapter, handle: handle)
         }
     }
@@ -448,7 +467,7 @@ struct CodexFollowUpDelivery: FollowUpDelivery {
 }
 
 /// Claude Code keeps its own queue of user messages (`uuid` and `priority` on a stream-json user
-/// message). It reports reading one with `command_lifecycle`, which reaches the queue as a
+/// message). Antigravity's live steer (`AntigravityLiveSteer`) is held the same way, by its hook. It reports reading one with `command_lifecycle`, which reaches the queue as a
 /// `followUpDelivery` event; it gives back one it has not read on `cancel_async_message`; and where
 /// it advertises `interrupt_send_now_v1` it reads one it holds at once on `interrupt{send_now}`,
 /// moving a running command to the background. An older CLI is written the message again with
@@ -457,16 +476,16 @@ struct ClaudeFollowUpDelivery: FollowUpDelivery {
     let adapter: any HarnessAdapter
     let provider: any HarnessFollowUpQueueing
     let handle: HarnessSessionHandle
+    let policy: FollowUpPolicy
 
     /// Nil for a runtime that does not keep follow-ups; messages to it wait for its turn to end.
-    init?(adapter: any HarnessAdapter, handle: HarnessSessionHandle) {
+    init?(adapter: any HarnessAdapter, handle: HarnessSessionHandle, policy: FollowUpPolicy = .claudeCode) {
         guard let provider = adapter as? any HarnessFollowUpQueueing else { return nil }
         self.adapter = adapter
         self.provider = provider
         self.handle = handle
+        self.policy = policy
     }
-
-    var policy: FollowUpPolicy { .claudeCode }
 
     func runningTurn(reportedRunning: Bool) async -> FollowUpTurn? {
         reportedRunning ? FollowUpTurn() : nil
@@ -486,7 +505,7 @@ struct ClaudeFollowUpDelivery: FollowUpDelivery {
 
     func steer(_ item: QueuedFollowUp, into turn: FollowUpTurn, priority: HarnessFollowUpPriority) async throws {
         guard let messageID = item.providerMessageID else {
-            throw HarnessAdapterError.invalidProviderEvent(L10n.string("Claude Code did not take this message."))
+            throw HarnessAdapterError.invalidProviderEvent(policy.droppedMessage)
         }
         try await provider.sendFollowUp(HarnessUserInput.projecting(item.draft).input, messageID: messageID,
                                         priority: priority, to: handle)
@@ -714,6 +733,15 @@ final class FollowUpQueueStore {
         queues[sessionID]?[index].state = .pending
         queues[sessionID]?[index].providerMessageID = nil
         queues[sessionID]?[index].steered = nil
+        save(sessionID)
+    }
+
+    /// The provider gave a sent message back unread (`HarnessFollowUpDelivery.State.returned`): Yardlet
+    /// holds it again, still on its way into a turn, so it starts the next one (`heldAgain`).
+    func holdAgain(_ itemID: UUID, in sessionID: UUID) {
+        guard let index = queues[sessionID]?.firstIndex(where: { $0.id == itemID }),
+              let item = queues[sessionID]?[index] else { return }
+        queues[sessionID]?[index] = item.heldAgain
         save(sessionID)
     }
 

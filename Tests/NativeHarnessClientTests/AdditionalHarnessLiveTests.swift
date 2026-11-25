@@ -128,6 +128,51 @@ final class AdditionalHarnessLiveTests: XCTestCase {
         XCTAssertTrue(metrics.allSatisfy { $0.id.hasPrefix("antigravity:") && $0.usedFraction != nil })
     }
 
+    /// "Steer Antigravity turns" on a real `agy acp`: a message left while the agent runs a command reaches the
+    /// same turn before its next model call, and the stream reports it where it joined. One short turn on the
+    /// account already signed in, with a temporary `--gemini-dir`, so the plugin goes there and nothing is
+    /// added to the person's own Antigravity folder.
+    func testLiveAntigravitySteersTheRunningTurn() async throws {
+        guard let binaryPath = ProcessInfo.processInfo.environment["NHC_ANTIGRAVITY_LIVE_BINARY"] else {
+            throw XCTSkip("Set NHC_ANTIGRAVITY_LIVE_BINARY for the bounded Antigravity live steer smoke (one short turn)")
+        }
+        let rootURL = try makeTemporaryRoot(named: "antigravity-steer")
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        let workspace = rootURL.appending(path: "work", directoryHint: .isDirectory)
+        let geminiDirectory = rootURL.appending(path: "gemini", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        let steer = AntigravityLiveSteer(
+            folder: geminiDirectory.appending(path: "config/plugins/\(AntigravityLiveSteer.pluginName)", directoryHint: .isDirectory),
+            isEnabled: { true })
+        try steer.install()
+        let adapter = ACPAdapter(kind: .antigravityCLI, executableURL: URL(filePath: binaryPath),
+                                 launchArguments: ["acp", "--dangerously-skip-permissions", "--gemini-dir",
+                                                   geminiDirectory.path(percentEncoded: false)],
+                                 liveSteer: steer)
+        let handle = try await adapter.createSession(CreateHarnessSessionRequest(
+            localSessionID: UUID(), workspaceURL: workspace, initialPrompt: nil))
+        let log = LivePayloadLog()
+        let collector = Task { for await event in await adapter.events(for: handle) { await log.append(event.payload) } }
+        defer { collector.cancel() }
+
+        try await adapter.send("Run the shell command `sleep 5` first. After it finishes, run `echo step2` as a separate "
+                               + "command. Then report briefly.", to: handle)
+        try await waitUntil(timeout: .seconds(120)) {
+            await log.payloads.contains { if case .activityStarted = $0 { true } else { false } }
+        }
+        try await adapter.sendFollowUp(HarnessUserInput(text: "Also end your final reply with the word KIWI."),
+                                       messageID: "steer-1", priority: .next, to: handle)
+        try await waitUntil(timeout: .seconds(240)) { await log.payloads.contains(.turnCompleted) }
+        let payloads = await log.payloads
+        let read = try XCTUnwrap(payloads.firstIndex(of: .followUpDelivery(.init(messageID: "steer-1", state: .read,
+                                                                                 joinsRunningTurn: true))))
+        XCTAssertLessThan(read, try XCTUnwrap(payloads.firstIndex(of: .turnCompleted)))
+        let answer = payloads.compactMap { if case let .assistantDelta(text) = $0 { text } else { nil } }.joined()
+        XCTAssertTrue(answer.contains("KIWI"), answer)
+        XCTAssertNil(steer.takeBack(for: handle.providerSessionID))
+        await adapter.close(handle)
+    }
+
     func testLivePiRPCSessionEventProjectionAndResume() async throws {
         guard let binaryPath = ProcessInfo.processInfo.environment["NHC_PI_LIVE_BINARY"] else {
             throw XCTSkip("Set NHC_PI_LIVE_BINARY for the bounded Pi RPC smoke")
@@ -464,4 +509,9 @@ private actor LiveApprovingSession {
             break
         }
     }
+}
+
+private actor LivePayloadLog {
+    private(set) var payloads: [HarnessEventPayload] = []
+    func append(_ payload: HarnessEventPayload) { payloads.append(payload) }
 }

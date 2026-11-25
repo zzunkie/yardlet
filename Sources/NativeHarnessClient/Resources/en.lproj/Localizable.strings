@@ -1628,6 +1628,11 @@
 "%@ key: %@. %@ key: %@." = "%@ key: %@. %@ key: %@.";
 "While a turn runs, %@ sends this way and %@ the other way" = "While a turn runs, %@ sends this way and %@ the other way";
 "Claude Code did not take this message." = "Claude Code did not take this message.";
+"Antigravity did not take this message." = "Antigravity did not take this message.";
+"Delivered · Antigravity reads it at its next step" = "Delivered · Antigravity reads it at its next step";
+"Send now: Antigravity reads it at its next step without stopping" = "Send now: Antigravity reads it at its next step without stopping";
+"Steer Antigravity turns (experimental)" = "Steer Antigravity turns (experimental)";
+"A message sent while an Antigravity task works reaches it at its next step, as with Claude Code, instead of after the turn. Adds a small Antigravity plugin to ~/.gemini/config/plugins, which Antigravity outside Yardlet also runs and which does nothing there. Turning this off removes it." = "A message sent while an Antigravity task works reaches it at its next step, as with Claude Code, instead of after the turn. Adds a small Antigravity plugin to ~/.gemini/config/plugins, which Antigravity outside Yardlet also runs and which does nothing there. Turning this off removes it.";
 "Claude Code cannot send this message now." = "Claude Code cannot send this message now.";
 "Copy message" = "Copy message";
 "Work locally" = "Work locally";

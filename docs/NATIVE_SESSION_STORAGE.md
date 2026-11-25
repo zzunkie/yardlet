@@ -153,8 +153,8 @@ read nothing in it, whatever mode the files inside have.
   preference key (`NativeHarnessClient.codexTimelineItems.<task UUID>`) is moved to the file unchanged and the key is
   deleted; if the file already exists, the file is kept. Archiving or deleting the task deletes the file.
 - **Messages that joined a running turn:** read cache entries of every harness have an optional field
-  `joinsRunningTurn` (Bool). It is written as `true` only for a follow-up message that Claude Code read at the next step
-  of a running turn; otherwise the key is absent. Older caches read it as nil, and older builds ignore the key. The
+  `joinsRunningTurn` (Bool). It is written as `true` only for a follow-up message that Claude Code, or Antigravity with
+  "Steer Antigravity turns" on, read at the next step of a running turn; otherwise the key is absent. Older caches read it as nil, and older builds ignore the key. The
   conversation draws such a message inside the turn that was running instead of as a new turn. When Claude history is
   reread (opening a detached task, importing), the `queued_command` attachment entry in which Claude left that message is
   also read as a message with this mark and placed in the same turn. This applies only to Claude history.
@@ -1009,6 +1009,24 @@ Yardlet removes there is the CLI's extra copies of Yardlet's tool schemas, descr
   approval and the turn only goes ready. The next prompt's stream repeats what the log showed; that is dropped
   (`AntigravityRedelivery`), texts by their words, which are the log's exactly, and tool calls by their order, since the
   log has no call IDs. A repeat that is not recognised shows twice rather than dropping the turn's own steps.
+- **Messages sent while a turn runs:** `agy acp` takes no message while a prompt runs, so by default one sent meanwhile
+  waits in Yardlet's follow-up queue and starts the next turn ("Send when this turn ends"; Stop and send cancels the
+  turn for it). Settings › General › "Steer Antigravity turns (experimental)" (`YardletAntigravityLiveSteer`, off by
+  default) delivers a steered message at the running turn's next step instead, through a `PreInvocation` hook
+  (`AntigravityLiveSteer`). Turning it on adds the plugin folder `~/.gemini/config/plugins/yardlet-live-steer/`
+  (`plugin.json`, `hooks.json`, `deliver.sh`); turning it off removes that folder, and only a folder whose
+  `plugin.json` names it. No other Antigravity file is written, and a conversation's workspaces stay its own: a hook
+  folder passed with `--add-dir` works too but is recorded in the conversation's `workspace_uris` and comes back when
+  the conversation continues outside Yardlet. `agy` reads plugins for every conversation, also outside Yardlet, and
+  picks the plugin up at a running process's next turn. While a prompt streams, Yardlet leaves the message in
+  `pending/<conversation>.json` as the hook's answer (`{"injectSteps":[{"userMessage":"…"}]}`); before each model call
+  the hook takes the file for its conversation with one rename and prints it, and answers `{}` for any other
+  conversation. The agent reads the message before its next model call, and the stream reports it as a
+  `user_message_chunk`, where its bubble goes, inside the running turn; the log keeps it as a `USER_INPUT` step
+  (source `SYSTEM_SDK`), so a later reread shows it once too. Until the hook takes it Yardlet can take it back (edit,
+  remove, Stop). A message still in the file when the prompt ends goes back to the queue and starts the next turn, and
+  Stop and send cancels the turn as with the setting off. A message with images, and one sent during a turn the agent
+  started itself (which `agy acp` does not stream), wait for the turn's end.
 - **Plan limit and the CLI's other notices:** over ACP the CLI reports nothing structured when its plan limit stops a
   turn. The model request fails with `RESOURCE_EXHAUSTED` (code 429, reason `QUOTA_EXHAUSTED`), which only its own log
   and conversation file keep; the client gets one message chunk the CLI writes itself, `\n⚠ <the service's words>\n`

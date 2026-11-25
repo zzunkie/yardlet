@@ -225,7 +225,17 @@ final class FollowUpQueueStoreTests: XCTestCase {
         XCTAssertEqual(FollowUpPolicy(harness: .claudeCode), .claudeCode)
         // A harness that takes nothing while its turn runs holds every message for the next turn.
         XCTAssertEqual(FollowUpPolicy(harness: .cursorAgent), .afterTurn)
-        XCTAssertEqual(FollowUpPolicy(harness: .antigravityCLI), .afterTurn)
+        XCTAssertEqual(FollowUpPolicy(harness: .antigravityCLI, antigravitySteers: false), .afterTurn)
+        // With "Steer Antigravity turns" on, its hook holds a steered message as Claude Code does, and
+        // Stop and send ends the turn for the message rather than asking the agent to read it at once.
+        let antigravity = FollowUpPolicy(harness: .antigravityCLI, antigravitySteers: true)
+        XCTAssertEqual(antigravity, .antigravity)
+        XCTAssertTrue(FollowUpPolicy.antigravity.holdsSentMessages)
+        XCTAssertFalse(FollowUpPolicy.antigravity.canReorderSent)
+        XCTAssertTrue(FollowUpPolicy.antigravity.stopsTurnToSendNow)
+        XCTAssertFalse(FollowUpPolicy.claudeCode.stopsTurnToSendNow)
+        XCTAssertEqual(FollowUpPolicy.antigravity.stopAndSendLabel, L10n.string("Stop and send"))
+        XCTAssertEqual(FollowUpPolicy(harness: .cursorAgent, antigravitySteers: true), .afterTurn)
         XCTAssertFalse(FollowUpPolicy.afterTurn.steers)
         XCTAssertNil(FollowUpPolicy.afterTurn.sendLabel)
         XCTAssertFalse(FollowUpPolicy.codex.holdsSentMessages)
