@@ -247,7 +247,12 @@ struct CodexMCPToolApproval: Equatable {
     init?(params: JSONValue?) {
         let meta = params?["_meta"]
         guard meta?["codex_approval_kind"]?.stringValue == "mcp_tool_call" else { return nil }
+        // A Yardlet write, scheduled-task change, sign-in fill or wrapper is allowed once at a time, as Claude
+        // Code's card asks about it (`AgentToolHarnessApproval`).
+        let asksEachTime = params?["serverName"]?.stringValue == AgentToolEnvironment.serverName
+            && (meta?["tool_name"]?.stringValue).map { AgentToolHarnessApproval.asksEachTime(tool: $0) } == true
         switch meta?["persist"] {
+        case _ where asksEachTime: persistModes = []
         case let .string(mode)?: persistModes = [mode]
         case let .array(modes)?: persistModes = modes.compactMap(\.stringValue)
         default: persistModes = []

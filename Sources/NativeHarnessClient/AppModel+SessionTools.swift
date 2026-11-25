@@ -29,6 +29,8 @@ struct SessionToolCaller: Equatable {
     /// (`SessionToolPolicy.waitCeiling`): every wait in the call, the person's approval included,
     /// shares it.
     let deadline: ContinuousClock.Instant
+    /// The call came from inside `run_yardlet_script`, which the caller's harness never showed the person.
+    var throughWrapper = false
 
     /// What is left of the call's time.
     var remaining: Duration {
@@ -63,7 +65,7 @@ enum TaskMessageDelivery: Equatable {
     case undelivered(String)
 }
 
-extension AppModel: SessionToolHandling {
+extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
     func callSessionTool(named name: String, arguments: ToolJSON, callerID: UUID) async -> AgentToolResult {
         let arguments = JSONValue(arguments)
         guard let caller = sessionToolCaller(callerID) else {
@@ -1970,6 +1972,28 @@ extension AppModel: SessionToolHandling {
     /// still asks. The scheduled-task tools keep their own rule (`ScheduleToolApproval`).
     func sessionToolAsksPerson(_ caller: SessionToolCaller) -> Bool {
         caller.permission < .elevated
+    }
+
+    /// Who made an agent tool call, for Yardlet's own approvals (`AgentToolBroker+Approvals`).
+    func agentToolPolicy(callerID: UUID) -> AgentToolCallerPolicy? {
+        guard let caller = sessionToolCaller(callerID) else { return nil }
+        return AgentToolCallerPolicy(hostTaskID: caller.hostTaskID, readOnly: caller.permission == .readOnly,
+                                     asksPerson: sessionToolAsksPerson(caller),
+                                     harnessAsksBeforeDirectCalls: claudeAsksBeforeDirectCalls(caller))
+    }
+
+    /// Whether the caller is a Claude Code task in Default or Accept edits, whose CLI asks the person before each
+    /// call of a Yardlet tool it was not told to allow; Plan reads without asking, Auto leaves it to a classifier,
+    /// and a subagent's harness is not the task's.
+    func claudeAsksBeforeDirectCalls(_ caller: SessionToolCaller) -> Bool {
+        guard caller.id == caller.hostTaskID, caller.harness == .claudeCode, caller.permission == .standard,
+              let host = store.sessions.first(where: { $0.id == caller.hostTaskID }) else { return false }
+        return Self.unaskedPermissionMode(of: host) == nil
+    }
+
+    func askPerson(title: String, detail: String, callerID: UUID) async -> Bool {
+        guard let caller = sessionToolCaller(callerID) else { return false }
+        return await askPerson(title: title, detail: detail, caller: caller)
     }
 
     /// Whether a task's browser tools may open a file outside its folders, given its real path

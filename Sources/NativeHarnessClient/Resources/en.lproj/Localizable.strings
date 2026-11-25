@@ -2605,6 +2605,22 @@
 "It starts now with the schedule's own settings." = "It starts now with the schedule's own settings.";
 "New prompt:" = "New prompt:";
 
+/* Yardlet's own approvals for agent tool calls (AgentToolBroker+Approvals) */
+"Allow this task to create the scheduled task “%@”?" = "Allow this task to create the scheduled task “%@”?";
+"Allow this task to update the scheduled task “%@”?" = "Allow this task to update the scheduled task “%@”?";
+"Allow this task to update a scheduled task?" = "Allow this task to update a scheduled task?";
+"Allow this task to delete the scheduled task “%@”?" = "Allow this task to delete the scheduled task “%@”?";
+"Allow this task to delete a scheduled task?" = "Allow this task to delete a scheduled task?";
+"Allow this task to run the scheduled task “%@” now?" = "Allow this task to run the scheduled task “%@” now?";
+"Allow this task to run a scheduled task now?" = "Allow this task to run a scheduled task now?";
+"Allow this task to fill a saved sign-in?" = "Allow this task to fill a saved sign-in?";
+"Item: %@" = "Item: %@";
+"Allow this task to run these browser actions?" = "Allow this task to run these browser actions?";
+"Allow this task to run this browser action?" = "Allow this task to run this browser action?";
+"Allow this task to use %@ in %@?" = "Allow this task to use %@ in %@?";
+"Allow this task to read from %@?" = "Allow this task to read from %@?";
+"First read: %@. Its later reads from %@ go without asking." = "First read: %@. Its later reads from %@ go without asking.";
+
 /* Gmail (Yardlet's own server) and the Google OAuth app */
 "The sign-in is no longer valid: %@" = "The sign-in is no longer valid: %@";
 "The sign-in server is not answering right now: %@" = "The sign-in server is not answering right now: %@";

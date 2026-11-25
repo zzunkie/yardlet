@@ -2111,6 +2111,26 @@ final class ConnectorCenter: ConnectorToolProviding {
         await callConnectorTool(named: name, arguments: arguments, for: context, caller: .model)
     }
 
+    /// The service a tool of the model's acts in, its title and whether it only reads, for Yardlet's approvals;
+    /// nil when no connector has a model's tool of this name. A tool the server does not mark read-only counts
+    /// as a write.
+    func connectorToolFacts(named name: String, for context: ConnectorToolContext) -> ConnectorToolFacts? {
+        guard let (owner, toolName) = owner(ofTool: name) else { return nil }
+        let service: String, tool: ToolJSON?
+        switch owner {
+        case .connector(let record):
+            tool = record.offeredTools.first { $0["name"]?.stringValue == toolName }
+            guard MCPAppTool.isForModel(tool) else { return nil }
+            service = record.name
+        case .accounts(let accounts, _):
+            tool = accounts.tools?.first { $0["name"]?.stringValue == toolName }
+            service = accounts.name
+        }
+        let title = tool?["title"]?.stringValue ?? tool?["annotations"]?["title"]?.stringValue ?? toolName
+        return ConnectorToolFacts(service: service, title: title,
+                                  readOnly: tool?["annotations"]?["readOnlyHint"] == .bool(true))
+    }
+
     /// Who makes a call: the task's model, through its harness, or a view of one of the connector's tools
     /// (`callFromView`). Each may call only the tools the server lets it (`MCPAppTool`); everything else is checked
     /// the same.

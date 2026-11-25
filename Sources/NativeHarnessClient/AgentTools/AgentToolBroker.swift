@@ -23,10 +23,24 @@ protocol ConnectorToolProviding: AnyObject {
     /// The kinds of services whose tools the task's list holds ("Gmail", "Linear"), each once and
     /// without accounts, for the server's instructions.
     func serviceNames(for context: ConnectorToolContext) -> [String]
+    /// What Yardlet's approvals weigh about a connector's tool; nil when no connector has one of this name.
+    func connectorToolFacts(named name: String, for context: ConnectorToolContext) -> ConnectorToolFacts?
+}
+
+/// What Yardlet's approvals weigh about one connector tool (`AgentToolBroker+Approvals`).
+struct ConnectorToolFacts: Equatable, Sendable {
+    /// The kind of service the tool acts in, without an account ("Gmail", "Slack"): a task's first read of
+    /// each is asked once.
+    var service: String
+    /// The tool's title, or its name when it has none.
+    var title: String
+    /// The tool changes nothing (`readOnlyHint` true). Anything else counts as a write.
+    var readOnly: Bool
 }
 
 extension ConnectorToolProviding {
     func serviceNames(for context: ConnectorToolContext) -> [String] { [] }
+    func connectorToolFacts(named name: String, for context: ConnectorToolContext) -> ConnectorToolFacts? { nil }
 }
 
 /// Yardlet's task suggestion tools (`spawn_task`, `dismiss_task`), answered by the app, which keeps
@@ -58,11 +72,43 @@ protocol SessionToolHandling: AnyObject {
     func allowsBrowserFile(_ path: String, callerID: UUID) async -> Bool
 }
 
+/// What the app knows of the task or subagent that made a call, which Yardlet's own approvals turn on
+/// (`AgentToolBroker+Approvals`).
+struct AgentToolCallerPolicy: Equatable, Sendable {
+    /// The task whose cards the caller's approvals go on; a subagent shares its task's.
+    var hostTaskID: UUID
+    /// The caller may only read (Claude Code's or Antigravity's Plan, Codex's read-only).
+    var readOnly: Bool
+    /// The caller asks the person before what it does beyond its own reach (`AppModel.sessionToolAsksPerson`).
+    var asksPerson: Bool
+    /// The caller is a Claude Code task in Default or Accept edits, whose CLI asks the person before each direct
+    /// call of a Yardlet tool it was not told to allow (`AgentToolServerLaunch.claudeAllowedTools`), offering
+    /// no lasting allow for a write (`ClaudeAdapter`).
+    var harnessAsksBeforeDirectCalls: Bool
+}
+
+/// The app side of Yardlet's own approvals for agent tool calls: who made a call, and the request card that
+/// asks the person in the caller's task.
+@MainActor
+protocol AgentToolApprovalHandling: AnyObject {
+    func agentToolPolicy(callerID: UUID) -> AgentToolCallerPolicy?
+    /// Asks the person on the caller's task's request card; true to go ahead.
+    func askPerson(title: String, detail: String, callerID: UUID) async -> Bool
+}
+
+/// How a call reached the broker: from the harness under the tool's own name, or from inside a wrapper
+/// (`run_yardlet_script`, `call_connector_tool`), whose calls the harness never saw.
+enum AgentToolCallOrigin: Equatable, Sendable {
+    case direct
+    case wrapped
+}
+
 /// Yardlet's scheduled-task tools (`ScheduleToolCatalog`), answered by the app against its scheduler
 /// (docs/AGENT_BROWSER_TOOLS.md, "Scheduled-task tools"): an agent creates, lists, changes, deletes and runs the person's schedules.
 @MainActor
 protocol ScheduleToolHandling: AnyObject {
-    func callScheduleTool(named name: String, arguments: ToolJSON, callerID: UUID) async -> AgentToolResult
+    func callScheduleTool(named name: String, arguments: ToolJSON, callerID: UUID,
+                          origin: AgentToolCallOrigin) async -> AgentToolResult
 }
 
 /// The app side of the Yardlet MCP server. It issues each task a random token when the task's
@@ -115,6 +161,13 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     var codeModeEnabled: @MainActor () -> Bool = { CodeModePreference.isOn() }
     /// The app, which answers the scheduled-task tools. Nil, as in tests, offers none.
     weak var schedules: (any ScheduleToolHandling)?
+    /// The app, which says who made a call and asks the person where Yardlet's own approvals ask
+    /// (`AgentToolBroker+Approvals`). Nil, as in tests, asks nothing.
+    weak var approvals: (any AgentToolApprovalHandling)?
+    /// The services each task's person allowed it to read from, by task (`AgentToolCallerPolicy.hostTaskID`).
+    var approvedReadServices: [UUID: Set<String>] = [:]
+    /// A first read's question in flight, by task and service, which calls made meanwhile wait on.
+    var pendingReadApprovals: [String: Task<Bool, Never>] = [:]
     /// The app, which answers the simulator tools. Nil, as in tests and on other platforms, offers none.
     weak var simulators: (any SimulatorToolHandling)?
     /// The vault for agents. A task with the browser tools also gets `browser_fill_credential` while
@@ -246,6 +299,7 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         browserToolsByTask.removeValue(forKey: localSessionID)
         simulatorToolsByTask.removeValue(forKey: localSessionID)
         connectorScopes.removeValue(forKey: localSessionID)
+        approvedReadServices.removeValue(forKey: localSessionID)
         tools.closeTab(for: localSessionID)
     }
 
@@ -270,12 +324,16 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         connectorScopes[localSessionID]
     }
 
-    private func connectorContext(_ sessionID: UUID) -> ConnectorToolContext {
+    func connectorContext(_ sessionID: UUID) -> ConnectorToolContext {
         ConnectorToolContext(taskID: sessionID, scope: connectorScopes[sessionID],
                              workspaceRoots: workspaceRoots[sessionID] ?? [])
     }
 
     func handle(_ call: AgentToolCall) async -> AgentToolResult {
+        await handle(call, origin: .direct)
+    }
+
+    private func handle(_ call: AgentToolCall, origin: AgentToolCallOrigin) async -> AgentToolResult {
         guard let sessionID = authorizedSession(call) else { return Self.unrecognizedToken }
         if CodeModeToolCatalog.definition(named: call.tool) != nil, !codeModeEnabled() {
             return .failure("MCP Code Mode is off in Yardlet's settings. Turn it on in Settings → General.",
@@ -287,6 +345,11 @@ final class AgentToolBroker: AgentToolLaunchProviding {
            let failure = AgentToolArgumentCheck.failure(tool: call.tool, arguments: call.arguments,
                                                         schema: definition.inputSchema) {
             return failure
+        }
+        if Self.ownDefinition(named: call.tool) != nil,
+           let refusal = await approvalRefusal(tool: call.tool, arguments: call.arguments, sessionID: sessionID,
+                                               origin: origin) {
+            return refusal
         }
         if AgentToolCatalog.definition(named: call.tool) != nil {
             guard browserToolsByTask[sessionID] != false else {
@@ -322,7 +385,8 @@ final class AgentToolBroker: AgentToolLaunchProviding {
                                                                     callerID: sessionID))
         }
         if ScheduleToolCatalog.definition(named: call.tool) != nil, let schedules {
-            return await schedules.callScheduleTool(named: call.tool, arguments: call.arguments, callerID: sessionID)
+            return await schedules.callScheduleTool(named: call.tool, arguments: call.arguments, callerID: sessionID,
+                                                    origin: origin)
         }
         if SimulatorToolCatalog.definition(named: call.tool) != nil, let simulators {
             guard simulatorToolsByTask[sessionID] == true else {
@@ -338,6 +402,10 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         }
         if CodeModeToolCatalog.definition(named: call.tool) != nil {
             return await handleCodeMode(call, for: sessionID)
+        }
+        if let refusal = await connectorApprovalRefusal(tool: call.tool, sessionID: sessionID, origin: origin,
+                                                        arguments: call.arguments) {
+            return refusal
         }
         if let result = await connectors?.callConnectorTool(named: call.tool, arguments: call.arguments,
                                                              for: connectorContext(sessionID)) {
@@ -391,6 +459,10 @@ final class AgentToolBroker: AgentToolLaunchProviding {
                                                         schema: definition.inputSchema) {
             return failure
         }
+        if let refusal = await approvalRefusal(tool: innerTool, arguments: innerArguments, sessionID: sessionID,
+                                               origin: .wrapped) {
+            return refusal
+        }
         return await simulators.callSimulatorTool(named: innerTool, arguments: innerArguments, callerID: sessionID)
     }
 
@@ -422,6 +494,10 @@ final class AgentToolBroker: AgentToolLaunchProviding {
             innerArguments = raw
         } else {
             innerArguments = .object([:])
+        }
+        if let refusal = await connectorApprovalRefusal(tool: innerTool, sessionID: sessionID, origin: .wrapped,
+                                                        arguments: innerArguments) {
+            return refusal
         }
         if let result = await connectors?.callConnectorTool(named: innerTool, arguments: innerArguments,
                                                              for: connectorContext(sessionID)) {
@@ -459,7 +535,7 @@ final class AgentToolBroker: AgentToolLaunchProviding {
                 return .failure("Yardlet tool broker is no longer available.", .unreachable, retry: .no)
             }
             let innerCall = AgentToolCall(token: token, session: session, tool: tool, arguments: arguments)
-            return await self.handle(innerCall)
+            return await self.handle(innerCall, origin: .wrapped)
         }
         return await hidingCredentials(result)
     }
@@ -543,7 +619,7 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         return map
     }()
 
-    private static func ownDefinition(named name: String) -> AgentToolDefinition? {
+    static func ownDefinition(named name: String) -> AgentToolDefinition? {
         ownDefinitionsByName[name]
     }
 

@@ -1084,7 +1084,10 @@ actor ClaudeAdapter:
             }
             let schedule = ScheduleToolApproval.request(toolName: toolName, input: input)
                 ?? GoogleToolApproval.request(toolName: toolName, input: input, mailDraft: mailDraft)
+            // Any other Yardlet write (a remote connector's, a draft, a saved sign-in fill) is asked each time
+            // too: Yardlet takes this card as the person's answer for the call (`AgentToolBroker+Approvals`).
             let suggestionOffer = structured == nil && !isAnswerableTool && schedule == nil
+                && !AgentToolHarnessApproval.asksEachTime(claudeToolName: toolName)
                 ? ClaudePermissionSuggestions.offer(from: request)
                 : nil
             permissions[requestID] = PermissionContext(
