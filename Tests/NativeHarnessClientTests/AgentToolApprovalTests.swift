@@ -229,6 +229,48 @@ final class AgentToolApprovalTests: XCTestCase {
         XCTAssertEqual(connectors.calls, [])
     }
 
+    /// A card nobody answered is no refusal: the call says so and leaves the card up, and the same call made again takes
+    /// the answer given meanwhile; once the card's own time ends it goes. A script's clock stops while its call's card
+    /// waits for the person.
+    func testAnUnansweredCardIsNoRefusalAndOutlivesTheCallAndTheScriptClock() async throws {
+        let (broker, session, token, connectors, approvals) = try makeBroker(policy: policy())
+        let center = SessionToolCenter(defaults: try XCTUnwrap(UserDefaults(suiteName: "approvals-\(UUID().uuidString)")))
+        approvals.center = center
+        approvals.callWait = .milliseconds(200)
+        let host = approvals.hostTaskID
+        let unanswered = await direct("gmail_send", broker, session, token)
+        XCTAssertEqual(unanswered.failure?.kind, .timedOut, unanswered.text)
+        XCTAssertTrue(unanswered.text.contains("did not refuse"), unanswered.text)
+        XCTAssertEqual(connectors.calls, [])
+        let card = try XCTUnwrap(center.approvals(for: host).first, "The card stays up")
+        XCTAssertTrue(center.answer(card.id, allow: true))
+        let again = await direct("gmail_send", broker, session, token)
+        XCTAssertFalse(again.isError, again.text)
+        XCTAssertEqual(connectors.calls, ["gmail_send"])
+        XCTAssertTrue(center.approvals(for: host).isEmpty)
+
+        center.cardLife = .milliseconds(100)
+        approvals.callWait = .seconds(5)
+        let expired = await direct("gmail_send", broker, session, token)
+        XCTAssertEqual(expired.failure?.kind, .timedOut, expired.text)
+        XCTAssertTrue(center.approvals(for: host).isEmpty, "Its own time ended, so it went")
+
+        center.cardLife = SessionToolPolicy.approvalTimeout
+        approvals.callWait = nil
+        let script = Task {
+            await broker.handle(AgentToolCall(token: token, session: session.uuidString, tool: CodeModeToolCatalog.runScript,
+                                              arguments: .object(["code": .string(#"return callTool("gmail_send", {});"#),
+                                                                  "timeoutSeconds": .integer(1)])))
+        }
+        try await waitUntil { !center.approvals(for: host).isEmpty }
+        try await Task.sleep(for: .milliseconds(1_600))
+        XCTAssertFalse(center.approvals(for: host).isEmpty, "Past the script's own second, its call's card is still up")
+        XCTAssertTrue(center.answer(try XCTUnwrap(center.approvals(for: host).first).id, allow: true))
+        let ran = await script.value
+        XCTAssertFalse(ran.isError, ran.text)
+        XCTAssertEqual(connectors.calls, ["gmail_send", "gmail_send"])
+    }
+
     func testAFirstReadQuestionIsSharedAndALaterOneIsNotLost() async throws {
         let (broker, session, token, connectors, approvals) = try makeBroker(policy: policy())
         let center = SessionToolCenter(defaults: try XCTUnwrap(UserDefaults(suiteName: "approvals-\(UUID().uuidString)")))
@@ -633,13 +675,15 @@ private final class RecordingApprovals: AgentToolApprovalHandling {
 
     /// When set, each question waits on a real card there, which the test answers or cancels.
     var center: SessionToolCenter?
+    /// How long a call waits on such a card; nil waits the card's whole time.
+    var callWait: Duration?
 
     func askPerson(title: String, detail: String, callerID: UUID) async -> Bool {
         titles.append(title)
         details.append(detail)
         guard let center else { return answer }
         return await center.ask(PermissionRequest(id: UUID().uuidString, title: title, detail: detail, command: nil),
-                                in: hostTaskID, onChange: {})
+                                in: hostTaskID, timeout: callWait ?? center.cardLife, onChange: {})
     }
 
     func askPerson(title: String, detail: String, actions: [PermissionRequestAction], callerID: UUID) async -> String? {

@@ -211,16 +211,10 @@ extension AgentToolBroker {
             question = pending
         } else {
             let title = L10n.format("Allow downloads from %@ in this task?", site.text)
-            question = PendingReadApproval(Task { await approvals.askPerson(title: title, detail: detail,
-                                                                            callerID: sessionID) })
+            question = PendingReadApproval { await approvals.askPerson(title: title, detail: detail, callerID: sessionID) }
             pendingDownloadApprovals[key] = question
         }
-        question.waiters += 1
-        let allowed = await withTaskCancellationHandler {
-            await question.answer.value
-        } onCancel: {
-            Task { @MainActor in question.leave() }
-        }
+        let allowed = await question.wait()
         // Only the question this call waited on is cleared: a later one may stand in its place already.
         if pendingDownloadApprovals[key] === question { pendingDownloadApprovals[key] = nil }
         if allowed { allowedDownloadSites[host, default: []].insert(site) }
@@ -287,17 +281,10 @@ extension AgentToolBroker {
         if let pending = pendingReadApprovals[key], !pending.answer.isCancelled {
             question = pending
         } else {
-            question = PendingReadApproval(Task { await approvals.askPerson(title: title, detail: detail,
-                                                                            callerID: sessionID) })
+            question = PendingReadApproval { await approvals.askPerson(title: title, detail: detail, callerID: sessionID) }
             pendingReadApprovals[key] = question
         }
-        question.waiters += 1
-        // The card goes once every call waiting on it was cancelled.
-        let allowed = await withTaskCancellationHandler {
-            await question.answer.value
-        } onCancel: {
-            Task { @MainActor in question.leave() }
-        }
+        let allowed = await question.wait()
         // Only the question this call waited on is cleared: a later one may stand in its place already.
         if pendingReadApprovals[key] === question { pendingReadApprovals[key] = nil }
         // A task released meanwhile (archived, deleted) keeps no allow: its question was withdrawn.
@@ -323,6 +310,24 @@ extension AgentToolBroker {
     static func declined(_ tool: String) -> AgentToolResult {
         .failure("The person declined \(tool) on Yardlet's card, so it did not run. Do not call it again unless "
             + "they ask for it.", .refused, retry: .no, details: ["tool": .string(tool)])
+    }
+
+    /// A call that ended refused because nobody answered Yardlet's card for it (`ApprovalWait`): the person did not
+    /// refuse. While the card stays up, the same call made again waits on it or takes the answer given meanwhile.
+    static func unanswered(_ tool: String, _ unanswered: ApprovalWait.Unanswered) -> AgentToolResult {
+        guard let stays = unanswered.cardStays else {
+            return .failure("Nobody answered Yardlet's card for \(tool) in time, so the card went and what it asked "
+                + "about did not run. The person did not refuse; they may be away. Tell them what you need it for, or "
+                + "call \(tool) again later to ask once more.", .timedOut, retry: .later,
+                details: ["tool": .string(tool), "unanswered": .bool(true)])
+        }
+        let minutes = max(1, Int((Double(stays.components.seconds) / 60).rounded()))
+        return .failure("Nobody has answered Yardlet's card for \(tool) yet, so what it asked about has not run. The "
+            + "person did not refuse: the card stays up for about \(minutes) more minute\(minutes == 1 ? "" : "s"). "
+            + "Call \(tool) again with the same arguments to wait for the answer, or tell the person what you need.",
+            .timedOut, retry: .later,
+            details: ["tool": .string(tool), "unanswered": .bool(true),
+                      "cardStaysSeconds": .integer(Int64(stays.components.seconds))])
     }
 
     /// The actions a `browser_batch` call names, in order.
@@ -362,9 +367,30 @@ extension AgentToolBroker {
 @MainActor
 final class PendingReadApproval {
     let answer: Task<Bool, Never>
+    /// What became of its card: each call waiting on it learns that nobody answered (`ApprovalWait`).
+    let record: ApprovalWait.Record
     var waiters = 0
 
-    init(_ answer: Task<Bool, Never>) { self.answer = answer }
+    init(_ ask: @escaping @MainActor () async -> Bool) {
+        // Asked inside a call, its card waits as long as that call may (`AppModel.sessionToolCardWait`).
+        let record = ApprovalWait.record.map { _ in ApprovalWait.Record() }
+        self.record = record ?? ApprovalWait.Record()
+        answer = Task { await ApprovalWait.$record.withValue(record) { await ask() } }
+    }
+
+    /// Waits for the answer as one more call. The card goes once every call waiting on it was cancelled.
+    func wait() async -> Bool {
+        waiters += 1
+        let allowed = await ApprovalWait.whilePersonReads {
+            await withTaskCancellationHandler {
+                await answer.value
+            } onCancel: {
+                Task { @MainActor in self.leave() }
+            }
+        }
+        if let unanswered = record.unanswered { ApprovalWait.record?.note(unanswered) }
+        return allowed
+    }
 
     /// A waiting call was cancelled; once none waits, the question is withdrawn and its card goes.
     func leave() {

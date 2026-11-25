@@ -102,6 +102,8 @@ protocol AgentToolApprovalHandling: AnyObject {
     /// Whether a process of the caller's task listens on this port of the Mac (`TaskResourceMonitor.servers(of:)`):
     /// a development server the task started.
     func taskListens(on port: Int, callerID: UUID) async -> Bool
+    /// When a call the caller makes now must have answered (`SessionToolCaller.deadline`).
+    func callDeadline(callerID: UUID) -> ContinuousClock.Instant?
 }
 
 extension AgentToolApprovalHandling {
@@ -111,6 +113,8 @@ extension AgentToolApprovalHandling {
     }
 
     func taskListens(on port: Int, callerID: UUID) async -> Bool { false }
+
+    func callDeadline(callerID: UUID) -> ContinuousClock.Instant? { nil }
 }
 
 /// How a call reached the broker: from the harness under the tool's own name, or from inside a wrapper
@@ -368,7 +372,16 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         await handle(call, origin: .direct)
     }
 
+    /// Each call, a script's own included, learns of the cards it waited on: one that ends refused because nobody answered
+    /// its card says so (`unanswered`), whichever tool asked.
     private func handle(_ call: AgentToolCall, origin: AgentToolCallOrigin) async -> AgentToolResult {
+        let record = ApprovalWait.Record()
+        let result = await ApprovalWait.$record.withValue(record) { await run(call, origin: origin) }
+        guard result.isError, let unanswered = record.unanswered else { return result }
+        return Self.unanswered(call.tool, unanswered)
+    }
+
+    private func run(_ call: AgentToolCall, origin: AgentToolCallOrigin) async -> AgentToolResult {
         guard let sessionID = authorizedSession(call) else { return Self.unrecognizedToken }
         if CodeModeToolCatalog.definition(named: call.tool) != nil,
            !codeModeIsOn(for: sessionID, connectorTools: await filteredConnectorTools(for: sessionID)) {
@@ -566,12 +579,19 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         }
         let session = call.session
         let token = call.token
-        let result = await CodeModeRunner.run(code: code, timeoutSeconds: timeoutSeconds) { [weak self] tool, arguments in
+        // The script's calls share the harness's call's deadline, which also ends the script, however long a card waited.
+        let started = ApprovalWait.callStarted ?? .now
+        let latestEnd = ApprovalWait.$callStarted.withValue(started) { approvals?.callDeadline(callerID: sessionID) }
+        // A moment past it, so that a call whose card is still up answers so before the script ends.
+        let left = latestEnd.map { ContinuousClock.now.duration(to: $0) + .seconds(2) }
+        let result = await CodeModeRunner.run(code: code, timeoutSeconds: timeoutSeconds, latestEnd: left.map {
+            Date().addingTimeInterval(Double($0.components.seconds) + Double($0.components.attoseconds) * 1e-18)
+        }) { [weak self] tool, arguments in
             guard let self else {
                 return .failure("Yardlet tool broker is no longer available.", .unreachable, retry: .no)
             }
             let innerCall = AgentToolCall(token: token, session: session, tool: tool, arguments: arguments)
-            return await self.handle(innerCall, origin: .wrapped)
+            return await ApprovalWait.$callStarted.withValue(started) { await self.handle(innerCall, origin: .wrapped) }
         }
         return await hidingCredentials(result)
     }

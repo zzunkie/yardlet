@@ -27,7 +27,7 @@ struct SessionToolCaller: Equatable {
     let permission: TaskPermissionLevel
     /// When the call must have answered, below the caller harness's own limit on one MCP call
     /// (`SessionToolPolicy.waitCeiling`): every wait in the call, the person's approval included,
-    /// shares it.
+    /// shares it, and a call a script makes shares the script's (`ApprovalWait.callStarted`).
     let deadline: ContinuousClock.Instant
     /// The call came from inside `run_yardlet_script`, which the caller's harness never showed the person.
     var throughWrapper = false
@@ -101,14 +101,14 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
                 roots: [session.workspaceURL] + session.additionalRootURLs,
                 projectID: project(for: session)?.id, title: session.title,
                 agentDepth: 0, permission: sessionToolPermission(of: session),
-                deadline: .now + sessionToolWaitCeiling(for: session.harness))
+                deadline: (ApprovalWait.callStarted ?? .now) + sessionToolWaitCeiling(for: session.harness))
         }
         if let run = sessionTools.run(id), let host = store.sessions.first(where: { $0.id == run.hostTaskID }) {
             return SessionToolCaller(
                 id: id, hostTaskID: host.id, harness: run.harness, workspaceURL: run.workspaceURL,
                 roots: [run.workspaceURL], projectID: project(for: host)?.id, title: host.title,
                 agentDepth: run.depth, permission: run.permission,
-                deadline: .now + sessionToolWaitCeiling(for: run.harness))
+                deadline: (ApprovalWait.callStarted ?? .now) + sessionToolWaitCeiling(for: run.harness))
         }
         return nil
     }
@@ -1986,14 +1986,21 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
                                      harnessAsksBeforeDirectCalls: claudeAsksBeforeDirectCalls(caller))
     }
 
-    /// Whether the caller is a Claude Code task in Default or Accept edits, whose CLI asks the person before each
-    /// call of a Yardlet tool it was not told to allow; Plan reads without asking, Auto leaves it to a classifier,
-    /// Don't ask refuses without a card, and a subagent's harness is not the task's.
+    /// Whether the caller is a Claude Code task or subagent in Default or Accept edits, whose CLI asks the person before
+    /// each call of a Yardlet tool it was not told to allow (a subagent's card waits in its task's conversation); Plan
+    /// reads without asking, Auto leaves it to a classifier, and Don't ask refuses without a card.
     func claudeAsksBeforeDirectCalls(_ caller: SessionToolCaller) -> Bool {
-        guard caller.id == caller.hostTaskID, caller.harness == .claudeCode, caller.permission == .standard,
-              let host = store.sessions.first(where: { $0.id == caller.hostTaskID }),
-              host.providerOptions[ClaudeLaunchOption.permissionMode] != "dontAsk" else { return false }
-        return Self.unaskedPermissionMode(of: host) == nil
+        guard caller.harness == .claudeCode, caller.permission == .standard else { return false }
+        let options: [String: String]
+        if caller.id == caller.hostTaskID, let host = store.sessions.first(where: { $0.id == caller.id }) {
+            options = host.providerOptions
+        } else if let run = sessionTools.run(caller.id) {
+            options = run.options
+        } else {
+            return false
+        }
+        let mode = options[ClaudeLaunchOption.permissionMode]
+        return mode != "dontAsk" && mode != "auto" && !ClaudePermissionMode.isElevated(mode)
     }
 
     func askPerson(title: String, detail: String, callerID: UUID) async -> Bool {
@@ -2007,10 +2014,13 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
         let request = PermissionRequest(
             id: SessionToolApproval.idPrefix + UUID().uuidString.lowercased(), title: title, detail: detail,
             command: nil, actions: actions)
-        return await sessionTools.choose(request, in: host,
-                                         timeout: min(SessionToolPolicy.approvalTimeout, caller.remaining)) { [weak self] in
+        return await sessionTools.choose(request, in: host, callerID: caller.id, timeout: caller.remaining) { [weak self] in
             self?.sessionToolApprovalsChanged(in: host)
         }
+    }
+
+    func callDeadline(callerID: UUID) -> ContinuousClock.Instant? {
+        sessionToolCaller(callerID)?.deadline
     }
 
     /// Whether a process of the caller's task, or of the task a subagent runs for, listens on the port. A server the
@@ -2041,8 +2051,7 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
         let request = PermissionRequest(
             id: SessionToolApproval.idPrefix + UUID().uuidString.lowercased(), title: title, detail: detail,
             command: nil)
-        return await sessionTools.ask(request, in: host,
-                                      timeout: min(SessionToolPolicy.approvalTimeout, caller.remaining)) { [weak self] in
+        return await sessionTools.ask(request, in: host, callerID: caller.id, timeout: caller.remaining) { [weak self] in
             self?.sessionToolApprovalsChanged(in: host)
         }
     }
