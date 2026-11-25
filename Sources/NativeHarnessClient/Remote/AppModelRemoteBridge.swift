@@ -68,6 +68,8 @@ final class AppModelRemoteBridge: RemoteBridge {
     var watchesHostSettings = false
     var trackingHostSettings = false
     var hostSettingsObservers: [any NSObjectProtocol] = []
+    /// "Steer Antigravity turns" changes whether an Antigravity task steers (`RemoteTask.steers`).
+    nonisolated(unsafe) private var antigravitySteerObserver: (any NSObjectProtocol)?
     var answeredHostSettings: RemoteHostSettings?
     var builtHostUsageRows: (inputs: TokenUsageRowsInputs, rows: HostUsageRows)?
     /// How many times the usage rows were read anew, for the main thread's budget checks.
@@ -98,6 +100,15 @@ final class AppModelRemoteBridge: RemoteBridge {
         previews?.onReady = { [weak self] askers in self?.previewsReady(askers) }
         // A tab's `file:` page is shown only when `readFile` would serve it (§15.22, §15.25).
         self.browser.fileScope = { [weak self] taskID in try? await self?.fileScope(taskID: taskID).get() }
+        antigravitySteerObserver = NotificationCenter.default.addObserver(
+            forName: AntigravityLiveSteer.didChangeNotification, object: nil, queue: nil
+        ) { [weak self] _ in
+            Task { @MainActor in self?.tasksChanged() }
+        }
+    }
+
+    deinit {
+        if let antigravitySteerObserver { NotificationCenter.default.removeObserver(antigravitySteerObserver) }
     }
 
     func setChangeHandler(_ handler: @escaping @Sendable (RemoteBridgeChange) -> Void) {

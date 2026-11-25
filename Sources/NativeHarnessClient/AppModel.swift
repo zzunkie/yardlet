@@ -1683,14 +1683,10 @@ final class AppModel {
     private func sendFollowUpNow(_ itemID: UUID, into target: FollowUpTarget, in session: SessionRecord) async {
         guard let item = followUps.item(itemID, in: session.id) else { return }
         if target.delivery.policy.stopsTurnToSendNow {
-            // A message the hook still holds comes back first, so the next turn does not read it twice.
-            if item.state == .sent {
-                guard followUps.claim(itemID) else { return }
-                let withdrawn = await withdrawFollowUp(item, in: session)
-                if withdrawn { followUps.hold(itemID, in: session.id) }
-                followUps.finish(itemID)
-                guard withdrawn else { return }
-            }
+            // What the hook still holds comes back first, this message and any other, so the turn being
+            // stopped does not read one of them at a last model call and the next turn read it again.
+            await withdrawSentFollowUps(in: session)
+            guard followUps.item(itemID, in: session.id)?.state != .sent else { return }
             await stopAndSendAfterTurn(itemID, in: session, policy: target.delivery.policy)
             return
         }
@@ -1887,6 +1883,8 @@ final class AppModel {
         in sessionID: UUID
     ) async {
         let holds = target.delivery.policy.holdsSentMessages
+        // Where it waited, for a message that ends up waiting again.
+        let place = followUps.queue(for: sessionID).firstIndex { $0.id == itemID }
         if holds {
             // Every write takes a new ID: the CLI drops a second message with an ID it has seen.
             followUps.markSent(itemID, messageID: UUID().uuidString.lowercased(), first: priority == .now, in: sessionID)
@@ -1899,7 +1897,7 @@ final class AppModel {
         } catch is HarnessFollowUpNotNow {
             // It waits in Yardlet for the turn's end, as a queued message does.
             guard store.sessions.contains(where: { $0.id == sessionID }) else { return }
-            followUps.hold(itemID, in: sessionID)
+            followUps.hold(itemID, in: sessionID, at: place)
         } catch {
             guard store.sessions.contains(where: { $0.id == sessionID }) else { return }
             markFollowUpFailed(itemID, message: error.localizedDescription, in: sessionID)

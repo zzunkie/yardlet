@@ -728,11 +728,17 @@ final class FollowUpQueueStore {
 
     /// Yardlet holds a message again, unsent, because the person took it back (an interrupt or an
     /// edit): it waits with the queue for the turn's end, no longer steered.
-    func hold(_ itemID: UUID, in sessionID: UUID) {
+    /// `place`, when given, is where it waited before it was sent, which it takes again.
+    func hold(_ itemID: UUID, in sessionID: UUID, at place: Int? = nil) {
         guard let index = queues[sessionID]?.firstIndex(where: { $0.id == itemID }) else { return }
         queues[sessionID]?[index].state = .pending
         queues[sessionID]?[index].providerMessageID = nil
         queues[sessionID]?[index].steered = nil
+        if let place, place != index, var queue = queues[sessionID] {
+            let item = queue.remove(at: index)
+            queue.insert(item, at: min(max(place, 0), queue.count))
+            queues[sessionID] = queue
+        }
         save(sessionID)
     }
 

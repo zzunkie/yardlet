@@ -1197,26 +1197,31 @@ actor ACPAdapter:
         guard let liveSteer, liveSteer.isEnabled(), priority == .next, input.images.isEmpty,
               promptTasks[session.localSessionID] != nil else { throw HarnessFollowUpNotNow() }
         var ledger = steerLedgers[session.localSessionID] ?? AntigravitySteerLedger()
-        let before = ledger
         if liveSteer.takeBack(for: session.providerSessionID) == nil { ledger.hookTookWaiting() }
+        // What the file held before this message, once the hook's taking is counted: a failed write puts
+        // back only that, never what the hook already handed to the agent.
+        let before = ledger
         ledger.add(.init(messageID: messageID, text: input.promptText))
         do {
             try liveSteer.leave(ledger.waiting.map(\.text), for: session.providerSessionID)
+            steerLedgers[session.localSessionID] = ledger
         } catch {
             ledger = before
-            if ledger.waiting.isEmpty || (try? liveSteer.leave(ledger.waiting.map(\.text), for: session.providerSessionID)) != nil {
-                steerLedgers[session.localSessionID] = ledger
-            } else {
+            if !ledger.waiting.isEmpty,
+               (try? liveSteer.leave(ledger.waiting.map(\.text), for: session.providerSessionID)) == nil {
                 returnWaiting(of: &ledger, for: session.localSessionID)
             }
+            steerLedgers[session.localSessionID] = ledger
             throw error
         }
-        steerLedgers[session.localSessionID] = ledger
     }
 
     /// Takes a message back unread. False when the hook has already handed it to the agent.
     func cancelFollowUp(messageID: String, in session: HarnessSessionHandle) async throws -> Bool {
-        guard let liveSteer, var ledger = steerLedgers[session.localSessionID], ledger.holds(messageID) else { return true }
+        guard let liveSteer, var ledger = steerLedgers[session.localSessionID] else { return true }
+        // Read on the stream already, though the app may not have heard yet.
+        if ledger.wasRead(messageID) { return false }
+        guard ledger.holds(messageID) else { return true }
         if liveSteer.takeBack(for: session.providerSessionID) == nil { ledger.hookTookWaiting() }
         let withdrawn = ledger.withdraw(messageID)
         if !ledger.waiting.isEmpty,
@@ -1242,10 +1247,11 @@ actor ACPAdapter:
     /// The prompt ended: what the hook handed over was read in it, and what is still in the file goes
     /// back to Yardlet, which starts the next turn with it.
     private func settleSteers(of session: HarnessSessionHandle) {
-        guard let liveSteer, var ledger = steerLedgers.removeValue(forKey: session.localSessionID),
-              !ledger.isEmpty else { return }
+        guard let liveSteer, var ledger = steerLedgers[session.localSessionID], !ledger.isEmpty else { return }
         let fileHadMessages = liveSteer.takeBack(for: session.providerSessionID) != nil
         let settled = ledger.settle(fileHadMessages: fileHadMessages, hookPresent: liveSteer.isInstalled)
+        // Kept for what it read until the next prompt.
+        steerLedgers[session.localSessionID] = ledger
         if !settled.read.isEmpty { completeAssistantIfNeeded(for: session.localSessionID) }
         for messageID in settled.read {
             emit(.followUpDelivery(.init(messageID: messageID, state: .read, joinsRunningTurn: true)), for: session.localSessionID)

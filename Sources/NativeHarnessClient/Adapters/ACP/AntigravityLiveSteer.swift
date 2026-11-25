@@ -57,8 +57,13 @@ struct AntigravityLiveSteer: Sendable {
             return error.localizedDescription
         }
         defaults.set(isOn, forKey: preferenceKey)
+        NotificationCenter.default.post(name: didChangeNotification, object: nil)
         return nil
     }
+
+    /// Posted once the setting changed, by any way of changing it (Settings, the agent's settings tool,
+    /// another device's Settings).
+    static let didChangeNotification = Notification.Name("YardletAntigravityLiveSteerDidChange")
 
     // MARK: The plugin
 
@@ -85,7 +90,10 @@ struct AntigravityLiveSteer: Sendable {
     #!/bin/sh
     # Added by Yardlet while its "Steer Antigravity turns" setting is on; turning it off removes this folder.
     # Hands a message Yardlet left for this conversation to the running turn, or answers {}.
-    id=$(sed -n 's/.*"conversationId"[[:space:]]*:[[:space:]]*"\\([0-9A-Za-z-]*\\)".*/\\1/p' | head -n 1)
+    # The payload's first "conversationId" key, in the C locale so no byte of the user's input stops grep or sed.
+    LC_ALL=C
+    export LC_ALL
+    id=$(grep -o '"conversationId"[[:space:]]*:[[:space:]]*"[0-9A-Za-z-]*"' | head -n 1 | sed 's/.*"\\([0-9A-Za-z-]*\\)"$/\\1/')
     file="pending/$id.json"
     if [ -n "$id" ] && [ -f "$file" ] && mv "$file" "$file.$$" 2>/dev/null; then
       cat "$file.$$"
@@ -99,26 +107,71 @@ struct AntigravityLiveSteer: Sendable {
     private var manifestURL: URL { folder.appending(path: "plugin.json") }
     private var pendingFolder: URL { folder.appending(path: "pending", directoryHint: .isDirectory) }
 
-    /// Whether the folder holds Yardlet's plugin, which is the only folder Yardlet removes.
+    /// Whether the folder holds Yardlet's plugin, which is the only folder Yardlet writes into or removes: a
+    /// real folder, not a link, whose `plugin.json` names it and Yardlet.
     var isInstalled: Bool {
-        guard let data = try? Data(contentsOf: manifestURL),
+        guard Self.isRealFolder(folder), !Self.isLink(manifestURL),
+              let data = try? Data(contentsOf: manifestURL),
               let manifest = try? JSONDecoder().decode([String: String].self, from: data) else { return false }
-        return manifest["name"] == Self.pluginName
+        return manifest["name"] == Self.pluginName && manifest["author"] == "Yardlet"
     }
 
-    /// Writes the plugin, or brings an older copy up to date.
+    /// Writes the plugin, or brings an older copy up to date. A folder of that name that is not Yardlet's,
+    /// or a link in its place, is left as it is, and nothing is written.
     func install(fileManager: FileManager = .default) throws {
         guard folder.lastPathComponent == Self.pluginName else { return }
-        try fileManager.createDirectory(at: pendingFolder, withIntermediateDirectories: true)
-        let files = [("plugin.json", Self.manifest), ("hooks.json", Self.hooks), ("deliver.sh", Self.deliverScript)]
-        for (name, contents) in files {
+        let path = folder.path(percentEncoded: false)
+        if Self.isLink(folder) || fileManager.fileExists(atPath: path) && !isInstalled {
+            throw CocoaError(.fileWriteNoPermission, userInfo: [NSFilePathErrorKey: path])
+        }
+        try fileManager.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        if Self.isLink(pendingFolder) { try fileManager.removeItem(at: pendingFolder) }
+        try fileManager.createDirectory(at: pendingFolder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        // The manifest goes last, so a folder written only in part is not taken for Yardlet's.
+        let files = [("hooks.json", Self.hooks, 0o600), ("deliver.sh", Self.deliverScript, 0o700),
+                     ("plugin.json", Self.manifest, 0o600)]
+        for (name, contents, permissions) in files {
             let url = folder.appending(path: name)
             let data = Data(contents.utf8)
-            if (try? Data(contentsOf: url)) != data {
-                try data.write(to: url, options: .atomic)
+            if Self.isLink(url) || (try? Data(contentsOf: url)) != data {
+                try Self.write(data, to: url, permissions: permissions, fileManager: fileManager)
             }
         }
-        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.appending(path: "deliver.sh").path(percentEncoded: false))
+        for (path, permissions) in [(folder, 0o700), (pendingFolder, 0o700), (folder.appending(path: "deliver.sh"), 0o700)] {
+            try fileManager.setAttributes([.posixPermissions: permissions], ofItemAtPath: path.path(percentEncoded: false))
+        }
+    }
+
+    /// Writes a file whole, readable only by its owner from the start, in place of what was at `url` (a link
+    /// itself, never its target).
+    private static func write(_ data: Data, to url: URL, permissions: Int, fileManager: FileManager) throws {
+        let temporary = url.deletingLastPathComponent().appending(path: ".\(url.lastPathComponent).\(UUID().uuidString)")
+        guard fileManager.createFile(atPath: temporary.path(percentEncoded: false), contents: data,
+                                     attributes: [.posixPermissions: permissions]) else {
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path(percentEncoded: false)])
+        }
+        do {
+            if isLink(url) { try fileManager.removeItem(at: url) }
+            if fileManager.fileExists(atPath: url.path(percentEncoded: false)) {
+                _ = try fileManager.replaceItemAt(url, withItemAt: temporary)
+            } else {
+                try fileManager.moveItem(at: temporary, to: url)
+            }
+        } catch {
+            try? fileManager.removeItem(at: temporary)
+            throw error
+        }
+    }
+
+    private static func isLink(_ url: URL) -> Bool { type(of: url) == .typeSymbolicLink }
+
+    private static func isRealFolder(_ url: URL) -> Bool { type(of: url) == .typeDirectory }
+
+    /// The item at `url` itself: a folder URL's trailing slash would make the lookup follow a link.
+    private static func type(of url: URL) -> FileAttributeType? {
+        var path = url.path(percentEncoded: false)
+        while path.count > 1, path.hasSuffix("/") { path.removeLast() }
+        return (try? FileManager.default.attributesOfItem(atPath: path))?[.type] as? FileAttributeType
     }
 
     /// Removes the plugin folder, with any message still in it, when it is Yardlet's.
@@ -151,7 +204,7 @@ struct AntigravityLiveSteer: Sendable {
         try install(fileManager: fileManager)
         let steps = texts.map { ["userMessage": $0] }
         let data = try JSONSerialization.data(withJSONObject: ["injectSteps": steps], options: [.withoutEscapingSlashes])
-        try data.write(to: url, options: .atomic)
+        try Self.write(data, to: url, permissions: 0o600, fileManager: fileManager)
     }
 
     /// Takes back the messages left for the conversation. Nil when there is no file: the hook took it.
@@ -185,8 +238,13 @@ struct AntigravitySteerLedger: Sendable, Equatable {
     private(set) var taken: [Entry] = []
     /// The `user_message_chunk` text read so far of the message being reported.
     private var chunks = ""
+    /// What the agent read in this prompt, kept past its end until the next prompt: a message read just
+    /// before the person took it back cannot be taken back.
+    private(set) var readIDs: Set<String> = []
 
     var isEmpty: Bool { waiting.isEmpty && taken.isEmpty }
+
+    func wasRead(_ messageID: String) -> Bool { readIDs.contains(messageID) }
 
     /// The file was gone when Yardlet went to change it: the hook took all it held.
     mutating func hookTookWaiting() {
@@ -209,23 +267,25 @@ struct AntigravitySteerLedger: Sendable, Equatable {
         waiting.contains { $0.messageID == messageID } || taken.contains { $0.messageID == messageID }
     }
 
-    /// A `user_message_chunk` on the stream. Returns the ID of the message it completes, if any. A chunk
-    /// that begins no message Yardlet left (another hook's) is let go.
+    /// A `user_message_chunk` on the stream. Returns the ID of the message it completes, if any. The agent
+    /// reads the messages in the order they were left, so the first one the text so far begins is the one it
+    /// reports, and a later one it equals waits until that is ruled out. A chunk that begins no message
+    /// Yardlet left (another hook's) is let go.
     mutating func read(chunk: String) -> String? {
         let candidates = taken + waiting
         guard !candidates.isEmpty else { return nil }
         chunks += chunk
         let seen = chunks.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let match = candidates.first(where: { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == seen }) {
+        guard let first = candidates.first(where: { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(seen) }) else {
             chunks = ""
-            if waiting.contains(match) { hookTookWaiting() }
-            taken.removeAll { $0 == match }
-            return match.messageID
+            return nil
         }
-        if !candidates.contains(where: { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(seen) }) {
-            chunks = ""
-        }
-        return nil
+        guard first.text.trimmingCharacters(in: .whitespacesAndNewlines) == seen else { return nil }
+        chunks = ""
+        if waiting.contains(first) { hookTookWaiting() }
+        taken.removeAll { $0 == first }
+        readIDs.insert(first.messageID)
+        return first.messageID
     }
 
     /// The turn ended. `fileHadMessages`: Yardlet took the file back, so what it held reached no model
@@ -239,7 +299,9 @@ struct AntigravitySteerLedger: Sendable, Equatable {
         } else {
             read += waiting.map(\.messageID)
         }
+        let readBefore = readIDs
         self = AntigravitySteerLedger()
+        readIDs = readBefore.union(read)
         return (read, returned)
     }
 }

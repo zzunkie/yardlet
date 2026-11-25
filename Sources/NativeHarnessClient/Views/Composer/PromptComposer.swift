@@ -67,6 +67,7 @@ struct PromptComposer: View {
         isProviderAttached: Bool = false,
         isRunning: Bool,
         canSteer: Bool = false,
+        antigravitySteers: Bool = AntigravityLiveSteer.isEnabled(),
         prefilledDraft: CodexComposerDraft? = nil,
         prefilledDraftID: UUID? = nil,
         codexQueue: [CodexQueuedSubmission] = [],
@@ -106,7 +107,8 @@ struct PromptComposer: View {
         options = ComposerSessionOptionsProjection.make(
             harness: harness, session: providerSession, codexCapabilities: codex,
             providerCapabilities: providerCapabilities, providerUsage: providerUsage,
-            codexTokenUsage: codexTokenUsage, entries: providerEntries, isAttached: isProviderAttached)
+            codexTokenUsage: codexTokenUsage, entries: providerEntries, isAttached: isProviderAttached,
+            antigravitySteers: antigravitySteers)
     }
 
     @Environment(\.yardletInterfaceScale) private var interfaceScale

@@ -1499,6 +1499,10 @@ private struct AppSettingSwitch: View {
             .toggleStyle(.paritySwitch)
             .controlSize(.small)
             .help(failure ?? "")
+            // Changed elsewhere: the agent's settings tool, or another device's Settings.
+            .onReceive(NotificationCenter.default.publisher(for: AntigravityLiveSteer.didChangeNotification)) { _ in
+                isOn = setting.value(in: context) == YardletSetting.on
+            }
     }
 
     private func change(_ on: Bool) {

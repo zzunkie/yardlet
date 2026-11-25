@@ -381,7 +381,8 @@ enum ComposerSessionOptionsProjection {
         providerUsage: HarnessProtocolUsage?,
         codexTokenUsage: CodexThreadTokenUsage? = nil,
         entries: [TranscriptEntry] = [],
-        isAttached: Bool
+        isAttached: Bool,
+        antigravitySteers: Bool = AntigravityLiveSteer.isEnabled()
     ) -> ComposerSessionOptions {
         let input = HarnessComposerInputPolicy(harness: harness,
                                                negotiatedImageInput: providerCapabilities?.acceptsImageInput)
@@ -391,8 +392,11 @@ enum ComposerSessionOptionsProjection {
         var options = ComposerSessionOptions(harnessName: harness.displayName, input: input,
                                              submission: .providerInput)
         // A harness that takes no message while its turn runs keeps what is sent meanwhile for
-        // the next turn; Claude Code's own queue replaces this below.
-        options.followUp = ComposerFollowUpOptions(policy: .afterTurn, delivery: .providerInput)
+        // the next turn; Claude Code's own queue replaces this below, and Antigravity's hook takes
+        // a steered message while "Steer Antigravity turns" is on.
+        let policy = FollowUpPolicy(harness: harness, antigravitySteers: antigravitySteers) ?? .afterTurn
+        options.followUp = ComposerFollowUpOptions(policy: policy == .antigravity ? policy : .afterTurn,
+                                                   delivery: .providerInput)
         if harness == .claudeCode {
             // The window supplies the shell; without it there is no bash mode.
             options.bashMode = true
