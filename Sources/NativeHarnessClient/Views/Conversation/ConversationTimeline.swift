@@ -145,7 +145,9 @@ struct ConversationTimeline: View {
             holds: { id in loaded.whole.turns.contains { $0.id == id } },
             isRenamed: { loaded.anchors.isRenamed($0, as: $1) })
         VStack(spacing: 0) {
-            HStack(spacing: 0) {
+            // The turn rail floats in the conversation's leading gutter rather than taking width from it,
+            // so the column stays centered on the same line as the composer under it.
+            ZStack(alignment: .leading) {
                 if railTurns.count > 1 || hasEarlierTurns {
                     ConversationReadingRail(
                         marks: CodexTurnRail.marks(for: railTurns), isFollowing: scrollState.isFollowing, focus: focus, tracker: readingTracker,
@@ -166,6 +168,7 @@ struct ConversationTimeline: View {
                         }
                     )
                     .accessibilitySortPriority(ParityAccessibility.surfacePicker - 1)
+                    .zIndex(1)
                 }
 
                 if ConversationRowListSwitch.isOn {
@@ -647,11 +650,9 @@ struct ConversationTimeline: View {
         ScrollView {
             VStack(alignment: .leading, spacing: ConversationLayout.turnSpacing, content: content)
                 .scrollTargetLayout()
-                .padding(.horizontal, ParityTheme.conversationInset)
-                .frame(maxWidth: ParityTheme.contentWidth, alignment: .leading)
+                .conversationColumn(alignment: .leading)
                 .padding(.top, ConversationLayout.topPadding)
                 .padding(.bottom, ConversationLayout.bottomPadding)
-                .frame(maxWidth: .infinity, alignment: .center)
                 // A drag from the margins or between turns selects, as a page's does.
                 .background { ConversationPressBackdrop() }
                 // The turns' frames are read in the content, which scrolling leaves as they are.

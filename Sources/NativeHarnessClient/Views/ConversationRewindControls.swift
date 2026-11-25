@@ -34,7 +34,7 @@ struct ConversationEditBanner: View {
                 Text(L10n.string("Conversation changed. Send the edited message to continue."))
                     .foregroundStyle(.secondary)
             }
-        }.font(.caption).padding(.horizontal, ParityTheme.conversationInset).padding(.vertical, 6)
+        }.font(.caption).conversationColumn().padding(.vertical, 6)
     }
 }
 

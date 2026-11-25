@@ -87,9 +87,7 @@ struct PersonalAgentActivityView: View {
             Button(L10n.string("Try again"), action: retry).buttonStyle(.borderless).parityPointer()
         }
         .font(.yardlet(.caption, scale: interfaceScale)).foregroundStyle(.secondary)
-        .frame(maxWidth: ParityTheme.contentWidth)
-        .padding(.horizontal, ParityTheme.conversationInset).padding(.bottom, 8)
-        .frame(maxWidth: .infinity)
+        .conversationColumn().padding(.bottom, 8)
     }
 
     @ViewBuilder

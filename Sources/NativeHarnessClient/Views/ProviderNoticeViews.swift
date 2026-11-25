@@ -273,9 +273,7 @@ struct ProviderNoticeLines: View {
         }
         .font(.yardlet(.caption, scale: interfaceScale))
         .lineLimit(1)
-        .frame(maxWidth: ParityTheme.contentWidth, alignment: .leading)
-        .padding(.horizontal, 30)
-        .frame(maxWidth: .infinity)
+        .conversationColumn(alignment: .leading)
     }
 
     static func showsAnything(_ notices: TaskProviderNotices?) -> Bool {

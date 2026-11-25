@@ -24,11 +24,9 @@ struct BackgroundTasksBar: View {
         tray.tuck = CodexStatusPanel.composerTuck
         return tray
             .padding(.horizontal, 13)
-            .frame(maxWidth: ParityTheme.contentWidth)
-            .padding(.horizontal, 24)
+            .conversationColumn()
             .padding(.top, 6)
             .padding(.bottom, -CodexStatusPanel.composerTuck)
-            .frame(maxWidth: .infinity)
     }
 
     private var expanded: Bool { isExpanded ?? startsExpanded }

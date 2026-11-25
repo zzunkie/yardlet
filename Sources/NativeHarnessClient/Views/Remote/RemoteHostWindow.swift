@@ -1446,11 +1446,9 @@ struct RemoteTaskView: View {
                                editing: $editing)
             }
             // Where the local composer sits under its conversation.
-            .frame(maxWidth: ParityTheme.contentWidth)
-            .padding(.horizontal, 24)
+            .conversationColumn()
             .padding(.top, 6)
             .padding(.bottom, 16)
-            .frame(maxWidth: .infinity)
             .clearOfFloatingPanel()
         }
         .confirmationDialog(
