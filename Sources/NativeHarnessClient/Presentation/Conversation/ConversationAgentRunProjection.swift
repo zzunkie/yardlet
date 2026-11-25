@@ -72,6 +72,7 @@ enum ConversationAgentRunProjection {
         name == "mcp__\(AgentToolEnvironment.serverName)__\(SessionToolCatalog.runAgent)"
             || name == SessionToolCatalog.runAgent
             || name.hasSuffix(": \(SessionToolCatalog.runAgent)")
+            || ConnectorToolLabels.yardletToolName(fromHarnessTool: name) == SessionToolCatalog.runAgent
     }
 
     /// The JSON object a transcript keeps as a call's input. An ACP agent's input may follow a line

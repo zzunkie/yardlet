@@ -1029,7 +1029,16 @@ actor ACPAdapter:
             .permissionRequested(
                 PermissionRequest(
                     id: requestID,
-                    title: toolCall["title"]?.stringValue
+                    // An MCP tool's title (Antigravity's `Run mcp_yardlet_<hex>_list_tasks`) reads as its
+                    // name everywhere the request shows: the card, notifications and the phone.
+                    title: toolCall["title"]?.stringValue.map { title in
+                        let kind = toolCall["kind"]?.stringValue ?? ""
+                        return ConversationLineWording.mcpLabel(
+                            title,
+                            account: toolCall["rawInput"]?[ConnectorToolNaming.accountArgument]?.stringValue,
+                            allowsBareServerPrefix: kind.isEmpty || kind.lowercased() == "other"
+                        ) ?? title
+                    }
                         ?? L10n.string("Approve tool call"),
                     detail: toolCall["kind"]?.stringValue,
                     command: toolCall["rawInput"]?["command"]?.stringValue,

@@ -453,6 +453,42 @@ final class ACPAdapterTests: XCTestCase {
         let orphanAnswer = await transport.sentMessages.first { $0["id"]?.stringValue == "permission-rpc-orphan" }
         XCTAssertEqual(orphanAnswer?["result"]?["outcome"]?["outcome"]?.stringValue, "cancelled")
 
+        // A request whose title names an MCP tool (Antigravity's "Run <tool name>") reads as the tool's label,
+        // with the account a shared connector's call acts in; any other title stays as the agent wrote it.
+        ConnectorToolLabels.shared.update([ConnectorRecord(
+            name: "Gmail", slug: "gmail", serverURL: URL(string: "https://gmail.googleapis.com/gmail/v1/")!,
+            status: .connected, presetID: "gmail", localService: .gmail, account: "person@example.test")])
+        defer { ConnectorToolLabels.shared.update([]) }
+        let titled: [(String, String, JSONValue)] = [
+            ("Run mcp_yardlet_f31bd028_list_tasks", "other", .object([:])),
+            ("Run mcp_yardlet_f31bd028_gmail_send_message", "other",
+             .object([ConnectorToolNaming.accountArgument: .string("work@example.test")])),
+            ("Run mcp_server", "execute", .object(["command": .string("mcp_server")]))
+        ]
+        for (index, (title, kind, input)) in titled.enumerated() {
+            await transport.emit(.object([
+                "jsonrpc": .string("2.0"), "id": .string("permission-rpc-titled-\(index)"),
+                "method": .string("session/request_permission"),
+                "params": .object([
+                    "sessionId": .string(handle.providerSessionID),
+                    "toolCall": .object(["toolCallId": .string("tool-titled-\(index)"), "title": .string(title),
+                                         "kind": .string(kind), "rawInput": input]),
+                    "options": .array([
+                        .object(["optionId": .string("allow-once"), "name": .string("Allow once"), "kind": .string("allow_once")])
+                    ])
+                ])
+            ]))
+        }
+        func requestTitles() async -> [String] {
+            await recorder.payloads.compactMap {
+                if case let .permissionRequested(request) = $0 { request.title } else { nil }
+            }
+        }
+        try await waitUntil { await requestTitles().count == 4 }
+        let requestedTitles = await requestTitles()
+        XCTAssertEqual(requestedTitles, ["Run command", "yardlet: list tasks",
+                                         "Gmail · work@example.test: send message", "Run mcp_server"])
+
         await transport.completePrompt()
         try await waitUntil { await recorder.payloads.contains(.turnCompleted) }
         let payloads = await recorder.payloads
