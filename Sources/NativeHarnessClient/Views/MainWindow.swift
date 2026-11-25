@@ -2661,9 +2661,8 @@ struct MainWindow: View {
 
     private func shellPresentedContent(_ lists: SidebarLists) -> some View {
         draftManagedContent(lists)
-        .environment(\.taskKeyboardFocus, model.store.selectedSessionID.map {
-            model.taskWorkspaces.state(for: $0).keyboardFocus
-        } ?? homeKeyboardFocus)
+        .environment(\.taskKeyboardFocus, model.store.selectedSessionID.map { panelWorkspace($0).keyboardFocus }
+            ?? homeKeyboardFocus)
         .frame(minWidth: 760, minHeight: 560)
         .onGeometryChange(for: CGSize.self) { $0.size } action: { windowSize = $0 }
         .background(ParityTheme.canvas)

@@ -176,6 +176,57 @@ final class ComposerSessionControlsRenderingTests: XCTestCase {
         for location in CodexRunLocation.menu(current: .dangerFullAccess, config: CodexPermissionConfig()) {
             XCTAssertTrue(elements.contains { $0.label.contains(location.displayName) }, location.rawValue)
         }
+
+        // In a split pane the row wraps, and the model shortens, rather than widen the screen past the
+        // pane or run past the composer's edges: half of a 1360 point window beside the sidebar, and the
+        // narrowest pane.
+        connections.publishDefaults([HarnessAccountSnapshot(
+            id: HarnessKind.codex.rawValue, harness: .codex, providerID: "openai-codex", state: .signedIn,
+            accountLabel: "jordan.at.work@example.com", accountPlan: "Pro", detail: "", credentialOwner: "Codex CLI",
+            checkedAt: Date(), usage: [], canLogin: false, canLogout: false)])
+        let long = CodexModelOption(id: "gpt-6.1-sol-long", model: "gpt-6.1-sol-long", displayName: "GPT-6.1-Sol-Long-Context",
+                                    defaultReasoningEffort: "xhigh", supportedReasoningEfforts: ["high", "xhigh"], isDefault: false)
+        catalogs.recordCodex(ComposerUnificationFixtures.codexCatalog.models + [long], for: nil)
+        let narrow = NewTaskDraft()
+        narrow.workspaceURL = ComposerUnificationFixtures.workspace
+        narrow.projectID = project.id
+        narrow.harness = .codex
+        narrow.text = "Clean up the release branches"
+        narrow.modelChoices[.codex] = NewTaskModelChoice(model: long.model, effort: "xhigh")
+        for width in [560, SplitLayoutMetrics.minimumPaneWidth] {
+            let size = NSSize(width: width, height: 560)
+            let host = WindowlessRender.Host(
+                NewTaskHome(recentSessions: [], projects: [project], draft: narrow, runtimeSelections: runtimes,
+                    connections: connections, models: NewTaskModelSource(catalogs: catalogs) { _, _, _, _ in },
+                    onSelectSession: { _ in }, onChooseWorkspace: { _ in }, onShowHarnesses: {}, onCreate: { _ in nil })
+                    .frame(width: size.width, height: size.height)
+                    .background(ParityTheme.canvas),
+                size: size, appearance: .light)
+            defer { host.close() }
+            host.settle()
+            try WindowlessRender.writePNG(try host.capture().bitmap,
+                to: directory.appending(path: "new-task-codex-\(Int(width)).png"))
+            for label in ["Add files and more", "Permissions", "Model", "Start task"].map(L10n.string) {
+                let frame = try XCTUnwrap(frame(of: label, in: host), "\(label) at \(width)")
+                XCTAssertGreaterThanOrEqual(frame.minX, NewTaskHomeLayout.inset, "\(label) at \(width)")
+                XCTAssertLessThanOrEqual(frame.maxX, width - NewTaskHomeLayout.inset, "\(label) at \(width)")
+            }
+        }
+    }
+
+    /// The frame, from the window's left edge, of the element labelled `label`.
+    private func frame(of label: String, in host: WindowlessRender.Host<some View>) -> NSRect? {
+        host.hosting.layoutSubtreeIfNeeded()
+        return WindowlessRender.withAccessibilityTree {
+            func visit(_ node: AnyObject) -> NSRect? {
+                for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
+                    if (child.accessibilityLabel?() ?? nil) == label, let frame = child.accessibilityFrame?() { return frame }
+                    if let found = visit(child) { return found }
+                }
+                return nil
+            }
+            return visit(host.hosting)?.offsetBy(dx: -host.window.frame.minX, dy: 0)
+        }
     }
 
     /// A running Codex task's permission menu as its control opens it: the Codex app's choices with their

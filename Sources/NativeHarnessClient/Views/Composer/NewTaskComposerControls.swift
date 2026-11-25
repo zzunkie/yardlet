@@ -38,28 +38,20 @@ struct NewTaskHarnessControl<Items: View>: View {
     }
 }
 
-/// The same wrapping control row for a local or remote new task. The model popover stays outside
-/// the two arrangements, so loading longer model names never replaces the view presenting it.
+/// The same wrapping control row for a local or remote new task, laid out as the task composer's
+/// (`ControlRowLayout`): what does not fit beside the rest moves to a row of its own, down to a split
+/// pane's width, with the model and Start at the trailing edge of the last one. No control is replaced
+/// as the row wraps, so an open menu or popover stays where it is.
 struct NewTaskComposerControlRow<Primary: View, Secondary: View, Trailing: View>: View {
     @ViewBuilder let primary: () -> Primary
     @ViewBuilder let secondary: () -> Secondary
     @ViewBuilder let trailing: () -> Trailing
 
     var body: some View {
-        HStack(alignment: .newTaskControlRow, spacing: 7) {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 7) {
-                    primary()
-                    secondary()
-                }
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 7) { primary() }
-                    HStack(spacing: 7) { secondary() }
-                        .alignmentGuide(.newTaskControlRow) { $0[VerticalAlignment.center] }
-                }
-            }
-            Spacer(minLength: 8)
-            trailing()
+        ControlRowLayout(pinsTrailingActions: true) {
+            ControlRowLayout { primary() }
+            ControlRowLayout { secondary() }
+            HStack(spacing: 7) { trailing() }
         }
         .padding(.leading, 11)
         .padding(.trailing, 10)
@@ -80,13 +72,4 @@ struct NewTaskStartControl: View {
             .disabled(!canStart || commandMenuOpen)
             .keyboardShortcut(ComposerShortcut.start)
     }
-}
-
-/// Start and the model align with the second row when the primary controls wrap.
-private enum NewTaskControlRowAlignment: AlignmentID {
-    static func defaultValue(in dimensions: ViewDimensions) -> CGFloat { dimensions[VerticalAlignment.center] }
-}
-
-private extension VerticalAlignment {
-    static let newTaskControlRow = VerticalAlignment(NewTaskControlRowAlignment.self)
 }
