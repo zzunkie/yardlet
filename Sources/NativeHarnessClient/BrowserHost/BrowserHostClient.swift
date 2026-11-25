@@ -1591,6 +1591,10 @@ final class BrowserTab {
     var onHoldChange: (() -> Void)?
     /// When the last agent turn that used the tab ended, on the clock `hiddenSince` uses.
     private var agentTurnEndedAt: SuspendingClock.Instant?
+    /// The panel the handlers here are set by: the last panel in a window to show the tab. The same task's views can
+    /// be drawn twice (kept out of the window while a split view's pane shows the task), and a panel that lets the tab
+    /// go clears them only while they are its own.
+    weak var panel: AnyObject?
     /// The panel's primary handler.
     var eventHandler: ((BrowserHostEvent) -> Void)?
     /// Called whenever the agent reports using this tab.
