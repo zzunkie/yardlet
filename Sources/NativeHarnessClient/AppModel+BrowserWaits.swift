@@ -24,7 +24,35 @@ extension AppModel {
     func followBrowserWaits(of client: BrowserHostClient) {
         browserWaitSource = client
         client.onPersonWaitsChange = { [weak self] in self?.refreshBrowserWaits() }
+        client.onDownload = { [weak self] tab, download in self?.noteBrowserDownload(download, in: tab) }
         refreshBrowserWaits()
+    }
+
+    /// A task's tab reported a download. One the agent's act started from a site not allowed for the task asks the
+    /// person first (`AgentToolBroker.allowsAgentDownload`, docs/AGENT_BROWSER_TOOLS.md, "Where the browser goes"); it
+    /// goes on meanwhile, and is cancelled if they say no, or moved to the Trash if it had already finished.
+    func noteBrowserDownload(_ download: BrowserDownload, in tab: BrowserTab) {
+        let key = "\(tab.id)-\(download.id)"
+        if agentDownloadsAsked[key] != nil {
+            agentDownloadsAsked[key] = download
+            return
+        }
+        guard download.state == .started, let session = tab.session, tab.isDrivenByAgent, let agentTools else { return }
+        agentDownloadsAsked[key] = download
+        let address = tab.agentDownloadAddress
+        Task { [weak self, weak tab] in
+            let allowed = await agentTools.allowsAgentDownload(from: address, fileName: download.fileName,
+                                                               sessionID: session)
+            guard let self, let latest = self.agentDownloadsAsked.removeValue(forKey: key), !allowed else { return }
+            switch latest.state {
+            case .started, .inProgress:
+                tab?.send(.cancelDownload(tab: tab?.id ?? 0, download: latest.id))
+            case .completed:
+                try? Trash.move(URL(filePath: latest.path))
+            case .cancelled, .interrupted:
+                break
+            }
+        }
     }
 
     /// Reads every task's browser waits again, and marks, tells and withdraws what changed. The mailbox's panel is

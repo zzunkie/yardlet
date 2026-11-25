@@ -39,14 +39,17 @@ struct AgentToolServerLaunch: Equatable, Sendable {
     /// So do the tools that only list Yardlet's own tools (`search_yardlet_tools`, `list_connector_tools`,
     /// `list_simulator_tools`) and the simulator tools that only look: `simulator_list` reads this Mac's device
     /// list, and a screenshot or snapshot acts only on a device the person let the task use (`SimulatorApprovals`
-    /// asks on the app's own card first).
+    /// asks on the app's own card first). The browser tools that read the task's own tabs, scroll, resize or open a
+    /// blank one go without a card (`AgentToolCatalog.unaskedTools`), and so does `browser_navigate`, which Yardlet asks
+    /// about on its own card by the site it goes to, offering that site for the task rather than the tool for good.
     static var claudeAllowedTools: [String] {
         ((TaskSuggestionToolCatalog.tools + SessionToolCatalog.tools + SettingsToolCatalog.tools).map(\.name)
             + [TerminalToolCatalog.readTerminal, ScheduleToolCatalog.listRuns, WidgetToolCatalog.showWidget,
                CodeModeToolCatalog.runScript, ConnectorGatewayToolCatalog.callTool, AgentToolCatalog.batch,
                ScheduleToolCatalog.list, CodeModeToolCatalog.searchTools, ConnectorGatewayToolCatalog.listTools,
                SimulatorGatewayToolCatalog.listTools, SimulatorToolCatalog.list, SimulatorToolCatalog.screenshot,
-               SimulatorToolCatalog.snapshot])
+               SimulatorToolCatalog.snapshot]
+            + AgentToolCatalog.unaskedTools + [AgentToolCatalog.navigate])
             .map { "mcp__\(AgentToolEnvironment.serverName)__\($0)" }
     }
 
@@ -162,10 +165,14 @@ protocol AgentToolLaunchProviding: AnyObject {
     /// The task's turn ended (it is ready, completed or failed): a change to its tools held for
     /// the turn is told to its server now.
     func taskTurnEnded(_ localSessionID: UUID)
+    /// Whether a download the agent's act started in the task's tab may stay, having asked the person where that is
+    /// the rule (`AgentToolBroker.allowsAgentDownload`); `address` is where it came from.
+    func allowsAgentDownload(from address: String?, fileName: String, sessionID: UUID) async -> Bool
 }
 
 extension AgentToolLaunchProviding {
     func taskTurnEnded(_ localSessionID: UUID) {}
+    func allowsAgentDownload(from address: String?, fileName: String, sessionID: UUID) async -> Bool { true }
 }
 
 /// The one setting: agent browser tools, on unless the user turns them off. A change applies to

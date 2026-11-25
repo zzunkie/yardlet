@@ -159,6 +159,35 @@ final class BrowserAgentToolsTests: XCTestCase {
         XCTAssertEqual(cdp.params(of: "Page.navigate").first?["url"], .string("https://example.com"))
     }
 
+    func testNavigateAsksWhereItGoesAndWhereARedirectLeads() async {
+        cdp.responders["Page.navigate"] = { _ in .object(["frameId": .string("F"), "loaderId": .string("L")]) }
+        cdp.eventsAfter["Page.navigate"] = [("Page.loadEventFired", .object(["timestamp": .number(1)]))]
+        var asked: [(String, String?)] = []
+        var answers: [Bool] = []
+        tools.allowsNavigation = { _, address, from in
+            asked.append((address, from))
+            return answers.isEmpty ? true : answers.removeFirst()
+        }
+        // Declined: nothing reaches the browser.
+        answers = [false]
+        let declined = await run(AgentToolCatalog.navigate, ["url": .string("https://docs.example.test")])
+        XCTAssertEqual(declined.structuredContent?["error"]?["kind"]?.stringValue, AgentToolFailure.Kind.refused.rawValue)
+        XCTAssertEqual(cdp.params(of: "Page.navigate").count, 0)
+
+        // A page that lands on its own site is not asked about again; one that lands on another is.
+        cdp.pageURL = "https://docs.example.test/start"
+        _ = await run(AgentToolCatalog.navigate, ["url": .string("https://docs.example.test")])
+        XCTAssertEqual(asked.count, 2)
+        cdp.pageURL = "https://elsewhere.example.test/landing"
+        answers = [true, false]
+        let redirected = await run(AgentToolCatalog.navigate, ["url": .string("https://docs.example.test/go")])
+        XCTAssertTrue(redirected.isError)
+        XCTAssertEqual(asked.last?.0, "https://elsewhere.example.test/landing")
+        XCTAssertEqual(asked.last?.1, "https://docs.example.test/go")
+        XCTAssertEqual(cdp.params(of: "Page.navigate").last?["url"], .string("about:blank"),
+                       "The page the person did not allow goes")
+    }
+
     func testNavigateReportsAFailedLoadAndRefusesAddressesOutsideThePolicy() async {
         cdp.responders["Page.getFrameTree"] = { _ in .object(["frameTree": .object(["frame": .object(["id": .string("F")])])]) }
         cdp.responders["Page.navigate"] = { _ in .object(["frameId": .string("F"), "errorText": .string("net::ERR_NAME_NOT_RESOLVED")]) }

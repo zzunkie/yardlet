@@ -105,13 +105,15 @@ final class AgentToolApprovalTests: XCTestCase {
 
         for tool in [SessionToolCatalog.sendMessageToTask, SessionToolCatalog.archiveTask, SessionToolCatalog.createProject,
                      SettingsToolCatalog.update, ScheduleToolCatalog.create, AgentToolCatalog.navigate,
-                     AgentToolCatalog.click, VaultToolCatalog.fillCredential, SimulatorToolCatalog.tap] {
+                     AgentToolCatalog.tabNew, AgentToolCatalog.click, VaultToolCatalog.fillCredential,
+                     SimulatorToolCatalog.tap] {
             let refusal = await broker.approvalRefusal(tool: tool, arguments: .object([:]), sessionID: session, origin: .direct)
             XCTAssertNotNil(refusal, tool)
         }
         for tool in [SessionToolCatalog.readTask, SessionToolCatalog.runAgent, SessionToolCatalog.createTask,
                      AgentToolCatalog.scroll, AgentToolCatalog.resize, AgentToolCatalog.snapshot,
-                     CodeModeToolCatalog.runScript, ConnectorGatewayToolCatalog.callTool,
+                     AgentToolCatalog.tabList, AgentToolCatalog.screenshot, AgentToolCatalog.consoleMessages,
+                     AgentToolCatalog.waitFor, CodeModeToolCatalog.runScript, ConnectorGatewayToolCatalog.callTool,
                      SimulatorGatewayToolCatalog.callTool] {
             let refusal = await broker.approvalRefusal(tool: tool, arguments: .object([:]), sessionID: session, origin: .direct)
             XCTAssertNil(refusal, tool)
@@ -122,6 +124,9 @@ final class AgentToolApprovalTests: XCTestCase {
         let clickingBatch = await broker.approvalRefusal(tool: AgentToolCatalog.batch, arguments: Self.batch([
             AgentToolCatalog.snapshot, AgentToolCatalog.click]), sessionID: session, origin: .direct)
         XCTAssertNotNil(clickingBatch)
+        let tabBatch = await broker.approvalRefusal(tool: AgentToolCatalog.batch, arguments: Self.batch([
+            AgentToolCatalog.snapshot, AgentToolCatalog.tabNew]), sessionID: session, origin: .direct)
+        XCTAssertNotNil(tabBatch, "A read-only task opens no tab")
     }
 
     func testABatchAsksOnceForItsChangingActions() async throws {
@@ -131,12 +136,14 @@ final class AgentToolApprovalTests: XCTestCase {
             sessionID: session, origin: .direct)
         XCTAssertNil(observing)
         XCTAssertEqual(approvals.titles, [])
-        let acting = await broker.approvalRefusal(tool: AgentToolCatalog.batch, arguments: Self.batch([
-            AgentToolCatalog.navigate, AgentToolCatalog.snapshot, AgentToolCatalog.click, AgentToolCatalog.type]),
-            sessionID: session, origin: .direct)
+        var actions = Self.batch([AgentToolCatalog.snapshot, AgentToolCatalog.click, AgentToolCatalog.type])
+        actions = Self.prependingNavigation("https://docs.example.test/a", to: actions)
+        let acting = await broker.approvalRefusal(tool: AgentToolCatalog.batch, arguments: actions,
+                                                  sessionID: session, origin: .direct)
         XCTAssertNil(acting)
         XCTAssertEqual(approvals.titles, [L10n.string("Allow this task to run these browser actions?")])
-        XCTAssertEqual(approvals.details.last?.split(separator: "\n").count, 3)
+        XCTAssertEqual(approvals.details.last?.split(separator: "\n").count, 4, approvals.details.last ?? "")
+        XCTAssertTrue(approvals.details.last?.contains("https://docs.example.test") == true)
         // A script's browser action was never on the harness's card.
         _ = await broker.approvalRefusal(tool: AgentToolCatalog.click, arguments: .object([:]), sessionID: session,
                                          origin: .wrapped)
@@ -188,14 +195,14 @@ final class AgentToolApprovalTests: XCTestCase {
 
     func testTabToolsAskInABatchAndInAScript() async throws {
         let (broker, session, _, _, approvals) = try makeBroker(policy: policy(claudeCLIAsks: true))
-        for tool in [AgentToolCatalog.tabClose, AgentToolCatalog.tabNew, AgentToolCatalog.tabSelect] {
+        for tool in [AgentToolCatalog.tabClose, AgentToolCatalog.tabSelect] {
             XCTAssertTrue(AgentToolBroker.changingBrowserTools.contains(tool), tool)
             let inBatch = await broker.approvalRefusal(tool: AgentToolCatalog.batch, arguments: Self.batch([tool]),
                                                        sessionID: session, origin: .direct)
             XCTAssertNil(inBatch)
             _ = await broker.approvalRefusal(tool: tool, arguments: .object([:]), sessionID: session, origin: .wrapped)
         }
-        XCTAssertEqual(approvals.titles.count, 6)
+        XCTAssertEqual(approvals.titles.count, 4)
         XCTAssertFalse(AgentToolBroker.changingBrowserTools.contains(AgentToolCatalog.scroll))
         XCTAssertFalse(AgentToolBroker.changingBrowserTools.contains(AgentToolCatalog.handoff))
     }
@@ -329,6 +336,127 @@ final class AgentToolApprovalTests: XCTestCase {
         XCTAssertEqual(connectors.calls, ["gmail_send"])
     }
 
+    func testReadingAndViewingATabGoUnaskedEverywhere() async throws {
+        let unasked = Set(AgentToolCatalog.unaskedTools)
+        XCTAssertEqual(unasked, [AgentToolCatalog.tabList, AgentToolCatalog.snapshot, AgentToolCatalog.screenshot,
+                                 AgentToolCatalog.consoleMessages, AgentToolCatalog.waitFor, AgentToolCatalog.scroll,
+                                 AgentToolCatalog.resize, AgentToolCatalog.tabNew])
+        for tool in unasked.union([AgentToolCatalog.navigate]) {
+            // Claude Code runs it without its card, and Codex and Antigravity read it as one that changes nothing.
+            XCTAssertTrue(AgentToolServerLaunch.claudeAllowedTools.contains("mcp__yardlet__\(tool)"), tool)
+            XCTAssertEqual(AgentToolCatalog.definition(named: tool)?.json["annotations"]?["readOnlyHint"], .bool(true), tool)
+        }
+        XCTAssertTrue(AgentToolBroker.changingBrowserTools.isDisjoint(with: unasked))
+        XCTAssertTrue(AgentToolHarnessApproval.asksEachTime(tool: AgentToolCatalog.navigate, labels: ConnectorToolLabels()),
+                      "No harness card allows every site for good")
+        let (broker, session, _, _, approvals) = try makeBroker(policy: policy())
+        let viewing = await broker.approvalRefusal(tool: AgentToolCatalog.batch,
+                                                   arguments: Self.batch(Array(unasked)), sessionID: session,
+                                                   origin: .direct)
+        XCTAssertNil(viewing)
+        for tool in unasked {
+            _ = await broker.approvalRefusal(tool: tool, arguments: .object([:]), sessionID: session, origin: .wrapped)
+        }
+        XCTAssertEqual(approvals.titles, [])
+    }
+
+    func testNavigationIsAllowedBySiteAndPort() async throws {
+        let (broker, session, _, _, approvals) = try makeBroker(policy: policy())
+        approvals.listeningPorts = [3000]
+        func goes(_ address: String) async -> Bool {
+            await broker.allowsNavigation(to: address, redirectedFrom: nil, sessionID: session)
+        }
+        // A blank page, a file (weighed by folders elsewhere) and the task's own server go unasked, by any loopback name.
+        for address in ["about:blank", "file:///tmp/x.html", "http://localhost:3000/", "http://127.0.0.1:3000/a",
+                        "http://[::1]:3000", "https://localhost:3000"] {
+            let allowed = await goes(address)
+            XCTAssertTrue(allowed, address)
+        }
+        XCTAssertEqual(approvals.titles, [])
+        // Another port of the Mac, the local network and a data: address ask; a data: card offers no site to allow.
+        approvals.chosen = BrowserNavigationAnswer.onceID
+        for address in ["http://localhost:3001", "http://192.168.0.2:3000", "data:text/html,hi"] {
+            let allowed = await goes(address)
+            XCTAssertTrue(allowed, address)
+        }
+        XCTAssertEqual(approvals.titles.count, 3)
+        XCTAssertEqual(approvals.offered.last, [BrowserNavigationAnswer.denyID, BrowserNavigationAnswer.onceID])
+        XCTAssertEqual(approvals.offered.first?.last, BrowserNavigationAnswer.siteID)
+
+        // Allowed for the task: the same scheme, host and port go; another port or scheme asks.
+        approvals.chosen = BrowserNavigationAnswer.siteID
+        _ = await goes("https://docs.stripe.com/a")
+        let asked = approvals.titles.count
+        _ = await goes("https://docs.stripe.com/b?q=1")
+        _ = await goes("HTTPS://DOCS.STRIPE.COM:443/c")
+        XCTAssertEqual(approvals.titles.count, asked)
+        approvals.answer = false
+        let otherPort = await goes("https://docs.stripe.com:8443/")
+        let otherScheme = await goes("http://docs.stripe.com/")
+        XCTAssertFalse(otherPort)
+        XCTAssertFalse(otherScheme)
+        XCTAssertEqual(approvals.titles.count, asked + 2)
+
+        // What a batch's card let through goes while the batch runs, and no longer.
+        let site = BrowserNavigationTarget("https://example.test/x").passKey
+        let passed = await BrowserNavigationPass.$allowed.withValue([site]) { await goes("https://example.test/y") }
+        XCTAssertTrue(passed)
+        let after = await goes("https://example.test/y")
+        XCTAssertFalse(after)
+
+        // A released task's sites are asked about again; a task that runs without asking is asked nothing.
+        broker.releaseAgentTools(for: session)
+        approvals.answer = true
+        approvals.chosen = BrowserNavigationAnswer.onceID
+        _ = await goes("https://docs.stripe.com/a")
+        XCTAssertEqual(approvals.titles.count, asked + 4)
+        approvals.policy = policy(asks: false)
+        let unasked = await goes("https://anywhere.example.test")
+        XCTAssertTrue(unasked)
+        XCTAssertEqual(approvals.titles.count, asked + 4)
+    }
+
+    func testABatchCardCanAllowItsSitesForTheTask() async throws {
+        let (broker, session, _, _, approvals) = try makeBroker(policy: policy())
+        approvals.chosen = BrowserNavigationAnswer.siteID
+        var pass: Set<String> = []
+        let arguments = Self.prependingNavigation("https://docs.example.test/a", to: Self.batch([AgentToolCatalog.snapshot]))
+        let refusal = await broker.approvalRefusal(tool: AgentToolCatalog.batch, arguments: arguments, sessionID: session,
+                                                   origin: .direct, navigationPass: &pass)
+        XCTAssertNil(refusal)
+        XCTAssertEqual(pass, ["https://docs.example.test"])
+        // The site is the task's now: the same batch, and a direct navigation there, ask nothing.
+        _ = await broker.approvalRefusal(tool: AgentToolCatalog.batch, arguments: arguments, sessionID: session,
+                                         origin: .direct)
+        let direct = await broker.allowsNavigation(to: "https://docs.example.test/b", redirectedFrom: nil, sessionID: session)
+        XCTAssertTrue(direct)
+        XCTAssertEqual(approvals.titles.count, 1)
+    }
+
+    func testADownloadFromASiteAsksOnceForTheTask() async throws {
+        let (broker, session, _, _, approvals) = try makeBroker(policy: policy())
+        approvals.listeningPorts = [5173]
+        let own = await broker.allowsAgentDownload(from: "http://localhost:5173/report.csv", fileName: "report.csv",
+                                                   sessionID: session)
+        XCTAssertTrue(own)
+        XCTAssertEqual(approvals.titles, [])
+        let first = await broker.allowsAgentDownload(from: "https://files.example.test/a.zip", fileName: "a.zip",
+                                                     sessionID: session)
+        let second = await broker.allowsAgentDownload(from: "https://files.example.test/b.zip", fileName: "b.zip",
+                                                      sessionID: session)
+        XCTAssertTrue(first && second)
+        XCTAssertEqual(approvals.titles, [L10n.format("Allow downloads from %@ in this task?", "https://files.example.test")])
+        // Allowing a site to open does not allow its downloads, and a declined one is not kept.
+        approvals.answer = false
+        let declined = await broker.allowsAgentDownload(from: "https://other.example.test/c.zip", fileName: "c.zip",
+                                                        sessionID: session)
+        XCTAssertFalse(declined)
+        let again = await broker.allowsAgentDownload(from: "https://other.example.test/c.zip", fileName: "c.zip",
+                                                     sessionID: session)
+        XCTAssertFalse(again)
+        XCTAssertEqual(approvals.titles.count, 3)
+    }
+
     func testAToolNotKnownToReadGetsNoLastingAllow() {
         let labels = ConnectorToolLabels()
         XCTAssertTrue(AgentToolHarnessApproval.asksEachTime(tool: "slack_post_message", labels: labels),
@@ -342,6 +470,13 @@ final class AgentToolApprovalTests: XCTestCase {
         .object(["actions": .array(names.map { .object(["name": .string($0), "input": .object([:])]) })])
     }
 
+    private static func prependingNavigation(_ url: String, to batch: ToolJSON) -> ToolJSON {
+        guard case let .array(actions)? = batch["actions"] else { return batch }
+        let navigate: ToolJSON = .object(["name": .string(AgentToolCatalog.navigate),
+                                          "input": .object(["url": .string(url)])])
+        return .object(["actions": .array([navigate] + actions)])
+    }
+
     private func text(_ result: AgentToolResult) -> String {
         result.content.compactMap { if case let .text(t) = $0 { return t }; return nil }.joined(separator: "\n")
     }
@@ -350,7 +485,13 @@ final class AgentToolApprovalTests: XCTestCase {
 @MainActor
 private final class RecordingApprovals: AgentToolApprovalHandling {
     var policy: AgentToolCallerPolicy?
-    let answer: Bool
+    var answer: Bool
+    /// The allow chosen on a card that offers several; nil answers as `answer` does, with the narrowest allow.
+    var chosen: String?
+    /// The answers each such card offered, by id.
+    var offered: [[String]] = []
+    /// The ports the caller's task listens on.
+    var listeningPorts: Set<Int> = []
     var hostTaskID = UUID()
     var titles: [String] = []
     var details: [String] = []
@@ -375,6 +516,18 @@ private final class RecordingApprovals: AgentToolApprovalHandling {
         guard let center else { return answer }
         return await center.ask(PermissionRequest(id: UUID().uuidString, title: title, detail: detail, command: nil),
                                 in: hostTaskID, onChange: {})
+    }
+
+    func askPerson(title: String, detail: String, actions: [PermissionRequestAction], callerID: UUID) async -> String? {
+        titles.append(title)
+        details.append(detail)
+        offered.append(actions.map(\.id))
+        guard answer else { return nil }
+        return chosen ?? PermissionActionPreference.preferred(from: actions, decision: .allow)?.id
+    }
+
+    func taskListens(on port: Int, callerID: UUID) async -> Bool {
+        listeningPorts.contains(port)
     }
 }
 

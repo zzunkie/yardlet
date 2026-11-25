@@ -85,6 +85,10 @@ final class BrowserAgentTools {
     /// for a task that runs without asking, whose shell reads the file anyway, and asks the person on the
     /// task's request card otherwise (`AppModel.allowsBrowserFile`). Without the app (tests) it is refused.
     var allowsFileOutsideFolders: @MainActor (UUID, String) async -> Bool = { _, _ in false }
+    /// Whether the task's browser may go to an address, and where it came from when a redirect led there: the broker
+    /// weighs it by its site and asks the person where that is the rule (`AgentToolBroker.allowsNavigation`). Nil
+    /// (tests) goes anywhere the address policy lets it.
+    var allowsNavigation: (@MainActor (UUID, String, String?) async -> Bool)?
     /// The files outside its folders each task was let open, so a page that shows one asks once.
     private var openedOutsideFolders: [UUID: Set<String>] = [:]
     /// Where the copies of uploaded files go (`BrowserAgentWorkspaceFile.privateCopy`): the broker's private
@@ -790,6 +794,12 @@ final class BrowserAgentTools {
         }
         // A file outside the task's folders, after `..` and symbolic links, opens only as the task's shell could read it.
         try await allowFile(url, on: page, sessionID: sessionID)
+        // Any other place by its site: a site not allowed for the task asks first.
+        let target = BrowserNavigationTarget(url)
+        if let sessionID, let allowsNavigation, await !allowsNavigation(sessionID, url, nil) {
+            throw BrowserAgentToolError("The person did not allow this task to open \(target.cardText), so the tab did "
+                + "not go there. Do not open it again unless they ask for it.", AgentToolFailure(.refused, retry: .no))
+        }
         // A file the agent opens here, the person allowing it where it lies outside the task's folders, is one a remote
         // device may see in this tab.
         page.agentOpens(url)
@@ -843,6 +853,15 @@ final class BrowserAgentTools {
             if !loaded { note = "\nThe page is still loading." }
         }
         let location = try await pageLocation(page)
+        // A redirect to another site is weighed as a navigation there; the page it showed goes if the person says no.
+        let landed = BrowserNavigationTarget(location.url)
+        if case .site = landed, landed != target, let sessionID, let allowsNavigation,
+           await !allowsNavigation(sessionID, location.url, url) {
+            page.clearRefs()
+            _ = try? await send(page, "Page.navigate", ["url": .string("about:blank")], timeout: loadTimeout)
+            throw BrowserAgentToolError("\(url) redirected to \(landed.cardText), which the person did not allow this "
+                + "task to open, so the tab now shows a blank page.", AgentToolFailure(.refused, retry: .no))
+        }
         return .text("Loaded \(location.url)\nTitle: \(location.title)\(note)")
     }
 

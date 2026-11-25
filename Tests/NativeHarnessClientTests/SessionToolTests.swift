@@ -56,9 +56,11 @@ final class SessionToolTests: XCTestCase {
         XCTAssertEqual(AgentToolCatalog.builtInTools.map(\.name).filter {
             !browserNames.contains($0) && $0.hasPrefix(AgentToolCatalog.browserToolPrefix)
         }, [], "yardlet-mcp refuses an unknown browser_ name itself, so only a browser tool starts with it")
-        XCTAssertEqual(Array(AgentToolServerLaunch.claudeAllowedTools.dropLast(15).suffix(names.count)), names.map { "mcp__yardlet__\($0)" },
+        let browser = AgentToolCatalog.unaskedTools.count + 1
+        XCTAssertEqual(Array(AgentToolServerLaunch.claudeAllowedTools.dropLast(15 + browser).suffix(names.count)),
+                       names.map { "mcp__yardlet__\($0)" },
                        "A Claude task runs them without the CLI's card; the app asks the person where it should")
-        XCTAssertEqual(Array(AgentToolServerLaunch.claudeAllowedTools.suffix(15)),
+        XCTAssertEqual(Array(AgentToolServerLaunch.claudeAllowedTools.dropLast(browser).suffix(15)),
                        ["mcp__yardlet__list_settings", "mcp__yardlet__update_setting", "mcp__yardlet__read_terminal",
                         "mcp__yardlet__list_task_runs", "mcp__yardlet__show_widget", "mcp__yardlet__run_yardlet_script",
                         "mcp__yardlet__call_connector_tool", "mcp__yardlet__browser_batch",

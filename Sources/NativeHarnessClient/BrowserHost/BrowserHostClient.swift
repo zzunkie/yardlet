@@ -92,6 +92,9 @@ final class BrowserHostClient {
     var onPersonWaitsChange: (() -> Void)?
     /// Called with every event a tab receives, after the tab and its panel have it.
     var onTabEvent: ((BrowserTab, BrowserHostEvent) -> Void)?
+    /// Called with every report of a task's download, after its tab has it, for the downloads the agent's acts start
+    /// (`AppModel.noteBrowserDownload`).
+    var onDownload: ((BrowserTab, BrowserDownload) -> Void)?
     /// The host says when a tab's navigation sends its request (`navigationRequest`); a host that never did, such as
     /// one without that hook, leaves it unknown (`BrowserTab.navigationRequestSent`).
     fileprivate(set) var reportsNavigationRequests = false
@@ -1255,6 +1258,7 @@ final class BrowserHostClient {
         case .download(let id, let download):
             guard let tab = tabs[id] else { return }
             tab.receive(event)
+            onDownload?(tab, download)
             // A tab a page opened only to download (a target=_blank link to a file) never shows a page. As
             // in Chrome it closes and its opener comes back, once the download ends: CEF reports nothing
             // more of a download whose tab has closed, and the panel's download row waits for its end.
@@ -1792,6 +1796,17 @@ final class BrowserTab {
     /// The agent's `browser_navigate` opens `address` in this tab (`agentOpenedFile`).
     func noteAgentOpened(_ address: String) {
         agentOpenedFile = BrowserAgentWorkspaceFile.realPath(ofFileAddress: address)
+        agentOpened = (address, .now)
+    }
+
+    /// The address the agent's `browser_navigate` last opened here, and when.
+    private var agentOpened: (address: String, at: ContinuousClock.Instant)?
+
+    /// Where a download the agent's latest act started comes from: the address its `browser_navigate` opened when that
+    /// was its latest act, since an address that downloads a file shows no page of its own, else the page the tab shows.
+    var agentDownloadAddress: String? {
+        if let agentOpened, lastAgentInput.map({ agentOpened.at >= $0 }) ?? true { return agentOpened.address }
+        return currentURL
     }
 
     /// `address` is the `file:` page the agent last opened in this tab, by its real path now.

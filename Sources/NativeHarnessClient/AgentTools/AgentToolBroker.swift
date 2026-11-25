@@ -97,6 +97,20 @@ protocol AgentToolApprovalHandling: AnyObject {
     func agentToolPolicy(callerID: UUID) -> AgentToolCallerPolicy?
     /// Asks the person on the caller's task's request card; true to go ahead.
     func askPerson(title: String, detail: String, callerID: UUID) async -> Bool
+    /// As `askPerson`, on a card that offers `actions`: the id of the allow the person chose, or nil for no.
+    func askPerson(title: String, detail: String, actions: [PermissionRequestAction], callerID: UUID) async -> String?
+    /// Whether a process of the caller's task listens on this port of the Mac (`TaskResourceMonitor.servers(of:)`):
+    /// a development server the task started.
+    func taskListens(on port: Int, callerID: UUID) async -> Bool
+}
+
+extension AgentToolApprovalHandling {
+    func askPerson(title: String, detail: String, actions: [PermissionRequestAction], callerID: UUID) async -> String? {
+        guard await askPerson(title: title, detail: detail, callerID: callerID) else { return nil }
+        return PermissionActionPreference.preferred(from: actions, decision: .allow)?.id
+    }
+
+    func taskListens(on port: Int, callerID: UUID) async -> Bool { false }
 }
 
 /// How a call reached the broker: from the harness under the tool's own name, or from inside a wrapper
@@ -173,6 +187,12 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     var approvedReadServices: [UUID: Set<String>] = [:]
     /// A first read's question in flight, by task and service, which calls made meanwhile wait on.
     var pendingReadApprovals: [String: PendingReadApproval] = [:]
+    /// The web sites each task's browser may go to without asking, and download from, as the person allowed them for
+    /// the task on Yardlet's card; by the task whose cards they were (`AgentToolCallerPolicy.hostTaskID`).
+    var allowedSites: [UUID: Set<BrowserSite>] = [:]
+    var allowedDownloadSites: [UUID: Set<BrowserSite>] = [:]
+    /// A first download's question that downloads from the same task and site wait on together.
+    var pendingDownloadApprovals: [String: Task<Bool, Never>] = [:]
     /// The app, which answers the simulator tools. Nil, as in tests and on other platforms, offers none.
     weak var simulators: (any SimulatorToolHandling)?
     /// The vault for agents. A task with the browser tools also gets `browser_fill_credential` while
@@ -225,6 +245,9 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         tools.uploadFolder = environment.privateDirectory.appending(path: "uploads", directoryHint: .isDirectory)
         tools.allowsFileOutsideFolders = { [weak self] session, path in
             await self?.sessions?.allowsBrowserFile(path, callerID: session) ?? false
+        }
+        tools.allowsNavigation = { [weak self] session, address, redirectedFrom in
+            await self?.allowsNavigation(to: address, redirectedFrom: redirectedFrom, sessionID: session) ?? false
         }
     }
 
@@ -310,6 +333,8 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         for key in pendingReadApprovals.keys.filter({ $0.hasPrefix(prefix) }) {
             pendingReadApprovals.removeValue(forKey: key)?.answer.cancel()
         }
+        allowedSites.removeValue(forKey: localSessionID)
+        allowedDownloadSites.removeValue(forKey: localSessionID)
         tools.closeTab(for: localSessionID)
     }
 
@@ -357,9 +382,10 @@ final class AgentToolBroker: AgentToolLaunchProviding {
                                                         schema: definition.inputSchema) {
             return failure
         }
+        var navigationPass: Set<String> = []
         if Self.ownDefinition(named: call.tool) != nil,
            let refusal = await approvalRefusal(tool: call.tool, arguments: call.arguments, sessionID: sessionID,
-                                               origin: origin) {
+                                               origin: origin, navigationPass: &navigationPass) {
             return refusal
         }
         if AgentToolCatalog.definition(named: call.tool) != nil {
@@ -367,7 +393,11 @@ final class AgentToolBroker: AgentToolLaunchProviding {
                 return .error("The browser tools were off in Yardlet's settings when this task started. Turn them "
                     + "on in Yardlet Settings → General, then start or resume the task.")
             }
-            return await tools.run(tool: call.tool, arguments: JSONValue(call.arguments), sessionID: sessionID)
+            // A batch's navigations its card let through go without another card while it runs.
+            let pass = navigationPass
+            return await BrowserNavigationPass.$allowed.withValue(pass) {
+                await tools.run(tool: call.tool, arguments: JSONValue(call.arguments), sessionID: sessionID)
+            }
         }
         if VaultToolCatalog.definition(named: call.tool) != nil {
             guard browserToolsByTask[sessionID] != false, vault?.offersTool == true else {

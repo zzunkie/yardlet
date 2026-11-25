@@ -407,7 +407,8 @@ final class SessionToolCenter {
     private(set) var approvals: [UUID: [SessionToolApproval]] = [:]
     private(set) var runs: [UUID: AgentRun] = [:]
 
-    @ObservationIgnored private var approvalWaiters: [String: CheckedContinuation<Bool, Never>] = [:]
+    /// Each waiting approval's answer: the action the person chose, or nil for no.
+    @ObservationIgnored private var approvalWaiters: [String: CheckedContinuation<String??, Never>] = [:]
     @ObservationIgnored private let defaults: UserDefaults
     /// The tasks `create_task` made, under the key that once kept how deep each sat: only whether a
     /// task is there is read, not the number an older Yardlet wrote for it.
@@ -463,7 +464,14 @@ final class SessionToolCenter {
     /// ran out of time, a stopped turn) takes its card away at once and is answered no.
     func ask(_ request: PermissionRequest, in taskID: UUID, timeout: Duration = SessionToolPolicy.approvalTimeout,
              onChange: @escaping @MainActor () -> Void) async -> Bool {
-        guard !Task.isCancelled else { return false }
+        await choose(request, in: taskID, timeout: timeout, onChange: onChange) != nil
+    }
+
+    /// As `ask`, for a card that offers more than one allow (`PermissionRequest.actions`): the allow the person
+    /// chose, an answer that named none (a notification's Allow) taking the narrowest, or nil for no.
+    func choose(_ request: PermissionRequest, in taskID: UUID, timeout: Duration = SessionToolPolicy.approvalTimeout,
+                onChange: @escaping @MainActor () -> Void) async -> String? {
+        guard !Task.isCancelled else { return nil }
         let approval = SessionToolApproval(id: request.id, taskID: taskID, request: request)
         approvals[taskID, default: []].append(approval)
         onChange()
@@ -473,7 +481,7 @@ final class SessionToolCenter {
             self?.answer(approval.id, allow: false)
         }
         // The waiter is in place before the cancellation's hop to the main actor can run.
-        let allowed = await withTaskCancellationHandler {
+        let answer = await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 approvalWaiters[approval.id] = continuation
             }
@@ -482,18 +490,22 @@ final class SessionToolCenter {
         }
         timer.cancel()
         onChange()
-        return allowed
+        guard let answer else { return nil }
+        let allows = request.actions.filter { $0.decision == .allow }
+        if let answer, allows.contains(where: { $0.id == answer }) { return answer }
+        return PermissionActionPreference.preferred(from: allows, decision: .allow)?.id ?? ""
     }
 
-    /// Answers a waiting approval. False when none waits under this ID.
+    /// Answers a waiting approval, with the action the person chose where its card offered several. False when
+    /// none waits under this ID.
     @discardableResult
-    func answer(_ id: String, allow: Bool) -> Bool {
+    func answer(_ id: String, allow: Bool, actionID: String? = nil) -> Bool {
         guard let continuation = approvalWaiters.removeValue(forKey: id) else { return false }
         for (taskID, list) in approvals {
             let kept = list.filter { $0.id != id }
             approvals[taskID] = kept.isEmpty ? nil : kept
         }
-        continuation.resume(returning: allow)
+        continuation.resume(returning: allow ? .some(actionID) : nil)
         return true
     }
 
