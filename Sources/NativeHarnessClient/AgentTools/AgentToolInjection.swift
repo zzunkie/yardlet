@@ -32,9 +32,13 @@ struct AgentToolServerLaunch: Equatable, Sendable {
     /// `read_terminal` goes without asking too, as the Claude app's `read_terminal` runs nothing; while the
     /// terminal is not shared the server does not list it and the name allows nothing. The settings tools go
     /// without the CLI's card as well: the app asks on its own card for the changes that ask.
+    /// The wrappers (`run_yardlet_script`, `call_connector_tool`, `browser_batch`) go without the CLI's card too:
+    /// the CLI cannot see the calls they make, so Yardlet weighs and asks about each of those itself
+    /// (`AgentToolBroker+Approvals`), and a card for the wrapper would only come before that one.
     static var claudeAllowedTools: [String] {
         ((TaskSuggestionToolCatalog.tools + SessionToolCatalog.tools + SettingsToolCatalog.tools).map(\.name)
-            + [TerminalToolCatalog.readTerminal, ScheduleToolCatalog.listRuns, WidgetToolCatalog.showWidget])
+            + [TerminalToolCatalog.readTerminal, ScheduleToolCatalog.listRuns, WidgetToolCatalog.showWidget,
+               CodeModeToolCatalog.runScript, ConnectorGatewayToolCatalog.callTool, AgentToolCatalog.batch])
             .map { "mcp__\(AgentToolEnvironment.serverName)__\($0)" }
     }
 

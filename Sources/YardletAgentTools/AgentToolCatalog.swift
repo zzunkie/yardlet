@@ -8,6 +8,9 @@ package struct AgentToolDefinition: Equatable, Sendable {
     /// JSON Schema for the arguments object.
     package var inputSchema: ToolJSON
     package var readOnly: Bool
+    /// The tool may remove something that is not easily brought back (`destructiveHint`): a schedule, a
+    /// task from the sidebar, a tab.
+    package var destructive = false
     /// The tool reaches beyond Yardlet: a web page for the browser tools. The task suggestion
     /// tools stay inside Yardlet.
     package var openWorld = true
@@ -25,7 +28,7 @@ package struct AgentToolDefinition: Equatable, Sendable {
             "annotations": .object([
                 "title": .string(title),
                 "readOnlyHint": .bool(readOnly),
-                "destructiveHint": .bool(false),
+                "destructiveHint": .bool(destructive),
                 "openWorldHint": .bool(openWorld)
             ])
         ]
@@ -398,7 +401,9 @@ package enum AgentToolCatalog {
                     "description": .string("The actions to run, in order.")
                 ])
             ], required: ["actions"]),
-            readOnly: false
+            // It changes nothing itself: Yardlet checks and, where the task asks, asks the person about each
+            // call it makes as about a direct one (`AgentToolBroker`), so a harness need not ask about it first.
+            readOnly: true
         ),
         AgentToolDefinition(
             name: tabList,
@@ -437,7 +442,8 @@ package enum AgentToolCatalog {
             description: "Close a tab of this task. Closing the active tab makes the next one active; closing the "
                 + "last tab closes the task's browser panel.",
             inputSchema: object(["tabId": property("string", "The tab to close.")], required: ["tabId"]),
-            readOnly: false
+            readOnly: false,
+            destructive: true
         )
     ]
 }

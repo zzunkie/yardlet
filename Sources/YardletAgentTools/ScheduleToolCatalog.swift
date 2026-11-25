@@ -209,6 +209,7 @@ package enum ScheduleToolCatalog {
             description: "Delete a scheduled task so it no longer runs. The tasks its runs started stay.",
             inputSchema: object([Key.scheduleID: scheduleIDProperty], required: [Key.scheduleID]),
             readOnly: false,
+            destructive: true,
             openWorld: false
         ),
         AgentToolDefinition(

@@ -21,11 +21,13 @@ import YardletAgentTools
 // freely than the task that made it.
 
 extension AppModel: ScheduleToolHandling {
-    func callScheduleTool(named name: String, arguments: ToolJSON, callerID: UUID) async -> AgentToolResult {
+    func callScheduleTool(named name: String, arguments: ToolJSON, callerID: UUID,
+                          origin: AgentToolCallOrigin = .direct) async -> AgentToolResult {
         let arguments = JSONValue(arguments)
-        guard let caller = sessionToolCaller(callerID) else {
+        guard var caller = sessionToolCaller(callerID) else {
             return .error("Yardlet no longer has the task that made this call.")
         }
+        caller.throughWrapper = origin == .wrapped
         if ScheduleToolCatalog.changingTools.contains(name),
            let refusal = scheduledRunRefusal(name, arguments: arguments, caller: caller) {
             return .error(refusal)
@@ -198,11 +200,11 @@ extension AppModel: ScheduleToolHandling {
     }
 
     /// Whether the caller's harness asked the person before this call came: Claude Code asks before every
-    /// changing scheduled-task call, on a card that names the place or the task each run goes to, unless it
-    /// runs in Auto or Bypass permissions. Whether another harness asks is its own setting, so Yardlet asks
-    /// for it where a session tool would.
+    /// changing scheduled-task call it makes directly, on a card that names the place or the task each run goes
+    /// to, unless it runs in Auto or Bypass permissions. It never saw a call made inside `run_yardlet_script`.
+    /// Whether another harness asks is its own setting, so Yardlet asks for it where a session tool would.
     private func harnessAskedBeforeScheduleCall(_ caller: SessionToolCaller) -> Bool {
-        guard caller.id == caller.hostTaskID, caller.harness == .claudeCode,
+        guard !caller.throughWrapper, caller.id == caller.hostTaskID, caller.harness == .claudeCode,
               let host = store.sessions.first(where: { $0.id == caller.hostTaskID }) else { return false }
         return Self.unaskedPermissionMode(of: host) == nil
     }

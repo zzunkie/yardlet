@@ -989,8 +989,10 @@ none is sent:
 
 ### When the harness asks
 
-- Tools that ask follow the harness's approval settings. Yardlet keeps no approval rules of its own and puts annotations
-  (`destructiveHint` and others) on write tools.
+- Tools that ask follow the harness's approval settings, and Yardlet puts annotations (`destructiveHint` and others) on
+  write tools. Yardlet also weighs each call where it runs (docs/AGENT_BROWSER_TOOLS.md, "Approvals"): in a task that
+  asks, a connector's first read of a service asks once for the task, and each write asks on Yardlet's card unless
+  Claude Code's CLI just asked for that direct call; a read-only task runs only read-only tools.
 - Claude Code: connector tools are not in `--allowedTools`, so the CLI asks according to the task's permission mode. The
   request cards for write tools (Gmail `send_draft`, `send_message`, `modify_labels` and `delete_draft`, Calendar `create_event`,
   `update_event`, `delete_event` and `respond_to_event`, Drive `create_file`, `copy_file`, `update_file`, `update_doc`,

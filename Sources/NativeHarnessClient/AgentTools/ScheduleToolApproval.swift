@@ -15,8 +15,12 @@ enum ScheduleToolApproval {
         return ScheduleToolCatalog.changingTools.contains(tool) ? tool : nil
     }
 
-    static func request(toolName: String?, input: JSONValue, calendar: Calendar = .autoupdatingCurrent,
-                        now: Date = Date(),
+    /// Whose card it is: Claude Code's, or Yardlet's own for a task whose harness did not ask
+    /// (`AgentToolBroker+Approvals`), which names the task rather than Claude.
+    enum Asker { case claude, task }
+
+    static func request(toolName: String?, input: JSONValue, asking asker: Asker = .claude,
+                        calendar: Calendar = .autoupdatingCurrent, now: Date = Date(),
                         name lookup: (UUID) -> String? = { ScheduleNameDirectory.shared.name(of: $0) })
         -> (title: String, detail: String)? {
         typealias Key = ScheduleToolCatalog.Key
@@ -32,13 +36,17 @@ enum ScheduleToolApproval {
         case ScheduleToolCatalog.create:
             let name = given.flatMap { $0.isEmpty ? nil : $0 }
                 ?? prompt.map(SessionTitleProjection.provisionalTitle(from:)) ?? ""
-            title = L10n.format("Allow Claude to create the scheduled task “%@”?", name)
+            title = asker == .claude ? L10n.format("Allow Claude to create the scheduled task “%@”?", name)
+                : L10n.format("Allow this task to create the scheduled task “%@”?", name)
             lines.append(input[Key.continueTaskID] == nil
                          ? L10n.string("Each run starts a new task.") : L10n.string("Each run continues a task."))
             lines += placeLines(input)
         case ScheduleToolCatalog.update:
-            title = existing.map { L10n.format("Allow Claude to update the scheduled task “%@”?", $0) }
-                ?? L10n.string("Allow Claude to update a scheduled task?")
+            title = asker == .claude
+                ? existing.map { L10n.format("Allow Claude to update the scheduled task “%@”?", $0) }
+                    ?? L10n.string("Allow Claude to update a scheduled task?")
+                : existing.map { L10n.format("Allow this task to update the scheduled task “%@”?", $0) }
+                    ?? L10n.string("Allow this task to update a scheduled task?")
             if let given, !given.isEmpty, given != existing { lines.append(L10n.format("New name: %@", given)) }
             if case let .bool(enabled)? = input[Key.enabled] {
                 lines.append(enabled ? L10n.string("Resumes its runs.") : L10n.string("Pauses its runs."))
@@ -48,12 +56,18 @@ enum ScheduleToolApproval {
                 lines += placeLines(input)
             }
         case ScheduleToolCatalog.delete:
-            title = existing.map { L10n.format("Allow Claude to delete the scheduled task “%@”?", $0) }
-                ?? L10n.string("Allow Claude to delete a scheduled task?")
+            title = asker == .claude
+                ? existing.map { L10n.format("Allow Claude to delete the scheduled task “%@”?", $0) }
+                    ?? L10n.string("Allow Claude to delete a scheduled task?")
+                : existing.map { L10n.format("Allow this task to delete the scheduled task “%@”?", $0) }
+                    ?? L10n.string("Allow this task to delete a scheduled task?")
             lines.append(L10n.string("It will not run again. The tasks its runs started stay in the sidebar."))
         default:
-            title = existing.map { L10n.format("Allow Claude to run the scheduled task “%@” now?", $0) }
-                ?? L10n.string("Allow Claude to run a scheduled task now?")
+            title = asker == .claude
+                ? existing.map { L10n.format("Allow Claude to run the scheduled task “%@” now?", $0) }
+                    ?? L10n.string("Allow Claude to run a scheduled task now?")
+                : existing.map { L10n.format("Allow this task to run the scheduled task “%@” now?", $0) }
+                    ?? L10n.string("Allow this task to run a scheduled task now?")
             lines.append(L10n.string("It starts now with the schedule's own settings."))
         }
         if let mode = input[Key.permissionMode]?.stringValue, !mode.isEmpty {

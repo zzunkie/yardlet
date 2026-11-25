@@ -609,6 +609,7 @@ struct NativeHarnessClientApp: App {
                     MacAgentToolService.shared.broker.suggestions = model
                     MacAgentToolService.shared.broker.sessions = model
                     MacAgentToolService.shared.broker.schedules = model
+                    MacAgentToolService.shared.broker.approvals = model
                     MacAgentToolService.shared.broker.simulators = model
                     // The simulator tools come and go with the platforms the Simulator switch finds usable.
                     model.simulators.onOffersDevicesChanged = { [weak broker = MacAgentToolService.shared.broker] in

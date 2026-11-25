@@ -59,7 +59,9 @@ package enum CodeModeToolCatalog {
                     ])
                 ])
             ]),
-            readOnly: false,
+            // It changes nothing itself: Yardlet checks and, where the task asks, asks the person about each
+            // call it makes as about a direct one (`AgentToolBroker`), so a harness need not ask about it first.
+            readOnly: true,
             openWorld: true
         )
     ]

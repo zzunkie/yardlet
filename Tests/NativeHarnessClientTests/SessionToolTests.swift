@@ -56,11 +56,12 @@ final class SessionToolTests: XCTestCase {
         XCTAssertEqual(AgentToolCatalog.builtInTools.map(\.name).filter {
             !browserNames.contains($0) && $0.hasPrefix(AgentToolCatalog.browserToolPrefix)
         }, [], "yardlet-mcp refuses an unknown browser_ name itself, so only a browser tool starts with it")
-        XCTAssertEqual(Array(AgentToolServerLaunch.claudeAllowedTools.dropLast(5).suffix(names.count)), names.map { "mcp__yardlet__\($0)" },
+        XCTAssertEqual(Array(AgentToolServerLaunch.claudeAllowedTools.dropLast(8).suffix(names.count)), names.map { "mcp__yardlet__\($0)" },
                        "A Claude task runs them without the CLI's card; the app asks the person where it should")
-        XCTAssertEqual(Array(AgentToolServerLaunch.claudeAllowedTools.suffix(5)),
+        XCTAssertEqual(Array(AgentToolServerLaunch.claudeAllowedTools.suffix(8)),
                        ["mcp__yardlet__list_settings", "mcp__yardlet__update_setting", "mcp__yardlet__read_terminal",
-                        "mcp__yardlet__list_task_runs", "mcp__yardlet__show_widget"])
+                        "mcp__yardlet__list_task_runs", "mcp__yardlet__show_widget", "mcp__yardlet__run_yardlet_script",
+                        "mcp__yardlet__call_connector_tool", "mcp__yardlet__browser_batch"])
         XCTAssertEqual(AgentToolServerLaunch.codexToolTimeoutSeconds, 1_800, "Codex lets a call wait 30 minutes")
         let invoker = UnixSocketToolInvoker(environment: [:])
         XCTAssertEqual(invoker.timeout, 180)

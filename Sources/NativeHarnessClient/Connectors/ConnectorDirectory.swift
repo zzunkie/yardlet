@@ -679,7 +679,8 @@ final class ConnectorToolLabels: @unchecked Sendable {
                 guard let original = tool["name"]?.stringValue else { continue }
                 next[ConnectorToolNaming.name(slug: prefix, tool: original)] =
                     Label(connector: service.name, presetID: first.presetID, tool: original, localService: service,
-                          icons: first.iconSources, takesAccount: true)
+                          icons: first.iconSources, takesAccount: true,
+                          readOnly: tool["annotations"]?["readOnlyHint"] == .bool(true))
             }
         }
         lock.withLock {

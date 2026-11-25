@@ -243,6 +243,7 @@ package enum SessionToolCatalog {
                 ])
             ], required: ["task_ids"]),
             readOnly: false,
+            destructive: true,
             openWorld: false
         ),
         AgentToolDefinition(

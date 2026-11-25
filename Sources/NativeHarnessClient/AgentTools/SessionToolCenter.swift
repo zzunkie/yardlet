@@ -459,9 +459,11 @@ final class SessionToolCenter {
         approvals.values.lazy.flatMap { $0 }.first { $0.id == id }
     }
 
-    /// Adds an approval and waits for its answer: true to go ahead.
+    /// Adds an approval and waits for its answer: true to go ahead. A call cancelled meanwhile (a script that
+    /// ran out of time, a stopped turn) takes its card away at once and is answered no.
     func ask(_ request: PermissionRequest, in taskID: UUID, timeout: Duration = SessionToolPolicy.approvalTimeout,
              onChange: @escaping @MainActor () -> Void) async -> Bool {
+        guard !Task.isCancelled else { return false }
         let approval = SessionToolApproval(id: request.id, taskID: taskID, request: request)
         approvals[taskID, default: []].append(approval)
         onChange()
@@ -470,8 +472,13 @@ final class SessionToolCenter {
             guard !Task.isCancelled else { return }
             self?.answer(approval.id, allow: false)
         }
-        let allowed = await withCheckedContinuation { continuation in
-            approvalWaiters[approval.id] = continuation
+        // The waiter is in place before the cancellation's hop to the main actor can run.
+        let allowed = await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                approvalWaiters[approval.id] = continuation
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.answer(approval.id, allow: false) }
         }
         timer.cancel()
         onChange()

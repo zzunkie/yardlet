@@ -700,16 +700,18 @@ Times in results are ISO 8601 in the Mac's time zone (with the offset).
   Claude to create the scheduled task “…”?" with the schedule, where it runs (the project or folder and the task the call
   names), its mode and the instructions, and it offers no "Always allow". Codex asks as the
   task's own approval setting and the tools' annotations decide. ACP harnesses use that
-  harness's own MCP approval. Yardlet has cards of its own. Where the harness did not ask (Claude Code in Auto, or
-  another harness), a schedule an agent makes or changes that continues another task asks as `send_message_to_task`
+  harness's own MCP approval. Yardlet has cards of its own. Where the harness did not ask (Claude Code in Auto, a call
+  inside `run_yardlet_script`, or another harness), each of the four asks first on Yardlet's card ("Allow this task to
+  create the scheduled task “…”?", with the same lines; section 6, "Approvals"). Beyond that card, a schedule an agent
+  makes or changes that continues another task asks as `send_message_to_task`
   does ("Schedule messages to …"), and one whose new tasks start in another project or a folder outside the caller's
   asks as `create_task` does ("Schedule a task in another project"); a task that runs without asking is not asked. A
   schedule whose runs do more without asking than the caller may, measured as above (`scheduleRunFreedom`: the
   permission its new tasks start with, or that of the task its runs continue), is the person's to start and stop: where
   the harness did not ask, running it now, deleting it, changing when it runs and resuming it ask with a card ("Run a
   scheduled task with more permissions than this task", and the like for the other three). Pausing it and renaming it
-  ask nothing. A
-  task a schedule started is asked as any task in its permission mode is: in Auto or bypass permissions it creates,
+  ask nothing beyond the first card. A
+  task a schedule started is asked as any task in its permission mode is: in bypass permissions it creates,
   changes and deletes other schedules without a card, and a schedule it creates gets the notification below. The
   Claude app asks such an `unattended` session in every mode; Yardlet does not, since the person chose that mode for the
   schedule's runs and a card raised while nobody is there would stop the run. Such a task is one a run
@@ -749,7 +751,7 @@ removes the pending record. A successful retry replaces that record with `starte
 
 | Harness | Path | Form | Evidence |
 |---|---|---|---|
-| Claude Code | The launch argument `--mcp-config <file>` (at the very end, because the option takes several values). Just before it, `--allowedTools` with `mcp__yardlet__spawn_task` and `mcp__yardlet__dismiss_task` (the two tools that only show a chip, without a permission card; the Claude app also puts them in `allowedTools`), the session tools, the settings tools, `read_terminal` (while the terminal is not shared the server does not list it and the name allows nothing), `list_task_runs` of the scheduled-task tools, and `show_widget` (`AgentToolServerLaunch.claudeAllowedTools`) | `{"mcpServers":{"yardlet":{"type":"stdio","command","args","env"}}}`. The file is a 0600 file in a 0700 folder (so the token does not show in the process list). `--strict-mcp-config` is not used, so the user's servers stay as they are | `--mcp-config <configs...>` and `--strict-mcp-config` are in the CLI's `--help`. The control request `mcp_status` reports `yardlet: connected`, and `mcp_call` calls a tool (section 7) |
+| Claude Code | The launch argument `--mcp-config <file>` (at the very end, because the option takes several values). Just before it, `--allowedTools` with `mcp__yardlet__spawn_task` and `mcp__yardlet__dismiss_task` (the two tools that only show a chip, without a permission card; the Claude app also puts them in `allowedTools`), the session tools, the settings tools, `read_terminal` (while the terminal is not shared the server does not list it and the name allows nothing), `list_task_runs` of the scheduled-task tools, `show_widget`, and the wrappers `run_yardlet_script`, `call_connector_tool` and `browser_batch`, whose calls Yardlet weighs itself (section 6, "Approvals") (`AgentToolServerLaunch.claudeAllowedTools`) | `{"mcpServers":{"yardlet":{"type":"stdio","command","args","env"}}}`. The file is a 0600 file in a 0700 folder (so the token does not show in the process list). `--strict-mcp-config` is not used, so the user's servers stay as they are | `--mcp-config <configs...>` and `--strict-mcp-config` are in the CLI's `--help`. The control request `mcp_status` reports `yardlet: connected`, and `mcp_call` calls a tool (section 7) |
 | Codex | `config` of `thread/start`, `thread/resume` and `thread/fork` | `{"mcp_servers":{"yardlet":{"command","args","env","tool_timeout_sec":1800}}}`. No tool gets an `approval_mode` of Yardlet's: whether Codex asks before a call follows the task's own approval setting and the tool's annotations. A fork gets the new task's token | In the App Server's schema (`app-server generate-json-schema --experimental`) all three requests take `config` (`additionalProperties: true`). Codex merges it into the user's configuration, so a user server in the same home stays connected beside `yardlet` (`mcpServerStatus/list`; a nested object and the dot notation `mcp_servers.yardlet` behave the same), and `mcpServer/tool/call` calls a tool (section 7). `thread/resume` was checked only by its request body, because a thread with no turn has no rollout |
 | ACP (OpenCode, Antigravity, Kimi, Grok, Hermes, Kiro) | `mcpServers` of `session/new` and `session/load` | `{"name":"yardlet","command","args":[],"env":[{"name","value"}]}` | ACP makes stdio MCP mandatory. The server is not added when `agentCapabilities.mcpCapabilities` of `initialize` has `stdio: false` or is `false`. OpenCode starts the server through `session/new` and sends `initialize` and `tools/list`. Antigravity (`agy acp`, which Yardlet runs from 1.4.11, `AntigravityTransport.acpMinimum`) does the same after a `server/discover` request; it does not save the server in `mcp_config.json`, but keeps each tool's schema under `~/.gemini/antigravity-cli/mcp/<server>/` as it does for its own servers |
 | Muse, Pi, Cursor | none | Not added (no route: `AgentToolInjectionRoute` is nil), and no token is issued | MSP, Pi RPC and headless stream-json have no per-session MCP field. If needed, the next step is to register it with that harness's `mcp add`, with the user's approval |
@@ -827,8 +829,40 @@ removes the pending record. A successful retry replaces that record with `starte
   file, so a call must also come from under the task's harness process (section 4).
 - Tool approval belongs to the harness (Claude's `can_use_tool` card, Codex's own policy). Yardlet asks on its own
   card only where this document says so: a `file:` address outside the task's folders, the session, settings and
-  scheduled-task tools' cards, a simulator tool's first use of a device ([SIMULATOR](SIMULATOR.md), "Agent tools"), and
-  the vault's Touch ID.
+  scheduled-task tools' cards, a simulator tool's first use of a device ([SIMULATOR](SIMULATOR.md), "Agent tools"),
+  the vault's Touch ID, and the approvals below.
+
+### Approvals
+
+Yardlet weighs each call where the tool runs (`AgentToolBroker+Approvals`), not by the name the harness saw, so a call
+made inside `run_yardlet_script`, `call_connector_tool`, `call_simulator_tool` or `browser_batch` is weighed as the same
+direct call would be.
+
+- **Read-only tasks** (Claude Code's and Antigravity's Plan, Codex's read-only) run only what changes nothing: the
+  read-only tools, `browser_scroll` and `browser_resize`, `run_agent` and `create_task` (which run read-only too), and
+  the wrappers, whose calls are weighed one by one. Anything else, including every connector tool not marked
+  `readOnlyHint: true`, is refused.
+- **Tasks that ask** (every level below Bypass permissions, Full access or Antigravity's bypass; Claude Code's Auto
+  included):
+  - A connector's read asks once per service for the task ("Allow this task to read from Gmail?"); later reads from
+    that service, direct or inside a wrapper, go without a card. A Claude Code task in Default or Accept edits has
+    already been asked by its CLI for a direct read, which counts as that answer.
+  - Every connector write (any tool not marked read-only, Gmail's `create_draft` included), scheduled-task change and
+    `browser_fill_credential` asks each time, with the mail draft or the call's input on the card and no lasting
+    allow. Only a direct call from a Claude Code task in Default or Accept edits is left to the CLI's card, which then
+    offers no "Always allow" either; Codex's card for these tools offers only "Allow once". A tool name
+    Yardlet does not know to be read-only (a connector whose tools it has not listed yet) gets no lasting allow
+    either. A Claude Code task in Don't ask is asked on Yardlet's card, since its CLI shows none.
+  - A `browser_batch` holding any browser tool not marked read-only, other than `browser_scroll` and
+    `browser_resize` (so `navigate`, `click`, `type`, `press_key`, `select_option`, `evaluate`, `handle_dialog`,
+    `file_upload` and the tab tools `tab_new`, `tab_select` and `tab_close`), asks once, on one card listing those
+    actions; a batch of the others runs at once. One of those tools inside `run_yardlet_script` asks as the harness
+    would for the direct call.
+  - A write's card leads with the account it acts in. A call that is cancelled while its card waits (a script that
+    ran out of time, a stopped turn) takes the card away and does nothing, whatever the answer.
+- The wrappers themselves are in Claude Code's `--allowedTools` and are listed with `readOnlyHint: true`, so no harness
+  asks about the wrapper before Yardlet asks about what it does.
+- `archive_task`, `delete_scheduled_task` and `browser_tab_close` are listed with `destructiveHint: true`.
 - `browser_evaluate` runs arbitrary JS in the page. There is no resident REPL like the Codex app's.
 - The snapshot reads iframes (including those of other sites and the ones inside them) and shadow DOM (open and
   closed). When one frame does not answer within 5 seconds, only that frame is left out. Unnamed
