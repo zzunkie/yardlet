@@ -16,12 +16,13 @@ import YardletAgentTools
 // - A task that runs without asking (Bypass permissions, Full access) is not asked.
 
 extension AgentToolBroker {
-    /// The browser tools that change a page or what it holds, which a batch or a script asks about.
-    static let changingBrowserTools: Set<String> = [
-        AgentToolCatalog.navigate, AgentToolCatalog.click, AgentToolCatalog.type, AgentToolCatalog.pressKey,
-        AgentToolCatalog.selectOption, AgentToolCatalog.evaluate, AgentToolCatalog.handleDialog,
-        AgentToolCatalog.fileUpload
-    ]
+    /// The browser tools a batch or a script asks about: every one not marked read-only, so a new one is asked
+    /// about too, less scrolling and resizing the tab (`readOnlyTaskAlsoRuns`), the handoff, which gives the tab
+    /// to the person, and the batch itself, whose actions are weighed one by one.
+    static let changingBrowserTools: Set<String> = Set(AgentToolCatalog.browserTools.filter {
+        !$0.readOnly && !readOnlyTaskAlsoRuns.contains($0.name) && $0.name != AgentToolCatalog.handoff
+            && $0.name != AgentToolCatalog.batch
+    }.map(\.name))
 
     /// Tools a read-only task may run beside the read-only ones: scrolling and resizing its own tab change only
     /// what it sees, and a child task or subagent runs read-only too (`SessionToolCaller.permission`).
@@ -68,8 +69,9 @@ extension AgentToolBroker {
             request = nil
         }
         guard let request else { return nil }
-        return await approvals.askPerson(title: request.title, detail: request.detail, callerID: sessionID)
-            ? nil : Self.declined(tool)
+        let allowed = await approvals.askPerson(title: request.title, detail: request.detail, callerID: sessionID)
+        // A call cancelled while it waited (a script out of time) does nothing, whatever the answer.
+        return allowed && !Task.isCancelled ? nil : Self.declined(tool)
     }
 
     /// Why a connector's tool may not run for this caller, or nil to run it (also when no connector has a tool
@@ -89,10 +91,15 @@ extension AgentToolBroker {
                 ? await GmailToolApproval.draft(toolName: claudeName, input: input) : nil
             let detail = GoogleToolApproval.request(toolName: claudeName, input: input, mailDraft: draft)?.detail
                 ?? Self.argumentPreview(arguments)
+            // The account it acts in leads the card: the one the call names, for a tool the accounts share.
+            let named = arguments[ConnectorToolNaming.accountArgument]?.stringValue?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let account = named?.isEmpty == false ? named : facts.account
             let allowed = await approvals.askPerson(
-                title: L10n.format("Allow this task to use %@ in %@?", facts.title, facts.service), detail: detail,
+                title: L10n.format("Allow this task to use %@ in %@?", facts.title, facts.service),
+                detail: account.map { L10n.format("Account: %@", $0) + (detail.isEmpty ? "" : "\n\n" + detail) } ?? detail,
                 callerID: sessionID)
-            return allowed ? nil : Self.declined(tool)
+            return allowed && !Task.isCancelled ? nil : Self.declined(tool)
         }
         let host = policy.hostTaskID
         if approvedReadServices[host]?.contains(facts.service) == true { return nil }
@@ -102,20 +109,28 @@ extension AgentToolBroker {
             return nil
         }
         let key = "\(host.uuidString)|\(facts.service)"
-        let question: Task<Bool, Never>
+        let question: PendingReadApproval
         if let pending = pendingReadApprovals[key] {
             question = pending
         } else {
             let title = L10n.format("Allow this task to read from %@?", facts.service)
             let detail = L10n.format("First read: %@. Its later reads from %@ go without asking.", facts.title,
                                      facts.service)
-            question = Task { await approvals.askPerson(title: title, detail: detail, callerID: sessionID) }
+            question = PendingReadApproval(Task { await approvals.askPerson(title: title, detail: detail,
+                                                                            callerID: sessionID) })
             pendingReadApprovals[key] = question
         }
-        let allowed = await question.value
-        pendingReadApprovals[key] = nil
+        question.waiters += 1
+        // The card goes once every call waiting on it was cancelled.
+        let allowed = await withTaskCancellationHandler {
+            await question.answer.value
+        } onCancel: {
+            Task { @MainActor in question.leave() }
+        }
+        // Only the question this call waited on is cleared: a later one may stand in its place already.
+        if pendingReadApprovals[key] === question { pendingReadApprovals[key] = nil }
         if allowed { approvedReadServices[host, default: []].insert(facts.service) }
-        return allowed ? nil : Self.declined(tool)
+        return allowed && !Task.isCancelled ? nil : Self.declined(tool)
     }
 
     /// Whether a read-only task may run one of Yardlet's own tools. A wrapper runs, and each call it makes is
@@ -169,17 +184,47 @@ extension AgentToolBroker {
     }
 }
 
+/// A first read's question that calls for the same task and service wait on together.
+@MainActor
+final class PendingReadApproval {
+    let answer: Task<Bool, Never>
+    var waiters = 0
+
+    init(_ answer: Task<Bool, Never>) { self.answer = answer }
+
+    /// A waiting call was cancelled; once none waits, the question is withdrawn and its card goes.
+    func leave() {
+        waiters -= 1
+        if waiters <= 0 { answer.cancel() }
+    }
+}
+
 /// The Yardlet tools a harness's own card asks about each time, offering no allow for the conversation or for
 /// good: a connector's write, a scheduled-task change, a saved sign-in fill, and the wrappers, whose calls
 /// Yardlet weighs one by one. A lasting allow on the harness's card would let later such calls go unasked.
 enum AgentToolHarnessApproval {
+    /// Yardlet's own tools that a harness's card may offer a lasting allow for.
+    private static let ownToolsWithLastingAllow: Set<String> = {
+        let catalogs: [[AgentToolDefinition]] = [
+            AgentToolCatalog.browserTools, TaskSuggestionToolCatalog.tools, SessionToolCatalog.tools,
+            SettingsToolCatalog.tools, ScheduleToolCatalog.tools, SimulatorToolCatalog.tools,
+            SimulatorGatewayToolCatalog.tools, ConnectorGatewayToolCatalog.staticTools, CodeModeToolCatalog.tools,
+            [VaultToolCatalog.tool, TerminalToolCatalog.tool, WidgetToolCatalog.tool]
+        ]
+        let asked: Set<String> = ScheduleToolCatalog.changingTools.union([
+            VaultToolCatalog.fillCredential, CodeModeToolCatalog.runScript, ConnectorGatewayToolCatalog.callTool,
+            SimulatorGatewayToolCatalog.callTool, AgentToolCatalog.batch
+        ])
+        return Set(catalogs.joined().map(\.name)).subtracting(asked)
+    }()
+
+    /// True unless the tool is known to only read: a connector's tool whose label says so, or one of Yardlet's own
+    /// tools other than the ones asked each time. A name Yardlet does not know yet (a connector whose labels have
+    /// not come) is asked each time.
     static func asksEachTime(tool: String, labels: ConnectorToolLabels = .shared) -> Bool {
-        if ScheduleToolCatalog.changingTools.contains(tool) || tool == VaultToolCatalog.fillCredential
-            || tool == CodeModeToolCatalog.runScript || tool == ConnectorGatewayToolCatalog.callTool
-            || tool == SimulatorGatewayToolCatalog.callTool || tool == AgentToolCatalog.batch {
-            return true
-        }
-        return labels.label(forTool: tool).map { !$0.readOnly } ?? false
+        if ownToolsWithLastingAllow.contains(tool) { return false }
+        if let label = labels.label(forTool: tool) { return !label.readOnly }
+        return true
     }
 
     /// The same for Claude Code's name of the tool (`mcp__yardlet__…`); false for any other server's.

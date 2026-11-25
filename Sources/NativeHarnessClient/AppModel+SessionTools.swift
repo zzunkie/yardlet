@@ -1984,10 +1984,11 @@ extension AppModel: SessionToolHandling, AgentToolApprovalHandling {
 
     /// Whether the caller is a Claude Code task in Default or Accept edits, whose CLI asks the person before each
     /// call of a Yardlet tool it was not told to allow; Plan reads without asking, Auto leaves it to a classifier,
-    /// and a subagent's harness is not the task's.
+    /// Don't ask refuses without a card, and a subagent's harness is not the task's.
     func claudeAsksBeforeDirectCalls(_ caller: SessionToolCaller) -> Bool {
         guard caller.id == caller.hostTaskID, caller.harness == .claudeCode, caller.permission == .standard,
-              let host = store.sessions.first(where: { $0.id == caller.hostTaskID }) else { return false }
+              let host = store.sessions.first(where: { $0.id == caller.hostTaskID }),
+              host.providerOptions[ClaudeLaunchOption.permissionMode] != "dontAsk" else { return false }
         return Self.unaskedPermissionMode(of: host) == nil
     }
 

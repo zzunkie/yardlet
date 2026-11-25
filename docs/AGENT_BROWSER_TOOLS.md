@@ -850,10 +850,16 @@ direct call would be.
   - Every connector write (any tool not marked read-only, Gmail's `create_draft` included), scheduled-task change and
     `browser_fill_credential` asks each time, with the mail draft or the call's input on the card and no lasting
     allow. Only a direct call from a Claude Code task in Default or Accept edits is left to the CLI's card, which then
-    offers no "Always allow" either; Codex's card for these tools offers only "Allow once".
-  - A `browser_batch` holding `browser_navigate`, `click`, `type`, `press_key`, `select_option`, `evaluate`,
-    `handle_dialog` or `file_upload` asks once, on one card listing those actions; a batch of the others runs at once.
-    One of those actions inside `run_yardlet_script` asks as the harness would for the direct call.
+    offers no "Always allow" either; Codex's card for these tools offers only "Allow once". A tool name
+    Yardlet does not know to be read-only (a connector whose tools it has not listed yet) gets no lasting allow
+    either. A Claude Code task in Don't ask is asked on Yardlet's card, since its CLI shows none.
+  - A `browser_batch` holding any browser tool not marked read-only, other than `browser_scroll` and
+    `browser_resize` (so `navigate`, `click`, `type`, `press_key`, `select_option`, `evaluate`, `handle_dialog`,
+    `file_upload` and the tab tools `tab_new`, `tab_select` and `tab_close`), asks once, on one card listing those
+    actions; a batch of the others runs at once. One of those tools inside `run_yardlet_script` asks as the harness
+    would for the direct call.
+  - A write's card leads with the account it acts in. A call that is cancelled while its card waits (a script that
+    ran out of time, a stopped turn) takes the card away and does nothing, whatever the answer.
 - The wrappers themselves are in Claude Code's `--allowedTools` and are listed with `readOnlyHint: true`, so no harness
   asks about the wrapper before Yardlet asks about what it does.
 - `archive_task`, `delete_scheduled_task` and `browser_tab_close` are listed with `destructiveHint: true`.

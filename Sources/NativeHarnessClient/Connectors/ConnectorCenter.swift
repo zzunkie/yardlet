@@ -2117,18 +2117,20 @@ final class ConnectorCenter: ConnectorToolProviding {
     func connectorToolFacts(named name: String, for context: ConnectorToolContext) -> ConnectorToolFacts? {
         guard let (owner, toolName) = owner(ofTool: name) else { return nil }
         let service: String, tool: ToolJSON?
+        var account: String?
         switch owner {
         case .connector(let record):
             tool = record.offeredTools.first { $0["name"]?.stringValue == toolName }
             guard MCPAppTool.isForModel(tool) else { return nil }
             service = record.name
+            account = record.account
         case .accounts(let accounts, _):
             tool = accounts.tools?.first { $0["name"]?.stringValue == toolName }
             service = accounts.name
         }
         let title = tool?["title"]?.stringValue ?? tool?["annotations"]?["title"]?.stringValue ?? toolName
         return ConnectorToolFacts(service: service, title: title,
-                                  readOnly: tool?["annotations"]?["readOnlyHint"] == .bool(true))
+                                  readOnly: tool?["annotations"]?["readOnlyHint"] == .bool(true), account: account)
     }
 
     /// Who makes a call: the task's model, through its harness, or a view of one of the connector's tools

@@ -7,7 +7,8 @@ import XCTest
 /// inside a wrapper is weighed as a direct one, a read-only task changes nothing, and no call gets two cards.
 @MainActor
 final class AgentToolApprovalTests: XCTestCase {
-    private func makeBroker(policy: AgentToolCallerPolicy?, answer: Bool = true)
+    private func makeBroker(policy: AgentToolCallerPolicy?, answer: Bool = true,
+                            simulators: (any SimulatorToolHandling)? = nil)
         throws -> (AgentToolBroker, UUID, String, ApprovalConnectors, RecordingApprovals) {
         let dir = FileManager.default.temporaryDirectory.appending(path: "approvals-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -18,6 +19,7 @@ final class AgentToolApprovalTests: XCTestCase {
             tools: BrowserAgentTools(usesMacEditingCommands: true, pages: { _ in BrowserAgentPage(cdp: ScriptedCDP()) })
         )
         broker.codeModeEnabled = { true }
+        broker.simulators = simulators
         let connectors = ApprovalConnectors()
         broker.connectors = connectors
         let approvals = RecordingApprovals(policy: policy, answer: answer)
@@ -184,6 +186,110 @@ final class AgentToolApprovalTests: XCTestCase {
         }
     }
 
+    func testTabToolsAskInABatchAndInAScript() async throws {
+        let (broker, session, _, _, approvals) = try makeBroker(policy: policy(claudeCLIAsks: true))
+        for tool in [AgentToolCatalog.tabClose, AgentToolCatalog.tabNew, AgentToolCatalog.tabSelect] {
+            XCTAssertTrue(AgentToolBroker.changingBrowserTools.contains(tool), tool)
+            let inBatch = await broker.approvalRefusal(tool: AgentToolCatalog.batch, arguments: Self.batch([tool]),
+                                                       sessionID: session, origin: .direct)
+            XCTAssertNil(inBatch)
+            _ = await broker.approvalRefusal(tool: tool, arguments: .object([:]), sessionID: session, origin: .wrapped)
+        }
+        XCTAssertEqual(approvals.titles.count, 6)
+        XCTAssertFalse(AgentToolBroker.changingBrowserTools.contains(AgentToolCatalog.scroll))
+        XCTAssertFalse(AgentToolBroker.changingBrowserTools.contains(AgentToolCatalog.handoff))
+    }
+
+    func testACancelledCallTakesItsCardAwayAndRunsNothing() async throws {
+        let (broker, session, token, connectors, approvals) = try makeBroker(policy: policy())
+        let center = SessionToolCenter(defaults: try XCTUnwrap(UserDefaults(suiteName: "approvals-\(UUID().uuidString)")))
+        approvals.center = center
+        let host = approvals.hostTaskID
+        let call = Task { await self.direct("gmail_send", broker, session, token) }
+        try await waitUntil { !center.approvals(for: host).isEmpty }
+        call.cancel()
+        try await waitUntil { center.approvals(for: host).isEmpty }
+        let result = await call.value
+        XCTAssertTrue(result.isError)
+        XCTAssertEqual(connectors.calls, [], "A late answer cannot send it either")
+
+        // A script out of time cancels its call the same way.
+        let script = Task { await self.script(#"return callTool("gmail_send", {});"#, broker, session, token) }
+        try await waitUntil { !center.approvals(for: host).isEmpty }
+        script.cancel()
+        try await waitUntil { center.approvals(for: host).isEmpty }
+        _ = await script.value
+        XCTAssertEqual(connectors.calls, [])
+    }
+
+    func testAFirstReadQuestionIsSharedAndALaterOneIsNotLost() async throws {
+        let (broker, session, token, connectors, approvals) = try makeBroker(policy: policy())
+        let center = SessionToolCenter(defaults: try XCTUnwrap(UserDefaults(suiteName: "approvals-\(UUID().uuidString)")))
+        approvals.center = center
+        let host = approvals.hostTaskID
+        let first = Task { await self.direct("gmail_search", broker, session, token) }
+        let second = Task { await self.direct("gmail_search", broker, session, token) }
+        try await waitUntil { center.approvals(for: host).count == 1 && broker.pendingReadApprovals.first?.value.waiters == 2 }
+        let card = try XCTUnwrap(center.approvals(for: host).first)
+        XCTAssertTrue(center.answer(card.id, allow: false))
+        let declined = await first.value
+        XCTAssertTrue(declined.isError)
+        let third = Task { await self.direct("gmail_search", broker, session, token) }
+        try await waitUntil { center.approvals(for: host).count == 1 }
+        _ = await second.value
+        XCTAssertNotNil(broker.pendingReadApprovals.first, "The second call's clean-up leaves the third's question")
+        XCTAssertTrue(center.answer(try XCTUnwrap(center.approvals(for: host).first).id, allow: true))
+        let read = await third.value
+        XCTAssertFalse(read.isError)
+        XCTAssertEqual(connectors.calls, ["gmail_search"])
+        XCTAssertEqual(approvals.titles.count, 2)
+
+        // Every waiter cancelled withdraws the question.
+        let slack = Task { await self.direct("slack_read", broker, session, token) }
+        try await waitUntil { !center.approvals(for: host).isEmpty }
+        slack.cancel()
+        try await waitUntil { center.approvals(for: host).isEmpty }
+        _ = await slack.value
+        XCTAssertEqual(connectors.calls, ["gmail_search"])
+    }
+
+    func testAWriteCardNamesItsAccount() async throws {
+        let (broker, session, token, _, approvals) = try makeBroker(policy: policy())
+        _ = await direct("gmail_send", broker, session, token)
+        _ = await broker.handle(AgentToolCall(token: token, session: session.uuidString, tool: "gmail_send",
+                                              arguments: .object(["account": .string("work@example.test")])))
+        XCTAssertEqual(approvals.details.map { $0.split(separator: "\n").first.map(String.init) },
+                       [L10n.format("Account: %@", "me@example.test"), L10n.format("Account: %@", "work@example.test")])
+    }
+
+    func testTheGatewaysWeighTheToolTheyCall() async throws {
+        let simulator = ApprovalSimulators()
+        let (broker, session, token, connectors, approvals) = try makeBroker(policy: policy(readOnly: true),
+                                                                             simulators: simulator)
+        func gateway(_ name: String, _ tool: String) async -> AgentToolResult {
+            await broker.handle(AgentToolCall(token: token, session: session.uuidString, tool: name,
+                                              arguments: .object(["tool": .string(tool)])))
+        }
+        let tap = await gateway(SimulatorGatewayToolCatalog.callTool, SimulatorToolCatalog.tap)
+        XCTAssertTrue(text(tap).contains("read-only"), text(tap))
+        _ = await gateway(SimulatorGatewayToolCatalog.callTool, SimulatorToolCatalog.screenshot)
+        XCTAssertEqual(simulator.calls, [SimulatorToolCatalog.screenshot])
+        // In a task that asks, a write through the connector gateway asks as a direct one does.
+        approvals.policy = policy()
+        _ = await gateway(ConnectorGatewayToolCatalog.callTool, "gmail_send")
+        XCTAssertEqual(approvals.titles, [L10n.format("Allow this task to use %@ in %@?", "Send", "Gmail")])
+        XCTAssertEqual(connectors.calls, ["gmail_send"])
+    }
+
+    func testAToolNotKnownToReadGetsNoLastingAllow() {
+        let labels = ConnectorToolLabels()
+        XCTAssertTrue(AgentToolHarnessApproval.asksEachTime(tool: "slack_post_message", labels: labels),
+                      "A connector whose labels have not come")
+        XCTAssertFalse(AgentToolHarnessApproval.asksEachTime(tool: AgentToolCatalog.click, labels: labels))
+        XCTAssertFalse(AgentToolHarnessApproval.asksEachTime(tool: SessionToolCatalog.readTask, labels: labels))
+        XCTAssertTrue(AgentToolHarnessApproval.asksEachTime(tool: VaultToolCatalog.fillCredential, labels: labels))
+    }
+
     private static func batch(_ names: [String]) -> ToolJSON {
         .object(["actions": .array(names.map { .object(["name": .string($0), "input": .object([:])]) })])
     }
@@ -212,10 +318,15 @@ private final class RecordingApprovals: AgentToolApprovalHandling {
         return policy
     }
 
+    /// When set, each question waits on a real card there, which the test answers or cancels.
+    var center: SessionToolCenter?
+
     func askPerson(title: String, detail: String, callerID: UUID) async -> Bool {
         titles.append(title)
         details.append(detail)
-        return answer
+        guard let center else { return answer }
+        return await center.ask(PermissionRequest(id: UUID().uuidString, title: title, detail: detail, command: nil),
+                                in: hostTaskID, onChange: {})
     }
 }
 
@@ -223,7 +334,7 @@ private final class RecordingApprovals: AgentToolApprovalHandling {
 private final class ApprovalConnectors: ConnectorToolProviding {
     private let facts: [String: ConnectorToolFacts] = [
         "gmail_search": .init(service: "Gmail", title: "Search", readOnly: true),
-        "gmail_send": .init(service: "Gmail", title: "Send", readOnly: false),
+        "gmail_send": .init(service: "Gmail", title: "Send", readOnly: false, account: "me@example.test"),
         "slack_read": .init(service: "Slack", title: "Read", readOnly: true)
     ]
     var calls: [String] = []
@@ -241,5 +352,17 @@ private final class ApprovalConnectors: ConnectorToolProviding {
 
     func connectorToolFacts(named name: String, for context: ConnectorToolContext) -> ConnectorToolFacts? {
         facts[name]
+    }
+}
+
+@MainActor
+private final class ApprovalSimulators: SimulatorToolHandling {
+    var simulatorSwitchIsOn: Bool { true }
+    var simulatorPlatformIsUsable: Bool { true }
+    var calls: [String] = []
+
+    func callSimulatorTool(named name: String, arguments: ToolJSON, callerID: UUID) async -> AgentToolResult {
+        calls.append(name)
+        return .text("ok")
     }
 }

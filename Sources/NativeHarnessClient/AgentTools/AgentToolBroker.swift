@@ -36,6 +36,9 @@ struct ConnectorToolFacts: Equatable, Sendable {
     var title: String
     /// The tool changes nothing (`readOnlyHint` true). Anything else counts as a write.
     var readOnly: Bool
+    /// The account a connector of one account acts in; nil for a tool its service's accounts share, whose call
+    /// names the account (`ConnectorToolNaming.accountArgument`).
+    var account: String? = nil
 }
 
 extension ConnectorToolProviding {
@@ -167,7 +170,7 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     /// The services each task's person allowed it to read from, by task (`AgentToolCallerPolicy.hostTaskID`).
     var approvedReadServices: [UUID: Set<String>] = [:]
     /// A first read's question in flight, by task and service, which calls made meanwhile wait on.
-    var pendingReadApprovals: [String: Task<Bool, Never>] = [:]
+    var pendingReadApprovals: [String: PendingReadApproval] = [:]
     /// The app, which answers the simulator tools. Nil, as in tests and on other platforms, offers none.
     weak var simulators: (any SimulatorToolHandling)?
     /// The vault for agents. A task with the browser tools also gets `browser_fill_credential` while
@@ -455,13 +458,13 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         } else {
             innerArguments = .object([:])
         }
-        if let failure = AgentToolArgumentCheck.failure(tool: innerTool, arguments: innerArguments,
-                                                        schema: definition.inputSchema) {
-            return failure
-        }
         if let refusal = await approvalRefusal(tool: innerTool, arguments: innerArguments, sessionID: sessionID,
                                                origin: .wrapped) {
             return refusal
+        }
+        if let failure = AgentToolArgumentCheck.failure(tool: innerTool, arguments: innerArguments,
+                                                        schema: definition.inputSchema) {
+            return failure
         }
         return await simulators.callSimulatorTool(named: innerTool, arguments: innerArguments, callerID: sessionID)
     }
