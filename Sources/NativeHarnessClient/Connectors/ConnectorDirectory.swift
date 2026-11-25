@@ -706,6 +706,7 @@ final class ConnectorToolLabels: @unchecked Sendable {
     /// `mcp_yardlet_<8|16|64 hex>_<tool>`, and — only when `allowsBareServerPrefix` is true —
     /// `yardlet_<8|16|64 hex>_<tool>` or `yardlet_<tool>`). Requires valid MCP identifier characters
     /// (`[A-Za-z0-9_-]`) and trims trailing underscores to match `ConversationLineWording.mcpLabel`.
+    /// Antigravity's call title `Run <tool name>` is read as the name (`harnessToolName`).
     static func yardletToolName(fromHarnessTool title: String, allowsBareServerPrefix: Bool = false) -> String? {
         let name = harnessToolName(title)
         let server = AgentToolEnvironment.serverName

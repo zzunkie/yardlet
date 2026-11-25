@@ -153,7 +153,7 @@ struct AntigravityAgentTurnFollower: Sendable {
             id: "\(conversationID)-\(responseStep.map(String.init) ?? "step")-waiting",
             kind: "wait",
             title: L10n.string("Waiting for approval or still running"),
-            detail: call.replacingOccurrences(of: "_", with: " "),
+            detail: ConversationLineWording.mcpLabel(call) ?? call.replacingOccurrences(of: "_", with: " "),
             outcome: .stopped,
             output: Self.waitingStepNotice)
         return [.activityCompleted(row)] + endTurn()

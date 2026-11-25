@@ -490,7 +490,7 @@ final class ToolRowWordingTests: XCTestCase {
                          source: .transcript(TranscriptEntry(content: .plan(""))))
     }
 
-    func testAntigravityYardletMCPToolNamesStripHashPrefixAndMatchClaudeWording() {
+    func testAntigravityYardletMCPToolNamesStripHashPrefixAndMatchClaudeWording() throws {
         XCTAssertEqual(ConversationLineWording.mcpLabel("mcp_yardlet_e76971ce_browser_navigate"),
                        "yardlet: browser navigate")
         XCTAssertEqual(ConversationLineWording.mcpLabel("mcp_yardlet_read_task"),
@@ -531,6 +531,38 @@ final class ToolRowWordingTests: XCTestCase {
         XCTAssertEqual(ConversationLineWording.mcpLabel("mcp_linear_create_issue"), "linear create issue")
         XCTAssertNil(ConversationLineWording.mcpLabel("Run the unit tests"))
         XCTAssertNil(ConversationLineWording.mcpLabel("Run mcp_tests.sh --all"))
+        XCTAssertNil(ConversationLineWording.mcpLabel("Run mcp_server"), "no server and tool apart")
+        XCTAssertNil(ConversationLineWording.mcpLabel("mcp_tests"))
+        XCTAssertNil(ConversationLineWording.mcpLabel("mcp_---"))
+        // A call of a kind that is no MCP call keeps its title, even one that reads like a server's tool.
+        for (kind, title) in [("execute", "Run mcp_server"), ("read", "mcp_tests"), ("read", "mcp_my_tests")] {
+            let call = ConversationTool(kind: .activity(kind), name: title)
+            XCTAssertFalse(ConversationLineWording.tool(call, phase: .completed, harness: .antigravityCLI,
+                                                        workspaceURL: nil, localize: en).text.hasPrefix("Used"), title)
+        }
+        // The phone and `read_task` read the same words.
+        var turn = ConversationTurn(id: "turn", status: .completed, timing: ConversationTurnTiming())
+        turn.work = [ConversationItem(id: "run", kind: .tool(run), phase: .completed,
+                                      source: .transcript(TranscriptEntry(content: .plan(""))))]
+        let remoteTitle = RemoteConversationProjection.turn(turn, harness: .antigravityCLI, workspaceURL: nil)
+            .items.first { $0.kind == .activity }?.title
+        XCTAssertEqual(remoteTitle, ConversationLineWording.tool(run, phase: .completed, harness: .antigravityCLI,
+                                                                 workspaceURL: nil).text)
+        XCTAssertEqual(remoteTitle?.contains("yardlet: list tasks"), true)
+        // History read back from the CLI's log names the tool in the call's kind.
+        let line = #"{"type":"PLANNER_RESPONSE","step_index":3,"tool_calls":[{"name":"mcp_yardlet_f31bd028_list_tasks","args":{}}]}"#
+        let restored = AntigravityTranscriptParser.entries(conversationID: "c", jsonl: Data(line.utf8)).compactMap {
+            if case let .activity(activity, _) = $0.content { activity } else { nil }
+        }
+        let restoredTool = try XCTUnwrap(restored.first.map {
+            ConversationTool(kind: .activity($0.kind), name: $0.title, input: $0.input)
+        })
+        XCTAssertEqual(ConversationLineWording.tool(restoredTool, phase: .completed, harness: .antigravityCLI,
+                                                    workspaceURL: nil, localize: en).text,
+                       "Used yardlet: list tasks")
+        // A `run_agent` call reads as the agent's card.
+        XCTAssertTrue(ConversationAgentRunProjection.isRunAgentCall(
+            HarnessActivity(id: "c", kind: "other", title: "Run mcp_yardlet_f31bd028_run_agent")))
         XCTAssertTrue(AppModel.isSessionToolCall(
             HarnessActivity(id: "c", kind: "other", title: "Run mcp_yardlet_f31bd028_read_task"), named: "read_task"))
         XCTAssertFalse(AppModel.isSessionToolCall(

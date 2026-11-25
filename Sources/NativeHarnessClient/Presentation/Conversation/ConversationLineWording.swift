@@ -485,7 +485,11 @@ enum ConversationLineWording {
     private static func activityMCPLabel(kind: String, name: String, input: String?) -> String? {
         let account = ClaudeToolArguments(tool: "", input: input)[ConnectorToolNaming.accountArgument]
         let allowsBarePrefix = kind.isEmpty || kind.lowercased() == "other"
-        return mcpLabel(name, account: account, allowsBareServerPrefix: allowsBarePrefix)
+        // An ACP call of a kind that is no MCP call names a file or a command in its title, which may
+        // start `mcp_` without naming another server's tool.
+        let namesOtherServers = !acpKindsOtherThanMCP.contains(kind.lowercased())
+        return mcpLabel(name, account: account, allowsBareServerPrefix: allowsBarePrefix,
+                        allowsUnsplitServerName: namesOtherServers)
             ?? mcpLabel(kind, account: account)
     }
 
@@ -495,7 +499,11 @@ enum ConversationLineWording {
     /// claude.ai connectors, says nothing, so the tool's own name stands alone ("slack read channel").
     /// Antigravity's title for a call without a summary, `Run <tool name>`, reads as the tool's name.
     /// `account` is the account a Yardlet connector's call names, for a tool its service's accounts share.
-    static func mcpLabel(_ name: String, account: String? = nil, allowsBareServerPrefix: Bool = false) -> String? {
+    /// ACP's kinds of call that name a file, a search or a command rather than an MCP tool.
+    private static let acpKindsOtherThanMCP: Set<String> = ["read", "edit", "execute", "search", "delete", "move", "fetch"]
+
+    static func mcpLabel(_ name: String, account: String? = nil, allowsBareServerPrefix: Bool = false,
+                         allowsUnsplitServerName: Bool = true) -> String? {
         if let toolName = ConnectorToolLabels.yardletToolName(fromHarnessTool: name,
                                                               allowsBareServerPrefix: allowsBareServerPrefix) {
             if let label = ConnectorToolLabels.shared.label(forTool: toolName) {
@@ -508,11 +516,15 @@ enum ConversationLineWording {
             text.replacingOccurrences(of: "_+", with: " ", options: .regularExpression)
         }
         // Antigravity joins server and tool with one underscore (`mcp_<server>_<tool>`), so where one ends
-        // is not known; the words read in order ("github create issue").
-        if !name.hasPrefix("mcp__"), name.hasPrefix("mcp_"), name.count > 4,
+        // is not known; the words read in order ("github create issue"). A name with no server and tool
+        // apart (`mcp_tests`) is no such name.
+        if allowsUnsplitServerName, !name.hasPrefix("mcp__"), name.hasPrefix("mcp_"),
            name.unicodeScalars.allSatisfy({ $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "_" || $0 == "-") }) {
-            let words = spaced(String(name.dropFirst(4))).trimmingCharacters(in: .whitespaces)
-            return words.isEmpty ? nil : words
+            let parts = name.dropFirst(4).split(separator: "_")
+            guard parts.count >= 2, parts.allSatisfy({ $0.contains(where: { $0.isLetter || $0.isNumber }) }) else {
+                return nil
+            }
+            return spaced(parts.joined(separator: "_"))
         }
         guard name.hasPrefix("mcp__") else { return nil }
         var rest = String(name.dropFirst(5))
